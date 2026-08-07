@@ -35,6 +35,7 @@ import {
 } from "../../../components/CancellationPolicyInline.jsx";
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib/programText.js";
+import { GRADE_OPTIONS, audiencePatch, rangeBackwards } from "../../../lib/grades.js";
 
 // Match ProgramWizardNew's palette so the two builders read as one system.
 // Monotonic where available. performance.now() is immune to the system clock
@@ -142,6 +143,52 @@ export default function QuickProgramBuilder() {
     }));
   }, [org]);
 
+  // Who the class is for: GRADES or AGES, never both.
+  //
+  // Jessica: "afterschool is always done by grades. only camps are done by ages.
+  // provider won't show both." This builder makes afterschool-shaped programs, so
+  // grades lead - but ages stay one click away, because a dance or music studio
+  // genuinely thinks in ages and one-off workshops often do too.
+  //
+  // The default is not blindly 'grades'. An org that answered the setup question
+  // with an age range has told us how it thinks, and switching it to grades would
+  // quietly drop a range it had been getting for free on every class. So: ages if
+  // they gave us ages, grades otherwise. On prod today that means grades for
+  // everyone - not one lean org has a default age range set, and Jeff completed
+  // setup while leaving that question blank.
+  const [audienceMode, setAudienceMode] = useState(
+    () => (org?.default_age_min != null || org?.default_age_max != null ? "ages" : "grades"),
+  );
+  // Once the operator has expressed an intent, nothing may pick for them again. The
+  // seeding effect below runs when the org row lands, which is AFTER mount, so
+  // without this it reaches back over a deliberate choice.
+  //
+  // "Intent" is not just the two pills. The first version only flagged the pills, so
+  // an operator who left the default on Grades and picked K-5 from the dropdowns was
+  // still unguarded: the org's default ages arriving a moment later flipped the mode
+  // to Ages, the grade selects vanished, and Create wrote grade_min/grade_max null,
+  // discarding the selection with no error. Picking a grade IS picking grades.
+  const audienceTouchedRef = useRef(false);
+  function chooseAudienceMode(next) {
+    audienceTouchedRef.current = true;
+    setAudienceMode(next);
+  }
+  const [gradeMin, setGradeMin] = useState("");
+  const [gradeMax, setGradeMax] = useState("");
+  const setGrade = (which, v) => {
+    audienceTouchedRef.current = true;
+    (which === "min" ? setGradeMin : setGradeMax)(v);
+  };
+  const setAge = (which, v) => {
+    audienceTouchedRef.current = true;
+    (which === "min" ? setAgeMin : setAgeMax)(v);
+  };
+  // What the audience fields were LAST SEEDED WITH. Ages seed from the org default;
+  // grades have no org default and instead carry over from the previous class, so
+  // "unchanged" is only meaningful against this, not against "". Updated wherever the
+  // form is (re)seeded - mount and resetForAnother.
+  const seededRef = useRef({ gradeMin: "", gradeMax: "" });
+
   // Age range for THIS program, pre-filled from the answer above. Kept editable
   // per program: "we teach 5-12" is the usual case, "this one is teens only" is
   // the exception worth allowing without a trip to settings.
@@ -150,6 +197,13 @@ export default function QuickProgramBuilder() {
   useEffect(() => {
     setAgeMin((v) => (v === "" && profile.default_age_min != null ? String(profile.default_age_min) : v));
     setAgeMax((v) => (v === "" && profile.default_age_max != null ? String(profile.default_age_max) : v));
+    // The org row arrives after mount, so the mode has to follow it - otherwise an
+    // org WITH default ages still opens on grades and the prefill lands on a hidden
+    // pair of fields. Only while the operator has not typed anything of their own.
+    if (!audienceTouchedRef.current
+      && (profile.default_age_min != null || profile.default_age_max != null)) {
+      setAudienceMode("ages");
+    }
   }, [profile.default_age_min, profile.default_age_max]);
 
   // Weekly series vs one-off workshop. An operator who told us they only run one
@@ -401,9 +455,19 @@ export default function QuickProgramBuilder() {
   // and the day follows from it. programs.day_of_week is NOT NULL and the public
   // catalog matches on it, so it is derived rather than left empty.
   const effectiveDay = isOneOff ? firstDateWeekday : day;
-  const ageMinNum = ageMin === "" ? null : parseInt(ageMin, 10);
-  const ageMaxNum = ageMax === "" ? null : parseInt(ageMax, 10);
-  const ageRangeBackwards = ageMinNum != null && ageMaxNum != null && ageMinNum > ageMaxNum;
+  const usingGrades = audienceMode === "grades";
+  // rangeBackwards, NOT a fourth hand-rolled copy. This file imported the shared
+  // helper and then re-implemented it inline three times anyway - which is the exact
+  // duplication grades.js exists to remove, reintroduced inside the change that
+  // removed it. The four parsed *Num consts that fed these comparisons existed for
+  // no other reason and are gone with them; the helper takes the raw form strings
+  // and does the "" and K-is-zero handling itself.
+  //
+  // Only the pair that is actually on screen can be wrong. An age range left
+  // backwards in a hidden field must not block a save that never writes it.
+  const ageRangeBackwards = !usingGrades && rangeBackwards(ageMin, ageMax);
+  const gradeRangeBackwards = usingGrades && rangeBackwards(gradeMin, gradeMax);
+  const audienceBackwards = ageRangeBackwards || gradeRangeBackwards;
 
   // The row behind the current pick, so the field can show its address rather
   // than just the name the <option> already carries.
@@ -417,7 +481,7 @@ export default function QuickProgramBuilder() {
   // explaining it. Always satisfiable: "+ Add a location" is right here, so an
   // operator with none can create one without leaving this form.
   const valid =
-    name.trim() !== "" && priceValid && spotsNum >= 1 && !ageRangeBackwards &&
+    name.trim() !== "" && priceValid && spotsNum >= 1 && !audienceBackwards &&
     (isOneOff ? !!startDate : !!day) && !!locationId;
 
   // ---- First-program onboarding ----------------------------------------
@@ -508,9 +572,12 @@ export default function QuickProgramBuilder() {
     return () => { cancelled = true; };
   }, [org?.id, isLean]);
 
+  // The setup question's own age range, same rule as the per-class one above, so it
+  // gets the same helper. These two *Num consts stay - unlike the per-class pair they
+  // are also what saveProfile WRITES to organizations.default_age_min/max.
   const ansAgeMinNum = ansAgeMin === "" ? null : parseInt(ansAgeMin, 10);
   const ansAgeMaxNum = ansAgeMax === "" ? null : parseInt(ansAgeMax, 10);
-  const ansAgeBackwards = ansAgeMinNum != null && ansAgeMaxNum != null && ansAgeMinNum > ansAgeMaxNum;
+  const ansAgeBackwards = rangeBackwards(ansAgeMin, ansAgeMax);
   const profileValid = !!ansVenue && !!ansCadence && !ansAgeBackwards;
 
   async function saveProfile() {
@@ -661,18 +728,17 @@ export default function QuickProgramBuilder() {
         first_session_date: startDate || null,
         session_count: isOneOff ? 1 : (sessionsNum >= 1 ? sessionsNum : 1),
         max_capacity: spotsNum,
-        // Ages, and deliberately NO grades. programs.grade_min/grade_max default
-        // to 0 and 5, so every program built here carries a silent "Grades K-5"
-        // nobody chose — a school-year assumption inherited from J2S that a
-        // dance or music studio has no use for, and that the lean registration
-        // form never even asks a child for. It isn't on the lean catalog card,
-        // but it is wrong data sitting in the row for rosters and exports to
-        // repeat. NULL says "not stated"; the age range says the thing parents
-        // actually want to know.
-        age_min: ageMinNum,
-        age_max: ageMaxNum,
-        grade_min: null,
-        grade_max: null,
+        // Grades OR ages, never both, and all five columns written EXPLICITLY from
+        // ONE helper. programs.grade_min/grade_max default to 0 and 5 in the
+        // database, so an insert that merely omits them stamps the row "Grades K-5"
+        // - a school-year assumption inherited from J2S that nobody chose. Omitting
+        // the unused pair is not the same as nulling it.
+        //
+        // The rule used to be written out here AND again in the Scheduled Programs
+        // panel, in prose-matched but separately-maintained ternaries. Two copies of
+        // "which pair do we write, and what goes in age_format" is how a row created
+        // in one surface starts reading back differently in the other.
+        ...audiencePatch(audienceMode, { gradeMin, gradeMax, ageMin, ageMax }),
         price_cents: priceCents,
         program_type: "standard",
         photo_url: photoUrl || null, // optional; NULL renders the no-image card
@@ -775,6 +841,14 @@ export default function QuickProgramBuilder() {
     // almost always for the same children.
     setAgeMin(profile.default_age_min != null ? String(profile.default_age_min) : "");
     setAgeMax(profile.default_age_max != null ? String(profile.default_age_max) : "");
+    // Grades carry over for the same reason, and so does the grades-or-ages choice:
+    // a provider who thinks in grades thinks in grades for the next class too, and
+    // being asked to re-pick it 25 times is the kind of friction Jeff hit with the
+    // term picker. There is no org-level default grade range to fall back to, so
+    // the values themselves are simply kept as typed - and THAT is what the next
+    // form's "did you change anything" question has to measure against.
+    seededRef.current = { gradeMin, gradeMax };
+
     // Room is per-CLASS, so it must clear. Ages carry over because the next class is
     // usually for the same children; a room number never is, and a stale one would
     // send an instructor to the wrong door.
@@ -813,6 +887,15 @@ export default function QuickProgramBuilder() {
     locationId !== seededLocationId ||
     ageMin !== seededAgeMin ||
     ageMax !== seededAgeMax ||
+    // Compared against what the form was LAST SEEDED WITH, not against "".
+    // resetForAnother deliberately carries grades over to the next class, so a bare
+    // `gradeMin !== ""` counted a carried value as fresh input: build one class with
+    // Grades K-5, hit "create another", touch nothing, hit Cancel, and the form
+    // claimed unsaved work. That is exactly the false prompt this seeded comparison
+    // exists to prevent - the one that teaches an operator to click through the
+    // dialog that is supposed to protect them.
+    gradeMin !== seededRef.current.gradeMin ||
+    gradeMax !== seededRef.current.gradeMax ||
     spots !== "18" ||
     sessions !== "8" ||
     mode !== seededMode ||
@@ -1801,14 +1884,74 @@ export default function QuickProgramBuilder() {
           </div>
         )}
 
+        {/* Who it's for. ONE question with two vocabularies, not two questions -
+            a class is described by grades or by ages, never both, so the toggle
+            swaps the fields rather than adding a second row an operator could
+            fill in twice. Optional either way: it must never block creating a
+            class, and Jeff built 13 without stating one. */}
         <div>
-          <label style={labelStyle}>Ages <span style={{ fontWeight: 400, color: MUTED }}>(optional)</span></label>
+          <label style={labelStyle}>
+            Who it&rsquo;s for <span style={{ fontWeight: 400, color: MUTED }}>(optional)</span>
+          </label>
+          {/* Two small buttons rather than a select: it is a choice between two
+              things, and a dropdown to pick between two is a click too many. */}
+          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+            {[["grades", "Grades"], ["ages", "Ages"]].map(([val, lbl]) => (
+              <button
+                key={val}
+                type="button"
+                onClick={() => chooseAudienceMode(val)}
+                aria-pressed={audienceMode === val}
+                style={{
+                  padding: "6px 14px", borderRadius: 999, fontSize: 13, fontWeight: 600,
+                  fontFamily: "inherit", cursor: "pointer",
+                  border: `1px solid ${audienceMode === val ? BRIGHT : RULE}`,
+                  background: audienceMode === val ? BRIGHT : "#fff",
+                  color: audienceMode === val ? "#fff" : INK,
+                }}
+              >
+                {lbl}
+              </button>
+            ))}
+          </div>
+          {usingGrades ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 14, color: MUTED }}>Grades</span>
+              {/* A select, not a text box: K is not a number, and typing "K" into
+                  a numeric field is the sort of thing that silently becomes 0 or
+                  nothing. The option list is the shared one - it used to be
+                  written four different ways, one of which stopped at 6th. */}
+              <select
+                style={{ ...inputStyle, width: 96 }}
+                value={gradeMin}
+                onChange={(e) => setGrade("min", e.target.value)}
+                aria-label="Lowest grade for this class"
+              >
+                <option value="">—</option>
+                {GRADE_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+              <span style={{ fontSize: 14, color: MUTED }}>to</span>
+              <select
+                style={{ ...inputStyle, width: 96 }}
+                value={gradeMax}
+                onChange={(e) => setGrade("max", e.target.value)}
+                aria-label="Highest grade for this class"
+              >
+                <option value="">—</option>
+                {GRADE_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+          ) : (
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <span style={{ fontSize: 14, color: MUTED }}>Ages</span>
             <input
               style={{ ...inputStyle, width: 84 }}
               value={ageMin}
-              onChange={(e) => setAgeMin(e.target.value.replace(/[^0-9]/g, "").slice(0, 2))}
+              onChange={(e) => setAge("min", e.target.value.replace(/[^0-9]/g, "").slice(0, 2))}
               inputMode="numeric"
               placeholder="5"
               aria-label="Youngest age for this class"
@@ -1817,16 +1960,22 @@ export default function QuickProgramBuilder() {
             <input
               style={{ ...inputStyle, width: 84 }}
               value={ageMax}
-              onChange={(e) => setAgeMax(e.target.value.replace(/[^0-9]/g, "").slice(0, 2))}
+              onChange={(e) => setAge("max", e.target.value.replace(/[^0-9]/g, "").slice(0, 2))}
               inputMode="numeric"
               placeholder="12"
               aria-label="Oldest age for this class"
             />
           </div>
+          )}
           <div style={helpStyle}>Shown to families on your class page.</div>
           {ageRangeBackwards && (
             <div style={{ color: "#b53737", fontSize: 12, marginTop: 6 }}>
               The first age should be the younger one.
+            </div>
+          )}
+          {gradeRangeBackwards && (
+            <div style={{ color: "#b53737", fontSize: 12, marginTop: 6 }}>
+              The first grade should be the lower one.
             </div>
           )}
         </div>

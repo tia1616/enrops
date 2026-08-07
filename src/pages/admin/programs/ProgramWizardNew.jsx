@@ -20,6 +20,13 @@ import ShareProgram from "../../../components/ShareProgram.jsx";
 import CancellationPolicyInline from "../../../components/CancellationPolicyInline.jsx";
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib/programText.js";
+import { isUnset, rangeBackwards, rangeBackwardsMessage } from "../../../lib/grades.js";
+
+// "" / null / undefined -> NULL, anything else -> a number. isUnset is the shared
+// definition of "not stated" and is the only one in the codebase that knows grade K
+// is the integer 0, so a truthiness shortcut here would delete Kindergarten.
+// Named intOrNull, not num: a local `num` already exists further down this file.
+const intOrNull = (v) => (isUnset(v) ? null : Number(v));
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -537,8 +544,22 @@ export default function ProgramWizardNew() {
 
   // Step 2 is complete when the time + date inputs are all set. Capacity and
   // session_count have defaults, so they only need to be > 0.
+  // The database now REFUSES a backwards range (programs_grade_range_valid /
+  // programs_age_range_valid, added 20260807a). This wizard had no range guard at
+  // all - the other two builders do - so what used to store "Grades 8 to 2"
+  // silently would now throw a raw Postgres constraint string at the operator.
+  // A migration that hardens the data must not turn a silent bug into an
+  // unreadable error; the guard belongs here, in front of it.
+  //
+  // Also catches the prefill's own invention: picking a curriculum with grade_min 8
+  // and no grade_max leaves the form holding 8 to 5, because grade_max falls back
+  // to this wizard's seed default of 5.
+  const wizardRangeBackwards = formData.age_format === "grade"
+    ? rangeBackwards(formData.grade_min, formData.grade_max)
+    : rangeBackwards(formData.age_min, formData.age_max);
   const step2Valid = Boolean(
-    formData.day_of_week
+    !wizardRangeBackwards
+    && formData.day_of_week
     && formData.start_time
     && formData.end_time
     && formData.first_session_date
@@ -604,10 +625,13 @@ export default function ProgramWizardNew() {
         max_capacity: formData.max_capacity,
         age_format: formData.age_format,
         // Only write the active range; null the other so we don't lie.
-        grade_min: formData.age_format === "grade" ? formData.grade_min : null,
-        grade_max: formData.age_format === "grade" ? formData.grade_max : null,
-        age_min: formData.age_format === "age" ? formData.age_min : null,
-        age_max: formData.age_format === "age" ? formData.age_max : null,
+        // `num` because a CLEARED box is now "" rather than a coerced 0 (see the
+        // grade inputs) and "" is not an integer - PostgREST would reject it. NOT a
+        // truthiness check: grade K is 0, so `x || null` would delete Kindergarten.
+        grade_min: formData.age_format === "grade" ? intOrNull(formData.grade_min) : null,
+        grade_max: formData.age_format === "grade" ? intOrNull(formData.grade_max) : null,
+        age_min: formData.age_format === "age" ? intOrNull(formData.age_min) : null,
+        age_max: formData.age_format === "age" ? intOrNull(formData.age_max) : null,
         // Partner-run programs don't take payment through us; default price to 0
         // so the NOT-null-friendly column stays clean and no $ ever shows.
         price_cents: formData.runs_own_registration
@@ -718,6 +742,7 @@ export default function ProgramWizardNew() {
           <Step2WhenAndHowMany
             formData={formData}
             onField={handleField}
+            audienceBackwards={wizardRangeBackwards}
             previewDates={previewDates}
             previewLoading={previewLoading}
             previewError={previewError}
@@ -991,6 +1016,13 @@ function Step1WhatAndWhere({
 function Step2WhenAndHowMany({
   formData,
   onField,
+  // The SAME value that disables Next, passed down rather than recomputed here.
+  // The parent already owns the rule (wizardRangeBackwards); a second copy of the
+  // expression in this component is exactly how the guard and the thing it guards
+  // drifted apart three times on this branch - a check that read one pair while the
+  // save wrote the other. One value, so the greyed button and the reason for it
+  // cannot disagree.
+  audienceBackwards,
   previewDates,
   previewLoading,
   previewError,
@@ -1109,10 +1141,23 @@ function Step2WhenAndHowMany({
         </div>
         {formData.age_format === "grade" ? (
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            {/* EMPTY STAYS EMPTY. These were `Number(e.target.value) || 0`, and both
+                halves of that are wrong for a grade: `Number("")` is 0 and `0 || 0`
+                is 0, so CLEARING the box wrote Kindergarten. Two ways it bit:
+                clearing the top of "Grades 2 to 5" left 2 to 0, which the range
+                guard then reported as "Put the lower grade first." on a value the
+                operator never typed; and clearing the bottom silently rewrote the
+                class to "Grades K-5" with nothing on screen saying so.
+
+                There was also no way to state a grade at all and then take it back,
+                which is exactly the "nobody said" that migration 20260807a stopped
+                the database from inventing. "" now means not stated, all the way
+                through: rangeBackwards treats it as unset via isUnset, and the
+                insert coerces it to NULL. Same rule as the other two builders. */}
             <input
               type="number" min={0} max={12}
               value={formData.grade_min ?? ""}
-              onChange={(e) => onField("grade_min", Number(e.target.value) || 0)}
+              onChange={(e) => onField("grade_min", e.target.value === "" ? "" : Number(e.target.value))}
               style={{ ...inputStyle, width: 80 }}
               aria-label="Grade min"
             />
@@ -1120,7 +1165,7 @@ function Step2WhenAndHowMany({
             <input
               type="number" min={0} max={12}
               value={formData.grade_max ?? ""}
-              onChange={(e) => onField("grade_max", Number(e.target.value) || 0)}
+              onChange={(e) => onField("grade_max", e.target.value === "" ? "" : Number(e.target.value))}
               style={{ ...inputStyle, width: 80 }}
               aria-label="Grade max"
             />
@@ -1144,6 +1189,17 @@ function Step2WhenAndHowMany({
               aria-label="Age max"
             />
             <span style={{ color: MUTED, fontSize: 13, marginLeft: 8 }}>years old</span>
+          </div>
+        )}
+        {/* SAY WHY NEXT IS GREY. The backwards-range guard blocked the step but
+            printed nothing, and Step 2 has six other reasons Next can be disabled -
+            so the operator saw a dead button and no way to learn which field was
+            wrong. A wall with no sign on it is the silent-degradation defect, not a
+            guard. Same sentence as the Scheduled Programs panel, deliberately: one
+            wording for one rule, in both places an operator meets it. */}
+        {audienceBackwards && (
+          <div style={{ marginTop: 8, color: "#b53737", fontSize: 13 }}>
+            {rangeBackwardsMessage(formData.age_format === "grade" ? "grades" : "ages")}
           </div>
         )}
       </div>

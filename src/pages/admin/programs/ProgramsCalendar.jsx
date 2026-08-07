@@ -8,7 +8,12 @@
 //   - calendar: programs grouped by day-of-week, sorted by start_time (default)
 //   - by_school: programs grouped by program_location, sorted by day/time within school
 
-import { useEffect, useMemo, useState } from "react";
+// useRef is load-bearing, not decorative: the panel's row-resync effect compares
+// against the row it was last seeded from. Adding the hook without adding the
+// import white-screened /admin/programs while npm run build and 76 unit tests all
+// passed - JSX is never type-checked, so a missing binding is a RUNTIME
+// ReferenceError, invisible to every static gate.
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import EditProgramCurriculumModal from "./EditProgramCurriculumModal.jsx";
@@ -21,6 +26,7 @@ import { fetchOrgTerms, formatTermLabel } from "../../../lib/terms.js";
 import { getPermissions } from "../../../lib/permissions.js";
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib/programText.js";
+import { GRADE_OPTIONS, audienceMode, audiencePatch, rangeBackwards, rangeBackwardsMessage } from "../../../lib/grades.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -479,6 +485,7 @@ export default function ProgramsCalendar() {
             id, curriculum, curriculum_id, day_of_week, start_time, end_time, room,
             max_capacity, status, term, instructor_name, price_cents,
             short_description,
+            grade_min, grade_max, age_min, age_max, age_format,
             runs_own_registration, external_registration_url, list_in_public_catalog,
             first_session_date, session_count, schedule_mode, end_date, organization_id,
             facility_requested_at, facility_approved_at, facility_notes,
@@ -1413,6 +1420,19 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
     // that already exists can get one - the lean builder only just started
     // collecting it, so every program created before now has none.
     short_description: program.short_description ?? "",
+    // The class NAME. For a lean provider this is free text typed once in the
+    // builder and, until now, unchangeable afterwards - full-nav orgs got "Change
+    // class", which swaps the curriculum behind it, not the name. `curriculum` is
+    // NOT NULL, so the save below refuses to blank it.
+    curriculum: program.curriculum ?? "",
+    // Who the class is for. Neither pair was editable here at all, so a range set
+    // at creation was permanent and one left blank could never be filled in.
+    // Every one of these must be SELECTED above before it is written, or a save
+    // would read undefined and null out J2S's 90 grade ranges.
+    grade_min: program.grade_min ?? "",
+    grade_max: program.grade_max ?? "",
+    age_min: program.age_min ?? "",
+    age_max: program.age_max ?? "",
     price_cents: program.price_cents ?? "",
     program_location_id: program.program_location_id ?? "",
     room: program.room ?? "",
@@ -1423,6 +1443,114 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
   const [savedFlash, setSavedFlash] = useState(false);
+
+  // Which pair the panel is currently editing, and the one coercion that has to be
+  // right: "" means NOT STATED, but grade K is 0, which is falsy. `Number("") || null`
+  // gives null for both, so K and blank become the same thing.
+  // Which pair is on screen. Held OUTSIDE `draft` on purpose: every other key in
+  // draft is a real `programs` column, and a UI-only key sitting among them is how
+  // a future `.update(draft)` or key-diff ends up trying to write a column that
+  // does not exist. Seeded from the row through the shared rule.
+  const [panelMode, setPanelMode] = useState(() => audienceMode(program));
+
+  // RE-READ THE ROW WHEN IT CHANGES UNDERNEATH US.
+  //
+  // `draft` is seeded once at mount, and this panel has no key, so anything that
+  // edits the same row while the panel is open is invisible to it - and handleSave
+  // writes every field from the draft. The live case: expand a class, then use
+  // "Change class" in the same row header to swap the curriculum. The modal saves
+  // and the row header updates, but the panel still holds the OLD name, so its next
+  // save (even one aimed only at the room) writes that name back while curriculum_id
+  // points at the new class. Publish/unpublish and the post-save merge take the same
+  // path. Fields the operator has already edited are left alone - only the ones they
+  // have not touched follow the row.
+  // Nothing is written to the four audience columns until the operator actually
+  // aims at them - see the save. Set by the pills AND by the range fields, because
+  // "they picked grades" and "they typed a grade" are both intent. A ref rides
+  // alongside the state so the resync effect below can read it without listing it as
+  // a dependency and re-running every time it flips.
+  const [audienceTouched, setAudienceTouched] = useState(false);
+  const audienceTouchedRef = useRef(false);
+  const seededFromRef = useRef(program);
+  useEffect(() => {
+    const prev = seededFromRef.current;
+    if (prev === program) return;
+    seededFromRef.current = program;
+    setDraft((d) => {
+      const next = { ...d };
+      // Only adopt a field when it actually changed on the row AND the operator's
+      // draft still matches what the row used to say (i.e. they have not edited it).
+      //
+      // COMPARED AS STRINGS, deliberately. The row supplies numbers (grade_min 3,
+      // max_capacity 20, price_cents 1500) while every input in this panel writes
+      // strings, so a raw === made "the operator has not edited this" permanently
+      // false for any numeric field they had ever touched. The panel then refused to
+      // adopt an outside change AND wrote its stale value back on the next save -
+      // exactly the clobber this effect exists to prevent.
+      const same = (a, b) => String(a ?? "") === String(b ?? "");
+      for (const k of ["curriculum", "room", "short_description", "price_cents", "max_capacity", "program_location_id", "grade_min", "grade_max", "age_min", "age_max"]) {
+        const was = prev?.[k] ?? "";
+        const now = program?.[k] ?? "";
+        if (!same(was, now) && same(d[k], was)) next[k] = now;
+      }
+      return next;
+    });
+    if (!audienceTouchedRef.current) setPanelMode(audienceMode(program));
+  }, [program]);
+  // SWITCHING THE TAB IS NOT AN EDIT. Only entering a VALUE is.
+  //
+  // The first attempt at this counted the pills as intent, which failed the exact
+  // case it was written for: the operator clicks "Ages" purely to see what is
+  // there, the (empty) age boxes appear, they save the room edit they came for -
+  // and because "they touched it" was true, the empty pair was written and the
+  // grade range was destroyed. Verified against the live row: it really did null
+  // grades 0-5 on a J2S class.
+  //
+  // A save must write what the operator ENTERED, not which tab they were looking
+  // at. Clearing a range on purpose is still possible and still explicit: set the
+  // dropdowns back to the blank option, which IS a value edit.
+  // ONE RULE: what is on screen is what gets written.
+  //
+  // This started as two variables - the tab being viewed and the pair last typed
+  // into - so that switching tabs could not destroy an edit. Every fix to that
+  // split produced a new defect: a save wrote a pair the operator could not see; the
+  // backwards-range guard checked one pair while the save wrote the other, so
+  // "Grades 5 to 2" could be waved through; and the panel and the builder ended up
+  // disagreeing about which pair a submit writes. Three attempts, three new bugs.
+  //
+  // So the model is now the simple one. `panelMode` decides BOTH what is displayed
+  // and what is saved, and `audienceTouched` is a plain "did they type a value".
+  // Switching to an empty Ages tab and saving does clear the grades - but the empty
+  // boxes are right there on screen, so it is visible rather than silent, which is
+  // the property the two-variable version kept failing to deliver.
+  function setAudience(key, value) {
+    if (key === "mode") { setPanelMode(value); return; }
+    setAudienceTouched(true);
+    audienceTouchedRef.current = true;
+    set(key, value);
+  }
+  const usingGradesInPanel = panelMode === "grades";
+  // THE GUARD MUST CHECK THE PAIR THAT WILL BE WRITTEN, not the tab on screen.
+  //
+  // Splitting "which tab am I looking at" (panelMode) from "which pair did I type
+  // in" (audienceTouched) opened an escape hatch: enter Grades 5 to 2, Save greys
+  // out correctly, click the Ages pill - the guard re-evaluated against the empty
+  // age pair, found nothing wrong, and re-enabled Save while the patch still wrote
+  // the backwards grades, and "Grades 5-2" reached the family card.
+  //
+  // WHAT CHANGED SINCE: `programs_grade_range_valid` / `programs_age_range_valid`
+  // (migration 20260807a, already applied to staging AND prod) now reject a
+  // backwards range at the database. This guard is therefore no longer the only
+  // thing standing between the operator and a bad row - but it is the only thing
+  // standing between them and a raw Postgres constraint string, so it matters more
+  // than before, not less. Every control that reaches handleSave needs it: the Save
+  // button and the drift notice's "Update to N sessions", which is the same handler.
+  //
+  // audienceTouched is null until the operator types, and nothing is written then,
+  // so there is nothing to guard.
+  const audienceBackwardsInPanel = usingGradesInPanel
+    ? rangeBackwards(draft.grade_min, draft.grade_max)
+    : rangeBackwards(draft.age_min, draft.age_max);
 
   // Copy-to-term: pick a season + year to copy this program into as a draft.
   // Operators think "Winter 2027", not "WI27" - so we present a Season and a
@@ -1584,6 +1712,35 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         // draft would start undefined and every save here would blank a description
         // the operator never touched (91 of 95 prod programs have one).
         short_description: draft.short_description?.trim() ? draft.short_description.trim() : null,
+        // NOT NULL in the database and the name families read on the card, so a
+        // blank box keeps the existing name rather than failing the save or
+        // publishing an untitled class. Guarded again below with a visible message.
+        curriculum: draft.curriculum?.trim() ? draft.curriculum.trim() : program.curriculum,
+        // AUDIENCE IS OMITTED UNLESS THE OPERATOR TOUCHED IT.
+        //
+        // The first version wrote all five columns on EVERY save, from whichever pill
+        // happened to be selected. That made a routine edit destructive: open a class
+        // showing "Grades K-5" to fix the room, click "Ages" once to see what is
+        // there, save - and the grade range is gone, with no confirm and nothing left
+        // on screen to restore it from. It also silently nulled the age range of any
+        // row carrying both pairs, because the panel opens on grades.
+        //
+        // A save that the operator did not aim at this field must not write it. The
+        // patch comes from ONE helper so the "never both" rule and the age_format
+        // rule cannot drift from the builder's copy - they used to be four hand-copied
+        // ternaries in two files.
+        //
+        // The `audienceTouched` gate is now belt AND braces: the changed-fields filter
+        // below would drop these anyway when they match the row. It stays because it
+        // is the one case where "unchanged" is not the whole story - switching to an
+        // empty tab produces all-nulls, which genuinely DIFFER from the row and would
+        // otherwise be sent as a deliberate clear.
+        ...(audienceTouched
+          ? audiencePatch(panelMode, {
+            gradeMin: draft.grade_min, gradeMax: draft.grade_max,
+            ageMin: draft.age_min, ageMax: draft.age_max,
+          })
+          : {}),
         price_cents: draft.price_cents === "" || draft.price_cents === null ? null : Number(draft.price_cents),
         program_location_id: draft.program_location_id || null,
         room: draft.room || null,
@@ -1628,7 +1785,76 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
           if (!ok) return; // finally{} resets saving
         }
       }
-      await onUpdate(program.id, patch);
+      // SEND ONLY WHAT CHANGED.
+      //
+      // This panel used to write all twenty fields on every save, so each save
+      // asserted a value for everything the operator never touched - and any field
+      // whose draft had gone stale became a silent overwrite. Nearly every
+      // destructive bug found in this panel traces back to that one choice: an edit
+      // aimed at the room nulled a grade range; a second tab's change was reverted;
+      // a "Change class" swap was undone by a later price edit. Those are not
+      // separate bugs, they are one bug wearing different hats.
+      //
+      // A save now carries the fields the operator actually changed and nothing
+      // else, so a field nobody edited cannot be clobbered no matter how stale the
+      // draft is. Compared as strings because inputs produce "20" where the row
+      // holds 20, and null/undefined/"" all mean "not set" on one side or the other.
+      //
+      // `patch` (the full object) is still what scheduleChanged above and the draft
+      // sync below read - they need the INTENDED value, not the delta.
+      // Bookkeeping every save owes, whether or not it wrote anything.
+      //
+      //  - first_session_date: in range mode the stored value is the DERIVED first
+      //    session (a real chosen-weekday date), not the typed window start.
+      //  - end_date: count mode stores NULL (count programs have no window), but the
+      //    draft still holds the old date, so a range->count save left the banner
+      //    comparing a stale draft end date against the nulled stored value.
+      //  - curriculum: a blank box falls back to the stored name, so without this
+      //    the field stayed empty under a red warning after a successful save.
+      //  - the audience edit is SPENT once stored. Without resetting it the panel
+      //    stayed permanently "touched", resending all five audience columns from a
+      //    stale draft on every later save.
+      //
+      // Hoisted into one function because the no-op path needs it too: it is the
+      // banner's only way to learn the draft already matches the row.
+      function reconcileDraftToStored() {
+        setAudienceTouched(false);
+        audienceTouchedRef.current = false;
+        setDraft((d) => ({
+          ...d,
+          curriculum: patch.curriculum ?? d.curriculum,
+          first_session_date: patch.first_session_date ?? "",
+          end_date: patch.end_date ?? "",
+        }));
+      }
+      // day_of_week is compared THROUGH titleDay, exactly as scheduleChanged above
+      // does. Older rows store it lowercase, so a raw string compare made
+      // "monday" !== "Monday" on every single save: the field was always in the
+      // delta, the "nothing changed" branch could never fire, and a schedule column
+      // was written while scheduleChanged had said false - slipping past the
+      // enrolled-families confirm. Two definitions of "changed" forty lines apart
+      // is the same split this component just finished removing elsewhere.
+      const sameStored = (k, stored, next) => {
+        if (k === "day_of_week") return norm(stored ? titleDay(stored) : null) === norm(next);
+        return String(stored ?? "") === String(next ?? "");
+      };
+      const changed = {};
+      for (const [k, v] of Object.entries(patch)) {
+        if (!sameStored(k, program[k], v)) changed[k] = v;
+      }
+      if (Object.keys(changed).length === 0) {
+        // Nothing to write. Say so rather than round-tripping an empty update and
+        // reporting success for work that never happened - but still reconcile the
+        // draft below, because the banner it drives compares against the STORED
+        // values and would otherwise stay stuck claiming unsaved changes forever,
+        // which also hides the drift notice (it renders only when nothing is
+        // pending). Skipping the write is not the same as skipping the bookkeeping.
+        reconcileDraftToStored();
+        setSavedFlash(true);
+        setTimeout(() => setSavedFlash(false), 1500);
+        return; // finally{} resets saving
+      }
+      await onUpdate(program.id, changed);
       // Sync the draft to what was actually STORED for every field the
       // "unsaved schedule changes" banner compares, so a good save always clears
       // it. Two fields the save rewrites out from under the draft:
@@ -1637,11 +1863,13 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
       //  - end_date: count mode stores NULL (count programs have no window), but the
       //    draft still holds the old date -- so a range->count save left the banner
       //    stuck comparing a stale draft end date against the nulled stored value.
-      setDraft((d) => ({
-        ...d,
-        first_session_date: patch.first_session_date ?? "",
-        end_date: patch.end_date ?? "",
-      }));
+      // The audience edit is SPENT once it is stored. Without this the panel stayed
+      // permanently "touched": every later save - a room fix, a price change - kept
+      // resending all five audience columns from a stale draft, so anything that
+      // changed them in between (a second tab, a SQL correction, an import) was
+      // silently reverted by an edit aimed at something else entirely. It also left
+      // the row-resync deaf for the rest of the session.
+      reconcileDraftToStored();
       setSavedFlash(true);
       setTimeout(() => setSavedFlash(false), 1500);
     } catch (err) {
@@ -1715,11 +1943,21 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
               ? `A calendar change means no class days fall in this window anymore. Its saved schedule still has ${program.session_count} session${Number(program.session_count) === 1 ? "" : "s"} — extend the end date below, then Save.`
               : `A school-calendar change means this program's dates now yield ${driftDerived} session${driftDerived === 1 ? "" : "s"}, but its saved schedule still has ${program.session_count}. Update to move families onto the corrected dates.`}
           </div>
-          {driftDerived > 0 && (
+          {driftDerived > 0 && (() => {
+            // THIS BUTTON IS `handleSave` UNDER ANOTHER NAME, so it needs every guard
+            // Save has. It was missing the backwards-range one, which made it the
+            // escape hatch around it: type "Grades 8 to 2", watch Save grey out, then
+            // click Update to N sessions instead and the same patch goes to a database
+            // that now REFUSES the range (programs_grade_range_valid, 20260807a) - so
+            // the operator gets a raw Postgres constraint string in the notice. Not
+            // reachable on prod today only because the audience fields ship with this
+            // branch; it would arrive reachable.
+            const driftDisabled = saving || rangeLoading || !rangePreview || audienceBackwardsInPanel;
+            return (
             <button
               type="button"
               onClick={handleSave}
-              disabled={saving || rangeLoading || !rangePreview}
+              disabled={driftDisabled}
               style={{
                 flexShrink: 0,
                 padding: "7px 14px",
@@ -1730,14 +1968,17 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
                 fontSize: 12.5,
                 fontWeight: 700,
                 fontFamily: "inherit",
-                cursor: saving || rangeLoading || !rangePreview ? "default" : "pointer",
-                opacity: saving || rangeLoading || !rangePreview ? 0.6 : 1,
+                cursor: driftDisabled ? "default" : "pointer",
+                opacity: driftDisabled ? 0.6 : 1,
               }}
-              title="Re-derive the sessions from the current calendars and save. If families are enrolled, you'll be asked to confirm first."
+              title={audienceBackwardsInPanel
+                ? rangeBackwardsMessage(panelMode)
+                : "Re-derive the sessions from the current calendars and save. If families are enrolled, you'll be asked to confirm first."}
             >
               {saving ? "Updating…" : `Update to ${driftDerived} session${driftDerived === 1 ? "" : "s"}`}
             </button>
-          )}
+            );
+          })()}
           {/* Surface a failed Update right here at the notice -- otherwise the only
               error message renders down by the form's Save button, off-screen from
               the button the operator just clicked, and the notice looks inert. */}
@@ -1906,7 +2147,98 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         <ExpandField label="Room">
           <input type="text" value={draft.room ?? ""} onChange={(e) => set("room", e.target.value)} placeholder="e.g. Room 12" style={expandInputStyle} />
         </ExpandField>
+        {/* WHO IT'S FOR. Grades or ages, the same one question the builder asks,
+            switched by the same rule. Neither pair was editable here before, so a
+            provider who left it blank at creation - all 13 of Jeff's classes - had
+            no way to add it, and one set wrongly could never be corrected. */}
+        {/* NOT inside ExpandField. ExpandField renders a bare <label> (no htmlFor),
+            and a label forwards clicks to its first labelable descendant - which here
+            would be the "Grades" pill. Clicking the caption, the "to" separator, or
+            the empty space beside the fields would silently flip the mode. Every
+            other ExpandField wraps a single input, so this was the first one where
+            that forwarding could destroy data. */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 2 }} role="group" aria-label="Who this class is for">
+          <span style={{ fontSize: 11, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.3 }}>
+            Who it&rsquo;s for
+          </span>
+          <div style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+            {[["grades", "Grades"], ["ages", "Ages"]].map(([val, lbl]) => (
+              <button
+                key={val}
+                type="button"
+                onClick={() => setAudience("mode", val)}
+                aria-pressed={panelMode === val}
+                style={{
+                  padding: "3px 10px", borderRadius: 999, fontSize: 11.5, fontWeight: 600,
+                  fontFamily: "inherit", cursor: "pointer",
+                  border: `1px solid ${panelMode === val ? BRIGHT : RULE}`,
+                  background: panelMode === val ? BRIGHT : "#fff",
+                  color: panelMode === val ? "#fff" : INK,
+                }}
+              >
+                {lbl}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            {usingGradesInPanel ? (
+              <>
+                <select value={draft.grade_min ?? ""} onChange={(e) => setAudience("grade_min", e.target.value)} style={{ ...expandInputStyle, width: 74 }} aria-label="Lowest grade">
+                  <option value="">—</option>
+                  {GRADE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+                <span style={{ fontSize: 12, color: MUTED }}>to</span>
+                <select value={draft.grade_max ?? ""} onChange={(e) => setAudience("grade_max", e.target.value)} style={{ ...expandInputStyle, width: 74 }} aria-label="Highest grade">
+                  <option value="">—</option>
+                  {GRADE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+              </>
+            ) : (
+              <>
+                <input type="text" inputMode="numeric" value={draft.age_min ?? ""} onChange={(e) => setAudience("age_min", e.target.value.replace(/[^0-9]/g, "").slice(0, 2))} placeholder="5" style={{ ...expandInputStyle, width: 74 }} aria-label="Youngest age" />
+                <span style={{ fontSize: 12, color: MUTED }}>to</span>
+                <input type="text" inputMode="numeric" value={draft.age_max ?? ""} onChange={(e) => setAudience("age_max", e.target.value.replace(/[^0-9]/g, "").slice(0, 2))} placeholder="12" style={{ ...expandInputStyle, width: 74 }} aria-label="Oldest age" />
+              </>
+            )}
+          </div>
+          {audienceBackwardsInPanel && (
+            <div style={{ color: RED, fontSize: 11.5, marginTop: 4 }}>
+              {rangeBackwardsMessage(panelMode)}
+            </div>
+          )}
+        </div>
       </div>
+
+      {/* The class NAME. Free text at creation for a lean provider and, until now,
+          not editable anywhere afterwards. Full width because a class name is a
+          sentence ("Beginner Ukulele, Tuesdays"), not a field-grid value.
+
+          ONLY WHEN NOTHING ELSE OWNS THE NAME. A program linked to an Offerings
+          record gets its name from that record, and the row header's "Change class"
+          rewrites it on every re-match - so a free-text rename there produces two
+          controls editing one field, silently diverging programs.curriculum from
+          curricula.name with nothing on screen saying which won. Gated on the link
+          rather than on the tenant, because that is the actual hazard: every lean
+          program is unlinked, and an unlinked full-nav program is equally safe. */}
+      {!program.curriculum_id && (
+      <div style={{ marginTop: 12 }}>
+        <label style={{ display: "block", fontSize: 11, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.3 }}>
+          Class name
+          <input
+            type="text"
+            value={draft.curriculum ?? ""}
+            onChange={(e) => set("curriculum", e.target.value)}
+            maxLength={120}
+            style={{ ...expandInputStyle, marginTop: 4, textTransform: "none", letterSpacing: 0, fontWeight: 400 }}
+          />
+        </label>
+        {!draft.curriculum?.trim() && (
+          <div style={{ fontSize: 12, color: RED, marginTop: 4 }}>
+            A class needs a name — saving now keeps the current one, &ldquo;{program.curriculum}&rdquo;.
+          </div>
+        )}
+      </div>
+      )}
 
       {/* Description sits OUTSIDE the field grid because it needs the full width
           to be writable. Editable here (not only in the builder) so the programs
@@ -2008,13 +2340,20 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
           // not enforce, and the DB (program_location_id NOT NULL) would reject
           // the write with a constraint error nobody can read.
           const noLocation = !draft.program_location_id;
-          const disabled = saving || rangeBusy || noLocation;
+          // Same reasoning for a backwards range: the message beside the fields is
+          // advice until the button enforces it, and "Grades 5 to 2" reaches the
+          // catalog card as nonsense a parent has to decode.
+          const disabled = saving || rangeBusy || noLocation || audienceBackwardsInPanel;
           return (
             <button
               type="button"
               onClick={handleSave}
               disabled={disabled}
-              title={noLocation ? "Pick a location first — every class needs one." : undefined}
+              title={
+                noLocation ? "Pick a location first — every class needs one."
+                  : audienceBackwardsInPanel ? rangeBackwardsMessage(panelMode)
+                    : undefined
+              }
               style={{
                 background: BRIGHT, color: "#fff", border: "none", padding: "8px 16px",
                 borderRadius: 6, fontSize: 13, fontWeight: 700, fontFamily: "inherit",

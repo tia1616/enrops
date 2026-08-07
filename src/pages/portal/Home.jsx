@@ -15,6 +15,7 @@ import {
 } from '../../lib/pricing.js';
 import { formatTermLabel, termSeasonName, schoolYearTermsForFall } from '../../lib/terms.js';
 import { programScheduleSummary, formatDayLabel } from '../../lib/programSchedule.js';
+import { audienceLabel } from '../../lib/grades.js';
 import { feeOnCents, totalWithFee } from '../../lib/platformFee.js';
 
 // Tenant resolution: `org` (id, slug, name, active_registration_term, ...) is
@@ -536,14 +537,15 @@ export default function Home() {
                     // "Is my child old enough?" is the first thing a parent asks
                     // and the most common reason they message the provider
                     // instead of registering. Only shown when the operator has
-                    // actually said - never guessed from grades.
-                    const ageStr = p.age_min != null && p.age_max != null
-                      ? `Ages ${p.age_min}–${p.age_max}`
-                      : p.age_min != null
-                        ? `Ages ${p.age_min}+`
-                        : p.age_max != null
-                          ? `Up to age ${p.age_max}`
-                          : null;
+                    // actually said - never guessed.
+                    //
+                    // Now GRADES OR AGES, from the one shared definition. This card
+                    // rendered ages only, so a provider who thinks in grades - which
+                    // is every afterschool provider, per Jessica - had no way to tell
+                    // families who a class was for. The wording for every age case is
+                    // carried over verbatim from what this line used to produce, so
+                    // nothing a family has been reading changes.
+                    const ageStr = audienceLabel(p);
                     // "Mondays", "Monday" for a one-off, or null when no day is set
                     // (never the literal "nulls"). Shared helper so this label and
                     // the schedule line below use the same one-session coercion.
@@ -576,8 +578,15 @@ export default function Home() {
                                   has always shown this; the lean cards never did,
                                   so the builder's Description field saved copy
                                   that reached no family. */}
+                              {/* marginBottom separates the provider's PROSE from the
+                                  facts beneath it (day, time, location, who it's for,
+                                  dates, price). Those facts are a tight group 2px
+                                  apart; with no gap here a three-paragraph description
+                                  ran straight into the schedule line and the card read
+                                  as one block. Only became visible once descriptions
+                                  got room to breathe earlier today. */}
                               {p.short_description && (
-                                <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 3, lineHeight: 1.45, whiteSpace: 'pre-line' }}>{p.short_description}</div>
+                                <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 4, marginBottom: 10, lineHeight: 1.45, whiteSpace: 'pre-line' }}>{p.short_description}</div>
                               )}
                               <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>{meta}</div>
                               {scheduleStr && (
@@ -598,8 +607,11 @@ export default function Home() {
                             {/* Same as the external-registration card above: the
                                 operator's description belongs in front of the
                                 family, right under the class name. */}
+                            {/* Same gap as the card above: the provider's prose needs
+                                separating from the facts block, or a multi-paragraph
+                                description runs into the schedule line. */}
                             {p.short_description && (
-                              <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 3, lineHeight: 1.45, whiteSpace: 'pre-line' }}>{p.short_description}</div>
+                              <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 4, marginBottom: 10, lineHeight: 1.45, whiteSpace: 'pre-line' }}>{p.short_description}</div>
                             )}
                             <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>
                               {meta}
@@ -815,9 +827,19 @@ export default function Home() {
                     const timeStr = p.start_time
                       ? `${p.start_time}${p.end_time ? `–${p.end_time}` : ''}`
                       : null;
-                    const gradeStr = p.grade_min != null && p.grade_max != null
-                      ? `Grades ${p.grade_min === 0 ? 'K' : p.grade_min}–${p.grade_max}`
-                      : null;
+                    // Was a fifth hand-rolled copy of the grade vocabulary, and the
+                    // only one that handled K. Now the same definition the lean card
+                    // above uses, so the two layouts cannot drift while they stay
+                    // forked. Renders identically for every row live on prod today.
+                    // Re-counted on prod 2026-08-07, after the LEGO camp's ages were
+                    // cleared: J2S holds 90 graded rows and 0 aged, prod-wide there
+                    // are ZERO one-sided ranges and ZERO equal-endpoint ranges, so
+                    // neither the new open-ended wording ("Grades 2+", "Up to grade
+                    // 5") nor the single-value collapse ("Grade 3") can appear on an
+                    // existing card. J2S is also the only prod org with grades at
+                    // all, and it is the only one on THIS layout - so this change is
+                    // inert on every live registration page.
+                    const gradeStr = audienceLabel(p);
                     const metaStr = [dayLabel, timeStr, gradeStr].filter(Boolean).join(' · ');
                     // Partner-run, listed program: families register on the partner's
                     // site, so render a link-out card (no price, no VIP, no checkout).
@@ -831,7 +853,7 @@ export default function Home() {
                           <div className="border-b border-j2s-purple/10 bg-j2s-purple-soft/40 px-5 py-4">
                             <p className="font-titan text-lg text-j2s-ink">{p.curriculum}</p>
                             {p.short_description && (
-                              <p className="mt-1 whitespace-pre-line text-sm text-j2s-ink/65 leading-snug">{p.short_description}</p>
+                              <p className="mt-1 mb-2.5 whitespace-pre-line text-sm text-j2s-ink/65 leading-snug">{p.short_description}</p>
                             )}
                             {metaStr && <p className="mt-1 text-sm text-j2s-ink/70">{metaStr}</p>}
                             {scheduleStr && (

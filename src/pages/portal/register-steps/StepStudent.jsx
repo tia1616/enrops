@@ -1,5 +1,6 @@
 import React from 'react';
 import { PickupDismissalSection, CustomQuestionsSection, hasPickupSection } from './RegExtraFields.jsx';
+import { GRADE_OPTIONS_LONG } from '../../../lib/grades.js';
 
 // Tenant-neutral referral options shared by every operator's registration flow.
 // (Replaced J2S-specific entries — "STEAM Night", "PDX Parent", "NW Kids",
@@ -16,15 +17,11 @@ const REFERRAL_OPTIONS = [
   'Other',
 ];
 
-const GRADE_OPTIONS = [
-  { value: '0', label: 'Kindergarten' },
-  { value: '1', label: '1st grade' },
-  { value: '2', label: '2nd grade' },
-  { value: '3', label: '3rd grade' },
-  { value: '4', label: '4th grade' },
-  { value: '5', label: '5th grade' },
-  { value: '6', label: '6th grade' },
-];
+// Was a local list that stopped at 6th grade while operators could set a class to
+// any grade, so a family whose child was in 7th could not pick a grade and could not
+// register. Now the shared range, in parent wording. ADDITIVE - 7th through 12th are
+// gained, nothing a family could already choose is taken away.
+const GRADE_OPTIONS = GRADE_OPTIONS_LONG;
 
 export default function StepStudent({ student, onUpdate, childIndex, regFields = { std: {}, custom: [] }, child = {}, onUpdateChild = () => {}, lean = false }) {
   const { std = {}, custom = [] } = regFields;
@@ -62,23 +59,40 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
             name="student-last-name"
           />
         </div>
-        {!lean && (
-          <div>
-            <label className="label-field">Grade *</label>
-            <select
-              className="input-field"
-              value={student.grade}
-              onChange={(e) => onUpdate({ grade: e.target.value })}
-            >
-              <option value="">Select&hellip;</option>
-              {GRADE_OPTIONS.map((g) => (
-                <option key={g.value} value={g.value}>
-                  {g.label}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
+        {/* ASKED OF EVERY FAMILY, not just the legacy tenant's. Jessica, 2026-08-07:
+            "lean org reg should ask for grades though." Providers can now state a
+            grade range on a class, so a roster with no grade on it is a gap for
+            exactly the operators who just gained the field.
+
+            Required only where it always was (full-nav orgs, enforced in
+            Register.jsx). For lean orgs it is OPTIONAL: /j2s/register is not the
+            only live checkout any more, and adding a NEW blocking field to a
+            working payment path is not something to do in the same pass that
+            introduces the question. The asterisk follows the real rule rather than
+            being decorative. */}
+        <div>
+          {/* "(optional)" spelled out rather than just dropping the asterisk. Every
+              sibling field here is starred, so an unmarked one reads as a mistake
+              and a parent skips it - which defeats the point of asking. htmlFor/id
+              because the label was naming nothing: a screen reader announced this
+              only as "Select...". */}
+          <label className="label-field" htmlFor={`student-grade-${childIndex}`}>
+            Grade{lean ? " (optional)" : " *"}
+          </label>
+          <select
+            id={`student-grade-${childIndex}`}
+            className="input-field"
+            value={student.grade}
+            onChange={(e) => onUpdate({ grade: e.target.value })}
+          >
+            <option value="">Select&hellip;</option>
+            {GRADE_OPTIONS.map((g) => (
+              <option key={g.value} value={g.value}>
+                {g.label}
+              </option>
+            ))}
+          </select>
+        </div>
         <div>
           <label className="label-field">Birth date *</label>
           <input
