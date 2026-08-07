@@ -1722,6 +1722,12 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         // patch comes from ONE helper so the "never both" rule and the age_format
         // rule cannot drift from the builder's copy - they used to be four hand-copied
         // ternaries in two files.
+        //
+        // The `audienceTouched` gate is now belt AND braces: the changed-fields filter
+        // below would drop these anyway when they match the row. It stays because it
+        // is the one case where "unchanged" is not the whole story - switching to an
+        // empty tab produces all-nulls, which genuinely DIFFER from the row and would
+        // otherwise be sent as a deliberate clear.
         ...(audienceTouched
           ? audiencePatch(panelMode, {
             gradeMin: draft.grade_min, gradeMax: draft.grade_max,
@@ -1772,7 +1778,36 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
           if (!ok) return; // finally{} resets saving
         }
       }
-      await onUpdate(program.id, patch);
+      // SEND ONLY WHAT CHANGED.
+      //
+      // This panel used to write all twenty fields on every save, so each save
+      // asserted a value for everything the operator never touched - and any field
+      // whose draft had gone stale became a silent overwrite. Nearly every
+      // destructive bug found in this panel traces back to that one choice: an edit
+      // aimed at the room nulled a grade range; a second tab's change was reverted;
+      // a "Change class" swap was undone by a later price edit. Those are not
+      // separate bugs, they are one bug wearing different hats.
+      //
+      // A save now carries the fields the operator actually changed and nothing
+      // else, so a field nobody edited cannot be clobbered no matter how stale the
+      // draft is. Compared as strings because inputs produce "20" where the row
+      // holds 20, and null/undefined/"" all mean "not set" on one side or the other.
+      //
+      // `patch` (the full object) is still what scheduleChanged above and the draft
+      // sync below read - they need the INTENDED value, not the delta.
+      const sameStored = (a, b) => String(a ?? "") === String(b ?? "");
+      const changed = {};
+      for (const [k, v] of Object.entries(patch)) {
+        if (!sameStored(program[k], v)) changed[k] = v;
+      }
+      if (Object.keys(changed).length === 0) {
+        // Nothing to write. Say so honestly rather than round-tripping an empty
+        // update and reporting success for work that never happened.
+        setSavedFlash(true);
+        setTimeout(() => setSavedFlash(false), 1500);
+        return; // finally{} resets saving
+      }
+      await onUpdate(program.id, changed);
       // Sync the draft to what was actually STORED for every field the
       // "unsaved schedule changes" banner compares, so a good save always clears
       // it. Two fields the save rewrites out from under the draft:
