@@ -830,10 +830,15 @@ export default function Home() {
                     // Was a fifth hand-rolled copy of the grade vocabulary, and the
                     // only one that handled K. Now the same definition the lean card
                     // above uses, so the two layouts cannot drift while they stay
-                    // forked. Renders identically for every row live on prod today:
-                    // checked, and not one program in either org has a one-sided
-                    // range (J2S: 90 graded + 1 aged, all with both ends set), so the
-                    // new open-ended wording cannot appear on an existing card.
+                    // forked. Renders identically for every row live on prod today.
+                    // Re-counted on prod 2026-08-07, after the LEGO camp's ages were
+                    // cleared: J2S holds 90 graded rows and 0 aged, prod-wide there
+                    // are ZERO one-sided ranges and ZERO equal-endpoint ranges, so
+                    // neither the new open-ended wording ("Grades 2+", "Up to grade
+                    // 5") nor the single-value collapse ("Grade 3") can appear on an
+                    // existing card. J2S is also the only prod org with grades at
+                    // all, and it is the only one on THIS layout - so this change is
+                    // inert on every live registration page.
                     const gradeStr = audienceLabel(p);
                     const metaStr = [dayLabel, timeStr, gradeStr].filter(Boolean).join(' · ');
                     // Partner-run, listed program: families register on the partner's

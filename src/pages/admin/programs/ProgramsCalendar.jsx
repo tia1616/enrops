@@ -1536,8 +1536,15 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
   // in" (audienceTouched) opened an escape hatch: enter Grades 5 to 2, Save greys
   // out correctly, click the Ages pill - the guard re-evaluated against the empty
   // age pair, found nothing wrong, and re-enabled Save while the patch still wrote
-  // the backwards grades. `programs` has no grade_min <= grade_max constraint (only
-  // `curricula` does), so "Grades 5-2" would have reached the family card.
+  // the backwards grades, and "Grades 5-2" reached the family card.
+  //
+  // WHAT CHANGED SINCE: `programs_grade_range_valid` / `programs_age_range_valid`
+  // (migration 20260807a, already applied to staging AND prod) now reject a
+  // backwards range at the database. This guard is therefore no longer the only
+  // thing standing between the operator and a bad row - but it is the only thing
+  // standing between them and a raw Postgres constraint string, so it matters more
+  // than before, not less. Every control that reaches handleSave needs it: the Save
+  // button and the drift notice's "Update to N sessions", which is the same handler.
   //
   // audienceTouched is null until the operator types, and nothing is written then,
   // so there is nothing to guard.
