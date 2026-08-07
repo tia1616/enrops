@@ -27,12 +27,18 @@ export function AuthProvider({ children }) {
     });
   }
 
-  async function signInWithMagicLink(email, redirectTo) {
-    return supabase.auth.signInWithOtp({
-      email,
-      options: { emailRedirectTo: redirectTo, shouldCreateUser: true },
-    });
-  }
+  // signInWithMagicLink was REMOVED, deliberately. It called signInWithOtp with
+  // `shouldCreateUser: true` and Supabase's default (unbranded) email, and its last
+  // caller - the post-checkout confirmation page - now uses the `auth-send-magic-link`
+  // edge function like every other sign-in surface in the app.
+  //
+  // Not left in place "in case someone needs it": it is the wrong door. Any future
+  // caller reaching for a magic link from a public page would silently get arbitrary
+  // account creation and an off-brand email, which is exactly the defect that led to
+  // deleting it. Use `supabase.functions.invoke('auth-send-magic-link', { body: {
+  // email, redirect_to, context, org_id } })` - it no-ops on unknown addresses and
+  // sends through the tenant's own branding. See Login.jsx for the parent-facing
+  // pattern, including the anti-enumeration wording its response requires.
 
   async function signOut() {
     return supabase.auth.signOut();
@@ -43,7 +49,6 @@ export function AuthProvider({ children }) {
     user: session?.user ?? null,
     loading,
     signInWithGoogle,
-    signInWithMagicLink,
     signOut,
   };
 

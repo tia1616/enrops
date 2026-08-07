@@ -3,6 +3,7 @@ import { useSearchParams, Link, useOutletContext } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { useCart } from '../../context/CartContext.jsx';
 import { supabase } from '../../lib/supabase.js';
+import { emailIsValid } from '../../lib/validation.js';
 
 export default function RegisterSuccess() {
   const { org } = useOutletContext();
@@ -10,10 +11,12 @@ export default function RegisterSuccess() {
   const [searchParams] = useSearchParams();
   const sessionId = searchParams.get('session_id');
   const comp = searchParams.get('comp') === '1'; // $0 scholarship — no payment
-  const { user, signInWithGoogle, signInWithMagicLink } = useAuth();
+  const { user, signInWithGoogle } = useAuth();
   const { clearCart, cart } = useCart();
 
-  const [email, setEmail] = useState(cart?.parent?.email || '');
+  // Read-only now. Nothing on this page sets it any more - the resend control that
+  // did was removed in favour of the sign-in page (see the account block below).
+  const [email] = useState(cart?.parent?.email || '');
   // Did we LEARN the address, or are we guessing? The cart is cleared 500ms after
   // this page mounts and does not survive a reload, so on any refresh, back-button
   // or reopened link `email` is "" - and the Resend button was gated on `!email`.
@@ -22,20 +25,10 @@ export default function RegisterSuccess() {
   // at mount rather than derived from `email`, so typing an address does not make
   // the page start claiming it already sent one there.
   const [emailKnownFromCart] = useState(() => !!cart?.parent?.email);
-  // Deliberately loose: this only decides whether the button is clickable, and the
-  // real validation is Supabase rejecting the address. A strict regex here would
-  // reject valid addresses and reintroduce the dead button it exists to prevent.
-  const emailLooksValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
-  // SHOW THE FIELD WHENEVER THE BUTTON WOULD OTHERWISE BE DEAD, not just when the
-  // cart is missing. The first version of this fix gated the button on
-  // emailLooksValid but rendered the input only when the cart was empty - so a cart
-  // address this regex happens to reject (no dot in the domain, a quoted local part)
-  // produced a disabled button in the ONE branch with nothing to type into. That is
-  // the bug being fixed here, moved one branch over. Tying the field to the same
-  // condition as the button makes "we offered a resend you cannot perform"
-  // unreachable by construction.
-  const needsEmailInput = !emailKnownFromCart || !emailLooksValid;
-  const [msg, setMsg] = useState('');
+  // The shared validator, not a fourth hand-rolled regex. src/lib/validation.js
+  // already exported emailIsValid with this exact pattern; writing it out again here
+  // is the same duplication this codebase keeps paying for elsewhere.
+  const emailLooksValid = emailIsValid(email);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   // ACH/bank transfer settles over 1-3 business days. Ask Stripe whether this
@@ -77,22 +70,6 @@ export default function RegisterSuccess() {
     a.click();
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
-
-  async function handleMagicLink() {
-    // Trimmed: a typed address arrives with whatever the keyboard or a paste left
-    // on it, and a trailing space is an invisible reason for a link never to come.
-    const addr = email.trim();
-    if (!addr) return;
-    setLoading(true);
-    setError('');
-    const { error: err } = await signInWithMagicLink(
-      addr,
-      `${window.location.origin}/${ORG_SLUG}/dashboard`,
-    );
-    setLoading(false);
-    if (err) setError(err.message);
-    else setMsg(`Check ${addr} for a sign-in link.`);
   }
 
   async function handleGoogle() {
@@ -185,7 +162,12 @@ export default function RegisterSuccess() {
               not, and "We sent a sign-in link to your inbox" reads like a fact we
               are sure of while the button underneath refuses to act on it. */}
           <p className="mt-2 text-j2s-ink/70">
-            {emailKnownFromCart ? (
+            {/* Branch on whether the address is USABLE, not merely on where it came
+                from. Branching on provenance alone meant a cart address the validator
+                rejects produced "We sent a sign-in link to parent@localhost" directly
+                above a correction field - asserting a send that, for a malformed
+                address, almost certainly failed. */}
+            {emailKnownFromCart && emailLooksValid ? (
               <>
                 We sent a sign-in link to <span className="font-semibold text-j2s-ink">{email}</span>.
                 Click the link to access your dashboard, view your child's schedule,
@@ -205,41 +187,28 @@ export default function RegisterSuccess() {
           </p>
 
           <div className="mt-6 space-y-4">
+            {/* NO RESEND BUTTON HERE, deliberately. Jessica, 2026-08-07, on being
+                shown that the resend arrived from Supabase rather than the provider:
+                "is this necessary though? we've established they already get a
+                sign-in email."
+
+                She is right, and the sign-in page is the one place that should own
+                this. It already sends through auth-send-magic-link with the tenant's
+                branding, already no-ops on unknown addresses, and already carries the
+                anti-enumeration wording. A second resend control here was a second
+                door to one action - and it was the door that could be opened by
+                anyone, since this page needs no session and no login.
+                See [[feedback_one_place_to_do_a_thing]].
+
+                What was actually broken is fixed by removing it: the offer no longer
+                outruns what the page can do, because the page no longer offers it. */}
             <p className="text-sm text-j2s-ink/60">
-              Didn't get the email? Check your spam folder, or have us send another.
+              Didn&rsquo;t get the email? Check your spam folder, or{' '}
+              <Link to={`/${ORG_SLUG}/login`} className="font-semibold text-j2s-purple underline">
+                sign in here
+              </Link>{' '}
+              and we&rsquo;ll send a fresh link.
             </p>
-            {/* THE FIELD IS THE FIX. Without it "have us send another" was an offer
-                the page could not honour once the cart was gone - which is every
-                refresh, every back-button, every time the link is opened later or on
-                another device. Asking for the address costs one line of typing and
-                works in all of those cases; the alternative was returning the email
-                from checkout-session-status, and that endpoint documents twice that
-                it deliberately exposes no extra PII, since anyone holding the
-                session-id URL can call it. */}
-            {needsEmailInput && (
-              <div>
-                <label htmlFor="resend-email" className="block text-sm font-semibold text-j2s-ink">
-                  Your email address
-                </label>
-                <input
-                  id="resend-email"
-                  type="email"
-                  autoComplete="email"
-                  inputMode="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com"
-                  className="mt-1 w-full rounded-xl border-2 border-j2s-ink/15 px-4 py-3 text-j2s-ink focus:border-j2s-purple focus:outline-none"
-                />
-              </div>
-            )}
-            <button
-              onClick={handleMagicLink}
-              disabled={loading || !emailLooksValid}
-              className="btn-j2s-primary w-full"
-            >
-              {loading ? 'Sending…' : 'Resend sign-in link'}
-            </button>
 
             {/* Google OAuth re-enabled 5/8/26 after Google verification approved. */}
             <div className="relative py-2 text-center">
@@ -263,11 +232,6 @@ export default function RegisterSuccess() {
             </button>
           </div>
 
-          {msg && (
-            <p className="mt-4 rounded-lg bg-j2s-purple-soft p-3 text-sm text-j2s-purple-dark">
-              {msg}
-            </p>
-          )}
           {error && <p className="error-text mt-4">{error}</p>}
         </div>
       ) : (

@@ -1577,9 +1577,29 @@ async function sendConfirmationEmail({
   // Build the auto-generated summary block — operators who customize the body
   // get this slotted in via the {{registration_summary_block}} token. Wraps
   // the registration table + totals/payment plan in a single <table>.
+  // CONFIRMATION NUMBER. Jeff asked directly whether families get one; they did
+  // not. sessionId existed here only as an internal Resend tag and the .ics uid
+  // seed, so the single durable record of the purchase carried nothing a family
+  // could quote or an operator could look up.
+  //
+  // Shown in FULL, not truncated the way the success page does it. The page is
+  // glanced at once; the email is where someone goes three weeks later to ask about
+  // a charge, and a shortened id cannot be searched in Stripe. (The page's truncated
+  // version is now inconsistent with this - worth aligning, but changing a second
+  // surface belongs in its own change, not smuggled into this one.)
+  //
+  // Inside summaryBlock so it travels with the receipt into operator-customised
+  // bodies too: they slot in {{registration_summary_block}}, and a confirmation
+  // number that vanishes the moment a provider edits their template is worse than
+  // never having added one.
+  const confirmationRow = sessionId
+    ? `<tr><td colspan="2" style="padding:12px 16px 0;font-family:${brand.font_family};font-size:12px;color:#6b6880;border-top:1px solid #EDE9FE;">Confirmation number<br><span style="font-family:ui-monospace,'Cascadia Mono',Consolas,monospace;font-size:12px;color:#1A1530;word-break:break-all;">${escapeHtml(sessionId)}</span></td></tr>`
+    : '';
+
   const summaryBlock = `<table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin-bottom:24px;font-family:${brand.font_family};">
         ${regRows}
         ${totalsBlock}
+        ${confirmationRow}
       </table>`;
 
   // White-background email shell — logo on top, no platform-color gradient.
