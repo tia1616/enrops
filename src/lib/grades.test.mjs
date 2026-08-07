@@ -93,10 +93,20 @@ for (const row of [
   { grade_min: 0, grade_max: 5, age_min: 6, age_max: 12 },
   { age_format: 'age', age_min: 6, age_max: 12 },
   { age_format: 'grade', grade_min: 1, grade_max: 3 },
+  // THE TWO CONTRADICTORY SHAPES the first version of this loop missed: a row
+  // whose age_format names a pair that is EMPTY. Trusting the claim over the data
+  // made audienceLabel return null for the first one - the audience line simply
+  // vanished from the family card for a class that states a real range - and
+  // return "Ages 6-12" while the editor opened on Grades for the second.
+  { age_format: 'age', grade_min: 0, grade_max: 5 },
+  { age_format: 'grade', age_min: 6, age_max: 12 },
 ]) {
+  const label = audienceLabel(row);
   const saysAges = audienceMode(row) === 'ages';
-  const labelIsAges = /^(Age|Ages|Up to age)/.test(audienceLabel(row) ?? '');
-  eq(`label and editor agree on ${JSON.stringify(row)}`, labelIsAges, saysAges);
+  // A row with ANY range must produce a label. `?? ''` here would let a vanished
+  // label score as "not ages" and pass while the card showed nothing.
+  eq(`a row with a range always has a label ${JSON.stringify(row)}`, typeof label === 'string' && label.length > 0, true);
+  eq(`label and editor agree on ${JSON.stringify(row)}`, /^(Age|Ages|Up to age)/.test(label), saysAges);
 }
 eq('age_min 0 only', audienceLabel({ age_min: 0, age_max: null }), 'Ages 0+');
 eq('neither set renders nothing', audienceLabel({}), null);

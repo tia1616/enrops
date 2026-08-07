@@ -71,8 +71,16 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
             introduces the question. The asterisk follows the real rule rather than
             being decorative. */}
         <div>
-          <label className="label-field">Grade{lean ? "" : " *"}</label>
+          {/* "(optional)" spelled out rather than just dropping the asterisk. Every
+              sibling field here is starred, so an unmarked one reads as a mistake
+              and a parent skips it - which defeats the point of asking. htmlFor/id
+              because the label was naming nothing: a screen reader announced this
+              only as "Select...". */}
+          <label className="label-field" htmlFor={`student-grade-${childIndex}`}>
+            Grade{lean ? " (optional)" : " *"}
+          </label>
           <select
+            id={`student-grade-${childIndex}`}
             className="input-field"
             value={student.grade}
             onChange={(e) => onUpdate({ grade: e.target.value })}

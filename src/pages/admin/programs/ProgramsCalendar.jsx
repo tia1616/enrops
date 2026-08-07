@@ -1795,14 +1795,54 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
       //
       // `patch` (the full object) is still what scheduleChanged above and the draft
       // sync below read - they need the INTENDED value, not the delta.
-      const sameStored = (a, b) => String(a ?? "") === String(b ?? "");
+      // Bookkeeping every save owes, whether or not it wrote anything.
+      //
+      //  - first_session_date: in range mode the stored value is the DERIVED first
+      //    session (a real chosen-weekday date), not the typed window start.
+      //  - end_date: count mode stores NULL (count programs have no window), but the
+      //    draft still holds the old date, so a range->count save left the banner
+      //    comparing a stale draft end date against the nulled stored value.
+      //  - curriculum: a blank box falls back to the stored name, so without this
+      //    the field stayed empty under a red warning after a successful save.
+      //  - the audience edit is SPENT once stored. Without resetting it the panel
+      //    stayed permanently "touched", resending all five audience columns from a
+      //    stale draft on every later save.
+      //
+      // Hoisted into one function because the no-op path needs it too: it is the
+      // banner's only way to learn the draft already matches the row.
+      function reconcileDraftToStored() {
+        setAudienceTouched(false);
+        audienceTouchedRef.current = false;
+        setDraft((d) => ({
+          ...d,
+          curriculum: patch.curriculum ?? d.curriculum,
+          first_session_date: patch.first_session_date ?? "",
+          end_date: patch.end_date ?? "",
+        }));
+      }
+      // day_of_week is compared THROUGH titleDay, exactly as scheduleChanged above
+      // does. Older rows store it lowercase, so a raw string compare made
+      // "monday" !== "Monday" on every single save: the field was always in the
+      // delta, the "nothing changed" branch could never fire, and a schedule column
+      // was written while scheduleChanged had said false - slipping past the
+      // enrolled-families confirm. Two definitions of "changed" forty lines apart
+      // is the same split this component just finished removing elsewhere.
+      const sameStored = (k, stored, next) => {
+        if (k === "day_of_week") return norm(stored ? titleDay(stored) : null) === norm(next);
+        return String(stored ?? "") === String(next ?? "");
+      };
       const changed = {};
       for (const [k, v] of Object.entries(patch)) {
-        if (!sameStored(program[k], v)) changed[k] = v;
+        if (!sameStored(k, program[k], v)) changed[k] = v;
       }
       if (Object.keys(changed).length === 0) {
-        // Nothing to write. Say so honestly rather than round-tripping an empty
-        // update and reporting success for work that never happened.
+        // Nothing to write. Say so rather than round-tripping an empty update and
+        // reporting success for work that never happened - but still reconcile the
+        // draft below, because the banner it drives compares against the STORED
+        // values and would otherwise stay stuck claiming unsaved changes forever,
+        // which also hides the drift notice (it renders only when nothing is
+        // pending). Skipping the write is not the same as skipping the bookkeeping.
+        reconcileDraftToStored();
         setSavedFlash(true);
         setTimeout(() => setSavedFlash(false), 1500);
         return; // finally{} resets saving
@@ -1822,17 +1862,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
       // changed them in between (a second tab, a SQL correction, an import) was
       // silently reverted by an edit aimed at something else entirely. It also left
       // the row-resync deaf for the rest of the session.
-      setAudienceTouched(false);
-      audienceTouchedRef.current = false;
-      // The class name likewise: a blank box falls back to the stored name, so
-      // without this the field stayed empty under a red warning while the save had
-      // in fact succeeded - two contradictory truths on one screen.
-      setDraft((d) => ({
-        ...d,
-        curriculum: patch.curriculum ?? d.curriculum,
-        first_session_date: patch.first_session_date ?? "",
-        end_date: patch.end_date ?? "",
-      }));
+      reconcileDraftToStored();
       setSavedFlash(true);
       setTimeout(() => setSavedFlash(false), 1500);
     } catch (err) {

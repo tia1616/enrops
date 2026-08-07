@@ -312,7 +312,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           // age_min/age_max added with audienceLabel: the helper answers "grades OR
           // ages", so selecting only the grade pair would have made it silently
           // render nothing for an age-based class rather than "Ages 6-12".
-          .select("id, curriculum, day_of_week, start_time, end_time, program_location_id, status, max_capacity, grade_min, grade_max, age_min, age_max")
+          .select("id, curriculum, day_of_week, start_time, end_time, program_location_id, status, max_capacity, grade_min, grade_max, age_min, age_max, age_format")
           .eq("organization_id", org.id)
           .eq("term", term)
           .not("status", "in", '("cancelled","archived")'),

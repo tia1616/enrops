@@ -150,10 +150,17 @@ function ageLabel(row) {
 // age range. Presence is now only the fallback for rows written before the column
 // was filled in.
 export function audienceMode(row, { defaultMode = 'grades' } = {}) {
-  if (row?.age_format === 'grade') return 'grades';
-  if (row?.age_format === 'age') return 'ages';
   const hasGrade = !isUnset(row?.grade_min) || !isUnset(row?.grade_max);
   const hasAge = !isUnset(row?.age_min) || !isUnset(row?.age_max);
+  // age_format is the operator's stated answer and outranks mere presence - but
+  // ONLY when the pair it names actually holds something. A row claiming 'grade'
+  // with no grades in it is contradictory, and trusting the claim over the data
+  // made the label disagree with the editor again: a row saying 'age' while
+  // carrying grades returned NO LABEL AT ALL, so the audience line vanished from
+  // the family card for a class that plainly stated a range. Believe the claim
+  // when it is backed by data; otherwise believe the data.
+  if (row?.age_format === 'grade' && hasGrade) return 'grades';
+  if (row?.age_format === 'age' && hasAge) return 'ages';
   if (hasGrade) return 'grades';
   if (hasAge) return 'ages';
   return defaultMode;

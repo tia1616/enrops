@@ -20,6 +20,7 @@ import ShareProgram from "../../../components/ShareProgram.jsx";
 import CancellationPolicyInline from "../../../components/CancellationPolicyInline.jsx";
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib/programText.js";
+import { rangeBackwards } from "../../../lib/grades.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -537,8 +538,22 @@ export default function ProgramWizardNew() {
 
   // Step 2 is complete when the time + date inputs are all set. Capacity and
   // session_count have defaults, so they only need to be > 0.
+  // The database now REFUSES a backwards range (programs_grade_range_valid /
+  // programs_age_range_valid, added 20260807a). This wizard had no range guard at
+  // all - the other two builders do - so what used to store "Grades 8 to 2"
+  // silently would now throw a raw Postgres constraint string at the operator.
+  // A migration that hardens the data must not turn a silent bug into an
+  // unreadable error; the guard belongs here, in front of it.
+  //
+  // Also catches the prefill's own invention: picking a curriculum with grade_min 8
+  // and no grade_max leaves the form holding 8 to 5, because grade_max falls back
+  // to this wizard's seed default of 5.
+  const wizardRangeBackwards = formData.age_format === "grade"
+    ? rangeBackwards(formData.grade_min, formData.grade_max)
+    : rangeBackwards(formData.age_min, formData.age_max);
   const step2Valid = Boolean(
-    formData.day_of_week
+    !wizardRangeBackwards
+    && formData.day_of_week
     && formData.start_time
     && formData.end_time
     && formData.first_session_date
