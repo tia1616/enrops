@@ -20,7 +20,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
-import { allChoices, offeredChoices, DEFAULT_OFFERED, needsAftercareProvider } from "../../lib/dismissal.js";
+import { allChoices, offeredChoices, DEFAULT_OFFERED } from "../../lib/dismissal.js";
+import { buildRegUrl } from "../../lib/regLinks.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -86,6 +87,11 @@ const ALWAYS_ON = [
 const STD_KEYS = STANDARD_FIELDS.map((f) => f.key);
 const stdFieldKey = (key) => `std_${key}`;
 
+// How a class reads in this page's pickers. ONE place, so the scope picker and
+// the preview's class picker can't start naming the same class differently.
+const programLabel = (p) =>
+  `${p?.curriculum || "Class"}${p?.day_of_week ? ` (${p.day_of_week}s)` : ""}`;
+
 const FIELD_TYPES = [
   { value: "text", label: "Short text" },
   { value: "textarea", label: "Long text (paragraph)" },
@@ -122,6 +128,8 @@ export default function RegistrationQuestions() {
   // Programs a question can be scoped to, so a one-day workshop isn't forced to
   // ask full-season questions. Current term only: scoping to a class families
   // can no longer register for would just be noise in the picker.
+  // The preview panel reads the same list to open the real form on a class a
+  // family could actually reach (see FormPreview).
   const [programs, setPrograms] = useState([]);
   const [toast, setToast] = useState(null);        // { kind, message }
 
@@ -154,7 +162,11 @@ export default function RegistrationQuestions() {
     // It must never block the questions themselves from rendering.
     supabase
       .from("programs")
-      .select("id, curriculum, day_of_week")
+      // status + runs_own_registration are for the PREVIEW link, not the scope
+      // picker: the picker deliberately still offers drafts (you configure a
+      // question before the class goes live), but the preview can only open a
+      // class a family could actually reach.
+      .select("id, curriculum, day_of_week, status, runs_own_registration")
       .eq("organization_id", org.id)
       .eq("term", org.active_registration_term || "")
       .order("curriculum")
@@ -353,6 +365,20 @@ export default function RegistrationQuestions() {
       <div style={{ marginBottom: 6 }}>
         <Link to="/admin/settings" style={{ fontSize: 13, color: BRIGHT, textDecoration: "none" }}>← Settings</Link>
       </div>
+      {/* The right column is a hard 300px, which on a 375px phone left the page
+          column ~35px wide. It mattered less when that column was a decorative
+          drawing; it holds the "open my form" button now, so it has to stack.
+          Done with a data attribute + media query because every style on this
+          page is an inline prop, which a normal rule can't override (same
+          pattern AdminLayout uses for the sidebar). Preview goes FIRST when
+          stacked: on a phone the action is the reason to be here, and burying
+          it under the whole builder is how it stays undiscovered. */}
+      <style>{`
+        @media (max-width: 900px) {
+          [data-regq-grid] { grid-template-columns: 1fr !important; }
+          [data-regq-grid] > aside { position: static !important; order: -1; }
+        }
+      `}</style>
       <h1 style={{ margin: 0, color: PURPLE, fontSize: 26, fontWeight: 700 }}>Registration questions</h1>
       <p style={{ color: MUTED, fontSize: 14, margin: "6px 0 22px", lineHeight: 1.5, maxWidth: 640 }}>
         Choose what your registration form asks families. Turn the standard questions on or off, and add your own.
@@ -381,7 +407,7 @@ export default function RegistrationQuestions() {
       {loading || rows === null ? (
         <div style={{ color: MUTED, fontSize: 14 }}>Loading…</div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 300px", gap: 26, alignItems: "start" }}>
+        <div data-regq-grid style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 300px", gap: 26, alignItems: "start" }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 26, minWidth: 0 }}>
             {/* Always on the form (read-only) */}
             <section style={{ background: CREAM, border: `1px solid ${RULE}`, borderRadius: 12, padding: "16px 20px" }}>
@@ -442,8 +468,8 @@ export default function RegistrationQuestions() {
             />
           </div>
 
-          {/* Live preview */}
-          <FormPreview std={std} customRows={customRows} />
+          {/* Preview = the real form, opened in a new tab */}
+          <FormPreview std={std} customRows={customRows} programs={programs} orgSlug={org?.slug} />
         </div>
       )}
     </div>
@@ -718,9 +744,7 @@ function CustomEditor({ draft, programs = [], onCancel, onSubmit }) {
       >
         <option value="">Every program</option>
         {programs.map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.curriculum}{p.day_of_week ? ` (${p.day_of_week}s)` : ""}
-          </option>
+          <option key={p.id} value={p.id}>{programLabel(p)}</option>
         ))}
       </select>
       <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
@@ -769,76 +793,151 @@ function ConfirmBar({ message, onCancel, onConfirm }) {
   );
 }
 
-// A lightweight preview of the resulting form — enabled standard questions +
-// active custom questions, in order. Approximates what families will see.
-function FormPreview({ std, customRows }) {
+// The preview IS the real form.
+//
+// This panel used to hand-draw an approximation of every input. It drifted the
+// moment a question type or a dismissal choice changed, it never showed the
+// built-in questions at all, and it flattened a multi-step wizard into one
+// column - so it misrepresented exactly what an operator opens a preview to
+// judge. Nobody in the market hand-draws this: either the builder IS the form
+// (Jotform, Typeform) or Preview opens the real thing (Google Forms' eye icon,
+// SurveyMonkey's test mode, Stripe's payment links). Registration pages are
+// already public, so opening the real form is a link and nothing more: no new
+// code path, and it cannot drift.
+//
+// A form only exists for a class families can reach, so the link is gated the
+// same way ShareProgram gates a share link: published (status "open"), in the
+// term the public catalog serves (the query above filters to it), and not
+// partner-run (those register on the partner's own site, so we have no form to
+// show). With nothing published there is no URL, and the panel says why instead
+// of handing over a link that bounces straight back to the catalog.
+function FormPreview({ std, customRows, programs, orgSlug }) {
+  // Derived, not seeded: programs arrive after the first render, so setting a
+  // default once would leave the picker stuck on "" after the load resolved.
+  const [pickedId, setPickedId] = useState("");
+
+  const openable = useMemo(
+    () => (programs || []).filter((p) => p.status === "open" && !p.runs_own_registration),
+    [programs],
+  );
+  const picked = openable.find((p) => p.id === pickedId) || openable[0] || null;
+  const url = orgSlug && picked ? buildRegUrl(orgSlug, picked.id) : "";
+
+  // Why there's nothing to open, honestly. `status` allows draft/open/closed/
+  // cancelled (live CHECK), and a partner-run class is published but registers
+  // on the PARTNER's site — so "none of your classes are published" would state
+  // the wrong cause for three of those five cases. Only claim the shared truth:
+  // nothing is open to families. Partner-run gets its own sentence because
+  // there is no action to take.
+  const allPartnerRun = (programs || []).length > 0 && (programs || []).every((p) => p.runs_own_registration);
+
+  // The questions in the order families meet them: enabled standard, then active
+  // custom. Labels only - what an input LOOKS like is the real form's job now.
   const items = [];
   for (const f of STANDARD_FIELDS) {
     const s = std[f.key];
-    // `offered` carried into the preview so it shows the answers this provider
-    // actually offers. The hint used to be a hardcoded string naming two options
-    // - a sixth copy of the vocabulary, and one that would start lying the moment
-    // somebody ticked a third answer.
-    if (s?.enabled) items.push({ key: f.key, label: (s.label || "").trim() || f.label, required: f.alwaysRequired || !!s.required, kind: "standard", stdKey: f.key, offered: s.offered });
+    if (s?.enabled) items.push({ key: f.key, label: (s.label || "").trim() || f.label, required: f.alwaysRequired || !!s.required });
   }
   for (const r of customRows) {
-    if (r.is_active !== false) items.push({ key: r.id, label: r.label, required: !!r.is_required, kind: "custom", field_type: r.field_type, options: r.options });
+    if (r.is_active === false) continue;
+    // A question scoped to one class is NOT asked of everyone, so say so. The
+    // old list showed every question unconditionally, which is the same kind of
+    // lie the drawing was. Named when we can find the class; a question scoped
+    // to a class outside this term still says it's limited rather than printing
+    // a raw id.
+    const scopeId = r.applies_to === "program" ? r.applies_to_value : null;
+    const scopeProg = scopeId ? (programs || []).find((p) => p.id === scopeId) : null;
+    items.push({
+      key: r.id,
+      label: r.label,
+      required: !!r.is_required,
+      scope: scopeId ? (scopeProg ? `Only on ${programLabel(scopeProg)}` : "Only on one class") : null,
+    });
   }
 
   return (
     <aside style={{ position: "sticky", top: 12, background: CREAM, border: `1px solid ${RULE}`, borderRadius: 12, padding: 16 }}>
       <div style={{ fontSize: 12, fontWeight: 700, color: PURPLE, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10 }}>Preview</div>
-      <div style={{ fontSize: 12, color: MUTED, marginBottom: 12 }}>How these questions read on your form.</div>
-      {items.length === 0 ? (
-        <div style={{ fontSize: 13, color: MUTED }}>No extra questions turned on yet.</div>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {items.map((it) => (
-            <div key={it.key}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: INK }}>
-                {it.label}{it.required && <span style={{ color: RED, marginLeft: 3 }}>*</span>}
-              </div>
-              <PreviewInput item={it} />
-            </div>
-          ))}
-        </div>
-      )}
-    </aside>
-  );
-}
 
-function PreviewInput({ item }) {
-  const box = { marginTop: 5, width: "100%", boxSizing: "border-box", border: `1px solid ${RULE}`, borderRadius: 6, padding: "7px 9px", fontSize: 12, color: MUTED, background: "#fff" };
-  if (item.kind === "standard") {
-    // Built from the provider's own choices rather than a fixed string, so the
-    // preview and the real form cannot disagree about what a family will see.
-    if (item.stdKey === "dismissal_method") {
-      const chosen = offeredChoices(item.offered ? { offered: item.offered } : null);
-      return (
-        <div style={box}>
-          {chosen.map((c) => `○ ${c.parent}`).join("   ")}
-          {chosen.some((c) => needsAftercareProvider(c.value)) && (
-            <div style={{ marginTop: 4 }}>&nbsp;&nbsp;&nbsp;&crarr; Which aftercare program?</div>
+      {url ? (
+        <>
+          <div style={{ fontSize: 12, color: MUTED, marginBottom: 10, lineHeight: 1.5 }}>
+            Click through your real registration form the way a family does.
+          </div>
+          {openable.length > 1 && (
+            <>
+              <label htmlFor="preview-class" style={{ ...fieldLabel, fontSize: 11 }}>Which class</label>
+              <select
+                id="preview-class"
+                value={picked.id}
+                onChange={(e) => setPickedId(e.target.value)}
+                style={{ ...textInput, fontSize: 12, marginBottom: 10 }}
+              >
+                {openable.map((p) => (
+                  <option key={p.id} value={p.id}>{programLabel(p)}</option>
+                ))}
+              </select>
+            </>
+          )}
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ ...smallPrimary, display: "block", textAlign: "center", textDecoration: "none", padding: "9px 14px" }}
+          >
+            Open my registration form ↗
+          </a>
+          <div style={{ fontSize: 11, color: MUTED, marginTop: 8, lineHeight: 1.5 }}>
+            Opens in a new tab. This is your live form, so look around but don't finish a payment.
+          </div>
+        </>
+      ) : (
+        <div style={{ fontSize: 12, color: MUTED, lineHeight: 1.55 }}>
+          {openable.length > 0 ? (
+            "We couldn't build your form's link. Please refresh and try again."
+          ) : (programs || []).length === 0 ? (
+            <>
+              {/* `programs` is already filtered to the term families register
+                  for, so "no classes" here does NOT mean the provider has none
+                  at all - they may have a past term full of them. Say which
+                  term is missing a class rather than implying they've never
+                  built one. */}
+              No classes yet in the term families are registering for.{" "}
+              <Link to="/admin/programs" style={{ color: BRIGHT, fontWeight: 600, textDecoration: "none" }}>Add one</Link>{" "}
+              and you can open the form here exactly as a family sees it.
+            </>
+          ) : allPartnerRun ? (
+            "Your families register on your partner's site, so there's no form of ours to preview."
+          ) : (
+            <>
+              Nothing to open yet — none of your classes are open to families right now.{" "}
+              <Link to="/admin/programs" style={{ color: BRIGHT, fontWeight: 600, textDecoration: "none" }}>Open one for registration</Link>{" "}
+              and this opens your real form.
+            </>
           )}
         </div>
-      );
-    }
-    const hints = {
-      guardian_secondary: "Name · email · phone",
-      authorized_pickup: "Up to 4 people (first & last name)",
-      do_not_release: "Name(s) — optional",
-      emergency_contact: "Name · phone",
-      how_heard: "Dropdown ▾",
-    };
-    return <div style={box}>{hints[item.stdKey] || ""}</div>;
-  }
-  if (item.field_type === "textarea") return <div style={{ ...box, minHeight: 34 }} />;
-  if (item.field_type === "checkbox") return <div style={{ marginTop: 5, fontSize: 12, color: MUTED }}>☐ Yes</div>;
-  if (item.field_type === "select") return <div style={box}>{(item.options?.[0] || "Pick one") + " ▾"}</div>;
-  if (item.field_type === "multiselect") return <div style={{ marginTop: 5, fontSize: 12, color: MUTED }}>{(item.options || []).slice(0, 3).map((o) => `☐ ${o}`).join("   ") || "☐ …"}</div>;
-  if (item.field_type === "date") return <div style={box}>mm / dd / yyyy</div>;
-  if (item.field_type === "number") return <div style={box}>0</div>;
-  return <div style={box} />;
+      )}
+
+      <div style={{ borderTop: `1px solid ${RULE}`, marginTop: 14, paddingTop: 12 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: INK, marginBottom: 8 }}>Your questions, in order</div>
+        {items.length === 0 ? (
+          <div style={{ fontSize: 12, color: MUTED }}>No extra questions turned on yet.</div>
+        ) : (
+          <ol style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 7 }}>
+            {items.map((it) => (
+              <li key={it.key} style={{ fontSize: 12, color: INK, lineHeight: 1.45 }}>
+                {it.label}{it.required && <span style={{ color: RED, marginLeft: 3 }}>*</span>}
+                {it.scope && <div style={{ fontSize: 11, color: MUTED }}>{it.scope}</div>}
+              </li>
+            ))}
+          </ol>
+        )}
+        <div style={{ fontSize: 11, color: MUTED, marginTop: 8, lineHeight: 1.5 }}>
+          Your form also asks everything under "Always on your form" above.
+        </div>
+      </div>
+    </aside>
+  );
 }
 
 function Toggle({ on, locked, onClick }) {
