@@ -395,7 +395,7 @@ export default function LocationsList({ embedded = false }) {
         disabled={editingId === "new"}
         style={btn(BRIGHT, "#fff", false, editingId === "new")}
       >
-        + Add a location
+        + Add a site
       </button>
     </>
   );
@@ -426,7 +426,7 @@ export default function LocationsList({ embedded = false }) {
                 on their confirmation.</>
               ) : (
                 <>Sites where you run your classes. <strong>Address, room number, arrival
-                and dismissal instructions, food/drink policy, location contact, and
+                and dismissal instructions, food/drink policy, site contact, and
                 notes</strong> all show up in every offer, add-on offer, and reminder
                 email instructors get for a camp here — so write them with the instructor
                 in mind.</>
