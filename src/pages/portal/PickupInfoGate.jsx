@@ -105,6 +105,18 @@ export default function PickupInfoGate({ students, parent, orgId, onComplete }) 
 
   const allValid = !loading && students.every((s) => problemFor(s) === null);
 
+  // problemFor has always written a specific sentence for each thing that blocks
+  // this screen, and none of them was ever rendered - the only signal was Save
+  // going grey, which on a gate a parent cannot skip reads as a broken button
+  // rather than as missing information. Surfaced next to the button they just
+  // pressed. Named per child, because "add the aftercare program" is useless when
+  // two siblings are on screen and only one is missing it.
+  const blockers = loading
+    ? []
+    : students
+        .map((s) => ({ name: s.name, msg: problemFor(s) }))
+        .filter((b) => b.msg && b.msg !== "loading");
+
   async function submit() {
     if (!allValid || saving) return;
     setSaving(true);
@@ -191,6 +203,19 @@ export default function PickupInfoGate({ students, parent, orgId, onComplete }) 
       </div>
 
       {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
+
+      {/* Why the button below is greyed out. Sits directly above it so it is in
+          the same glance as the control it explains. */}
+      {blockers.length > 0 && !saving && (
+        <div className="mt-6 rounded-lg border-2 border-j2s-purple/15 bg-j2s-purple-soft/40 px-4 py-3 text-sm text-j2s-ink/80">
+          <p className="font-semibold text-j2s-ink">Still needed before you continue:</p>
+          <ul className="mt-1 grid gap-1">
+            {blockers.map((b, i) => (
+              <li key={i}>{students.length > 1 && b.name ? `${b.name}: ${b.msg}` : b.msg}</li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <button
         onClick={submit}
