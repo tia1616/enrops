@@ -95,6 +95,10 @@ function alwaysOnFor(isLegacyReg) {
     "Allergies and medical notes",
     "Emergency contact",
     "Parent / guardian name, email, and phone",
+    // StepParent.jsx:57 renders this for everyone — that file has no `lean` prop
+    // at all — so leaving it out kept the list incomplete for all seven tenants,
+    // not just the two legacy-only chips above.
+    "Mailing address",
     ...(isLegacyReg ? ["How did you hear about us?"] : []),
   ];
 }
@@ -436,11 +440,16 @@ export default function RegistrationQuestions() {
   // clicking it re-upserted identical rows. This matches what the other settings
   // pages in this repo already do (BackgroundCheckSettings, PayRatesSettings,
   // EmailSenderSettings, BrandLogoSettings): one control, one derived truth.
+  // "Saved ✓" must not render when the questions never loaded. load()'s error
+  // path leaves `std` as {} and returns, and stdDiffersFrom's `if (!a) return
+  // false` then makes stdDirty false — so without this guard the button paints a
+  // green tick over a page that is showing an error toast and zero questions.
+  const stdLoaded = Object.keys(std).length > 0;
   const stdSave = useMemo(() => ({
     disabled: savingStd || !stdDirty,
-    label: savingStd ? "Saving…" : stdDirty ? "Save standard questions" : "Saved ✓",
-    done: !savingStd && !stdDirty,
-  }), [savingStd, stdDirty]);
+    label: savingStd ? "Saving…" : (!stdDirty && stdLoaded) ? "Saved ✓" : "Save standard questions",
+    done: !savingStd && !stdDirty && stdLoaded,
+  }), [savingStd, stdDirty, stdLoaded]);
 
   // --- custom section handlers (immediate writes) ---
   const customRows = useMemo(
@@ -620,7 +629,12 @@ export default function RegistrationQuestions() {
                     style={{
                       padding: "9px 18px", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 600,
                       fontFamily: "inherit", cursor: stdSave.disabled ? "default" : "pointer",
-                      background: stdSave.done ? OK_GREEN : BRIGHT, color: "#fff", opacity: savingStd ? 0.7 : 1,
+                      background: stdSave.done ? OK_GREEN : BRIGHT, color: "#fff",
+                      // Same expression as the panel's twin, so one derived state
+                      // cannot be painted two ways: dim a genuinely dead button,
+                      // keep the green "Saved ✓" bright because that is a settled
+                      // state rather than a blocked one.
+                      opacity: stdSave.disabled && !stdSave.done ? 0.55 : 1,
                     }}
                   >
                     {stdSave.label}
@@ -1115,7 +1129,7 @@ function FormPreview({ std, customRows, programs, orgSlug, stdDirty, stdEdited, 
                 display: "flex", alignItems: "center", justifyContent: "center",
                 background: stdSave.done ? OK_GREEN : BRIGHT,
                 cursor: stdSave.disabled ? "default" : "pointer",
-                opacity: stdSave.disabled && !stdSave.done ? 0.7 : 1,
+                opacity: stdSave.disabled && !stdSave.done ? 0.55 : 1,
               }}
             >
               {stdSave.label}
