@@ -271,10 +271,24 @@ export default function QuickProgramBuilder() {
   // buttons grow to 69px tall to match. Measured on staging at 375x812. Operators
   // build classes on their phones, so that is the case to get right, not the
   // exception. 480 rather than 375 so a wrapped label never happens at all.
+  //
+  // TWO thresholds, because the footer now holds THREE buttons. 480 was measured
+  // for Cancel + Create; adding "Save as draft" brought the defect straight back
+  // in the band just above it - measured on staging at 500px, all three buttons
+  // 69px tall with the label wrapped, which is exactly what this breakpoint
+  // exists to prevent. Cancel(96) + Save as draft(142) + Create(235) + 2 gaps
+  // needs ~493px of content box, and a 500px viewport only gives 468. 560 leaves
+  // headroom for a longer label without re-measuring. `narrow` is unchanged for
+  // the two-button onboarding pair that also uses it.
   const [narrow, setNarrow] = useState(() =>
     typeof window !== "undefined" && window.innerWidth < 480);
+  const [narrowFooter, setNarrowFooter] = useState(() =>
+    typeof window !== "undefined" && window.innerWidth < 560);
   useEffect(() => {
-    const onResize = () => setNarrow(window.innerWidth < 480);
+    const onResize = () => {
+      setNarrow(window.innerWidth < 480);
+      setNarrowFooter(window.innerWidth < 560);
+    };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
@@ -2192,8 +2206,8 @@ export default function QuickProgramBuilder() {
             field landed on the publish button while the eye was on a Cancel to its
             left. On the one control here that cannot be undone, "what you tab to"
             and "what you see" have to be the same button. */}
-        <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", gap: 10, alignItems: "stretch" }}>
-          {narrow ? (
+        <div style={{ display: "flex", flexDirection: narrowFooter ? "column" : "row", gap: 10, alignItems: "stretch" }}>
+          {narrowFooter ? (
             <>
               {createButton}
               {draftButton}
