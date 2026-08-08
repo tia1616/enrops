@@ -220,6 +220,14 @@ export default function QuickProgramBuilder() {
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState("");
   const [createdId, setCreatedId] = useState(null);
+  // 'open' | 'draft' — which button was pressed. The success screen cannot read
+  // it off the row (we only select the id back), and it decides whether we claim
+  // the class is live and whether a share link is offered at all.
+  const [createdStatus, setCreatedStatus] = useState("open");
+  // The session dates enrops worked out for a draft. This is the whole point of
+  // saving without publishing: Jeff reads these into Facilitron before the class
+  // goes live. null = not fetched yet, [] = none derivable (no start date).
+  const [draftDates, setDraftDates] = useState(null);
 
   // How long this build actually took. We refused to print a made-up "your first
   // program takes N minutes" in the step strip, so this is what earns the right
@@ -704,7 +712,14 @@ export default function QuickProgramBuilder() {
     }
   }
 
-  async function handleCreate() {
+  // asDraft: save it privately instead of publishing. Jeff runs two districts
+  // through Facilitron and needs enrops to work out the session dates so he can
+  // copy them across BEFORE the class goes live — ~25 times a term. Everything
+  // downstream already supports it (the registration page filters status='open',
+  // and derive_program_session_dates does NOT care about status: verified on a
+  // real draft, which returned all 8 dates), so the only gap was this builder
+  // publishing the instant you hit Create.
+  async function handleCreate(asDraft = false) {
     if (!valid || submitting) return;
     setSubmitting(true);
     setErr("");
@@ -749,7 +764,10 @@ export default function QuickProgramBuilder() {
         program_type: "standard",
         photo_url: photoUrl || null, // optional; NULL renders the no-image card
         runs_own_registration: false, // native enrops checkout
-        status: "open", // live the moment it's created
+        // Live the moment it's created, unless the operator chose Save as draft.
+        // Same two values the classic wizard writes, so a class made in either
+        // builder is the same kind of row.
+        status: asDraft ? "draft" : "open",
       };
       const { data, error } = await supabase
         .from("programs")
@@ -757,11 +775,24 @@ export default function QuickProgramBuilder() {
         .select("id")
         .single();
       if (error) throw error;
-      // Advertising conversion. This builder always writes status 'open', so
-      // every successful save here is a live, customer-facing registration
-      // workflow. Path 1 of 3 - see pixelWorkflowCreated.
-      pixelWorkflowCreated();
+      // Advertising conversion — only for a class that actually went live. A
+      // draft is private and takes no registrations, so counting it as a
+      // customer-facing registration workflow would inflate the conversion the
+      // pixel exists to measure. The classic wizard already skips it for the
+      // same reason.
+      if (!asDraft) pixelWorkflowCreated();
+      setCreatedStatus(asDraft ? "draft" : "open");
       setCreatedId(data.id);
+      // Read the dates enrops just worked out, so the operator can copy them
+      // straight out. Not awaited inside the save's own guard: the class IS
+      // saved by now, and a failure here must not read as a failed save.
+      // RLS-respecting (the function is not SECURITY DEFINER) and granted to
+      // authenticated, so this returns only their own program's dates.
+      if (asDraft) {
+        supabase
+          .rpc("derive_program_session_dates", { p_program_id: data.id })
+          .then(({ data: d, error: dErr }) => setDraftDates(dErr ? [] : (d ?? [])));
+      }
       recordBuildTiming(data.id);
       // This org now has one more program than it did at mount. Without this,
       // "Create another" brings the form back with programCount still 0 and the
@@ -843,6 +874,10 @@ export default function QuickProgramBuilder() {
     setPhotoErr("");
     setErr("");
     setCreatedId(null);
+    // Reset with createdId, or "add another class" shows the previous draft's
+    // dates under the new blank form.
+    setCreatedStatus("open");
+    setDraftDates(null);
     // Back to the operator's usual ages rather than blank — the next class is
     // almost always for the same children.
     setAgeMin(profile.default_age_min != null ? String(profile.default_age_min) : "");
@@ -1176,6 +1211,80 @@ export default function QuickProgramBuilder() {
   }
 
   // ---- Success: program is live, hand over the shareable link ----
+  if (createdId && createdStatus === "draft") {
+    // A draft is private: no "live", no Stripe step, no share link (the public
+    // catalog filters status='open', so there is nothing to share and offering
+    // it would be a link that goes nowhere). Wording mirrors the classic
+    // wizard's draft screen so the two builders say the same thing.
+    const fmt = (iso) => {
+      const [y, m, d] = String(iso).split("-").map(Number);
+      if (!y || !m || !d) return String(iso);
+      // Constructed from parts, not `new Date(iso)`, which parses a bare date as
+      // UTC and can render the previous day west of Greenwich.
+      return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+    };
+    return (
+      <div style={{ maxWidth: 560, margin: "0 auto", padding: "24px 16px" }}>
+        <div style={{ fontSize: 22, fontWeight: 700, color: INK, marginBottom: 8 }}>
+          Saved as a draft.
+        </div>
+        <p style={{ color: MUTED, fontSize: 14, lineHeight: 1.6, margin: "0 0 20px" }}>
+          Only you can see it — families can&rsquo;t register and it isn&rsquo;t on your
+          public page. Publish it from your program list when you&rsquo;re ready.
+        </p>
+
+        <div style={{ background: "#FBFBFB", border: `1px solid ${RULE}`, borderRadius: 12, padding: "16px 18px", marginBottom: 20 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: INK, marginBottom: 6 }}>
+            Your class dates
+          </div>
+          {draftDates === null ? (
+            <div style={{ fontSize: 13.5, color: MUTED }}>Working them out…</div>
+          ) : draftDates.length === 0 ? (
+            <div style={{ fontSize: 13.5, color: MUTED, lineHeight: 1.55 }}>
+              {/* Honest about the cause: the deriver needs a first session date,
+                  and this builder only requires one for a one-off class. */}
+              Add a start date to this class and enrops will work out every session
+              date for you — open it from your program list to add one.
+            </div>
+          ) : (
+            <>
+              <p style={{ fontSize: 13.5, color: MUTED, lineHeight: 1.55, margin: "0 0 10px" }}>
+                {draftDates.length} session{draftDates.length === 1 ? "" : "s"}, skipping
+                that district&rsquo;s no-school days. Copy these anywhere you need them.
+              </p>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {draftDates.map((d) => (
+                  <span key={String(d)} style={{ fontSize: 12.5, color: INK, background: "#fff", border: `1px solid ${RULE}`, borderRadius: 999, padding: "4px 11px" }}>
+                    {fmt(d)}
+                  </span>
+                ))}
+              </div>
+              {/* Plain text as well as chips: the chips are readable, but Jeff is
+                  pasting these into Facilitron, and you cannot paste chips. */}
+              <div style={{ fontSize: 12, color: MUTED, marginTop: 12, marginBottom: 4, fontWeight: 600 }}>
+                All dates, ready to copy
+              </div>
+              <textarea
+                readOnly
+                value={draftDates.join("\n")}
+                onFocus={(e) => e.target.select()}
+                rows={Math.min(draftDates.length, 8)}
+                style={{ width: "100%", boxSizing: "border-box", fontFamily: "inherit", fontSize: 12.5, color: INK, border: `1px solid ${RULE}`, borderRadius: 8, padding: "8px 10px", background: "#fff", resize: "vertical" }}
+              />
+            </>
+          )}
+        </div>
+
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+          <button onClick={resetForAnother} style={primaryBtn}>Add another class</button>
+          <button onClick={() => navigate("/admin/programs")} style={secondaryBtn}>
+            Go to my programs
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (createdId) {
     // Arielle's rule: never a payment-less live page. If Stripe isn't connected
     // yet, lead with that step (the WOW) and dim the share link until it is.
@@ -1300,7 +1409,10 @@ export default function QuickProgramBuilder() {
   // was the wrong tool.
   const createButton = (
     <button
-      onClick={handleCreate}
+      // MUST be wrapped: passing handleCreate directly hands React's click event
+      // in as `asDraft`, and a SyntheticEvent is truthy — every Create would
+      // have silently saved a draft.
+      onClick={() => handleCreate(false)}
       disabled={!valid || submitting}
       style={{ ...primaryBtn, flex: 1, opacity: !valid || submitting ? 0.55 : 1, cursor: !valid || submitting ? "not-allowed" : "pointer" }}
     >
@@ -1315,6 +1427,19 @@ export default function QuickProgramBuilder() {
       style={{ ...secondaryBtn, flex: narrow ? 1 : "0 0 auto", opacity: submitting ? 0.55 : 1, cursor: submitting ? "not-allowed" : "pointer" }}
     >
       Cancel
+    </button>
+  );
+  // Save without publishing. Same validation as Create — a draft still has to be
+  // a real class, and it is the same row either way. Wording matches the classic
+  // wizard's "Save as draft" so the two builders name one action one way.
+  const draftButton = (
+    <button
+      type="button"
+      onClick={() => handleCreate(true)}
+      disabled={!valid || submitting}
+      style={{ ...secondaryBtn, flex: narrow ? 1 : "0 0 auto", opacity: !valid || submitting ? 0.55 : 1, cursor: !valid || submitting ? "not-allowed" : "pointer" }}
+    >
+      {submitting ? "Saving…" : "Save as draft"}
     </button>
   );
 
@@ -2027,32 +2152,33 @@ export default function QuickProgramBuilder() {
           {narrow ? (
             <>
               {createButton}
+              {draftButton}
               {cancelButton}
             </>
           ) : (
             <>
               {cancelButton}
+              {draftButton}
               {createButton}
             </>
           )}
         </div>
-        {/* Says what the button does. This builder writes status "open" with the
-            org's active term, which is exactly what the public catalog gates on, so
-            the class is live the moment it saves - there is no draft and no preview
-            here. Jeff wants that immediacy; the problem was only that nothing on
-            screen said so.
+        {/* Says what each button does. Create still publishes immediately — Jeff
+            wants that immediacy and it is unchanged; the problem was only that
+            nothing on screen said so. What HAS changed is that "there is no draft"
+            is no longer true, so this copy had to move with the feature rather
+            than keep telling operators a draft does not exist.
 
             TWO SENTENCES, because "your registration page" is not a place every
             tenant has. Two prod orgs (Mrs. Richelle, Shoreview Chess) run
             uses_enrops_registration = false - their families register elsewhere and
             never see an enrops page - which is the same trap `cancellationCopy` was
             written to escape. `=== true` and not `!== false`, matching that helper:
-            the fallback has to be the sentence that is true in BOTH states, and
-            "there is no draft" is the part Jessica actually needed to know. */}
+            the fallback has to be the sentence that is true in BOTH states. */}
         <div style={{ ...helpStyle, marginTop: -4, textAlign: "center" }}>
           {org?.uses_enrops_registration === true
-            ? "This publishes the class to your registration page straight away."
-            : "This creates the class straight away — there is no draft to review first."}
+            ? "Create puts the class on your registration page straight away. Save as draft keeps it private, with its dates worked out, until you publish it."
+            : "Create makes the class straight away. Save as draft keeps it private, with its dates worked out, until you're ready."}
         </div>
       </div>
     </div>
