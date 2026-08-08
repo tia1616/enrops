@@ -107,6 +107,93 @@ const programLabel = (p) =>
 // the scoped sentence. Unreachable today (this page and the quick builder only
 // ever write 'all' or 'program'; 0 non-'all'/'program' and 0 NULL rows on either
 // env) — which is exactly when a fail-open default goes unnoticed.
+// The SAVED state of the standard section, as staged state. Extracted from
+// load() because the unsaved-changes warning has to compare against exactly what
+// load() would have seeded — a second copy of this logic would drift and the
+// warning would either cry wolf or stay silent on a real change.
+function seedStdFromRows(rows) {
+  const byStd = {};
+  for (const r of rows ?? []) if (r.standard_key) byStd[r.standard_key] = r;
+  const seeded = {};
+  for (const f of STANDARD_FIELDS) {
+    const row = byStd[f.key];
+    seeded[f.key] = {
+      // Existing rows keep their saved state (J2S and any org that already
+      // configured its form are untouched). For a brand-new org with no row,
+      // the safety-critical fields (alwaysRequired: dismissal + pickup) start
+      // ON so the builder shows them pre-selected; saving activates them. This
+      // is what the section copy promises.
+      enabled: row ? row.is_active !== false : !!f.alwaysRequired,
+      required: f.alwaysRequired ? true : (row ? !!row.is_required : f.defaultRequired),
+      label: row?.label ?? f.label,
+      // Which answers this provider offers. Seeded THROUGH offeredChoices so
+      // the builder shows exactly what the registration form will render -
+      // including its fallbacks. Reading row.options.offered raw would let
+      // Settings display a stale or unknown value the form silently drops,
+      // and the two screens would disagree about the live configuration.
+      offered: f.answerChoices
+        ? offeredChoices(row?.options).map((c) => c.value)
+        : null,
+    };
+  }
+  return seeded;
+}
+
+// What the REGISTRATION FORM actually asks today, in the same shape as staged
+// state. Identical to seedStdFromRows EXCEPT for `enabled`, and that one field is
+// the whole point:
+//
+//   - seedStdFromRows pre-selects the safety questions (alwaysRequired) for an
+//     org with no row, because the section promises "they start on — review them
+//     and Save to add them to your form". That is a PROPOSAL, not the truth.
+//   - the form asks a question only when an ACTIVE ROW EXISTS. No row = not asked.
+//
+// Comparing staged state against the seed would therefore report a brand-new org
+// as having nothing unsaved, while its panel lists two safety questions the form
+// does not ask — the same lie the drawing told, in the case that matters most
+// (a provider setting up for the first time).
+function savedStdTruth(rows) {
+  const proposed = seedStdFromRows(rows);
+  const byStd = {};
+  for (const r of rows ?? []) if (r.standard_key) byStd[r.standard_key] = r;
+  const truth = {};
+  for (const f of STANDARD_FIELDS) {
+    const row = byStd[f.key];
+    truth[f.key] = { ...proposed[f.key], enabled: row ? row.is_active !== false : false };
+  }
+  return truth;
+}
+
+// Has the operator got standard questions this panel shows but the form does not
+// ask — whether from an unsaved toggle or from never having saved the
+// pre-selected defaults?
+//
+// `offered` is compared as a SET, not a sequence: the checkbox handler APPENDS
+// (`[...offered, value]`) while the seed arrives in canonical CHOICES order, so
+// unticking a choice and re-ticking it yields the same answers in a different
+// order. That saves and renders identically, so calling it "unsaved changes"
+// would be crying wolf — and a warning that fires when nothing changed is one
+// people learn to ignore.
+function stdHasUnsavedChanges(std, rows) {
+  const saved = savedStdTruth(rows);
+  return STANDARD_FIELDS.some((f) => {
+    const a = std?.[f.key];
+    const b = saved[f.key];
+    if (!a) return false;           // not seeded yet; nothing staged to lose
+    if (!!a.enabled !== !!b.enabled) return true;
+    // Off in both: nothing about it reaches the form, so a stray label edit on a
+    // question nobody is asked is not something to warn about. (saveStandard
+    // does not persist a disabled question's label anyway, so warning here would
+    // report a change that saving silently discards.)
+    if (!a.enabled && !b.enabled) return false;
+    if (!!a.required !== !!b.required) return true;
+    if ((a.label ?? "") !== (b.label ?? "")) return true;
+    const setA = [...new Set(a.offered ?? [])].sort().join("|");
+    const setB = [...new Set(b.offered ?? [])].sort().join("|");
+    return setA !== setB;
+  });
+}
+
 function scopeNote(row, programs) {
   if (!row || row.applies_to === "all") return null;
   const target = (programs || []).find((p) => p.id === row.applies_to_value);
@@ -217,31 +304,7 @@ export default function RegistrationQuestions() {
         setPrograms(progs ?? []);
       });
     // Seed the staged standard state from existing rows (or defaults).
-    const byStd = {};
-    for (const r of data ?? []) if (r.standard_key) byStd[r.standard_key] = r;
-    const seeded = {};
-    for (const f of STANDARD_FIELDS) {
-      const row = byStd[f.key];
-      seeded[f.key] = {
-        // Existing rows keep their saved state (J2S and any org that already
-        // configured its form are untouched). For a brand-new org with no row,
-        // the safety-critical fields (alwaysRequired: dismissal + pickup) start
-        // ON so the builder shows them pre-selected; saving activates them. This
-        // is what the section copy promises.
-        enabled: row ? row.is_active !== false : !!f.alwaysRequired,
-        required: f.alwaysRequired ? true : (row ? !!row.is_required : f.defaultRequired),
-        label: row?.label ?? f.label,
-        // Which answers this provider offers. Seeded THROUGH offeredChoices so
-        // the builder shows exactly what the registration form will render -
-        // including its fallbacks. Reading row.options.offered raw would let
-        // Settings display a stale or unknown value the form silently drops,
-        // and the two screens would disagree about the live configuration.
-        offered: f.answerChoices
-          ? offeredChoices(row?.options).map((c) => c.value)
-          : null,
-      };
-    }
-    setStd(seeded);
+    setStd(seedStdFromRows(data));
     setSavedStd(false);
     setLoading(false);
   }
@@ -314,6 +377,12 @@ export default function RegistrationQuestions() {
       setSavingStd(false);
     }
   }
+
+  // Unsaved standard-question changes. NOT `!savedStd`: that is also the state
+  // before anybody has touched anything, so it would warn on every page load.
+  // Derived from the actual values, so toggling something back to how it was
+  // stops the warning.
+  const stdDirty = useMemo(() => stdHasUnsavedChanges(std, rows), [std, rows]);
 
   // --- custom section handlers (immediate writes) ---
   const customRows = useMemo(
@@ -517,7 +586,16 @@ export default function RegistrationQuestions() {
           </div>
 
           {/* Preview = the real form, opened in a new tab */}
-          <FormPreview std={std} customRows={customRows} programs={programs} orgSlug={org?.slug} />
+          <FormPreview
+            std={std}
+            customRows={customRows}
+            programs={programs}
+            orgSlug={org?.slug}
+            stdDirty={stdDirty}
+            canEdit={canEdit}
+            savingStd={savingStd}
+            onSaveStandard={saveStandard}
+          />
         </div>
       )}
     </div>
@@ -871,7 +949,7 @@ function ConfirmBar({ message, onCancel, onConfirm }) {
 // partner-run (those register on the partner's own site, so we have no form to
 // show). With nothing published there is no URL, and the panel says why instead
 // of handing over a link that bounces straight back to the catalog.
-function FormPreview({ std, customRows, programs, orgSlug }) {
+function FormPreview({ std, customRows, programs, orgSlug, stdDirty, canEdit, savingStd, onSaveStandard }) {
   // Derived, not seeded: programs arrive after the first render, so setting a
   // default once would leave the picker stuck on "" after the load resolved.
   const [pickedId, setPickedId] = useState("");
@@ -920,6 +998,43 @@ function FormPreview({ std, customRows, programs, orgSlug }) {
   return (
     <aside style={{ position: "sticky", top: 12, background: CREAM, border: `1px solid ${RULE}`, borderRadius: 12, padding: 16 }}>
       <div style={{ fontSize: 12, fontWeight: 700, color: PURPLE, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10 }}>Preview</div>
+
+      {/* The form reads SAVED rows, so unsaved standard-question changes make
+          this panel and the real form disagree. Say so where the operator is
+          looking, and put the Save here too: the section's own Save button sits
+          at the bottom of the left column, which on a phone (where this panel
+          now renders FIRST) is below the entire builder.
+
+          Deliberately the SAME action, not a second one: same handler, same
+          label, same busy state, so the two cannot diverge or disagree about
+          what saving means. Jessica's rule is one entry point per action; this
+          is one action reachable from where its consequence is described.
+
+          Placed ABOVE the button because it qualifies the button. */}
+      {stdDirty && (
+        <div style={{ background: "#FBF1DC", border: "1px solid #E0C88A", borderRadius: 8, padding: "9px 11px", marginBottom: 10 }}>
+          <div style={{ fontSize: 12, color: INK, lineHeight: 1.45 }}>
+            <strong style={{ fontWeight: 600 }}>You have unsaved changes.</strong>{" "}
+            Your form asks the questions you've saved, so what you change here won't
+            show up until you save it.
+          </div>
+          {canEdit && (
+            <button
+              type="button"
+              onClick={onSaveStandard}
+              disabled={savingStd}
+              style={{
+                marginTop: 8, width: "100%", minHeight: 36, padding: "7px 12px",
+                background: "transparent", color: AMBER, border: "1px solid #E0C88A",
+                borderRadius: 6, fontFamily: "inherit", fontSize: 12, fontWeight: 600,
+                cursor: savingStd ? "default" : "pointer", opacity: savingStd ? 0.7 : 1,
+              }}
+            >
+              {savingStd ? "Saving…" : "Save standard questions"}
+            </button>
+          )}
+        </div>
+      )}
 
       {url ? (
         <>
