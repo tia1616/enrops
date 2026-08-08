@@ -21,11 +21,11 @@ import { supabase } from "../../../lib/supabase";
 import Chevron from "../../../components/Chevron.jsx";
 import NeedsLinkingSection from "../contacts/NeedsLinkingSection.jsx";
 import ImportContactsModal from "../contacts/ImportContactsModal.jsx";
-// This component is the GOES-TO-SITES half of the venue surface (SchoolsLocations
-// renders LocationsList instead for own-space orgs), so its body says "site" — the
-// word the ICP vocabulary guide records operators using, and the word
-// QuickProgramBuilder already used for the same action. The nav item and the page
-// title stay "Locations" for every venue model: Jessica's 2026-08-05 decision.
+// This component is the PARTNER-VENUES half of the venue surface — SchoolsLocations
+// renders LocationsList instead when org.venue_model === 'own_venue' — so its body says
+// "site", the word the ICP vocabulary guide records operators using and the word
+// QuickProgramBuilder already used for the same action. The nav item and the page title
+// stay "Locations" for every venue model: Jessica's 2026-08-05 decision.
 import { venueWord, venueWordPlural, addVenueLabel, venueCount } from "../../../lib/venueWords.js";
 import FindMissingAddressesModal from "../FindMissingAddressesModal.jsx";
 import AddSchoolModal from "./AddSchoolModal.jsx";

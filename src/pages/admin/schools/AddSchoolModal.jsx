@@ -25,9 +25,10 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "../../../lib/supabase";
 import PlacesAutocomplete, { PlacesLookupHint } from "../../../components/PlacesAutocomplete";
-// The noun follows the provider's venue model, so the heading repeats back whichever
-// button they pressed ("Add a site" from SchoolsList / QuickProgramBuilder for
-// goes-to-sites orgs, "Add a location" for own-space). See src/lib/venueWords.js.
+// The noun follows org.venue_model, so the heading repeats back whichever button was
+// pressed — "Add a site" when opened from SchoolsList (partner_venues orgs), "Add a
+// location" for own_venue. This modal is opened from ProgramWizardNew too, which is why
+// it resolves the word itself rather than taking it as a prop. See lib/venueWords.js.
 import { venueWord, VenueWord, addVenueLabel } from "../../../lib/venueWords.js";
 
 const BRIGHT = "#5847C9";
