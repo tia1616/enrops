@@ -1045,13 +1045,15 @@ function FormPreview({ std, customRows, programs, orgSlug, stdDirty, canEdit, sa
           a full viewport, so the disappearing block was the only signal and
           "vanished" reads the same as "reverted my toggle".
           Keyed on savedStd (set only after the write resolves) AND !stdDirty, so
-          it cannot claim saved while something is still pending. */}
+          it cannot claim saved while something is still pending.
+
+          The wording makes no claim ABOUT THE LIST below it: an operator who
+          turns every standard question off and saves gets "No extra questions
+          turned on yet." in that list, and "your form now asks these questions"
+          would be pointing at nothing. Both safety questions CAN be switched off
+          (alwaysRequired governs required, not enabled), so that state is
+          reachable. "Up to date" is true in every state a save can leave. */}
       {savedStd && !stdDirty && (
-        {/* Deliberately makes no claim ABOUT THE LIST below it. An operator who
-            turns every standard question off and saves gets "No extra questions
-            turned on yet." in that list, and a confirmation reading "your form
-            now asks these questions" would be pointing at nothing. This sentence
-            is true in every state the save can leave behind. */}
         <div style={{ fontSize: 12, color: OK_GREEN, fontWeight: 600, marginBottom: 10 }}>
           Saved ✓ Your form is up to date.
         </div>
