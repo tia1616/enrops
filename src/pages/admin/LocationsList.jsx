@@ -78,7 +78,7 @@ const EMPTY_DRAFT = {
   notes: "",
 };
 
-// `embedded` — rendered inside SchoolsLocations as the own-venue "Locations"
+// `embedded` — rendered inside SchoolsLocations as the own-venue "Sites"
 // tab. In that mode the page already owns the <h1> + intro, so suppress this
 // component's own header card and show just the action buttons (mirrors how
 // SchoolsList is a pure list). Standalone (default) keeps the full header.
@@ -288,7 +288,7 @@ export default function LocationsList({ embedded = false }) {
     // purpose: this is also the form you fix a districtless location in, and
     // blocking every other field behind the district would be an obstruction.
     if (editingId === "new" && draft.district_id === "") {
-      setError("Choose this location's district — or pick “No district” if it doesn't follow one.");
+      setError("Choose this site's district — or pick “No district” if it doesn't follow one.");
       return;
     }
     setSaving(true);
@@ -373,7 +373,7 @@ export default function LocationsList({ embedded = false }) {
         <button
           type="button"
           onClick={() => setFindingAddresses(true)}
-          title="Look up addresses for every location that doesn't have one yet"
+          title="Look up addresses for every site that doesn't have one yet"
           style={{
             padding: "10px 14px",
             background: "transparent",
@@ -419,13 +419,13 @@ export default function LocationsList({ embedded = false }) {
           justifyContent: "space-between",
         }}>
           <div>
-            <h1 style={{ fontSize: 26, fontWeight: 700, color: INK, margin: 0, letterSpacing: -0.4 }}>Locations</h1>
+            <h1 style={{ fontSize: 26, fontWeight: 700, color: INK, margin: 0, letterSpacing: -0.4 }}>Sites</h1>
             <div style={{ color: MUTED, marginTop: 4, fontSize: 14, maxWidth: 720 }}>
               {isLean ? (
                 <>Where your classes run. Families see these when they pick a class, and
                 on their confirmation.</>
               ) : (
-                <>Locations where you run your classes. <strong>Address, room number, arrival
+                <>Sites where you run your classes. <strong>Address, room number, arrival
                 and dismissal instructions, food/drink policy, location contact, and
                 notes</strong> all show up in every offer, add-on offer, and reminder
                 email instructors get for a camp here — so write them with the instructor
@@ -453,7 +453,7 @@ export default function LocationsList({ embedded = false }) {
       )}
 
       {loading ? (
-        <div style={{ color: MUTED, fontSize: 14, padding: 16 }}>Loading locations…</div>
+        <div style={{ color: MUTED, fontSize: 14, padding: 16 }}>Loading sites…</div>
       ) : locations.length === 0 ? (
         <div style={{
           background: "#fff",
@@ -464,7 +464,7 @@ export default function LocationsList({ embedded = false }) {
           color: MUTED,
           fontSize: 14,
         }}>
-          No locations yet. Click <strong>+ Add a location</strong> to set up your first one.
+          No sites yet. Click <strong>+ Add a site</strong> to set up your first one.
         </div>
       ) : (
         locations.map((loc) => (
@@ -485,7 +485,7 @@ export default function LocationsList({ embedded = false }) {
             style={{ width: "100%", maxWidth: 560, height: "100%", background: "#fff", boxShadow: "-12px 0 40px rgba(0,0,0,0.18)", overflowY: "auto", borderTopLeftRadius: 12, borderBottomLeftRadius: 12 }}
           >
             <EditCard
-              title={editingId === "new" ? "New location" : (locations.find((l) => l.id === editingId)?.name ?? "")}
+              title={editingId === "new" ? "New site" : (locations.find((l) => l.id === editingId)?.name ?? "")}
               draft={draft}
               bind={bind}
               applyPlace={applyPlace}
@@ -547,11 +547,11 @@ function DisplayCard({ loc, campCount, districtName, onEdit, isLean = false }) {
             </div>
           ) : (
             // No district of EITHER kind (structured id or legacy free-text), so
-            // no school calendar applies and this location's class dates never
+            // no school calendar applies and this site's class dates never
             // skip no-school days. Own-venue orgs never see the grouped
             // "No district" warning on the partner list, so say it on the row.
             <div
-              title="Open this location and set its district so its class dates skip that district's no-school days"
+              title="Open this site and set its district so its class dates skip that district's no-school days"
               style={{ fontSize: 11, color: "#8a6d1f", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}
             >
               No district — dates won&rsquo;t skip no-school days
@@ -568,7 +568,7 @@ function DisplayCard({ loc, campCount, districtName, onEdit, isLean = false }) {
             <div style={{ fontSize: 13, color: CORAL, fontStyle: "italic" }}>
               {isLean
                 ? "No address yet — families won't see where this one is."
-                : "No details filled in yet — instructors won't see any extra info for this location."}
+                : "No details filled in yet — instructors won't see any extra info for this site."}
             </div>
           ) : (
             <>
@@ -580,7 +580,7 @@ function DisplayCard({ loc, campCount, districtName, onEdit, isLean = false }) {
               ))}
               {contactBits.length > 0 && (
                 <div style={{ fontSize: 13, color: INK, lineHeight: 1.4 }}>
-                  <span style={{ color: MUTED, fontWeight: 600 }}>Location contact: </span>
+                  <span style={{ color: MUTED, fontWeight: 600 }}>Site contact: </span>
                   {contactBits.join(" · ")}
                 </div>
               )}
@@ -612,7 +612,7 @@ function EditCard({ title, draft, bind, applyPlace, partners, districts, error, 
     }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
         <div style={{ fontSize: 18, fontWeight: 700, color: INK }}>
-          {isNew ? "New location" : `Editing ${title}`}
+          {isNew ? "New site" : `Editing ${title}`}
         </div>
         {/* The legend explains a badge that no longer appears for registration
             operators, so it goes with it. */}
@@ -624,7 +624,7 @@ function EditCard({ title, draft, bind, applyPlace, partners, districts, error, 
       </div>
 
       <Field
-        label="Location name *"
+        label="Site name *"
         hint={<PlacesLookupHint enabled={placesEnabled} down={lookupDown} />}
         instructorFacing
       >
@@ -649,8 +649,8 @@ function EditCard({ title, draft, bind, applyPlace, partners, districts, error, 
       <Field
         label="Area"
         hint={isLean
-          ? "The town or neighbourhood this location is in. Defaults to the city from the address."
-          : "The area this location is in (e.g. Portland, Hillsboro). Instructors rank areas in their availability survey, and instructor matching uses it. Defaults to the city from the address."}
+          ? "The town or neighbourhood this site is in. Defaults to the city from the address."
+          : "The area this site is in (e.g. Portland, Hillsboro). Instructors rank areas in their availability survey, and instructor matching uses it. Defaults to the city from the address."}
       >
         <input type="text" {...bind("area")} placeholder={parseCity(draft.address) ? `e.g. ${parseCity(draft.address)} (from address)` : "e.g. Portland"} style={inputStyle} />
         {!draft.area?.trim() && parseCity(draft.address) && (
@@ -685,9 +685,9 @@ function EditCard({ title, draft, bind, applyPlace, partners, districts, error, 
             so promising dates "will skip" outright would be false right then. */}
         <div style={{ fontSize: 12, marginTop: 6, lineHeight: 1.5, color: draft.district_id === NO_DISTRICT ? "#8a6d1f" : "#6b6b6b" }}>
           {draft.district_id === NO_DISTRICT
-            ? "No district means no school calendar here, so this location's class dates won't skip no-school days."
+            ? "No district means no school calendar here, so this site's class dates won't skip no-school days."
             : draft.district_id === ""
-              ? "The district's calendar is what makes class dates skip no-school days. Pick the one this location follows."
+              ? "The district's calendar is what makes class dates skip no-school days. Pick the one this site follows."
               : "Class dates here will skip this district's no-school days once its school calendar is on file."}
         </div>
         {draft.district_id === NEW_DISTRICT && (
@@ -758,18 +758,18 @@ function EditCard({ title, draft, bind, applyPlace, partners, districts, error, 
       </Field>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 14 }}>
-        <Field label="Location contact name" instructorFacing>
+        <Field label="Site contact name" instructorFacing>
           <input type="text" {...bind("contact_name")} placeholder="e.g. Jane Smith" style={inputStyle} />
         </Field>
-        <Field label="Location contact phone" instructorFacing>
+        <Field label="Site contact phone" instructorFacing>
           <input type="text" {...bind("contact_phone")} placeholder="e.g. 503-555-1234" style={inputStyle} />
         </Field>
-        <Field label="Location contact email" instructorFacing>
+        <Field label="Site contact email" instructorFacing>
           <input type="email" {...bind("contact_email")} placeholder="e.g. jane@venue.org" style={inputStyle} />
         </Field>
       </div>
 
-      <Field label="Notes" hint="Anything else worth telling the instructor about this location." instructorFacing>
+      <Field label="Notes" hint="Anything else worth telling the instructor about this site." instructorFacing>
         <textarea {...bind("notes")} placeholder="e.g. Air conditioning is unreliable on hot days — bring a fan." rows={2} style={textareaStyle} />
       </Field>
       </>
@@ -782,7 +782,7 @@ function EditCard({ title, draft, bind, applyPlace, partners, districts, error, 
           Cancel
         </button>
         <button type="button" onClick={onSave} disabled={saving} style={btn(BRIGHT, "#fff", false, saving)}>
-          {saving ? "Saving…" : (isNew ? "Add location" : "Save changes")}
+          {saving ? "Saving…" : (isNew ? "Add site" : "Save changes")}
         </button>
       </div>
     </div>
