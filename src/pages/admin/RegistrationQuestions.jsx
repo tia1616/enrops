@@ -92,6 +92,29 @@ const stdFieldKey = (key) => `std_${key}`;
 const programLabel = (p) =>
   `${p?.curriculum || "Class"}${p?.day_of_week ? ` (${p.day_of_week}s)` : ""}`;
 
+// "Only on <class>" — or null when every family is asked. Said in TWO places
+// (the custom-questions list and the preview's ordered list), so it lives here:
+// they were drifting already, one naming the class by curriculum alone and the
+// other by curriculum + day.
+//
+// Deny-list on purpose: ONLY the literal 'all' means every family. The live
+// CHECK also allows 'enrollment_type', and the column is nullable
+// (`text DEFAULT 'all'`, no NOT NULL) — while
+// get_active_registration_fields() matches `applies_to = 'all' OR (applies_to =
+// 'program' AND ...)`, so an 'enrollment_type' OR NULL row is dropped from the
+// form entirely. Coercing either to 'all' would announce it as a question every
+// family answers when in fact nobody is ever asked it, so both fall through to
+// the scoped sentence. Unreachable today (this page and the quick builder only
+// ever write 'all' or 'program'; 0 non-'all'/'program' and 0 NULL rows on either
+// env) — which is exactly when a fail-open default goes unnoticed.
+function scopeNote(row, programs) {
+  if (!row || row.applies_to === "all") return null;
+  const target = (programs || []).find((p) => p.id === row.applies_to_value);
+  // Neutral fallback: the class may be in another term (so absent from this
+  // list) or deleted. Never render a raw id, never render blank.
+  return target ? `Only on ${programLabel(target)}` : "Only on one class";
+}
+
 const FIELD_TYPES = [
   { value: "text", label: "Short text" },
   { value: "textarea", label: "Long text (paragraph)" },
@@ -130,7 +153,13 @@ export default function RegistrationQuestions() {
   // can no longer register for would just be noise in the picker.
   // The preview panel reads the same list to open the real form on a class a
   // family could actually reach (see FormPreview).
-  const [programs, setPrograms] = useState([]);
+  //
+  // null = NOT LOADED YET, [] = loaded and this org has none. The preview has to
+  // tell those apart: this query is deliberately not awaited (it must never block
+  // the questions from rendering), so an initial `[]` would render the
+  // loaded-and-empty copy -- "No classes yet ... Add one" -- to an org with 32
+  // open classes until the promise landed.
+  const [programs, setPrograms] = useState(null);
   const [toast, setToast] = useState(null);        // { kind, message }
 
   // Staged state for the standard section (saved together).
@@ -170,7 +199,17 @@ export default function RegistrationQuestions() {
       .eq("organization_id", org.id)
       .eq("term", org.active_registration_term || "")
       .order("curriculum")
-      .then(({ data: progs }) => setPrograms(progs ?? []));
+      .then(({ data: progs }) => {
+        // Same staleness guard the questions query gets above. Without it, a
+        // fast org switch (A -> B) where A's slower response lands last leaves
+        // org A's classes on screen under org B: the preview would then build
+        // buildRegUrl(B.slug, A_program_id), a link whose program the public
+        // wizard cannot find, so the family-facing form opens with nothing
+        // selected. Harmless when this list only fed a dropdown; it is a
+        // clickable link target now.
+        if (myReq !== loadReq.current) return;
+        setPrograms(progs ?? []);
+      });
     // Seed the staged standard state from existing rows (or defaults).
     const byStd = {};
     for (const r of data ?? []) if (r.standard_key) byStd[r.standard_key] = r;
@@ -457,10 +496,13 @@ export default function RegistrationQuestions() {
               )}
             </section>
 
-            {/* Custom questions */}
+            {/* Custom questions. Coerced to an array: this section's scope
+                picker only needs "which classes can I choose", so a not-yet-
+                loaded list is the same as an empty one to it. The preview gets
+                the raw value because it MUST tell loading from empty. */}
             <CustomSection
               customRows={customRows}
-              programs={programs}
+              programs={programs ?? []}
               canEdit={canEdit}
               onSave={saveCustom}
               onDelete={deleteCustom}
@@ -625,11 +667,11 @@ function CustomSection({ customRows, canEdit, programs = [], onSave, onDelete, o
                 </div>
                 {/* Honest state: a question limited to one class must SAY so, or
                     this list reads as "every family is asked all of these".
-                    Falls back to a neutral label if the program isn't in the
-                    current term, so the scope never renders blank. */}
-                {r.applies_to === "program" && (
+                    Wording + fallback come from scopeNote so this and the
+                    preview's list cannot disagree. */}
+                {scopeNote(r, programs) && (
                   <div style={{ fontSize: 11, color: BRIGHT, fontWeight: 600, marginTop: 3 }}>
-                    Only on {programs.find((p) => p.id === r.applies_to_value)?.curriculum || "one program"}
+                    {scopeNote(r, programs)}
                   </div>
                 )}
               </div>
@@ -645,6 +687,18 @@ function CustomSection({ customRows, canEdit, programs = [], onSave, onDelete, o
                       // Re-hydrate the scope picker from the stored columns, or
                       // editing a program-scoped question would silently reset it
                       // to "Every program" on save.
+                      //
+                      // KNOWN GAP, deliberately not fixed here: this covers
+                      // 'program' only, while the live CHECK also allows
+                      // 'enrollment_type'. Such a row would seed "" here and
+                      // saveCustom() would then write applies_to='all' — silently
+                      // widening a scoped question to every family. Unreachable
+                      // today: nothing writes that value (this editor and the
+                      // quick builder only write 'all' or 'program') and there are
+                      // 0 such rows on staging or prod. scopeNote() already treats
+                      // any non-'all' scope as scoped, so the LABEL is honest even
+                      // if this seed is not. Fixing it properly means deciding how
+                      // enrollment-type scoping should look, which is a feature.
                       applies_to_program_id: r.applies_to === "program" ? (r.applies_to_value || "") : "",
                     })}
                     style={linkBtn}
@@ -831,6 +885,12 @@ function FormPreview({ std, customRows, programs, orgSlug }) {
   // there is no action to take.
   const allPartnerRun = (programs || []).length > 0 && (programs || []).every((p) => p.runs_own_registration);
 
+  // null = the class list has not landed yet (the parent does not await it). Say
+  // nothing rather than picking an empty-state sentence: every one of them names
+  // a cause and offers an action, and all of them are wrong for an org whose
+  // classes simply have not arrived.
+  const stillLoading = programs === null;
+
   // The questions in the order families meet them: enabled standard, then active
   // custom. Labels only - what an input LOOKS like is the real form's job now.
   const items = [];
@@ -842,16 +902,12 @@ function FormPreview({ std, customRows, programs, orgSlug }) {
     if (r.is_active === false) continue;
     // A question scoped to one class is NOT asked of everyone, so say so. The
     // old list showed every question unconditionally, which is the same kind of
-    // lie the drawing was. Named when we can find the class; a question scoped
-    // to a class outside this term still says it's limited rather than printing
-    // a raw id.
-    const scopeId = r.applies_to === "program" ? r.applies_to_value : null;
-    const scopeProg = scopeId ? (programs || []).find((p) => p.id === scopeId) : null;
+    // lie the drawing was. Same sentence as the editable list above (scopeNote).
     items.push({
       key: r.id,
       label: r.label,
       required: !!r.is_required,
-      scope: scopeId ? (scopeProg ? `Only on ${programLabel(scopeProg)}` : "Only on one class") : null,
+      scope: scopeNote(r, programs),
     });
   }
 
@@ -896,9 +952,11 @@ function FormPreview({ std, customRows, programs, orgSlug }) {
         </>
       ) : (
         <div style={{ fontSize: 12, color: MUTED, lineHeight: 1.55 }}>
-          {openable.length > 0 ? (
+          {stillLoading ? (
+            "Finding the classes families can register for…"
+          ) : openable.length > 0 ? (
             "We couldn't build your form's link. Please refresh and try again."
-          ) : (programs || []).length === 0 ? (
+          ) : programs.length === 0 ? (
             <>
               {/* `programs` is already filtered to the term families register
                   for, so "no classes" here does NOT mean the provider has none
