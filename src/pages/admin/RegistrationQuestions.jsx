@@ -75,14 +75,29 @@ const STANDARD_FIELDS = [
 
 // Fields your registration form always asks (built in — not configurable here).
 // Shown read-only so the builder reflects the whole form, not just the extras.
-const ALWAYS_ON = [
-  "Child's name, grade, and birth date",
-  "Homeroom teacher",
-  "Allergies and medical notes",
-  "Emergency contact",
-  "Parent / guardian name, email, and phone",
-  "How did you hear about us?",
-];
+//
+// TWO of these are asked ONLY on the legacy registration form. StepStudent.jsx
+// wraps "Homeroom teacher" (line 107) and "How did you hear about us?" (line 206)
+// in `{!lean && (`, where Register.jsx:35 defines
+// `isLean = org.instructor_pay_model !== 'legacy_own_platform'` — so on prod only
+// j2s asks them and the other six orgs never do. Listing them for everyone was
+// wrong before this change and merely stale; the preview panel now states that
+// this list is complete AND puts a button next to it that opens the real form,
+// which turns a stale list into a claim a family-facing page disproves.
+//
+// NOTE the test is `=== 'legacy_own_platform'`, NOT the `hasInstructorPortal`
+// test further down (`!== 'enrops_platform'`). They are different axes and a
+// third pay model would make them disagree — do not merge them.
+function alwaysOnFor(isLegacyReg) {
+  return [
+    "Child's name, grade, and birth date",
+    ...(isLegacyReg ? ["Homeroom teacher"] : []),
+    "Allergies and medical notes",
+    "Emergency contact",
+    "Parent / guardian name, email, and phone",
+    ...(isLegacyReg ? ["How did you hear about us?"] : []),
+  ];
+}
 
 const STD_KEYS = STANDARD_FIELDS.map((f) => f.key);
 const stdFieldKey = (key) => `std_${key}`;
@@ -231,6 +246,11 @@ export default function RegistrationQuestions() {
   // instructor portal, so copy that promises one describes a screen they cannot
   // reach - it reads as a missing feature rather than a feature they don't need.
   const hasInstructorPortal = org?.instructor_pay_model !== "enrops_platform";
+  // A DIFFERENT axis from hasInstructorPortal above: this is the exact test the
+  // public registration form uses to decide whether to ask "Homeroom teacher"
+  // and "How did you hear about us?" (Register.jsx:35). Only j2s is legacy.
+  const isLegacyReg = org?.instructor_pay_model === "legacy_own_platform";
+  const alwaysOn = useMemo(() => alwaysOnFor(isLegacyReg), [isLegacyReg]);
   const canEdit = useMemo(() => ["owner", "admin"].includes(orgMember?.role), [orgMember]);
 
   const [rows, setRows] = useState(null);          // all custom_reg_fields rows for the org
@@ -253,6 +273,18 @@ export default function RegistrationQuestions() {
   const [std, setStd] = useState({});              // { key: {enabled, required, label} }
   const [savingStd, setSavingStd] = useState(false);
   const [savedStd, setSavedStd] = useState(false);
+  // Has the OPERATOR edited the standard section in this sitting?
+  //
+  // Separate from stdDirty, which only knows that staged state differs from what
+  // the form asks. Those differ in a case that is the MAJORITY of real orgs: an
+  // org with no saved safety rows is dirty on arrival, because the section
+  // pre-selects dismissal + pickup as a proposal. Verified on prod: 5 of 7 orgs
+  // have neither row. Telling those operators "you have unsaved changes" before
+  // they touch anything blames them for something the platform proposed, and is
+  // the cry-wolf failure this file's own comments argue against. A viewer can
+  // never set this (every control is behind canEdit), so they only ever see the
+  // neutral wording.
+  const [stdTouched, setStdTouched] = useState(false);
 
   const loadReq = useRef(0);
 
@@ -306,6 +338,10 @@ export default function RegistrationQuestions() {
     // Seed the staged standard state from existing rows (or defaults).
     setStd(seedStdFromRows(data));
     setSavedStd(false);
+    // Reseeding IS the staged state being reset, so nothing is operator-edited
+    // any more. Keeping this true would leave "you have unsaved changes" on
+    // screen describing edits that no longer exist.
+    setStdTouched(false);
     setLoading(false);
   }
 
@@ -317,6 +353,7 @@ export default function RegistrationQuestions() {
   // --- standard section handlers ---
   function editStd(key, patch) {
     setSavedStd(false);
+    setStdTouched(true);
     setStd((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
   }
 
@@ -383,6 +420,26 @@ export default function RegistrationQuestions() {
   // Derived from the actual values, so toggling something back to how it was
   // stops the warning.
   const stdDirty = useMemo(() => stdHasUnsavedChanges(std, rows), [std, rows]);
+
+  // ONE derived state for the standard-section Save, used by BOTH places it
+  // appears (the section itself and the preview panel). They previously computed
+  // `disabled` from different inputs — `savingStd || savedStd` vs `savingStd` —
+  // so in any state where savedStd and stdDirty were both true one button showed
+  // a disabled "Saved ✓" while the other showed an enabled Save, 900px apart, on
+  // the same screen. Deriving both from this object is what makes the comment
+  // claiming they cannot diverge actually true.
+  //
+  // Gating on !stdDirty also fixes the older button's own dishonesty: it used to
+  // sit enabled saying "Save standard questions" on a form with nothing to save
+  // (savedStd resets on any edit, including an edit that puts a value back), and
+  // clicking it re-upserted identical rows. This matches what the other settings
+  // pages in this repo already do (BackgroundCheckSettings, PayRatesSettings,
+  // EmailSenderSettings, BrandLogoSettings): one control, one derived truth.
+  const stdSave = useMemo(() => ({
+    disabled: savingStd || !stdDirty,
+    label: savingStd ? "Saving…" : stdDirty ? "Save standard questions" : "Saved ✓",
+    done: !savingStd && !stdDirty,
+  }), [savingStd, stdDirty]);
 
   // --- custom section handlers (immediate writes) ---
   const customRows = useMemo(
@@ -528,7 +585,7 @@ export default function RegistrationQuestions() {
               <h2 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: INK }}>Always on your form</h2>
               <p style={{ margin: "3px 0 10px", fontSize: 13, color: MUTED }}>These are built in and always asked.</p>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                {ALWAYS_ON.map((f) => (
+                {alwaysOn.map((f) => (
                   <span key={f} style={{ fontSize: 12, color: INK, background: "#fff", border: `1px solid ${RULE}`, borderRadius: 999, padding: "4px 11px" }}>{f}</span>
                 ))}
               </div>
@@ -558,14 +615,14 @@ export default function RegistrationQuestions() {
                   <button
                     type="button"
                     onClick={saveStandard}
-                    disabled={savingStd || savedStd}
+                    disabled={stdSave.disabled}
                     style={{
                       padding: "9px 18px", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 600,
-                      fontFamily: "inherit", cursor: savingStd || savedStd ? "default" : "pointer",
-                      background: savedStd ? OK_GREEN : BRIGHT, color: "#fff", opacity: savingStd ? 0.7 : 1,
+                      fontFamily: "inherit", cursor: stdSave.disabled ? "default" : "pointer",
+                      background: stdSave.done ? OK_GREEN : BRIGHT, color: "#fff", opacity: savingStd ? 0.7 : 1,
                     }}
                   >
-                    {savingStd ? "Saving…" : savedStd ? "Saved ✓" : "Save standard questions"}
+                    {stdSave.label}
                   </button>
                 </div>
               )}
@@ -592,8 +649,9 @@ export default function RegistrationQuestions() {
             programs={programs}
             orgSlug={org?.slug}
             stdDirty={stdDirty}
+            stdTouched={stdTouched}
+            stdSave={stdSave}
             canEdit={canEdit}
-            savingStd={savingStd}
             savedStd={savedStd}
             onSaveStandard={saveStandard}
           />
@@ -950,7 +1008,7 @@ function ConfirmBar({ message, onCancel, onConfirm }) {
 // partner-run (those register on the partner's own site, so we have no form to
 // show). With nothing published there is no URL, and the panel says why instead
 // of handing over a link that bounces straight back to the catalog.
-function FormPreview({ std, customRows, programs, orgSlug, stdDirty, canEdit, savingStd, savedStd, onSaveStandard }) {
+function FormPreview({ std, customRows, programs, orgSlug, stdDirty, stdTouched, stdSave, canEdit, savedStd, onSaveStandard }) {
   // Derived, not seeded: programs arrive after the first render, so setting a
   // default once would leave the picker stuck on "" after the load resolved.
   const [pickedId, setPickedId] = useState("");
@@ -1013,25 +1071,52 @@ function FormPreview({ std, customRows, programs, orgSlug, stdDirty, canEdit, sa
 
           Placed ABOVE the button because it qualifies the button. */}
       {stdDirty && (
-        <div style={{ background: "#FBF1DC", border: "1px solid #E0C88A", borderRadius: 8, padding: "9px 11px", marginBottom: 10 }}>
+        <div
+          role="status"
+          aria-live="polite"
+          style={{ background: "#FBF1DC", border: "1px solid #E0C88A", borderRadius: 8, padding: "9px 11px", marginBottom: 10 }}
+        >
+          {/* TWO states, and conflating them was the worst defect in this panel.
+              stdTouched = the operator actually edited something in this sitting.
+              Without it, an org that has simply never saved its pre-selected
+              safety questions (5 of 7 on prod) was told it had unsaved CHANGES
+              on arrival — blaming the operator for a proposal the section made.
+              Both states are worth stating and both want the same Save; only the
+              cause differs, so only the sentence differs. */}
           <div style={{ fontSize: 12, color: INK, lineHeight: 1.45 }}>
-            <strong style={{ fontWeight: 600 }}>You have unsaved changes.</strong>{" "}
-            Your form asks the questions you've saved, so what you change here won't
-            show up until you save it.
+            {stdTouched ? (
+              <>
+                <strong style={{ fontWeight: 600 }}>You have unsaved changes.</strong>{" "}
+                Your form asks the questions you've saved, so what you change here
+                won't show up until you save it.
+              </>
+            ) : (
+              <>
+                <strong style={{ fontWeight: 600 }}>Not on your form yet.</strong>{" "}
+                These questions are switched on here but haven't been saved, so your
+                form isn't asking them.{canEdit ? " Save to add them." : ""}
+              </>
+            )}
           </div>
           {canEdit && (
             <button
               type="button"
               onClick={onSaveStandard}
-              disabled={savingStd}
+              disabled={stdSave.disabled}
+              // Same derived state as the section's button, and filled BRIGHT like
+              // it: the amber-on-amber outline was 4.37:1 text and a 1.46:1 border
+              // (both under WCAG AA), and 36px tall on the surface this panel
+              // exists to serve on a phone — smaller than the 38px this same file
+              // already rejected 60 lines below. 44 is the thumb floor.
               style={{
-                marginTop: 8, width: "100%", minHeight: 36, padding: "7px 12px",
-                background: "transparent", color: AMBER, border: "1px solid #E0C88A",
-                borderRadius: 6, fontFamily: "inherit", fontSize: 12, fontWeight: 600,
-                cursor: savingStd ? "default" : "pointer", opacity: savingStd ? 0.7 : 1,
+                ...smallPrimary, marginTop: 8, width: "100%", minHeight: 44,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                background: stdSave.done ? OK_GREEN : BRIGHT,
+                cursor: stdSave.disabled ? "default" : "pointer",
+                opacity: stdSave.disabled && !stdSave.done ? 0.7 : 1,
               }}
             >
-              {savingStd ? "Saving…" : "Save standard questions"}
+              {stdSave.label}
             </button>
           )}
         </div>
@@ -1054,7 +1139,7 @@ function FormPreview({ std, customRows, programs, orgSlug, stdDirty, canEdit, sa
           (alwaysRequired governs required, not enabled), so that state is
           reachable. "Up to date" is true in every state a save can leave. */}
       {savedStd && !stdDirty && (
-        <div style={{ fontSize: 12, color: OK_GREEN, fontWeight: 600, marginBottom: 10 }}>
+        <div role="status" aria-live="polite" style={{ fontSize: 12, color: OK_GREEN, fontWeight: 600, marginBottom: 10 }}>
           Saved ✓ Your form is up to date.
         </div>
       )}
