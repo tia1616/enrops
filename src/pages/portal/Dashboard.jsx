@@ -6,6 +6,7 @@ import { getTenant } from '../../lib/tenants.js';
 import { formatTermLabel } from '../../lib/terms.js';
 import { getUserRoles } from '../../lib/useUserRoles.js';
 import { renderWaiverText } from '../../lib/waiverText.js';
+import { dismissalAnswerIncomplete } from '../../lib/dismissal.js';
 import WaiverGate from './WaiverGate.jsx';
 import PickupInfoGate from './PickupInfoGate.jsx';
 
@@ -220,7 +221,7 @@ export default function Dashboard() {
       const { data: asRegs } = await supabase
         .from('registrations')
         .select(`id, status, registered_at, program_id,
-          students(id, first_name, last_name, dismissal_method),
+          students(id, first_name, last_name, dismissal_method, aftercare_provider),
           programs(
             id, curriculum, curriculum_id, day_of_week, start_time, end_time,
             first_session_date, term, session_count,
@@ -300,7 +301,16 @@ export default function Dashboard() {
         const seenStu = new Set();
         for (const r of asRegs || []) {
           const stu = r.students;
-          if (stu?.id && stu.dismissal_method == null && !seenStu.has(stu.id)) {
+          // Unanswered OR answered-but-incomplete. "Aftercare" with no program
+          // named is the second case: the family DID answer, so the old
+          // `dismissal_method == null` test skipped them, which meant the one
+          // screen built to collect missing pickup info was the one screen that
+          // could never repair it - every staff surface read "Aftercare (provider
+          // not stated)" forever with no in-app route to fix it. Same helper the
+          // form and the gate's own blocker use, so all three agree on "complete".
+          const needsInfo = stu?.dismissal_method == null
+            || dismissalAnswerIncomplete(stu.dismissal_method, stu.aftercare_provider);
+          if (stu?.id && needsInfo && !seenStu.has(stu.id)) {
             seenStu.add(stu.id);
             incomplete.push({ student_id: stu.id, name: `${stu.first_name ?? ""} ${stu.last_name ?? ""}`.trim() });
           }
