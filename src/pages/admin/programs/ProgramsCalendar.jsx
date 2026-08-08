@@ -2125,7 +2125,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
           ) : !draft.program_location_id ? (
             <div style={{ fontSize: 12, color: "#8a6d1f", marginTop: 4 }}>
               {locations.length === 0
-                ? "Add one under Programs → Locations, then pick it here."
+                ? "Add one under Programs → Sites, then pick it here."
                 : "Every class needs a location — pick one to save."}
             </div>
           ) : (() => {

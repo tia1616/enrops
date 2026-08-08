@@ -1730,7 +1730,7 @@ export default function QuickProgramBuilder() {
                   <div style={helpStyle}>📍 {selectedLocation.address}</div>
                 ) : (
                   <div style={{ ...helpStyle, color: "#8a6d1f" }}>
-                    No address saved for this location yet — families won't see one. Add it under Programs → Locations.
+                    No address saved for this site yet — families won't see one. Add it under Programs → Sites.
                   </div>
                 )
               )}
@@ -1771,7 +1771,7 @@ export default function QuickProgramBuilder() {
                 && !(selectedLocation.district && String(selectedLocation.district).trim()) && (
                 <div style={{ ...helpStyle, color: "#8a6d1f" }}>
                   This location has no district yet, so these class dates won&rsquo;t skip no-school days.
-                  Set its district on the Locations page.
+                  Set its district on the Sites page.
                 </div>
               )}
             </>

@@ -259,7 +259,7 @@ export function PartnerContacts({ org }) {
         ) : error ? (
           <div style={{ color: RED, fontSize: 13, padding: 16 }}>{error}</div>
         ) : groups.length === 0 ? (
-          <div style={{ color: MUTED, fontSize: 13, padding: 16 }}>{q ? `No partner contacts match “${q}”.` : "No partner contacts yet — add them under each location in the Locations tab."}</div>
+          <div style={{ color: MUTED, fontSize: 13, padding: 16 }}>{q ? `No partner contacts match “${q}”.` : "No partner contacts yet — add them under each site in the Sites tab."}</div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             {groups.map((g) => (

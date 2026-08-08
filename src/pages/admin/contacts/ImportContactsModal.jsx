@@ -1127,7 +1127,7 @@ function DoneStep({ result, orgId, onClose }) {
           </p>
           <p style={{ margin: '0 0 10px', fontSize: 12.5, color: MUTED, lineHeight: 1.5 }}>
             A district or Parks &amp; Rec usually covers several sites, so we didn’t guess.
-            Add the specific venue where you’ll run programs — or skip and add them later under Locations.
+            Add the specific venue where you’ll run programs — or skip and add them later under Sites.
           </p>
           {rowErr && <div style={{ background: `${RED}1A`, color: RED, padding: 8, borderRadius: 6, fontSize: 12.5, marginBottom: 8 }}>{rowErr}</div>}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
