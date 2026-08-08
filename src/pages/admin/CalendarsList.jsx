@@ -77,11 +77,9 @@ export default function CalendarsList() {
   const { org } = useOutletContext() ?? {};
   const isLean = org?.instructor_pay_model === "enrops_platform";
   // Districts are discovered from each school's District field, which lives on
-  // the venue surface - named "Sites" for every venue_model (Jessica, 2026-08-08)
+  // the venue surface - named "Locations" for every venue_model as of 2026-08-05
   // (mirror of AdminLayout's nav label; was Locations/Partners by venue_model).
-  // Points AT the /admin/schools surface, so it has to match that nav item's label
-  // or these instructions send the operator to a menu item that does not exist.
-  const venueLabel = "Sites";
+  const venueLabel = "Locations";
   const [schoolYear, setSchoolYear] = useState(defaultSchoolYear());
   const [districts, setDistricts] = useState([]); // merged rows: [{ key, label, districtId, calendarKey, location_count }]
   const [calendars, setCalendars] = useState([]); // district_calendars rows for current school year

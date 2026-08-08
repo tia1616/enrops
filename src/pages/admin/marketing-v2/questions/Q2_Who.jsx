@@ -422,7 +422,7 @@ async function deriveScopeFromPicks(orgId, what) {
         filter: { type: "master_list" },
         info: {
           headline: "Master list (everyone)",
-          sub: "Your picked camps' sites don't have a district set yet. Sending to the full list — set district on the site in Programs → Sites, or pick a specific area below.",
+          sub: "Your picked camps' locations don't have a district set yet. Sending to the full list — set district on the location in Programs → Locations, or pick a specific area below.",
           tone: "warn",
         },
       };

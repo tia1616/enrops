@@ -1,4 +1,4 @@
-// AddSchoolModal — the unified, fast "Add a site" flow.
+// AddSchoolModal — the unified, fast "Add a location" flow.
 //
 // One step: type the name (Places autocomplete fills the address), pick a type,
 // choose the district, and save. Behind the scenes it writes BOTH a partners
@@ -25,10 +25,6 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "../../../lib/supabase";
 import PlacesAutocomplete, { PlacesLookupHint } from "../../../components/PlacesAutocomplete";
-// One noun, no conditional: a site is where they run programs — a school, a library, a
-// studio of their own. Jessica, 2026-08-08: sites and locations are the same thing, so
-// there is nothing to resolve per org and the venue_model split is gone from the
-// wording. Hardcoded rather than helper-resolved for exactly that reason.
 
 const BRIGHT = "#5847C9";
 const INK = "#1a1a1a";
@@ -97,7 +93,7 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
     // "" = the operator hasn't chosen yet. Refuse rather than silently saving a
     // districtless location (see the DISTRICT IS AN EXPLICIT CHOICE note above).
     if (districtId === "") {
-      throw new Error(`Choose this site's district — or pick “No district” if it doesn't follow one.`);
+      throw new Error("Choose this location's district — or pick “No district” if it doesn't follow one.");
     }
     if (districtId === NO_DISTRICT) return null; // deliberate: no district
     if (districtId !== NEW_DISTRICT) return districtId || null;
@@ -115,7 +111,7 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
   async function save() {
     setError("");
     const trimmed = name.trim();
-    if (!trimmed) { setError("Site name is required."); return; }
+    if (!trimmed) { setError("Location name is required."); return; }
     if (umbrellaMode && !umbrellaPartnerId) { setError("Pick the umbrella org this venue belongs to, or create one."); return; }
     if (umbrellaMode && umbrellaPartnerId === NEW_UMBRELLA && !newUmbrellaName.trim()) {
       setError("Enter a name for the new umbrella org."); return;
@@ -203,7 +199,7 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
         }}
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
-          <h2 style={{ margin: 0, fontSize: 19, fontWeight: 700, color: INK }}>Add a site</h2>
+          <h2 style={{ margin: 0, fontSize: 19, fontWeight: 700, color: INK }}>Add a location</h2>
           <button type="button" onClick={onClose} disabled={busy} aria-label="Close"
             style={{ background: "transparent", border: "none", color: MUTED, fontSize: 18, cursor: "pointer", lineHeight: 1 }}>✕</button>
         </div>
@@ -220,7 +216,7 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
 
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
           <label>
-            <Lbl>Site name *</Lbl>
+            <Lbl>Location name *</Lbl>
             {placesEnabled ? (
               <PlacesAutocomplete
                 value={name}
@@ -263,9 +259,9 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
               fallback that would overstate the unchosen case). */}
           <div style={{ fontSize: 12, color: districtId === NO_DISTRICT ? "#8a6d1f" : MUTED, marginTop: -6, lineHeight: 1.5 }}>
             {districtId === NO_DISTRICT
-              ? `No district means no school calendar here, so this site's class dates won't skip no-school days. You can set a district later.`
+              ? "No district means no school calendar here, so this location's class dates won't skip no-school days. You can set a district later."
               : districtId === ""
-                ? `The district's calendar is what makes class dates skip no-school days. Pick the one this site follows.`
+                ? "The district's calendar is what makes class dates skip no-school days. Pick the one this location follows."
                 /* Deliberately conditional: a just-created district (and an
                    existing one nobody has uploaded a calendar for yet) has no
                    no-school dates on file, so promising dates "will skip
@@ -325,7 +321,7 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
           </button>
           <button type="button" onClick={save} disabled={busy}
             style={{ padding: "9px 18px", background: BRIGHT, color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: busy ? "wait" : "pointer", opacity: busy ? 0.6 : 1 }}>
-            {busy ? "Adding…" : `Add site`}
+            {busy ? "Adding…" : "Add location"}
           </button>
         </div>
       </div>

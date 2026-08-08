@@ -65,13 +65,10 @@ const NAV = [
     ],
   },
   {
-    // "Sites" for every venue_model. Jessica's 2026-08-05 call was one name for the
-    // one surface (it replaced "Partners" for partner_venues orgs, which sent a
-    // provider hunting for the district field under a word he didn't associate with
-    // places); on 2026-08-08 she set the noun: sites and locations are the same
-    // thing — a site is where they run programs, a school or a library or their own
-    // studio. One word, no venue_model conditional.
-    to: "/admin/schools", label: "Sites",
+    // "Locations" for every venue_model (Jessica, 2026-08-05) — one name for the
+    // one surface. Was "Partners" for partner_venues orgs, which sent a provider
+    // hunting for the district field under a word he didn't associate with places.
+    to: "/admin/schools", label: "Locations",
     match: ["/admin/schools", "/admin/calendars"],
   },
   {
@@ -125,7 +122,7 @@ const NAV = [
 // Lean registration operators (instructor_pay_model === 'enrops_platform') run a
 // registration-only surface — no instructors, curriculum library, or comms yet.
 // Trim the sidebar to Home . Programs . Finances . Discounts . Settings and hide
-// the paid / curriculum surfaces. Sites (the /admin/schools surface) is a TAB
+// the paid / curriculum surfaces. Locations (the /admin/schools surface) is a TAB
 // under Programs for lean ops — they pick a venue every time they build a class,
 // so it belongs beside the programs it serves and not in Settings, where it
 // briefly lived. Any legacy_own_platform tenant (J2S) keeps the
@@ -148,7 +145,7 @@ function shapeNavForOrg(nav, org) {
                                      // ROUTE still works, so any org that
                                      // already has a second admin keeps it.
     "/admin/schedule",               // Instructors (paid upgrade)
-    "/admin/schools",                // Sites -> now a tab under
+    "/admin/schools",                // Locations -> now a tab under
                                      // Programs (see the tabs block below), so
                                      // it stays off the top-level sidebar.
     "/admin/family-comms/contacts",  // Comms (paid upgrade)
@@ -159,23 +156,23 @@ function shapeNavForOrg(nav, org) {
     if (HIDE_TOP.has(item.to)) continue;
     if (item.to === "/admin/programs" && item.tabs) {
       // Drop the curriculum "Offerings" library and the afterschool custody log,
-      // then add the venue surface as a tab. Sites/Calendars used to sit
+      // then add the venue surface as a tab. Locations/Calendars used to sit
       // under Settings for lean ops, which is where you put things you configure
-      // once -- but a registration operator picks a site every time they
+      // once -- but a registration operator picks a location every time they
       // build a class, so it belongs beside the programs it serves, not in a
       // settings drawer. School calendar is now its OWN Programs peer tab
-      // (/admin/calendars, a real route) rather than an inner tab of Sites,
+      // (/admin/calendars, a real route) rather than an inner tab of Locations,
       // so a lean op can find it without digging three levels deep.
       out.push({
         ...item,
         tabs: [
           ...item.tabs.filter((t) => t.to !== "/admin/curricula" && t.to !== "/admin/class-reports"),
           // School calendar promoted to a Programs peer (was buried as an inner
-          // tab of Sites, 3 levels deep). It's a scheduling INPUT, so it
+          // tab of Locations, 3 levels deep). It's a scheduling INPUT, so it
           // belongs beside the programs it shapes. navItemActive lights Programs
           // on /admin/calendars via this tab.
           { to: "/admin/calendars", label: "School calendar" },
-          { to: "/admin/schools", label: "Sites" },
+          { to: "/admin/schools", label: "Locations" },
         ],
       });
       continue;
@@ -677,10 +674,11 @@ export default function AdminLayout() {
           <nav style={{ padding: "12px 8px", flex: 1 }}>
             {visibleNav.map((item) => {
               const active = navItemActive(item, location.pathname);
-              // The /admin/schools label used to be swapped per org; the base label
-              // is now "Sites" for every venue_model, so no per-org override is
-              // needed. Any future venue_model-specific naming belongs in the nav
-              // definition above, not here.
+              // The /admin/schools label used to be swapped to "Locations" for
+              // own_venue orgs only; the base label is now "Locations" for every
+              // venue_model, so no per-org override is needed. Any future
+              // venue_model-specific naming belongs in the nav definition above,
+              // not here.
               const label = item.label;
               return (
                 <Link

@@ -21,11 +21,6 @@ import { supabase } from "../../../lib/supabase";
 import Chevron from "../../../components/Chevron.jsx";
 import NeedsLinkingSection from "../contacts/NeedsLinkingSection.jsx";
 import ImportContactsModal from "../contacts/ImportContactsModal.jsx";
-// This component is the PARTNER-VENUES half of the venue surface — SchoolsLocations
-// renders LocationsList instead when org.venue_model === 'own_venue'. Both now say
-// "site": Jessica, 2026-08-08, sites and locations are the same thing, so the word is
-// the same for every venue model and there is no per-org conditional left to resolve.
-// Her 2026-08-05 call — one name for one surface — still holds; only the noun changed.
 import FindMissingAddressesModal from "../FindMissingAddressesModal.jsx";
 import AddSchoolModal from "./AddSchoolModal.jsx";
 import SchoolDetailDrawer from "./SchoolDetailDrawer.jsx";
@@ -102,7 +97,7 @@ export default function SchoolsList() {
     if (pErr || lErr) {
       // Surface the failure instead of spinning "Loading…" forever (rule E).
       console.error("[SchoolsList] load failed:", pErr ?? lErr);
-      setLoadError(`Couldn't load sites: ${(pErr ?? lErr).message}. Refresh to try again.`);
+      setLoadError(`Couldn't load locations: ${(pErr ?? lErr).message}. Refresh to try again.`);
       setPartners([]);
       return;
     }
@@ -277,20 +272,19 @@ export default function SchoolsList() {
       {/* Toolbar */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
         <div style={{ fontSize: 13, color: MUTED }}>
-          {/* "site" unconditionally — one word for this surface. The venue count is
-              only shown when it DIFFERS (contact-only rows, or an umbrella with
-              several venues) — for the common 1:1 case "22 sites · 22 venues" read as
-              two different things. "venue" is a SEPARATE entity (program_locations)
-              and is deliberately left alone. */}
+          {/* "Locations" is the operator-facing name for a row here. The venue
+              count is only shown when it DIFFERS (contact-only rows, or an
+              umbrella with several venues) — for the common 1:1 case "22
+              locations · 22 venues" read as two different things. */}
           {partners === null ? "Loading…" : [
-            `${schools.length} site${schools.length === 1 ? "" : "s"}`,
+            `${schools.length} location${schools.length === 1 ? "" : "s"}`,
             ...(totalVenues !== schools.length ? [`${totalVenues} venue${totalVenues === 1 ? "" : "s"}`] : []),
             `${districts.length} district${districts.length === 1 ? "" : "s"}`,
           ].join(" · ")}
         </div>
         {partners !== null && schools.length > 0 && (
           <span
-            title={`Setting up a site by hand — entering details, looking up the address, and linking contacts + calendar across your tools — runs about ${MINUTES_SAVED_PER_PARTNER} min each. Enrops does it in a couple of clicks.`}
+            title={`Setting up a location by hand — entering details, looking up the address, and linking contacts + calendar across your tools — runs about ${MINUTES_SAVED_PER_PARTNER} min each. Enrops does it in a couple of clicks.`}
             style={{ fontSize: 12, fontWeight: 600, color: OK, background: `${OK}14`, padding: "4px 10px", borderRadius: 99 }}
           >
             {savedLabel} saved vs. by hand
@@ -305,18 +299,18 @@ export default function SchoolsList() {
           </button>
         )}
         <button type="button" onClick={() => setImporting(true)}
-          title={`Bulk-upload a list of sites (schools, Parks & Rec, etc.) + contacts from a spreadsheet`}
+          title="Bulk-upload a list of locations (schools, Parks & Rec, etc.) + contacts from a spreadsheet"
           style={{ padding: "9px 14px", background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>
-          Import sites
+          Import locations
         </button>
         <button type="button" onClick={() => setAdding(true)}
           style={{ padding: "9px 16px", background: BRIGHT, color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>
-          + Add a site
+          + Add a location
         </button>
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
-        <input type="text" placeholder={`Search sites, districts, areas…`} value={query} onChange={(e) => setQuery(e.target.value)}
+        <input type="text" placeholder="Search locations, districts, areas…" value={query} onChange={(e) => setQuery(e.target.value)}
           style={{ flex: "1 1 260px", maxWidth: 360, padding: "8px 12px", fontSize: 13, border: `1px solid ${RULE}`, borderRadius: 6, fontFamily: "inherit", boxSizing: "border-box" }} />
         <button type="button" onClick={() => setGroupByDistrict((v) => !v)}
           style={chip(groupByDistrict)}>
@@ -349,8 +343,8 @@ export default function SchoolsList() {
 
       {partners !== null && filtered.length === 0 && (
         <div style={{ background: "#fff", border: `1px dashed ${RULE}`, borderRadius: 12, padding: 36, textAlign: "center", color: MUTED, fontSize: 14 }}>
-          {query ? `No sites match that search.` : (
-            <>No sites yet. Click <strong>+ Add a site</strong> to set up your first one.</>
+          {query ? "No locations match that search." : (
+            <>No locations yet. Click <strong>+ Add a location</strong> to set up your first one.</>
           )}
         </div>
       )}
