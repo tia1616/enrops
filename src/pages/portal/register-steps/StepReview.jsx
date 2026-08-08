@@ -1,14 +1,11 @@
 import React, { useState } from 'react';
 import { formatMoney, INSTALLMENT_MIN_CENTS } from '../../../lib/pricing.js';
 import { programScheduleSummary, formatStartDate, formatDayLabel } from '../../../lib/programSchedule.js';
+import { dismissalSummary } from '../../../lib/dismissal.js';
 
-const DISMISSAL_LABELS = {
-  released_to_authorized_adult: 'Released to an authorized adult',
-  walks_or_bikes_home: 'Walks or bikes home',
-  bus: 'Bus',
-  aftercare: 'Aftercare',
-  other: 'Other',
-};
+// Was the fifth copy of this map. Now src/lib/dismissal.js. Review shows the
+// same summary the roster will, provider name included, so what the parent
+// confirms is exactly what staff later read.
 const nm = (c) => `${c?.first_name ?? ''} ${c?.last_name ?? ''}`.trim();
 
 export default function StepReview({
@@ -135,7 +132,7 @@ export default function StepReview({
               <div key={i} className="mt-3 border-t border-j2s-purple/10 pt-3 text-sm text-j2s-ink/80">
                 <p className="font-semibold text-j2s-ink">{nm(c.student) || `Child ${i + 1}`}</p>
                 {c.student?.dismissal_method && (
-                  <p className="mt-1">Dismissal: {DISMISSAL_LABELS[c.student.dismissal_method] || c.student.dismissal_method}</p>
+                  <p className="mt-1">Dismissal: {dismissalSummary(c.student)}</p>
                 )}
                 {(c.authorized_pickup || []).filter((p) => (p.first_name || '').trim()).length > 0 && (
                   <p className="mt-1">

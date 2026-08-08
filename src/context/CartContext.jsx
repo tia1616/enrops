@@ -26,7 +26,14 @@ function emptyChild(index) {
       emergency_contact_phone: '',
       how_heard: '',
       how_heard_other: '',
-      dismissal_method: '', // customizable-registration: released_to_authorized_adult | walks_or_bikes_home | bus | aftercare | other
+      // customizable-registration. The value list lives in src/lib/dismissal.js
+      // (DISMISSAL_VALUES), pinned by a test against the database CHECK - not
+      // repeated here, because a comment is the one copy nothing can verify.
+      dismissal_method: '',
+      // Only meaningful when dismissal_method is 'aftercare'. StepStudent clears
+      // it when the answer moves away, so a name cannot outlive the answer it
+      // belongs to.
+      aftercare_provider: '',
     },
     // customizable-registration (Chunk 2) — child-level structured people + answers.
     // Written to student_contacts / custom_field_values by create-registration.

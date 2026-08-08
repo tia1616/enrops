@@ -16,6 +16,7 @@ import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { usePermissions } from "../../lib/permissions";
 import Chevron from "../../components/Chevron.jsx";
+import { isSelfRelease } from "../../lib/dismissal.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -619,7 +620,9 @@ function CellDetail({ selected, instructors, onClose }) {
       )}
       {row("Attendance", present)}
       {row("Checked in", rec?.checked_in_at ? `${fmtTime(rec.checked_in_at)}${checkedBy ? ` by ${checkedBy}` : ""}` : null)}
-      {row("Released to", rec?.released_to_name)}
+      {/* "Released to" is wrong above "Walked to aftercare — Champions": nobody
+          collected the child. Same for walked/biked home. */}
+      {row(isSelfRelease(rec?.dismissal_kind) ? "Dismissal" : "Released to", rec?.released_to_name)}
       {row("Released at", rec?.released_at ? `${fmtTime(rec.released_at)}${releasedBy ? ` by ${releasedBy}` : ""}` : null)}
       {row("Notes", rec?.notes)}
       {!rec?.released_at && rec?.present === true && (

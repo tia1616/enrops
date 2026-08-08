@@ -5,6 +5,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
+import {
+  dismissalSummary,
+  aftercareReleaseLabel,
+  WALKS_OR_BIKES,
+  AFTERCARE,
+  DISMISSAL_KIND_AFTERCARE,
+  releaseConfirmationLine,
+} from "../../lib/dismissal.js";
 import PortalSwitcher from "../../components/PortalSwitcher.jsx";
 import { displayFirstName } from "../../lib/instructorName";
 import { avatarUrl } from "../../lib/avatars";
@@ -3472,7 +3480,7 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
               allergies, dietary_restrictions, medical_notes, medical_conditions,
               epipen_required, medications_at_program,
               emergency_contact_name, emergency_contact_phone,
-              special_needs_accommodations, dismissal_method
+              special_needs_accommodations, dismissal_method, aftercare_provider
             ),
             parent:parents (
               first_name, last_name, email, phone
@@ -3618,13 +3626,10 @@ function TelPhone({ phone }) {
   return <a href={`tel:${tel}`} style={{ color: PURPLE, textDecoration: "underline" }}>{phone}</a>;
 }
 
-const DISMISSAL_LABELS = {
-  released_to_authorized_adult: "Released to an authorized adult",
-  walks_or_bikes_home: "Walks or bikes home",
-  bus: "Bus",
-  aftercare: "Aftercare",
-  other: "Other",
-};
+// Was the second copy of this map. Now src/lib/dismissal.js. This surface is the
+// one an instructor reads while actually dismissing a child, so it shows
+// dismissalSummary() - "Aftercare" without the provider's name is not an answer
+// to "where does this child go".
 
 const contactName = (c) => `${c.first_name ?? ""} ${c.last_name ?? ""}`.trim();
 
@@ -3738,7 +3743,7 @@ function CamperRow({ registration, contacts = [], canRecord = false, orgAsksDism
 
       {s.dismissal_method && (
         <div style={{ marginTop: 6, fontSize: 12, color: INK }}>
-          <strong>Dismissal:</strong> {DISMISSAL_LABELS[s.dismissal_method] || s.dismissal_method}
+          <strong>Dismissal:</strong> {dismissalSummary(s)}
         </div>
       )}
 
@@ -3780,6 +3785,10 @@ function CamperRow({ registration, contacts = [], canRecord = false, orgAsksDism
           guardians={guardians}
           doNotRelease={doNotRelease}
           dismissalMethod={s.dismissal_method}
+          // The destination, not just the category. The roster line above already
+          // reads "Aftercare — Champions", but this is the control the instructor
+          // actually operates, and on a phone the two are rarely on screen together.
+          aftercareProvider={s.aftercare_provider}
           parent={p}
           orgAsksDismissal={orgAsksDismissal}
           attRecord={attRecord}
@@ -3801,7 +3810,7 @@ function CamperRow({ registration, contacts = [], canRecord = false, orgAsksDism
 // the person is added to the authorized list (parent portal / admin roster editor)
 // before they become selectable. That keeps the authorized list the single source
 // of truth and makes the log trustworthy.
-function AttendanceControls({ pickups = [], guardians = [], doNotRelease = [], dismissalMethod, parent, orgAsksDismissal = false, attRecord, saving, onSave }) {
+function AttendanceControls({ pickups = [], guardians = [], doNotRelease = [], dismissalMethod, aftercareProvider, parent, orgAsksDismissal = false, attRecord, saving, onSave }) {
   const [pickValue, setPickValue] = useState(""); // controlled dismissal <select>
 
   // Canonical name match: lowercase, collapse all whitespace to one space,
@@ -3842,7 +3851,14 @@ function AttendanceControls({ pickups = [], guardians = [], doNotRelease = [], d
     releaseOptions.push({ value: c.id, label: nm, kind: "released_to_adult", contactId: c.id, name: nm });
     seenNames.add(normName(nm));
   }
-  const canWalk = dismissalMethod === "walks_or_bikes_home";
+  const canWalk = dismissalMethod === WALKS_OR_BIKES;
+  // An aftercare child is collected by nobody, so releaseOptions above is empty
+  // for them - the registration form deliberately does not ask for an authorized
+  // pickup list when the answer is aftercare. Without this option the instructor's
+  // only choices would be the parent and guardians, i.e. recording that a parent
+  // collected a child who actually went to aftercare, or leaving the dismissal
+  // blank. A wrong custody record is worse than none.
+  const canAftercare = dismissalMethod === AFTERCARE;
 
   const present = attRecord?.present ?? null;
   const released = Boolean(attRecord?.released_at);
@@ -3862,6 +3878,20 @@ function AttendanceControls({ pickups = [], guardians = [], doNotRelease = [], d
     if (!v) return;
     if (v === "__walk__") {
       onSave({ dismissal_kind: "walked_or_biked", released_to_contact_id: null, released_to_name: "Walked / biked home", released_at: new Date().toISOString(), notes: null });
+      return;
+    }
+    if (v === "__aftercare__") {
+      // Its own dismissal_kind, not released_to_adult: Class Reports flags
+      // released_to_adult with no contact row as an authorization violation, and
+      // this is the normal, correct path. released_to_name carries the provider so
+      // the record says where the child actually went.
+      onSave({
+        dismissal_kind: DISMISSAL_KIND_AFTERCARE,
+        released_to_contact_id: null,
+        released_to_name: aftercareReleaseLabel(aftercareProvider),
+        released_at: new Date().toISOString(),
+        notes: null,
+      });
       return;
     }
     const opt = releaseOptions.find((o) => o.value === v);
@@ -3916,7 +3946,7 @@ function AttendanceControls({ pickups = [], guardians = [], doNotRelease = [], d
         <span style={{ fontSize: 12, fontWeight: 600, color: INK, minWidth: 78 }}>Dismissal</span>
         {released ? (
           <span style={{ fontSize: 12, color: OK_GREEN, fontWeight: 600 }}>
-            ✓ Released to {attRecord.released_to_name}{releasedTime ? ` at ${releasedTime}` : ""}
+            ✓ {releaseConfirmationLine(attRecord.dismissal_kind, attRecord.released_to_name)}{releasedTime ? ` at ${releasedTime}` : ""}
           </span>
         ) : present === false ? (
           // Marked absent — a dismissal record would contradict the attendance.
@@ -3933,6 +3963,7 @@ function AttendanceControls({ pickups = [], guardians = [], doNotRelease = [], d
               <option key={o.value} value={o.value}>{o.label}</option>
             ))}
             {canWalk && <option value="__walk__">Walked / biked home</option>}
+            {canAftercare && <option value="__aftercare__">{aftercareReleaseLabel(aftercareProvider)}</option>}
           </select>
         )}
         {released && !saving && (

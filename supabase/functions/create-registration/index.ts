@@ -72,6 +72,24 @@ serve(async (req) => {
       return json({ error: 'No line items' }, 400);
     }
 
+    // "Aftercare" with no program named is an INCOMPLETE answer, and the server
+    // has to say so rather than quietly storing half of it. Three browser
+    // surfaces block it, but this endpoint is public: a request that omits
+    // aftercare_provider used to coerce it to null and persist ('aftercare', NULL).
+    // Nothing could then repair that row - the parent-portal gate only collects
+    // info for children with NO answer, so a family who DID answer was skipped,
+    // and every staff surface read "Aftercare (provider not stated)" forever.
+    // Rejecting here is what makes the client-side rule an actual rule.
+    for (const child of children) {
+      const st = child?.student ?? {};
+      if (st.dismissal_method === 'aftercare'
+          && !String(st.aftercare_provider ?? '').trim()) {
+        return json({
+          error: 'Please tell us which aftercare program the child goes to.',
+        }, 400);
+      }
+    }
+
     // --- Resolve organization ---
     const { data: org, error: orgErr } = await admin
       .from('organizations')
@@ -268,6 +286,21 @@ serve(async (req) => {
           // customizable-registration: how the child leaves (null when the org
           // hasn't enabled that question)
           dismissal_method: student.dismissal_method || null,
+          // WHO, when the answer is aftercare. Stored only for that answer:
+          // accepting it unconditionally would let a name typed and then
+          // reconsidered persist against an answer it no longer describes, and
+          // every staff surface reads the two together. The client clears it on
+          // change too - this is the server refusing to take its word for it,
+          // since the browser's payload is not trustworthy.
+          // String(...) before trim, NOT `?.trim()`. The body is client-supplied
+          // JSON: a number, boolean, object or array here passes the optional-chain
+          // null check, resolves `.trim` to undefined, and throws "is not a
+          // function" - a 500 in the middle of checkout from a malformed payload.
+          // Every sibling field in this insert uses the safe `x || null` shape;
+          // this was the only one calling a string method on untrusted input.
+          aftercare_provider: student.dismissal_method === 'aftercare'
+            ? (String(student.aftercare_provider ?? '').trim().slice(0, 120) || null)
+            : null,
         })
         .select('id')
         .single();

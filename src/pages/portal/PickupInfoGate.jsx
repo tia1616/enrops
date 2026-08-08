@@ -14,6 +14,7 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase.js";
+import { needsAuthorizedPickup, needsAftercareProvider, dismissalAnswerIncomplete } from "../../lib/dismissal.js";
 import {
   PickupDismissalSection,
   GuardianSecondarySection,
@@ -39,7 +40,11 @@ export default function PickupInfoGate({ students, parent, orgId, onComplete }) 
         const [{ data: fields }, { data: contacts }, { data: studs }] = await Promise.all([
           supabase.rpc("get_active_registration_fields", { p_org_id: orgId }),
           supabase.from("student_contacts").select("student_id, role, first_name, last_name, phone, email").in("student_id", ids),
-          supabase.from("students").select("id, dismissal_method").in("id", ids),
+          // aftercare_provider selected alongside the method. Without it the
+          // "Which aftercare program?" box renders EMPTY for a child who already
+          // has one on file, and re-saving would blank a name the family had
+          // already given - the select/read mismatch turning into data loss.
+          supabase.from("students").select("id, dismissal_method, aftercare_provider").in("id", ids),
         ]);
         if (cancelled) return;
         const parsed = parseRegFields(fields || []);
@@ -49,9 +54,11 @@ export default function PickupInfoGate({ students, parent, orgId, onComplete }) 
         const init = {};
         for (const s of students) {
           const cs = (contacts || []).filter((c) => c.student_id === s.student_id);
-          const dm = (studs || []).find((x) => x.id === s.student_id)?.dismissal_method || "";
+          const stu = (studs || []).find((x) => x.id === s.student_id);
+          const dm = stu?.dismissal_method || "";
           init[s.student_id] = {
             dismissal_method: dm,
+            aftercare_provider: stu?.aftercare_provider || "",
             pickup: cs.filter((c) => c.role === "authorized_pickup"),
             doNotRelease: cs.filter((c) => c.role === "do_not_release"),
             guardian2: cs.find((c) => c.role === "guardian") || {},
@@ -76,7 +83,13 @@ export default function PickupInfoGate({ students, parent, orgId, onComplete }) 
     const d = byStudent[s.student_id];
     if (!d) return "loading";
     if (std?.dismissal_method && !d.dismissal_method) return "Choose how this child leaves.";
-    if (d.dismissal_method === "released_to_authorized_adult" && nonEmpty(d.pickup).length === 0) {
+    // Same completeness rule as the registration form, through the same helper -
+    // this gate exists to finish missing pickup info, so it must not let a family
+    // "finish" with the aftercare destination blank.
+    if (dismissalAnswerIncomplete(d.dismissal_method, d.aftercare_provider)) {
+      return "Add which aftercare program they go to.";
+    }
+    if (needsAuthorizedPickup(d.dismissal_method) && nonEmpty(d.pickup).length === 0) {
       return "Add at least one person who can pick them up.";
     }
     // Mirror Register's canAdvance: if the org marked do-not-release required, the
@@ -90,7 +103,28 @@ export default function PickupInfoGate({ students, parent, orgId, onComplete }) 
     return null;
   }
 
-  const allValid = !loading && students.every((s) => problemFor(s) === null);
+  // problemFor has always written a specific sentence for each thing that blocks
+  // this screen, and none of them was ever rendered - the only signal was Save
+  // going grey, which on a gate a parent cannot skip reads as a broken button
+  // rather than as missing information. Surfaced next to the button they just
+  // pressed. Named per child, because "add the aftercare program" is useless when
+  // two siblings are on screen and only one is missing it.
+  //
+  // ONE pass over the students, because "is this blocked" and "what do we tell
+  // them" answering the same question twice is how you get a dead grey button with
+  // nothing next to it - the bug this box exists to prevent. unresolved decides
+  // the button; blockers is the subset that has something a parent can act on.
+  // Note allValid canNOT just be `blockers.length === 0`: problemFor's "loading"
+  // sentinel is deliberately not shown to a parent, so that would enable Save for
+  // a student whose data has not arrived and submit() would deref an undefined
+  // byStudent entry.
+  const problems = loading ? [] : students.map((s) => ({ name: s.name, msg: problemFor(s) }));
+  const unresolved = problems.filter((p) => p.msg !== null);
+  const allValid = !loading && unresolved.length === 0;
+  const blockers = unresolved.filter((p) => p.msg !== "loading");
+  // True when something blocks Save but has no sentence a parent can act on, so
+  // the box still says something rather than nothing.
+  const awaitingDetails = unresolved.length > blockers.length;
 
   async function submit() {
     if (!allValid || saving) return;
@@ -110,6 +144,11 @@ export default function PickupInfoGate({ students, parent, orgId, onComplete }) 
           p_do_not_release: nonEmpty(d.doNotRelease),
           p_guardian: (g2.first_name || "").trim() ? [g2] : [],
           p_dismissal_method: d.dismissal_method || null,
+          // 7th argument, added by migration 20260807b. The parameter has NO
+          // default there on purpose, so the old 6-arg signature and this one
+          // coexist unambiguously while both environments roll forward - which
+          // means this call must always pass it, even as null.
+          p_aftercare_provider: d.aftercare_provider || null,
         });
         if (saveErr) throw saveErr;
       }
@@ -140,8 +179,21 @@ export default function PickupInfoGate({ students, parent, orgId, onComplete }) 
               <h2 className="font-titan text-xl text-j2s-ink">{s.name || "Your child"}</h2>
               <PickupDismissalSection
                 std={std}
+                // Every child renders at once here, so the radio group name and
+                // the provider input id have to differ per child.
+                instanceKey={s.student_id}
                 dismissalMethod={d.dismissal_method}
-                onDismissalChange={(v) => update(s.student_id, { dismissal_method: v })}
+                // Same clear-on-change rule as the registration form: a provider
+                // name must never outlive the answer it describes, or a roster
+                // shows a destination for a child who now walks home.
+                onDismissalChange={(v) => update(
+                  s.student_id,
+                  needsAftercareProvider(v)
+                    ? { dismissal_method: v }
+                    : { dismissal_method: v, aftercare_provider: "" },
+                )}
+                aftercareProvider={d.aftercare_provider}
+                onAftercareProviderChange={(v) => update(s.student_id, { aftercare_provider: v })}
                 pickup={d.pickup}
                 onPickupChange={(v) => update(s.student_id, { pickup: v })}
                 doNotRelease={d.doNotRelease}
@@ -160,6 +212,38 @@ export default function PickupInfoGate({ students, parent, orgId, onComplete }) 
       </div>
 
       {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
+
+      {/* Why the button below is greyed out. Sits directly above it so it is in
+          the same glance as the control it explains, and keyed off !allValid (the
+          same condition that disables the button) rather than off the message list,
+          so the button can never be disabled with nothing here.
+
+          role="alert" matches the pickup/do-not-release conflict warning inside
+          this same flow (RegExtraFields). Without it the only explanation for a
+          disabled button, on a gate a parent cannot skip, is silent to a screen
+          reader. */}
+      {!allValid && !saving && (
+        <div
+          role="alert"
+          className="mt-6 rounded-lg border-2 border-j2s-purple/15 bg-j2s-purple-soft/40 px-4 py-3 text-sm text-j2s-ink/80"
+        >
+          {blockers.length > 0 && (
+            <>
+              <p className="font-semibold text-j2s-ink">Still needed before you continue:</p>
+              <ul className="mt-1 grid gap-1">
+                {blockers.map((b, i) => (
+                  <li key={i}>{students.length > 1 && b.name ? `${b.name}: ${b.msg}` : b.msg}</li>
+                ))}
+              </ul>
+            </>
+          )}
+          {awaitingDetails && (
+            <p className={blockers.length > 0 ? "mt-2" : ""}>
+              Still loading {students.length > 1 ? "one of your children's details" : "your child's details"}…
+            </p>
+          )}
+        </div>
+      )}
 
       <button
         onClick={submit}

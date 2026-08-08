@@ -8,6 +8,7 @@
 // the matching standard/custom question, so J2S's live form is unchanged until
 // those are turned on in Settings.
 import React from 'react';
+import { offeredChoices, needsAuthorizedPickup, needsAftercareProvider } from '../../../lib/dismissal.js';
 
 const MAX_PICKUP = 4;
 
@@ -50,7 +51,12 @@ export function parseRegFields(rows) {
   const custom = [];
   for (const r of rows || []) {
     if (r.standard_key) {
-      std[r.standard_key] = { enabled: true, required: !!r.is_required, label: r.label };
+      // `options` carried through, not dropped. It is a real column on
+      // custom_reg_fields and get_active_registration_fields returns the whole
+      // row, so the provider's per-question configuration was already arriving
+      // here and being thrown away one line before it could be used. That is
+      // what kept the dismissal answers hardcoded to two.
+      std[r.standard_key] = { enabled: true, required: !!r.is_required, label: r.label, options: r.options ?? null };
     } else if (r.is_active !== false) {
       custom.push(r);
     }
@@ -72,8 +78,22 @@ function Req({ on }) {
 // dismissal_method choice + (conditionally) the authorized-pickup list +
 // (optionally) the do-not-release list. All three are separate standard
 // questions; we render whichever are enabled.
-export function PickupDismissalSection({ std, dismissalMethod, onDismissalChange, pickup, onPickupChange, doNotRelease, onDoNotReleaseChange }) {
-  const releasedToAdult = dismissalMethod === 'released_to_authorized_adult';
+// instanceKey MUST be unique per child whenever more than one of these is on the
+// page at once, which the parent-portal pickup gate does - it renders one section
+// per child in a single document. Two consequences of a shared identifier there:
+// every child's radios join ONE native group, so answering for the second child
+// unchecks the first in the DOM; and a duplicated input id makes the follow-up
+// label resolve to the FIRST match, so tapping "Which aftercare program?" under
+// child two focuses child one's box. Defaulted rather than required because the
+// registration wizard renders a single child at a time and has no id to give.
+export function PickupDismissalSection({ std, dismissalMethod, onDismissalChange, aftercareProvider, onAftercareProviderChange, pickup, onPickupChange, doNotRelease, onDoNotReleaseChange, instanceKey = 'single' }) {
+  const providerInputId = `aftercare-provider-${instanceKey}`;
+  // From the shared module, not a hardcoded pair. Which answers this provider
+  // offers comes from their own config; the default is the two that were already
+  // live, so nobody's form changes until they turn something on.
+  const dismissalChoices = offeredChoices(std.dismissal_method?.options);
+  const releasedToAdult = needsAuthorizedPickup(dismissalMethod);
+  const showAftercareProvider = needsAftercareProvider(dismissalMethod);
   const list = Array.isArray(pickup) ? pickup : [];
   const dnr = Array.isArray(doNotRelease) ? doNotRelease : [];
   const conflicts = pickupDnrConflicts(list, dnr);
@@ -110,10 +130,7 @@ export function PickupDismissalSection({ std, dismissalMethod, onDismissalChange
             {std.dismissal_method.label || 'How does your child leave?'}<Req on={std.dismissal_method.required} />
           </label>
           <div className="mt-2 grid gap-2">
-            {[
-              { value: 'released_to_authorized_adult', label: 'Released to a parent or authorized adult' },
-              { value: 'walks_or_bikes_home', label: 'Walks or bikes home on their own' },
-            ].map((opt) => (
+            {dismissalChoices.map((opt) => (
               <label
                 key={opt.value}
                 className={`flex cursor-pointer items-center gap-3 rounded-lg border-2 px-4 py-3 transition ${
@@ -122,15 +139,47 @@ export function PickupDismissalSection({ std, dismissalMethod, onDismissalChange
               >
                 <input
                   type="radio"
-                  name="dismissal_method"
+                  name={`dismissal_method-${instanceKey}`}
                   className="accent-j2s-purple"
                   checked={dismissalMethod === opt.value}
                   onChange={() => onDismissalChange(opt.value)}
                 />
-                <span className="text-sm text-j2s-ink">{opt.label}</span>
+                <span className="text-sm text-j2s-ink">{opt.parent}</span>
               </label>
             ))}
           </div>
+          {/* WHO the child goes to. Free text, Jessica's call: Jeff has one
+              provider per site and nobody has used the field yet, so a preset
+              list would be scaffolding for data that does not exist.
+
+              The name is the entire point of this answer - "Aftercare" alone
+              tells an instructor nothing about where the child is supposed to
+              be. dismissalSummary() says so out loud on every staff surface
+              when it is missing, rather than letting silence read as "we know". */}
+          {showAftercareProvider && (
+            <div className="mt-3">
+              {/* REQUIRED, matching the question it belongs to. dismissal_method is
+                  always-required, so leaving its follow-up optional meant a family
+                  could answer "aftercare" and leave the destination blank - the
+                  roster would then read "Aftercare (provider not stated)" forever
+                  for a family who did answer. Enforced in Register.jsx's canAdvance
+                  and the pickup gate's blocker through the same shared helper. */}
+              <label className="label-field" htmlFor={providerInputId}>
+                Which aftercare program?<span className="text-j2s-orange-dark"> *</span>
+              </label>
+              <input
+                id={providerInputId}
+                className="input-field"
+                type="text"
+                required
+                maxLength={120}
+                value={aftercareProvider || ''}
+                onChange={(e) => onAftercareProviderChange?.(e.target.value)}
+                placeholder="e.g. Champions"
+              />
+              <p className="help-text">So we know where to send your child at the end of class.</p>
+            </div>
+          )}
         </div>
       )}
 

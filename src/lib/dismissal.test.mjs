@@ -1,0 +1,191 @@
+// Pins the dismissal vocabulary. Repo convention: plain node script with a
+// pass/fail counter, run by scripts/run-src-tests.mjs.
+//
+// These exist because the vocabulary was written SIX times with two different
+// wordings, on the custody path. One definition is only worth anything if it
+// stays the definition.
+import {
+  RELEASED_TO_ADULT, WALKS_OR_BIKES, BUS, AFTERCARE, OTHER,
+  DISMISSAL_VALUES, DEFAULT_OFFERED,
+  offeredChoices, allChoices,
+  dismissalLabel, dismissalParentLabel,
+  needsAftercareProvider, needsAuthorizedPickup,
+  dismissalSummary,
+  dismissalAnswerIncomplete, aftercareReleaseLabel, DISMISSAL_KIND_AFTERCARE,
+  releaseConfirmationLine, isSelfRelease,
+} from './dismissal.js';
+
+let pass = 0, fail = 0;
+function eq(name, actual, expected) {
+  const a = JSON.stringify(actual), e = JSON.stringify(expected);
+  if (a === e) { pass++; console.log(`PASS  ${name}`); }
+  else { fail++; console.error(`FAIL  ${name}\n  expected: ${e}\n  actual:   ${a}`); }
+}
+
+// --- the vocabulary must equal the DB constraint ---------------------------
+// students_dismissal_method_check, read from prod 2026-08-07:
+//   released_to_authorized_adult | walks_or_bikes_home | bus | aftercare | other
+// If the UI ever offers a value outside this set, the parent hits a raw
+// constraint error mid-checkout with no way past it.
+const CHECK_VALUES = ['released_to_authorized_adult', 'walks_or_bikes_home', 'bus', 'aftercare', 'other'];
+eq('values match the database CHECK exactly', DISMISSAL_VALUES.slice().sort(), CHECK_VALUES.slice().sort());
+eq('every offered choice is a legal value',
+  allChoices().every((c) => CHECK_VALUES.includes(c.value)), true);
+eq('no duplicate values', new Set(DISMISSAL_VALUES).size, DISMISSAL_VALUES.length);
+
+// --- what a provider gets before they choose -------------------------------
+// The two that are already live on prod (35 real answers). Adding the other
+// three silently would change a live registration form nobody asked to change.
+eq('default is exactly the two already in use', DEFAULT_OFFERED, [RELEASED_TO_ADULT, WALKS_OR_BIKES]);
+eq('null options -> the current two', offeredChoices(null).map((c) => c.value), DEFAULT_OFFERED);
+eq('undefined options -> the current two', offeredChoices(undefined).map((c) => c.value), DEFAULT_OFFERED);
+eq('options with no offered key -> the current two', offeredChoices({}).map((c) => c.value), DEFAULT_OFFERED);
+
+// --- opting in -------------------------------------------------------------
+eq('aftercare can be added',
+  offeredChoices({ offered: [RELEASED_TO_ADULT, WALKS_OR_BIKES, AFTERCARE] }).map((c) => c.value),
+  [RELEASED_TO_ADULT, WALKS_OR_BIKES, AFTERCARE]);
+// Order follows the canonical list, not the stored array, so the form reads the
+// same for every provider regardless of the order they switched things on.
+eq('order is canonical, not stored order',
+  offeredChoices({ offered: [AFTERCARE, RELEASED_TO_ADULT] }).map((c) => c.value),
+  [RELEASED_TO_ADULT, AFTERCARE]);
+// options is operator-editable data; a stale value must not render a radio the
+// database will reject.
+eq('unknown values are dropped',
+  offeredChoices({ offered: [RELEASED_TO_ADULT, 'teleportation'] }).map((c) => c.value),
+  [RELEASED_TO_ADULT]);
+// A required question with no answers is a checkout that cannot be completed.
+eq('all-off falls back rather than rendering nothing',
+  offeredChoices({ offered: [] }).map((c) => c.value), DEFAULT_OFFERED);
+eq('only-unknown falls back too',
+  offeredChoices({ offered: ['nonsense'] }).map((c) => c.value), DEFAULT_OFFERED);
+
+// --- labels ----------------------------------------------------------------
+eq('staff label, released', dismissalLabel(RELEASED_TO_ADULT), 'Released to an authorized adult');
+eq('staff label, walks', dismissalLabel(WALKS_OR_BIKES), 'Walks or bikes home');
+eq('staff label, aftercare', dismissalLabel(AFTERCARE), 'Aftercare');
+eq('staff label, bus', dismissalLabel(BUS), 'Bus');
+eq('staff label, other', dismissalLabel(OTHER), 'Other');
+eq('parent label is the fuller sentence', dismissalParentLabel(RELEASED_TO_ADULT), 'Released to a parent or authorized adult');
+eq('parent label, aftercare', dismissalParentLabel(AFTERCARE), 'Goes to aftercare');
+// Unset means omit the row, not print "None" at somebody.
+eq('null is null, not a label', dismissalLabel(null), null);
+eq('empty string is null', dismissalLabel(''), null);
+eq('every legal value has a staff label',
+  DISMISSAL_VALUES.every((v) => typeof dismissalLabel(v) === 'string' && dismissalLabel(v).length > 0), true);
+eq('every legal value has a parent label',
+  DISMISSAL_VALUES.every((v) => typeof dismissalParentLabel(v) === 'string' && dismissalParentLabel(v).length > 0), true);
+// The bug this guards: four surfaces did `LABELS[v] || v`, so an unmapped value
+// printed the raw database string on a custody document.
+eq('no legal value renders as its raw database string',
+  DISMISSAL_VALUES.every((v) => dismissalLabel(v) !== v), true);
+
+// --- which answer triggers what -------------------------------------------
+eq('only aftercare asks who', DISMISSAL_VALUES.filter(needsAftercareProvider), [AFTERCARE]);
+eq('only released-to-adult needs the pickup list', DISMISSAL_VALUES.filter(needsAuthorizedPickup), [RELEASED_TO_ADULT]);
+eq('walking home does not need a pickup list', needsAuthorizedPickup(WALKS_OR_BIKES), false);
+eq('aftercare does not need a pickup list', needsAuthorizedPickup(AFTERCARE), false);
+
+// --- the roster line -------------------------------------------------------
+eq('summary is the plain label when no provider applies',
+  dismissalSummary({ dismissal_method: RELEASED_TO_ADULT }), 'Released to an authorized adult');
+eq('summary carries the aftercare provider',
+  dismissalSummary({ dismissal_method: AFTERCARE, aftercare_provider: 'Champions' }), 'Aftercare — Champions');
+// "Aftercare" alone tells an instructor nothing about where the child goes, and
+// silence reads as "we know" rather than "nobody said".
+eq('missing provider is stated, not silent',
+  dismissalSummary({ dismissal_method: AFTERCARE }), 'Aftercare (provider not stated)');
+eq('blank provider is stated, not silent',
+  dismissalSummary({ dismissal_method: AFTERCARE, aftercare_provider: '   ' }), 'Aftercare (provider not stated)');
+eq('provider name is trimmed',
+  dismissalSummary({ dismissal_method: AFTERCARE, aftercare_provider: '  Champions  ' }), 'Aftercare — Champions');
+// A provider name left over from a previous answer must not leak onto a line
+// that is no longer about aftercare.
+eq('provider is ignored when the answer is not aftercare',
+  dismissalSummary({ dismissal_method: WALKS_OR_BIKES, aftercare_provider: 'Champions' }), 'Walks or bikes home');
+eq('nothing stated -> null so the caller omits the field', dismissalSummary({}), null);
+eq('undefined student -> null', dismissalSummary(undefined), null);
+
+// --- is the answer complete? ----------------------------------------------
+// "Aftercare" without a program names the category and withholds the destination,
+// which is the one thing the answer exists to supply.
+eq('aftercare with no program is incomplete', dismissalAnswerIncomplete(AFTERCARE, ''), true);
+eq('aftercare with whitespace only is incomplete', dismissalAnswerIncomplete(AFTERCARE, '   '), true);
+eq('aftercare with undefined provider is incomplete', dismissalAnswerIncomplete(AFTERCARE, undefined), true);
+eq('aftercare with a program is complete', dismissalAnswerIncomplete(AFTERCARE, 'Champions'), false);
+// Every other answer needs nothing extra - this must never block a family who
+// picked walking home just because a stale provider field is empty.
+for (const v of DISMISSAL_VALUES.filter((x) => x !== AFTERCARE)) {
+  eq(`${v} is never incomplete`, dismissalAnswerIncomplete(v, ''), false);
+}
+eq('an unanswered question is not "incomplete" here', dismissalAnswerIncomplete('', ''), false);
+
+// --- what the instructor records -------------------------------------------
+// Jessica: instructors WALK kids to aftercare, so the label is an action taken,
+// not a release to someone who arrived.
+eq('release label names the program', aftercareReleaseLabel('Champions'), 'Walked to aftercare — Champions');
+eq('release label trims', aftercareReleaseLabel('  Right At School  '), 'Walked to aftercare — Right At School');
+// No dangling separator when the name is missing.
+eq('no provider -> no dangling dash', aftercareReleaseLabel(''), 'Walked to aftercare');
+eq('null provider -> no dangling dash', aftercareReleaseLabel(null), 'Walked to aftercare');
+eq('label never ends in a separator', /[—-]\s*$/.test(aftercareReleaseLabel('')), false);
+// Must match a value attendance_records_dismissal_kind_chk accepts (20260807d).
+// Reusing 'released_to_adult' would make Class Reports flag every correct
+// aftercare handoff as "released to someone not on the authorized list".
+eq('the recorded kind is its own value', DISMISSAL_KIND_AFTERCARE, 'aftercare');
+eq('the recorded kind is NOT released_to_adult', DISMISSAL_KIND_AFTERCARE === 'released_to_adult', false);
+
+// --- confirming a recorded dismissal ---------------------------------------
+// released_to_name is a person's NAME for some kinds and a whole PHRASE for
+// others; one hardcoded "Released to" prefix served both and produced
+// "Released to Walked to aftercare — Champions".
+eq('a person gets the prefix',
+  releaseConfirmationLine('released_to_adult', 'Grandma Pat'), 'Released to Grandma Pat');
+eq('a guardian gets the prefix',
+  releaseConfirmationLine('guardian', 'Dana Vorster'), 'Released to Dana Vorster');
+eq('aftercare stands alone',
+  releaseConfirmationLine(DISMISSAL_KIND_AFTERCARE, 'Walked to aftercare — Champions'),
+  'Walked to aftercare — Champions');
+eq('walking home stands alone',
+  releaseConfirmationLine('walked_or_biked', 'Walked / biked home'), 'Walked / biked home');
+// The prefix is what names WHO took the child, so an unrecognised kind must keep
+// it rather than silently dropping the only attribution on the line.
+eq('an unknown kind is treated as a person',
+  releaseConfirmationLine('something_new', 'Grandma Pat'), 'Released to Grandma Pat');
+eq('a null kind is treated as a person',
+  releaseConfirmationLine(null, 'Grandma Pat'), 'Released to Grandma Pat');
+eq('no name -> no dangling prefix', releaseConfirmationLine('released_to_adult', ''), 'Released');
+eq('null name -> no dangling prefix', releaseConfirmationLine('released_to_adult', null), 'Released');
+eq('whitespace name -> no dangling prefix', releaseConfirmationLine('released_to_adult', '  '), 'Released');
+eq('name is trimmed', releaseConfirmationLine('released_to_adult', ' Pat '), 'Released to Pat');
+// The field-label predicate must agree with the sentence builder, or the two
+// surfaces disagree about whether anyone collected the child.
+eq('aftercare is a self-release', isSelfRelease(DISMISSAL_KIND_AFTERCARE), true);
+eq('walked/biked is a self-release', isSelfRelease('walked_or_biked'), true);
+eq('released_to_adult is not', isSelfRelease('released_to_adult'), false);
+eq('null kind is not', isSelfRelease(null), false);
+for (const k of ['released_to_adult', 'guardian', DISMISSAL_KIND_AFTERCARE, 'walked_or_biked', null]) {
+  eq(`predicate matches the sentence for ${k}`,
+    releaseConfirmationLine(k, 'X') === 'X', isSelfRelease(k));
+}
+
+// --- the one copy that cannot import this module ---------------------------
+// create-registration runs on Deno and is deployed from supabase/functions, so
+// it cannot import src/lib. Rather than keep a second copy of the vocabulary in
+// _shared (which would make three places), the literal stays inline and this
+// test asserts it still matches. It decides whether the provider name is stored
+// at all, so if it drifts the answer is silently dropped at checkout.
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+const edgeFn = readFileSync(
+  fileURLToPath(new URL('../../supabase/functions/create-registration/index.ts', import.meta.url)),
+  'utf8',
+);
+const guard = edgeFn.match(/student\.dismissal_method === '([^']+)'/);
+eq('the edge function still tests a dismissal_method value', Boolean(guard), true);
+eq('and the value it tests is the one this module defines', guard?.[1], AFTERCARE);
+
+console.log(`\n${fail ? 'FAILURES' : 'ALL PASS'}  (${pass} passed, ${fail} failed)`);
+process.exit(fail ? 1 : 0);
