@@ -224,10 +224,22 @@ export default function QuickProgramBuilder() {
   // it off the row (we only select the id back), and it decides whether we claim
   // the class is live and whether a share link is offered at all.
   const [createdStatus, setCreatedStatus] = useState("open");
+  // 'open' | 'draft' | null — which button is mid-save. Separate from
+  // `createdStatus`, which is only known once the insert has resolved.
+  const [submittingAs, setSubmittingAs] = useState(null);
   // The session dates enrops worked out for a draft. This is the whole point of
   // saving without publishing: Jeff reads these into Facilitron before the class
   // goes live. null = not fetched yet, [] = none derivable (no start date).
   const [draftDates, setDraftDates] = useState(null);
+  // Distinct from []: the read FAILED, versus there being nothing to derive.
+  // Collapsing them told an operator who had entered a start date to go and add
+  // one, which is the same lie the rest of this file avoids with locationsFailed
+  // and countFailed.
+  const [draftDatesFailed, setDraftDatesFailed] = useState(false);
+  // Which draft the in-flight dates request belongs to. Jeff saves ~25 of these
+  // in a row, so a slow response from the PREVIOUS draft could otherwise land
+  // under the CURRENT one and he would copy the wrong dates into Facilitron.
+  const draftDatesFor = useRef(null);
 
   // How long this build actually took. We refused to print a made-up "your first
   // program takes N minutes" in the step strip, so this is what earns the right
@@ -722,6 +734,10 @@ export default function QuickProgramBuilder() {
   async function handleCreate(asDraft = false) {
     if (!valid || submitting) return;
     setSubmitting(true);
+    // Which button is in flight, so only that one changes its label. Both share
+    // `submitting` for the disabled state, which is correct — neither should be
+    // pressable while the other is saving.
+    setSubmittingAs(asDraft ? "draft" : "open");
     setErr("");
     try {
       const payload = {
@@ -789,9 +805,15 @@ export default function QuickProgramBuilder() {
       // RLS-respecting (the function is not SECURITY DEFINER) and granted to
       // authenticated, so this returns only their own program's dates.
       if (asDraft) {
+        draftDatesFor.current = data.id;
         supabase
           .rpc("derive_program_session_dates", { p_program_id: data.id })
-          .then(({ data: d, error: dErr }) => setDraftDates(dErr ? [] : (d ?? [])));
+          .then(({ data: d, error: dErr }) => {
+            // Drop a response that belongs to an earlier draft.
+            if (draftDatesFor.current !== data.id) return;
+            setDraftDatesFailed(!!dErr);
+            setDraftDates(dErr ? [] : (d ?? []));
+          });
       }
       recordBuildTiming(data.id);
       // This org now has one more program than it did at mount. Without this,
@@ -808,6 +830,7 @@ export default function QuickProgramBuilder() {
       setErr(e?.message ?? String(e));
     } finally {
       setSubmitting(false);
+      setSubmittingAs(null);
     }
   }
 
@@ -878,6 +901,8 @@ export default function QuickProgramBuilder() {
     // dates under the new blank form.
     setCreatedStatus("open");
     setDraftDates(null);
+    setDraftDatesFailed(false);
+    draftDatesFor.current = null;
     // Back to the operator's usual ages rather than blank — the next class is
     // almost always for the same children.
     setAgeMin(profile.default_age_min != null ? String(profile.default_age_min) : "");
@@ -1239,6 +1264,14 @@ export default function QuickProgramBuilder() {
           </div>
           {draftDates === null ? (
             <div style={{ fontSize: 13.5, color: MUTED }}>Working them out…</div>
+          ) : draftDatesFailed ? (
+            // A failed read is NOT the same as nothing to derive. Telling an
+            // operator who entered a start date to go and add one is how a
+            // working feature loses their trust.
+            <div style={{ fontSize: 13.5, color: MUTED, lineHeight: 1.55 }}>
+              Your class is saved, but we couldn&rsquo;t work out its dates just now.
+              Open it from your program list to see them.
+            </div>
           ) : draftDates.length === 0 ? (
             <div style={{ fontSize: 13.5, color: MUTED, lineHeight: 1.55 }}>
               {/* Honest about the cause: the deriver needs a first session date,
@@ -1261,10 +1294,11 @@ export default function QuickProgramBuilder() {
               </div>
               {/* Plain text as well as chips: the chips are readable, but Jeff is
                   pasting these into Facilitron, and you cannot paste chips. */}
-              <div style={{ fontSize: 12, color: MUTED, marginTop: 12, marginBottom: 4, fontWeight: 600 }}>
+              <label htmlFor="draft-dates-copy" style={{ display: "block", fontSize: 12, color: MUTED, marginTop: 12, marginBottom: 4, fontWeight: 600 }}>
                 All dates, ready to copy
-              </div>
+              </label>
               <textarea
+                id="draft-dates-copy"
                 readOnly
                 value={draftDates.join("\n")}
                 onFocus={(e) => e.target.select()}
@@ -1416,7 +1450,12 @@ export default function QuickProgramBuilder() {
       disabled={!valid || submitting}
       style={{ ...primaryBtn, flex: 1, opacity: !valid || submitting ? 0.55 : 1, cursor: !valid || submitting ? "not-allowed" : "pointer" }}
     >
-      {submitting ? "Creating…" : "Create program & get link"}
+      {/* `submitting` is shared with the draft button, so this said "Creating…"
+          while the operator was saving a draft — the publish control announcing
+          it was publishing, on the one action here that cannot be undone. Keyed
+          on which button is IN FLIGHT (createdStatus is only set after the insert
+          resolves, so it is still "open" while a draft is saving). */}
+      {submittingAs === "open" ? "Creating…" : "Create program & get link"}
     </button>
   );
   const cancelButton = (
@@ -1439,7 +1478,7 @@ export default function QuickProgramBuilder() {
       disabled={!valid || submitting}
       style={{ ...secondaryBtn, flex: narrow ? 1 : "0 0 auto", opacity: !valid || submitting ? 0.55 : 1, cursor: !valid || submitting ? "not-allowed" : "pointer" }}
     >
-      {submitting ? "Saving…" : "Save as draft"}
+      {submittingAs === "draft" ? "Saving…" : "Save as draft"}
     </button>
   );
 
@@ -1460,8 +1499,13 @@ export default function QuickProgramBuilder() {
         </EnnieTip>
       </div>
       <p style={{ color: MUTED, fontSize: 14, lineHeight: 1.55, margin: "0 0 20px" }}>
-        The essentials only. You'll get a shareable registration link the moment
-        you save.
+        {/* Was "You'll get a shareable registration link the moment you save",
+            which stopped being true for both buttons the moment Save as draft
+            existed — a draft is private and has no link. The footer copy was
+            updated with the feature; this sentence makes the same claim and had
+            to move with it. */}
+        The essentials only. Publish it straight away and you&rsquo;ll get a shareable
+        registration link, or save it as a draft to keep it private.
       </p>
 
       {/* Lean only. A legacy operator has had Stripe connected for years, so a
