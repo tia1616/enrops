@@ -173,6 +173,12 @@ export default function RegistrationQuestions() {
     if (!org?.id) return;
     const myReq = ++loadReq.current;   // supersede any in-flight load (e.g. fast org switch)
     setLoading(true);
+    // Back to "not loaded" for the new org. The staleness guard below only stops
+    // an OUT-OF-ORDER write; without this reset the previous org's classes stay
+    // on screen for the whole query on EVERY org switch, and the preview builds
+    // buildRegUrl(newOrg.slug, oldOrgProgramId) — a link the public wizard
+    // cannot resolve — the common path, not the rare one.
+    setPrograms(null);
     const { data, error } = await supabase
       .from("custom_reg_fields")
       .select("id, field_key, label, field_type, options, is_required, applies_to, applies_to_value, sort_order, help_text, is_active, standard_key")
