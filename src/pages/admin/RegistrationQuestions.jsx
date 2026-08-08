@@ -189,11 +189,24 @@ function savedStdTruth(rows) {
 // order. That saves and renders identically, so calling it "unsaved changes"
 // would be crying wolf — and a warning that fires when nothing changed is one
 // people learn to ignore.
-function stdHasUnsavedChanges(std, rows) {
-  const saved = savedStdTruth(rows);
+// Compared against a BASELINE rather than always the saved truth, because the
+// panel needs two different questions answered with one comparison:
+//
+//   baseline = savedStdTruth(rows)    -> "does the form differ from this screen?"
+//                                        (whether to warn at all)
+//   baseline = seedStdFromRows(rows)  -> "did the OPERATOR change something?"
+//                                        (which sentence explains why)
+//
+// The seed is a pure function of rows, so the second question needs no snapshot
+// and no sticky flag: load() sets std to exactly seedStdFromRows(rows), so any
+// difference from it is an edit made in this sitting. A sticky "touched" boolean
+// got this wrong on revert - it kept claiming the operator had changed something
+// after they had put it back, which is the same wrong-cause failure as the
+// warning it was added to fix.
+function stdDiffersFrom(std, baseline) {
   return STANDARD_FIELDS.some((f) => {
     const a = std?.[f.key];
-    const b = saved[f.key];
+    const b = baseline[f.key];
     if (!a) return false;           // not seeded yet; nothing staged to lose
     if (!!a.enabled !== !!b.enabled) return true;
     // Off in both: nothing about it reaches the form, so a stray label edit on a
@@ -273,18 +286,6 @@ export default function RegistrationQuestions() {
   const [std, setStd] = useState({});              // { key: {enabled, required, label} }
   const [savingStd, setSavingStd] = useState(false);
   const [savedStd, setSavedStd] = useState(false);
-  // Has the OPERATOR edited the standard section in this sitting?
-  //
-  // Separate from stdDirty, which only knows that staged state differs from what
-  // the form asks. Those differ in a case that is the MAJORITY of real orgs: an
-  // org with no saved safety rows is dirty on arrival, because the section
-  // pre-selects dismissal + pickup as a proposal. Verified on prod: 5 of 7 orgs
-  // have neither row. Telling those operators "you have unsaved changes" before
-  // they touch anything blames them for something the platform proposed, and is
-  // the cry-wolf failure this file's own comments argue against. A viewer can
-  // never set this (every control is behind canEdit), so they only ever see the
-  // neutral wording.
-  const [stdTouched, setStdTouched] = useState(false);
 
   const loadReq = useRef(0);
 
@@ -338,10 +339,6 @@ export default function RegistrationQuestions() {
     // Seed the staged standard state from existing rows (or defaults).
     setStd(seedStdFromRows(data));
     setSavedStd(false);
-    // Reseeding IS the staged state being reset, so nothing is operator-edited
-    // any more. Keeping this true would leave "you have unsaved changes" on
-    // screen describing edits that no longer exist.
-    setStdTouched(false);
     setLoading(false);
   }
 
@@ -353,7 +350,6 @@ export default function RegistrationQuestions() {
   // --- standard section handlers ---
   function editStd(key, patch) {
     setSavedStd(false);
-    setStdTouched(true);
     setStd((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
   }
 
@@ -419,7 +415,12 @@ export default function RegistrationQuestions() {
   // before anybody has touched anything, so it would warn on every page load.
   // Derived from the actual values, so toggling something back to how it was
   // stops the warning.
-  const stdDirty = useMemo(() => stdHasUnsavedChanges(std, rows), [std, rows]);
+  // Does the real form differ from this screen? (whether to warn at all)
+  const stdDirty = useMemo(() => stdDiffersFrom(std, savedStdTruth(rows)), [std, rows]);
+  // Did the OPERATOR change something, or is the difference just the section's
+  // own pre-selected defaults never having been saved? Only the sentence differs;
+  // both states want the same Save. Derived, so reverting an edit self-heals.
+  const stdEdited = useMemo(() => stdDiffersFrom(std, seedStdFromRows(rows)), [std, rows]);
 
   // ONE derived state for the standard-section Save, used by BOTH places it
   // appears (the section itself and the preview panel). They previously computed
@@ -649,7 +650,7 @@ export default function RegistrationQuestions() {
             programs={programs}
             orgSlug={org?.slug}
             stdDirty={stdDirty}
-            stdTouched={stdTouched}
+            stdEdited={stdEdited}
             stdSave={stdSave}
             canEdit={canEdit}
             savedStd={savedStd}
@@ -1008,7 +1009,7 @@ function ConfirmBar({ message, onCancel, onConfirm }) {
 // partner-run (those register on the partner's own site, so we have no form to
 // show). With nothing published there is no URL, and the panel says why instead
 // of handing over a link that bounces straight back to the catalog.
-function FormPreview({ std, customRows, programs, orgSlug, stdDirty, stdTouched, stdSave, canEdit, savedStd, onSaveStandard }) {
+function FormPreview({ std, customRows, programs, orgSlug, stdDirty, stdEdited, stdSave, canEdit, savedStd, onSaveStandard }) {
   // Derived, not seeded: programs arrive after the first render, so setting a
   // default once would leave the picker stuck on "" after the load resolved.
   const [pickedId, setPickedId] = useState("");
@@ -1077,14 +1078,15 @@ function FormPreview({ std, customRows, programs, orgSlug, stdDirty, stdTouched,
           style={{ background: "#FBF1DC", border: "1px solid #E0C88A", borderRadius: 8, padding: "9px 11px", marginBottom: 10 }}
         >
           {/* TWO states, and conflating them was the worst defect in this panel.
-              stdTouched = the operator actually edited something in this sitting.
+              stdEdited = staged state differs from what load() seeded, i.e. the
+              operator actually changed something (and it self-heals on revert).
               Without it, an org that has simply never saved its pre-selected
               safety questions (5 of 7 on prod) was told it had unsaved CHANGES
               on arrival — blaming the operator for a proposal the section made.
               Both states are worth stating and both want the same Save; only the
               cause differs, so only the sentence differs. */}
           <div style={{ fontSize: 12, color: INK, lineHeight: 1.45 }}>
-            {stdTouched ? (
+            {stdEdited ? (
               <>
                 <strong style={{ fontWeight: 600 }}>You have unsaved changes.</strong>{" "}
                 Your form asks the questions you've saved, so what you change here
