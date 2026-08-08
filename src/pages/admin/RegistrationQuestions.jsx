@@ -20,7 +20,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
-import { allChoices, offeredChoices, DEFAULT_OFFERED, needsAftercareProvider } from "../../lib/dismissal.js";
+import { allChoices, offeredChoices, DEFAULT_OFFERED } from "../../lib/dismissal.js";
+import { buildRegUrl } from "../../lib/regLinks.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -74,17 +75,164 @@ const STANDARD_FIELDS = [
 
 // Fields your registration form always asks (built in — not configurable here).
 // Shown read-only so the builder reflects the whole form, not just the extras.
-const ALWAYS_ON = [
-  "Child's name, grade, and birth date",
-  "Homeroom teacher",
-  "Allergies and medical notes",
-  "Emergency contact",
-  "Parent / guardian name, email, and phone",
-  "How did you hear about us?",
-];
+//
+// TWO of these are asked ONLY on the legacy registration form. StepStudent.jsx
+// wraps "Homeroom teacher" (line 107) and "How did you hear about us?" (line 206)
+// in `{!lean && (`, where Register.jsx:35 defines
+// `isLean = org.instructor_pay_model !== 'legacy_own_platform'` — so on prod only
+// j2s asks them and the other six orgs never do. Listing them for everyone was
+// wrong before this change and merely stale; the preview panel now states that
+// this list is complete AND puts a button next to it that opens the real form,
+// which turns a stale list into a claim a family-facing page disproves.
+//
+// NOTE the test is `=== 'legacy_own_platform'`, NOT the `hasInstructorPortal`
+// test further down (`!== 'enrops_platform'`). They are different axes and a
+// third pay model would make them disagree — do not merge them.
+function alwaysOnFor(isLegacyReg) {
+  return [
+    "Child's name, grade, and birth date",
+    ...(isLegacyReg ? ["Homeroom teacher"] : []),
+    "Allergies and medical notes",
+    "Emergency contact",
+    "Parent / guardian name, email, and phone",
+    // StepParent.jsx:57 renders this for everyone — that file has no `lean` prop
+    // at all — so leaving it out kept the list incomplete for all seven tenants,
+    // not just the two legacy-only chips above.
+    "Mailing address",
+    ...(isLegacyReg ? ["How did you hear about us?"] : []),
+  ];
+}
 
 const STD_KEYS = STANDARD_FIELDS.map((f) => f.key);
 const stdFieldKey = (key) => `std_${key}`;
+
+// How a class reads in this page's pickers. ONE place, so the scope picker and
+// the preview's class picker can't start naming the same class differently.
+const programLabel = (p) =>
+  `${p?.curriculum || "Class"}${p?.day_of_week ? ` (${p.day_of_week}s)` : ""}`;
+
+// "Only on <class>" — or null when every family is asked. Said in TWO places
+// (the custom-questions list and the preview's ordered list), so it lives here:
+// they were drifting already, one naming the class by curriculum alone and the
+// other by curriculum + day.
+//
+// Deny-list on purpose: ONLY the literal 'all' means every family. The live
+// CHECK also allows 'enrollment_type', and the column is nullable
+// (`text DEFAULT 'all'`, no NOT NULL) — while
+// get_active_registration_fields() matches `applies_to = 'all' OR (applies_to =
+// 'program' AND ...)`, so an 'enrollment_type' OR NULL row is dropped from the
+// form entirely. Coercing either to 'all' would announce it as a question every
+// family answers when in fact nobody is ever asked it, so both fall through to
+// the scoped sentence. Unreachable today (this page and the quick builder only
+// ever write 'all' or 'program'; 0 non-'all'/'program' and 0 NULL rows on either
+// env) — which is exactly when a fail-open default goes unnoticed.
+// The SAVED state of the standard section, as staged state. Extracted from
+// load() because the unsaved-changes warning has to compare against exactly what
+// load() would have seeded — a second copy of this logic would drift and the
+// warning would either cry wolf or stay silent on a real change.
+function seedStdFromRows(rows) {
+  const byStd = {};
+  for (const r of rows ?? []) if (r.standard_key) byStd[r.standard_key] = r;
+  const seeded = {};
+  for (const f of STANDARD_FIELDS) {
+    const row = byStd[f.key];
+    seeded[f.key] = {
+      // Existing rows keep their saved state (J2S and any org that already
+      // configured its form are untouched). For a brand-new org with no row,
+      // the safety-critical fields (alwaysRequired: dismissal + pickup) start
+      // ON so the builder shows them pre-selected; saving activates them. This
+      // is what the section copy promises.
+      enabled: row ? row.is_active !== false : !!f.alwaysRequired,
+      required: f.alwaysRequired ? true : (row ? !!row.is_required : f.defaultRequired),
+      label: row?.label ?? f.label,
+      // Which answers this provider offers. Seeded THROUGH offeredChoices so
+      // the builder shows exactly what the registration form will render -
+      // including its fallbacks. Reading row.options.offered raw would let
+      // Settings display a stale or unknown value the form silently drops,
+      // and the two screens would disagree about the live configuration.
+      offered: f.answerChoices
+        ? offeredChoices(row?.options).map((c) => c.value)
+        : null,
+    };
+  }
+  return seeded;
+}
+
+// What the REGISTRATION FORM actually asks today, in the same shape as staged
+// state. Identical to seedStdFromRows EXCEPT for `enabled`, and that one field is
+// the whole point:
+//
+//   - seedStdFromRows pre-selects the safety questions (alwaysRequired) for an
+//     org with no row, because the section promises "they start on — review them
+//     and Save to add them to your form". That is a PROPOSAL, not the truth.
+//   - the form asks a question only when an ACTIVE ROW EXISTS. No row = not asked.
+//
+// Comparing staged state against the seed would therefore report a brand-new org
+// as having nothing unsaved, while its panel lists two safety questions the form
+// does not ask — the same lie the drawing told, in the case that matters most
+// (a provider setting up for the first time).
+function savedStdTruth(rows) {
+  const proposed = seedStdFromRows(rows);
+  const byStd = {};
+  for (const r of rows ?? []) if (r.standard_key) byStd[r.standard_key] = r;
+  const truth = {};
+  for (const f of STANDARD_FIELDS) {
+    const row = byStd[f.key];
+    truth[f.key] = { ...proposed[f.key], enabled: row ? row.is_active !== false : false };
+  }
+  return truth;
+}
+
+// Has the operator got standard questions this panel shows but the form does not
+// ask — whether from an unsaved toggle or from never having saved the
+// pre-selected defaults?
+//
+// `offered` is compared as a SET, not a sequence: the checkbox handler APPENDS
+// (`[...offered, value]`) while the seed arrives in canonical CHOICES order, so
+// unticking a choice and re-ticking it yields the same answers in a different
+// order. That saves and renders identically, so calling it "unsaved changes"
+// would be crying wolf — and a warning that fires when nothing changed is one
+// people learn to ignore.
+// Compared against a BASELINE rather than always the saved truth, because the
+// panel needs two different questions answered with one comparison:
+//
+//   baseline = savedStdTruth(rows)    -> "does the form differ from this screen?"
+//                                        (whether to warn at all)
+//   baseline = seedStdFromRows(rows)  -> "did the OPERATOR change something?"
+//                                        (which sentence explains why)
+//
+// The seed is a pure function of rows, so the second question needs no snapshot
+// and no sticky flag: load() sets std to exactly seedStdFromRows(rows), so any
+// difference from it is an edit made in this sitting. A sticky "touched" boolean
+// got this wrong on revert - it kept claiming the operator had changed something
+// after they had put it back, which is the same wrong-cause failure as the
+// warning it was added to fix.
+function stdDiffersFrom(std, baseline) {
+  return STANDARD_FIELDS.some((f) => {
+    const a = std?.[f.key];
+    const b = baseline[f.key];
+    if (!a) return false;           // not seeded yet; nothing staged to lose
+    if (!!a.enabled !== !!b.enabled) return true;
+    // Off in both: nothing about it reaches the form, so a stray label edit on a
+    // question nobody is asked is not something to warn about. (saveStandard
+    // does not persist a disabled question's label anyway, so warning here would
+    // report a change that saving silently discards.)
+    if (!a.enabled && !b.enabled) return false;
+    if (!!a.required !== !!b.required) return true;
+    if ((a.label ?? "") !== (b.label ?? "")) return true;
+    const setA = [...new Set(a.offered ?? [])].sort().join("|");
+    const setB = [...new Set(b.offered ?? [])].sort().join("|");
+    return setA !== setB;
+  });
+}
+
+function scopeNote(row, programs) {
+  if (!row || row.applies_to === "all") return null;
+  const target = (programs || []).find((p) => p.id === row.applies_to_value);
+  // Neutral fallback: the class may be in another term (so absent from this
+  // list) or deleted. Never render a raw id, never render blank.
+  return target ? `Only on ${programLabel(target)}` : "Only on one class";
+}
 
 const FIELD_TYPES = [
   { value: "text", label: "Short text" },
@@ -115,6 +263,11 @@ export default function RegistrationQuestions() {
   // instructor portal, so copy that promises one describes a screen they cannot
   // reach - it reads as a missing feature rather than a feature they don't need.
   const hasInstructorPortal = org?.instructor_pay_model !== "enrops_platform";
+  // A DIFFERENT axis from hasInstructorPortal above: this is the exact test the
+  // public registration form uses to decide whether to ask "Homeroom teacher"
+  // and "How did you hear about us?" (Register.jsx:35). Only j2s is legacy.
+  const isLegacyReg = org?.instructor_pay_model === "legacy_own_platform";
+  const alwaysOn = useMemo(() => alwaysOnFor(isLegacyReg), [isLegacyReg]);
   const canEdit = useMemo(() => ["owner", "admin"].includes(orgMember?.role), [orgMember]);
 
   const [rows, setRows] = useState(null);          // all custom_reg_fields rows for the org
@@ -122,7 +275,15 @@ export default function RegistrationQuestions() {
   // Programs a question can be scoped to, so a one-day workshop isn't forced to
   // ask full-season questions. Current term only: scoping to a class families
   // can no longer register for would just be noise in the picker.
-  const [programs, setPrograms] = useState([]);
+  // The preview panel reads the same list to open the real form on a class a
+  // family could actually reach (see FormPreview).
+  //
+  // null = NOT LOADED YET, [] = loaded and this org has none. The preview has to
+  // tell those apart: this query is deliberately not awaited (it must never block
+  // the questions from rendering), so an initial `[]` would render the
+  // loaded-and-empty copy -- "No classes yet ... Add one" -- to an org with 32
+  // open classes until the promise landed.
+  const [programs, setPrograms] = useState(null);
   const [toast, setToast] = useState(null);        // { kind, message }
 
   // Staged state for the standard section (saved together).
@@ -136,6 +297,12 @@ export default function RegistrationQuestions() {
     if (!org?.id) return;
     const myReq = ++loadReq.current;   // supersede any in-flight load (e.g. fast org switch)
     setLoading(true);
+    // Back to "not loaded" for the new org. The staleness guard below only stops
+    // an OUT-OF-ORDER write; without this reset the previous org's classes stay
+    // on screen for the whole query on EVERY org switch, and the preview builds
+    // buildRegUrl(newOrg.slug, oldOrgProgramId) — a link the public wizard
+    // cannot resolve — the common path, not the rare one.
+    setPrograms(null);
     const { data, error } = await supabase
       .from("custom_reg_fields")
       .select("id, field_key, label, field_type, options, is_required, applies_to, applies_to_value, sort_order, help_text, is_active, standard_key")
@@ -154,37 +321,27 @@ export default function RegistrationQuestions() {
     // It must never block the questions themselves from rendering.
     supabase
       .from("programs")
-      .select("id, curriculum, day_of_week")
+      // status + runs_own_registration are for the PREVIEW link, not the scope
+      // picker: the picker deliberately still offers drafts (you configure a
+      // question before the class goes live), but the preview can only open a
+      // class a family could actually reach.
+      .select("id, curriculum, day_of_week, status, runs_own_registration")
       .eq("organization_id", org.id)
       .eq("term", org.active_registration_term || "")
       .order("curriculum")
-      .then(({ data: progs }) => setPrograms(progs ?? []));
+      .then(({ data: progs }) => {
+        // Same staleness guard the questions query gets above. Without it, a
+        // fast org switch (A -> B) where A's slower response lands last leaves
+        // org A's classes on screen under org B: the preview would then build
+        // buildRegUrl(B.slug, A_program_id), a link whose program the public
+        // wizard cannot find, so the family-facing form opens with nothing
+        // selected. Harmless when this list only fed a dropdown; it is a
+        // clickable link target now.
+        if (myReq !== loadReq.current) return;
+        setPrograms(progs ?? []);
+      });
     // Seed the staged standard state from existing rows (or defaults).
-    const byStd = {};
-    for (const r of data ?? []) if (r.standard_key) byStd[r.standard_key] = r;
-    const seeded = {};
-    for (const f of STANDARD_FIELDS) {
-      const row = byStd[f.key];
-      seeded[f.key] = {
-        // Existing rows keep their saved state (J2S and any org that already
-        // configured its form are untouched). For a brand-new org with no row,
-        // the safety-critical fields (alwaysRequired: dismissal + pickup) start
-        // ON so the builder shows them pre-selected; saving activates them. This
-        // is what the section copy promises.
-        enabled: row ? row.is_active !== false : !!f.alwaysRequired,
-        required: f.alwaysRequired ? true : (row ? !!row.is_required : f.defaultRequired),
-        label: row?.label ?? f.label,
-        // Which answers this provider offers. Seeded THROUGH offeredChoices so
-        // the builder shows exactly what the registration form will render -
-        // including its fallbacks. Reading row.options.offered raw would let
-        // Settings display a stale or unknown value the form silently drops,
-        // and the two screens would disagree about the live configuration.
-        offered: f.answerChoices
-          ? offeredChoices(row?.options).map((c) => c.value)
-          : null,
-      };
-    }
-    setStd(seeded);
+    setStd(seedStdFromRows(data));
     setSavedStd(false);
     setLoading(false);
   }
@@ -257,6 +414,42 @@ export default function RegistrationQuestions() {
       setSavingStd(false);
     }
   }
+
+  // Unsaved standard-question changes. NOT `!savedStd`: that is also the state
+  // before anybody has touched anything, so it would warn on every page load.
+  // Derived from the actual values, so toggling something back to how it was
+  // stops the warning.
+  // Does the real form differ from this screen? (whether to warn at all)
+  const stdDirty = useMemo(() => stdDiffersFrom(std, savedStdTruth(rows)), [std, rows]);
+  // Did the OPERATOR change something, or is the difference just the section's
+  // own pre-selected defaults never having been saved? Only the sentence differs;
+  // both states want the same Save. Derived, so reverting an edit self-heals.
+  const stdEdited = useMemo(() => stdDiffersFrom(std, seedStdFromRows(rows)), [std, rows]);
+
+  // ONE derived state for the standard-section Save, used by BOTH places it
+  // appears (the section itself and the preview panel). They previously computed
+  // `disabled` from different inputs — `savingStd || savedStd` vs `savingStd` —
+  // so in any state where savedStd and stdDirty were both true one button showed
+  // a disabled "Saved ✓" while the other showed an enabled Save, 900px apart, on
+  // the same screen. Deriving both from this object is what makes the comment
+  // claiming they cannot diverge actually true.
+  //
+  // Gating on !stdDirty also fixes the older button's own dishonesty: it used to
+  // sit enabled saying "Save standard questions" on a form with nothing to save
+  // (savedStd resets on any edit, including an edit that puts a value back), and
+  // clicking it re-upserted identical rows. This matches what the other settings
+  // pages in this repo already do (BackgroundCheckSettings, PayRatesSettings,
+  // EmailSenderSettings, BrandLogoSettings): one control, one derived truth.
+  // "Saved ✓" must not render when the questions never loaded. load()'s error
+  // path leaves `std` as {} and returns, and stdDiffersFrom's `if (!a) return
+  // false` then makes stdDirty false — so without this guard the button paints a
+  // green tick over a page that is showing an error toast and zero questions.
+  const stdLoaded = Object.keys(std).length > 0;
+  const stdSave = useMemo(() => ({
+    disabled: savingStd || !stdDirty,
+    label: savingStd ? "Saving…" : (!stdDirty && stdLoaded) ? "Saved ✓" : "Save standard questions",
+    done: !savingStd && !stdDirty && stdLoaded,
+  }), [savingStd, stdDirty, stdLoaded]);
 
   // --- custom section handlers (immediate writes) ---
   const customRows = useMemo(
@@ -353,6 +546,20 @@ export default function RegistrationQuestions() {
       <div style={{ marginBottom: 6 }}>
         <Link to="/admin/settings" style={{ fontSize: 13, color: BRIGHT, textDecoration: "none" }}>← Settings</Link>
       </div>
+      {/* The right column is a hard 300px, which on a 375px phone left the page
+          column ~35px wide. It mattered less when that column was a decorative
+          drawing; it holds the "open my form" button now, so it has to stack.
+          Done with a data attribute + media query because every style on this
+          page is an inline prop, which a normal rule can't override (same
+          pattern AdminLayout uses for the sidebar). Preview goes FIRST when
+          stacked: on a phone the action is the reason to be here, and burying
+          it under the whole builder is how it stays undiscovered. */}
+      <style>{`
+        @media (max-width: 900px) {
+          [data-regq-grid] { grid-template-columns: 1fr !important; }
+          [data-regq-grid] > aside { position: static !important; order: -1; }
+        }
+      `}</style>
       <h1 style={{ margin: 0, color: PURPLE, fontSize: 26, fontWeight: 700 }}>Registration questions</h1>
       <p style={{ color: MUTED, fontSize: 14, margin: "6px 0 22px", lineHeight: 1.5, maxWidth: 640 }}>
         Choose what your registration form asks families. Turn the standard questions on or off, and add your own.
@@ -381,14 +588,14 @@ export default function RegistrationQuestions() {
       {loading || rows === null ? (
         <div style={{ color: MUTED, fontSize: 14 }}>Loading…</div>
       ) : (
-        <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 300px", gap: 26, alignItems: "start" }}>
+        <div data-regq-grid style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 300px", gap: 26, alignItems: "start" }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 26, minWidth: 0 }}>
             {/* Always on the form (read-only) */}
             <section style={{ background: CREAM, border: `1px solid ${RULE}`, borderRadius: 12, padding: "16px 20px" }}>
               <h2 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: INK }}>Always on your form</h2>
               <p style={{ margin: "3px 0 10px", fontSize: 13, color: MUTED }}>These are built in and always asked.</p>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                {ALWAYS_ON.map((f) => (
+                {alwaysOn.map((f) => (
                   <span key={f} style={{ fontSize: 12, color: INK, background: "#fff", border: `1px solid ${RULE}`, borderRadius: 999, padding: "4px 11px" }}>{f}</span>
                 ))}
               </div>
@@ -418,23 +625,31 @@ export default function RegistrationQuestions() {
                   <button
                     type="button"
                     onClick={saveStandard}
-                    disabled={savingStd || savedStd}
+                    disabled={stdSave.disabled}
                     style={{
                       padding: "9px 18px", border: "none", borderRadius: 8, fontSize: 14, fontWeight: 600,
-                      fontFamily: "inherit", cursor: savingStd || savedStd ? "default" : "pointer",
-                      background: savedStd ? OK_GREEN : BRIGHT, color: "#fff", opacity: savingStd ? 0.7 : 1,
+                      fontFamily: "inherit", cursor: stdSave.disabled ? "default" : "pointer",
+                      background: stdSave.done ? OK_GREEN : BRIGHT, color: "#fff",
+                      // Same expression as the panel's twin, so one derived state
+                      // cannot be painted two ways: dim a genuinely dead button,
+                      // keep the green "Saved ✓" bright because that is a settled
+                      // state rather than a blocked one.
+                      opacity: stdSave.disabled && !stdSave.done ? 0.55 : 1,
                     }}
                   >
-                    {savingStd ? "Saving…" : savedStd ? "Saved ✓" : "Save standard questions"}
+                    {stdSave.label}
                   </button>
                 </div>
               )}
             </section>
 
-            {/* Custom questions */}
+            {/* Custom questions. Coerced to an array: this section's scope
+                picker only needs "which classes can I choose", so a not-yet-
+                loaded list is the same as an empty one to it. The preview gets
+                the raw value because it MUST tell loading from empty. */}
             <CustomSection
               customRows={customRows}
-              programs={programs}
+              programs={programs ?? []}
               canEdit={canEdit}
               onSave={saveCustom}
               onDelete={deleteCustom}
@@ -442,8 +657,19 @@ export default function RegistrationQuestions() {
             />
           </div>
 
-          {/* Live preview */}
-          <FormPreview std={std} customRows={customRows} />
+          {/* Preview = the real form, opened in a new tab */}
+          <FormPreview
+            std={std}
+            customRows={customRows}
+            programs={programs}
+            orgSlug={org?.slug}
+            stdDirty={stdDirty}
+            stdEdited={stdEdited}
+            stdSave={stdSave}
+            canEdit={canEdit}
+            savedStd={savedStd}
+            onSaveStandard={saveStandard}
+          />
         </div>
       )}
     </div>
@@ -599,11 +825,11 @@ function CustomSection({ customRows, canEdit, programs = [], onSave, onDelete, o
                 </div>
                 {/* Honest state: a question limited to one class must SAY so, or
                     this list reads as "every family is asked all of these".
-                    Falls back to a neutral label if the program isn't in the
-                    current term, so the scope never renders blank. */}
-                {r.applies_to === "program" && (
+                    Wording + fallback come from scopeNote so this and the
+                    preview's list cannot disagree. */}
+                {scopeNote(r, programs) && (
                   <div style={{ fontSize: 11, color: BRIGHT, fontWeight: 600, marginTop: 3 }}>
-                    Only on {programs.find((p) => p.id === r.applies_to_value)?.curriculum || "one program"}
+                    {scopeNote(r, programs)}
                   </div>
                 )}
               </div>
@@ -619,6 +845,18 @@ function CustomSection({ customRows, canEdit, programs = [], onSave, onDelete, o
                       // Re-hydrate the scope picker from the stored columns, or
                       // editing a program-scoped question would silently reset it
                       // to "Every program" on save.
+                      //
+                      // KNOWN GAP, deliberately not fixed here: this covers
+                      // 'program' only, while the live CHECK also allows
+                      // 'enrollment_type'. Such a row would seed "" here and
+                      // saveCustom() would then write applies_to='all' — silently
+                      // widening a scoped question to every family. Unreachable
+                      // today: nothing writes that value (this editor and the
+                      // quick builder only write 'all' or 'program') and there are
+                      // 0 such rows on staging or prod. scopeNote() already treats
+                      // any non-'all' scope as scoped, so the LABEL is honest even
+                      // if this seed is not. Fixing it properly means deciding how
+                      // enrollment-type scoping should look, which is a feature.
                       applies_to_program_id: r.applies_to === "program" ? (r.applies_to_value || "") : "",
                     })}
                     style={linkBtn}
@@ -718,9 +956,7 @@ function CustomEditor({ draft, programs = [], onCancel, onSubmit }) {
       >
         <option value="">Every program</option>
         {programs.map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.curriculum}{p.day_of_week ? ` (${p.day_of_week}s)` : ""}
-          </option>
+          <option key={p.id} value={p.id}>{programLabel(p)}</option>
         ))}
       </select>
       <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
@@ -769,76 +1005,245 @@ function ConfirmBar({ message, onCancel, onConfirm }) {
   );
 }
 
-// A lightweight preview of the resulting form — enabled standard questions +
-// active custom questions, in order. Approximates what families will see.
-function FormPreview({ std, customRows }) {
+// The preview IS the real form.
+//
+// This panel used to hand-draw an approximation of every input. It drifted the
+// moment a question type or a dismissal choice changed, it never showed the
+// built-in questions at all, and it flattened a multi-step wizard into one
+// column - so it misrepresented exactly what an operator opens a preview to
+// judge. Nobody in the market hand-draws this: either the builder IS the form
+// (Jotform, Typeform) or Preview opens the real thing (Google Forms' eye icon,
+// SurveyMonkey's test mode, Stripe's payment links). Registration pages are
+// already public, so opening the real form is a link and nothing more: no new
+// code path, and it cannot drift.
+//
+// A form only exists for a class families can reach, so the link is gated the
+// same way ShareProgram gates a share link: published (status "open"), in the
+// term the public catalog serves (the query above filters to it), and not
+// partner-run (those register on the partner's own site, so we have no form to
+// show). With nothing published there is no URL, and the panel says why instead
+// of handing over a link that bounces straight back to the catalog.
+function FormPreview({ std, customRows, programs, orgSlug, stdDirty, stdEdited, stdSave, canEdit, savedStd, onSaveStandard }) {
+  // Derived, not seeded: programs arrive after the first render, so setting a
+  // default once would leave the picker stuck on "" after the load resolved.
+  const [pickedId, setPickedId] = useState("");
+
+  const openable = useMemo(
+    () => (programs || []).filter((p) => p.status === "open" && !p.runs_own_registration),
+    [programs],
+  );
+  const picked = openable.find((p) => p.id === pickedId) || openable[0] || null;
+  const url = orgSlug && picked ? buildRegUrl(orgSlug, picked.id) : "";
+
+  // Why there's nothing to open, honestly. `status` allows draft/open/closed/
+  // cancelled (live CHECK), and a partner-run class is published but registers
+  // on the PARTNER's site — so "none of your classes are published" would state
+  // the wrong cause for three of those five cases. Only claim the shared truth:
+  // nothing is open to families. Partner-run gets its own sentence because
+  // there is no action to take.
+  const allPartnerRun = (programs || []).length > 0 && (programs || []).every((p) => p.runs_own_registration);
+
+  // null = the class list has not landed yet (the parent does not await it). Say
+  // nothing rather than picking an empty-state sentence: every one of them names
+  // a cause and offers an action, and all of them are wrong for an org whose
+  // classes simply have not arrived.
+  const stillLoading = programs === null;
+
+  // The questions in the order families meet them: enabled standard, then active
+  // custom. Labels only - what an input LOOKS like is the real form's job now.
   const items = [];
   for (const f of STANDARD_FIELDS) {
     const s = std[f.key];
-    // `offered` carried into the preview so it shows the answers this provider
-    // actually offers. The hint used to be a hardcoded string naming two options
-    // - a sixth copy of the vocabulary, and one that would start lying the moment
-    // somebody ticked a third answer.
-    if (s?.enabled) items.push({ key: f.key, label: (s.label || "").trim() || f.label, required: f.alwaysRequired || !!s.required, kind: "standard", stdKey: f.key, offered: s.offered });
+    if (s?.enabled) items.push({ key: f.key, label: (s.label || "").trim() || f.label, required: f.alwaysRequired || !!s.required });
   }
   for (const r of customRows) {
-    if (r.is_active !== false) items.push({ key: r.id, label: r.label, required: !!r.is_required, kind: "custom", field_type: r.field_type, options: r.options });
+    if (r.is_active === false) continue;
+    // A question scoped to one class is NOT asked of everyone, so say so. The
+    // old list showed every question unconditionally, which is the same kind of
+    // lie the drawing was. Same sentence as the editable list above (scopeNote).
+    items.push({
+      key: r.id,
+      label: r.label,
+      required: !!r.is_required,
+      scope: scopeNote(r, programs),
+    });
   }
 
   return (
     <aside style={{ position: "sticky", top: 12, background: CREAM, border: `1px solid ${RULE}`, borderRadius: 12, padding: 16 }}>
       <div style={{ fontSize: 12, fontWeight: 700, color: PURPLE, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10 }}>Preview</div>
-      <div style={{ fontSize: 12, color: MUTED, marginBottom: 12 }}>How these questions read on your form.</div>
-      {items.length === 0 ? (
-        <div style={{ fontSize: 13, color: MUTED }}>No extra questions turned on yet.</div>
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {items.map((it) => (
-            <div key={it.key}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: INK }}>
-                {it.label}{it.required && <span style={{ color: RED, marginLeft: 3 }}>*</span>}
-              </div>
-              <PreviewInput item={it} />
-            </div>
-          ))}
-        </div>
-      )}
-    </aside>
-  );
-}
 
-function PreviewInput({ item }) {
-  const box = { marginTop: 5, width: "100%", boxSizing: "border-box", border: `1px solid ${RULE}`, borderRadius: 6, padding: "7px 9px", fontSize: 12, color: MUTED, background: "#fff" };
-  if (item.kind === "standard") {
-    // Built from the provider's own choices rather than a fixed string, so the
-    // preview and the real form cannot disagree about what a family will see.
-    if (item.stdKey === "dismissal_method") {
-      const chosen = offeredChoices(item.offered ? { offered: item.offered } : null);
-      return (
-        <div style={box}>
-          {chosen.map((c) => `○ ${c.parent}`).join("   ")}
-          {chosen.some((c) => needsAftercareProvider(c.value)) && (
-            <div style={{ marginTop: 4 }}>&nbsp;&nbsp;&nbsp;&crarr; Which aftercare program?</div>
+      {/* The form reads SAVED rows, so unsaved standard-question changes make
+          this panel and the real form disagree. Say so where the operator is
+          looking, and put the Save here too: the section's own Save button sits
+          at the bottom of the left column, which on a phone (where this panel
+          now renders FIRST) is below the entire builder.
+
+          Deliberately the SAME action, not a second one: same handler, same
+          label, same busy state, so the two cannot diverge or disagree about
+          what saving means. Jessica's rule is one entry point per action; this
+          is one action reachable from where its consequence is described.
+
+          Placed ABOVE the button because it qualifies the button. */}
+      {stdDirty && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{ background: "#FBF1DC", border: "1px solid #E0C88A", borderRadius: 8, padding: "9px 11px", marginBottom: 10 }}
+        >
+          {/* TWO states, and conflating them was the worst defect in this panel.
+              stdEdited = staged state differs from what load() seeded, i.e. the
+              operator actually changed something (and it self-heals on revert).
+              Without it, an org that has simply never saved its pre-selected
+              safety questions (5 of 7 on prod) was told it had unsaved CHANGES
+              on arrival — blaming the operator for a proposal the section made.
+              Both states are worth stating and both want the same Save; only the
+              cause differs, so only the sentence differs. */}
+          <div style={{ fontSize: 12, color: INK, lineHeight: 1.45 }}>
+            {stdEdited ? (
+              <>
+                <strong style={{ fontWeight: 600 }}>You have unsaved changes.</strong>{" "}
+                Your form asks the questions you've saved, so what you change here
+                won't show up until you save it.
+              </>
+            ) : (
+              <>
+                <strong style={{ fontWeight: 600 }}>Not on your form yet.</strong>{" "}
+                These questions are switched on here but haven't been saved, so your
+                form isn't asking them.{canEdit ? " Save to add them." : ""}
+              </>
+            )}
+          </div>
+          {canEdit && (
+            <button
+              type="button"
+              onClick={onSaveStandard}
+              disabled={stdSave.disabled}
+              // Same derived state as the section's button, and filled BRIGHT like
+              // it: the amber-on-amber outline was 4.37:1 text and a 1.46:1 border
+              // (both under WCAG AA), and 36px tall on the surface this panel
+              // exists to serve on a phone — smaller than the 38px this same file
+              // already rejected 60 lines below. 44 is the thumb floor.
+              style={{
+                ...smallPrimary, marginTop: 8, width: "100%", minHeight: 44,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                background: stdSave.done ? OK_GREEN : BRIGHT,
+                cursor: stdSave.disabled ? "default" : "pointer",
+                opacity: stdSave.disabled && !stdSave.done ? 0.55 : 1,
+              }}
+            >
+              {stdSave.label}
+            </button>
           )}
         </div>
-      );
-    }
-    const hints = {
-      guardian_secondary: "Name · email · phone",
-      authorized_pickup: "Up to 4 people (first & last name)",
-      do_not_release: "Name(s) — optional",
-      emergency_contact: "Name · phone",
-      how_heard: "Dropdown ▾",
-    };
-    return <div style={box}>{hints[item.stdKey] || ""}</div>;
-  }
-  if (item.field_type === "textarea") return <div style={{ ...box, minHeight: 34 }} />;
-  if (item.field_type === "checkbox") return <div style={{ marginTop: 5, fontSize: 12, color: MUTED }}>☐ Yes</div>;
-  if (item.field_type === "select") return <div style={box}>{(item.options?.[0] || "Pick one") + " ▾"}</div>;
-  if (item.field_type === "multiselect") return <div style={{ marginTop: 5, fontSize: 12, color: MUTED }}>{(item.options || []).slice(0, 3).map((o) => `☐ ${o}`).join("   ") || "☐ …"}</div>;
-  if (item.field_type === "date") return <div style={box}>mm / dd / yyyy</div>;
-  if (item.field_type === "number") return <div style={box}>0</div>;
-  return <div style={box} />;
+      )}
+
+      {/* The save's confirmation, and it lives OUTSIDE the block above on
+          purpose. A successful save clears stdDirty, which unmounts that block
+          and the button inside it — so a confirmation rendered in there would be
+          destroyed by the very thing it reports. Measured on staging at 1280x720:
+          the section's own "Saved" sits 924px below the panel's button, more than
+          a full viewport, so the disappearing block was the only signal and
+          "vanished" reads the same as "reverted my toggle".
+          Keyed on savedStd (set only after the write resolves) AND !stdDirty, so
+          it cannot claim saved while something is still pending.
+
+          The wording makes no claim ABOUT THE LIST below it: an operator who
+          turns every standard question off and saves gets "No extra questions
+          turned on yet." in that list, and "your form now asks these questions"
+          would be pointing at nothing. Both safety questions CAN be switched off
+          (alwaysRequired governs required, not enabled), so that state is
+          reachable. "Up to date" is true in every state a save can leave. */}
+      {savedStd && !stdDirty && (
+        <div role="status" aria-live="polite" style={{ fontSize: 12, color: OK_GREEN, fontWeight: 600, marginBottom: 10 }}>
+          Saved ✓ Your form is up to date.
+        </div>
+      )}
+
+      {url ? (
+        <>
+          <div style={{ fontSize: 12, color: MUTED, marginBottom: 10, lineHeight: 1.5 }}>
+            Click through your real registration form the way a family does.
+          </div>
+          {openable.length > 1 && (
+            <>
+              <label htmlFor="preview-class" style={{ ...fieldLabel, fontSize: 11 }}>Which class</label>
+              <select
+                id="preview-class"
+                value={picked.id}
+                onChange={(e) => setPickedId(e.target.value)}
+                style={{ ...textInput, fontSize: 12, marginBottom: 10 }}
+              >
+                {openable.map((p) => (
+                  <option key={p.id} value={p.id}>{programLabel(p)}</option>
+                ))}
+              </select>
+            </>
+          )}
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            // minHeight 44: this is the primary action on a phone, and
+            // smallPrimary's padding alone rendered a 38px-tall target (proven
+            // on staging at 375px). 44 is the floor for a thumb.
+            style={{ ...smallPrimary, display: "flex", alignItems: "center", justifyContent: "center", minHeight: 44, textDecoration: "none", padding: "9px 14px" }}
+          >
+            Open my registration form ↗
+          </a>
+          <div style={{ fontSize: 11, color: MUTED, marginTop: 8, lineHeight: 1.5 }}>
+            Opens in a new tab. This is your live form, so look around but don't finish a payment.
+          </div>
+        </>
+      ) : (
+        <div style={{ fontSize: 12, color: MUTED, lineHeight: 1.55 }}>
+          {stillLoading ? (
+            "Finding the classes families can register for…"
+          ) : openable.length > 0 ? (
+            "We couldn't build your form's link. Please refresh and try again."
+          ) : programs.length === 0 ? (
+            <>
+              {/* `programs` is already filtered to the term families register
+                  for, so "no classes" here does NOT mean the provider has none
+                  at all - they may have a past term full of them. Say which
+                  term is missing a class rather than implying they've never
+                  built one. */}
+              No classes yet in the term families are registering for.{" "}
+              <Link to="/admin/programs" style={{ color: BRIGHT, fontWeight: 600, textDecoration: "none" }}>Add one</Link>{" "}
+              and you can open the form here exactly as a family sees it.
+            </>
+          ) : allPartnerRun ? (
+            "Your families register on your partner's site, so there's no form of ours to preview."
+          ) : (
+            <>
+              Nothing to open yet — none of your classes are open to families right now.{" "}
+              <Link to="/admin/programs" style={{ color: BRIGHT, fontWeight: 600, textDecoration: "none" }}>Open one for registration</Link>{" "}
+              and this opens your real form.
+            </>
+          )}
+        </div>
+      )}
+
+      <div style={{ borderTop: `1px solid ${RULE}`, marginTop: 14, paddingTop: 12 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: INK, marginBottom: 8 }}>Your questions, in order</div>
+        {items.length === 0 ? (
+          <div style={{ fontSize: 12, color: MUTED }}>No extra questions turned on yet.</div>
+        ) : (
+          <ol style={{ margin: 0, paddingLeft: 18, display: "flex", flexDirection: "column", gap: 7 }}>
+            {items.map((it) => (
+              <li key={it.key} style={{ fontSize: 12, color: INK, lineHeight: 1.45 }}>
+                {it.label}{it.required && <span style={{ color: RED, marginLeft: 3 }}>*</span>}
+                {it.scope && <div style={{ fontSize: 11, color: MUTED }}>{it.scope}</div>}
+              </li>
+            ))}
+          </ol>
+        )}
+        <div style={{ fontSize: 11, color: MUTED, marginTop: 8, lineHeight: 1.5 }}>
+          Your form also asks everything under "Always on your form" above.
+        </div>
+      </div>
+    </aside>
+  );
 }
 
 function Toggle({ on, locked, onClick }) {
