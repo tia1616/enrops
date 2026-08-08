@@ -1047,8 +1047,13 @@ function FormPreview({ std, customRows, programs, orgSlug, stdDirty, canEdit, sa
           Keyed on savedStd (set only after the write resolves) AND !stdDirty, so
           it cannot claim saved while something is still pending. */}
       {savedStd && !stdDirty && (
+        {/* Deliberately makes no claim ABOUT THE LIST below it. An operator who
+            turns every standard question off and saves gets "No extra questions
+            turned on yet." in that list, and a confirmation reading "your form
+            now asks these questions" would be pointing at nothing. This sentence
+            is true in every state the save can leave behind. */}
         <div style={{ fontSize: 12, color: OK_GREEN, fontWeight: 600, marginBottom: 10 }}>
-          Saved ✓ Your form now asks these questions.
+          Saved ✓ Your form is up to date.
         </div>
       )}
 
