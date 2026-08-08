@@ -883,7 +883,10 @@ function FormPreview({ std, customRows, programs, orgSlug }) {
             href={url}
             target="_blank"
             rel="noopener noreferrer"
-            style={{ ...smallPrimary, display: "block", textAlign: "center", textDecoration: "none", padding: "9px 14px" }}
+            // minHeight 44: this is the primary action on a phone, and
+            // smallPrimary's padding alone rendered a 38px-tall target (proven
+            // on staging at 375px). 44 is the floor for a thumb.
+            style={{ ...smallPrimary, display: "flex", alignItems: "center", justifyContent: "center", minHeight: 44, textDecoration: "none", padding: "9px 14px" }}
           >
             Open my registration form ↗
           </a>
