@@ -594,6 +594,7 @@ export default function RegistrationQuestions() {
             stdDirty={stdDirty}
             canEdit={canEdit}
             savingStd={savingStd}
+            savedStd={savedStd}
             onSaveStandard={saveStandard}
           />
         </div>
@@ -949,7 +950,7 @@ function ConfirmBar({ message, onCancel, onConfirm }) {
 // partner-run (those register on the partner's own site, so we have no form to
 // show). With nothing published there is no URL, and the panel says why instead
 // of handing over a link that bounces straight back to the catalog.
-function FormPreview({ std, customRows, programs, orgSlug, stdDirty, canEdit, savingStd, onSaveStandard }) {
+function FormPreview({ std, customRows, programs, orgSlug, stdDirty, canEdit, savingStd, savedStd, onSaveStandard }) {
   // Derived, not seeded: programs arrive after the first render, so setting a
   // default once would leave the picker stuck on "" after the load resolved.
   const [pickedId, setPickedId] = useState("");
@@ -1033,6 +1034,21 @@ function FormPreview({ std, customRows, programs, orgSlug, stdDirty, canEdit, sa
               {savingStd ? "Saving…" : "Save standard questions"}
             </button>
           )}
+        </div>
+      )}
+
+      {/* The save's confirmation, and it lives OUTSIDE the block above on
+          purpose. A successful save clears stdDirty, which unmounts that block
+          and the button inside it — so a confirmation rendered in there would be
+          destroyed by the very thing it reports. Measured on staging at 1280x720:
+          the section's own "Saved" sits 924px below the panel's button, more than
+          a full viewport, so the disappearing block was the only signal and
+          "vanished" reads the same as "reverted my toggle".
+          Keyed on savedStd (set only after the write resolves) AND !stdDirty, so
+          it cannot claim saved while something is still pending. */}
+      {savedStd && !stdDirty && (
+        <div style={{ fontSize: 12, color: OK_GREEN, fontWeight: 600, marginBottom: 10 }}>
+          Saved ✓ Your form now asks these questions.
         </div>
       )}
 
