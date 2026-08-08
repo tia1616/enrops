@@ -110,6 +110,11 @@ function friendlyError(error) {
 
 export default function RegistrationQuestions() {
   const { org, orgMember } = useOutletContext() ?? {};
+  // Same test the rest of the admin uses for the reduced nav
+  // (instructor_pay_model === "enrops_platform"). These providers have no
+  // instructor portal, so copy that promises one describes a screen they cannot
+  // reach - it reads as a missing feature rather than a feature they don't need.
+  const hasInstructorPortal = org?.instructor_pay_model !== "enrops_platform";
   const canEdit = useMemo(() => ["owner", "admin"].includes(orgMember?.role), [orgMember]);
 
   const [rows, setRows] = useState(null);          // all custom_reg_fields rows for the org
@@ -403,6 +408,7 @@ export default function RegistrationQuestions() {
                     state={std[f.key]}
                     canEdit={canEdit}
                     first={i === 0}
+                    hasInstructorPortal={hasInstructorPortal}
                     onChange={(patch) => editStd(f.key, patch)}
                   />
                 ))}
@@ -444,7 +450,7 @@ export default function RegistrationQuestions() {
   );
 }
 
-function StandardRow({ field, state, canEdit, first, onChange }) {
+function StandardRow({ field, state, canEdit, first, hasInstructorPortal = true, onChange }) {
   if (!state) return null;
   return (
     <div style={{ padding: "14px 0", borderTop: first ? "none" : `1px solid ${RULE}` }}>
@@ -530,15 +536,23 @@ function StandardRow({ field, state, canEdit, first, onChange }) {
             </div>
             <div style={{ marginTop: 6, fontSize: 12, color: MUTED, lineHeight: 1.5, maxWidth: 460 }}>
               Turning on <strong>Goes to aftercare</strong> also asks the family which
-              program, and that name shows on your rosters and your instructors&rsquo;
-              dismissal list.
+              program, and that name shows on your rosters
+              {hasInstructorPortal ? <> and your instructors&rsquo; dismissal list</> : null}.
             </div>
           </div>
         )}
-        {/* Safety coupling: these questions feed the instructor dismissal tool. */}
+        {/* Safety coupling: these questions feed the dismissal tooling. Named
+            differently for providers on the reduced nav - they have no instructor
+            portal, so "your instructors won't see the dismissal step" points at a
+            screen that does not exist for them. */}
         {field.alwaysRequired && (
           <div style={{ marginTop: 8, fontSize: 12, color: MUTED, lineHeight: 1.5, maxWidth: 460, fontStyle: "italic" }}>
-            Powers your instructors' dismissal check-off and Class Reports. Turn it off and families won't be asked at registration, and instructors won't see the dismissal step.
+            {hasInstructorPortal
+              ? "Powers your instructors' dismissal check-off and Class Reports. Turn it off and families won't be asked at registration, and instructors won't see the dismissal step."
+              /* Class Reports is filtered out of the reduced nav too
+                 (AdminLayout shapeNavForOrg drops /admin/class-reports), so it
+                 must not be named here either. Class rosters DO survive. */
+              : "Powers the dismissal details on your class rosters. Turn it off and families won't be asked at registration, and dismissal won't appear on your rosters."}
           </div>
         )}
         </>

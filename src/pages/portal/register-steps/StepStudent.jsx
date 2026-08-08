@@ -169,6 +169,10 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
           <p className="mt-1 text-sm text-j2s-ink/60">Who we can release your child to.</p>
           <PickupDismissalSection
             std={std}
+            // One child renders at a time in this wizard, so nothing collides
+            // today. Passed anyway so it stays correct if the step ever shows
+            // siblings side by side.
+            instanceKey={`child-${childIndex}`}
             dismissalMethod={student.dismissal_method || ''}
             // Clear the provider name when the answer moves off aftercare, so a
             // name typed and then reconsidered cannot ride along to the roster

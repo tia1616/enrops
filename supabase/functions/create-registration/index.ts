@@ -72,6 +72,24 @@ serve(async (req) => {
       return json({ error: 'No line items' }, 400);
     }
 
+    // "Aftercare" with no program named is an INCOMPLETE answer, and the server
+    // has to say so rather than quietly storing half of it. Three browser
+    // surfaces block it, but this endpoint is public: a request that omits
+    // aftercare_provider used to coerce it to null and persist ('aftercare', NULL).
+    // Nothing could then repair that row - the parent-portal gate only collects
+    // info for children with NO answer, so a family who DID answer was skipped,
+    // and every staff surface read "Aftercare (provider not stated)" forever.
+    // Rejecting here is what makes the client-side rule an actual rule.
+    for (const child of children) {
+      const st = child?.student ?? {};
+      if (st.dismissal_method === 'aftercare'
+          && !String(st.aftercare_provider ?? '').trim()) {
+        return json({
+          error: 'Please tell us which aftercare program the child goes to.',
+        }, 400);
+      }
+    }
+
     // --- Resolve organization ---
     const { data: org, error: orgErr } = await admin
       .from('organizations')

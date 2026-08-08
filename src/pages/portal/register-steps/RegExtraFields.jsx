@@ -78,7 +78,16 @@ function Req({ on }) {
 // dismissal_method choice + (conditionally) the authorized-pickup list +
 // (optionally) the do-not-release list. All three are separate standard
 // questions; we render whichever are enabled.
-export function PickupDismissalSection({ std, dismissalMethod, onDismissalChange, aftercareProvider, onAftercareProviderChange, pickup, onPickupChange, doNotRelease, onDoNotReleaseChange }) {
+// instanceKey MUST be unique per child whenever more than one of these is on the
+// page at once, which the parent-portal pickup gate does - it renders one section
+// per child in a single document. Two consequences of a shared identifier there:
+// every child's radios join ONE native group, so answering for the second child
+// unchecks the first in the DOM; and a duplicated input id makes the follow-up
+// label resolve to the FIRST match, so tapping "Which aftercare program?" under
+// child two focuses child one's box. Defaulted rather than required because the
+// registration wizard renders a single child at a time and has no id to give.
+export function PickupDismissalSection({ std, dismissalMethod, onDismissalChange, aftercareProvider, onAftercareProviderChange, pickup, onPickupChange, doNotRelease, onDoNotReleaseChange, instanceKey = 'single' }) {
+  const providerInputId = `aftercare-provider-${instanceKey}`;
   // From the shared module, not a hardcoded pair. Which answers this provider
   // offers comes from their own config; the default is the two that were already
   // live, so nobody's form changes until they turn something on.
@@ -130,7 +139,7 @@ export function PickupDismissalSection({ std, dismissalMethod, onDismissalChange
               >
                 <input
                   type="radio"
-                  name="dismissal_method"
+                  name={`dismissal_method-${instanceKey}`}
                   className="accent-j2s-purple"
                   checked={dismissalMethod === opt.value}
                   onChange={() => onDismissalChange(opt.value)}
@@ -155,11 +164,11 @@ export function PickupDismissalSection({ std, dismissalMethod, onDismissalChange
                   roster would then read "Aftercare (provider not stated)" forever
                   for a family who did answer. Enforced in Register.jsx's canAdvance
                   and the pickup gate's blocker through the same shared helper. */}
-              <label className="label-field" htmlFor="aftercare-provider">
+              <label className="label-field" htmlFor={providerInputId}>
                 Which aftercare program?<span className="text-j2s-orange-dark"> *</span>
               </label>
               <input
-                id="aftercare-provider"
+                id={providerInputId}
                 className="input-field"
                 type="text"
                 required

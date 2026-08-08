@@ -158,6 +158,9 @@ export default function PickupInfoGate({ students, parent, orgId, onComplete }) 
               <h2 className="font-titan text-xl text-j2s-ink">{s.name || "Your child"}</h2>
               <PickupDismissalSection
                 std={std}
+                // Every child renders at once here, so the radio group name and
+                // the provider input id have to differ per child.
+                instanceKey={s.student_id}
                 dismissalMethod={d.dismissal_method}
                 // Same clear-on-change rule as the registration form: a provider
                 // name must never outlive the answer it describes, or a roster
