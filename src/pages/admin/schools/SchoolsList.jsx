@@ -21,6 +21,12 @@ import { supabase } from "../../../lib/supabase";
 import Chevron from "../../../components/Chevron.jsx";
 import NeedsLinkingSection from "../contacts/NeedsLinkingSection.jsx";
 import ImportContactsModal from "../contacts/ImportContactsModal.jsx";
+// This component is the GOES-TO-SITES half of the venue surface (SchoolsLocations
+// renders LocationsList instead for own-space orgs), so its body says "site" — the
+// word the ICP vocabulary guide records operators using, and the word
+// QuickProgramBuilder already used for the same action. The nav item and the page
+// title stay "Locations" for every venue model: Jessica's 2026-08-05 decision.
+import { venueWord, venueWordPlural, addVenueLabel, venueCount } from "../../../lib/venueWords.js";
 import FindMissingAddressesModal from "../FindMissingAddressesModal.jsx";
 import AddSchoolModal from "./AddSchoolModal.jsx";
 import SchoolDetailDrawer from "./SchoolDetailDrawer.jsx";
@@ -97,7 +103,7 @@ export default function SchoolsList() {
     if (pErr || lErr) {
       // Surface the failure instead of spinning "Loading…" forever (rule E).
       console.error("[SchoolsList] load failed:", pErr ?? lErr);
-      setLoadError(`Couldn't load locations: ${(pErr ?? lErr).message}. Refresh to try again.`);
+      setLoadError(`Couldn't load ${venueWordPlural(org)}: ${(pErr ?? lErr).message}. Refresh to try again.`);
       setPartners([]);
       return;
     }
@@ -272,19 +278,20 @@ export default function SchoolsList() {
       {/* Toolbar */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 14 }}>
         <div style={{ fontSize: 13, color: MUTED }}>
-          {/* "Locations" is the operator-facing name for a row here. The venue
-              count is only shown when it DIFFERS (contact-only rows, or an
-              umbrella with several venues) — for the common 1:1 case "22
-              locations · 22 venues" read as two different things. */}
+          {/* The row's operator-facing name comes from venueWords (site here, since
+              this component only renders for goes-to-sites orgs). The venue count is
+              only shown when it DIFFERS (contact-only rows, or an umbrella with
+              several venues) — for the common 1:1 case "22 sites · 22 venues" read as
+              two different things. */}
           {partners === null ? "Loading…" : [
-            `${schools.length} location${schools.length === 1 ? "" : "s"}`,
+            venueCount(org, schools.length),
             ...(totalVenues !== schools.length ? [`${totalVenues} venue${totalVenues === 1 ? "" : "s"}`] : []),
             `${districts.length} district${districts.length === 1 ? "" : "s"}`,
           ].join(" · ")}
         </div>
         {partners !== null && schools.length > 0 && (
           <span
-            title={`Setting up a location by hand — entering details, looking up the address, and linking contacts + calendar across your tools — runs about ${MINUTES_SAVED_PER_PARTNER} min each. Enrops does it in a couple of clicks.`}
+            title={`Setting up a ${venueWord(org)} by hand — entering details, looking up the address, and linking contacts + calendar across your tools — runs about ${MINUTES_SAVED_PER_PARTNER} min each. Enrops does it in a couple of clicks.`}
             style={{ fontSize: 12, fontWeight: 600, color: OK, background: `${OK}14`, padding: "4px 10px", borderRadius: 99 }}
           >
             {savedLabel} saved vs. by hand
@@ -299,18 +306,18 @@ export default function SchoolsList() {
           </button>
         )}
         <button type="button" onClick={() => setImporting(true)}
-          title="Bulk-upload a list of locations (schools, Parks & Rec, etc.) + contacts from a spreadsheet"
+          title={`Bulk-upload a list of ${venueWordPlural(org)} (schools, Parks & Rec, etc.) + contacts from a spreadsheet`}
           style={{ padding: "9px 14px", background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>
-          Import locations
+          Import {venueWordPlural(org)}
         </button>
         <button type="button" onClick={() => setAdding(true)}
           style={{ padding: "9px 16px", background: BRIGHT, color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>
-          + Add a location
+          + {addVenueLabel(org)}
         </button>
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
-        <input type="text" placeholder="Search locations, districts, areas…" value={query} onChange={(e) => setQuery(e.target.value)}
+        <input type="text" placeholder={`Search ${venueWordPlural(org)}, districts, areas…`} value={query} onChange={(e) => setQuery(e.target.value)}
           style={{ flex: "1 1 260px", maxWidth: 360, padding: "8px 12px", fontSize: 13, border: `1px solid ${RULE}`, borderRadius: 6, fontFamily: "inherit", boxSizing: "border-box" }} />
         <button type="button" onClick={() => setGroupByDistrict((v) => !v)}
           style={chip(groupByDistrict)}>
@@ -343,8 +350,8 @@ export default function SchoolsList() {
 
       {partners !== null && filtered.length === 0 && (
         <div style={{ background: "#fff", border: `1px dashed ${RULE}`, borderRadius: 12, padding: 36, textAlign: "center", color: MUTED, fontSize: 14 }}>
-          {query ? "No locations match that search." : (
-            <>No locations yet. Click <strong>+ Add a location</strong> to set up your first one.</>
+          {query ? `No ${venueWordPlural(org)} match that search.` : (
+            <>No {venueWordPlural(org)} yet. Click <strong>+ {addVenueLabel(org)}</strong> to set up your first one.</>
           )}
         </div>
       )}
