@@ -103,7 +103,13 @@ export default function OperatorOverview() {
   const published = real.filter((r) => r.first_published_at).length;
   const selling = real.filter((r) => (r.registration_count ?? 0) > 0).length;
 
-  const th = { padding: "10px 12px", borderBottom: `1px solid ${RULE}`, whiteSpace: "nowrap" };
+  // Headers wrap. They used to be nowrap, and eight nowrap headers gave the
+  // table a min-content width of 1042px inside a 953px slot — <main> is a grid
+  // item with the default min-width:auto, so it grew to fit rather than letting
+  // the table scroll, and the whole admin shell scrolled sideways with the
+  // sidebar. Two-line headers are ordinary in an admin table; a sideways-
+  // scrolling shell is not. Numeric cells stay nowrap so no figure ever splits.
+  const th = { padding: "10px 12px", borderBottom: `1px solid ${RULE}` };
   const td = { padding: "10px 12px", borderBottom: `1px solid ${RULE}`, verticalAlign: "top" };
   const num = { ...td, textAlign: "right", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" };
 
@@ -138,14 +144,8 @@ export default function OperatorOverview() {
             {internalCount > 0 && ` (${internalCount} internal account${internalCount === 1 ? "" : "s"} excluded from these counts)`}
           </div>
 
-          {/* minWidth:0 + maxWidth:100% are load-bearing, not decoration. Without
-              them this wrapper refuses to shrink below its content's min-width,
-              so an eight-column table pushed the whole admin shell into a
-              horizontal scroll — measured on staging: <main> at 1114px inside a
-              1025px slot, and the sidebar scrolled away with it. The table now
-              scrolls inside its own box and the page does not. */}
           <div style={{ overflowX: "auto", maxWidth: "100%", minWidth: 0 }}>
-            <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 940, fontSize: 13, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 8 }}>
+            <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 820, fontSize: 13, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 8 }}>
               <thead>
                 <tr style={{ textAlign: "left", color: MUTED, fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em" }}>
                   <th style={th}>Operator</th>
@@ -183,7 +183,7 @@ export default function OperatorOverview() {
                           {r.stripe_charges_enabled ? " · can take payments" : " · can't take payments yet"}
                         </div>
                       </td>
-                      <td style={{ ...td, color: stage.color, fontWeight: 600, whiteSpace: "nowrap" }}>{stage.label}</td>
+                      <td style={{ ...td, color: stage.color, fontWeight: 600 }}>{stage.label}</td>
                       <td style={num}>
                         {r.signed_in_member_count}/{r.member_count}
                         <div style={{ fontSize: 11.5, color: MUTED, fontWeight: 400 }}>signed in</div>
