@@ -30,19 +30,27 @@ const fmtDate = (iso) =>
   iso ? new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "—";
 
 // The states an operator can be in, in order. Deliberately derived from work
-// done (invited / signed in / published / registered), never from a status
-// column somebody has to remember to set.
+// done (signed in / published / registered), never from a status column
+// somebody has to remember to set.
 //
 // "Nothing published" tests first_published_at, NOT the live count: a class that
 // was published in September and closed in October leaves zero live rows, and
 // reading that as "never published" is the exact wrong answer to the question
 // this screen exists to answer.
+//
+// The green state tests ACTIVE registrations, not the total. An operator whose
+// only registration was cancelled or refunded has a total of 1 and is not
+// selling anything; reading that as "Taking registrations" would paint the row
+// green on the one screen used to decide who needs help. That case gets its own
+// label rather than being folded into "no registrations", which would contradict
+// the count of 1 sitting in the next column.
 function stageOf(r) {
   if ((r.member_count ?? 0) === 0) return { key: "no_account", label: "No account yet", color: FLAG };
   if ((r.signed_in_member_count ?? 0) === 0) return { key: "no_signin", label: "Never signed in", color: FLAG };
   if (!r.first_published_at) return { key: "no_publish", label: "Nothing published", color: AMBER };
-  if ((r.registration_count ?? 0) === 0) return { key: "no_regs", label: "Published, no registrations", color: AMBER };
-  return { key: "selling", label: "Taking registrations", color: OK };
+  if ((r.active_registration_count ?? 0) > 0) return { key: "selling", label: "Taking registrations", color: OK };
+  if ((r.registration_count ?? 0) > 0) return { key: "all_cancelled", label: "Registrations all cancelled", color: AMBER };
+  return { key: "no_regs", label: "Published, no registrations", color: AMBER };
 }
 
 export default function OperatorOverview() {
@@ -69,7 +77,13 @@ export default function OperatorOverview() {
     if (error) {
       // The function raises 42501 for a non-platform-admin. Showing that as
       // "couldn't load" would be a lie about why the screen is empty.
-      if (error.code === "42501" || /forbidden/i.test(error.message ?? "")) {
+      //
+      // Matched on the SQLSTATE alone. This used to also match /forbidden/i on
+      // the message, which is the wider net: any edge layer that answers "403
+      // Forbidden" — a WAF, a rate limiter, Netlify — would have told a real
+      // platform admin they lack access, which is a confident claim about their
+      // permissions drawn from an error that only proves the request failed.
+      if (error.code === "42501") {
         setAdminCheck("denied");
         return;
       }
@@ -100,6 +114,12 @@ export default function OperatorOverview() {
 
   const real = (rows ?? []).filter((r) => !r.org_is_internal);
   const internalCount = (rows ?? []).length - real.length;
+  // Derived, never typed in. This used to be the literal string "Jul 3, 2026",
+  // which was read off prod's earliest event of ANY kind and was wrong on both
+  // environments — prod's first publish event is Jul 8, staging's is Jul 2. The
+  // boundary that decides whether a date can be trusted has to come from the
+  // same query as the dates.
+  const logStart = (rows ?? []).find((r) => r.publish_log_starts_at)?.publish_log_starts_at ?? null;
   const published = real.filter((r) => r.first_published_at).length;
   const selling = real.filter((r) => (r.registration_count ?? 0) > 0).length;
 
@@ -229,9 +249,11 @@ export default function OperatorOverview() {
             "Live" is what families can register for right now — programs that are open plus camp sessions that
             are active. "First published" counts anything that ever went live, including classes since closed
             or cancelled, so an operator who published last term and closed it still shows the date they did it.
-            Publishing has been recorded as it happens since Jul 3, 2026; those dates are exact. Anything older
-            falls back to the date the class was created, and a class goes live at or after it's created, never
-            before — so those read "or later" and the real date could be any time after.
+            {logStart
+              ? ` Publishing has been recorded as it happens since ${fmtDate(logStart)}, so those dates are exact.`
+              : " Nothing has been published yet, so there are no exact dates to compare against."}{" "}
+            Anything older falls back to the date the class was created, and a class goes live at or after it's
+            created, never before — so those read "or later" and the real date could be any time after.
             "Last activity" is the most recent program, camp or registration — not a login: a login date only
             updates when someone signs in fresh, so a daily user who never gets logged out looks dormant.
             Cancelled registrations are still counted in the total, because the operator did get that first one.
