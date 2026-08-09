@@ -1805,6 +1805,11 @@ function AfterschoolRostersSection({ org, canEdit }) {
           .from("programs")
           .select("id, curriculum, day_of_week, start_time, end_time, max_capacity, program_location_id, first_session_date, session_count, program_locations ( name, district )")
           .eq("organization_id", org.id)
+          // Published only. A draft cannot have registrations, so it would list at
+          // "0 enrolled" next to a roster-email control that would send a school an
+          // empty roster for a class that is not live. Reachable since 2026-08-08,
+          // when the lean quick builder gained Save as draft.
+          .eq("status", "open")
           .eq("term", term);
         if (pErr) throw pErr;
         const ids = (progRows ?? []).map((p) => p.id);
