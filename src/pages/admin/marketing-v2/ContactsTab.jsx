@@ -17,7 +17,7 @@
 // Org comes from useOutletContext — never hardcoded. Copy is tenant-neutral.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useOutletContext, useSearchParams } from "react-router-dom";
+import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import { PURPLE, BRIGHT, INK, MUTED, RULE, OK, WARN } from "../marketing/tokens.jsx";
 import FamilyCommsTabs from "./FamilyCommsTabs.jsx";
@@ -25,7 +25,8 @@ import ElapsedTimer from "../../../components/ElapsedTimer.jsx";
 import { InstructorContacts, PartnerContacts } from "./AudienceContacts.jsx";
 import ContactTimelineDrawer from "./ContactTimelineDrawer.jsx";
 import AudienceSwitcher from "./AudienceSwitcher.jsx";
-import { commsAudiencesFor } from "../../../lib/entitlements.js";
+import { entitlementsFor } from "../../../lib/entitlements.js";
+import { useCommsAudience } from "../../../lib/useCommsAudience.js";
 
 // Comms is the single CRM hub for all three audiences. Instructors + Partners
 // get a light, consistent "your people" contacts list here (name / email /
@@ -190,25 +191,13 @@ const DOC_COLUMNS = ["email", "parent_name", "phone", "child_first_name", "child
 
 export default function ContactsTab() {
   const { org } = useOutletContext() ?? {};
-  const [params, setParams] = useSearchParams();
 
   // Audience selection rides in the URL (?audience=) so it survives refresh +
   // deep links, and the sidebar "Comms" item stays lit (path is unchanged:
-  // /admin/family-comms/contacts). Default (no param) = families.
-  //
-  // Clamped to what this org may see (commsAudiencesFor) — same as the
-  // Automations tab. Hiding the pill isn't enough on its own: a stale
-  // ?audience=instructors link would otherwise render an instructor list to an
-  // org whose nav has no instructor surface at all.
-  const allowedAudiences = commsAudiencesFor(org);
-  const requested = params.get("audience");
-  const audience = allowedAudiences.includes(requested) ? requested : "families";
-  function selectAudience(a) {
-    const next = new URLSearchParams(params);
-    if (a === "families") next.delete("audience");
-    else next.set("audience", a);
-    setParams(next, { replace: true });
-  }
+  // /admin/family-comms/contacts). Clamping to what this org may see, and
+  // rewriting the URL when it asked for something else, both live in
+  // lib/useCommsAudience so the three Comms tabs cannot drift apart.
+  const { audience, allowedAudiences, selectAudience } = useCommsAudience(org);
 
   return (
     <div style={{ padding: "24px 32px" }}>
@@ -228,6 +217,10 @@ function FamiliesContacts({ org }) {
   const [countErr, setCountErr] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [uploading, setUploading] = useState(false);
+  // Contacts is the page a registration_only org is REDIRECTED to, so its copy
+  // must not sell the campaign surface the redirect exists to withhold. Same
+  // honest-copy rule the Campaigns tab link already follows in FamilyCommsTabs.
+  const canSendCampaigns = entitlementsFor(org).comms === "full";
 
   useEffect(() => {
     if (!org?.id) return;
@@ -253,9 +246,18 @@ function FamiliesContacts({ org }) {
           Families
         </h1>
         <p style={{ color: MUTED, fontSize: 15, lineHeight: 1.55, margin: 0 }}>
-          This is the list your campaigns send to. Upload your families&apos; email
-          addresses here so you can start sending. You choose who receives each
-          campaign when you build it.
+          {canSendCampaigns ? (
+            <>
+              This is the list your campaigns send to. Upload your families&apos; email
+              addresses here so you can start sending. You choose who receives each
+              campaign when you build it.
+            </>
+          ) : (
+            <>
+              Everyone who registers is added here automatically, with their child and
+              site. Upload a CSV to bring in families who registered somewhere else.
+            </>
+          )}
         </p>
       </header>
 
@@ -291,7 +293,9 @@ function FamiliesContacts({ org }) {
         <div style={{ border: `1px dashed ${RULE}`, borderRadius: 12, padding: 28, textAlign: "center", color: MUTED }}>
           <p style={{ margin: "0 0 4px", color: INK, fontWeight: 600 }}>No contacts yet</p>
           <p style={{ margin: 0, fontSize: 13 }}>
-            Upload a CSV of your families to build your list — then you can send your first campaign.
+            {canSendCampaigns
+              ? <>Upload a CSV of your families to build your list — then you can send your first campaign.</>
+              : <>Families appear here as they register. You can also upload a CSV to bring in families who registered somewhere else.</>}
           </p>
         </div>
       )}
@@ -303,6 +307,7 @@ function FamiliesContacts({ org }) {
       {uploading && org?.id && (
         <UploadModal
           orgId={org.id}
+          canSendCampaigns={canSendCampaigns}
           onClose={() => setUploading(false)}
           onImported={() => {
             setUploading(false);
@@ -668,7 +673,7 @@ function EditContactModal({ orgId, contactId, onClose, onSaved, suggestions = []
 
 // ─── Upload modal ───────────────────────────────────────────────────────────
 
-function UploadModal({ orgId, onClose, onImported }) {
+function UploadModal({ orgId, onClose, onImported, canSendCampaigns }) {
   const [step, setStep] = useState("pick"); // pick | parsing | mapping | committing | done
   const [elapsed, setElapsed] = useState(0); // live m:ss counter for the file read (PDF = AI extract)
 
@@ -950,7 +955,7 @@ function UploadModal({ orgId, onClose, onImported }) {
         )}
 
         {step === "done" && result && (
-          <DoneStep result={result} onClose={onImported} />
+          <DoneStep result={result} onClose={onImported} canSendCampaigns={canSendCampaigns} />
         )}
       </div>
     </div>
@@ -1165,7 +1170,7 @@ function BulkTagAssign({ bulkTags, setBulkTags, existingTags }) {
   );
 }
 
-function DoneStep({ result, onClose }) {
+function DoneStep({ result, onClose, canSendCampaigns }) {
   const inserted = result.inserted ?? 0;
   const updated = result.updated ?? 0;
   const invalid = result.invalid ?? 0;
@@ -1181,11 +1186,20 @@ function DoneStep({ result, onClose }) {
         </p>
       </div>
 
+      {/* Fires after EVERY import, which makes it the most-seen string on this
+          tier. It used to promise a campaign builder the tier cannot open. */}
       <div style={{ marginTop: 8, background: `${PURPLE}0A`, border: `1px solid ${PURPLE}22`, borderRadius: 8, padding: 14 }}>
-        <p style={{ margin: "0 0 4px", fontSize: 13, fontWeight: 700, color: PURPLE }}>What this unlocks</p>
+        <p style={{ margin: "0 0 4px", fontSize: 13, fontWeight: 700, color: PURPLE }}>
+          {canSendCampaigns ? "What this unlocks" : "What happens now"}
+        </p>
         <p style={{ margin: 0, fontSize: 13, color: INK, lineHeight: 1.6 }}>
-          Your contacts are on your list now, so you can <strong>build a campaign</strong> and
-          reach these families. You&apos;ll pick who receives each campaign when you set it up.
+          {canSendCampaigns ? (
+            <>Your contacts are on your list now, so you can <strong>build a campaign</strong> and
+            reach these families. You&apos;ll pick who receives each campaign when you set it up.</>
+          ) : (
+            <>These families are on your list now. Anyone who registers is added
+            automatically, so you only need to upload families who registered somewhere else.</>
+          )}
         </p>
       </div>
 

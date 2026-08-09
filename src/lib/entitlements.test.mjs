@@ -7,11 +7,14 @@
 //   - thank_you is opt-OUT, so creating its row with enabled:false switches the
 //     confirmation email off; anything that inserts one must know that
 //   - hiding an audience pill without clamping the value shows an empty list
+import { readFileSync } from 'node:fs';
 import {
   entitlementsFor,
   commsAudiencesFor,
   isAlwaysOnAutomation,
   isOptOutAutomation,
+  automationIsSending,
+  registrationAutomationsCanFire,
   canReachCommsTab,
   REGISTRATION_AUTOMATION_KEYS,
 } from './entitlements.js';
@@ -37,10 +40,11 @@ eq('lean + pilot         -> registration_only', entitlementsFor({ ...LEAN_STANDA
 // be a no-op for J2S, whose surface nobody asked to change.
 eq('legacy with plan missing -> still full', entitlementsFor({ instructor_pay_model: 'legacy_own_platform' }).comms, 'full');
 
-// THE SHIPPED BUG: AdminLayout's org select omitted platform_plan, so this was
-// undefined for every org and everyone silently fell to the reduced tier. It
-// fails closed, which is the safe direction and precisely why nothing surfaced
-// it. Pinned so a future select edit that drops the column fails here first.
+// Fails CLOSED when the plan is missing. This documents the resolver's behaviour
+// and is NOT a pin on the shipped bug — see the AdminLayout assertion at the end
+// of this file, which is. Code review caught that this line alone asserts the
+// DEFECT (undefined plan -> reduced tier is exactly what production did) and
+// would pass just as happily with the column dropped from the select again.
 eq('lean with plan missing -> reduced (fails CLOSED)', entitlementsFor({ instructor_pay_model: 'enrops_platform' }).comms, 'registration_only');
 eq('null org             -> full (never lock out a load failure)', entitlementsFor(null).comms, 'full');
 
@@ -87,6 +91,38 @@ eq('welcome is never always-on',              isAlwaysOnAutomation(LEAN_STANDARD
 eq('thank_you is opt-out', isOptOutAutomation('thank_you'), true);
 eq('welcome_camp is opt-in', isOptOutAutomation('welcome_camp'), false);
 eq('partner_roster is opt-in', isOptOutAutomation('partner_roster'), false);
+
+// --- is it SENDING (tier-independent) vs can it be switched OFF (tier-dependent) ---
+// The two used to be one value, which produced opposite lies on the two tiers.
+eq('no row + opt-out template -> sending',   automationIsSending(null, 'thank_you'), true);
+eq('no row + opt-in template  -> not sending', automationIsSending(null, 'welcome_camp'), false);
+eq('stored false beats the opt-out default', automationIsSending({ enabled: false }, 'thank_you'), false);
+eq('stored true is sending',                 automationIsSending({ enabled: true }, 'welcome_camp'), true);
+
+// --- registration-dependent automations ---
+eq('org that brings its own registration cannot fire them',
+   registrationAutomationsCanFire({ uses_enrops_registration: false }), false);
+eq('org using Enrops registration can',
+   registrationAutomationsCanFire({ uses_enrops_registration: true }), true);
+eq('unset defaults to CAN (column default is true)',
+   registrationAutomationsCanFire({}), true);
+
+// --- THE REAL PIN for the shipped select bug ---
+// entitlementsFor is pure, so no assertion about org objects can detect a column
+// missing from AdminLayout's query. This reads the source and asserts the column
+// is in the select string. Delete platform_plan from that select and this fails,
+// which is what the earlier "pinned" comment wrongly claimed of a pure-function
+// assertion. Path is resolved from this file so it works from any cwd.
+const adminLayout = readFileSync(
+  new URL('../layouts/AdminLayout.jsx', import.meta.url),
+  'utf8',
+);
+const orgSelect = adminLayout.match(/\.select\(\s*"([^"]*instructor_pay_model[^"]*)"\s*\)/);
+eq('AdminLayout org query was found', Boolean(orgSelect), true);
+eq('AdminLayout org query still selects platform_plan',
+   Boolean(orgSelect && orgSelect[1].includes('platform_plan')), true);
+eq('AdminLayout org query still selects uses_enrops_registration',
+   Boolean(orgSelect && orgSelect[1].includes('uses_enrops_registration')), true);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

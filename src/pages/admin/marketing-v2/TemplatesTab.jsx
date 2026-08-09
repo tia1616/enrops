@@ -26,13 +26,13 @@
 // Org comes from useOutletContext — never hardcoded. Copy is tenant-neutral.
 
 import { useEffect, useState } from "react";
-import { useOutletContext, useSearchParams } from "react-router-dom";
+import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import { BRIGHT, INK, MUTED, RULE } from "../marketing/tokens.jsx";
 import FamilyCommsTabs from "./FamilyCommsTabs.jsx";
 import AttachmentPicker from "./AttachmentPicker.jsx";
 import AudienceSwitcher from "./AudienceSwitcher.jsx";
-import { commsAudiencesFor } from "../../../lib/entitlements.js";
+import { useCommsAudience } from "../../../lib/useCommsAudience.js";
 import { htmlToEditable, editableToHtml, highlightTokens, stripHtml } from "./bodyEditorUtils.js";
 
 const RED = "#b53737";
@@ -143,18 +143,15 @@ function fmtDate(iso) {
 
 export default function TemplatesTab() {
   const { org } = useOutletContext() ?? {};
-  const [params, setParams] = useSearchParams();
 
   // Audience rides in the URL (?audience=) so it survives refresh + deep links
   // and matches Comms>Contacts. Default (no param) = families, so the campaign
   // template experience is byte-for-byte unchanged.
-  // Clamped to what this org may see (commsAudiencesFor) — same as Contacts and
+  // Clamp + URL rewrite live in lib/useCommsAudience, shared with Contacts and
   // Automations. Reachable only with full Comms, but a lean org WITH full Comms
   // still has no instructor surface, so the Instructors shelf stays hidden here
   // too: templates for sends that org can never make are just confusing shelf.
-  const allowedAudiences = commsAudiencesFor(org);
-  const requested = params.get("audience");
-  const audience = allowedAudiences.includes(requested) ? requested : "families";
+  const { audience, allowedAudiences, selectAudience: setAudience } = useCommsAudience(org);
   const cfg = AUDIENCES[audience];
 
   const [templates, setTemplates] = useState(null); // null = loading
@@ -168,12 +165,10 @@ export default function TemplatesTab() {
 
   function selectAudience(a) {
     // Switching audience closes the editor (below), which would silently drop an
-    // in-progress draft — confirm first if there are unsaved changes.
+    // in-progress draft — confirm first if there are unsaved changes. The URL
+    // write itself is the shared one; only this guard is Templates-specific.
     if (editing && editorDirty && !window.confirm("Discard your unsaved changes to this template?")) return;
-    const next = new URLSearchParams(params);
-    if (a === "families") next.delete("audience");
-    else next.set("audience", a);
-    setParams(next, { replace: true });
+    setAudience(a);
   }
 
   // Leaving the editor when the audience changes prevents saving a draft under

@@ -44,6 +44,7 @@
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 import Anthropic from "npm:@anthropic-ai/sdk@0.96.0";
 import { loadOrgBrand } from "../_shared/orgBrand.ts";
+import { assertCommsFull } from "../_shared/entitlements.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
@@ -2103,6 +2104,16 @@ Deno.serve(async (req: Request) => {
   // explicit auth gate above; service role lets us avoid second-guessing each
   // policy from inside this trusted function).
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+  // ---- Plan gate ----
+  // The role gate above proves WHO you are; this proves the org is entitled to the
+  // campaign surface at all. Campaigns are the paid tier, and until this existed
+  // the only thing stopping a registration_only operator was a hidden route — an
+  // authenticated supabase client is already on the page, so the function was
+  // callable straight from devtools. Reads the plan off the row with the service
+  // client, never from the request body.
+  const planRefusal = await assertCommsFull(supabase, organization_id);
+  if (planRefusal) return planRefusal;
 
   // ---- Rate limit: 15s cooldown + 50 drafts/day per org (AI only) ----
   if (skipAi) {

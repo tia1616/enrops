@@ -27,6 +27,7 @@ import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 import { loadOrgBrand, formatFromAddress, renderSignatureBlock, type OrgBrand } from "../_shared/orgBrand.ts";
 import { listUnsubscribeHeaders } from "../_shared/listUnsubscribe.ts";
+import { assertCommsFull } from "../_shared/entitlements.ts";
 import {
   parseEmailAttachments,
   loadCommsAttachments,
@@ -336,6 +337,15 @@ serve(async (req: Request) => {
       return json({ error: "forbidden: caller has no admin access to this campaign's org" }, 403);
     }
   }
+
+  // Plan gate, checked on the DELIVERY path and not only at draft time. This runs
+  // for the cron too, deliberately: the org that drafted a campaign is not
+  // necessarily entitled at the moment it sends, and a campaign row that already
+  // exists must not keep delivering on a tier that no longer includes campaigns.
+  // Draft-time checking alone would leave any already-approved campaign sending
+  // forever. Reads the plan off the org row, never from the request.
+  const planRefusal = await assertCommsFull(supabase, campaign.organization_id);
+  if (planRefusal) return planRefusal;
 
   const { data: touchpoint, error: tErr } = await supabase
     .from("marketing_campaign_touchpoints")

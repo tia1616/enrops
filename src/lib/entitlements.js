@@ -14,12 +14,24 @@
 // is the whole point — see feedback_no_hardcoded_config_single_source and the
 // hard rule that we branch on CONFIG, never on tenant.
 //
-// NOTE ON EXPIRY: founding deals have an end date (Jeff's is 2026-12-31, after
-// which he moves to $99/mo). That date is deliberately NOT modelled here. There
-// is no subscription billing in the platform yet, so an automatic downgrade
-// would silently strip Comms from a live operator mid-term and stop their
-// families' emails — the exact silent-failure class we keep fixing. Expiry is a
-// deliberate human flip of platform_plan, not a cron.
+// NOTE ON EXPIRY, AND THE TRAP IT HIDES. Founding deals have an end date (Jeff's
+// is 2026-12-31), but the end of the FREE PERIOD is not the end of the
+// ENTITLEMENT. Jessica, 2026-08-09: "he's not going to get downgraded, he's going
+// to pay for it starting Jan 2027." He keeps everything and starts paying $99/mo.
+//
+// So DO NOT move a founding org onto a billing-shaped plan when they start
+// paying. Every payment-shaped value ('flat_monthly', 'per_registration',
+// 'hybrid') resolves to registration_only below, so an honest-looking billing
+// flip would revoke the product on the exact day the customer starts paying for
+// it. This column answers "what can they do", never "what do they pay".
+//
+// The correct move on 1 Jan 2027: LEAVE platform_plan as 'founding' and record
+// the price in organizations.platform_monthly_cents (9900). That column already
+// exists on every org and is 0 everywhere today. Access is untouched.
+//
+// No automatic expiry is modelled and none should be: there is no subscription
+// billing here, so a cron-driven downgrade would silently strip Comms from a
+// live operator mid-term and stop their families' emails.
 
 // Plans whose orgs get the whole product. 'founding' is the free-until-agreed
 // early-partner deal.
@@ -129,6 +141,47 @@ export function isAlwaysOnAutomation(org, templateKey) {
     templateKey === "thank_you" &&
     entitlementsFor(org).comms === "registration_only"
   );
+}
+
+/**
+ * Is this automation ACTUALLY sending right now?
+ *
+ * Deliberately TIER-INDEPENDENT, and that separation is the whole point. Whether
+ * an automation is *sending* is a fact about the stored row plus the template's
+ * opt-in/opt-out default. Whether it is *toggleable* is the tier question, and
+ * that is isAlwaysOnAutomation's job. Conflating the two produced two opposite
+ * bugs at once:
+ *
+ *   - a full-tier org with no thank_you row was shown "Off" while stripe-webhook
+ *     was demonstrably sending (it skips only on an explicit false), which invites
+ *     the operator to add a second confirmation of their own so families get two;
+ *   - a reduced-tier org with a stored enabled:false was shown "Always on" while
+ *     nothing sent at all, with no control anywhere to repair it.
+ *
+ * @param automationRow the org's `automations` row for this template, or null
+ */
+export function automationIsSending(automationRow, templateKey) {
+  if (automationRow) return !!automationRow.enabled;
+  return isOptOutAutomation(templateKey);
+}
+
+/**
+ * Can this org's registration automations actually fire?
+ *
+ * All four of the registration_only tier's automations depend on Enrops running
+ * the registration: thank_you fires from stripe-webhook, and the three others
+ * resolve their audience from `registrations` rows with status='confirmed'. An
+ * org with uses_enrops_registration=false (Shoreview Chess, Mrs. Richelle on
+ * prod) brings its own registration, so none of them can ever send.
+ *
+ * Jessica's call, 2026-08-09: keep Comms visible for them and make the page say
+ * so, rather than hiding it. Contacts genuinely works for these orgs - it reads
+ * uploaded contacts and has nothing to do with registration - so hiding the
+ * section would take away something that works in order to hide something that
+ * doesn't. The honest notice is also the upgrade argument.
+ */
+export function registrationAutomationsCanFire(org) {
+  return org?.uses_enrops_registration !== false;
 }
 
 /**
