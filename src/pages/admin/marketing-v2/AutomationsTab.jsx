@@ -24,6 +24,12 @@ import AudienceSwitcher from "./AudienceSwitcher.jsx";
 import AutomationEditor from "./AutomationEditor.jsx";
 import SenderSetupNotice from "./SenderSetupNotice.jsx";
 import DeliveryIssuesPanel from "./DeliveryIssuesPanel.jsx";
+import {
+  commsAudiencesFor,
+  entitlementsFor,
+  isAlwaysOnAutomation,
+  REGISTRATION_AUTOMATION_KEYS,
+} from "../../../lib/entitlements.js";
 
 // Per-audience header copy + empty state. The audience filter (?audience=) shows
 // one audience at a time — the same spine as Comms>Contacts and >Templates — so
@@ -115,9 +121,15 @@ export default function AutomationsTab() {
 
   // Audience filter rides in the URL (?audience=) so it survives refresh + deep
   // links and matches Comms>Contacts / >Templates. Default (no param) = families.
-  const audience = ["instructors", "partners"].includes(params.get("audience"))
-    ? params.get("audience")
-    : "families";
+  //
+  // Clamped to what this org may actually see (commsAudiencesFor): a lean org
+  // never gets the Instructors pill, because those sends fire from a Schedule
+  // tab its nav doesn't render. Clamping here — not just hiding the pill — is
+  // what stops a stale ?audience=instructors bookmark showing an empty list
+  // with no explanation.
+  const allowedAudiences = commsAudiencesFor(org);
+  const requested = params.get("audience");
+  const audience = allowedAudiences.includes(requested) ? requested : "families";
   const audienceCfg = AUTO_AUDIENCE[audience];
   function selectAudience(a) {
     const next = new URLSearchParams(params);
@@ -258,6 +270,11 @@ export default function AutomationsTab() {
   async function toggleAutomation(tpl) {
     if (!tpl.is_v1_enabled) return;
     if (STRIPE_DEPENDENT_KEYS.has(tpl.key) && !stripeReady) return;
+    // Belt and braces: the always-on card renders no Toggle, so nothing calls
+    // this today. Guarding the WRITE as well as the control means a future
+    // caller can't quietly write enabled:false and switch off the confirmation
+    // email for a tier that has no other way to notice it stopped.
+    if (isAlwaysOnAutomation(org, tpl.key)) return;
     const existing = automationByTpl[tpl.id];
     const wasEnabled = !!existing?.enabled;
     // Don't let a promotional template turn on with an unfilled placeholder
@@ -324,9 +341,18 @@ export default function AutomationsTab() {
   // Show one audience at a time. An automation can belong to MORE THAN ONE
   // audience (no_school_day reaches families + instructors), so match on the
   // membership array. Missing/empty falls back to families (backfill default).
+  //
+  // A registration_only org sees only the automations that are part of a
+  // registration working at all (confirmation, welcome, no-school heads-up).
+  // The retention/nurture/review ones are the upgrade, so they are not rendered
+  // at all rather than shown locked — a wall of disabled cards on a tier whose
+  // whole point is "registration, done" reads as a broken product, not an offer.
+  const commsLevel = entitlementsFor(org).comms;
   const visibleTemplates = templates.filter((t) => {
     const auds = Array.isArray(t.audiences) && t.audiences.length ? t.audiences : ["families"];
-    return auds.includes(audience);
+    if (!auds.includes(audience)) return false;
+    if (commsLevel === "registration_only" && !REGISTRATION_AUTOMATION_KEYS.has(t.key)) return false;
+    return true;
   });
 
   return (
@@ -350,7 +376,7 @@ export default function AutomationsTab() {
         }
       `}</style>
       <FamilyCommsTabs active="automations" />
-      <AudienceSwitcher active={audience} onSelect={selectAudience} label="Automation audience" />
+      <AudienceSwitcher active={audience} onSelect={selectAudience} label="Automation audience" audiences={allowedAudiences} />
 
       <SenderSetupNotice orgId={org?.id} />
 
@@ -410,7 +436,14 @@ export default function AutomationsTab() {
           const stats = auto ? runStats[auto.id] : null;
           const locked = STRIPE_DEPENDENT_KEYS.has(tpl.key) && !stripeReady;
           const disabledTemplate = !tpl.is_v1_enabled;
-          const enabled = !!auto?.enabled;
+          // The confirmation email on the registration_only tier: no off switch,
+          // and genuinely on. stripe-webhook treats a MISSING automations row as
+          // "send" for thank_you (it's the only opt-OUT automation), so with no
+          // row this really is firing — reporting it as On is the honest state,
+          // not an optimistic one. `locked` still wins: without Stripe connected
+          // there are no payments, so nothing fires and "Always on" would lie.
+          const alwaysOn = !locked && isAlwaysOnAutomation(org, tpl.key);
+          const enabled = alwaysOn || !!auto?.enabled;
           const isSaving = savingTplId === tpl.id;
           // Operator-initiated sends (availability survey, class offers, sub
           // requests) are shown for TRANSPARENCY but sent from the Schedule tab,
@@ -452,6 +485,7 @@ export default function AutomationsTab() {
                         locked={locked}
                         disabledTemplate={disabledTemplate}
                         enabled={enabled}
+                        alwaysOn={alwaysOn}
                       />
                     )}
                     {/* The program-type chip only means something in the FAMILIES
@@ -584,6 +618,20 @@ export default function AutomationsTab() {
                     </>
                   ) : (
                   <>
+                  {alwaysOn ? (
+                    // No Toggle at all rather than a disabled one. A greyed-out
+                    // switch invites clicking and explains nothing; a sentence
+                    // where the switch would be says why, right where they're
+                    // looking. Edit stays live — they can reword it freely.
+                    <span
+                      style={{
+                        color: MUTED, fontSize: 12, fontWeight: 600,
+                        textAlign: "right", maxWidth: 150, lineHeight: 1.45,
+                      }}
+                    >
+                      Every family gets this
+                    </span>
+                  ) : (
                   <Toggle
                     checked={enabled}
                     onClick={() => toggleAutomation(tpl)}
@@ -598,6 +646,7 @@ export default function AutomationsTab() {
                             : "Turn on"
                     }
                   />
+                  )}
                   <button
                     type="button"
                     disabled={disabledTemplate || locked}
@@ -704,12 +753,18 @@ function ModeBadge({ isBoardSend }) {
     : <Chip color={PURPLE} bg="#efe9f7">⚡ Runs automatically</Chip>;
 }
 
-function StatusPill({ locked, disabledTemplate, enabled }) {
+function StatusPill({ locked, disabledTemplate, enabled, alwaysOn }) {
   if (disabledTemplate) {
     return <Chip color={MUTED} bg="#f5f4ee">Coming soon</Chip>;
   }
   if (locked) {
     return <Chip color={WARN} bg="#fef5e6">Locked</Chip>;
+  }
+  // Distinct from "Active" on purpose — "Active" reads as something you chose
+  // and could unchoose. This one has no off switch, and saying so in the pill
+  // is cheaper than letting the operator hunt for a toggle that isn't there.
+  if (alwaysOn) {
+    return <Chip color={OK} bg="#ecf6ec">Always on</Chip>;
   }
   return enabled
     ? <Chip color={OK} bg="#ecf6ec">Active</Chip>

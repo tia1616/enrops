@@ -25,6 +25,7 @@ import ElapsedTimer from "../../../components/ElapsedTimer.jsx";
 import { InstructorContacts, PartnerContacts } from "./AudienceContacts.jsx";
 import ContactTimelineDrawer from "./ContactTimelineDrawer.jsx";
 import AudienceSwitcher from "./AudienceSwitcher.jsx";
+import { commsAudiencesFor } from "../../../lib/entitlements.js";
 
 // Comms is the single CRM hub for all three audiences. Instructors + Partners
 // get a light, consistent "your people" contacts list here (name / email /
@@ -194,9 +195,14 @@ export default function ContactsTab() {
   // Audience selection rides in the URL (?audience=) so it survives refresh +
   // deep links, and the sidebar "Comms" item stays lit (path is unchanged:
   // /admin/family-comms/contacts). Default (no param) = families.
-  const audience = ["instructors", "partners"].includes(params.get("audience"))
-    ? params.get("audience")
-    : "families";
+  //
+  // Clamped to what this org may see (commsAudiencesFor) — same as the
+  // Automations tab. Hiding the pill isn't enough on its own: a stale
+  // ?audience=instructors link would otherwise render an instructor list to an
+  // org whose nav has no instructor surface at all.
+  const allowedAudiences = commsAudiencesFor(org);
+  const requested = params.get("audience");
+  const audience = allowedAudiences.includes(requested) ? requested : "families";
   function selectAudience(a) {
     const next = new URLSearchParams(params);
     if (a === "families") next.delete("audience");
@@ -208,7 +214,7 @@ export default function ContactsTab() {
     <div style={{ padding: "24px 32px" }}>
       <div>
         <FamilyCommsTabs active="contacts" />
-        <AudienceSwitcher active={audience} onSelect={selectAudience} label="Contact audience" />
+        <AudienceSwitcher active={audience} onSelect={selectAudience} label="Contact audience" audiences={allowedAudiences} />
       </div>
       {audience === "families" && <FamiliesContacts org={org} />}
       {audience === "instructors" && <InstructorContacts org={org} />}

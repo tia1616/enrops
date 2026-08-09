@@ -148,7 +148,11 @@ function shapeNavForOrg(nav, org) {
     "/admin/schools",                // Locations -> now a tab under
                                      // Programs (see the tabs block below), so
                                      // it stays off the top-level sidebar.
-    "/admin/family-comms/contacts",  // Comms (paid upgrade)
+    // Comms is NO LONGER hidden here. Every lean org now gets at least the
+    // registration_only tier of it (Contacts + the automations that make a
+    // registration work), so the nav item is always shown and what's INSIDE is
+    // what varies. That split lives in lib/entitlements.js, not in this
+    // nav-shape function — see canReachCommsTab, which the routes enforce.
     "/admin/community",              // Community (coming soon)
   ]);
   const out = [];

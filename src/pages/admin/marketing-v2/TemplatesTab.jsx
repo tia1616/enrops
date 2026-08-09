@@ -32,6 +32,7 @@ import { BRIGHT, INK, MUTED, RULE } from "../marketing/tokens.jsx";
 import FamilyCommsTabs from "./FamilyCommsTabs.jsx";
 import AttachmentPicker from "./AttachmentPicker.jsx";
 import AudienceSwitcher from "./AudienceSwitcher.jsx";
+import { commsAudiencesFor } from "../../../lib/entitlements.js";
 import { htmlToEditable, editableToHtml, highlightTokens, stripHtml } from "./bodyEditorUtils.js";
 
 const RED = "#b53737";
@@ -147,9 +148,13 @@ export default function TemplatesTab() {
   // Audience rides in the URL (?audience=) so it survives refresh + deep links
   // and matches Comms>Contacts. Default (no param) = families, so the campaign
   // template experience is byte-for-byte unchanged.
-  const audience = ["instructors", "partners"].includes(params.get("audience"))
-    ? params.get("audience")
-    : "families";
+  // Clamped to what this org may see (commsAudiencesFor) — same as Contacts and
+  // Automations. Reachable only with full Comms, but a lean org WITH full Comms
+  // still has no instructor surface, so the Instructors shelf stays hidden here
+  // too: templates for sends that org can never make are just confusing shelf.
+  const allowedAudiences = commsAudiencesFor(org);
+  const requested = params.get("audience");
+  const audience = allowedAudiences.includes(requested) ? requested : "families";
   const cfg = AUDIENCES[audience];
 
   const [templates, setTemplates] = useState(null); // null = loading
@@ -207,7 +212,7 @@ export default function TemplatesTab() {
   return (
     <div style={{ maxWidth: 900, margin: "0 auto", padding: "24px 32px" }}>
       <FamilyCommsTabs active="templates" />
-      <AudienceSwitcher active={audience} onSelect={selectAudience} label="Template audience" />
+      <AudienceSwitcher active={audience} onSelect={selectAudience} label="Template audience" audiences={allowedAudiences} />
 
       <header style={{ marginBottom: 20, display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16, flexWrap: "wrap" }}>
         <div>
