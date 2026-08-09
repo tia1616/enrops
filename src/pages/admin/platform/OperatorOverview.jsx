@@ -138,8 +138,14 @@ export default function OperatorOverview() {
             {internalCount > 0 && ` (${internalCount} internal account${internalCount === 1 ? "" : "s"} excluded from these counts)`}
           </div>
 
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 13, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 8 }}>
+          {/* minWidth:0 + maxWidth:100% are load-bearing, not decoration. Without
+              them this wrapper refuses to shrink below its content's min-width,
+              so an eight-column table pushed the whole admin shell into a
+              horizontal scroll — measured on staging: <main> at 1114px inside a
+              1025px slot, and the sidebar scrolled away with it. The table now
+              scrolls inside its own box and the page does not. */}
+          <div style={{ overflowX: "auto", maxWidth: "100%", minWidth: 0 }}>
+            <table style={{ borderCollapse: "collapse", width: "100%", minWidth: 940, fontSize: 13, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 8 }}>
               <thead>
                 <tr style={{ textAlign: "left", color: MUTED, fontSize: 11, textTransform: "uppercase", letterSpacing: ".04em" }}>
                   <th style={th}>Operator</th>
