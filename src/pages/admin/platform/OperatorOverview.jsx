@@ -196,7 +196,20 @@ export default function OperatorOverview() {
                           </div>
                         )}
                       </td>
-                      <td style={num}>{fmtDate(r.first_published_at)}</td>
+                      {/* An exact date and an estimate must never look alike in the
+                          same column — that is how a date nobody should act on
+                          gets acted on. Anything published since the event log
+                          started on Jul 3 is the real moment. Older ones fall
+                          back to when the class was CREATED, and a class is
+                          published at or after it is created, never before — so
+                          that date is a floor and the label has to read "or
+                          later", not "by". */}
+                      <td style={num}>
+                        {fmtDate(r.first_published_at)}
+                        {r.first_published_at && r.first_published_is_exact === false && (
+                          <div style={{ fontSize: 11.5, color: MUTED }}>or later</div>
+                        )}
+                      </td>
                       <td style={num}>
                         {r.registration_count}
                         {r.registration_count !== r.active_registration_count && (
@@ -214,10 +227,11 @@ export default function OperatorOverview() {
 
           <div style={{ fontSize: 11.5, color: MUTED, marginTop: 10, maxWidth: 720, lineHeight: 1.6 }}>
             "Live" is what families can register for right now — programs that are open plus camp sessions that
-            are active. "First published" counts anything that ever left draft, including classes since closed
+            are active. "First published" counts anything that ever went live, including classes since closed
             or cancelled, so an operator who published last term and closed it still shows the date they did it.
-            The platform doesn't stamp the moment something goes live, so that date is when the class was
-            created: for anything built as a draft first it reads early by however long it sat there.
+            Publishing has been recorded as it happens since Jul 3, 2026; those dates are exact. Anything older
+            falls back to the date the class was created, and a class goes live at or after it's created, never
+            before — so those read "or later" and the real date could be any time after.
             "Last activity" is the most recent program, camp or registration — not a login: a login date only
             updates when someone signs in fresh, so a daily user who never gets logged out looks dormant.
             Cancelled registrations are still counted in the total, because the operator did get that first one.
