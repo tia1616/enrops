@@ -880,9 +880,18 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
                   {isBoardSend ? (
                     <>This is the intro paragraph, sent as plain text. Blank line = new paragraph. The greeting, schedule details, response buttons, and deadline are added automatically.</>
                   ) : (
-                    <>Blank line = new paragraph. <strong>**text**</strong> = bold,
-                    <em> _text_</em> = italic.
-                    <span style={{ fontFamily: "ui-monospace, monospace" }}> [link text]({"{{register_url}}"})</span> = clickable link.</>
+                    <>
+                      {/* The example is a PLAIN web address on purpose. It used to
+                          be [link text] pointing at the register_url token, which
+                          read as though links had to be Enrops URLs — an operator
+                          wanting to send families to their own shop or site had no
+                          reason to think they could. Merge tokens stay discoverable
+                          in the "Available tokens" row below, which is click-to-copy
+                          and per-template. */}
+                      Blank line = new paragraph. <strong>**text**</strong> = bold,
+                      <em> _text_</em> = italic.
+                      <span style={{ fontFamily: "ui-monospace, monospace" }}> [link text](https://yoursite.com)</span> = clickable link.
+                    </>
                   )}
                 </p>
               </>
