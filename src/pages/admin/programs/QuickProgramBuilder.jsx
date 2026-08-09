@@ -277,9 +277,19 @@ export default function QuickProgramBuilder() {
   // in the band just above it - measured on staging at 500px, all three buttons
   // 69px tall with the label wrapped, which is exactly what this breakpoint
   // exists to prevent. Cancel(96) + Save as draft(142) + Create(235) + 2 gaps
-  // needs ~493px of content box, and a 500px viewport only gives 468. 560 leaves
-  // headroom for a longer label without re-measuring. `narrow` is unchanged for
-  // the two-button onboarding pair that also uses it.
+  // needs ~493px of content box.
+  //
+  // `narrowFooter` (560) governs the THREE-BUTTON FOOTER - its container and all
+  // three of its buttons. `narrow` (480) governs the two-button onboarding pair
+  // (Next / Not now) and nothing else.
+  //
+  // HEADROOM IS THIN AND A VIEWPORT THRESHOLD CANNOT FIX THAT: this page is
+  // `maxWidth: 560`, so the footer's content box is capped at 528px no matter how
+  // wide the window gets. Against the ~493px requirement that is ~35px, which a
+  // longer button label, a tenant whose browser base font is 18px, or 110% zoom
+  // would eat - and the wrap would then happen at 1280px, where no viewport
+  // threshold reaches. If a label grows, the durable fix is letting the row wrap
+  // to two lines rather than moving this number again.
   const [narrow, setNarrow] = useState(() =>
     typeof window !== "undefined" && window.innerWidth < 480);
   const [narrowFooter, setNarrowFooter] = useState(() =>
@@ -827,6 +837,16 @@ export default function QuickProgramBuilder() {
             if (draftDatesFor.current !== data.id) return;
             setDraftDatesFailed(!!dErr);
             setDraftDates(dErr ? [] : (d ?? []));
+          })
+          // supabase-js turns fetch failures into a resolved { error }, so this
+          // should be unreachable — but without it a rejection would leave the
+          // panel on "Working them out…" forever with no way out, and the
+          // destructure above would throw an unhandled TypeError. The failure
+          // story is only complete if every branch of it is written.
+          .catch(() => {
+            if (draftDatesFor.current !== data.id) return;
+            setDraftDatesFailed(true);
+            setDraftDates([]);
           });
       }
       recordBuildTiming(data.id);
@@ -1477,7 +1497,7 @@ export default function QuickProgramBuilder() {
       type="button"
       onClick={handleCancel}
       disabled={submitting}
-      style={{ ...secondaryBtn, flex: narrow ? 1 : "0 0 auto", opacity: submitting ? 0.55 : 1, cursor: submitting ? "not-allowed" : "pointer" }}
+      style={{ ...secondaryBtn, flex: narrowFooter ? 1 : "0 0 auto", opacity: submitting ? 0.55 : 1, cursor: submitting ? "not-allowed" : "pointer" }}
     >
       Cancel
     </button>
@@ -1490,7 +1510,7 @@ export default function QuickProgramBuilder() {
       type="button"
       onClick={() => handleCreate(true)}
       disabled={!valid || submitting}
-      style={{ ...secondaryBtn, flex: narrow ? 1 : "0 0 auto", opacity: !valid || submitting ? 0.55 : 1, cursor: !valid || submitting ? "not-allowed" : "pointer" }}
+      style={{ ...secondaryBtn, flex: narrowFooter ? 1 : "0 0 auto", opacity: !valid || submitting ? 0.55 : 1, cursor: !valid || submitting ? "not-allowed" : "pointer" }}
     >
       {submittingAs === "draft" ? "Saving…" : "Save as draft"}
     </button>
@@ -1513,13 +1533,23 @@ export default function QuickProgramBuilder() {
         </EnnieTip>
       </div>
       <p style={{ color: MUTED, fontSize: 14, lineHeight: 1.55, margin: "0 0 20px" }}>
-        {/* Was "You'll get a shareable registration link the moment you save",
-            which stopped being true for both buttons the moment Save as draft
-            existed — a draft is private and has no link. The footer copy was
-            updated with the feature; this sentence makes the same claim and had
-            to move with it. */}
-        The essentials only. Publish it straight away and you&rsquo;ll get a shareable
-        registration link, or save it as a draft to keep it private.
+        {/* Two things wrong with the old sentence, both fixed here.
+            (1) "You'll get a shareable registration link the moment you save"
+            stopped being true for BOTH buttons once Save as draft existed — a
+            draft is private and has no link.
+            (2) It promised a registration link to every tenant. Two prod orgs
+            (Mrs. Richelle, Shoreview Chess) run uses_enrops_registration = false
+            and have no enrops registration page at all, so that was the first
+            sentence on their screen and it was false. The footer helper below
+            already branches on exactly this flag; this sentence has to as well,
+            or half the copy on one screen is tenant-aware and half is not.
+            Names the BUTTON ("Create"), not "publish" — no control here is
+            called Publish, and "publish" already means something else on the
+            draft screen ("Publish it from your program list"). */}
+        The essentials only.{" "}
+        {org?.uses_enrops_registration === true
+          ? "Create it and you'll get a shareable registration link, or save it as a draft to keep it private."
+          : "Create it to add it to your schedule straight away, or save it as a draft to keep it private."}
       </p>
 
       {/* Lean only. A legacy operator has had Stripe connected for years, so a
