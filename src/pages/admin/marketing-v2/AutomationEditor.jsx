@@ -876,24 +876,6 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
                     fontFamily: "inherit", boxSizing: "border-box",
                   }}
                 />
-                <p style={{ margin: "6px 0 0", fontSize: 11, color: MUTED, lineHeight: 1.5 }}>
-                  {isBoardSend ? (
-                    <>This is the intro paragraph, sent as plain text. Blank line = new paragraph. The greeting, schedule details, response buttons, and deadline are added automatically.</>
-                  ) : (
-                    <>
-                      {/* The example is a PLAIN web address on purpose. It used to
-                          be [link text] pointing at the register_url token, which
-                          read as though links had to be Enrops URLs — an operator
-                          wanting to send families to their own shop or site had no
-                          reason to think they could. Merge tokens stay discoverable
-                          in the "Available tokens" row below, which is click-to-copy
-                          and per-template. */}
-                      Blank line = new paragraph. <strong>**text**</strong> = bold,
-                      <em> _text_</em> = italic.
-                      <span style={{ fontFamily: "ui-monospace, monospace" }}> [link text](https://yoursite.com)</span> = clickable link.
-                    </>
-                  )}
-                </p>
               </>
             ) : (
               <div
@@ -909,6 +891,28 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
                 dangerouslySetInnerHTML={{ __html: highlightTokens(body) }}
               />
             )}
+
+            {/* Shown in BOTH modes, deliberately. This used to render only inside
+                the edit branch, so an operator reading their email had nothing on
+                screen telling them a link was possible at all — the capability was
+                behind a click they had no reason to make. Jessica went looking for
+                "the link option" on the confirmation email and could not find it,
+                which is the whole verdict on hiding it. The example is a PLAIN web
+                address: it pointed at the register_url token before, which read as
+                though links had to be Enrops URLs, so an operator wanting to send
+                families to their own shop had no reason to think they could. Merge
+                tokens keep their own click-to-copy row below. */}
+            <p style={{ margin: "6px 0 0", fontSize: 11, color: MUTED, lineHeight: 1.5 }}>
+              {isBoardSend ? (
+                <>This is the intro paragraph, sent as plain text. Blank line = new paragraph. The greeting, schedule details, response buttons, and deadline are added automatically.</>
+              ) : (
+                <>
+                  Press <strong>Edit</strong> to change the wording. Blank line = new paragraph,
+                  {" "}<strong>**text**</strong> = bold,<em> _text_</em> = italic,
+                  <span style={{ fontFamily: "ui-monospace, monospace" }}> [link text](https://yoursite.com)</span> = clickable link.
+                </>
+              )}
+            </p>
           </div>
 
           {/* Board sends: the operator edits the INTRO paragraph only; the edge
