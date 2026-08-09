@@ -941,7 +941,11 @@ function TodayAgenda({ org }) {
             .from("programs")
             .select("id, curriculum, day_of_week, start_time, end_time, program_location_id")
             .eq("organization_id", org.id)
-            .not("status", "in", '("cancelled","archived")')
+            // Drafts excluded as well as cancelled/archived: this block answers
+            // "what is happening today", and an unpublished class is not happening
+            // — nobody can have registered for it. Reachable since 2026-08-08,
+            // when the lean quick builder gained Save as draft.
+            .not("status", "in", '("cancelled","archived","draft")')
             .lte("first_session_date", today)
             .gte("first_session_date", lookback.toISOString().slice(0, 10));
           const candidates = (progs ?? []).filter(

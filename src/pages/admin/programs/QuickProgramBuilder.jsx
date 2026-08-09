@@ -220,6 +220,18 @@ export default function QuickProgramBuilder() {
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState("");
   const [createdId, setCreatedId] = useState(null);
+  // 'open' | 'draft' — which button was pressed. The success screen cannot read
+  // it off the row (we only select the id back), and it decides whether we claim
+  // the class is live and whether a share link is offered at all.
+  const [createdStatus, setCreatedStatus] = useState("open");
+  // 'open' | 'draft' | null — which button is mid-save. Separate from
+  // `createdStatus`, which is only known once the insert has resolved.
+  const [submittingAs, setSubmittingAs] = useState(null);
+  // NOTE, so nobody re-adds it: this screen deliberately does NOT list the
+  // draft's session dates. Scheduled Programs (ProgramsCalendar) already shows
+  // every date per class, expandable, including the no-school days it SKIPPED and
+  // why — strictly more than this screen could, and it is where an operator
+  // already goes. Duplicating it here was unrequested scope (Jessica, 2026-08-08).
 
   // How long this build actually took. We refused to print a made-up "your first
   // program takes N minutes" in the step strip, so this is what earns the right
@@ -251,10 +263,40 @@ export default function QuickProgramBuilder() {
   // buttons grow to 69px tall to match. Measured on staging at 375x812. Operators
   // build classes on their phones, so that is the case to get right, not the
   // exception. 480 rather than 375 so a wrapped label never happens at all.
+  //
+  // TWO thresholds, because the footer now holds THREE buttons. 480 was measured
+  // for Cancel + Create; adding "Save as draft" brought the defect straight back
+  // in the band just above it - measured on staging at 500px, all three buttons
+  // 69px tall with the label wrapped, which is exactly what this breakpoint
+  // exists to prevent. Cancel(96) + Save as draft(142) + Create(235) + 2 gaps
+  // needs ~493px of content box.
+  //
+  // `narrowFooter` (560) governs the THREE-BUTTON FOOTER - its container and all
+  // three of its buttons. `narrow` (480) governs the two-button onboarding pair
+  // (Next / Not now) and nothing else.
+  //
+  // THE ARITHMETIC, done properly - an earlier version of this comment got it
+  // wrong by forgetting the layout's own padding. AdminLayout adds
+  // `padding: 16px 14px` to <main> below 900px (AdminLayout.jsx:564), and this
+  // page adds `padding: 24px 16px`, so the row's content box is
+  // min(528, viewport - 28 - 32). At a 560px viewport that is 500px, giving the
+  // ~493px requirement about SEVEN pixels - which is why the threshold is 620,
+  // not 560: the full 528px box only exists from ~588px up.
+  //
+  // Even at 528 the slack is ~35px, which a longer button label, an 18px base
+  // font, or 110% zoom would eat - and that wrap would happen at 1280px, where
+  // no viewport threshold reaches. If a label grows, let the row wrap to two
+  // lines (`flexWrap`, as both success-screen rows in this file already do)
+  // rather than moving this number a third time.
   const [narrow, setNarrow] = useState(() =>
     typeof window !== "undefined" && window.innerWidth < 480);
+  const [narrowFooter, setNarrowFooter] = useState(() =>
+    typeof window !== "undefined" && window.innerWidth < 620);
   useEffect(() => {
-    const onResize = () => setNarrow(window.innerWidth < 480);
+    const onResize = () => {
+      setNarrow(window.innerWidth < 480);
+      setNarrowFooter(window.innerWidth < 620);
+    };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
@@ -704,9 +746,20 @@ export default function QuickProgramBuilder() {
     }
   }
 
-  async function handleCreate() {
+  // asDraft: save it privately instead of publishing. Jeff runs two districts
+  // through Facilitron and needs enrops to work out the session dates so he can
+  // copy them across BEFORE the class goes live — ~25 times a term. Everything
+  // downstream already supports it (the registration page filters status='open',
+  // and derive_program_session_dates does NOT care about status: verified on a
+  // real draft, which returned all 8 dates), so the only gap was this builder
+  // publishing the instant you hit Create.
+  async function handleCreate(asDraft = false) {
     if (!valid || submitting) return;
     setSubmitting(true);
+    // Which button is in flight, so only that one changes its label. Both share
+    // `submitting` for the disabled state, which is correct — neither should be
+    // pressable while the other is saving.
+    setSubmittingAs(asDraft ? "draft" : "open");
     setErr("");
     try {
       const payload = {
@@ -749,7 +802,10 @@ export default function QuickProgramBuilder() {
         program_type: "standard",
         photo_url: photoUrl || null, // optional; NULL renders the no-image card
         runs_own_registration: false, // native enrops checkout
-        status: "open", // live the moment it's created
+        // Live the moment it's created, unless the operator chose Save as draft.
+        // Same two values the classic wizard writes, so a class made in either
+        // builder is the same kind of row.
+        status: asDraft ? "draft" : "open",
       };
       const { data, error } = await supabase
         .from("programs")
@@ -757,10 +813,13 @@ export default function QuickProgramBuilder() {
         .select("id")
         .single();
       if (error) throw error;
-      // Advertising conversion. This builder always writes status 'open', so
-      // every successful save here is a live, customer-facing registration
-      // workflow. Path 1 of 3 - see pixelWorkflowCreated.
-      pixelWorkflowCreated();
+      // Advertising conversion — only for a class that actually went live. A
+      // draft is private and takes no registrations, so counting it as a
+      // customer-facing registration workflow would inflate the conversion the
+      // pixel exists to measure. The classic wizard already skips it for the
+      // same reason.
+      if (!asDraft) pixelWorkflowCreated();
+      setCreatedStatus(asDraft ? "draft" : "open");
       setCreatedId(data.id);
       recordBuildTiming(data.id);
       // This org now has one more program than it did at mount. Without this,
@@ -777,6 +836,7 @@ export default function QuickProgramBuilder() {
       setErr(e?.message ?? String(e));
     } finally {
       setSubmitting(false);
+      setSubmittingAs(null);
     }
   }
 
@@ -843,6 +903,9 @@ export default function QuickProgramBuilder() {
     setPhotoErr("");
     setErr("");
     setCreatedId(null);
+    // Reset with createdId so the next save starts from "publishing", not from
+    // whatever the last one did.
+    setCreatedStatus("open");
     // Back to the operator's usual ages rather than blank — the next class is
     // almost always for the same children.
     setAgeMin(profile.default_age_min != null ? String(profile.default_age_min) : "");
@@ -1176,6 +1239,48 @@ export default function QuickProgramBuilder() {
   }
 
   // ---- Success: program is live, hand over the shareable link ----
+  if (createdId && createdStatus === "draft") {
+    // A draft is private: no "live", no Stripe step, no share link (the public
+    // catalog filters status='open', so there is nothing to share and offering
+    // it would be a link that goes nowhere). Wording mirrors the classic
+    // wizard's draft screen so the two builders say the same thing.
+    return (
+      <div style={{ maxWidth: 560, margin: "0 auto", padding: "24px 16px" }}>
+        <div style={{ fontSize: 22, fontWeight: 700, color: INK, marginBottom: 8 }}>
+          Saved as a draft.
+        </div>
+        {/* VERBATIM from the classic wizard's draft screen (ProgramWizardNew.jsx
+            :1409), which makes the "mirrors the classic wizard" claim above
+            actually true rather than aspirational.
+            Two things it deliberately does NOT say, both of which an earlier
+            version of this sentence got wrong:
+            - It does not promise the class dates are worked out. A weekly draft
+              only requires a day of the week (see `valid`), so a draft can exist
+              with no first session date and therefore no dates at all.
+            - It does not mention a public registration page. Two prod orgs
+              (Mrs. Richelle, Shoreview Chess) run uses_enrops_registration=false
+              and have none, which is why the intro and footer on this screen are
+              branched. This wording needs no branch because it is true for
+              everyone. */}
+        <p style={{ color: MUTED, fontSize: 14, lineHeight: 1.6, margin: "0 0 20px" }}>
+          Only you can see it for now. When you&rsquo;re ready, publish it from your
+          program list.
+        </p>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+          {/* Same two labels and the same styling as the live success screen
+              below — one builder should not name its own exits two ways. */}
+          <button onClick={resetForAnother} style={primaryBtn}>Create another</button>
+          <button
+            onClick={() => navigate("/admin/programs")}
+            style={{ ...primaryBtn, background: "#fff", color: BRIGHT, border: `1px solid ${RULE}` }}
+          >
+            Back to programs
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (createdId) {
     // Arielle's rule: never a payment-less live page. If Stripe isn't connected
     // yet, lead with that step (the WOW) and dim the share link until it is.
@@ -1300,11 +1405,19 @@ export default function QuickProgramBuilder() {
   // was the wrong tool.
   const createButton = (
     <button
-      onClick={handleCreate}
+      // MUST be wrapped: passing handleCreate directly hands React's click event
+      // in as `asDraft`, and a SyntheticEvent is truthy — every Create would
+      // have silently saved a draft.
+      onClick={() => handleCreate(false)}
       disabled={!valid || submitting}
       style={{ ...primaryBtn, flex: 1, opacity: !valid || submitting ? 0.55 : 1, cursor: !valid || submitting ? "not-allowed" : "pointer" }}
     >
-      {submitting ? "Creating…" : "Create program & get link"}
+      {/* `submitting` is shared with the draft button, so this said "Creating…"
+          while the operator was saving a draft — the publish control announcing
+          it was publishing, on the one action here that cannot be undone. Keyed
+          on which button is IN FLIGHT (createdStatus is only set after the insert
+          resolves, so it is still "open" while a draft is saving). */}
+      {submittingAs === "open" ? "Creating…" : "Create program & get link"}
     </button>
   );
   const cancelButton = (
@@ -1312,9 +1425,22 @@ export default function QuickProgramBuilder() {
       type="button"
       onClick={handleCancel}
       disabled={submitting}
-      style={{ ...secondaryBtn, flex: narrow ? 1 : "0 0 auto", opacity: submitting ? 0.55 : 1, cursor: submitting ? "not-allowed" : "pointer" }}
+      style={{ ...secondaryBtn, flex: narrowFooter ? 1 : "0 0 auto", opacity: submitting ? 0.55 : 1, cursor: submitting ? "not-allowed" : "pointer" }}
     >
       Cancel
+    </button>
+  );
+  // Save without publishing. Same validation as Create — a draft still has to be
+  // a real class, and it is the same row either way. Wording matches the classic
+  // wizard's "Save as draft" so the two builders name one action one way.
+  const draftButton = (
+    <button
+      type="button"
+      onClick={() => handleCreate(true)}
+      disabled={!valid || submitting}
+      style={{ ...secondaryBtn, flex: narrowFooter ? 1 : "0 0 auto", opacity: !valid || submitting ? 0.55 : 1, cursor: !valid || submitting ? "not-allowed" : "pointer" }}
+    >
+      {submittingAs === "draft" ? "Saving…" : "Save as draft"}
     </button>
   );
 
@@ -1335,8 +1461,23 @@ export default function QuickProgramBuilder() {
         </EnnieTip>
       </div>
       <p style={{ color: MUTED, fontSize: 14, lineHeight: 1.55, margin: "0 0 20px" }}>
-        The essentials only. You'll get a shareable registration link the moment
-        you save.
+        {/* Two things wrong with the old sentence, both fixed here.
+            (1) "You'll get a shareable registration link the moment you save"
+            stopped being true for BOTH buttons once Save as draft existed — a
+            draft is private and has no link.
+            (2) It promised a registration link to every tenant. Two prod orgs
+            (Mrs. Richelle, Shoreview Chess) run uses_enrops_registration = false
+            and have no enrops registration page at all, so that was the first
+            sentence on their screen and it was false. The footer helper below
+            already branches on exactly this flag; this sentence has to as well,
+            or half the copy on one screen is tenant-aware and half is not.
+            Names the BUTTON ("Create"), not "publish" — no control here is
+            called Publish, and "publish" already means something else on the
+            draft screen ("Publish it from your program list"). */}
+        The essentials only.{" "}
+        {org?.uses_enrops_registration === true
+          ? "Create it and you'll get a shareable registration link, or save it as a draft to keep it private."
+          : "Create it to add it to your schedule straight away, or save it as a draft to keep it private."}
       </p>
 
       {/* Lean only. A legacy operator has had Stripe connected for years, so a
@@ -2023,36 +2164,37 @@ export default function QuickProgramBuilder() {
             field landed on the publish button while the eye was on a Cancel to its
             left. On the one control here that cannot be undone, "what you tab to"
             and "what you see" have to be the same button. */}
-        <div style={{ display: "flex", flexDirection: narrow ? "column" : "row", gap: 10, alignItems: "stretch" }}>
-          {narrow ? (
+        <div style={{ display: "flex", flexDirection: narrowFooter ? "column" : "row", gap: 10, alignItems: "stretch" }}>
+          {narrowFooter ? (
             <>
               {createButton}
+              {draftButton}
               {cancelButton}
             </>
           ) : (
             <>
               {cancelButton}
+              {draftButton}
               {createButton}
             </>
           )}
         </div>
-        {/* Says what the button does. This builder writes status "open" with the
-            org's active term, which is exactly what the public catalog gates on, so
-            the class is live the moment it saves - there is no draft and no preview
-            here. Jeff wants that immediacy; the problem was only that nothing on
-            screen said so.
+        {/* Says what each button does. Create still publishes immediately — Jeff
+            wants that immediacy and it is unchanged; the problem was only that
+            nothing on screen said so. What HAS changed is that "there is no draft"
+            is no longer true, so this copy had to move with the feature rather
+            than keep telling operators a draft does not exist.
 
             TWO SENTENCES, because "your registration page" is not a place every
             tenant has. Two prod orgs (Mrs. Richelle, Shoreview Chess) run
             uses_enrops_registration = false - their families register elsewhere and
             never see an enrops page - which is the same trap `cancellationCopy` was
             written to escape. `=== true` and not `!== false`, matching that helper:
-            the fallback has to be the sentence that is true in BOTH states, and
-            "there is no draft" is the part Jessica actually needed to know. */}
+            the fallback has to be the sentence that is true in BOTH states. */}
         <div style={{ ...helpStyle, marginTop: -4, textAlign: "center" }}>
           {org?.uses_enrops_registration === true
-            ? "This publishes the class to your registration page straight away."
-            : "This creates the class straight away — there is no draft to review first."}
+            ? "Create puts the class on your registration page straight away. Save as draft keeps it private, with its dates worked out, until you publish it."
+            : "Create makes the class straight away. Save as draft keeps it private, with its dates worked out, until you're ready."}
         </div>
       </div>
     </div>
