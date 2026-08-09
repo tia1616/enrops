@@ -1559,6 +1559,15 @@ async function runPartnerRosterAutomation(
       program_locations!inner ( id, partner_id, contact_email )
     `)
     .eq("organization_id", a.organization_id)
+    // PUBLISHED ONLY. Without this a DRAFT whose first session lands exactly seven
+    // days out emails a roster to the SCHOOL for a class the operator has not
+    // published — an outbound email to a third party about something that does not
+    // exist yet. The quick builder writes runs_own_registration:false on every row,
+    // so every draft it creates matched this query, and from 2026-08-08 that
+    // builder can save drafts (Jeff's flow is ~25 a term, at school sites).
+    // Consistent with DEAD_STATUSES further down this file, which already lists
+    // 'draft' as not-live.
+    .eq("status", "open")
     .eq("runs_own_registration", false)
     .not("program_locations.partner_id", "is", null)
     .or(`first_session_date.eq.${sevenDayStr},first_session_date.eq.${todayStr}`);
@@ -2525,6 +2534,12 @@ async function hasFutureProgramsForOrg(supabase: SupabaseClient, orgId: string):
     .from("programs")
     .select("id")
     .eq("organization_id", orgId)
+    // Published only. A DRAFT is invisible on the public catalog (Home.jsx filters
+    // status='open'), so counting one here promises families a "next term" whose
+    // only class they cannot see or book. Newly reachable in volume from
+    // 2026-08-08: the lean quick builder can now save drafts, and the intended
+    // use is ~25 of them up front before any are published.
+    .eq("status", "open")
     .gt("first_session_date", futureCutoff)
     .limit(1)
     .maybeSingle();
