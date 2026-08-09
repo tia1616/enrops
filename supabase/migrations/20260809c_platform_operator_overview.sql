@@ -19,6 +19,12 @@
 -- EVERY org (RLS on organizations/programs/registrations scopes an operator to
 -- their own), and last_sign_in_at lives in auth.users, which authenticated
 -- cannot read at all.
+--
+-- last_sign_in_at and last_registration_at are returned but deliberately NOT
+-- rendered on the screen. The first is a trap (see the note on last_activity_at
+-- below) and the second is already implied by it; both are here because the next
+-- question after "where is this operator" is usually "show me why", and I would
+-- rather the data be one console query away than have someone re-derive it.
 create or replace function public.platform_operator_overview()
 returns table (
   org_id                   uuid,
@@ -68,7 +74,7 @@ begin
     c.live_count,
     -- least() ignores NULLs in Postgres, so an org with programs but no camps
     -- (or the reverse) still gets a real date instead of NULL.
-    least(p.first_live_at, c.first_live_at),
+    least(p.first_published_at, c.first_published_at),
     r.reg_count,
     r.active_count,
     r.first_at,
@@ -94,9 +100,24 @@ begin
     where om.organization_id = o.id
   ) m on true
   left join lateral (
+    -- Two DIFFERENT questions, so two different filters.
+    --
+    -- "How many are live right now" is status = 'open' - an allow-list, and
+    -- correct, because that is the only status families can register against.
+    --
+    -- "When did they first publish anything" must NOT reuse that filter. The
+    -- live CHECK is draft/open/closed/cancelled, so an operator who published
+    -- in September and closed the class in October has zero 'open' rows and
+    -- would report first_published_at = NULL: "never published" about somebody
+    -- who did. Deny-list instead - anything that ever left draft was published
+    -- once - which is also the shape that survives a new status being added to
+    -- the constraint. `status is not null` because a NULL status proves
+    -- nothing either way and must not be read as evidence of publishing.
     select
       count(*) filter (where pr.status = 'open')::int                   as live_count,
-      min(pr.created_at) filter (where pr.status = 'open')              as first_live_at,
+      min(pr.created_at) filter (
+        where pr.status is not null and pr.status <> 'draft'
+      )                                                                 as first_published_at,
       max(pr.created_at)                                                as last_created_at
     from programs pr
     where pr.organization_id = o.id
@@ -105,9 +126,12 @@ begin
     -- camp_sessions is the camps-shaped sibling of programs; its live state is
     -- 'active', not 'open'. J2S is the only org on prod with camps, but leaving
     -- them out would report J2S's first publish as programs-only.
+    --
+    -- No draft filter on first_published_at here because camps have no draft:
+    -- the live CHECK is active/cancelled only, so every row was public once.
     select
       count(*) filter (where cs.status = 'active')::int                 as live_count,
-      min(cs.created_at) filter (where cs.status = 'active')            as first_live_at,
+      min(cs.created_at)                                                as first_published_at,
       max(cs.created_at)                                                as last_created_at
     from camp_sessions cs
     where cs.organization_id = o.id

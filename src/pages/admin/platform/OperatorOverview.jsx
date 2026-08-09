@@ -29,13 +29,18 @@ const AMBER = "#8a6100";
 const fmtDate = (iso) =>
   iso ? new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "—";
 
-// The four states an operator can be in, in order. Deliberately derived from
-// work done (signed in / published / registered), never from a status column
-// somebody has to remember to set.
+// The states an operator can be in, in order. Deliberately derived from work
+// done (invited / signed in / published / registered), never from a status
+// column somebody has to remember to set.
+//
+// "Nothing published" tests first_published_at, NOT the live count: a class that
+// was published in September and closed in October leaves zero live rows, and
+// reading that as "never published" is the exact wrong answer to the question
+// this screen exists to answer.
 function stageOf(r) {
-  const live = (r.live_program_count ?? 0) + (r.live_camp_count ?? 0);
+  if ((r.member_count ?? 0) === 0) return { key: "no_account", label: "No account yet", color: FLAG };
   if ((r.signed_in_member_count ?? 0) === 0) return { key: "no_signin", label: "Never signed in", color: FLAG };
-  if (live === 0) return { key: "no_publish", label: "Nothing published", color: AMBER };
+  if (!r.first_published_at) return { key: "no_publish", label: "Nothing published", color: AMBER };
   if ((r.registration_count ?? 0) === 0) return { key: "no_regs", label: "Published, no registrations", color: AMBER };
   return { key: "selling", label: "Taking registrations", color: OK };
 }
@@ -94,7 +99,8 @@ export default function OperatorOverview() {
   }
 
   const real = (rows ?? []).filter((r) => !r.org_is_internal);
-  const published = real.filter((r) => (r.live_program_count ?? 0) + (r.live_camp_count ?? 0) > 0).length;
+  const internalCount = (rows ?? []).length - real.length;
+  const published = real.filter((r) => r.first_published_at).length;
   const selling = real.filter((r) => (r.registration_count ?? 0) > 0).length;
 
   const th = { padding: "10px 12px", borderBottom: `1px solid ${RULE}`, whiteSpace: "nowrap" };
@@ -128,8 +134,8 @@ export default function OperatorOverview() {
       {rows !== null && rows.length > 0 && (
         <>
           <div style={{ fontSize: 13, color: MUTED, marginBottom: 8 }}>
-            {real.length} operator{real.length === 1 ? "" : "s"} · {published} with something live · {selling} with registrations
-            {rows.length !== real.length && " (internal accounts excluded from these counts)"}
+            {real.length} operator{real.length === 1 ? "" : "s"} · {published} who've published · {selling} with registrations
+            {internalCount > 0 && ` (${internalCount} internal account${internalCount === 1 ? "" : "s"} excluded from these counts)`}
           </div>
 
           <div style={{ overflowX: "auto" }}>
@@ -161,9 +167,14 @@ export default function OperatorOverview() {
                           </span>
                         )}
                         <div style={{ fontSize: 11.5, color: MUTED }}>
-                          Set up {fmtDate(r.org_created_at)}
+                          {r.org_slug} · set up {fmtDate(r.org_created_at)}
                           {r.org_platform_plan ? ` · ${r.org_platform_plan}` : ""}
-                          {r.stripe_charges_enabled ? " · Stripe on" : " · Stripe not connected"}
+                          {/* Only the shared truth. stripe_charges_enabled is false both
+                              for an operator who never started Stripe and for one who
+                              connected but is still being verified - the Enrops org on
+                              prod is the second kind - so "not connected" would state
+                              the wrong cause for half the rows it appears on. */}
+                          {r.stripe_charges_enabled ? " · can take payments" : " · can't take payments yet"}
                         </div>
                       </td>
                       <td style={{ ...td, color: stage.color, fontWeight: 600, whiteSpace: "nowrap" }}>{stage.label}</td>
@@ -196,10 +207,12 @@ export default function OperatorOverview() {
           </div>
 
           <div style={{ fontSize: 11.5, color: MUTED, marginTop: 10, maxWidth: 720, lineHeight: 1.6 }}>
-            "Live" counts programs that are open plus camp sessions that are active. "First published" is the
-            earliest one of those was created — the platform doesn't stamp the moment something goes live, so
-            for anything built as a draft first this reads early by however long it sat in draft.
-            "Last activity" is the most recent program, camp or registration, not a login: a login date only
+            "Live" is what families can register for right now — programs that are open plus camp sessions that
+            are active. "First published" counts anything that ever left draft, including classes since closed
+            or cancelled, so an operator who published last term and closed it still shows the date they did it.
+            The platform doesn't stamp the moment something goes live, so that date is when the class was
+            created: for anything built as a draft first it reads early by however long it sat there.
+            "Last activity" is the most recent program, camp or registration — not a login: a login date only
             updates when someone signs in fresh, so a daily user who never gets logged out looks dormant.
             Cancelled registrations are still counted in the total, because the operator did get that first one.
           </div>
