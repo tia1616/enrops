@@ -22,8 +22,13 @@
 // deliberate human flip of platform_plan, not a cron.
 
 // Plans whose orgs get the whole product. 'founding' is the free-until-agreed
-// early-partner deal; 'legacy_own_platform' orgs (J2S) and internal orgs reach
-// this through the default branch below rather than by plan name.
+// early-partner deal.
+//
+// Note what this does NOT cover: a LEAN org on any other plan gets the reduced
+// tier, and that includes 'pilot'. The internal Enrops org and the demo tenants
+// are lean+pilot, so they see the registration_only surface too. That is correct
+// for a demo of the standard tier and wrong for demoing the full one — move the
+// org to 'founding' for the day if a full-surface demo is needed.
 const FULL_ACCESS_PLANS = new Set(["founding", "enterprise"]);
 
 /**
@@ -91,6 +96,23 @@ export const REGISTRATION_AUTOMATION_KEYS = new Set([
   "welcome_camp",        // same, camp variant
   "no_school_day",       // stops a parent driving to a closed school
 ]);
+
+/**
+ * Automations that fire UNLESS explicitly disabled, i.e. a missing `automations`
+ * row means ON, not off. thank_you is the only one: stripe-webhook sends the
+ * confirmation whenever the row is absent and skips it only on an explicit
+ * enabled === false (see the thank_you branch in stripe-webhook/index.ts).
+ *
+ * Every other automation is opt-IN — the cron collects rows where enabled is
+ * true, so no row means nothing fires.
+ *
+ * This distinction has to be respected by anything that CREATES an automations
+ * row, not just by anything that reads one. Inserting enabled:false for an
+ * opt-out automation doesn't leave it as it was, it turns it OFF.
+ */
+export function isOptOutAutomation(templateKey) {
+  return templateKey === "thank_you";
+}
 
 /**
  * The confirmation email is not optional on the registration_only tier. It IS

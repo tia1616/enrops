@@ -629,7 +629,7 @@ export default function AutomationsTab() {
                         textAlign: "right", maxWidth: 150, lineHeight: 1.45,
                       }}
                     >
-                      Every family gets this
+                      Sent when a registration is paid
                     </span>
                   ) : (
                   <Toggle

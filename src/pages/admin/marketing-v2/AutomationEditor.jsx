@@ -20,6 +20,7 @@ import { supabase } from "../../../lib/supabase.js";
 import { PURPLE, BRIGHT, INK, MUTED, RULE, OK, WARN } from "../marketing/tokens.jsx";
 import { editableToHtml, highlightTokens, htmlToEditable } from "./bodyEditorUtils.js";
 import AttachmentPicker from "./AttachmentPicker.jsx";
+import { isOptOutAutomation } from "../../../lib/entitlements.js";
 import { buildRegUrl, PUBLIC_SITE } from "../../../lib/regLinks.js";
 import { PLATFORM_FOOTER_TEXT, platformFooterUrl, surfaceForAutomation } from "../../../components/PlatformFooterLine.jsx";
 
@@ -581,7 +582,14 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
           .insert({
             organization_id: orgId,
             template_id: template.id,
-            enabled: false,
+            // Creating the row must not CHANGE whether the automation fires --
+            // this insert exists to store an override, and the operator only
+            // asked to reword the email. thank_you is opt-OUT (stripe-webhook
+            // sends when no row exists), so a hardcoded false here silently
+            // switched off the confirmation email for any org that edited its
+            // wording, with no error and nothing in the UI to show it. Everything
+            // else is opt-in and correctly starts false.
+            enabled: isOptOutAutomation(template.key),
             ...patch,
           })
           .select()
