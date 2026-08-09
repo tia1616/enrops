@@ -275,21 +275,27 @@ export default function QuickProgramBuilder() {
   // three of its buttons. `narrow` (480) governs the two-button onboarding pair
   // (Next / Not now) and nothing else.
   //
-  // HEADROOM IS THIN AND A VIEWPORT THRESHOLD CANNOT FIX THAT: this page is
-  // `maxWidth: 560`, so the footer's content box is capped at 528px no matter how
-  // wide the window gets. Against the ~493px requirement that is ~35px, which a
-  // longer button label, a tenant whose browser base font is 18px, or 110% zoom
-  // would eat - and the wrap would then happen at 1280px, where no viewport
-  // threshold reaches. If a label grows, the durable fix is letting the row wrap
-  // to two lines rather than moving this number again.
+  // THE ARITHMETIC, done properly - an earlier version of this comment got it
+  // wrong by forgetting the layout's own padding. AdminLayout adds
+  // `padding: 16px 14px` to <main> below 900px (AdminLayout.jsx:564), and this
+  // page adds `padding: 24px 16px`, so the row's content box is
+  // min(528, viewport - 28 - 32). At a 560px viewport that is 500px, giving the
+  // ~493px requirement about SEVEN pixels - which is why the threshold is 620,
+  // not 560: the full 528px box only exists from ~588px up.
+  //
+  // Even at 528 the slack is ~35px, which a longer button label, an 18px base
+  // font, or 110% zoom would eat - and that wrap would happen at 1280px, where
+  // no viewport threshold reaches. If a label grows, let the row wrap to two
+  // lines (`flexWrap`, as both success-screen rows in this file already do)
+  // rather than moving this number a third time.
   const [narrow, setNarrow] = useState(() =>
     typeof window !== "undefined" && window.innerWidth < 480);
   const [narrowFooter, setNarrowFooter] = useState(() =>
-    typeof window !== "undefined" && window.innerWidth < 560);
+    typeof window !== "undefined" && window.innerWidth < 620);
   useEffect(() => {
     const onResize = () => {
       setNarrow(window.innerWidth < 480);
-      setNarrowFooter(window.innerWidth < 560);
+      setNarrowFooter(window.innerWidth < 620);
     };
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
@@ -897,8 +903,8 @@ export default function QuickProgramBuilder() {
     setPhotoErr("");
     setErr("");
     setCreatedId(null);
-    // Reset with createdId, or "add another class" shows the previous draft's
-    // dates under the new blank form.
+    // Reset with createdId so the next save starts from "publishing", not from
+    // whatever the last one did.
     setCreatedStatus("open");
     // Back to the operator's usual ages rather than blank — the next class is
     // almost always for the same children.
@@ -1243,15 +1249,32 @@ export default function QuickProgramBuilder() {
         <div style={{ fontSize: 22, fontWeight: 700, color: INK, marginBottom: 8 }}>
           Saved as a draft.
         </div>
+        {/* VERBATIM from the classic wizard's draft screen (ProgramWizardNew.jsx
+            :1409), which makes the "mirrors the classic wizard" claim above
+            actually true rather than aspirational.
+            Two things it deliberately does NOT say, both of which an earlier
+            version of this sentence got wrong:
+            - It does not promise the class dates are worked out. A weekly draft
+              only requires a day of the week (see `valid`), so a draft can exist
+              with no first session date and therefore no dates at all.
+            - It does not mention a public registration page. Two prod orgs
+              (Mrs. Richelle, Shoreview Chess) run uses_enrops_registration=false
+              and have none, which is why the intro and footer on this screen are
+              branched. This wording needs no branch because it is true for
+              everyone. */}
         <p style={{ color: MUTED, fontSize: 14, lineHeight: 1.6, margin: "0 0 20px" }}>
-          Only you can see it &mdash; families can&rsquo;t register and it isn&rsquo;t on your
-          public page. Its class dates are worked out and waiting on your program list,
-          and you can publish it from there whenever you&rsquo;re ready.
+          Only you can see it for now. When you&rsquo;re ready, publish it from your
+          program list.
         </p>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
-          <button onClick={resetForAnother} style={primaryBtn}>Add another class</button>
-          <button onClick={() => navigate("/admin/programs")} style={secondaryBtn}>
-            Go to my programs
+          {/* Same two labels and the same styling as the live success screen
+              below — one builder should not name its own exits two ways. */}
+          <button onClick={resetForAnother} style={primaryBtn}>Create another</button>
+          <button
+            onClick={() => navigate("/admin/programs")}
+            style={{ ...primaryBtn, background: "#fff", color: BRIGHT, border: `1px solid ${RULE}` }}
+          >
+            Back to programs
           </button>
         </div>
       </div>
