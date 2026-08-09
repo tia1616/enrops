@@ -227,19 +227,11 @@ export default function QuickProgramBuilder() {
   // 'open' | 'draft' | null — which button is mid-save. Separate from
   // `createdStatus`, which is only known once the insert has resolved.
   const [submittingAs, setSubmittingAs] = useState(null);
-  // The session dates enrops worked out for a draft. This is the whole point of
-  // saving without publishing: Jeff reads these into Facilitron before the class
-  // goes live. null = not fetched yet, [] = none derivable (no start date).
-  const [draftDates, setDraftDates] = useState(null);
-  // Distinct from []: the read FAILED, versus there being nothing to derive.
-  // Collapsing them told an operator who had entered a start date to go and add
-  // one, which is the same lie the rest of this file avoids with locationsFailed
-  // and countFailed.
-  const [draftDatesFailed, setDraftDatesFailed] = useState(false);
-  // Which draft the in-flight dates request belongs to. Jeff saves ~25 of these
-  // in a row, so a slow response from the PREVIOUS draft could otherwise land
-  // under the CURRENT one and he would copy the wrong dates into Facilitron.
-  const draftDatesFor = useRef(null);
+  // NOTE, so nobody re-adds it: this screen deliberately does NOT list the
+  // draft's session dates. Scheduled Programs (ProgramsCalendar) already shows
+  // every date per class, expandable, including the no-school days it SKIPPED and
+  // why — strictly more than this screen could, and it is where an operator
+  // already goes. Duplicating it here was unrequested scope (Jessica, 2026-08-08).
 
   // How long this build actually took. We refused to print a made-up "your first
   // program takes N minutes" in the step strip, so this is what earns the right
@@ -823,32 +815,6 @@ export default function QuickProgramBuilder() {
       if (!asDraft) pixelWorkflowCreated();
       setCreatedStatus(asDraft ? "draft" : "open");
       setCreatedId(data.id);
-      // Read the dates enrops just worked out, so the operator can copy them
-      // straight out. Not awaited inside the save's own guard: the class IS
-      // saved by now, and a failure here must not read as a failed save.
-      // RLS-respecting (the function is not SECURITY DEFINER) and granted to
-      // authenticated, so this returns only their own program's dates.
-      if (asDraft) {
-        draftDatesFor.current = data.id;
-        supabase
-          .rpc("derive_program_session_dates", { p_program_id: data.id })
-          .then(({ data: d, error: dErr }) => {
-            // Drop a response that belongs to an earlier draft.
-            if (draftDatesFor.current !== data.id) return;
-            setDraftDatesFailed(!!dErr);
-            setDraftDates(dErr ? [] : (d ?? []));
-          })
-          // supabase-js turns fetch failures into a resolved { error }, so this
-          // should be unreachable — but without it a rejection would leave the
-          // panel on "Working them out…" forever with no way out, and the
-          // destructure above would throw an unhandled TypeError. The failure
-          // story is only complete if every branch of it is written.
-          .catch(() => {
-            if (draftDatesFor.current !== data.id) return;
-            setDraftDatesFailed(true);
-            setDraftDates([]);
-          });
-      }
       recordBuildTiming(data.id);
       // This org now has one more program than it did at mount. Without this,
       // "Create another" brings the form back with programCount still 0 and the
@@ -934,9 +900,6 @@ export default function QuickProgramBuilder() {
     // Reset with createdId, or "add another class" shows the previous draft's
     // dates under the new blank form.
     setCreatedStatus("open");
-    setDraftDates(null);
-    setDraftDatesFailed(false);
-    draftDatesFor.current = null;
     // Back to the operator's usual ages rather than blank — the next class is
     // almost always for the same children.
     setAgeMin(profile.default_age_min != null ? String(profile.default_age_min) : "");
@@ -1275,74 +1238,16 @@ export default function QuickProgramBuilder() {
     // catalog filters status='open', so there is nothing to share and offering
     // it would be a link that goes nowhere). Wording mirrors the classic
     // wizard's draft screen so the two builders say the same thing.
-    const fmt = (iso) => {
-      const [y, m, d] = String(iso).split("-").map(Number);
-      if (!y || !m || !d) return String(iso);
-      // Constructed from parts, not `new Date(iso)`, which parses a bare date as
-      // UTC and can render the previous day west of Greenwich.
-      return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
-    };
     return (
       <div style={{ maxWidth: 560, margin: "0 auto", padding: "24px 16px" }}>
         <div style={{ fontSize: 22, fontWeight: 700, color: INK, marginBottom: 8 }}>
           Saved as a draft.
         </div>
         <p style={{ color: MUTED, fontSize: 14, lineHeight: 1.6, margin: "0 0 20px" }}>
-          Only you can see it — families can&rsquo;t register and it isn&rsquo;t on your
-          public page. Publish it from your program list when you&rsquo;re ready.
+          Only you can see it &mdash; families can&rsquo;t register and it isn&rsquo;t on your
+          public page. Its class dates are worked out and waiting on your program list,
+          and you can publish it from there whenever you&rsquo;re ready.
         </p>
-
-        <div style={{ background: "#FBFBFB", border: `1px solid ${RULE}`, borderRadius: 12, padding: "16px 18px", marginBottom: 20 }}>
-          <div style={{ fontSize: 15, fontWeight: 700, color: INK, marginBottom: 6 }}>
-            Your class dates
-          </div>
-          {draftDates === null ? (
-            <div style={{ fontSize: 13.5, color: MUTED }}>Working them out…</div>
-          ) : draftDatesFailed ? (
-            // A failed read is NOT the same as nothing to derive. Telling an
-            // operator who entered a start date to go and add one is how a
-            // working feature loses their trust.
-            <div style={{ fontSize: 13.5, color: MUTED, lineHeight: 1.55 }}>
-              Your class is saved, but we couldn&rsquo;t work out its dates just now.
-              Open it from your program list to see them.
-            </div>
-          ) : draftDates.length === 0 ? (
-            <div style={{ fontSize: 13.5, color: MUTED, lineHeight: 1.55 }}>
-              {/* Honest about the cause: the deriver needs a first session date,
-                  and this builder only requires one for a one-off class. */}
-              Add a start date to this class and enrops will work out every session
-              date for you — open it from your program list to add one.
-            </div>
-          ) : (
-            <>
-              <p style={{ fontSize: 13.5, color: MUTED, lineHeight: 1.55, margin: "0 0 10px" }}>
-                {draftDates.length} session{draftDates.length === 1 ? "" : "s"}, skipping
-                that district&rsquo;s no-school days. Copy these anywhere you need them.
-              </p>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-                {draftDates.map((d) => (
-                  <span key={String(d)} style={{ fontSize: 12.5, color: INK, background: "#fff", border: `1px solid ${RULE}`, borderRadius: 999, padding: "4px 11px" }}>
-                    {fmt(d)}
-                  </span>
-                ))}
-              </div>
-              {/* Plain text as well as chips: the chips are readable, but Jeff is
-                  pasting these into Facilitron, and you cannot paste chips. */}
-              <label htmlFor="draft-dates-copy" style={{ display: "block", fontSize: 12, color: MUTED, marginTop: 12, marginBottom: 4, fontWeight: 600 }}>
-                All dates, ready to copy
-              </label>
-              <textarea
-                id="draft-dates-copy"
-                readOnly
-                value={draftDates.join("\n")}
-                onFocus={(e) => e.target.select()}
-                rows={Math.min(draftDates.length, 8)}
-                style={{ width: "100%", boxSizing: "border-box", fontFamily: "inherit", fontSize: 12.5, color: INK, border: `1px solid ${RULE}`, borderRadius: 8, padding: "8px 10px", background: "#fff", resize: "vertical" }}
-              />
-            </>
-          )}
-        </div>
-
         <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
           <button onClick={resetForAnother} style={primaryBtn}>Add another class</button>
           <button onClick={() => navigate("/admin/programs")} style={secondaryBtn}>
