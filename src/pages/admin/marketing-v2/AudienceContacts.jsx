@@ -242,7 +242,13 @@ export function PartnerContacts({ org }) {
       <header style={{ marginBottom: 16 }}>
         <h1 style={{ color: INK, fontSize: 26, fontWeight: 800, margin: "0 0 8px" }}>Partners</h1>
         <p style={{ color: MUTED, fontSize: 15, lineHeight: 1.55, margin: 0 }}>
-          The people at your partner sites you can email, grouped by school or organization. Add or edit each partner&apos;s contacts in the <Link to="/admin/schools" style={{ color: BRIGHT, fontWeight: 600 }}>Partners</Link> tab.
+          {/* The destination was renamed to "Locations" everywhere (N1). This
+              pointer kept the old word while linking to the same page, so it
+              named a tab that no longer exists - the empty state two blocks down
+              already said "Locations", so the file contradicted itself. The
+              AUDIENCE is still called Partners on purpose: that's partner orgs as
+              CONTACTS, a different thing from the venues page. */}
+          The people at your partner sites you can email, grouped by school or organization. Add or edit each partner&apos;s contacts in the <Link to="/admin/schools" style={{ color: BRIGHT, fontWeight: 600 }}>Locations</Link> tab.
         </p>
       </header>
 

@@ -16,7 +16,7 @@
 //     with a helpful pointer to Stripe setup.
 
 import { useEffect, useState } from "react";
-import { Link, useOutletContext, useSearchParams } from "react-router-dom";
+import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import { PURPLE, INK, MUTED, RULE, OK, INFO, WARN } from "../marketing/tokens.jsx";
 import FamilyCommsTabs from "./FamilyCommsTabs.jsx";
@@ -24,6 +24,14 @@ import AudienceSwitcher from "./AudienceSwitcher.jsx";
 import AutomationEditor from "./AutomationEditor.jsx";
 import SenderSetupNotice from "./SenderSetupNotice.jsx";
 import DeliveryIssuesPanel from "./DeliveryIssuesPanel.jsx";
+import {
+  automationIsSending,
+  entitlementsFor,
+  isAlwaysOnAutomation,
+  registrationAutomationsCanFire,
+  REGISTRATION_AUTOMATION_KEYS,
+} from "../../../lib/entitlements.js";
+import { useCommsAudience } from "../../../lib/useCommsAudience.js";
 
 // Per-audience header copy + empty state. The audience filter (?audience=) shows
 // one audience at a time — the same spine as Comms>Contacts and >Templates — so
@@ -111,20 +119,13 @@ const REVIEW_LINK_PLACEHOLDER = "your-review-link-here";
 
 export default function AutomationsTab() {
   const { user, org } = useOutletContext();
-  const [params, setParams] = useSearchParams();
 
   // Audience filter rides in the URL (?audience=) so it survives refresh + deep
-  // links and matches Comms>Contacts / >Templates. Default (no param) = families.
-  const audience = ["instructors", "partners"].includes(params.get("audience"))
-    ? params.get("audience")
-    : "families";
+  // links and matches Comms>Contacts / >Templates. The clamp to what this org may
+  // see, and the URL rewrite when it asked for something else, live in
+  // lib/useCommsAudience so all three Comms tabs share one implementation.
+  const { audience, allowedAudiences, selectAudience } = useCommsAudience(org);
   const audienceCfg = AUTO_AUDIENCE[audience];
-  function selectAudience(a) {
-    const next = new URLSearchParams(params);
-    if (a === "families") next.delete("audience");
-    else next.set("audience", a);
-    setParams(next, { replace: true });
-  }
 
   const [editingTpl, setEditingTpl] = useState(null);
   const [orgLogoUrl, setOrgLogoUrl] = useState(null);
@@ -259,7 +260,13 @@ export default function AutomationsTab() {
     if (!tpl.is_v1_enabled) return;
     if (STRIPE_DEPENDENT_KEYS.has(tpl.key) && !stripeReady) return;
     const existing = automationByTpl[tpl.id];
-    const wasEnabled = !!existing?.enabled;
+    const wasEnabled = automationIsSending(existing, tpl.key);
+    // Guard the WRITE as well as the control, but only in the OFF direction.
+    // Blocking both ways made a stored enabled:false unrepairable: the card
+    // showed no Toggle, and if one ever rendered, this returned before it could
+    // turn the confirmation back on. Turning it ON is exactly the recovery path
+    // we want available; turning it off is what this tier may not do.
+    if (wasEnabled && isAlwaysOnAutomation(org, tpl.key)) return;
     // Don't let a promotional template turn on with an unfilled placeholder
     // link — families would get a dead link in a real send. Only blocks the
     // OFF→ON transition; turning it off is always allowed. The effective body is
@@ -290,9 +297,21 @@ export default function AutomationsTab() {
           [tpl.id]: { ...existing, ...patch },
         }));
       } else {
+        // Creating the row must land on the OPPOSITE of what is happening now,
+        // not unconditionally on. For an opt-out automation (thank_you) "no row"
+        // already means SENDING, so a full-tier operator clicking the toggle is
+        // asking to turn it OFF — inserting enabled:true there would leave the
+        // switch visibly flipped and nothing actually changed, the dead-control
+        // pattern. enabled_at only matters when turning on.
+        const nowEnabled = !wasEnabled;
         const { data, error: insErr } = await supabase
           .from("automations")
-          .insert({ organization_id: org.id, template_id: tpl.id, enabled: true, enabled_at: new Date().toISOString() })
+          .insert({
+            organization_id: org.id,
+            template_id: tpl.id,
+            enabled: nowEnabled,
+            ...(nowEnabled ? { enabled_at: new Date().toISOString() } : {}),
+          })
           .select()
           .single();
         if (insErr) throw insErr;
@@ -324,9 +343,18 @@ export default function AutomationsTab() {
   // Show one audience at a time. An automation can belong to MORE THAN ONE
   // audience (no_school_day reaches families + instructors), so match on the
   // membership array. Missing/empty falls back to families (backfill default).
+  //
+  // A registration_only org sees only the automations that are part of a
+  // registration working at all (confirmation, welcome, no-school heads-up).
+  // The retention/nurture/review ones are the upgrade, so they are not rendered
+  // at all rather than shown locked — a wall of disabled cards on a tier whose
+  // whole point is "registration, done" reads as a broken product, not an offer.
+  const commsLevel = entitlementsFor(org).comms;
   const visibleTemplates = templates.filter((t) => {
     const auds = Array.isArray(t.audiences) && t.audiences.length ? t.audiences : ["families"];
-    return auds.includes(audience);
+    if (!auds.includes(audience)) return false;
+    if (commsLevel === "registration_only" && !REGISTRATION_AUTOMATION_KEYS.has(t.key)) return false;
+    return true;
   });
 
   return (
@@ -350,7 +378,7 @@ export default function AutomationsTab() {
         }
       `}</style>
       <FamilyCommsTabs active="automations" />
-      <AudienceSwitcher active={audience} onSelect={selectAudience} label="Automation audience" />
+      <AudienceSwitcher active={audience} onSelect={selectAudience} label="Automation audience" audiences={allowedAudiences} />
 
       <SenderSetupNotice orgId={org?.id} />
 
@@ -359,12 +387,41 @@ export default function AutomationsTab() {
           Automations
         </h1>
         <p style={{ color: MUTED, fontSize: 15, lineHeight: 1.55, margin: "0 0 10px" }}>
-          {audienceCfg.intro}
+          {/* The families intro pitches staying close BETWEEN sessions and building
+              lifetime value — which describes the retention automations (check-in,
+              recaps, birthday, review ask) that this tier filters out below. On the
+              reduced tier every remaining card is transactional, so the pitch has to
+              match what is actually on the page. Hiding the cards is what creates
+              the mismatch. */}
+          {commsLevel === "registration_only" && audience === "families"
+            ? <>These are the emails that make a registration feel finished: a confirmation
+              the moment a family pays, a heads-up before the first class, and a note when
+              there&apos;s no school. Enrops sends them for you.</>
+            : audienceCfg.intro}
         </p>
         <p style={{ color: MUTED, fontSize: 13, lineHeight: 1.55, margin: 0, fontStyle: "italic" }}>
           {audienceCfg.note}
         </p>
       </header>
+
+      {/* Every automation on this tier needs Enrops to be running the registration:
+          thank_you fires from the checkout webhook, and the other three resolve
+          their audience from confirmed registrations. An org that brings its own
+          registration can never make any of them send, so say that plainly rather
+          than showing four cards that quietly never fire. Jessica's call: keep the
+          section (Contacts genuinely works for them) and be honest here. */}
+      {!registrationAutomationsCanFire(org) && (
+        <div
+          style={{
+            background: "#fef5e6", border: `1px solid ${WARN}`, color: "#7c4a02",
+            padding: "12px 14px", borderRadius: 12, marginBottom: 18, fontSize: 13.5, lineHeight: 1.5,
+          }}
+        >
+          <strong>These send off registrations taken in Enrops.</strong> You take
+          registrations on your own site, so none of them will fire yet. Your contact
+          list still works, and moving registration over switches these on.
+        </div>
+      )}
 
       {/* Delivery-issue alerts are framed for families ("families who didn't get
           an email") and only make sense on the Families view — don't surface them
@@ -410,7 +467,23 @@ export default function AutomationsTab() {
           const stats = auto ? runStats[auto.id] : null;
           const locked = STRIPE_DEPENDENT_KEYS.has(tpl.key) && !stripeReady;
           const disabledTemplate = !tpl.is_v1_enabled;
-          const enabled = !!auto?.enabled;
+          // Two SEPARATE questions, and conflating them produced two opposite
+          // lies at once (review findings 4 and 5):
+          //
+          //   enabled  — is it actually sending? A fact about the stored row and
+          //              the template's default. thank_you is the one opt-OUT
+          //              automation, so NO ROW means it IS sending. Tier plays no
+          //              part: a full-tier org with no row used to read "Off" on
+          //              an email stripe-webhook was demonstrably sending.
+          //   alwaysOn — can this tier switch it off? Tier-dependent, and only
+          //              claimable when the thing is genuinely on: a stored
+          //              enabled:false used to still render "Always on" while
+          //              nothing sent and no control existed to repair it.
+          //
+          // `locked` beats both: with no Stripe account there are no payments, so
+          // nothing fires and either claim would be false.
+          const enabled = automationIsSending(auto, tpl.key);
+          const alwaysOn = !locked && enabled && isAlwaysOnAutomation(org, tpl.key);
           const isSaving = savingTplId === tpl.id;
           // Operator-initiated sends (availability survey, class offers, sub
           // requests) are shown for TRANSPARENCY but sent from the Schedule tab,
@@ -452,6 +525,7 @@ export default function AutomationsTab() {
                         locked={locked}
                         disabledTemplate={disabledTemplate}
                         enabled={enabled}
+                        alwaysOn={alwaysOn}
                       />
                     )}
                     {/* The program-type chip only means something in the FAMILIES
@@ -584,6 +658,20 @@ export default function AutomationsTab() {
                     </>
                   ) : (
                   <>
+                  {alwaysOn ? (
+                    // No Toggle at all rather than a disabled one. A greyed-out
+                    // switch invites clicking and explains nothing; a sentence
+                    // where the switch would be says why, right where they're
+                    // looking. Edit stays live — they can reword it freely.
+                    <span
+                      style={{
+                        color: MUTED, fontSize: 12, fontWeight: 600,
+                        textAlign: "right", maxWidth: 150, lineHeight: 1.45,
+                      }}
+                    >
+                      Sent when a registration is paid
+                    </span>
+                  ) : (
                   <Toggle
                     checked={enabled}
                     onClick={() => toggleAutomation(tpl)}
@@ -598,6 +686,7 @@ export default function AutomationsTab() {
                             : "Turn on"
                     }
                   />
+                  )}
                   <button
                     type="button"
                     disabled={disabledTemplate || locked}
@@ -704,12 +793,18 @@ function ModeBadge({ isBoardSend }) {
     : <Chip color={PURPLE} bg="#efe9f7">⚡ Runs automatically</Chip>;
 }
 
-function StatusPill({ locked, disabledTemplate, enabled }) {
+function StatusPill({ locked, disabledTemplate, enabled, alwaysOn }) {
   if (disabledTemplate) {
     return <Chip color={MUTED} bg="#f5f4ee">Coming soon</Chip>;
   }
   if (locked) {
     return <Chip color={WARN} bg="#fef5e6">Locked</Chip>;
+  }
+  // Distinct from "Active" on purpose — "Active" reads as something you chose
+  // and could unchoose. This one has no off switch, and saying so in the pill
+  // is cheaper than letting the operator hunt for a toggle that isn't there.
+  if (alwaysOn) {
+    return <Chip color={OK} bg="#ecf6ec">Always on</Chip>;
   }
   return enabled
     ? <Chip color={OK} bg="#ecf6ec">Active</Chip>

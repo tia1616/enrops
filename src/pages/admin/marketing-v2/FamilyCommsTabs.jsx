@@ -9,10 +9,18 @@
 //   Campaigns respect the promotional unsubscribe.
 //   Automations bypass it — they're service comms to active families.
 
-import { Link } from "react-router-dom";
+import { Link, useOutletContext } from "react-router-dom";
 import { PURPLE, BRIGHT, INK, MUTED, RULE } from "../marketing/tokens.jsx";
+import { canReachCommsTab } from "../../../lib/entitlements.js";
 
+// Reads the org off the outlet context rather than taking it as a prop, on
+// purpose: this strip renders from four different pages, and a caller that
+// forgot to pass the prop would silently render a tab the org can't reach.
+// The gate should not depend on four call sites remembering it.
 export default function FamilyCommsTabs({ active, onReset }) {
+  const { org } = useOutletContext();
+  const can = (tab) => canReachCommsTab(org, tab);
+
   return (
     <div
       style={{
@@ -30,22 +38,26 @@ export default function FamilyCommsTabs({ active, onReset }) {
       <TabLink to="/admin/family-comms/contacts" active={active === "contacts"}>
         Contacts
       </TabLink>
-      <TabLink
-        to="/admin/family-comms/marketing"
-        active={active === "marketing"}
-        // When we're already ON the marketing route but deep in the campaign
-        // wizard (list vs wizard is internal state, not a route), a plain Link
-        // to the same route is a no-op. onReset lets the host reset to the list.
-        onClick={active === "marketing" && onReset ? (e) => { e.preventDefault(); onReset(); } : undefined}
-      >
-        Campaigns
-      </TabLink>
+      {can("marketing") && (
+        <TabLink
+          to="/admin/family-comms/marketing"
+          active={active === "marketing"}
+          // When we're already ON the marketing route but deep in the campaign
+          // wizard (list vs wizard is internal state, not a route), a plain Link
+          // to the same route is a no-op. onReset lets the host reset to the list.
+          onClick={active === "marketing" && onReset ? (e) => { e.preventDefault(); onReset(); } : undefined}
+        >
+          Campaigns
+        </TabLink>
+      )}
       <TabLink to="/admin/family-comms/automations" active={active === "automations"}>
         Automations
       </TabLink>
-      <TabLink to="/admin/family-comms/templates" active={active === "templates"}>
-        Templates
-      </TabLink>
+      {can("templates") && (
+        <TabLink to="/admin/family-comms/templates" active={active === "templates"}>
+          Templates
+        </TabLink>
+      )}
     </div>
   );
 }

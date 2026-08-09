@@ -15,11 +15,12 @@
 // server-injected <base target="_blank"> per guardrails section 6C — keeps
 // clicks safe AND opens links in a new tab instead of blanking the iframe.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../../lib/supabase.js";
 import { PURPLE, BRIGHT, INK, MUTED, RULE, OK, WARN } from "../marketing/tokens.jsx";
 import { editableToHtml, highlightTokens, htmlToEditable } from "./bodyEditorUtils.js";
 import AttachmentPicker from "./AttachmentPicker.jsx";
+import { isOptOutAutomation } from "../../../lib/entitlements.js";
 import { buildRegUrl, PUBLIC_SITE } from "../../../lib/regLinks.js";
 import { PLATFORM_FOOTER_TEXT, platformFooterUrl, surfaceForAutomation } from "../../../components/PlatformFooterLine.jsx";
 
@@ -290,6 +291,39 @@ function setReviewUrlInBody(body, url) {
   return `${src}\n<p style="margin:0 0 16px;">${anchor}</p>`;
 }
 
+// A formatting-bar button. Real <button> with a visible focus ring and a 28px
+// tap target — an icon-only <span onClick> is not a control (that was one of the
+// five defects found on a phone on 2026-07-27).
+function FormatButton({ label, onClick, children }) {
+  return (
+    <button
+      type="button"
+      // onMouseDown + preventDefault so clicking the button does not blur the
+      // body box first — losing the selection is what makes "highlight, then
+      // press Link" quietly fail.
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      style={{
+        display: "inline-flex", alignItems: "center", justifyContent: "center",
+        minHeight: 28, padding: "4px 9px", background: "#fff",
+        border: `1px solid ${RULE}`, borderRadius: 5, color: INK,
+        fontSize: 13, fontFamily: "inherit", lineHeight: 1, cursor: "pointer",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+const linkInputStyle = {
+  display: "block", width: "100%", marginTop: 4, padding: "7px 10px",
+  fontSize: 13, fontFamily: "inherit", color: INK,
+  border: `1px solid ${RULE}`, borderRadius: 6, outline: "none",
+  boxSizing: "border-box", background: "#fff",
+};
+
 export default function AutomationEditor({ template, automation, orgId, orgName, orgSlug, orgLogoUrl, orgSenderName, orgPrimaryColor, userEmail, onClose, onSaved }) {
   const isBoardSend = template.trigger_type === "operator_initiated";
   // sub_offer copy is fully system-generated (create-assignment-substitution
@@ -483,6 +517,73 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
     setBody(editableToHtml(newText));
   }
 
+  // ── Formatting controls ───────────────────────────────────────────────────
+  // The body is stored as a markdown-ish string, but an operator must never be
+  // asked to TYPE that. Jessica went looking for "the link option" on the
+  // confirmation email and found only a line of syntax; her note was "no one
+  // will know what those words mean - think how other CRMs make it easy."
+  //
+  // So this mirrors what every one of them does (checked Mailchimp, HubSpot,
+  // MailerSend): select your words, press a button, a small box asks for the
+  // web address. Bold and italic sit beside it as one group, which is the same
+  // arrangement those toolbars use. Nothing here exposes the markers.
+  const bodyRef = useRef(null);
+
+  /** Current selection in the body box, defaulting to the caret. */
+  function bodySelection() {
+    const el = bodyRef.current;
+    if (!el) return { start: editableText.length, end: editableText.length };
+    return { start: el.selectionStart ?? 0, end: el.selectionEnd ?? 0 };
+  }
+
+  /** Replace the current selection with `next`, then put the caret after it. */
+  function replaceSelection(next, selectInsteadFrom) {
+    const { start, end } = bodySelection();
+    const updated = editableText.slice(0, start) + next + editableText.slice(end);
+    handleEditableChange(updated);
+    // Restore focus after React re-renders, so the operator keeps typing where
+    // they were instead of being dumped at the end of the box.
+    requestAnimationFrame(() => {
+      const el = bodyRef.current;
+      if (!el) return;
+      el.focus();
+      const caret = selectInsteadFrom == null ? start + next.length : start + selectInsteadFrom;
+      const caretEnd = selectInsteadFrom == null ? start + next.length : start + next.length;
+      el.setSelectionRange(caret, caretEnd);
+    });
+  }
+
+  /** Wrap the selection in `marker` (bold/italic). Empty selection = placeholder. */
+  function wrapSelection(marker, placeholder) {
+    const { start, end } = bodySelection();
+    const selected = editableText.slice(start, end);
+    const inner = selected || placeholder;
+    replaceSelection(`${marker}${inner}${marker}`, selected ? null : marker.length);
+  }
+
+  const [linkPanel, setLinkPanel] = useState(null); // null | { text, url }
+
+  function openLinkPanel() {
+    const { start, end } = bodySelection();
+    // Pre-fill the words from whatever they highlighted, exactly like Mailchimp
+    // pre-fills from the selected text.
+    setLinkPanel({ text: editableText.slice(start, end), url: "", start, end });
+  }
+
+  function insertLink() {
+    const words = (linkPanel?.text || "").trim();
+    let url = (linkPanel?.url || "").trim();
+    if (!words || !url) return;
+    // Operators paste "mysite.com" far more often than they type a scheme. The
+    // sanitizer only accepts http/https/mailto and would silently turn anything
+    // else into a dead "#", so assume https rather than hand them a broken link.
+    if (!/^(https?:|mailto:)/i.test(url)) url = `https://${url}`;
+    const { start, end } = linkPanel;
+    const updated = `${editableText.slice(0, start)}[${words}](${url})${editableText.slice(end)}`;
+    handleEditableChange(updated);
+    setLinkPanel(null);
+  }
+
 
   // Reset success/error after a few seconds
   useEffect(() => {
@@ -581,7 +682,14 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
           .insert({
             organization_id: orgId,
             template_id: template.id,
-            enabled: false,
+            // Creating the row must not CHANGE whether the automation fires --
+            // this insert exists to store an override, and the operator only
+            // asked to reword the email. thank_you is opt-OUT (stripe-webhook
+            // sends when no row exists), so a hardcoded false here silently
+            // switched off the confirmation email for any org that edited its
+            // wording, with no error and nothing in the UI to show it. Everything
+            // else is opt-in and correctly starts false.
+            enabled: isOptOutAutomation(template.key),
             ...patch,
           })
           .select()
@@ -857,26 +965,103 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
             </div>
             {editingBody ? (
               <>
+                {/* Formatting bar. Board sends are plain text end to end, so they
+                    get no controls — offering bold on an email that strips it
+                    would be a dead button. */}
+                {!isBoardSend && (
+                  <div style={{
+                    display: "flex", alignItems: "center", gap: 4, marginBottom: 6,
+                    border: `1px solid ${RULE}`, borderBottom: "none",
+                    borderRadius: "6px 6px 0 0", padding: "5px 6px", background: "#FBFBFB",
+                  }}>
+                    <FormatButton label="Bold" onClick={() => wrapSelection("**", "bold text")}>
+                      <span style={{ fontWeight: 800 }}>B</span>
+                    </FormatButton>
+                    <FormatButton label="Italic" onClick={() => wrapSelection("_", "italic text")}>
+                      <span style={{ fontStyle: "italic", fontFamily: "Georgia, serif" }}>I</span>
+                    </FormatButton>
+                    <span style={{ width: 1, height: 18, background: RULE, margin: "0 4px" }} />
+                    <FormatButton label="Add a link" onClick={openLinkPanel}>
+                      {/* Chain glyph — the icon every email tool uses for this. */}
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+                        <path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.5 1.5" />
+                        <path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.5-1.5" />
+                      </svg>
+                      <span style={{ marginLeft: 5 }}>Link</span>
+                    </FormatButton>
+                  </div>
+                )}
                 <textarea
+                  ref={bodyRef}
                   value={editableText}
                   onChange={(e) => handleEditableChange(e.target.value)}
                   rows={14}
                   style={{
                     width: "100%", padding: "12px 14px", fontSize: 14, color: INK,
-                    border: `1px solid ${RULE}`, borderRadius: 6, outline: "none",
+                    border: `1px solid ${RULE}`,
+                    borderRadius: isBoardSend ? 6 : "0 0 6px 6px",
+                    outline: "none",
                     background: "#fff", resize: "vertical", lineHeight: 1.55,
                     fontFamily: "inherit", boxSizing: "border-box",
                   }}
                 />
-                <p style={{ margin: "6px 0 0", fontSize: 11, color: MUTED, lineHeight: 1.5 }}>
-                  {isBoardSend ? (
-                    <>This is the intro paragraph, sent as plain text. Blank line = new paragraph. The greeting, schedule details, response buttons, and deadline are added automatically.</>
-                  ) : (
-                    <>Blank line = new paragraph. <strong>**text**</strong> = bold,
-                    <em> _text_</em> = italic.
-                    <span style={{ fontFamily: "ui-monospace, monospace" }}> [link text]({"{{register_url}}"})</span> = clickable link.</>
-                  )}
-                </p>
+
+                {/* The link box. Inline rather than a browser prompt: this file's
+                    house rule is no alert()/confirm(), and an inline panel can
+                    pre-fill the highlighted words the way Mailchimp's does. */}
+                {linkPanel && (
+                  <div style={{
+                    border: `1px solid ${PURPLE}`, borderRadius: 8, padding: 12,
+                    marginTop: 8, background: `${PURPLE}08`,
+                  }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 700, color: PURPLE, marginBottom: 8 }}>
+                      Add a link
+                    </div>
+                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      <label style={{ flex: "1 1 180px", fontSize: 12, color: MUTED }}>
+                        Words families will see
+                        <input
+                          value={linkPanel.text}
+                          onChange={(e) => setLinkPanel((p) => ({ ...p, text: e.target.value }))}
+                          placeholder="Shop ukuleles"
+                          style={linkInputStyle}
+                        />
+                      </label>
+                      <label style={{ flex: "1 1 180px", fontSize: 12, color: MUTED }}>
+                        Web address
+                        <input
+                          value={linkPanel.url}
+                          onChange={(e) => setLinkPanel((p) => ({ ...p, url: e.target.value }))}
+                          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); insertLink(); } }}
+                          placeholder="theukuleleproject.com/shop"
+                          style={linkInputStyle}
+                        />
+                      </label>
+                    </div>
+                    <div style={{ display: "flex", gap: 8, marginTop: 10, alignItems: "center" }}>
+                      <button
+                        type="button"
+                        onClick={insertLink}
+                        disabled={!linkPanel.text.trim() || !linkPanel.url.trim()}
+                        style={{
+                          padding: "6px 14px", background: PURPLE, color: "#fff", border: "none",
+                          borderRadius: 6, fontSize: 13, fontWeight: 700, fontFamily: "inherit",
+                          cursor: (!linkPanel.text.trim() || !linkPanel.url.trim()) ? "not-allowed" : "pointer",
+                          opacity: (!linkPanel.text.trim() || !linkPanel.url.trim()) ? 0.5 : 1,
+                        }}
+                      >Add link</button>
+                      <button
+                        type="button"
+                        onClick={() => setLinkPanel(null)}
+                        style={{
+                          padding: "6px 12px", background: "transparent", color: INK,
+                          border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 13,
+                          fontFamily: "inherit", cursor: "pointer",
+                        }}
+                      >Cancel</button>
+                    </div>
+                  </div>
+                )}
               </>
             ) : (
               <div
@@ -892,6 +1077,23 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
                 dangerouslySetInnerHTML={{ __html: highlightTokens(body) }}
               />
             )}
+
+            {/* The syntax cheat-sheet that used to live here is GONE. It read
+                "**text** = bold, [link text](url) = clickable link", which is
+                developer notation an operator has no reason to recognise -
+                Jessica: "no one will know what those words mean." The buttons
+                above do the job instead. What stays is a plain sentence, and only
+                the two facts a person still needs: how to start editing, and that
+                a blank line starts a new paragraph. */}
+            <p style={{ margin: "6px 0 0", fontSize: 11.5, color: MUTED, lineHeight: 1.5 }}>
+              {isBoardSend ? (
+                <>This is the opening paragraph. The greeting, schedule details, response buttons and deadline are added for you.</>
+              ) : editingBody ? (
+                <>Highlight any words and press <strong>Link</strong> to turn them into a link. Leave a blank line to start a new paragraph.</>
+              ) : (
+                <>Press <strong>Edit</strong> to change the wording or add a link.</>
+              )}
+            </p>
           </div>
 
           {/* Board sends: the operator edits the INTRO paragraph only; the edge

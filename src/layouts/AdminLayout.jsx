@@ -148,7 +148,11 @@ function shapeNavForOrg(nav, org) {
     "/admin/schools",                // Locations -> now a tab under
                                      // Programs (see the tabs block below), so
                                      // it stays off the top-level sidebar.
-    "/admin/family-comms/contacts",  // Comms (paid upgrade)
+    // Comms is NO LONGER hidden here. Every lean org now gets at least the
+    // registration_only tier of it (Contacts + the automations that make a
+    // registration work), so the nav item is always shown and what's INSIDE is
+    // what varies. That split lives in lib/entitlements.js, not in this
+    // nav-shape function — see canReachCommsTab, which the routes enforce.
     "/admin/community",              // Community (coming soon)
   ]);
   const out = [];
@@ -336,7 +340,12 @@ export default function AdminLayout() {
           // direction the service fee moves. Getting this wrong by defaulting
           // would tell a provider they're absorbing a fee their families are
           // actually paying, which is the opposite of the truth.
-          .select("id, name, slug, email, active_registration_term, uses_enrops_registration, venue_model, background_check_config, instructor_pay_model, stripe_charges_enabled, fee_pass_through, venue_answer, program_cadence, default_age_min, default_age_max, onboarding_completed_at")
+          // platform_plan is LOAD-BEARING, not informational: lib/entitlements.js
+          // resolves what this org can reach from it. Drop it from this select and
+          // every org silently resolves to the most limited tier — it fails closed
+          // and quietly, with no error anywhere. Caught exactly that way on staging:
+          // a 'founding' org rendered the bare-bones Comms surface.
+          .select("id, name, slug, email, active_registration_term, uses_enrops_registration, venue_model, background_check_config, instructor_pay_model, platform_plan, stripe_charges_enabled, fee_pass_through, venue_answer, program_cadence, default_age_min, default_age_max, onboarding_completed_at")
           .eq("id", memberRow.organization_id)
           .maybeSingle();
         if (!mounted) return;

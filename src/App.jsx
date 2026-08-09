@@ -1,5 +1,6 @@
 import React, { Suspense, lazy } from 'react';
 import { Routes, Route, Navigate, useOutletContext } from 'react-router-dom';
+import { canReachCommsTab } from './lib/entitlements.js';
 import PublicLayout from './layouts/PublicLayout.jsx';
 import AdminLayout from './layouts/AdminLayout.jsx';
 import { CartProvider } from './context/CartContext.jsx';
@@ -110,6 +111,22 @@ function ProgramWizardRoute() {
     return <Navigate to="/admin/programs/quick-new" replace />;
   }
   return <ProgramWizardNew />;
+}
+
+// Comms tabs an org isn't entitled to are not just hidden from the tab strip —
+// they're unreachable by URL. Hiding a link is not a gate: a bookmark, a shared
+// URL, or a browser autocomplete all still land on the page, and Campaigns
+// would then let a registration_only operator compose a send they don't have.
+// Sends this to their Comms home instead of a dead end. org is loaded before
+// AdminLayout renders <Outlet>, so this never flashes.
+function CommsTabRoute({ tab, children }) {
+  const { org } = useOutletContext();
+  if (canReachCommsTab(org, tab)) return children;
+  // Contacts is the redirect TARGET, so sending it to itself would spin. It is
+  // reachable on every tier today; this only matters if a future tier gates it,
+  // and an infinite redirect is a far worse failure than landing on Programs.
+  if (tab === "contacts") return <Navigate to="/admin/programs" replace />;
+  return <Navigate to="/admin/family-comms/contacts" replace />;
 }
 
 export default function App() {
@@ -229,10 +246,17 @@ export default function App() {
               /admin/family-comms/templates    -> Reusable email templates
             /admin/marketing-v2 stays as a redirect for old bookmarks. */}
         <Route path="family-comms" element={<Navigate to="/admin/family-comms/contacts" replace />} />
-        <Route path="family-comms/marketing" element={<AICampaignBuilder />} />
-        <Route path="family-comms/automations" element={<AutomationsTab />} />
-        <Route path="family-comms/contacts" element={<ContactsTab />} />
-        <Route path="family-comms/templates" element={<TemplatesTab />} />
+        {/* ALL FOUR are wrapped, including the two that are reachable on every
+            tier today. Wrapping only the gated ones made the bare form look like
+            the norm, so the next Comms route would copy a neighbour and quietly
+            ship ungated — and widening the gate later (a tier where Automations
+            becomes paid) would silently leave two routes URL-reachable.
+            canReachCommsTab already fails closed for an unknown tab, so these two
+            are a no-op today and self-enforcing afterwards. */}
+        <Route path="family-comms/marketing" element={<CommsTabRoute tab="marketing"><AICampaignBuilder /></CommsTabRoute>} />
+        <Route path="family-comms/automations" element={<CommsTabRoute tab="automations"><AutomationsTab /></CommsTabRoute>} />
+        <Route path="family-comms/contacts" element={<CommsTabRoute tab="contacts"><ContactsTab /></CommsTabRoute>} />
+        <Route path="family-comms/templates" element={<CommsTabRoute tab="templates"><TemplatesTab /></CommsTabRoute>} />
         <Route path="marketing-v2" element={<Navigate to="/admin/family-comms/marketing" replace />} />
         <Route path="schedule" element={<Schedule />} />
         <Route path="schedule/print" element={<SchedulePrint />} />
