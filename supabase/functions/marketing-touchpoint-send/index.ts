@@ -1601,11 +1601,19 @@ function buildProgramDetails(
     const day = (p.day_of_week ?? "").trim();
     if (day) bits.push(escapeHtml(pluralDay(day)));
     if (p.first_session_date) bits.push(`starting ${escapeHtml(formatHumanDate(p.first_session_date))}`);
-    if (p.session_count != null) bits.push(`${p.session_count} sessions`);
     const close = registrationCloseDate(p.first_session_date, daysBefore);
     const closeSentence = close ? ` Sign-ups close ${escapeHtml(close)}.` : "";
-    const detail = bits.length > 0 ? `: ${bits.join(", ")}.` : ".";
-    return `<li><strong>${name}</strong>${detail}${closeSentence}</li>`;
+    // Name on its own line, not "Name: Mondays, ...". Curriculum names carry
+    // their own colon ("Pokemon Game Makers: LEGO Game Design"), so a colon
+    // separator here produces two in one breath and the eye stops reading.
+    const sessions = p.session_count != null ? ` (${p.session_count} sessions)` : "";
+    const schedule = bits.length > 0 ? `${bits.join(", ")}${sessions}.` : "";
+    // Assembled from whichever halves exist rather than hanging the deadline off
+    // the schedule being present. Today a deadline implies a start date implies
+    // a schedule, so the coupling would hold - but it would hold by accident,
+    // and the next person to add a field here should not have to notice that.
+    const detail = (schedule || closeSentence) ? `<br>${schedule}${closeSentence}` : "";
+    return `<li><strong>${name}</strong>${detail}</li>`;
   }).filter((s) => s.length > 0);
   return items.length > 0 ? `<ul>${items.join("")}</ul>` : "";
 }
