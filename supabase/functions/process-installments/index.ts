@@ -114,6 +114,13 @@ interface InstallmentRow {
   parent_notified_failed_at: string | null;
   /** Stripe account this plan's charges live on. null = the platform. */
   stripe_charge_account_id: string | null;
+  /**
+   * What the FAMILY agreed to at checkout, not the org's setting today. Honoured
+   * over live config so a later toggle cannot reprice a plan in flight.
+   * null = not recorded (a row from before the snapshot shipped); falls back to
+   * live config, which is the behaviour those rows already had.
+   */
+  fee_pass_through: boolean | null;
 }
 
 interface ProgramRow {
@@ -587,6 +594,34 @@ async function processGroup(
 
   const groupMargin = activeRows.reduce((s, r) => s + (shareByRow.get(r.id) as number), 0);
 
+  // The fee decision this group's family agreed to. Every row in a group comes
+  // from ONE cart and therefore ONE checkout, so they are written together and
+  // must agree. If they somehow do not, we cannot tell which one the family saw
+  // — so we stop, exactly as the two blocks above do when the fee schedule is
+  // unreadable. Guessing here means guessing at a number on someone's card.
+  const snapshots = new Set(activeRows.map((r) => r.fee_pass_through));
+  if (snapshots.size > 1) {
+    const why = `rows in this charge disagree about the fee the family agreed to (${[...snapshots].map(String).sort().join(', ')})`;
+    console.error(`[process-installments] BLOCKED: ${why}`, activeRows.map((r) => r.id));
+    await admin.from('installments').update({
+      status: 'paused_card_failed',
+      failure_reason: `charge blocked: ${why}`,
+      last_attempt_at: new Date().toISOString(),
+    }).in('id', activeRows.map((r) => r.id).sort());
+    summary.paused_card_failed_groups++;
+    summary.paused_card_failed_rows += activeRows.length;
+    summary.errors++;
+    summary.details.push(`BLOCKED group (mixed fee agreement): ${activeRows.length} rows`);
+    await sendOperatorAlert({
+      brand,
+      to: alertEmail,
+      subject: 'Installment charge held — could not confirm the fee',
+      body: `${activeRows.length} installment row(s) were NOT charged and are now paused.\n\nThe records for this payment plan disagree about whether the family agreed to pay the service fee, and we will not guess at a number a family already agreed to. Nothing was charged.\n\nRow IDs: ${activeRows.map((r) => r.id).join(', ')}`,
+    });
+    return;
+  }
+  const passThroughForGroup = activeRows[0].fee_pass_through;
+
   // The PLAN's own history wins over the org's CURRENT stripe_charge_model.
   // stripe_charge_account_id was stamped on every row when charge 1 completed:
   // null = the plan lives on the platform (destination), non-null = it lives on
@@ -668,12 +703,24 @@ async function processGroup(
   const connectParams = routing.params;
   const acct = routing.requestOptions;
 
-  // Pass-through: if the operator passes the fee to families, this installment
-  // charges its base amount PLUS this charge's SHARE of the registration-level
-  // fee — the exact same groupMargin used for application_fee_amount above, so
-  // what the family pays and what the platform keeps always agree, and the
-  // three installments together never exceed the org's per-registration cap.
-  const passFee = orgConfig?.fee_pass_through ? groupMargin : 0;
+  // Pass-through: if the family agreed to pay the fee, this installment charges
+  // its base amount PLUS this charge's SHARE of the registration-level fee — the
+  // exact same groupMargin used for application_fee_amount above, so what the
+  // family pays and what the platform keeps always agree, and the three
+  // installments together never exceed the org's per-registration cap.
+  //
+  // THE SNAPSHOT WINS OVER LIVE CONFIG, and that is the whole point. This used
+  // to read orgConfig.fee_pass_through, so an operator flipping the toggle
+  // mid-plan charged a saved card MORE than the family authorised, with no fee
+  // line and no fresh consent, while their confirmation email still quoted the
+  // old figure. The row now carries what was agreed at checkout, so the toggle
+  // only affects NEW registrations.
+  //
+  // `?? orgConfig` is for rows written before the snapshot shipped: they behave
+  // exactly as they did, rather than silently defaulting to "no fee" and paying
+  // the operator less than the family agreed to.
+  const passThrough = passThroughForGroup ?? orgConfig?.fee_pass_through ?? false;
+  const passFee = passThrough ? groupMargin : 0;
 
   let paymentIntent: Stripe.PaymentIntent;
   try {

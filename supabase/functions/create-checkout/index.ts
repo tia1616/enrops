@@ -460,6 +460,14 @@ serve(async (req) => {
         stripe_session_id: session.id,
         organization_id: orgId,
         schedule: { aggregated, per_line: perLine },
+        // Freeze the fee decision the family is agreeing to RIGHT NOW, on the
+        // same orgConfig that priced the fee line in this very session (see
+        // feeLineInst above) — so the snapshot and what they were shown at
+        // checkout can never be two different answers. The webhook copies it
+        // onto every installments row; process-installments honours it over
+        // live config, which is what stops a later toggle from repricing
+        // charges 2 and 3 on a card they have already saved.
+        fee_pass_through: !!orgConfig?.fee_pass_through,
       });
 
       if (scheduleErr) {

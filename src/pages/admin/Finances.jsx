@@ -694,44 +694,31 @@ export default function Finances() {
     setFeeError(null);
 
     // ── the in-flight-plan consequence ────────────────────────────────────────
-    // process-installments recomputes the pass-through fee from LIVE org config on
-    // every off-session charge, and nothing snapshots what the family agreed to
-    // (checkout_schedules and installments.amount_cents hold base amounts only).
-    // So with a plan running, turning this ON charges a saved card MORE than the
-    // family authorized, with no fee line and no fresh consent, while their
-    // confirmation email still quotes the old figure.
+    // There no longer is one, and that is a deliberate change rather than an
+    // omission. Every installment row now carries `fee_pass_through` as it stood
+    // at CHECKOUT (create-checkout -> checkout_schedules -> the row), and
+    // process-installments honours that over live org config. So this toggle
+    // cannot reach a plan that is already running: it decides what NEW families
+    // are asked to pay, and nothing else.
     //
-    // NOT a hard block, deliberately. A block cannot tell "newly imposing a fee"
-    // apart from "restoring one those families already authorized" - that is
-    // precisely the snapshot we do not have - so it would make a mis-click to
-    // Absorbed irreversible until every plan finished. Trapping an operator is its
-    // own defect. The real fix is to snapshot the fee decision onto the plan at
-    // checkout; this states the consequence in the terms that matter until then.
+    // The old guard here refused to flip ON while the pending-plan count was
+    // unknown. Its purpose was to stop an operator repricing families blind —
+    // the blast radius it was measuring no longer exists, so the guard is gone
+    // rather than left as a hoop with no reason behind it. What it protected is
+    // now protected in the database, which is the only place it could not be
+    // clicked past. (Rows written before the snapshot shipped fall back to live
+    // config, so this promise is only true once that backfill has run — it did,
+    // on both environments, in the same pass as the column.)
     //
-    // Can't check IS fail-closed, because that resolves as soon as the count works
-    // and so traps nobody.
-    if (nextValue === true && pendingPlans === null) {
-      setFeeError(
-        "We couldn't check whether any families are partway through a payment plan, " +
-        "so this hasn't been changed. Try again in a moment."
-      );
-      return;
-    }
-
-    // Confirm BOTH directions when plans are in flight. Turning it off reprices
-    // those plans too - onto the operator - and that direction previously saved
-    // with no dialog at all.
+    // What replaces it is the sentence below: operators flip this expecting
+    // their margin to change on everything, and they need telling that the
+    // families already on plans are not affected. Silence would read as "it
+    // changed everything", which is what it used to do.
     const familiesPhrase = pendingPlans === 1 ? "1 family is" : `${pendingPlans} families are`;
     const planNote = pendingPlans > 0
-      ? nextValue === true
-        // The direction that costs a FAMILY money. Name the amount changing, not
-        // just the fact of change.
-        ? `\n\nWARNING: ${familiesPhrase} partway through a payment plan. Their remaining ` +
-          "payments will be charged the service fee ON TOP of the amount they agreed to, " +
-          "without being asked again. Only do this if you have their agreement."
-        // The direction that costs the OPERATOR money.
-        : `\n\n${familiesPhrase} partway through a payment plan. You will absorb the fee on ` +
-          "their remaining payments instead of them."
+      ? `\n\n${familiesPhrase} partway through a payment plan. They keep the price they ` +
+        "agreed to, so their remaining payments do not change. This applies to new " +
+        "registrations only."
       : "";
     const prompt = nextValue === true
       ? "Pass-through mode: families will see the service fee as a separate line " +
@@ -1490,22 +1477,22 @@ function FeePayerRow({ feePassThrough, canManage, onToggle, error, pendingPlans 
       </div>
 
       {/* Counted by org_pending_plan_families, which mirrors process-installments'
-          own predicate (status='pending') and counts distinct PARENTS. So this can
-          only name families whose remaining payments genuinely would be repriced. */}
+          own predicate (status='pending') and counts distinct PARENTS.
+
+          This banner used to WARN that changing the toggle also changed who paid
+          the fee on those remaining payments. It did, and it was the consent
+          problem the snapshot was built to remove: every installment row now
+          carries the decision the family agreed to at checkout, and
+          process-installments honours that over live config. So the same fact
+          the operator needs to know has inverted — it is now a reassurance, and
+          `tone` moves from warn to info with it. Leaving the old sentence up
+          would be the product describing a behaviour it no longer has. */}
       {canManage && pendingPlans > 0 && (
         <div style={{ marginTop: 12, maxWidth: 520 }}>
-          <Banner tone="warn">
+          <Banner tone="info">
             {pendingPlans === 1
-              ? "1 family is partway through a payment plan. Changing this also changes who pays the fee on their remaining payments."
-              : `${pendingPlans} families are partway through a payment plan. Changing this also changes who pays the fee on their remaining payments.`}
-          </Banner>
-        </div>
-      )}
-
-      {canManage && pendingPlans === null && (
-        <div style={{ marginTop: 12, maxWidth: 520 }}>
-          <Banner tone="warn">
-            We couldn&rsquo;t check whether any families are partway through a payment plan.
+              ? "1 family is partway through a payment plan. They keep the price they agreed to — this setting only affects new registrations."
+              : `${pendingPlans} families are partway through a payment plan. They keep the price they agreed to — this setting only affects new registrations.`}
           </Banner>
         </div>
       )}
