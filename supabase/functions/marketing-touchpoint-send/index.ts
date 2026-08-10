@@ -129,6 +129,13 @@ const APPROVED_TOKENS = new Set([
   "logo_url", "closer", "phone", "website",
   "savings", "early_bird_price", "regular_price", "early_bird_deadline",
   "first_session_date", "session_count", "day_of_week", "curriculum", "vip_price",
+  // The day registration closes for THIS recipient's program:
+  // first_session_date - organizations.registration_close_days_before. Per
+  // recipient, so one campaign spanning schools that start on different days
+  // states the right deadline to each parent instead of the earliest one to
+  // everybody. Empty for camps (see the camps branch) and when the program has
+  // no first_session_date.
+  "registration_close_date",
   "topic", "topics_list", "promo_code", "promo_amount",
   // VIP/annual-pass block: resolves to an HTML <p> built from org.vip_offering
   // for recipients whose school offers it, and to an empty string for
@@ -222,6 +229,10 @@ type Org = {
   vip_offering: VipOffering | null;
   active_registration_term: string | null;
   mailing_address: string | null;
+  // Days before a program's first session that this org closes registration.
+  // Drives {{registration_close_date}}. NOT NULL DEFAULT 7 in the schema, but
+  // typed nullable so an older cached row can't render a NaN date.
+  registration_close_days_before: number | null;
   // Nested one-to-one from org_branding (PostgREST returns object or 1-elem array).
   org_branding: { primary_color: string | null } | { primary_color: string | null }[] | null;
 };
@@ -383,7 +394,7 @@ serve(async (req: Request) => {
   // ---- Load org ----
   const { data: org, error: oErr } = await supabase
     .from("organizations")
-    .select("id, name, slug, brand_voice, logo_url, vip_offering, active_registration_term, mailing_address, org_branding(primary_color)")
+    .select("id, name, slug, brand_voice, logo_url, vip_offering, active_registration_term, mailing_address, registration_close_days_before, org_branding(primary_color)")
     .eq("id", campaign.organization_id)
     .single<Org>();
   if (oErr || !org) return json({ error: `organization not found: ${oErr?.message ?? "unknown"}` }, 404);
@@ -1159,6 +1170,15 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
     tokens.set("curriculum", curriculumHtml);
     tokens.set("day_of_week", program.day_of_week || "");
     tokens.set("first_session_date", program.first_session_date ? formatHumanDate(program.first_session_date) : "");
+    // The deadline THIS parent is working against. Uses the first program only,
+    // same as every other numeric per-program token: a multi-program school
+    // could have two different close dates, and quoting one as if it covered
+    // both would be worse than the existing convention. Empty when the program
+    // has no start date, so the copy omits the line rather than saying "closes ".
+    tokens.set(
+      "registration_close_date",
+      registrationCloseDate(program.first_session_date, org.registration_close_days_before),
+    );
     tokens.set("session_count", program.session_count != null ? String(program.session_count) : "");
     tokens.set("regular_price", program.price_cents ? `$${(program.price_cents / 100).toFixed(0)}` : "");
     tokens.set("early_bird_price", program.early_bird_price_cents ? `$${(program.early_bird_price_cents / 100).toFixed(0)}` : "");
@@ -1234,12 +1254,16 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
     tokens.set("early_bird_deadline", sameDeadline && deadlines[0] != null ? formatHumanDate(deadlines[0]) : "");
 
     // Camps still don't have per-program session_count, day_of_week, or vip_price.
-    for (const k of ["day_of_week", "session_count", "vip_price"]) {
+    // registration_close_date is deliberately empty too: the org's close window
+    // is an afterschool-term practice, and a recipient's area can hold camps with
+    // several different start dates, so there is no single honest deadline to
+    // print. Camp copy states dates inline from KNOWN PROGRAM DETAILS instead.
+    for (const k of ["day_of_week", "session_count", "vip_price", "registration_close_date"]) {
       tokens.set(k, "");
     }
   } else {
     // No matching program AND no matching camps — leave per-program tokens empty
-    for (const k of ["curriculum", "day_of_week", "first_session_date", "session_count", "regular_price", "early_bird_price", "early_bird_deadline", "savings", "vip_price", "camp_details"]) {
+    for (const k of ["curriculum", "day_of_week", "first_session_date", "session_count", "regular_price", "early_bird_price", "early_bird_deadline", "savings", "vip_price", "camp_details", "registration_close_date"]) {
       tokens.set(k, "");
     }
   }
@@ -1469,6 +1493,34 @@ function formatHumanDate(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+// {{registration_close_date}} — the day registration closes for one program,
+// formatted the same way as every other date token ("Monday, August 24").
+//
+// Date-only arithmetic, deliberately: the "+T00:00:00" parse makes this a LOCAL
+// midnight, so subtracting whole days can never roll across a boundary the way a
+// UTC parse of a bare "YYYY-MM-DD" would (that lands at 00:00Z, and in any
+// western timezone the previous calendar day). Parents in Portland got the wrong
+// day out of exactly that mistake elsewhere.
+//
+// Returns "" for a missing start date, an unparseable one, or a null/negative
+// window — an empty token drops the deadline sentence, which is the safe
+// failure. Never guess a deadline: a wrong date in a marketing email is a
+// promise the operator has to honor.
+function registrationCloseDate(
+  firstSessionDate: string | null,
+  daysBefore: number | null,
+): string {
+  if (!firstSessionDate) return "";
+  const days = typeof daysBefore === "number" && Number.isFinite(daysBefore) && daysBefore >= 0
+    ? Math.floor(daysBefore)
+    : null;
+  if (days === null) return "";
+  const d = new Date(firstSessionDate + "T00:00:00");
+  if (Number.isNaN(d.getTime())) return "";
+  d.setDate(d.getDate() - days);
+  return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
 }
 
 function extractTopics(what: Record<string, unknown> | undefined): string[] {

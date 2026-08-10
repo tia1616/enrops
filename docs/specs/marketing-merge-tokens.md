@@ -54,6 +54,7 @@ These need the renderer to join `marketing_recipients.school_name` → `program_
 | `{{day_of_week}}` | `programs.day_of_week` | 🔵 | "Mondays" |
 | `{{curriculum}}` | `programs.curriculum` | 🔵 | Don should generally NOT reference specific curriculum names; this token exists for when the operator explicitly mentioned one in the topic |
 | `{{vip_price}}` | `programs.vip_price_cents` (or `vip_new_price_cents`) formatted as `$NNN/term` | 🔵 | |
+| `{{registration_close_date}}` | `programs.first_session_date - organizations.registration_close_days_before`, formatted as `"Monday, August 24"` | 🟢 | Afterschool only; empty for camps and when the program has no start date. Uses the recipient's FIRST matching program, same convention as the price tokens. Describes operator practice — nothing closes checkout automatically. |
 
 ## Per-campaign tokens (set at draft time, same across all sends in this campaign)
 

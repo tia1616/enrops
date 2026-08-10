@@ -116,6 +116,7 @@ for anything specific and MUST NOT invent specifics.
 `{{savings}}` `{{early_bird_price}}` `{{regular_price}}`
 `{{early_bird_deadline}}` `{{first_session_date}}` `{{session_count}}`
 `{{day_of_week}}` `{{curriculum}}` `{{vip_price}}`
+`{{registration_close_date}}` (afterschool only - empty for camps)
 
 **Per-campaign**
 `{{topic}}` `{{topics_list}}` `{{promo_code}}` `{{promo_amount}}`
