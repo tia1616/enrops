@@ -68,6 +68,15 @@ export function publishBlockedByStripe(org, program) {
 // reads on the lean builder is the reason they read on the program list.
 // Jessica picked "name the fix, not the failure" 2026-08-10.
 export const PUBLISH_GATE_CTA = "Connect Stripe to publish";
+// The CREATE paths need a different label, because they do a different thing.
+// Sending an operator to Stripe from a half-filled form and losing what they
+// typed is bug B1 — Jeff entered a program, was handed off to Stripe, came back
+// and it was gone. That was fixed by the builder never redirecting; the publish
+// gate reintroduced a redirect, so it has to carry the save with it. The button
+// SAYS "Save" because it saves: a control that silently persisted a draft under
+// a label that only mentioned Stripe would be the same lie in the other
+// direction.
+export const PUBLISH_GATE_CTA_SAVE = "Save draft & connect Stripe";
 export const PUBLISH_GATE_WHY = "Families can't pay you until Stripe is connected.";
 // For the two CREATE paths, where the class does not exist yet.
 export const PUBLISH_GATE_DRAFT_HINT = "Save as draft keeps this class private in the meantime.";

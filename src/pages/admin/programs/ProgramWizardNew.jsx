@@ -23,7 +23,7 @@ import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib
 import { isUnset, rangeBackwards, rangeBackwardsMessage } from "../../../lib/grades.js";
 import {
   publishBlockedByStripe,
-  PUBLISH_GATE_CTA,
+  PUBLISH_GATE_CTA_SAVE,
   PUBLISH_GATE_WHY,
   PUBLISH_GATE_DRAFT_HINT,
   STRIPE_CONNECT_ROUTE,
@@ -682,11 +682,23 @@ export default function ProgramWizardNew() {
       if (status === "open") pixelWorkflowCreated();
       setSavedProgramId(data.id);
       setSavedAsStatus(status);
+      // Returned so save-then-connect can tell success from failure.
+      // savedProgramId is state and would still read stale right after an await.
+      return data.id;
     } catch (e) {
       setSubmitError(e.message ?? String(e));
+      return null;
     } finally {
       setSubmitting(false);
     }
+  }
+
+  // Save what they have as a draft, THEN hand off to Stripe. Never navigate on a
+  // failed save: the error is already on screen and everything they typed is
+  // still in the form, which is the whole point.
+  async function handleSaveDraftAndConnect() {
+    const savedId = await handleSubmit("draft");
+    if (savedId) navigate(STRIPE_CONNECT_ROUTE);
   }
 
   // ---- Render branches ----
@@ -785,6 +797,7 @@ export default function ProgramWizardNew() {
             orgName={org?.name}
             usesEnropsRegistration={org?.uses_enrops_registration}
             onSubmit={handleSubmit}
+            onSaveDraftAndConnect={handleSaveDraftAndConnect}
             onBackToPrograms={() => navigate("/admin/programs")}
             step3Valid={step3Valid}
             publishBlocked={publishBlocked}
@@ -1397,6 +1410,7 @@ function Step3PriceAndOpen({
   orgName,
   usesEnropsRegistration,
   onSubmit,
+  onSaveDraftAndConnect,
   onBackToPrograms,
   step3Valid,
   publishBlocked,
@@ -1609,24 +1623,32 @@ function Step3PriceAndOpen({
               registration, so describing that is describing a button that is
               not there. Say what IS true and what still works. */}
           {publishBlocked
-            ? `${PUBLISH_GATE_WHY} ${PUBLISH_GATE_DRAFT_HINT}`
+            ? `${PUBLISH_GATE_WHY} We'll save this as a draft before sending you to Stripe, so nothing you've entered is lost.`
             : isPartner
               ? "Adding this puts it on your schedule and rosters so you can match instructors. Saving as a draft keeps it private until you're ready."
               : "Opening registration puts this program in your public catalog so families can sign up. Saving as a draft keeps it private — you can publish from the program list anytime."}
         </p>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           {publishBlocked ? (
-            <Link
-              to={STRIPE_CONNECT_ROUTE}
+            // Saves the draft BEFORE handing off to Stripe. A plain link here
+            // would walk away from three steps of typing and lose all of it —
+            // bug B1, which was fixed by never redirecting from a builder. The
+            // gate brought the redirect back, so the save has to come with it.
+            <button
+              type="button"
+              onClick={() => onSaveDraftAndConnect()}
+              disabled={submitting || !step3Valid}
               style={{
                 display: "inline-flex", alignItems: "center",
                 padding: "10px 18px", background: "#FDF6E3", color: "#8a5a00",
                 border: "1px solid #F0D48A", borderRadius: 8, fontSize: 14,
-                fontWeight: 600, textDecoration: "none",
+                fontWeight: 600, fontFamily: "inherit",
+                cursor: submitting || !step3Valid ? "not-allowed" : "pointer",
+                opacity: submitting || !step3Valid ? 0.5 : 1,
               }}
             >
-              {PUBLISH_GATE_CTA} →
-            </Link>
+              {submitting ? "Saving…" : `${PUBLISH_GATE_CTA_SAVE} →`}
+            </button>
           ) : (
           <button
             onClick={() => onSubmit("open")}

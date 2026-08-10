@@ -38,9 +38,8 @@ import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib
 import { GRADE_OPTIONS, audiencePatch, rangeBackwards, rangeBackwardsMessage } from "../../../lib/grades.js";
 import {
   publishBlockedByStripe,
-  PUBLISH_GATE_CTA,
+  PUBLISH_GATE_CTA_SAVE,
   PUBLISH_GATE_WHY,
-  PUBLISH_GATE_DRAFT_HINT,
   STRIPE_CONNECT_ROUTE,
 } from "../../../lib/publishGate.js";
 
@@ -794,8 +793,8 @@ export default function QuickProgramBuilder() {
     // Connect link when this is true, so getting here means a stale render — and
     // the DB trigger would reject it anyway. Drafts are never gated.
     if (!asDraft && publishBlocked) {
-      setErr(`${PUBLISH_GATE_WHY} ${PUBLISH_GATE_DRAFT_HINT}`);
-      return;
+      setErr(`${PUBLISH_GATE_WHY} Save this as a draft instead, then connect Stripe.`);
+      return null;
     }
     setSubmitting(true);
     // Which button is in flight, so only that one changes its label. Both share
@@ -874,8 +873,15 @@ export default function QuickProgramBuilder() {
       // but keeping the read before the write means nobody has to prove that
       // again later.
       setProgramCount((c) => (typeof c === "number" ? c + 1 : c));
+      // Returns the id so a caller can tell success from failure. The
+      // save-then-connect button needs this: `createdId` is state, so reading it
+      // straight after an await gives the STALE value from this render, and the
+      // button would navigate to Stripe on a failed save — losing the form and
+      // the error message with it.
+      return data.id;
     } catch (e) {
       setErr(e?.message ?? String(e));
+      return null;
     } finally {
       setSubmitting(false);
       setSubmittingAs(null);
@@ -1449,14 +1455,37 @@ export default function QuickProgramBuilder() {
   // step that unblocks it. Replaced, not disabled — a dimmed button is a dead
   // end, and this one has somewhere to send them. Save as draft sits right
   // beside it, untouched, which is the whole reason the gate is humane.
+  //
+  // SAVES BEFORE IT NAVIGATES. This is bug B1: Jeff filled in a program, was
+  // handed off to Stripe, came back and the form was empty. That was fixed by
+  // the builder never redirecting anywhere — and this gate reintroduced a
+  // redirect, so it reintroduced the data loss until this. Persist the draft
+  // first, then leave; the operator returns from Stripe to a saved class.
+  //
+  // Disabled on `!valid` for the same reason Create and Save as draft are: with
+  // a required field missing there is no row to write, and navigating anyway
+  // would throw away what they HAD typed. Better to keep them here with the
+  // field flagged than to lose it politely.
   const createButton = publishBlocked ? (
     <button
       type="button"
-      onClick={() => navigate(STRIPE_CONNECT_ROUTE)}
-      style={{ ...primaryBtn, flex: 1, background: "#FDF6E3", color: "#8a5a00", border: "1px solid #F0D48A" }}
-      title={`${PUBLISH_GATE_WHY} ${PUBLISH_GATE_DRAFT_HINT}`}
+      onClick={async () => {
+        // Only leave if the draft actually landed. On failure handleCreate has
+        // already surfaced the error above the buttons, and staying put is what
+        // keeps the operator's typing.
+        const savedId = await handleCreate(true);
+        if (savedId) navigate(STRIPE_CONNECT_ROUTE);
+      }}
+      disabled={!valid || submitting}
+      style={{
+        ...primaryBtn, flex: 1, background: "#FDF6E3", color: "#8a5a00",
+        border: "1px solid #F0D48A",
+        opacity: !valid || submitting ? 0.55 : 1,
+        cursor: !valid || submitting ? "not-allowed" : "pointer",
+      }}
+      title={`${PUBLISH_GATE_WHY} We'll save this class as a draft first, so nothing you've typed is lost.`}
     >
-      {PUBLISH_GATE_CTA} →
+      {submittingAs === "draft" ? "Saving…" : `${PUBLISH_GATE_CTA_SAVE} →`}
     </button>
   ) : (
     <button
@@ -2252,7 +2281,7 @@ export default function QuickProgramBuilder() {
               publish action beneath a control that does not perform it is the
               same class of lie the sentence was rewritten to remove. */}
           {publishBlocked
-            ? `${PUBLISH_GATE_WHY} ${PUBLISH_GATE_DRAFT_HINT}`
+            ? `${PUBLISH_GATE_WHY} We'll save this class as a draft before sending you to Stripe, so nothing you've typed is lost.`
             : org?.uses_enrops_registration === true
               ? "Create puts the class on your registration page straight away. Save as draft keeps it private, with its dates worked out, until you publish it."
               : "Create makes the class straight away. Save as draft keeps it private, with its dates worked out, until you're ready."}
