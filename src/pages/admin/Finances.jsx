@@ -1477,7 +1477,12 @@ function FeePayerRow({ feePassThrough, canManage, onToggle, error, pendingPlans 
       </div>
 
       {/* Counted by org_pending_plan_families, which mirrors process-installments'
-          own predicate (status='pending') and counts distinct PARENTS.
+          own predicate (status='pending') and counts distinct PARENTS. When the
+          count is UNKNOWN this renders nothing at all: there used to be a
+          "we couldn't check" banner here, and it went with the risk it was
+          warning about — an unknown count no longer changes what the toggle
+          does, so the honest thing is silence rather than an alarm about a
+          consequence that cannot happen.
 
           This banner used to WARN that changing the toggle also changed who paid
           the fee on those remaining payments. It did, and it was the consent

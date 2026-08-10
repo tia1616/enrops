@@ -27,8 +27,17 @@ const DONE = "#3a7c3a";
 
 import { STRIPE_CONNECT_ESTIMATE } from "../lib/stripeConnectEstimate.js";
 
-const BASE_STEPS = ["Enter your program info", "Publish it"];
+const ENTER_INFO = "Enter your program info";
+const PUBLISH_IT = "Publish it";
 const CONNECT_STRIPE = "Connect Stripe";
+const BASE_STEPS = [ENTER_INFO, PUBLISH_IT];
+// ORDER MATTERS, and it changed when publishing became gated on Stripe. This
+// used to read Enter -> Publish -> Connect Stripe, i.e. Stripe as the thing you
+// mop up afterwards. Since the publish gate shipped that sequence is not merely
+// out of date, it is impossible: a paid class cannot leave draft until charges
+// are enabled, so an operator following these pips in order hits a wall at
+// step 2 that the strip told them was step 3.
+const STEPS_NEEDING_STRIPE = [ENTER_INFO, CONNECT_STRIPE, PUBLISH_IT];
 
 function Pip({ n, label, state }) {
   const bg = state === "done" ? DONE : state === "current" ? BRIGHT : "#fff";
@@ -80,7 +89,7 @@ export default function ProgramSteps({ count, chargesEnabled, current = 1 }) {
   // off `isFirst` alone told a returning operator with a disconnected account
   // that their program was live, directly above a panel saying it wasn't.
   const needsStripe = chargesEnabled === false;
-  const steps = needsStripe ? [...BASE_STEPS, CONNECT_STRIPE] : BASE_STEPS;
+  const steps = needsStripe ? STEPS_NEEDING_STRIPE : BASE_STEPS;
 
   return (
     <div

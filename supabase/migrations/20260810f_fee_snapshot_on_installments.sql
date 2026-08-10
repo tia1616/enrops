@@ -23,8 +23,19 @@
 -- an admin edits instalment terms after the fact.
 --
 -- NULL means "not recorded" and falls back to live org config, i.e. exactly
--- today's behaviour. That is what makes the code side deployable in either
--- order: rows written by an older deploy keep working unchanged.
+-- today's behaviour, so rows written by an older deploy keep working unchanged.
+--
+-- THAT TOLERANCE IS FOR READERS ONLY. An earlier version of this comment said
+-- the code was "deployable in either order", and that is wrong for the two
+-- WRITERS: create-checkout and stripe-webhook name this column in their
+-- inserts, so code-before-migration means PostgREST rejects the write as an
+-- unknown column. In create-checkout that expires the session and every
+-- instalment checkout 500s; in stripe-webhook it is worse, because the insert
+-- fails AFTER charge 1 has been taken, leaving the plan unqueued with only an
+-- operator alert as evidence.
+--
+-- So the order is not free: THIS MIGRATION MUST BE APPLIED BEFORE either writer
+-- is deployed. It was, on both environments, on 2026-08-10.
 
 alter table public.checkout_schedules
   add column if not exists fee_pass_through boolean;
