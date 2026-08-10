@@ -68,7 +68,13 @@ const STATUS_RANK: Record<string, number> = {
 // svix-signature header is a space-separated list of `v1,<base64sig>` entries
 // (a secret can be rotated, so multiple may be present). A match on ANY entry
 // is a pass.
-function base64ToBytes(b64: string): Uint8Array {
+// Return type is the narrow Uint8Array<ArrayBuffer>, not the default
+// Uint8Array<ArrayBufferLike>. Deno 2.7 / TS 5.9 tightened crypto.subtle's
+// BufferSource to exclude SharedArrayBuffer-backed views, so the unannotated
+// version no longer satisfied importKey() below and `deno check` failed on this
+// file. `new Uint8Array(len)` is always ArrayBuffer-backed, so this only states
+// what was already true — no runtime change.
+function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
   const bin = atob(b64);
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
@@ -150,6 +156,128 @@ async function addSuppression(
   }
 }
 
+// ---- Lifecycle delivery write-back ---------------------------------------
+// Lifecycle email (camp welcome, recaps, birthday, review ask) is sent by
+// lifecycle-automations-cron and logged in automation_run_recipients, NOT
+// marketing_sends. Before this, a Resend event for one of those sends fell
+// through as "no_matching_send" and the delivery outcome was simply lost — so
+// "status = sent" was the end of the story and nobody could tell a delivered
+// welcome from a junked one. (2026-07-30: exactly that question, unanswerable.)
+//
+// Three deliberate differences from the marketing path above:
+//
+// 1. We write delivery_status / delivered_at / bounced_at / complained_at, and
+//    never touch `status`. `status` is the SEND state machine and the cron's
+//    idempotency key — 'sent' means "stop retrying this context_key". Moving it
+//    to 'delivered' or 'bounced' would change which rows the cron re-sends.
+//
+// 2. Opens and clicks are ignored. Pixel opens are the unreliable proxy this
+//    whole change exists to replace, and a service email does not need
+//    engagement tracking. We record only what the receiving server did.
+//
+// 3. A complaint does NOT auto-suppress. On the marketing side, suppression is
+//    correct. Here it would be actively harmful: the informational resolvers
+//    (birthday, welcome_contact) filter marketing_suppressions too, so writing a
+//    suppression row would silently stop that family's CAMP LOGISTICS email —
+//    the drop-off details, the recap — because someone hit "junk" once. We
+//    record the complaint and leave the decision to a human.
+async function handleLifecycleEvent(
+  supabase: SupabaseClient,
+  emailId: string,
+  type: string,
+  data: Record<string, unknown>,
+): Promise<Response> {
+  // resend_message_id is not UNIQUE on this table (the unique key is
+  // automation_id + context_key), and a retry overwrites the id in place. A
+  // Resend id is globally unique so at most one row can hold it, but limit(1)
+  // rather than maybeSingle() means an unexpected duplicate degrades to "apply
+  // to one row" instead of throwing PGRST116 and 500-ing the webhook.
+  const { data: rows, error: lookupErr } = await supabase
+    .from("automation_run_recipients")
+    .select("id, delivery_status, delivered_at, bounced_at, complained_at, bounce_detail")
+    .eq("resend_message_id", emailId)
+    .limit(1);
+
+  if (lookupErr) {
+    console.error("automation_run_recipients lookup failed:", lookupErr);
+    return json({ error: "lookup_failed" }, 500);
+  }
+
+  const row = rows?.[0];
+  if (!row) {
+    // Genuinely unknown (a transactional one-off, or a send predating this
+    // wiring). 200 so Resend stops retrying.
+    return json({ ok: true, ignored: "no_matching_send", type }, 200);
+  }
+
+  const nowIso = new Date().toISOString();
+  const update: Record<string, unknown> = {};
+
+  switch (type) {
+    case "email.delivered":
+    // A bounce and a delivery are mutually exclusive outcomes, but an open or a
+    // click is positive PROOF of delivery — so if the delivered event went
+    // missing, treat them as the delivery signal rather than dropping them.
+    case "email.opened":
+    case "email.clicked": {
+      // Never downgrade a terminal negative outcome. A late 'delivered' must not
+      // erase a bounce or a complaint we already recorded.
+      if (row.delivery_status === "bounced" || row.delivery_status === "complained") break;
+      if (row.delivery_status !== "delivered") update.delivery_status = "delivered";
+      if (!row.delivered_at) update.delivered_at = nowIso;
+      break;
+    }
+    case "email.bounced": {
+      // A complaint is the stronger signal about a real person; don't overwrite
+      // it with a later bounce on the same message.
+      if (row.delivery_status === "complained") break;
+      const bounce = (data.bounce ?? {}) as Record<string, unknown>;
+      // null (not "unknown") when THIS event carries no bounce object, so the
+      // check below can tell "no reason supplied" apart from a real reason.
+      const detail = bounce.type
+        ? `${bounce.type}${bounce.subType ? ` (${bounce.subType})` : ""}`
+        : null;
+      if (row.delivery_status !== "bounced") update.delivery_status = "bounced";
+      if (!row.bounced_at) update.bounced_at = nowIso;
+      // Only write a reason we actually have. Webhooks are at-least-once, so a
+      // redelivery (or a differently-shaped bounce event) must not overwrite a
+      // recorded "Permanent (General)" with "unknown" — that reason is the whole
+      // value of the row to an operator deciding what to do about the address.
+      if (detail) {
+        if (detail !== row.bounce_detail) update.bounce_detail = detail;
+      } else if (!row.bounce_detail) {
+        update.bounce_detail = "unknown";
+      }
+      break;
+    }
+    case "email.complained": {
+      // Recorded, NOT suppressed — see note 3 in the header comment.
+      if (row.delivery_status !== "complained") update.delivery_status = "complained";
+      if (!row.complained_at) update.complained_at = nowIso;
+      break;
+    }
+    default: {
+      return json({ ok: true, ignored: "unhandled_type", type }, 200);
+    }
+  }
+
+  if (Object.keys(update).length === 0) {
+    return json({ ok: true, noop: true, scope: "lifecycle", type }, 200);
+  }
+
+  const { error: updateErr } = await supabase
+    .from("automation_run_recipients")
+    .update(update)
+    .eq("id", row.id);
+
+  if (updateErr) {
+    console.error("automation_run_recipients update failed:", updateErr);
+    return json({ error: "update_failed" }, 500);
+  }
+
+  return json({ ok: true, scope: "lifecycle", applied: update, type }, 200);
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -196,10 +324,10 @@ serve(async (req) => {
     return json({ error: "lookup_failed" }, 500);
   }
 
-  // Orphan event (e.g. a transactional email, or the legacy one-shot send that
-  // predates this webhook). Acknowledge with 200 so Resend doesn't retry.
+  // No campaign row — this may be a LIFECYCLE send (welcome, recap, birthday),
+  // which lives in automation_run_recipients instead. Try there before giving up.
   if (!send) {
-    return json({ ok: true, ignored: "no_matching_send", type }, 200);
+    return await handleLifecycleEvent(supabase, emailId, type, data);
   }
 
   const nowIso = new Date().toISOString();
