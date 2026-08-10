@@ -1606,7 +1606,14 @@ function buildProgramDetails(
     // Name on its own line, not "Name: Mondays, ...". Curriculum names carry
     // their own colon ("Pokemon Game Makers: LEGO Game Design"), so a colon
     // separator here produces two in one breath and the eye stops reading.
-    const sessions = p.session_count != null ? ` (${p.session_count} sessions)` : "";
+    // "(1 sessions)" is a real row, not a hypothetical: LEGO Game Makers Camp at
+    // Multnomah County Library runs a single session (2026-10-01). The existing
+    // {{session_count}} token emits a bare number and leaves the noun to the
+    // operator's copy, so this is the first place the platform has to agree with
+    // itself about the plural.
+    const sessions = p.session_count != null
+      ? ` (${p.session_count} ${p.session_count === 1 ? "session" : "sessions"})`
+      : "";
     const schedule = bits.length > 0 ? `${bits.join(", ")}${sessions}.` : "";
     // Assembled from whichever halves exist rather than hanging the deadline off
     // the schedule being present. Today a deadline implies a start date implies
