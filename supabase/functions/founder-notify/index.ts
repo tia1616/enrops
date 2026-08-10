@@ -1,7 +1,8 @@
 // founder-notify - sends ONE real-time email per operator milestone to the founder.
 //
-// Spec: "enrops Founder Notifications" (2026-07-27). Two triggers, one email each,
+// Spec: "enrops Founder Notifications" (2026-07-27). Three triggers, one email each,
 // no digest, no batching:
+//   new_account        - somebody created an operator account (added 2026-08-10)
 //   first_registration - the operator published their first enrops-hosted program/camp
 //   first_transaction  - the operator collected their first family payment
 //
@@ -210,6 +211,19 @@ serve(async (req) => {
           }
         }
       }
+    } else if (note.trigger_key === 'new_account') {
+      subjectNoun = 'New account';
+
+      // Nothing to report beyond the header - a brand-new account has no
+      // program, no payment and no location. The header already carries who
+      // they are, how to reach them and when it happened, which is the whole
+      // of the news. Inventing a facts row here would pad the email with
+      // things that are trivially true of every signup.
+      //
+      // Whether they are running the enrops registration flow is NOT asserted:
+      // it is a default on a fresh org, not a decision they have made yet, and
+      // printing it as a fact would be reporting our own default back as if it
+      // were theirs.
     } else {
       subjectNoun = 'First transaction';
 
@@ -252,7 +266,14 @@ serve(async (req) => {
     // Only offered when the org is actually IN the public directory. A slug alone is
     // not enough: the directory is WHERE status = 'active', so a non-active org has a
     // slug but no page, and the button would be a dead link.
-    const publicUrl = (publiclyVisible && org.slug) ? `${PUBLIC_SITE_URL}/${org.slug}` : null;
+    //
+    // Not offered for new_account. A fresh org IS in the directory - it defaults
+    // to status 'active' - so the button would render and lead to a real page
+    // with nothing on it. "See their page" that opens an empty page is a worse
+    // answer than no button.
+    const publicUrl = (publiclyVisible && org.slug && note.trigger_key !== 'new_account')
+      ? `${PUBLIC_SITE_URL}/${org.slug}`
+      : null;
 
     // No 'Business' row: the business name is already the headline. Repeating it
     // here just made every email say it twice.
@@ -270,7 +291,12 @@ serve(async (req) => {
         <td style="padding:6px 0;color:#1a1a1a;font-size:15px;font-weight:600;">${esc(v)}</td>
       </tr>`).join('');
 
-    const subject = `[enrops] ${subjectNoun === 'First registration' ? 'First registration' : 'First transaction'}: ${org.name ?? org.slug ?? 'unknown operator'}`;
+    // subjectNoun directly. This was a two-branch ternary that resolved anything
+    // which was not 'First registration' to 'First transaction' - so the moment a
+    // third trigger existed, its email would have gone out titled "First
+    // transaction" about an operator who had not been paid a cent. The header
+    // block already printed the right words; only the subject line lied.
+    const subject = `[enrops] ${subjectNoun}: ${org.name ?? org.slug ?? 'unknown operator'}`;
 
     const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
 <body style="margin:0;padding:0;background:#FBFBFB;font-family:'Poppins',system-ui,sans-serif;">
