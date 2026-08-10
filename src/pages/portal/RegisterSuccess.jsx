@@ -121,7 +121,11 @@ export default function RegisterSuccess() {
                so stripe-webhook never runs: no receipt, no magic link, and no account
                to sign in to. The page was inviting a family to do something that
                could not work. */
-            ? 'Your spot is confirmed — no payment needed. Your registration is saved.'
+            /* Just the one sentence. Anything about the registration being saved
+               belongs to the heading immediately below, which already says exactly
+               that - on staging this rendered "Your registration is saved." and then
+               "Your registration is saved" back to back. */
+            ? 'Your spot is confirmed — no payment needed.'
             : 'Thanks for signing up. We just sent your receipt and class details to your email.'}
         </p>
         {sessionId && (
