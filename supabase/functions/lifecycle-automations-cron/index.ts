@@ -54,6 +54,16 @@ import {
   type CommsAttachment,
 } from "../_shared/attachments.ts";
 import { cleanNoSchoolDates, toClosurePeriods, termToSchoolYear, nsdWeekdayLower, nsdDate, periodFires, formatDateList } from "./noSchoolDates.ts";
+import {
+  orgToday,
+  orgHour,
+  withinSendingHours,
+  addDays,
+  lateJoinFloor,
+  sessionsOnOrAfter,
+  welcomeVerdict,
+  type WelcomeWindow,
+} from "./welcomeWindow.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -117,7 +127,9 @@ interface AutomationRow {
   enabled_at: string | null;
   email_attachments: unknown; // jsonb: [{ id, attach }]
   template: TemplateRow;
-  org: { id: string; slug: string; name: string };
+  // timezone drives what "today" means for this org's audience windows — a
+  // sweep runs at every hour of the day, so UTC is not good enough.
+  org: { id: string; slug: string; name: string; timezone: string | null };
 }
 
 interface TestSendParams {
@@ -183,6 +195,10 @@ interface AudienceEntry {
   register_url: string;         // org's base registration URL
   next_term_available: boolean; // true if org has programs/camps starting >14 days out — drives {{next_term_link_block}}
   program_time?: string;        // drives {{program_time}} — a clean time range (e.g. "9:00 AM – 12:00 PM") or "" when unknown. Set by the Welcome, check-in, and recap resolvers.
+  // drives {{program_day}} — the recurring class day, already plural ("Wednesdays"),
+  // or "" when it doesn't apply. Afterschool only: a camp runs every weekday, so
+  // naming one day would be wrong, and the token isn't offered for welcome_camp.
+  program_day?: string;
   // ── no_school_day only ──
   // recipient_role distinguishes the two audiences of the SAME automation. When
   // set to "instructor" the resolver also sets subject_template/body_template so
@@ -219,11 +235,19 @@ const NO_SCHOOL_INSTRUCTOR_BODY =
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
-  // Three modes:
+  // Four modes:
   //   cron mode      → POST {} (or no body) — scan all enabled automations
   //   event mode     → POST {registration_id: "UUID"} — fire eligible Welcome
   //                    for a specific registration (stripe-webhook → late
   //                    registrants who confirm inside the 7-day window)
+  //   sweep mode     → POST {sweep_welcome: true} — Welcome only, every 15
+  //                    minutes. The daily run is once a day at 8am, so a parent
+  //                    signing up at 10am for a 4pm class used to get nothing:
+  //                    by the next run the class had started and the audience
+  //                    excluded it. The sweep is also what covers registrations
+  //                    that never touch Stripe (admin-added, $0, imported) and
+  //                    so never fire event mode. Idempotency makes re-running
+  //                    every 15 minutes a no-op for anyone already emailed.
   //   test_send mode → POST {mode: "test_send", organization_id, template_key,
   //                    test_to_email, preview_subject, preview_body} —
   //                    operator-initiated preview send from the editor drawer.
@@ -231,6 +255,7 @@ serve(async (req) => {
   //                    can't be abused to spam non-admins. Doesn't write to
   //                    automation_run_recipients or time_saved_events.
   let eventRegistrationId: string | null = null;
+  let sweepWelcome = false;
   let testSendParams: TestSendParams | null = null;
   let previewParams: PreviewParams | null = null;
   if (req.method === "POST") {
@@ -262,6 +287,8 @@ serve(async (req) => {
         };
       } else if (typeof body?.registration_id === "string") {
         eventRegistrationId = body.registration_id;
+      } else if (body?.sweep_welcome === true) {
+        sweepWelcome = true;
       }
     } catch { /* empty body — cron mode */ }
   }
@@ -287,7 +314,7 @@ serve(async (req) => {
     });
   }
   const summary: { mode: string; automations: unknown[]; errors: unknown[] } = {
-    mode: eventRegistrationId ? "event" : "cron",
+    mode: eventRegistrationId ? "event" : sweepWelcome ? "sweep" : "cron",
     automations: [],
     errors: [],
   };
@@ -304,7 +331,7 @@ serve(async (req) => {
         default_subject, default_body, default_timing, time_saved_minutes_per_send, is_v1_enabled,
         audience
       ),
-      org:organizations!inner ( id, slug, name )
+      org:organizations!inner ( id, slug, name, timezone )
     `)
     .eq("enabled", true)
     .eq("template.is_v1_enabled", true);
@@ -316,11 +343,27 @@ serve(async (req) => {
     });
   }
 
+  const sweepNow = new Date();
   for (const a of (automations ?? []) as AutomationRow[]) {
     // In event mode, only run Welcome workflows — other triggers are time-based.
     if (eventRegistrationId && a.template.trigger_type !== "days_before_first_session") continue;
+    if (sweepWelcome) {
+      // Welcome is the only trigger that needs to react within minutes. Every
+      // other one is anchored to a date, so the daily run is the right cadence
+      // and re-evaluating them 96 times a day would buy nothing.
+      if (a.template.trigger_type !== "days_before_first_session") continue;
+      // Never a 3am email. Anything found outside the org's waking hours simply
+      // waits for the 7am sweep, which is still far sooner than the daily run.
+      if (!withinSendingHours(orgHour(a.org.timezone, sweepNow))) {
+        summary.automations.push({ automation_id: a.id, key: a.template.key, org_slug: a.org.slug, skipped: "quiet_hours" });
+        continue;
+      }
+    }
     try {
-      const result = await runAutomation(supabase, a, eventRegistrationId);
+      const result = await runAutomation(supabase, a, eventRegistrationId, {
+        suppressEmptyRun: sweepWelcome,
+        deferRetries: sweepWelcome,
+      });
       summary.automations.push({ automation_id: a.id, key: a.template.key, org_slug: a.org.slug, ...result });
     } catch (e) {
       summary.errors.push({ automation_id: a.id, error: (e as Error).message });
@@ -342,6 +385,7 @@ async function runAutomation(
   supabase: SupabaseClient,
   a: AutomationRow,
   eventRegistrationId: string | null = null,
+  opts: { suppressEmptyRun?: boolean; deferRetries?: boolean } = {},
 ) {
   // 1. Resolve audience by trigger type
   let audience: AudienceEntry[] = [];
@@ -389,7 +433,13 @@ async function runAutomation(
       return { skipped: "unknown_trigger", trigger: a.template.trigger_type };
   }
 
-  // 2. Create automation_runs row
+  // 2. Create automation_runs row. The sweep runs 96 times a day and almost
+  // always finds nobody, so it does NOT log an empty run — that would bury the
+  // real history under ~100k no-op rows a year. A sweep that actually sends
+  // still gets its row, and the daily cron keeps logging both ways.
+  if (opts.suppressEmptyRun && audience.length === 0) {
+    return { audience: 0, sent: 0, failed: 0, skipped: 0, run_id: null };
+  }
   const { data: runRow, error: runErr } = await supabase
     .from("automation_runs")
     .insert({
@@ -434,6 +484,14 @@ async function runAutomation(
     if (!p) return false;
     if (p.status === "sent") return true;
     if (p.status === "failed" && p.attempts >= MAX_SEND_ATTEMPTS) return true; // exhausted — leave for operator
+    // The sweep NEVER retries. MAX_SEND_ATTEMPTS is 5 because that is ~5 daily
+    // chances to outlast a provider blip, spread across the welcome window. A
+    // 15-minute sweep would spend all 5 inside a single 75-minute Resend
+    // outage and then treat the family as exhausted forever, which is the
+    // opposite of what this cadence is for. The sweep exists to reach NEW
+    // people quickly; retrying a failure stays the daily run's job, at the
+    // one-per-day pace the cap was sized for.
+    if (opts.deferRetries) return true;
     return false;
   };
 
@@ -761,6 +819,9 @@ async function renderLifecycleEmail(supabase: SupabaseClient, input: RenderInput
     program_start_date: "Monday, June 17",
     program_end_date: "Friday, June 21",
     program_time: "9:00 AM – 12:00 PM",
+    // Matches program_start_date above — a sample that starts on a Monday must
+    // not claim to meet Wednesdays, or the preview shows an impossible program.
+    program_day: "Mondays",
     location_name: "Beaverton STEAM Hub",
     abandoned_resume_url: "#",
     age_turning: "8",
@@ -979,7 +1040,7 @@ async function resolveTestEntryContent(
   if (programId) {
     const { data: p, error } = await supabase
       .from("programs")
-      .select(`id, curriculum, first_session_date, start_time, end_time, program_location_id, curriculum_id,
+      .select(`id, curriculum, day_of_week, first_session_date, start_time, end_time, program_location_id, curriculum_id,
         program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions ),
         curricula ( final_showcase, mid_term_skills, final_recap_skills )`)
       .eq("id", programId)
@@ -997,6 +1058,7 @@ async function resolveTestEntryContent(
       program_start_date: prog.first_session_date ? formatDate(prog.first_session_date) : "",
       program_end_date: sessions.length > 0 ? formatDate(sessions[sessions.length - 1]) : "",
       program_time: timeClause(prog.start_time, prog.end_time, true),
+      program_day: recurringDayLabel(prog.day_of_week),
       location_name: prog.program_locations?.name ?? "",
       final_showcase_raw: prog.curricula?.final_showcase ?? "",
       mid_term_skills_raw: (prog.curricula?.mid_term_skills as string[] | null) ?? [],
@@ -1022,43 +1084,76 @@ async function resolveWelcomeAudience(
   eventRegistrationId: string | null = null,
 ): Promise<AudienceEntry[]> {
   const days = pickNumber(a.timing_override?.days_before, a.template.default_timing?.days_before, 7);
-  const today = new Date().toISOString().slice(0, 10);
-  const windowEnd = new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
+  const now = new Date();
+  // The ORG's calendar day, not the server's: at 8pm in New York it is already
+  // tomorrow in UTC, and a UTC "today" would file a class starting that evening
+  // as already past. Matters now that this runs all day, not just at 8am.
+  const today = orgToday(a.org.timezone, now);
+  const windowEnd = addDays(today, days);
+  const win: WelcomeWindow = { today, windowEnd, enabledAt: a.enabled_at, now };
+  // null when enabled_at is unknown — the late path is then refused outright
+  // rather than falling back to a 30-day window (see lateJoinFloor).
+  const lateFloorMs = lateJoinFloor(a.enabled_at, now);
+  const lateFloorIso = lateFloorMs === null ? null : new Date(lateFloorMs).toISOString();
   const nextTermAvailable = await hasFutureProgramsForOrg(supabase, a.organization_id);
 
-  // Audience window: programs starting between today and today + days_before.
-  // BETWEEN + idempotency (UNIQUE constraint) handles late registrants without
-  // duplicate sends. Programs already started (before today) are excluded —
-  // backstop against an automation re-enabled after a long pause.
+  // Two disjoint windows, unioned (see welcomeWindow.ts for the full rules):
+  //   ON TIME — starts between today and today + days_before. Unchanged.
+  //   LATE    — already started, not yet finished, and the registration is newer
+  //             than the day this automation was switched on. This is the parent
+  //             who signs up the morning of day one, or joins in week 6; before,
+  //             first_session_date >= today excluded them and they got nothing.
+  // Idempotency (UNIQUE on context_key) is what keeps the union duplicate-free.
   //
   // Context key includes student_id — siblings in the SAME program get
   // separate emails, each personalized to their kid. Same parent might
   // receive 2 welcomes for 2 enrolled kids, which is the right behavior.
 
   if (a.template.applies_to_program_type === "afterschool") {
-    let q = supabase
-      .from("registrations")
-      .select(`
-        id, parent_id,
+    const afterschoolSelect = `
+        id, parent_id, registered_at,
         students!inner ( id, first_name ),
         parents!inner ( id, first_name, email ),
-        programs!inner ( id, curriculum, first_session_date, start_time, end_time, program_location_id, curriculum_id, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
-      `)
+        programs!inner ( id, curriculum, day_of_week, first_session_date, start_time, end_time, program_location_id, curriculum_id, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
+      `;
+    const afterschoolBase = () => supabase
+      .from("registrations")
+      .select(afterschoolSelect)
       .eq("organization_id", a.organization_id)
       .eq("status", "confirmed")
-      .not("program_id", "is", null)
+      .not("program_id", "is", null);
+
+    let onTimeQ = afterschoolBase()
       .gte("programs.first_session_date", today)
       .lte("programs.first_session_date", windowEnd);
-    if (eventRegistrationId) q = q.eq("id", eventRegistrationId);
-    const { data, error } = await q;
-    if (error) throw error;
+    // Already started. registered_at is the fence, not the program date: this
+    // can only ever reach signups newer than lateFloorIso, so it stays small
+    // and can never sweep up a term's worth of existing families.
+    let lateQ = lateFloorIso === null ? null : afterschoolBase()
+      .lt("programs.first_session_date", today)
+      .gte("registered_at", lateFloorIso);
+    if (eventRegistrationId) {
+      onTimeQ = onTimeQ.eq("id", eventRegistrationId);
+      if (lateQ) lateQ = lateQ.eq("id", eventRegistrationId);
+    }
+    const [onTimeRes, lateRes] = await Promise.all([
+      onTimeQ,
+      lateQ ?? Promise.resolve({ data: [], error: null }),
+    ]);
+    if (onTimeRes.error) throw onTimeRes.error;
+    if (lateRes.error) throw lateRes.error;
+    // Merge on registration id. The two windows are disjoint by construction;
+    // keying by id makes that a guarantee rather than an assumption.
+    const mergedById = new Map<string, any>();
+    for (const r of [...(onTimeRes.data ?? []), ...(lateRes.data ?? [])]) mergedById.set(r.id, r);
+    const data = Array.from(mergedById.values());
 
     // Batch-fetch session dates for every unique program in the audience —
     // {{session_dates_block}} renders "12 weekly sessions, starting Sep 9..."
     // for afterschool programs. derive_program_session_dates honors location
     // + district closures, so no per-row math here.
     const sessionsByProgram = new Map<string, string[]>();
-    const uniqueProgramIds = Array.from(new Set((data ?? []).map((r: any) => r.programs?.id).filter(Boolean)));
+    const uniqueProgramIds = Array.from(new Set(data.map((r: any) => r.programs?.id).filter(Boolean)));
     for (const pid of uniqueProgramIds) {
       try {
         const { data: sessions } = await supabase.rpc("derive_program_session_dates", { p_program_id: pid });
@@ -1068,19 +1163,36 @@ async function resolveWelcomeAudience(
       }
     }
 
-    return (data ?? [])
+    return data
       .filter((r: any) => r.parents?.email && r.students?.id)
       .map((r: any) => ({
+        r,
+        sessions: sessionsByProgram.get(r.programs.id) ?? [],
+      }))
+      .map(({ r, sessions }) => ({
+        r,
+        sessions,
+        verdict: welcomeVerdict(
+          { startsOn: r.programs.first_session_date, sessionDates: sessions, registeredAt: r.registered_at },
+          win,
+        ),
+      }))
+      .filter(({ verdict }) => verdict.eligible)
+      .map(({ r, sessions, verdict }) => ({
         context_key: `program:${r.programs.id}:parent:${r.parents.id}:student:${r.students.id}`,
         parent_id: r.parents.id,
         parent_email: r.parents.email,
         parent_first_name: r.parents.first_name,
         child_first_name: r.students?.first_name ?? null,
         program_name: r.programs.curriculum ?? "your program",
-        program_start_date: formatDate(r.programs.first_session_date),
+        // The day THIS family should be told about. Identical to the program's
+        // start for an on-time signup; a late joiner is pointed at their next
+        // real session so the copy never announces a date that has passed.
+        program_start_date: formatDate(verdict.firstDay ?? r.programs.first_session_date),
         program_end_date: "",
         // programs.start_time/end_time are already human text ("3:25 PM"); use as-is.
         program_time: timeClause(r.programs.start_time, r.programs.end_time, true),
+        program_day: recurringDayLabel(r.programs.day_of_week),
         location_name: r.programs.program_locations?.name ?? "",
         abandoned_resume_url: "",
         age_turning: "",
@@ -1089,31 +1201,55 @@ async function resolveWelcomeAudience(
         final_recap_skills_raw: (r.programs.curricula?.final_recap_skills as string[] | null) ?? [],
         arrival_instructions_raw: r.programs.program_locations?.parent_arrival_instructions ?? "",
         dismissal_instructions_raw: r.programs.program_locations?.parent_dismissal_instructions ?? "",
-        session_dates_raw: sessionsByProgram.get(r.programs.id) ?? [],
+        // Only the sessions this family actually gets. A no-op on time (the
+        // program hasn't started, so every session is still ahead); for a late
+        // join it drops the ones they were never enrolled for, so the Schedule
+        // block can't advertise a date they missed or count a session they
+        // don't have. The headline date alone was not enough.
+        session_dates_raw: sessionsOnOrAfter(sessions, today),
         register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
         next_term_available: nextTermAvailable,
       }));
   }
 
   if (a.template.applies_to_program_type === "camps") {
-    let q = supabase
-      .from("registrations")
-      .select(`
-        id, parent_id,
+    const campSelect = `
+        id, parent_id, registered_at,
         students!inner ( id, first_name ),
         parents!inner ( id, first_name, email ),
         camp_sessions!inner ( id, curriculum_name, starts_on, ends_on, start_time, end_time, location_id, location_name, curriculum_id, curricula ( final_showcase, mid_term_skills, final_recap_skills ), program_locations ( parent_arrival_instructions, parent_dismissal_instructions ) )
-      `)
+      `;
+    const campBase = () => supabase
+      .from("registrations")
+      .select(campSelect)
       .eq("organization_id", a.organization_id)
       .eq("status", "confirmed")
-      .not("camp_session_id", "is", null)
+      .not("camp_session_id", "is", null);
+
+    let onTimeQ = campBase()
       .gte("camp_sessions.starts_on", today)
       .lte("camp_sessions.starts_on", windowEnd);
-    if (eventRegistrationId) q = q.eq("id", eventRegistrationId);
-    const { data, error } = await q;
-    if (error) throw error;
+    // Mid-camp join: running right now (started, ends today or later) and a
+    // genuinely new registration. A camp with no ends_on is excluded by the
+    // .gte — we never mail about something whose end we can't establish.
+    let lateQ = lateFloorIso === null ? null : campBase()
+      .lt("camp_sessions.starts_on", today)
+      .gte("camp_sessions.ends_on", today)
+      .gte("registered_at", lateFloorIso);
+    if (eventRegistrationId) {
+      onTimeQ = onTimeQ.eq("id", eventRegistrationId);
+      if (lateQ) lateQ = lateQ.eq("id", eventRegistrationId);
+    }
+    const [onTimeRes, lateRes] = await Promise.all([
+      onTimeQ,
+      lateQ ?? Promise.resolve({ data: [], error: null }),
+    ]);
+    if (onTimeRes.error) throw onTimeRes.error;
+    if (lateRes.error) throw lateRes.error;
+    const mergedById = new Map<string, any>();
+    for (const r of [...(onTimeRes.data ?? []), ...(lateRes.data ?? [])]) mergedById.set(r.id, r);
 
-    const rows = (data ?? []).filter((r: any) => r.parents?.email && r.students?.id);
+    const rows = Array.from(mergedById.values()).filter((r: any) => r.parents?.email && r.students?.id);
     if (rows.length === 0) return [];
 
     // One welcome per child per camp — where a "camp" is a curriculum at a venue.
@@ -1162,13 +1298,26 @@ async function resolveWelcomeAudience(
         return keeper.get(k)?.id === cs.id;
       })
       .map((r: any) => ({
+        r,
+        verdict: welcomeVerdict(
+          {
+            startsOn: r.camp_sessions.starts_on,
+            endsOn: r.camp_sessions.ends_on,
+            registeredAt: r.registered_at,
+          },
+          win,
+        ),
+      }))
+      .filter(({ verdict }) => verdict.eligible)
+      .map(({ r, verdict }) => ({
         context_key: `camp:${r.camp_sessions.id}:parent:${r.parents.id}:student:${r.students.id}`,
         parent_id: r.parents.id,
         parent_email: r.parents.email,
         parent_first_name: r.parents.first_name,
         child_first_name: r.students?.first_name ?? null,
         program_name: r.camp_sessions.curriculum_name ?? "your camp",
-        program_start_date: formatDate(r.camp_sessions.starts_on),
+        // On time: the camp's own start. Mid-camp join: today, never a past date.
+        program_start_date: formatDate(verdict.firstDay ?? r.camp_sessions.starts_on),
         program_end_date: r.camp_sessions.ends_on ? formatDate(r.camp_sessions.ends_on) : "",
         // camp_sessions.start_time/end_time are Postgres `time` values → format.
         program_time: timeClause(r.camp_sessions.start_time, r.camp_sessions.end_time, false),
@@ -2432,6 +2581,9 @@ function buildTokens(entry: AudienceEntry, brand: OrgBrand): Record<string, stri
     // copy wraps it — "starts {{program_start_date}} ({{program_time}})" — and
     // renderTokens strips the bare " ()" left when it's empty.
     program_time: entry.program_time ?? "",
+    // Recurring class day, already plural ("Wednesdays"). "" for camps, which
+    // run every weekday — renderTokens collapses a wrapped empty token.
+    program_day: entry.program_day ?? "",
     location_name: entry.location_name,
     age_turning: entry.age_turning,
     abandoned_resume_url: entry.abandoned_resume_url,
@@ -2439,7 +2591,7 @@ function buildTokens(entry: AudienceEntry, brand: OrgBrand): Record<string, stri
     mid_term_skills_block: buildSkillsBlock(entry.mid_term_skills_raw, brand, "What they have been working on"),
     final_recap_skills_block: buildSkillsBlock(entry.final_recap_skills_raw, brand, "What they covered"),
     arrival_dismissal_block: buildArrivalDismissalBlock(entry.arrival_instructions_raw, entry.dismissal_instructions_raw, brand),
-    session_dates_block: buildSessionDatesBlock(entry.session_dates_raw, brand),
+    session_dates_block: buildSessionDatesBlock(entry.session_dates_raw, brand, entry.program_day ?? ""),
     register_url: entry.register_url,
     next_term_link_block: buildNextTermLinkBlock(entry.next_term_available, entry.register_url, brand),
     // no_school_day tokens — "" for every other template (they never set these),
@@ -2487,7 +2639,7 @@ const PRE_RENDERED_HTML_TOKENS = new Set(["final_showcase_block", "mid_term_skil
 // output. Renders the program's session count + first/last dates as a tight
 // summary parents can scan. Empty when there are no dates (camps, or
 // afterschool programs whose session list hasn't been derived yet).
-function buildSessionDatesBlock(sessions: string[] | null | undefined, brand: OrgBrand): string {
+function buildSessionDatesBlock(sessions: string[] | null | undefined, brand: OrgBrand, dayLabel = ""): string {
   if (!sessions || sessions.length === 0) return "";
   const valid = sessions.filter((s) => typeof s === "string" && s.trim().length > 0);
   if (valid.length === 0) return "";
@@ -2502,7 +2654,11 @@ function buildSessionDatesBlock(sessions: string[] | null | undefined, brand: Or
   // class (derive_program_session_dates already honors district/location
   // closures, so gaps are real). Count line + the dates — no "starting X ending
   // Y" summary, which would just repeat the first and last dates in the list.
-  const header = escapeHtml(`${count} weekly sessions:`);
+  // Name the recurring day when we know it ("12 weekly sessions, on Wednesdays:").
+  // It is the one thing a parent joining mid-term can't infer from a date list,
+  // and the block already handles being empty, so an unknown day degrades to the
+  // original wording instead of leaving a dangling word in the sentence.
+  const header = escapeHtml(dayLabel ? `${count} weekly sessions, on ${dayLabel}:` : `${count} weekly sessions:`);
   const dates = escapeHtml(valid.map(formatDateShort).join(", "));
   return `<div style="background:#f5f4ee;padding:14px 18px;margin:16px 0;border-radius:6px;border-left:3px solid ${brand.primary_color};"><p style="${labelStyle}">Schedule</p><p style="${textStyle}margin-bottom:4px;font-weight:700;">${header}</p><p style="${textStyle}">${dates}</p></div>`;
 }
@@ -2727,6 +2883,15 @@ function pickNumber(...candidates: unknown[]): number {
   // Last argument is the default — guaranteed number by caller convention.
   const last = candidates[candidates.length - 1];
   return typeof last === "number" ? last : 0;
+}
+
+// programs.day_of_week holds a single capitalized weekday ("Wednesday"). Emails
+// talk about the recurring class, so render it plural. Empty in, empty out —
+// camps have no single day and must not get one invented.
+function recurringDayLabel(day: string | null | undefined): string {
+  const d = (day ?? "").trim();
+  if (!d) return "";
+  return d.endsWith("s") ? d : `${d}s`;
 }
 
 function formatDate(iso: string): string {

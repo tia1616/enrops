@@ -52,7 +52,9 @@ function decodeCommonEntities(s) {
 const TOKENS_BY_TEMPLATE_KEY = {
   thank_you:              ["first_name", "child_first_name", "org_name", "sender_name", "registration_summary_block"],
   welcome_camp:           ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "program_start_date", "program_time", "location_name", "arrival_dismissal_block", "final_showcase_block", "next_term_link_block", "register_url"],
-  welcome_afterschool:    ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "program_start_date", "program_time", "location_name", "arrival_dismissal_block", "session_dates_block", "next_term_link_block", "register_url"],
+  // program_day = the recurring class day, already plural ("Wednesdays"). Not
+  // offered for camps: a camp runs every weekday, so it has no single day.
+  welcome_afterschool:    ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "program_start_date", "program_day", "program_time", "location_name", "arrival_dismissal_block", "session_dates_block", "next_term_link_block", "register_url"],
   check_in:               ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "program_time", "register_url"],
   mid_recap:              ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "program_time", "mid_term_skills_block", "register_url"],
   final_recap:            ["first_name", "child_first_name", "org_name", "sender_name", "program_name", "program_start_date", "program_time", "program_end_date", "final_showcase_block", "final_recap_skills_block", "next_term_link_block", "register_url"],
@@ -124,6 +126,9 @@ function sampleTokens(orgName, senderName, primaryColor, orgSlug) {
     sender_name: (senderName?.split(" @ ")[0]?.trim()) || "You",
     program_name: "Mini Robotics",
     program_start_date: "Monday, June 17",
+    // Must agree with program_start_date above ("Monday, June 17") — a sample
+    // program cannot start on a Monday and meet Wednesdays.
+    program_day: "Mondays",
     program_time: "9:00 AM – 12:00 PM",
     program_end_date: "Friday, June 21",
     location_name: "Beaverton STEAM Hub",
