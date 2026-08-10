@@ -2,43 +2,10 @@ import React from 'react';
 import { PickupDismissalSection, CustomQuestionsSection, hasPickupSection } from './RegExtraFields.jsx';
 import { GRADE_OPTIONS_LONG } from '../../../lib/grades.js';
 import { needsAftercareProvider } from '../../../lib/dismissal.js';
-
-// Tenant-neutral referral options shared by every operator's registration flow.
-// (Replaced J2S-specific entries — "STEAM Night", "PDX Parent", "NW Kids",
-// "Kids Out and About" — which leaked Journey to STEAM's Portland-area channels
-// to other tenants. Per-tenant configurable options are a queued follow-up.)
-const REFERRAL_OPTIONS = [
-  'School flyer (from my child\'s school)',
-  'School newsletter, PTO, or PTA email',
-  'Friend or family referral',
-  'Social media (Facebook, Instagram)',
-  'Google search',
-  'Community event or fair',
-  'Local parenting magazine or website',
-  'Other',
-];
-
-// "An email from us" is a real channel operators run (J2S mails its own family
-// list), but the label has to be the TENANT'S name or it puts one provider's
-// brand on another's form - the same leak the note above describes. So it is
-// derived from org.name, not written down: J2S families read "Journey to STEAM
-// email", Shoreview Chess families read "Shoreview Chess email".
-//
-// Inserted next to the other email channel so the two email answers sit
-// together, and dropped entirely when the org name is missing rather than
-// offering a family "undefined email". Stored as free text in
-// parent_org_relationships.how_heard / registrations.how_heard (verified: no
-// CHECK constraint on either column), so adding a label breaks no existing row.
-function referralOptions(orgName) {
-  const name = (orgName || '').trim();
-  if (!name) return REFERRAL_OPTIONS;
-  const at = REFERRAL_OPTIONS.indexOf('School newsletter, PTO, or PTA email');
-  return [
-    ...REFERRAL_OPTIONS.slice(0, at + 1),
-    `${name} email`,
-    ...REFERRAL_OPTIONS.slice(at + 1),
-  ];
-}
+// The referral answers, incl. the tenant-derived "<provider> email" option, live
+// in src/lib/referral.js so no tenant's channel can be written into this file
+// again - see the note there and src/lib/referral.test.mjs.
+import { referralOptions } from '../../../lib/referral.js';
 
 // Was a local list that stopped at 6th grade while operators could set a class to
 // any grade, so a family whose child was in 7th could not pick a grade and could not
