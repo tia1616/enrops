@@ -50,6 +50,14 @@ export function takesMoneyThroughEnrops(org, program) {
  * control alone. Failing OPEN here costs one honest error message from the
  * database; failing CLOSED would strand a connected operator behind a button
  * they cannot press and cannot explain.
+ *
+ * DO NOT "simplify" this to `!org?.stripe_charges_enabled`. It reads like a typo
+ * and it is not. The column is nullable but DEFAULT false, and measured on
+ * 2026-08-10 there is no NULL anywhere: prod 0 null / 5 false / 2 true, staging
+ * 0 null / 3 false / 5 true. So on every row that exists, `!` and `=== false`
+ * agree — the ONLY case that separates them is the not-yet-loaded row this is
+ * written to protect, where `!undefined` is true and would hide the publish
+ * control from an operator whose Stripe is perfectly fine.
  */
 export function publishBlockedByStripe(org, program) {
   if (!takesMoneyThroughEnrops(org, program)) return false;
