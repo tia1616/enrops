@@ -755,7 +755,7 @@ serve(async (req: Request) => {
       const innerHtml = renderedInner + downloadButtonsHtml;
       const bodyHtml = wrapInEmailShell(innerHtml, tokens);
       const bodyText = (touchpoint.payload!.body_text
-        ? postCleanCopy(replaceTokens(touchpoint.payload!.body_text, tokens, { html: false }))
+        ? postCleanCopy(replaceTokens(touchpoint.payload!.body_text, tokens, { html: false, multiline: true }))
         : stripHtmlToText(renderedInner)) + downloadButtonsText;
 
       // Read the unsubscribe URL back out of the SAME token map the footer link
@@ -1381,7 +1381,15 @@ function buildVipBlock(
 // "&lt;li&gt;" to parents.
 const PRE_RENDERED_HTML_TOKENS = new Set(["vip_block", "curriculum", "camp_details", "program_details", "register_button"]);
 
-function replaceTokens(text: string, tokens: Map<string, string>, opts: { html: boolean }): string {
+// opts.multiline says whether the destination can hold line breaks. The
+// text/plain body can; a subject line cannot (a newline in a Resend subject is
+// at best stripped, at worst rejected), so the two plaintext destinations need
+// DIFFERENT separators, not the same one.
+function replaceTokens(
+  text: string,
+  tokens: Map<string, string>,
+  opts: { html: boolean; multiline?: boolean },
+): string {
   return text.replace(/\{\{(\w+)\}\}/g, (full, key) => {
     if (!APPROVED_TOKENS.has(key)) {
       console.warn(`marketing-touchpoint-send: unknown token {{${key}}} in body — replacing with empty`);
@@ -1390,16 +1398,31 @@ function replaceTokens(text: string, tokens: Map<string, string>, opts: { html: 
     const value = tokens.get(key) ?? "";
     if (PRE_RENDERED_HTML_TOKENS.has(key)) {
       // Body context: emit the HTML as-is (token already contains the right tags).
-      // Plaintext context (subject lines): strip tags + decode common entities so
-      // the subject doesn't show literal <strong>...</strong>.
       if (opts.html) return value;
+      // Plaintext context. Block-level tags have to become a SEPARATOR, not
+      // nothing: stripping them bare ran every row of a list together, e.g.
+      // "...close Wednesday, September 2.Robotics Builders: Carnival Games..."
+      // in the text/plain part of a real send (caught 2026-08-10 off a staging
+      // capture of body_text). Affects program_details and camp_details alike.
+      const sep = opts.multiline ? "\n" : " ";
       return value
+        .replace(/<\/li>|<\/p>|<\/div>|<br\s*\/?>/gi, sep)
         .replace(/<[^>]+>/g, "")
         .replace(/&amp;/g, "&")
         .replace(/&lt;/g, "<")
         .replace(/&gt;/g, ">")
         .replace(/&quot;/g, '"')
-        .replace(/&#039;/g, "'");
+        .replace(/&#039;/g, "'")
+        .replace(/&#39;/g, "'")
+        // Named entities our own builders emit. register_button ships
+        // "Register now &rarr;", which reached recipients as that literal text
+        // in every plaintext part until now.
+        .replace(/&rarr;/g, "->")
+        .replace(/&nbsp;/g, " ")
+        // Collapse whatever the separator over-produced: a <ul> wrapping <li>s
+        // yields a leading break, and </p><p> yields two.
+        .replace(opts.multiline ? /\n{3,}/g : /\s{2,}/g, opts.multiline ? "\n\n" : " ")
+        .trim();
     }
     return opts.html ? escapeHtml(value) : value;
   });
@@ -1412,8 +1435,21 @@ function postCleanCopy(text: string): string {
   return text
     // "save  off" / "save  off the regular" -> "save off the regular" (avoid double space)
     .replace(/save\s+off/gi, "save off")
-    // Empty "Starts:" / "Sessions:" / similar bullets — strip the line
-    .replace(/^(.*?:\s*$)\n/gm, "")
+    // Empty "Starts:" / "Sessions:" / similar bullets — strip the line.
+    //
+    // Only a SHORT label qualifies. The rule used to match any line ending in a
+    // colon, which quietly deleted the operator's lead-in sentence from the
+    // text/plain part: "Here is what is running at Beatrice Morrow Cannady this
+    // fall:" vanished while surviving in the HTML (caught 2026-08-10). That is
+    // the exact sentence shape the drafting guidance now asks for above a
+    // {{program_details}} list, so the old rule ate the recommended copy.
+    //
+    // A label whose value went empty is short and has no sentence in it
+    // ("Starts:", "Sessions:", "Early bird deadline:" = 20 chars). A lead-in is
+    // a sentence. 30 characters separates the real cases cleanly, and the
+    // change only ever strips LESS than before, so no previously-cleaned
+    // artifact can come back except on a label longer than 30 characters.
+    .replace(/^([^\n.!?]{0,29}:[ \t]*)$\n/gm, "")
     // Empty <p></p> left behind when a token (e.g. {{vip_block}}) resolves to
     // empty string for an excluded school. Without this cleanup, the operator
     // would see a blank vertical gap where the suppressed block used to live.
@@ -1489,6 +1525,10 @@ function stripHtmlToText(html: string): string {
   return html
     .replace(/<br\s*\/?>/gi, "\n")
     .replace(/<\/p>/gi, "\n\n")
+    // </li> has to break the line too. Without it a rendered {{program_details}}
+    // or {{camp_details}} list arrives as one run-on paragraph in the plaintext
+    // alternative, each row welded to the next.
+    .replace(/<\/li>/gi, "\n")
     .replace(/<[^>]+>/g, "")
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")
@@ -1496,6 +1536,10 @@ function stripHtmlToText(html: string): string {
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
+    .replace(/&#039;/g, "'")
+    // register_button emits "Register now &rarr;", which shipped as that
+    // literal text to every plaintext reader until 2026-08-10.
+    .replace(/&rarr;/g, "->")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
@@ -1907,7 +1951,7 @@ async function renderPreview(
   const innerHtml = renderedInner + downloadButtonsHtml;
   const bodyHtml = wrapInEmailShell(innerHtml, tokens);
   const bodyText = (touchpoint.payload!.body_text
-    ? postCleanCopy(replaceTokens(touchpoint.payload!.body_text, tokens, { html: false }))
+    ? postCleanCopy(replaceTokens(touchpoint.payload!.body_text, tokens, { html: false, multiline: true }))
     : stripHtmlToText(renderedInner)) + downloadButtonsText;
 
   // Tell the operator whether the VIP block fired for this school so the
