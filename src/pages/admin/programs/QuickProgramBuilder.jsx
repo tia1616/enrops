@@ -1345,14 +1345,26 @@ export default function QuickProgramBuilder() {
           {notConnected ? "Your program is almost live." : "Your program is live."}
         </div>
 
-        {/* Always 3 here, and it needs no branching. Info and Publish are both
-            done, so step 3 is either "Connect Stripe" in progress (when that step
-            exists) or one past the end, meaning all done. The old version threaded
-            notConnected through the first-program branch only and hardcoded 3 for
-            everyone else, which ticked BOTH pips and said "it's live" directly
-            above "One step left: connect Stripe". */}
+        {/* WHICH STEP IS CURRENT DEPENDS ON STRIPE, since the publish gate
+            reordered the strip to Enter -> Connect Stripe -> Publish.
+            A flat 3 was right under the old order, where Stripe was last. Under
+            the new one it marks step 2 — Connect Stripe — as DONE with a tick,
+            which is a green light on the single thing the operator has not done.
+            Reachable: a FREE class is exempt from the gate, so it can go live
+            while charges are off, and this is the screen it lands on.
+            So when Stripe is still missing, Connect Stripe IS the current step.
+            Publish then renders as upcoming even though this class published —
+            imperfect, because one cursor cannot say "3 done, 2 not" — but it
+            points at the real next action instead of falsely clearing it.
+            The old version threaded notConnected through the first-program branch
+            only and hardcoded 3 for everyone else, which ticked BOTH pips and
+            said "it's live" directly above "One step left: connect Stripe". */}
         {isLean && (
-          <ProgramSteps count={programCount} chargesEnabled={chargesResolved} current={3} />
+          <ProgramSteps
+            count={programCount}
+            chargesEnabled={chargesResolved}
+            current={notConnected ? 2 : 3}
+          />
         )}
 
         {notConnected ? (

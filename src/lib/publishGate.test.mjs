@@ -111,5 +111,20 @@ for (const f of ['QuickProgramBuilder.jsx', 'ProgramWizardNew.jsx', 'ProgramsCal
 // an operator anywhere else is a dead end they cannot clear.
 eq('connect route is Finances', STRIPE_CONNECT_ROUTE, '/admin/finances');
 
+// The step strip must not promise an order the gate forbids. It used to read
+// Enter -> Publish -> Connect Stripe, which since the gate is not merely stale
+// but impossible: a paid class cannot leave draft until charges are on, so an
+// operator following the pips hits a wall at step 2 that the strip called step 3.
+const steps = readFileSync(new URL('../components/ProgramSteps.jsx', import.meta.url), 'utf8');
+const gated = steps.match(/const STEPS_NEEDING_STRIPE\s*=\s*\[([^\]]*)\]/);
+eq('the Stripe step list was found', Boolean(gated), true);
+eq('Connect Stripe comes BEFORE Publish when Stripe is needed',
+   Boolean(gated) && gated[1].indexOf('CONNECT_STRIPE') < gated[1].indexOf('PUBLISH_IT'), true);
+// And the success screen must not tick that step off while charges are still off:
+// a FREE class is exempt from the gate, so it can go live with Stripe missing.
+const builder = readFileSync(new URL('../pages/admin/programs/QuickProgramBuilder.jsx', import.meta.url), 'utf8');
+eq('success screen does not hardcode the step past Connect Stripe',
+   /current=\{notConnected \? 2 : 3\}/.test(builder), true);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
