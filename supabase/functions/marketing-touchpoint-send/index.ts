@@ -1444,12 +1444,23 @@ function postCleanCopy(text: string): string {
     // the exact sentence shape the drafting guidance now asks for above a
     // {{program_details}} list, so the old rule ate the recommended copy.
     //
-    // A label whose value went empty is short and has no sentence in it
+    // A label whose value went empty is short and contains no sentence
     // ("Starts:", "Sessions:", "Early bird deadline:" = 20 chars). A lead-in is
-    // a sentence. 30 characters separates the real cases cleanly, and the
-    // change only ever strips LESS than before, so no previously-cleaned
-    // artifact can come back except on a label longer than 30 characters.
-    .replace(/^([^\n.!?]{0,29}:[ \t]*)$\n/gm, "")
+    // a sentence, and the ones that caused this bug run 45+ characters.
+    //
+    // KNOWN LIMIT, measured not assumed: a SHORT lead-in is still eaten.
+    // "What you get:" is 13 characters and gets stripped exactly as before.
+    // The length test is a proxy - the real signal is whether the label's value
+    // resolved to empty, which is only knowable at substitution time, not from
+    // the finished string. Fixing it properly means having replaceTokens record
+    // which tokens came back empty and cleaning those lines specifically.
+    // Until then: keep a list lead-in longer than 30 characters, or end it
+    // without a colon.
+    //
+    // \r is in the trailing class so a CRLF body still matches. Dropping it
+    // regressed "Starts: \r\n" - the old `\s*` absorbed the \r and this one
+    // must too. Caught by diffing the two regexes over both line endings.
+    .replace(/^([^\n.!?]{0,29}:[ \t\r]*)$\n/gm, "")
     // Empty <p></p> left behind when a token (e.g. {{vip_block}}) resolves to
     // empty string for an excluded school. Without this cleanup, the operator
     // would see a blank vertical gap where the suppressed block used to live.
