@@ -224,7 +224,7 @@ serve(async (req) => {
       // it is a default on a fresh org, not a decision they have made yet, and
       // printing it as a fact would be reporting our own default back as if it
       // were theirs.
-    } else {
+    } else if (note.trigger_key === 'first_transaction') {
       subjectNoun = 'First transaction';
 
       if (note.subject_id) {
@@ -245,6 +245,32 @@ serve(async (req) => {
           if (parent?.first_name) facts.push(['First family', parent.first_name]);
         }
       }
+    } else {
+      // REFUSE. Not a fallback - a stop.
+      //
+      // This branch used to be the first_transaction branch, which meant every
+      // key that was not 'first_registration' rendered as a transaction. Adding
+      // 'new_account' would have mailed "First transaction" about an operator
+      // who had never been paid; fixing only that one subject line would have
+      // left the same trap armed for trigger key number four.
+      //
+      // An unknown key means the database emitted something this function does
+      // not understand. The only honest outcomes are "say nothing" and "say
+      // something wrong", and a founder acting on a wrong milestone is worse
+      // than a founder waiting for an email.
+      //
+      // sent_at is deliberately left null: the row stays retriable, so deploying
+      // a function that DOES understand the key delivers the email that was
+      // missed rather than losing it. send_error is written so the reason is on
+      // the row and not only in logs that expire. The 5-minute sweep will retry
+      // and fail the same way until then, which is the intended noise - it stops
+      // on its own after a day.
+      console.error('[founder-notify] unknown trigger_key:', note.trigger_key);
+      await supabase
+        .from('founder_notifications')
+        .update({ send_error: `unknown trigger_key: ${String(note.trigger_key).slice(0, 100)}` })
+        .eq('id', note.id);
+      return json({ error: 'unknown trigger_key' }, 500);
     }
 
     // City/state fallback: any location this org has an address for. Still null for
