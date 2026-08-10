@@ -179,6 +179,37 @@ serve(async (req) => {
     }
     if (!flat.length) return json({ error: 'No programs to register' }, 400);
 
+    // EVERY program in the cart must be PUBLISHED, checked here on the server.
+    //
+    // The screens already refuse to offer a draft class, but a screen is not a
+    // gate: the publish gate learned this the hard way when a UI-only Comms
+    // check was bypassed from devtools within hours. Without this, a crafted
+    // POST carrying a draft program_id creates a registration and checkout
+    // charges for it - a class the operator deliberately kept private, sold.
+    //
+    // Deliberately covers VIP legs too, and that is the case that actually bit:
+    // the price lookup below skips VIP ids entirely (they use the fixed VIP
+    // rate), so a draft Winter or Spring leg was never fetched and never
+    // checked. Live on prod against the-ukulele-project, whose open Fall class
+    // had two draft legs sharing its location and day.
+    //
+    // The NULL clause is load-bearing and is NOT belt-and-braces. programs.status
+    // is nullable, and in SQL `status <> 'open'` evaluates to NULL for a NULL
+    // row, so a bare .neq() silently does not match it - the one program state
+    // nobody writes on purpose would have been the one that stayed sellable.
+    // Anything that is not literally 'open' must fail this check.
+    const allProgramIds = [...new Set(flat.map((f) => f.program_id))];
+    const { data: unpublished, error: pubErr } = await admin
+      .from('programs')
+      .select('id')
+      .in('id', allProgramIds)
+      .or('status.is.null,status.neq.open');
+    if (pubErr) throw new Error(`publish check: ${pubErr.message}`);
+    if (unpublished?.length) {
+      console.warn('[create-registration] BLOCKED: unpublished programs in cart', unpublished.map((p) => p.id));
+      return json({ error: 'A class in your cart is no longer open for registration. Please refresh and try again.' }, 400);
+    }
+
     // Real prices for non-VIP programs, scoped to this org (reject a program that
     // isn't in this org so a client can't inject a foreign/fake price).
     const nonVipIds = [...new Set(flat.filter((f) => !f.is_vip).map((f) => f.program_id))];
