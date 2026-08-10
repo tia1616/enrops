@@ -333,6 +333,17 @@ export default function QuickProgramBuilder() {
     return () => { cancelled = true; };
   }, [org?.id]);
 
+  // ONE answer to "can this org be paid", used by every consumer on this screen.
+  // The fetch above is the fresher value (it re-reads after a Connect
+  // round-trip); until it lands, or if it failed, the org row AdminLayout
+  // already loaded still knows. Deriving it once matters: making the fetch
+  // return null on failure fixed the publish gate but would have inverted the
+  // SUCCESS screen, which reads `=== false` — an unknown would have flipped it
+  // from "almost live, connect Stripe" to "your program is live" with the share
+  // panel open. Different answers to the same question on one screen, and the
+  // fail-open one sitting on the money surface.
+  const chargesResolved = chargesEnabled ?? org?.stripe_charges_enabled ?? null;
+
   // Locations the operator has set up (Programs -> Locations). One location
   // auto-selects (no need to pick when there's only one); 2+ shows a picker;
   // none means they must add one before this class can be created -- location
@@ -551,13 +562,8 @@ export default function QuickProgramBuilder() {
   // so the price and the org's two flags are the whole question. Reads the LIVE
   // price field, so typing a price into a free class arms the gate as you type,
   // rather than after a rejected save.
-  //
-  // `?? org?.stripe_charges_enabled` so the gate is never LESS informed than the
-  // rest of the app: the fetch above is the fresher value (it re-reads after a
-  // Connect round-trip), but until it lands — or if it failed — the org row
-  // AdminLayout already loaded still knows the answer.
   const publishBlocked = publishBlockedByStripe(
-    { ...org, stripe_charges_enabled: chargesEnabled ?? org?.stripe_charges_enabled },
+    { ...org, stripe_charges_enabled: chargesResolved },
     { price_cents: priceValid ? priceCents : 0, runs_own_registration: false },
   );
 
@@ -1320,7 +1326,7 @@ export default function QuickProgramBuilder() {
   if (createdId) {
     // Arielle's rule: never a payment-less live page. If Stripe isn't connected
     // yet, lead with that step (the WOW) and dim the share link until it is.
-    const notConnected = chargesEnabled === false;
+    const notConnected = chargesResolved === false;
     return (
       <div style={{ maxWidth: 560, margin: "0 auto", padding: "24px 16px" }}>
         {/* Honest state: with Stripe not connected the page exists but can't take
@@ -1340,7 +1346,7 @@ export default function QuickProgramBuilder() {
             everyone else, which ticked BOTH pips and said "it's live" directly
             above "One step left: connect Stripe". */}
         {isLean && (
-          <ProgramSteps count={programCount} chargesEnabled={chargesEnabled} current={3} />
+          <ProgramSteps count={programCount} chargesEnabled={chargesResolved} current={3} />
         )}
 
         {notConnected ? (
@@ -1532,7 +1538,7 @@ export default function QuickProgramBuilder() {
       {/* Lean only. A legacy operator has had Stripe connected for years, so a
           strip whose third step is "Connect Stripe" would be describing a road
           they finished long ago. */}
-      {isLean && <ProgramSteps count={programCount} chargesEnabled={chargesEnabled} current={1} />}
+      {isLean && <ProgramSteps count={programCount} chargesEnabled={chargesResolved} current={1} />}
 
       <div style={{ display: "grid", gap: 18 }}>
         {/* Every class after the first inherits the questions and waivers set

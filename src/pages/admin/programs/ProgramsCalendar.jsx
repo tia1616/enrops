@@ -168,7 +168,18 @@ export default function ProgramsCalendar() {
   // (a typo, a rethink, a cancellation in negotiation). Hides it from the
   // public catalog and marketing audience filters again.
   async function unpublishProgram(programId) {
-    if (!confirm("Unpublish this program? It'll be hidden from the public catalog and stop appearing in marketing campaigns. Existing registrations are unaffected.")) return;
+    // The gate grandfathers a class that was ALREADY live when Stripe went away
+    // — it stays live and stays editable. Unpublishing surrenders that: the row
+    // stops being grandfathered the moment it leaves 'open', and publishing it
+    // again is a new transition the trigger will refuse. So for these programs
+    // this button is a one-way door, and it has to say so BEFORE the click, not
+    // afterwards when the Publish control has turned into "Connect Stripe".
+    const target = programs.find((p) => p.id === programId);
+    const oneWay = publishBlockedByStripe(org, target);
+    const question = oneWay
+      ? "Unpublish this program? It'll be hidden from the public catalog and stop appearing in marketing campaigns. Existing registrations are unaffected.\n\nHeads up: because Stripe isn't connected, you won't be able to publish it again until it is."
+      : "Unpublish this program? It'll be hidden from the public catalog and stop appearing in marketing campaigns. Existing registrations are unaffected.";
+    if (!confirm(question)) return;
     const { error: unpubErr } = await supabase
       .from("programs")
       .update({ status: "draft" })
