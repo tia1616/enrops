@@ -22,6 +22,7 @@ const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
 const PANEL = "#fff";
+const CREAM = "#FBFBFB"; // same value RefundWatch uses, so the two screens match
 const FLAG = "#B3261E";
 const OK = "#1B7F4C";
 const AMBER = "#8a6100";
@@ -112,16 +113,35 @@ export default function OperatorOverview() {
     );
   }
 
-  const real = (rows ?? []).filter((r) => !r.org_is_internal);
-  const internalCount = (rows ?? []).length - real.length;
+  // An operator who has never created a program or a camp and never taken a
+  // registration has not started. Four of the six on prod are in this state -
+  // yoga-playgrounds, shoreview-chess, mrs-richelle and chase-youth all have
+  // zero programs and zero platform events - and counting them as operators
+  // inflates every number on this screen. Jessica's rule: they are not signal,
+  // this screen is for tracking new providers from here.
+  //
+  // Derived from activity, never from a hand-kept list of names. Whoever stalls
+  // next drops in on their own, and anyone who comes back climbs out on their
+  // own the moment they build something - including a draft, which counts,
+  // because starting a draft is starting.
+  const hasStarted = (r) =>
+    Boolean(r.last_activity_at) || Boolean(r.first_published_at) || (r.registration_count ?? 0) > 0;
+
+  const liveRows = (rows ?? []).filter(hasStarted);
+  const dormantRows = (rows ?? []).filter((r) => !hasStarted(r));
+
+  // Headline counts are over operators who are actually going: real tenants,
+  // excluding both internal accounts and the ones who never began.
+  const counted = liveRows.filter((r) => !r.org_is_internal);
+  const internalCount = liveRows.length - counted.length;
   // Derived, never typed in. This used to be the literal string "Jul 3, 2026",
   // which was read off prod's earliest event of ANY kind and was wrong on both
   // environments — prod's first publish event is Jul 8, staging's is Jul 2. The
   // boundary that decides whether a date can be trusted has to come from the
   // same query as the dates.
   const logStart = (rows ?? []).find((r) => r.publish_log_starts_at)?.publish_log_starts_at ?? null;
-  const published = real.filter((r) => r.first_published_at).length;
-  const selling = real.filter((r) => (r.registration_count ?? 0) > 0).length;
+  const published = counted.filter((r) => r.first_published_at).length;
+  const selling = counted.filter((r) => (r.registration_count ?? 0) > 0).length;
 
   // Headers wrap. They used to be nowrap, and eight nowrap headers gave the
   // table a min-content width of 1042px inside a 953px slot — <main> is a grid
@@ -132,6 +152,82 @@ export default function OperatorOverview() {
   const th = { padding: "10px 12px", borderBottom: `1px solid ${RULE}` };
   const td = { padding: "10px 12px", borderBottom: `1px solid ${RULE}`, verticalAlign: "top" };
   const num = { ...td, textAlign: "right", fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap" };
+
+  // One renderer for both groups. The rows below the divider are the same rows,
+  // not a reduced version of them — an operator who never started still shows
+  // when they were set up and whether anyone ever signed in, which is the whole
+  // reason for keeping them on the page instead of hiding them.
+  const renderRow = (r) => {
+    const stage = stageOf(r);
+    const live = (r.live_program_count ?? 0) + (r.live_camp_count ?? 0);
+    return (
+      <tr key={r.org_id}>
+        <td style={{ ...td, color: INK }}>
+          <span style={{ fontWeight: 600 }}>{r.org_name}</span>
+          {r.org_is_internal && (
+            <span style={{ marginLeft: 8, fontSize: 10, color: MUTED, fontWeight: 700, textTransform: "uppercase",
+                           letterSpacing: ".05em", border: `1px solid ${RULE}`, borderRadius: 4, padding: "1px 5px" }}>
+              Internal
+            </span>
+          )}
+          {/* Stripe used to be a phrase on this line. It is a column now, so it
+              is not said twice. */}
+          <div style={{ fontSize: 11.5, color: MUTED }}>
+            {r.org_slug} · set up {fmtDate(r.org_created_at)}
+            {r.org_platform_plan ? ` · ${r.org_platform_plan}` : ""}
+          </div>
+        </td>
+        <td style={{ ...td, color: stage.color, fontWeight: 600 }}>{stage.label}</td>
+        <td style={num}>
+          {r.signed_in_member_count}/{r.member_count}
+          <div style={{ fontSize: 11.5, color: MUTED, fontWeight: 400 }}>signed in</div>
+        </td>
+        {/* Three states, not two. A tick means money can actually move;
+            "started" means an account exists but Stripe has not cleared it to
+            charge yet (demo-chess-center on staging is exactly this). Ticking
+            that row would say they are ready when a family still cannot pay. */}
+        <td style={{ ...td, textAlign: "center", whiteSpace: "nowrap" }}>
+          {r.stripe_charges_enabled ? (
+            <span title="Connected and able to take payments" style={{ color: OK, fontWeight: 700, fontSize: 15 }}>✓</span>
+          ) : r.stripe_connected ? (
+            <span title="Account connected, but Stripe has not enabled charges yet"
+                  style={{ color: AMBER, fontSize: 11.5, fontWeight: 600 }}>started</span>
+          ) : (
+            <span title="No Stripe account yet" style={{ color: MUTED }}>—</span>
+          )}
+        </td>
+        <td style={num}>
+          {live}
+          {r.live_camp_count > 0 && (
+            <div style={{ fontSize: 11.5, color: MUTED }}>
+              {r.live_program_count} program{r.live_program_count === 1 ? "" : "s"} · {r.live_camp_count} camp{r.live_camp_count === 1 ? "" : "s"}
+            </div>
+          )}
+        </td>
+        {/* An exact date and an estimate must never look alike in the same
+            column — that is how a date nobody should act on gets acted on.
+            Anything published since the log started (the date in the note
+            below, read from the data) is the real moment. Older ones fall back
+            to when the class was CREATED, and a class is published at or after
+            it is created, never before — so that date is a floor and the label
+            has to read "or later", not "by". */}
+        <td style={num}>
+          {fmtDate(r.first_published_at)}
+          {r.first_published_at && r.first_published_is_exact === false && (
+            <div style={{ fontSize: 11.5, color: MUTED }}>or later</div>
+          )}
+        </td>
+        <td style={num}>
+          {r.registration_count}
+          {r.registration_count !== r.active_registration_count && (
+            <div style={{ fontSize: 11.5, color: MUTED }}>{r.active_registration_count} not cancelled</div>
+          )}
+        </td>
+        <td style={num}>{fmtDate(r.first_registration_at)}</td>
+        <td style={num}>{fmtDate(r.last_activity_at)}</td>
+      </tr>
+    );
+  };
 
   return (
     <div>
@@ -160,8 +256,8 @@ export default function OperatorOverview() {
       {rows !== null && rows.length > 0 && (
         <>
           <div style={{ fontSize: 13, color: MUTED, marginBottom: 8 }}>
-            {real.length} operator{real.length === 1 ? "" : "s"} · {published} who've published · {selling} with registrations
-            {internalCount > 0 && ` (${internalCount} internal account${internalCount === 1 ? "" : "s"} excluded from these counts)`}
+            {counted.length} operator{counted.length === 1 ? "" : "s"} · {published} who've published · {selling} with registrations
+            {internalCount > 0 && ` (${internalCount} internal account${internalCount === 1 ? "" : "s"} excluded)`}
           </div>
 
           <div style={{ overflowX: "auto", maxWidth: "100%", minWidth: 0 }}>
@@ -180,79 +276,26 @@ export default function OperatorOverview() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => {
-                  const stage = stageOf(r);
-                  const live = (r.live_program_count ?? 0) + (r.live_camp_count ?? 0);
-                  return (
-                    <tr key={r.org_id}>
-                      <td style={{ ...td, color: INK }}>
-                        <span style={{ fontWeight: 600 }}>{r.org_name}</span>
-                        {r.org_is_internal && (
-                          <span style={{ marginLeft: 8, fontSize: 10, color: MUTED, fontWeight: 700, textTransform: "uppercase",
-                                         letterSpacing: ".05em", border: `1px solid ${RULE}`, borderRadius: 4, padding: "1px 5px" }}>
-                            Internal
-                          </span>
-                        )}
-                        {/* Stripe used to be a phrase on this line. It is a column
-                            now, so it is not said twice. */}
-                        <div style={{ fontSize: 11.5, color: MUTED }}>
-                          {r.org_slug} · set up {fmtDate(r.org_created_at)}
-                          {r.org_platform_plan ? ` · ${r.org_platform_plan}` : ""}
-                        </div>
-                      </td>
-                      <td style={{ ...td, color: stage.color, fontWeight: 600 }}>{stage.label}</td>
-                      <td style={num}>
-                        {r.signed_in_member_count}/{r.member_count}
-                        <div style={{ fontSize: 11.5, color: MUTED, fontWeight: 400 }}>signed in</div>
-                      </td>
-                      {/* Three states, not two. A tick means money can actually
-                          move; "started" means an account exists but Stripe has
-                          not cleared it to charge yet (demo-chess-center on
-                          staging is exactly this). Ticking that row would say
-                          they are ready when a family still cannot pay them. */}
-                      <td style={{ ...td, textAlign: "center", whiteSpace: "nowrap" }}>
-                        {r.stripe_charges_enabled ? (
-                          <span title="Connected and able to take payments" style={{ color: OK, fontWeight: 700, fontSize: 15 }}>✓</span>
-                        ) : r.stripe_connected ? (
-                          <span title="Account connected, but Stripe has not enabled charges yet"
-                                style={{ color: AMBER, fontSize: 11.5, fontWeight: 600 }}>started</span>
-                        ) : (
-                          <span title="No Stripe account yet" style={{ color: MUTED }}>—</span>
-                        )}
-                      </td>
-                      <td style={num}>
-                        {live}
-                        {r.live_camp_count > 0 && (
-                          <div style={{ fontSize: 11.5, color: MUTED }}>
-                            {r.live_program_count} program{r.live_program_count === 1 ? "" : "s"} · {r.live_camp_count} camp{r.live_camp_count === 1 ? "" : "s"}
-                          </div>
-                        )}
-                      </td>
-                      {/* An exact date and an estimate must never look alike in the
-                          same column — that is how a date nobody should act on
-                          gets acted on. Anything published since the event log
-                          started on Jul 3 is the real moment. Older ones fall
-                          back to when the class was CREATED, and a class is
-                          published at or after it is created, never before — so
-                          that date is a floor and the label has to read "or
-                          later", not "by". */}
-                      <td style={num}>
-                        {fmtDate(r.first_published_at)}
-                        {r.first_published_at && r.first_published_is_exact === false && (
-                          <div style={{ fontSize: 11.5, color: MUTED }}>or later</div>
-                        )}
-                      </td>
-                      <td style={num}>
-                        {r.registration_count}
-                        {r.registration_count !== r.active_registration_count && (
-                          <div style={{ fontSize: 11.5, color: MUTED }}>{r.active_registration_count} not cancelled</div>
-                        )}
-                      </td>
-                      <td style={num}>{fmtDate(r.first_registration_at)}</td>
-                      <td style={num}>{fmtDate(r.last_activity_at)}</td>
-                    </tr>
-                  );
-                })}
+                {liveRows.map(renderRow)}
+
+                {/* The ones who never began, kept on the page rather than hidden -
+                    the record that they were provisioned is worth having - but
+                    out of the counts above so the headline numbers describe
+                    operators who are actually going. */}
+                {dormantRows.length > 0 && (
+                  <tr>
+                    <td colSpan={9} style={{ padding: "14px 12px 6px", borderBottom: `1px solid ${RULE}`, background: CREAM }}>
+                      <div style={{ fontSize: 11, color: MUTED, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".05em" }}>
+                        Never got started ({dormantRows.length})
+                      </div>
+                      <div style={{ fontSize: 11.5, color: MUTED, marginTop: 3 }}>
+                        No programs, no camps, no registrations, and not counted above. A provider who was only
+                        just set up sits here too, until they build something.
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                {dormantRows.map(renderRow)}
               </tbody>
             </table>
           </div>
