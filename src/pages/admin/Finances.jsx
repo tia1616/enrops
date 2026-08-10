@@ -716,9 +716,8 @@ export default function Finances() {
     // changed everything", which is what it used to do.
     const familiesPhrase = pendingPlans === 1 ? "1 family is" : `${pendingPlans} families are`;
     const planNote = pendingPlans > 0
-      ? `\n\n${familiesPhrase} partway through a payment plan. They keep the price they ` +
-        "agreed to, so their remaining payments do not change. This applies to new " +
-        "registrations only."
+      ? `\n\n${familiesPhrase} partway through a payment plan. Switching this does not ` +
+        "change their remaining payments. It applies to new registrations only."
       : "";
     const prompt = nextValue === true
       ? "Pass-through mode: families will see the service fee as a separate line " +
@@ -1495,9 +1494,15 @@ function FeePayerRow({ feePassThrough, canManage, onToggle, error, pendingPlans 
       {canManage && pendingPlans > 0 && (
         <div style={{ marginTop: 12, maxWidth: 520 }}>
           <Banner tone="info">
+            {/* Claims only what THIS TOGGLE does. "They keep the price they
+                agreed to" was broader than the snapshot can promise: it freezes
+                who pays the fee, not the rate itself, so a rate change would
+                still move their remaining payments. Rates are platform-admin
+                only and change rarely and deliberately — but the sentence
+                should not write a cheque the code cannot cash. */}
             {pendingPlans === 1
-              ? "1 family is partway through a payment plan. They keep the price they agreed to — this setting only affects new registrations."
-              : `${pendingPlans} families are partway through a payment plan. They keep the price they agreed to — this setting only affects new registrations.`}
+              ? "1 family is partway through a payment plan. Switching this doesn't change their remaining payments — it only affects new registrations."
+              : `${pendingPlans} families are partway through a payment plan. Switching this doesn't change their remaining payments — it only affects new registrations.`}
           </Banner>
         </div>
       )}
