@@ -673,6 +673,7 @@ export default function Register() {
               child={activeChild}
               onUpdateChild={updateActiveChild}
               lean={isLean}
+              orgName={org?.name || ''}
             />
           )}
           {step === 1 && (
