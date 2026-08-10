@@ -171,6 +171,7 @@ export default function OperatorOverview() {
                   <th style={th}>Operator</th>
                   <th style={th}>Where they are</th>
                   <th style={{ ...th, textAlign: "right" }}>Account</th>
+                  <th style={{ ...th, textAlign: "center" }}>Stripe</th>
                   <th style={{ ...th, textAlign: "right" }}>Live</th>
                   <th style={{ ...th, textAlign: "right" }}>First published</th>
                   <th style={{ ...th, textAlign: "right" }}>Registrations</th>
@@ -192,21 +193,32 @@ export default function OperatorOverview() {
                             Internal
                           </span>
                         )}
+                        {/* Stripe used to be a phrase on this line. It is a column
+                            now, so it is not said twice. */}
                         <div style={{ fontSize: 11.5, color: MUTED }}>
                           {r.org_slug} · set up {fmtDate(r.org_created_at)}
                           {r.org_platform_plan ? ` · ${r.org_platform_plan}` : ""}
-                          {/* Only the shared truth. stripe_charges_enabled is false both
-                              for an operator who never started Stripe and for one who
-                              connected but is still being verified - the Enrops org on
-                              prod is the second kind - so "not connected" would state
-                              the wrong cause for half the rows it appears on. */}
-                          {r.stripe_charges_enabled ? " · can take payments" : " · can't take payments yet"}
                         </div>
                       </td>
                       <td style={{ ...td, color: stage.color, fontWeight: 600 }}>{stage.label}</td>
                       <td style={num}>
                         {r.signed_in_member_count}/{r.member_count}
                         <div style={{ fontSize: 11.5, color: MUTED, fontWeight: 400 }}>signed in</div>
+                      </td>
+                      {/* Three states, not two. A tick means money can actually
+                          move; "started" means an account exists but Stripe has
+                          not cleared it to charge yet (demo-chess-center on
+                          staging is exactly this). Ticking that row would say
+                          they are ready when a family still cannot pay them. */}
+                      <td style={{ ...td, textAlign: "center", whiteSpace: "nowrap" }}>
+                        {r.stripe_charges_enabled ? (
+                          <span title="Connected and able to take payments" style={{ color: OK, fontWeight: 700, fontSize: 15 }}>✓</span>
+                        ) : r.stripe_connected ? (
+                          <span title="Account connected, but Stripe has not enabled charges yet"
+                                style={{ color: AMBER, fontSize: 11.5, fontWeight: 600 }}>started</span>
+                        ) : (
+                          <span title="No Stripe account yet" style={{ color: MUTED }}>—</span>
+                        )}
                       </td>
                       <td style={num}>
                         {live}
@@ -246,6 +258,8 @@ export default function OperatorOverview() {
           </div>
 
           <div style={{ fontSize: 11.5, color: MUTED, marginTop: 10, maxWidth: 720, lineHeight: 1.6 }}>
+            "Stripe" ticks when an operator can actually take money. "Started" means they connected an account
+            but Stripe hasn't cleared it to charge yet, which is a different problem from never having begun.
             "Live" is what families can register for right now — programs that are open plus camp sessions that
             are active. "First published" counts anything that ever went live, including classes since closed
             or cancelled, so an operator who published last term and closed it still shows the date they did it.
