@@ -198,15 +198,28 @@ serve(async (req) => {
     // row, so a bare .neq() silently does not match it - the one program state
     // nobody writes on purpose would have been the one that stayed sellable.
     // Anything that is not literally 'open' must fail this check.
+    // It also closes a TENANT hole found in the same pass. The org check below
+    // lives inside the non-VIP price loop, and VIP ids are excluded from that
+    // loop - so a VIP bundle's program ids, which come straight off the client
+    // payload, were never checked against this org at all. A crafted cart could
+    // name ANOTHER tenant's classes and register children against them at the
+    // fixed VIP rate. Validating every cart program here, once, in one place, is
+    // the fix; the price loop keeps its own check as defence in depth.
     const allProgramIds = [...new Set(flat.map((f) => f.program_id))];
-    const { data: unpublished, error: pubErr } = await admin
+    const { data: cartPrograms, error: pubErr } = await admin
       .from('programs')
-      .select('id')
-      .in('id', allProgramIds)
-      .or('status.is.null,status.neq.open');
+      .select('id, status, organization_id')
+      .in('id', allProgramIds);
     if (pubErr) throw new Error(`publish check: ${pubErr.message}`);
-    if (unpublished?.length) {
-      console.warn('[create-registration] BLOCKED: unpublished programs in cart', unpublished.map((p) => p.id));
+    const byId = new Map((cartPrograms || []).map((p) => [p.id, p]));
+    const rejected = allProgramIds.filter((id) => {
+      const p = byId.get(id);
+      // Missing row counts as rejected: an id we cannot read is an id we must
+      // not sell, rather than one we quietly skip.
+      return !p || p.organization_id !== orgId || p.status !== 'open';
+    });
+    if (rejected.length) {
+      console.warn('[create-registration] BLOCKED: cart holds programs that are not this org\'s and open', rejected);
       return json({ error: 'A class in your cart is no longer open for registration. Please refresh and try again.' }, 400);
     }
 
