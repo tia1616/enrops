@@ -238,8 +238,10 @@ serve(async (req) => {
     const VIP_PER_TERM_CENTS = 24000;
 
     // The cart was flattened and validated at the top of this handler, before
-    // any write — see the block above the parent upsert. `flat` and `byId` are
-    // in scope here.
+    // any write — see the block above the parent upsert. `flat` is in scope
+    // here. (`byId` is deliberately not reused: it holds only the three columns
+    // the validation needed. Widening that select and dropping the second query
+    // is a real simplification, but it is a separate change from this one.)
 
     // Real prices for non-VIP programs, scoped to this org (reject a program that
     // isn't in this org so a client can't inject a foreign/fake price).
