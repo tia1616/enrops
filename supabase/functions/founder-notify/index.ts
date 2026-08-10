@@ -266,10 +266,16 @@ serve(async (req) => {
       // and fail the same way until then, which is the intended noise - it stops
       // on its own after a day.
       console.error('[founder-notify] unknown trigger_key:', note.trigger_key);
-      await supabase
-        .from('founder_notifications')
-        .update({ send_error: `unknown trigger_key: ${String(note.trigger_key).slice(0, 100)}` })
-        .eq('id', note.id);
+      // !preview, like every other write in this function. Preview is documented
+      // as render-only, and the person most likely to preview a row with an
+      // unrecognised key is someone diagnosing why no email arrived - writing
+      // send_error here would overwrite the very diagnostic they opened it for.
+      if (!preview) {
+        await supabase
+          .from('founder_notifications')
+          .update({ send_error: `unknown trigger_key: ${String(note.trigger_key).slice(0, 100)}` })
+          .eq('id', note.id);
+      }
       return json({ error: 'unknown trigger_key' }, 500);
     }
 
