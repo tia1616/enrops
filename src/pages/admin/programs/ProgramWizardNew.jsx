@@ -21,6 +21,13 @@ import CancellationPolicyInline from "../../../components/CancellationPolicyInli
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib/programText.js";
 import { isUnset, rangeBackwards, rangeBackwardsMessage } from "../../../lib/grades.js";
+import {
+  publishBlockedByStripe,
+  PUBLISH_GATE_CTA,
+  PUBLISH_GATE_WHY,
+  PUBLISH_GATE_DRAFT_HINT,
+  STRIPE_CONNECT_ROUTE,
+} from "../../../lib/publishGate.js";
 
 // "" / null / undefined -> NULL, anything else -> a number. isUnset is the shared
 // definition of "not stated" and is the only one in the codebase that knows grade K
@@ -574,6 +581,13 @@ export default function ProgramWizardNew() {
     ? true
     : Boolean(formData.price_cents !== null && formData.price_cents >= 0);
 
+  // "Open registration" publishes, so it carries the Stripe gate. "Save as
+  // draft" writes the same row with status='draft' and is never gated — the
+  // operator keeps working either way. Partner-run and free classes take no
+  // money through enrops and are exempt; publishGate holds that rule, and the
+  // database trigger holds it again.
+  const publishBlocked = publishBlockedByStripe(org, formData);
+
   // Which calendar source the preview was actually able to use. Drives the
   // "Confirmed through ..." line in the preview box.
   //   - 'district' = location has a district set + that district's calendar
@@ -602,6 +616,12 @@ export default function ProgramWizardNew() {
   async function handleSubmit(status) {
     if (!step1Valid || !step2Valid || !step3Valid) {
       setSubmitError("Some required fields are still empty.");
+      return;
+    }
+    // Backstop for the publishing path only — the button is replaced by a
+    // Connect link when this is true. Draft saves are never gated.
+    if (status === "open" && publishBlocked) {
+      setSubmitError(`${PUBLISH_GATE_WHY} ${PUBLISH_GATE_DRAFT_HINT}`);
       return;
     }
     setSubmitting(true);
@@ -767,6 +787,7 @@ export default function ProgramWizardNew() {
             onSubmit={handleSubmit}
             onBackToPrograms={() => navigate("/admin/programs")}
             step3Valid={step3Valid}
+            publishBlocked={publishBlocked}
           />
         )}
       </div>
@@ -1378,6 +1399,7 @@ function Step3PriceAndOpen({
   onSubmit,
   onBackToPrograms,
   step3Valid,
+  publishBlocked,
 }) {
   const isPartner = formData.runs_own_registration;
 
@@ -1583,11 +1605,29 @@ function Step3PriceAndOpen({
           Ready to publish?
         </div>
         <p style={{ margin: "0 0 14px", color: MUTED, fontSize: 13, lineHeight: 1.5 }}>
-          {isPartner
-            ? "Adding this puts it on your schedule and rosters so you can match instructors. Saving as a draft keeps it private until you're ready."
-            : "Opening registration puts this program in your public catalog so families can sign up. Saving as a draft keeps it private — you can publish from the program list anytime."}
+          {/* Once the gate is up, the primary control no longer opens
+              registration, so describing that is describing a button that is
+              not there. Say what IS true and what still works. */}
+          {publishBlocked
+            ? `${PUBLISH_GATE_WHY} ${PUBLISH_GATE_DRAFT_HINT}`
+            : isPartner
+              ? "Adding this puts it on your schedule and rosters so you can match instructors. Saving as a draft keeps it private until you're ready."
+              : "Opening registration puts this program in your public catalog so families can sign up. Saving as a draft keeps it private — you can publish from the program list anytime."}
         </p>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          {publishBlocked ? (
+            <Link
+              to={STRIPE_CONNECT_ROUTE}
+              style={{
+                display: "inline-flex", alignItems: "center",
+                padding: "10px 18px", background: "#FDF6E3", color: "#8a5a00",
+                border: "1px solid #F0D48A", borderRadius: 8, fontSize: 14,
+                fontWeight: 600, textDecoration: "none",
+              }}
+            >
+              {PUBLISH_GATE_CTA} →
+            </Link>
+          ) : (
           <button
             onClick={() => onSubmit("open")}
             disabled={submitting || !step3Valid}
@@ -1600,6 +1640,7 @@ function Step3PriceAndOpen({
           >
             {submitting ? "Working…" : isPartner ? "Add to schedule" : "Open registration"}
           </button>
+          )}
           <button
             onClick={() => onSubmit("draft")}
             disabled={submitting || !step3Valid}

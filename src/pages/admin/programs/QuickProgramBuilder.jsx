@@ -36,6 +36,13 @@ import {
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib/programText.js";
 import { GRADE_OPTIONS, audiencePatch, rangeBackwards, rangeBackwardsMessage } from "../../../lib/grades.js";
+import {
+  publishBlockedByStripe,
+  PUBLISH_GATE_CTA,
+  PUBLISH_GATE_WHY,
+  PUBLISH_GATE_DRAFT_HINT,
+  STRIPE_CONNECT_ROUTE,
+} from "../../../lib/publishGate.js";
 
 // Match ProgramWizardNew's palette so the two builders read as one system.
 // Monotonic where available. performance.now() is immune to the system clock
@@ -310,12 +317,18 @@ export default function QuickProgramBuilder() {
     if (!org?.id) return;
     let cancelled = false;
     (async () => {
-      const { data } = await supabase
+      const { data, error: chargesErr } = await supabase
         .from("organizations")
         .select("stripe_charges_enabled")
         .eq("id", org.id)
         .maybeSingle();
-      if (!cancelled) setChargesEnabled(!!data?.stripe_charges_enabled);
+      if (cancelled) return;
+      // A FAILED read is not "no Stripe". This used to coerce both to false with
+      // `!!data?.…`, which was survivable while the value only chose between two
+      // nudges — it is not now that it can withhold Create. A network blip must
+      // not tell a connected operator to go connect Stripe. null = unknown, and
+      // every consumer below treats unknown as "don't act".
+      setChargesEnabled(chargesErr || !data ? null : !!data.stripe_charges_enabled);
     })();
     return () => { cancelled = true; };
   }, [org?.id]);
@@ -531,6 +544,22 @@ export default function QuickProgramBuilder() {
   const valid =
     name.trim() !== "" && priceValid && spotsNum >= 1 && !audienceBackwards &&
     (isOneOff ? !!startDate : !!day) && !!locationId;
+
+  // Create PUBLISHES, so it carries the Stripe gate; Save as draft does not and
+  // must stay fully available — "you can't publish yet" has to never mean "you
+  // can't work". Every class this builder makes is runs_own_registration:false,
+  // so the price and the org's two flags are the whole question. Reads the LIVE
+  // price field, so typing a price into a free class arms the gate as you type,
+  // rather than after a rejected save.
+  //
+  // `?? org?.stripe_charges_enabled` so the gate is never LESS informed than the
+  // rest of the app: the fetch above is the fresher value (it re-reads after a
+  // Connect round-trip), but until it lands — or if it failed — the org row
+  // AdminLayout already loaded still knows the answer.
+  const publishBlocked = publishBlockedByStripe(
+    { ...org, stripe_charges_enabled: chargesEnabled ?? org?.stripe_charges_enabled },
+    { price_cents: priceValid ? priceCents : 0, runs_own_registration: false },
+  );
 
   // ---- First-program onboarding ----------------------------------------
   //
@@ -755,6 +784,13 @@ export default function QuickProgramBuilder() {
   // publishing the instant you hit Create.
   async function handleCreate(asDraft = false) {
     if (!valid || submitting) return;
+    // Backstop for the publishing path only. The Create button is replaced by a
+    // Connect link when this is true, so getting here means a stale render — and
+    // the DB trigger would reject it anyway. Drafts are never gated.
+    if (!asDraft && publishBlocked) {
+      setErr(`${PUBLISH_GATE_WHY} ${PUBLISH_GATE_DRAFT_HINT}`);
+      return;
+    }
     setSubmitting(true);
     // Which button is in flight, so only that one changes its label. Both share
     // `submitting` for the disabled state, which is correct — neither should be
@@ -1403,7 +1439,20 @@ export default function QuickProgramBuilder() {
   // Create above Cancel on a phone) can be emitted in real DOM order without
   // writing the markup twice. See the note at the footer for why CSS `order`
   // was the wrong tool.
-  const createButton = (
+  // Stripe not connected and this class would take money: Create becomes the
+  // step that unblocks it. Replaced, not disabled — a dimmed button is a dead
+  // end, and this one has somewhere to send them. Save as draft sits right
+  // beside it, untouched, which is the whole reason the gate is humane.
+  const createButton = publishBlocked ? (
+    <button
+      type="button"
+      onClick={() => navigate(STRIPE_CONNECT_ROUTE)}
+      style={{ ...primaryBtn, flex: 1, background: "#FDF6E3", color: "#8a5a00", border: "1px solid #F0D48A" }}
+      title={`${PUBLISH_GATE_WHY} ${PUBLISH_GATE_DRAFT_HINT}`}
+    >
+      {PUBLISH_GATE_CTA} →
+    </button>
+  ) : (
     <button
       // MUST be wrapped: passing handleCreate directly hands React's click event
       // in as `asDraft`, and a SyntheticEvent is truthy — every Create would
@@ -2192,9 +2241,15 @@ export default function QuickProgramBuilder() {
             written to escape. `=== true` and not `!== false`, matching that helper:
             the fallback has to be the sentence that is true in BOTH states. */}
         <div style={{ ...helpStyle, marginTop: -4, textAlign: "center" }}>
-          {org?.uses_enrops_registration === true
-            ? "Create puts the class on your registration page straight away. Save as draft keeps it private, with its dates worked out, until you publish it."
-            : "Create makes the class straight away. Save as draft keeps it private, with its dates worked out, until you're ready."}
+          {/* When the gate is up, Create is no longer the button this sentence
+              describes — it says "Connect Stripe to publish". Explaining the
+              publish action beneath a control that does not perform it is the
+              same class of lie the sentence was rewritten to remove. */}
+          {publishBlocked
+            ? `${PUBLISH_GATE_WHY} ${PUBLISH_GATE_DRAFT_HINT}`
+            : org?.uses_enrops_registration === true
+              ? "Create puts the class on your registration page straight away. Save as draft keeps it private, with its dates worked out, until you publish it."
+              : "Create makes the class straight away. Save as draft keeps it private, with its dates worked out, until you're ready."}
         </div>
       </div>
     </div>
