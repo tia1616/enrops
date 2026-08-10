@@ -363,6 +363,18 @@ serve(async (req) => {
                     // 2 and 3 against the same account, and refunds of charge 1
                     // must be scoped there as well.
                     stripe_charge_account_id: (event.account as string | null) ?? null,
+                    // What the FAMILY agreed to, carried from the checkout that
+                    // just completed — not the org's setting at charge time.
+                    // process-installments honours this over live config, so an
+                    // operator flipping the fee toggle later cannot change what
+                    // charges 2 and 3 take off this saved card.
+                    //
+                    // `?? null` covers exactly one case: a session created by the
+                    // previous deploy and paid after this one, so the schedule row
+                    // predates the column. NULL means "not recorded" and falls back
+                    // to live config downstream, i.e. the behaviour those rows would
+                    // have had anyway. The window is minutes wide and closes itself.
+                    fee_pass_through: scheduleRow.fee_pass_through ?? null,
                   };
                 });
 
@@ -388,6 +400,13 @@ serve(async (req) => {
             } else {
               // === LEGACY PATH (pre-v17 sessions): hardcoded 2-row insert ===
               // Kept for backwards compat with sessions created before v17 deploy.
+              //
+              // Deliberately does NOT stamp fee_pass_through. There is no schedule
+              // row to carry it, and create-checkout has written
+              // schedule_source='checkout_schedules' on every session since v17,
+              // so nothing new can arrive here. Leaving it NULL says "not
+              // recorded" honestly; inventing the org's current value would be
+              // claiming to know what a family was shown before we tracked it.
               const inst2RegId = meta.installment_2_registration_id || regIds[0];
               const inst3RegId = meta.installment_3_registration_id || regIds[0];
 
