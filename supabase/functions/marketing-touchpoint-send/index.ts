@@ -133,8 +133,10 @@ const APPROVED_TOKENS = new Set([
   // first_session_date - organizations.registration_close_days_before. Per
   // recipient, so one campaign spanning schools that start on different days
   // states the right deadline to each parent instead of the earliest one to
-  // everybody. Empty for camps (see the camps branch) and when the program has
-  // no first_session_date.
+  // everybody. Empty for camps (see the camps branch), when the program has no
+  // first_session_date, and when a school's picked programs do not share one
+  // close date — a deadline that is right for only some of the programs named
+  // in the same sentence is worse than no deadline at all.
   "registration_close_date",
   "topic", "topics_list", "promo_code", "promo_amount",
   // VIP/annual-pass block: resolves to an HTML <p> built from org.vip_offering
@@ -1170,14 +1172,34 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
     tokens.set("curriculum", curriculumHtml);
     tokens.set("day_of_week", program.day_of_week || "");
     tokens.set("first_session_date", program.first_session_date ? formatHumanDate(program.first_session_date) : "");
-    // The deadline THIS parent is working against. Uses the first program only,
-    // same as every other numeric per-program token: a multi-program school
-    // could have two different close dates, and quoting one as if it covered
-    // both would be worse than the existing convention. Empty when the program
-    // has no start date, so the copy omits the line rather than saying "closes ".
+    // The deadline THIS parent is working against.
+    //
+    // Emitted ONLY when every program this recipient is being told about shares
+    // one close date — the same all-or-nothing rule the camps branch uses for
+    // early_bird_deadline, and for the same reason. {{curriculum}} names ALL of
+    // a school's picked programs, so a single deadline drawn from the first one
+    // would be attached to every name in that sentence. Beatrice Morrow Cannady
+    // runs two fall programs starting four days apart (2026-09-14, 2026-09-18);
+    // taking the first would have told Cannady parents that the September 18
+    // class closed on the 7th, four days before it does, and a parent who
+    // believes that stops trying.
+    //
+    // The close window is org-wide, so "same close date" is exactly "same
+    // first_session_date" — no need to compute each one to compare them.
+    //
+    // Empty when they disagree, and empty when any start date is missing.
+    // Dropping the sentence is the safe failure; there is no "close enough"
+    // deadline. Emitting the LATEST would be worse than the earliest, not
+    // better: it invites a parent to register for the early program after it
+    // has already closed.
+    const startDates = allPrograms.map((p) => p.first_session_date);
+    const everyProgramDated = startDates.length > 0 && startDates.every((d) => d != null);
+    const oneSharedStart = everyProgramDated && startDates.every((d) => d === startDates[0]);
     tokens.set(
       "registration_close_date",
-      registrationCloseDate(program.first_session_date, org.registration_close_days_before),
+      oneSharedStart
+        ? registrationCloseDate(startDates[0], org.registration_close_days_before)
+        : "",
     );
     tokens.set("session_count", program.session_count != null ? String(program.session_count) : "");
     tokens.set("regular_price", program.price_cents ? `$${(program.price_cents / 100).toFixed(0)}` : "");
