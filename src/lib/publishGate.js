@@ -16,7 +16,7 @@
 //
 // This file is the ONE place the rule is written for the frontend. The database
 // trigger `tg_programs_require_stripe_to_publish`
-// (supabase/migrations/20260810b_require_stripe_to_publish.sql) is the same rule
+// (supabase/migrations/20260810c_require_stripe_to_publish.sql) is the same rule
 // in SQL and is the actual enforcement — the Comms gate shipped UI-only the
 // morning of 2026-08-09 and code review found it bypassable from devtools within
 // hours. Change one of these two and you must change the other.

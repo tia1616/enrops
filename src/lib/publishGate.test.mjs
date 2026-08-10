@@ -69,7 +69,7 @@ eq('no error -> empty string', publishErrorMessage(null), '');
 
 // --- DRIFT PINS: the same rule, written twice, must stay the same rule ---
 const sql = readFileSync(
-  new URL('../../supabase/migrations/20260810b_require_stripe_to_publish.sql', import.meta.url),
+  new URL('../../supabase/migrations/20260810c_require_stripe_to_publish.sql', import.meta.url),
   'utf8',
 );
 // Every input of the JS rule has to appear in the SQL one. Drop an exemption
