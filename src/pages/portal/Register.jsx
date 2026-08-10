@@ -248,6 +248,17 @@ export default function Register() {
         .eq('program_location_id', program.program_location_id)
         .eq('day_of_week', program.day_of_week)
         .eq('runs_own_registration', false) // don't bundle partner-run programs into a paid VIP offer
+        // A LEG MUST BE PUBLISHED TO BE SOLD. Without this the bundle happily
+        // picked up DRAFT winter and spring classes and charged a family for
+        // them -- a class the operator deliberately kept private, sold anyway,
+        // with no way for them to see it had happened. Live on prod against
+        // the-ukulele-project: an open Fall class at Stephenson had two $299
+        // drafts sharing its location and day, both sellable this way.
+        //
+        // 'open' mirrors this page's own eligibility query rather than
+        // inventing a second rule -- status is nullable, and a NULL-status row
+        // is not open and must not be sold either, which .eq gives us.
+        .eq('status', 'open')
         .in('term', [bundleTerms.winter, bundleTerms.spring]);
       const winter = matches?.find((p) => p.term === bundleTerms.winter);
       const spring = matches?.find((p) => p.term === bundleTerms.spring);
