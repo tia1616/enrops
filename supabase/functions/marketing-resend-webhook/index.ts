@@ -187,12 +187,40 @@ async function addSuppression(
 // inside any sane webhook timeout, and paid only on events headed for discard.
 const UNMATCHED_RECHECK_MS = 750;
 
+// The event types this function actually acts on. MUST stay in step with the
+// switch cases below — opens and clicks are here because they are positive
+// PROOF of delivery, not because we track engagement on service email.
+const ACTIONABLE_LIFECYCLE_EVENTS = new Set([
+  "email.delivered",
+  "email.opened",
+  "email.clicked",
+  "email.bounced",
+  "email.complained",
+]);
+
 async function handleLifecycleEvent(
   supabase: SupabaseClient,
   emailId: string,
   type: string,
   data: Record<string, unknown>,
 ): Promise<Response> {
+  // Decide actionability BEFORE the lookup and, critically, before the re-check
+  // delay below. This function is reached for ANY event that missed
+  // marketing_sends, not just delivery verdicts — and `email.sent` fires within
+  // milliseconds of every lifecycle send, i.e. squarely INSIDE the race window
+  // the re-check exists for. So without this guard the row reliably does not
+  // exist yet, every single send burns the full re-check delay, and then falls
+  // through to the switch's default arm having done nothing. A welcome batch to
+  // 200 families would hold 200 invocations for 750ms each for no benefit —
+  // wasted concurrency that can push Resend into webhook timeouts and retries.
+  //
+  // The switch's `default:` arm is deliberately KEPT rather than deleted. It is
+  // now unreachable, but it is what makes the switch safe if this set and the
+  // cases below ever drift apart, and it costs nothing.
+  if (!ACTIONABLE_LIFECYCLE_EVENTS.has(type)) {
+    return json({ ok: true, ignored: "unhandled_type", type }, 200);
+  }
+
   // resend_message_id is not UNIQUE on this table (the unique key is
   // automation_id + context_key), and a retry overwrites the id in place. A
   // Resend id is globally unique so at most one row can hold it, but limit(1)
