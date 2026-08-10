@@ -117,6 +117,11 @@ for anything specific and MUST NOT invent specifics.
 `{{early_bird_deadline}}` `{{first_session_date}}` `{{session_count}}`
 `{{day_of_week}}` `{{curriculum}}` `{{vip_price}}`
 `{{registration_close_date}}` (afterschool only - empty for camps)
+`{{program_details}}` (afterschool only - a <ul>, one row per program at this
+parent's school with its own day, start date, sessions and deadline. Use this
+whenever a school might run more than one class; the inline tokens above
+describe only ONE program while `{{curriculum}}` names them all. Own line, never
+inside a sentence.)
 
 **Per-campaign**
 `{{topic}}` `{{topics_list}}` `{{promo_code}}` `{{promo_amount}}`

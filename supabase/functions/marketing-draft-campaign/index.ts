@@ -1048,6 +1048,10 @@ const APPROVED_TOKENS = new Set([
   // The day registration closes for this recipient's program. Afterschool only
   // (empty for camps). KEEP IN SYNC with marketing-touchpoint-send's APPROVED_TOKENS.
   "registration_close_date",
+  // Per-program <ul> for this recipient's school, one row per program with its
+  // own day, start date, sessions and deadline. The afterschool sibling of
+  // camp_details, and the correct choice for a multi-program school.
+  "program_details",
   // per-area camps (resolves to an HTML <ul> with each camp's name, venue, dates
   // in THIS recipient's area). The camps-mode equivalent of the per-school
   // program tokens for afterschool. Empty for afterschool campaigns.
@@ -1172,7 +1176,11 @@ function buildSystemPrompt(
   const tokenList = `Approved merge tokens (use these for ALL specifics):
 - Per-recipient: {{first_name}}, {{parent_name}}, {{child_first_name}}, {{child_last_name}}, {{school}}, {{city}}, {{zip}}, {{geo_segment}}, {{unsubscribe_url}}
 - Per-org: {{org_name}}, {{sender_name}}, {{sender_email}}, {{register_url}}, {{register_button}} (branded registration button — see CTA rule), {{reply_to}}, {{logo_url}}, {{closer}}, {{phone}}, {{website}}
-- Per-program (pulled per recipient's school): {{savings}}, {{early_bird_price}}, {{regular_price}}, {{early_bird_deadline}}, {{first_session_date}}, {{session_count}}, {{day_of_week}}, {{curriculum}}, {{vip_price}}, {{registration_close_date}} (the last day this parent can register for THEIR school's program — use it for deadline urgency instead of {{early_bird_deadline}} when the early-bird window has already passed)
+- Per-program (pulled per recipient's school): {{savings}}, {{early_bird_price}}, {{regular_price}}, {{early_bird_deadline}}, {{first_session_date}}, {{session_count}}, {{day_of_week}}, {{curriculum}}, {{vip_price}}, {{registration_close_date}} (the last day this parent can register for THEIR school's program — use it for deadline urgency instead of {{early_bird_deadline}} when the early-bird window has already passed), {{program_details}} (an HTML <ul>, one row per program at this parent's school, each with its own day, start date, session count and sign-up deadline)
+
+WHEN A SCHOOL RUNS MORE THAN ONE PROGRAM, USE {{program_details}}
+The inline per-program tokens ({{first_session_date}}, {{day_of_week}}, {{session_count}}, {{registration_close_date}}, {{regular_price}}) all describe ONE program — the soonest one at that parent's school. But {{curriculum}} names EVERY program the school runs. So a sentence like "{{curriculum}} starts {{first_session_date}} and sign-ups close {{registration_close_date}}" is only true about one of the classes it names, and states a wrong date for the others. {{registration_close_date}} deliberately renders EMPTY when a school's programs disagree, which would leave your sentence dangling ("sign-ups close on .").
+Whenever a campaign spans schools that might run two or more programs, put the specifics in {{program_details}} and keep the surrounding prose general ("Here's what's running at {{school}} this fall:"). One row per class, each correct. Never put {{program_details}} inside a sentence — it is a list, so give it its own line or paragraph.
 - Per-area camp list (pulled per recipient's area, camps mode only): {{camp_details}} — an HTML <ul> with each camp's name, venue, and date range in this recipient's area. Use this when the operator wants parents to see specific venues + dates per camp (almost always — it's what helps them pick a camp to register for).
 - VIP / annual-pass block (whole paragraph, per-recipient suppression): {{vip_block}} — see "VIP / ANNUAL-PASS BLOCK" rules below
 - Per-campaign: {{topic}}, {{topics_list}}, {{promo_code}}, {{promo_amount}}
@@ -1222,7 +1230,7 @@ Tokens that work for camps (same names as afterschool, different source):
 
 Tokens that DO NOT work for camps (leave empty — emitting them gives broken copy):
 - {{school}}  — camp parents have kids at many schools; the camp is a destination, not their school. Use {{geo_segment}} ("camps in {{geo_segment}}", "this summer in {{geo_segment}}") instead.
-- {{day_of_week}}, {{session_count}}, {{regular_price}}, {{early_bird_price}}, {{early_bird_deadline}}, {{savings}}, {{vip_price}}, {{registration_close_date}}  — camps don't share these structurally with the afterschool program model. Write any price/dates inline FROM KNOWN PROGRAM DETAILS if you need them — but most camp copy doesn't.
+- {{day_of_week}}, {{session_count}}, {{regular_price}}, {{early_bird_price}}, {{early_bird_deadline}}, {{savings}}, {{vip_price}}, {{registration_close_date}}, {{program_details}}  — camps don't share these structurally with the afterschool program model. ({{program_details}} is the afterschool list; {{camp_details}} is the camps one. Use {{camp_details}} here.) Write any price/dates inline FROM KNOWN PROGRAM DETAILS if you need them — but most camp copy doesn't.
 
 NEVER say "your school", "their school", or "your kid's school" in camps copy.
 

@@ -424,6 +424,7 @@ const MERGE_TOKENS = [
     { key: "register_button", label: "Reg button", tip: "Branded registration button" },
     { key: "vip_block", label: "VIP block", tip: "Annual pass offer (auto-suppressed per school)" },
     { key: "camp_details", label: "Camp list", tip: "Camp names, venues & dates for recipient's area" },
+    { key: "program_details", label: "Program list", tip: "One row per program at this parent's school, each with its own day, start date, sessions and sign-up deadline. Use this when a school runs more than one class. Put it on its own line, not inside a sentence." },
   ]},
 ];
 

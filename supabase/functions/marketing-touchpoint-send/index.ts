@@ -138,6 +138,17 @@ const APPROVED_TOKENS = new Set([
   // close date — a deadline that is right for only some of the programs named
   // in the same sentence is worse than no deadline at all.
   "registration_close_date",
+  // Per-program list for THIS recipient's school: an HTML <ul>, one <li> per
+  // program, each carrying its OWN day, start date, session count and sign-up
+  // deadline. The afterschool sibling of {{camp_details}}.
+  //
+  // This is the honest answer for a multi-program school. The inline tokens
+  // above describe ONE program while {{curriculum}} names them all, so at a
+  // school running two classes on different dates they can only ever be right
+  // about one of them. A block per program is right about each, and because it
+  // renders as a whole <ul> or as nothing, it cannot leave the half-sentence an
+  // empty inline token leaves behind ("sign-ups close on .").
+  "program_details",
   "topic", "topics_list", "promo_code", "promo_amount",
   // VIP/annual-pass block: resolves to an HTML <p> built from org.vip_offering
   // for recipients whose school offers it, and to an empty string for
@@ -1201,6 +1212,14 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
         ? registrationCloseDate(startDates[0], org.registration_close_days_before)
         : "",
     );
+
+    // {{program_details}} — one <li> per program at this recipient's school,
+    // each with its OWN deadline. Sorted by start date so the soonest class,
+    // and the soonest deadline, is read first.
+    tokens.set(
+      "program_details",
+      buildProgramDetails(allPrograms, org.registration_close_days_before),
+    );
     tokens.set("session_count", program.session_count != null ? String(program.session_count) : "");
     tokens.set("regular_price", program.price_cents ? `$${(program.price_cents / 100).toFixed(0)}` : "");
     tokens.set("early_bird_price", program.early_bird_price_cents ? `$${(program.early_bird_price_cents / 100).toFixed(0)}` : "");
@@ -1280,12 +1299,12 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
     // is an afterschool-term practice, and a recipient's area can hold camps with
     // several different start dates, so there is no single honest deadline to
     // print. Camp copy states dates inline from KNOWN PROGRAM DETAILS instead.
-    for (const k of ["day_of_week", "session_count", "vip_price", "registration_close_date"]) {
+    for (const k of ["day_of_week", "session_count", "vip_price", "registration_close_date", "program_details"]) {
       tokens.set(k, "");
     }
   } else {
     // No matching program AND no matching camps — leave per-program tokens empty
-    for (const k of ["curriculum", "day_of_week", "first_session_date", "session_count", "regular_price", "early_bird_price", "early_bird_deadline", "savings", "vip_price", "camp_details", "registration_close_date"]) {
+    for (const k of ["curriculum", "day_of_week", "first_session_date", "session_count", "regular_price", "early_bird_price", "early_bird_deadline", "savings", "vip_price", "camp_details", "registration_close_date", "program_details"]) {
       tokens.set(k, "");
     }
   }
@@ -1356,7 +1375,11 @@ function buildVipBlock(
 // 2026-06-02 when Cascadia-excluded vs Cascadia-included previews showed
 // raw HTML tags. All OTHER tokens still get escaped: they come from
 // recipient data (parent_name, school) which could contain <script> etc.
-const PRE_RENDERED_HTML_TOKENS = new Set(["vip_block", "curriculum", "camp_details", "register_button"]);
+// program_details belongs here for the same reason camp_details does: it is a
+// <ul> this function builds, with every interpolated value already passed
+// through escapeHtml inside the builder. Escaping it again would ship literal
+// "&lt;li&gt;" to parents.
+const PRE_RENDERED_HTML_TOKENS = new Set(["vip_block", "curriculum", "camp_details", "program_details", "register_button"]);
 
 function replaceTokens(text: string, tokens: Map<string, string>, opts: { html: boolean }): string {
   return text.replace(/\{\{(\w+)\}\}/g, (full, key) => {
@@ -1543,6 +1566,57 @@ function registrationCloseDate(
   if (Number.isNaN(d.getTime())) return "";
   d.setDate(d.getDate() - days);
   return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+}
+
+// {{program_details}} — the afterschool sibling of {{camp_details}}. One <li>
+// per program at this recipient's school, each carrying its own day, start
+// date, session count and sign-up deadline.
+//
+// Why a list and not a sentence: {{curriculum}} names every program a school
+// runs, but the inline tokens beside it ({{first_session_date}},
+// {{registration_close_date}}, {{regular_price}}) describe only ONE of them.
+// At Beatrice Morrow Cannady, which runs three fall classes on three different
+// dates, no single sentence can be true about all three. A row each is.
+//
+// Renders "" for an empty list, so postCleanCopy's empty-paragraph rule strips
+// the wrapper the operator put it in. That is the whole advantage over an
+// inline token: nothing can be left dangling mid-sentence.
+//
+// Every interpolated value is escaped here, which is why the token is listed in
+// PRE_RENDERED_HTML_TOKENS and skips escaping at substitution time.
+function buildProgramDetails(
+  programs: ProgramRow[],
+  daysBefore: number | null,
+): string {
+  const sorted = [...programs].sort((a, b) =>
+    (a.first_session_date ?? "9999").localeCompare(b.first_session_date ?? "9999")
+  );
+  const items = sorted.map((p) => {
+    const name = escapeHtml(p.curriculum ?? "");
+    if (!name) return "";
+    // Each fragment is added only when we actually have the value, so a program
+    // missing a start date degrades to just its name rather than emitting
+    // "starting ." — the same failure the inline token was suppressed for.
+    const bits: string[] = [];
+    const day = (p.day_of_week ?? "").trim();
+    if (day) bits.push(escapeHtml(pluralDay(day)));
+    if (p.first_session_date) bits.push(`starting ${escapeHtml(formatHumanDate(p.first_session_date))}`);
+    if (p.session_count != null) bits.push(`${p.session_count} sessions`);
+    const close = registrationCloseDate(p.first_session_date, daysBefore);
+    const closeSentence = close ? ` Sign-ups close ${escapeHtml(close)}.` : "";
+    const detail = bits.length > 0 ? `: ${bits.join(", ")}.` : ".";
+    return `<li><strong>${name}</strong>${detail}${closeSentence}</li>`;
+  }).filter((s) => s.length > 0);
+  return items.length > 0 ? `<ul>${items.join("")}</ul>` : "";
+}
+
+// "Monday" -> "Mondays", so a recurring class reads as recurring. Left alone if
+// the operator already pluralized it or entered something with punctuation
+// ("Mon/Wed"), because guessing at those produces worse copy than echoing what
+// they typed.
+function pluralDay(day: string): string {
+  if (/^(monday|tuesday|wednesday|thursday|friday|saturday|sunday)$/i.test(day)) return `${day}s`;
+  return day;
 }
 
 function extractTopics(what: Record<string, unknown> | undefined): string[] {
@@ -1739,7 +1813,17 @@ async function renderPreview(
   // ALL picked programs at the preview location — used to join {{curriculum}}
   // as a list for multi-program schools. Mirrors the real-send behavior so
   // preview shows what parents at this school will actually see.
-  const programsAtLocation = pickedPrograms.filter((p) => p.program_location_id === locationId);
+  // Sorted the SAME way resolveRecipientPrograms sorts for a real send
+  // (earliest first_session_date first, undated last). This filter used to
+  // return whatever order Postgres handed back, so at a multi-program school
+  // the preview picked a different "first" program than the send did and the
+  // operator approved copy showing one program's date, day and price while
+  // parents received another's. The comment here claimed it mirrored the send;
+  // it did not. Caught 2026-08-10 on a Cannady preview whose subject listed
+  // three programs out of date order.
+  const programsAtLocation = pickedPrograms
+    .filter((p) => p.program_location_id === locationId)
+    .sort((a, b) => (a.first_session_date ?? "9999").localeCompare(b.first_session_date ?? "9999"));
   const programAtLocation = programsAtLocation[0];
   // Also load district (added 2026-06-02) so camps preview synthesizes a
   // parent in this location's area and {{curriculum}} resolves to the camps
