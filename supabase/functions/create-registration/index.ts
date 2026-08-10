@@ -103,6 +103,81 @@ serve(async (req) => {
     }
     const orgId = org.id;
 
+    // ---------------------------------------------------------------------
+    // VALIDATE THE CART BEFORE ANY WRITE.
+    //
+    // This block sits here, above the parent upsert, ON PURPOSE. It needs only
+    // `children` and `orgId`, and everything below it writes: the parents UPDATE
+    // matches on email alone against a GLOBAL unique index, and the
+    // parent_org_relationships insert attaches that parent to this tenant. This
+    // function is public (verify_jwt = false), so with the check further down, a
+    // POST carrying a known family's email plus a cart we then reject would
+    // overwrite that family's name and phone, attach them to any tenant, and
+    // return a friendly 400 with nothing registered and nothing charged - no
+    // error for the operator to see, repeatable at will. Rejecting first makes
+    // that unreachable. Do not move it back down.
+    // ---------------------------------------------------------------------
+
+    // Flatten the cart into priced lines in the EXACT order registrations are
+    // inserted below (children -> items -> programs, skipping nulls).
+    type FlatLine = { child_index: number; program_id: string; is_vip: boolean };
+    const flat: FlatLine[] = [];
+    for (const child of children) {
+      for (const item of child.items || []) {
+        const progs = item.isVip && item.vipBundle
+          ? [item.vipBundle.fall, item.vipBundle.winter, item.vipBundle.spring]
+          : [item.program];
+        for (const prog of progs) {
+          // Guards the ID, not just the object. `{program:{}}` used to push
+          // program_id: undefined, which reached PostgREST as `id=in.(undefined)`
+          // and came back as a Postgres 22P02 - surfaced to the family as a 500
+          // quoting "invalid input syntax for type uuid". A cart line with no id
+          // is not a program; drop it and let the empty-cart 400 below speak.
+          if (!prog || typeof prog.id !== 'string' || !prog.id) continue;
+          flat.push({ child_index: child.child_index, program_id: prog.id, is_vip: !!item.isVip });
+        }
+      }
+    }
+    if (!flat.length) return json({ error: 'No programs to register' }, 400);
+
+    // EVERY program in the cart must belong to THIS org, be PUBLISHED, and be one
+    // we actually sell. The screens filter all three, but a screen is not a gate -
+    // the Comms gate shipped UI-only and was bypassed from a browser console the
+    // same day.
+    //
+    // Three clauses, each closing something different:
+    //   organization_id - VIP ids skip the price lookup below, so a crafted VIP
+    //     bundle naming ANOTHER tenant's classes was never org-checked at all.
+    //   status          - a draft class the operator deliberately kept private.
+    //     Compared with !== 'open', so NULL is rejected too. Note this is
+    //     deliberately STRICTER than 20260810c's publish trigger, which coalesces
+    //     NULL to 'open': publishing something ambiguous is recoverable, selling
+    //     it is not. Prod holds zero NULL rows, so nothing rides on it today.
+    //   runs_own_registration - partner-run classes are listed publicly so their
+    //     ids sit in every browser, and we take no money for them. Three of them
+    //     on prod are open and priced at zero, which sailed through as a
+    //     confirmed, paid enrollment on a school's roster from an anonymous POST.
+    const allProgramIds = [...new Set(flat.map((f) => f.program_id))];
+    const { data: cartPrograms, error: pubErr } = await admin
+      .from('programs')
+      .select('id, status, organization_id, runs_own_registration')
+      .in('id', allProgramIds);
+    if (pubErr) throw new Error(`cart validation: ${pubErr.message}`);
+    const byId = new Map((cartPrograms || []).map((p) => [p.id, p]));
+    const rejected = allProgramIds.filter((id) => {
+      const p = byId.get(id);
+      // Missing row counts as rejected: an id we cannot read is an id we must
+      // not sell, rather than one we quietly skip.
+      return !p
+        || p.organization_id !== orgId
+        || p.status !== 'open'
+        || p.runs_own_registration === true;
+    });
+    if (rejected.length) {
+      console.warn('[create-registration] BLOCKED: cart holds programs that are not this org\'s, open and ours to sell', rejected);
+      return json({ error: 'A class in your cart is no longer open for registration. Please refresh and try again.' }, 400);
+    }
+
     // --- Upsert parent ---
     const emailClean = parent.email.toLowerCase().trim();
     const { data: existing } = await admin
@@ -162,22 +237,11 @@ serve(async (req) => {
     // never silently charge full price.
     const VIP_PER_TERM_CENTS = 24000;
 
-    // Flatten the cart into priced lines in the EXACT order registrations are
-    // inserted below (children -> items -> programs, skipping nulls).
-    type FlatLine = { child_index: number; program_id: string; is_vip: boolean };
-    const flat: FlatLine[] = [];
-    for (const child of children) {
-      for (const item of child.items || []) {
-        const progs = item.isVip && item.vipBundle
-          ? [item.vipBundle.fall, item.vipBundle.winter, item.vipBundle.spring]
-          : [item.program];
-        for (const prog of progs) {
-          if (!prog) continue;
-          flat.push({ child_index: child.child_index, program_id: prog.id, is_vip: !!item.isVip });
-        }
-      }
-    }
-    if (!flat.length) return json({ error: 'No programs to register' }, 400);
+    // The cart was flattened and validated at the top of this handler, before
+    // any write — see the block above the parent upsert. `flat` is in scope
+    // here. (`byId` is deliberately not reused: it holds only the three columns
+    // the validation needed. Widening that select and dropping the second query
+    // is a real simplification, but it is a separate change from this one.)
 
     // Real prices for non-VIP programs, scoped to this org (reject a program that
     // isn't in this org so a client can't inject a foreign/fake price).

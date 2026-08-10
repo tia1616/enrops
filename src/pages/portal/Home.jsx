@@ -180,6 +180,13 @@ export default function Home() {
           .select('*')
           .eq('organization_id', org.id)
           .eq('runs_own_registration', false) // don't bundle partner-run programs into a paid VIP offer
+          // Same rule as the catalog query directly above, and as Register's own
+          // bundle lookup: a leg must be PUBLISHED to be offered. Without it the
+          // VIP bundle advertised DRAFT winter and spring classes to families --
+          // classes the operator deliberately kept private. Second instance of
+          // the same missing filter; both fixed together so one cannot drift
+          // back on its own.
+          .eq('status', 'open')
           .in('term', [bundleTerms.winter, bundleTerms.spring])
         : Promise.resolve({ data: null }),
       // Recurring weekly classes for outside-registration tenants (no term/checkout).
