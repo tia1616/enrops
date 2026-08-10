@@ -12,6 +12,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
+import RichBodyEditor from "../../components/RichBodyEditor.jsx";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -100,6 +101,13 @@ export default function BrandLogoSettings() {
   const [savedHeroHeadline, setSavedHeroHeadline] = useState("");
   const [heroSubtext, setHeroSubtext] = useState("");
   const [savedHeroSubtext, setSavedHeroSubtext] = useState("");
+  // Confirmation-page block. Same rationale as the hero copy above — public page
+  // wording that belongs to the operator — but this one holds a LINK, which is
+  // why it gets the rich editor rather than a plain input: Jeff's whole ask was
+  // sending families to his ukulele shop after they pay, and a text input can't
+  // carry a link.
+  const [confirmationHtml, setConfirmationHtml] = useState("");
+  const [savedConfirmationHtml, setSavedConfirmationHtml] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -119,7 +127,7 @@ export default function BrandLogoSettings() {
       const { data: o } = await supabase
         .from("organizations").select("logo_url, logo_email_url").eq("id", org.id).maybeSingle();
       const { data: b } = await supabase
-        .from("org_branding").select("primary_color, secondary_color, accent_color, page_bg_color, banner_image_url, hero_headline, hero_subtext")
+        .from("org_branding").select("primary_color, secondary_color, accent_color, page_bg_color, banner_image_url, hero_headline, hero_subtext, confirmation_page_html")
         .eq("organization_id", org.id).maybeSingle();
       if (!cancelled) {
         const url = o?.logo_url || o?.logo_email_url || "";
@@ -140,6 +148,8 @@ export default function BrandLogoSettings() {
         const hs = b?.hero_subtext ?? "";
         setHeroHeadline(hh); setSavedHeroHeadline(hh);
         setHeroSubtext(hs); setSavedHeroSubtext(hs);
+        const cp = b?.confirmation_page_html ?? "";
+        setConfirmationHtml(cp); setSavedConfirmationHtml(cp);
         setLoading(false);
       }
     })();
@@ -207,7 +217,8 @@ export default function BrandLogoSettings() {
   const colorsDirty = COLOR_FIELDS.some((f) => colors[f.key] !== savedColors[f.key]);
   const bannerDirty = bannerUrl !== savedBanner;
   const heroDirty = heroHeadline !== savedHeroHeadline || heroSubtext !== savedHeroSubtext;
-  const dirty = logoDirty || colorsDirty || bannerDirty || heroDirty;
+  const confirmationDirty = confirmationHtml !== savedConfirmationHtml;
+  const dirty = logoDirty || colorsDirty || bannerDirty || heroDirty || confirmationDirty;
   // Built from the CURRENT origin so the link is right on staging and on prod,
   // and from the org's own slug — never a hardcoded tenant.
   const publicUrl = org?.slug
@@ -257,7 +268,7 @@ export default function BrandLogoSettings() {
       }
       // Colors + banner go straight to org_branding. Build the payload from only
       // what changed so untouched fields (e.g. default colors) are never written.
-      if (colorsDirty || bannerDirty || heroDirty) {
+      if (colorsDirty || bannerDirty || heroDirty || confirmationDirty) {
         const payload = { organization_id: org.id, updated_at: new Date().toISOString() };
         // Only write colors the operator ACTUALLY changed. Writing all four would
         // pin untouched fields (still showing the platform default in the picker)
@@ -268,6 +279,10 @@ export default function BrandLogoSettings() {
         // and an empty string would read as "the operator chose blank wording".
         if (heroHeadline !== savedHeroHeadline) payload.hero_headline = heroHeadline.trim() || null;
         if (heroSubtext !== savedHeroSubtext) payload.hero_subtext = heroSubtext.trim() || null;
+        // Same NULL-not-"" rule: the confirmation page renders the block only when
+        // this is truthy, so clearing the editor must detach it, not store a blank
+        // that would render an empty card.
+        if (confirmationDirty) payload.confirmation_page_html = confirmationHtml.trim() || null;
         const { error: e } = await supabase.from("org_branding").upsert(payload, { onConflict: "organization_id" });
         if (e) throw e;
       }
@@ -276,6 +291,7 @@ export default function BrandLogoSettings() {
       // Re-baseline the hero copy too, or the form stays permanently "dirty" and
       // the next save rewrites fields the operator never touched again.
       setSavedHeroHeadline(heroHeadline); setSavedHeroSubtext(heroSubtext);
+      setSavedConfirmationHtml(confirmationHtml);
     } catch (e) {
       const raw = e?.message ?? "";
       const jargon = /non-2xx|edge function|failed to fetch|network|fetcherror/i.test(raw);
@@ -443,6 +459,32 @@ export default function BrandLogoSettings() {
             style={{ width: "100%", boxSizing: "border-box", marginTop: 4, padding: "9px 12px", fontSize: 13, border: `1px solid ${RULE}`, borderRadius: 8, fontFamily: "inherit", fontWeight: 400, minHeight: 66, resize: "vertical" }}
           />
         </label>
+      </div>
+
+      {/* Confirmation page wording. Sits with the hero copy because both are
+          operator-authored words on a page families see, and org_branding was
+          already their home. This one is the LAST page of the flow rather than the
+          first: the screen a family lands on straight after paying.
+
+          Why a rich editor and not two inputs like the hero above: the entire ask
+          was Jeff sending families to his ukulele shop once they've paid, and that
+          needs a link. The editor is the same one used for email bodies, so an
+          operator learns one control, and its Link button means nobody has to be
+          told to type bracket-parenthesis notation. */}
+      <div style={{ marginTop: 16, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 12, padding: 20 }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: INK, marginBottom: 4 }}>Confirmation page wording</div>
+        <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 14, lineHeight: 1.5 }}>
+          An extra note on the page families see right after they pay — a good place to link to your
+          own shop or website. Their class details, calendar links and sign-in instructions are always
+          shown above it. Leave this blank and nothing extra appears.
+        </div>
+        <RichBodyEditor
+          value={confirmationHtml}
+          onChange={setConfirmationHtml}
+          rows={6}
+          placeholder={"Need a ukulele before the first class? We keep beginner sizes in stock."}
+          helpText={<>Highlight any words and press <strong>Link</strong> to send families to your own site. Leave a blank line to start a new paragraph.</>}
+        />
       </div>
 
       <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 18 }}>
