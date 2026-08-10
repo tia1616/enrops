@@ -40,20 +40,36 @@ const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const UNSUBSCRIBE_SECRET = Deno.env.get("MARKETING_UNSUBSCRIBE_SECRET")!;
 const UNSUBSCRIBE_ENDPOINT = `${SUPABASE_URL}/functions/v1/marketing-unsubscribe`;
-// The `!` above is a COMPILE-time assertion and does nothing at runtime: with the
-// secret unset, hmacToken signs with the literal string "undefined" and mints a
-// token marketing-unsubscribe rejects with 401 — a footer link that looks fine
-// and fails on click, leaving "report spam" as the recipient's only working exit.
+// A `!` on Deno.env.get is a COMPILE-time assertion and does nothing at runtime:
+// with the secret unset, hmacToken would sign with the literal string "undefined"
+// and mint a token marketing-unsubscribe rejects with 401 — a footer link that
+// looks fine and fails on click, leaving "report spam" as the recipient's only
+// working exit. unsubscribeConfigured() drives a FAIL-CLOSED refusal in serve()
+// (no secret, no send), matching how lifecycle-automations-cron handles it.
 //
-// This flag drives a FAIL-CLOSED refusal in serve() (no secret, no send), matching
-// how lifecycle-automations-cron already handles the same condition. It is the one
-// place the environment is read; computeUnsubscribeUrl returns "" when it is false,
-// and everything downstream (footer block, List-Unsubscribe header) keys off that
-// empty URL rather than re-checking the environment. One source of truth, so the
-// header and the visible link cannot disagree.
-const UNSUBSCRIBE_CONFIGURED = !!(Deno.env.get("MARKETING_UNSUBSCRIBE_SECRET") ?? "").trim();
+// READ AT CALL TIME, never once at module load. A Supabase edge isolate is
+// long-lived and is NOT restarted when a project secret changes, so a module-scope
+// capture keeps whatever it saw at cold start: every send would keep being refused
+// after the secret was added, while the refusal text told an admin to set a secret
+// they had already set. One env read per call buys recovery on the next request.
+//
+// Both the guard and the signing key MUST come from these two accessors. Making
+// only the boolean dynamic while hmacToken kept a stale module-scope secret would
+// be WORSE than not fixing it: the guard would open once the secret was added, but
+// every token would still be signed with the old value and 401 on click — the
+// exact silent broken-link failure this workstream exists to remove.
+function unsubscribeSecretRaw(): string {
+  // RAW and untrimmed on purpose. marketing-unsubscribe/index.ts:20 verifies with
+  // `Deno.env.get('MARKETING_UNSUBSCRIBE_SECRET')!` and signs the HMAC with that
+  // exact string, so trimming here would change the key on a secret carrying any
+  // stray whitespace and 401 every unsubscribe link we issue. The emptiness CHECK
+  // below trims; the signing key never does.
+  return Deno.env.get("MARKETING_UNSUBSCRIBE_SECRET") ?? "";
+}
+function unsubscribeConfigured(): boolean {
+  return !!unsubscribeSecretRaw().trim();
+}
 // Public site origin for registration links in emails. Per-environment (set
 // PUBLIC_SITE_URL on staging to the staging site); defaults to prod. Mirrors
 // lifecycle-automations-cron — never hardcode the domain, or staging emails
@@ -309,7 +325,7 @@ serve(async (req: Request) => {
   // Checked BEFORE any recipient is loaded so the batch cannot half-send. Applies
   // to 'send' and 'test' (both actually deliver mail); 'preview' renders to screen
   // and never sends, so it stays available for the operator to keep working.
-  if (!UNSUBSCRIBE_CONFIGURED && body.mode !== "preview") {
+  if (!unsubscribeConfigured() && body.mode !== "preview") {
     console.error("[marketing-touchpoint-send] send refused — MARKETING_UNSUBSCRIBE_SECRET is not set");
     return json({
       error: "unsubscribe_not_configured",
@@ -1520,7 +1536,7 @@ async function computeUnsubscribeUrl(email: string, orgId: string): Promise<stri
   // omit the footer block and listUnsubscribeHeaders return {}, so nothing
   // renders a link that cannot work. The serve() guard above already refuses the
   // send outright; this is the second line of defence for any future caller.
-  if (!UNSUBSCRIBE_CONFIGURED) return "";
+  if (!unsubscribeConfigured()) return "";
   const lowered = email.toLowerCase();
   const token = await hmacToken(lowered, orgId);
   const params = new URLSearchParams({ email: lowered, org: orgId, t: token });
@@ -1530,7 +1546,7 @@ async function computeUnsubscribeUrl(email: string, orgId: string): Promise<stri
 async function hmacToken(email: string, orgId: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     "raw",
-    new TextEncoder().encode(UNSUBSCRIBE_SECRET),
+    new TextEncoder().encode(unsubscribeSecretRaw()),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"],

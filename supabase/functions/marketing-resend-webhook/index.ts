@@ -181,6 +181,12 @@ async function addSuppression(
 //    suppression row would silently stop that family's CAMP LOGISTICS email —
 //    the drop-off details, the recap — because someone hit "junk" once. We
 //    record the complaint and leave the decision to a human.
+// How long to wait before the single re-read above. Sized against what it is
+// racing: the cron's own send-then-upsert gap is one Supabase round trip (tens of
+// milliseconds), so this is generous cover rather than a tuned value. Kept well
+// inside any sane webhook timeout, and paid only on events headed for discard.
+const UNMATCHED_RECHECK_MS = 750;
+
 async function handleLifecycleEvent(
   supabase: SupabaseClient,
   emailId: string,
@@ -203,7 +209,37 @@ async function handleLifecycleEvent(
     return json({ error: "lookup_failed" }, 500);
   }
 
-  const row = rows?.[0];
+  // ONE delayed re-check before giving up. lifecycle-automations-cron sends
+  // through Resend and only THEN upserts the row carrying resend_message_id, so
+  // an event that arrives inside that gap finds nothing and — because we answer
+  // 200 to stop Resend retrying — would be dropped permanently, leaving
+  // delivery_status NULL forever. That is exactly the "it says sent, but did it
+  // land?" blind spot this wiring exists to close, so losing an event to a race
+  // defeats the feature rather than merely delaying it.
+  //
+  // Deliberately NOT solved by returning non-2xx to lean on Resend's retries:
+  // that would also retry every GENUINELY unknown event (a transactional one-off,
+  // or a send predating this wiring) on Resend's full backoff schedule, forever.
+  // A single short re-read costs that latency only on events we are about to
+  // discard anyway, and never on the matching path.
+  let row = rows?.[0];
+  if (!row) {
+    await new Promise((resolve) => setTimeout(resolve, UNMATCHED_RECHECK_MS));
+    const { data: recheckRows, error: recheckErr } = await supabase
+      .from("automation_run_recipients")
+      .select("id, delivery_status, delivered_at, bounced_at, complained_at, bounce_detail")
+      .eq("resend_message_id", emailId)
+      .limit(1);
+    if (recheckErr) {
+      // Same treatment as the first lookup: a read failure is NOT proof the send
+      // is unknown, so 500 and let Resend redeliver rather than silently
+      // recording nothing.
+      console.error("automation_run_recipients re-check failed:", recheckErr);
+      return json({ error: "lookup_failed" }, 500);
+    }
+    row = recheckRows?.[0];
+  }
+
   if (!row) {
     // Genuinely unknown (a transactional one-off, or a send predating this
     // wiring). 200 so Resend stops retrying.
