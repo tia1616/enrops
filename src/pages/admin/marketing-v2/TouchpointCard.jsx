@@ -410,6 +410,7 @@ const MERGE_TOKENS = [
     { key: "first_session_date", label: "Start date", tip: "First session date" },
     { key: "session_count", label: "Sessions", tip: "Number of sessions" },
     { key: "day_of_week", label: "Day", tip: "Day(s) the program meets" },
+    { key: "registration_close_date", label: "Sign-up deadline", tip: "Last day to register for this parent's program. Counts back from their start date, so each school sees its own deadline." },
   ]},
   { group: "Pricing & promos", tokens: [
     { key: "savings", label: "Savings", tip: "Dollar amount saved" },
@@ -423,6 +424,7 @@ const MERGE_TOKENS = [
     { key: "register_button", label: "Reg button", tip: "Branded registration button" },
     { key: "vip_block", label: "VIP block", tip: "Annual pass offer (auto-suppressed per school)" },
     { key: "camp_details", label: "Camp list", tip: "Camp names, venues & dates for recipient's area" },
+    { key: "program_details", label: "Program list", tip: "One row per program at this parent's school, each with its own day, start date, sessions and sign-up deadline. Use this when a school runs more than one class. Put it on its own line, not inside a sentence." },
   ]},
 ];
 

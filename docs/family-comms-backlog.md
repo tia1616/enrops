@@ -84,6 +84,50 @@ likely a shared prereq detection helper.
   save on Done editing (DB PATCH); All/None bar on multi-selects;
   "no picked content" badge suppressed for non-program intents.
 
+## N. Camps: the token set is not per-mode
+
+Filed 2026-08-10, from the code review of the `{{registration_close_date}}`
+build. Deferred deliberately: camps are done for the season, so nothing can hit
+this until next summer.
+
+The afterschool half of this review is FIXED, not deferred - `{{program_details}}`
+shipped the same day (one row per program, each with its own deadline), which is
+what Jessica asked for when she saw the dangling sentence in a Cannady preview.
+The camps half below is the part still open.
+
+**Today.** `APPROVED_TOKENS` in `marketing-draft-campaign` is ONE flat set
+covering both modes. The rule that a token is afterschool-only lives in prose
+inside Ennie's prompt ("Tokens that DO NOT work for camps"), and the merge-token
+palette in `TouchpointCard.jsx` shows every chip regardless of the campaign's
+mode. Neither is enforcement.
+
+**Why this is a problem.** A camps draft that uses an afterschool-only token
+passes the mechanical check, then renders empty at send. `postCleanCopy` only
+strips lines ending in a colon and collapses runs of spaces, so the parent
+receives the half-sentence: `Sign-ups close on .` This is a whole class, not one
+token - `{{day_of_week}}`, `{{session_count}}`, `{{regular_price}}`,
+`{{early_bird_price}}`, `{{early_bird_deadline}}`, `{{savings}}`, `{{vip_price}}`
+and now `{{registration_close_date}}` all behave this way in camps mode.
+
+**Fix candidate.** Split into `AFTERSCHOOL_TOKENS` / `CAMPS_TOKENS` / `SHARED_TOKENS`,
+have the draft validator reject out-of-mode tokens instead of trusting the prompt,
+and filter the palette in `TouchpointCard.jsx` by the campaign's mode so an
+operator cannot insert a chip that renders blank.
+
+**Touches.** `marketing-draft-campaign` (APPROVED_TOKENS + prompt),
+`marketing-touchpoint-send` (keep the two sets in sync), `TouchpointCard.jsx`
+(palette filter). Worth doing before next summer's camps campaigns.
+
+Root cause worth naming: the renderer substitutes an empty string and trusts the
+copy around it to still read. `{{early_bird_deadline}}`, `{{savings}}`,
+`{{regular_price}}`, `{{session_count}}` and `{{day_of_week}}` all still have
+that shape. The afterschool fix took the block-shaped route
+(`{{program_details}}` renders a whole `<ul>` or nothing, so there is no
+half-sentence to leave behind) - prefer that pattern over per-symptom patching
+when this comes back around.
+
+---
+
 ## Recently resolved (prior session, 2026-06-02)
 
 - Q1 intent-first surface with 4 intents + "Something else" sub-intents.

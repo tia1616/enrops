@@ -129,6 +129,26 @@ const APPROVED_TOKENS = new Set([
   "logo_url", "closer", "phone", "website",
   "savings", "early_bird_price", "regular_price", "early_bird_deadline",
   "first_session_date", "session_count", "day_of_week", "curriculum", "vip_price",
+  // The day registration closes for THIS recipient's program:
+  // first_session_date - organizations.registration_close_days_before. Per
+  // recipient, so one campaign spanning schools that start on different days
+  // states the right deadline to each parent instead of the earliest one to
+  // everybody. Empty for camps (see the camps branch), when the program has no
+  // first_session_date, and when a school's picked programs do not share one
+  // close date — a deadline that is right for only some of the programs named
+  // in the same sentence is worse than no deadline at all.
+  "registration_close_date",
+  // Per-program list for THIS recipient's school: an HTML <ul>, one <li> per
+  // program, each carrying its OWN day, start date, session count and sign-up
+  // deadline. The afterschool sibling of {{camp_details}}.
+  //
+  // This is the honest answer for a multi-program school. The inline tokens
+  // above describe ONE program while {{curriculum}} names them all, so at a
+  // school running two classes on different dates they can only ever be right
+  // about one of them. A block per program is right about each, and because it
+  // renders as a whole <ul> or as nothing, it cannot leave the half-sentence an
+  // empty inline token leaves behind ("sign-ups close on .").
+  "program_details",
   "topic", "topics_list", "promo_code", "promo_amount",
   // VIP/annual-pass block: resolves to an HTML <p> built from org.vip_offering
   // for recipients whose school offers it, and to an empty string for
@@ -222,6 +242,10 @@ type Org = {
   vip_offering: VipOffering | null;
   active_registration_term: string | null;
   mailing_address: string | null;
+  // Days before a program's first session that this org closes registration.
+  // Drives {{registration_close_date}}. NOT NULL DEFAULT 7 in the schema, but
+  // typed nullable so an older cached row can't render a NaN date.
+  registration_close_days_before: number | null;
   // Nested one-to-one from org_branding (PostgREST returns object or 1-elem array).
   org_branding: { primary_color: string | null } | { primary_color: string | null }[] | null;
 };
@@ -383,7 +407,7 @@ serve(async (req: Request) => {
   // ---- Load org ----
   const { data: org, error: oErr } = await supabase
     .from("organizations")
-    .select("id, name, slug, brand_voice, logo_url, vip_offering, active_registration_term, mailing_address, org_branding(primary_color)")
+    .select("id, name, slug, brand_voice, logo_url, vip_offering, active_registration_term, mailing_address, registration_close_days_before, org_branding(primary_color)")
     .eq("id", campaign.organization_id)
     .single<Org>();
   if (oErr || !org) return json({ error: `organization not found: ${oErr?.message ?? "unknown"}` }, 404);
@@ -731,7 +755,7 @@ serve(async (req: Request) => {
       const innerHtml = renderedInner + downloadButtonsHtml;
       const bodyHtml = wrapInEmailShell(innerHtml, tokens);
       const bodyText = (touchpoint.payload!.body_text
-        ? postCleanCopy(replaceTokens(touchpoint.payload!.body_text, tokens, { html: false }))
+        ? postCleanCopy(replaceTokens(touchpoint.payload!.body_text, tokens, { html: false, multiline: true }))
         : stripHtmlToText(renderedInner)) + downloadButtonsText;
 
       // Read the unsubscribe URL back out of the SAME token map the footer link
@@ -1159,6 +1183,43 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
     tokens.set("curriculum", curriculumHtml);
     tokens.set("day_of_week", program.day_of_week || "");
     tokens.set("first_session_date", program.first_session_date ? formatHumanDate(program.first_session_date) : "");
+    // The deadline THIS parent is working against.
+    //
+    // Emitted ONLY when every program this recipient is being told about shares
+    // one close date — the same all-or-nothing rule the camps branch uses for
+    // early_bird_deadline, and for the same reason. {{curriculum}} names ALL of
+    // a school's picked programs, so a single deadline drawn from the first one
+    // would be attached to every name in that sentence. Beatrice Morrow Cannady
+    // runs two fall programs starting four days apart (2026-09-14, 2026-09-18);
+    // taking the first would have told Cannady parents that the September 18
+    // class closed on the 7th, four days before it does, and a parent who
+    // believes that stops trying.
+    //
+    // The close window is org-wide, so "same close date" is exactly "same
+    // first_session_date" — no need to compute each one to compare them.
+    //
+    // Empty when they disagree, and empty when any start date is missing.
+    // Dropping the sentence is the safe failure; there is no "close enough"
+    // deadline. Emitting the LATEST would be worse than the earliest, not
+    // better: it invites a parent to register for the early program after it
+    // has already closed.
+    const startDates = allPrograms.map((p) => p.first_session_date);
+    const everyProgramDated = startDates.length > 0 && startDates.every((d) => d != null);
+    const oneSharedStart = everyProgramDated && startDates.every((d) => d === startDates[0]);
+    tokens.set(
+      "registration_close_date",
+      oneSharedStart
+        ? registrationCloseDate(startDates[0], org.registration_close_days_before)
+        : "",
+    );
+
+    // {{program_details}} — one <li> per program at this recipient's school,
+    // each with its OWN deadline. Sorted by start date so the soonest class,
+    // and the soonest deadline, is read first.
+    tokens.set(
+      "program_details",
+      buildProgramDetails(allPrograms, org.registration_close_days_before),
+    );
     tokens.set("session_count", program.session_count != null ? String(program.session_count) : "");
     tokens.set("regular_price", program.price_cents ? `$${(program.price_cents / 100).toFixed(0)}` : "");
     tokens.set("early_bird_price", program.early_bird_price_cents ? `$${(program.early_bird_price_cents / 100).toFixed(0)}` : "");
@@ -1234,12 +1295,16 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
     tokens.set("early_bird_deadline", sameDeadline && deadlines[0] != null ? formatHumanDate(deadlines[0]) : "");
 
     // Camps still don't have per-program session_count, day_of_week, or vip_price.
-    for (const k of ["day_of_week", "session_count", "vip_price"]) {
+    // registration_close_date is deliberately empty too: the org's close window
+    // is an afterschool-term practice, and a recipient's area can hold camps with
+    // several different start dates, so there is no single honest deadline to
+    // print. Camp copy states dates inline from KNOWN PROGRAM DETAILS instead.
+    for (const k of ["day_of_week", "session_count", "vip_price", "registration_close_date", "program_details"]) {
       tokens.set(k, "");
     }
   } else {
     // No matching program AND no matching camps — leave per-program tokens empty
-    for (const k of ["curriculum", "day_of_week", "first_session_date", "session_count", "regular_price", "early_bird_price", "early_bird_deadline", "savings", "vip_price", "camp_details"]) {
+    for (const k of ["curriculum", "day_of_week", "first_session_date", "session_count", "regular_price", "early_bird_price", "early_bird_deadline", "savings", "vip_price", "camp_details", "registration_close_date", "program_details"]) {
       tokens.set(k, "");
     }
   }
@@ -1310,9 +1375,21 @@ function buildVipBlock(
 // 2026-06-02 when Cascadia-excluded vs Cascadia-included previews showed
 // raw HTML tags. All OTHER tokens still get escaped: they come from
 // recipient data (parent_name, school) which could contain <script> etc.
-const PRE_RENDERED_HTML_TOKENS = new Set(["vip_block", "curriculum", "camp_details", "register_button"]);
+// program_details belongs here for the same reason camp_details does: it is a
+// <ul> this function builds, with every interpolated value already passed
+// through escapeHtml inside the builder. Escaping it again would ship literal
+// "&lt;li&gt;" to parents.
+const PRE_RENDERED_HTML_TOKENS = new Set(["vip_block", "curriculum", "camp_details", "program_details", "register_button"]);
 
-function replaceTokens(text: string, tokens: Map<string, string>, opts: { html: boolean }): string {
+// opts.multiline says whether the destination can hold line breaks. The
+// text/plain body can; a subject line cannot (a newline in a Resend subject is
+// at best stripped, at worst rejected), so the two plaintext destinations need
+// DIFFERENT separators, not the same one.
+function replaceTokens(
+  text: string,
+  tokens: Map<string, string>,
+  opts: { html: boolean; multiline?: boolean },
+): string {
   return text.replace(/\{\{(\w+)\}\}/g, (full, key) => {
     if (!APPROVED_TOKENS.has(key)) {
       console.warn(`marketing-touchpoint-send: unknown token {{${key}}} in body — replacing with empty`);
@@ -1321,16 +1398,31 @@ function replaceTokens(text: string, tokens: Map<string, string>, opts: { html: 
     const value = tokens.get(key) ?? "";
     if (PRE_RENDERED_HTML_TOKENS.has(key)) {
       // Body context: emit the HTML as-is (token already contains the right tags).
-      // Plaintext context (subject lines): strip tags + decode common entities so
-      // the subject doesn't show literal <strong>...</strong>.
       if (opts.html) return value;
+      // Plaintext context. Block-level tags have to become a SEPARATOR, not
+      // nothing: stripping them bare ran every row of a list together, e.g.
+      // "...close Wednesday, September 2.Robotics Builders: Carnival Games..."
+      // in the text/plain part of a real send (caught 2026-08-10 off a staging
+      // capture of body_text). Affects program_details and camp_details alike.
+      const sep = opts.multiline ? "\n" : " ";
       return value
+        .replace(/<\/li>|<\/p>|<\/div>|<br\s*\/?>/gi, sep)
         .replace(/<[^>]+>/g, "")
         .replace(/&amp;/g, "&")
         .replace(/&lt;/g, "<")
         .replace(/&gt;/g, ">")
         .replace(/&quot;/g, '"')
-        .replace(/&#039;/g, "'");
+        .replace(/&#039;/g, "'")
+        .replace(/&#39;/g, "'")
+        // Named entities our own builders emit. register_button ships
+        // "Register now &rarr;", which reached recipients as that literal text
+        // in every plaintext part until now.
+        .replace(/&rarr;/g, "->")
+        .replace(/&nbsp;/g, " ")
+        // Collapse whatever the separator over-produced: a <ul> wrapping <li>s
+        // yields a leading break, and </p><p> yields two.
+        .replace(opts.multiline ? /\n{3,}/g : /\s{2,}/g, opts.multiline ? "\n\n" : " ")
+        .trim();
     }
     return opts.html ? escapeHtml(value) : value;
   });
@@ -1343,8 +1435,32 @@ function postCleanCopy(text: string): string {
   return text
     // "save  off" / "save  off the regular" -> "save off the regular" (avoid double space)
     .replace(/save\s+off/gi, "save off")
-    // Empty "Starts:" / "Sessions:" / similar bullets — strip the line
-    .replace(/^(.*?:\s*$)\n/gm, "")
+    // Empty "Starts:" / "Sessions:" / similar bullets — strip the line.
+    //
+    // Only a SHORT label qualifies. The rule used to match any line ending in a
+    // colon, which quietly deleted the operator's lead-in sentence from the
+    // text/plain part: "Here is what is running at Beatrice Morrow Cannady this
+    // fall:" vanished while surviving in the HTML (caught 2026-08-10). That is
+    // the exact sentence shape the drafting guidance now asks for above a
+    // {{program_details}} list, so the old rule ate the recommended copy.
+    //
+    // A label whose value went empty is short and contains no sentence
+    // ("Starts:", "Sessions:", "Early bird deadline:" = 20 chars). A lead-in is
+    // a sentence, and the ones that caused this bug run 45+ characters.
+    //
+    // KNOWN LIMIT, measured not assumed: a SHORT lead-in is still eaten.
+    // "What you get:" is 13 characters and gets stripped exactly as before.
+    // The length test is a proxy - the real signal is whether the label's value
+    // resolved to empty, which is only knowable at substitution time, not from
+    // the finished string. Fixing it properly means having replaceTokens record
+    // which tokens came back empty and cleaning those lines specifically.
+    // Until then: keep a list lead-in longer than 30 characters, or end it
+    // without a colon.
+    //
+    // \r is in the trailing class so a CRLF body still matches. Dropping it
+    // regressed "Starts: \r\n" - the old `\s*` absorbed the \r and this one
+    // must too. Caught by diffing the two regexes over both line endings.
+    .replace(/^([^\n.!?]{0,29}:[ \t\r]*)$\n/gm, "")
     // Empty <p></p> left behind when a token (e.g. {{vip_block}}) resolves to
     // empty string for an excluded school. Without this cleanup, the operator
     // would see a blank vertical gap where the suppressed block used to live.
@@ -1420,6 +1536,10 @@ function stripHtmlToText(html: string): string {
   return html
     .replace(/<br\s*\/?>/gi, "\n")
     .replace(/<\/p>/gi, "\n\n")
+    // </li> has to break the line too. Without it a rendered {{program_details}}
+    // or {{camp_details}} list arrives as one run-on paragraph in the plaintext
+    // alternative, each row welded to the next.
+    .replace(/<\/li>/gi, "\n")
     .replace(/<[^>]+>/g, "")
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")
@@ -1427,6 +1547,10 @@ function stripHtmlToText(html: string): string {
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
+    .replace(/&#039;/g, "'")
+    // register_button emits "Register now &rarr;", which shipped as that
+    // literal text to every plaintext reader until 2026-08-10.
+    .replace(/&rarr;/g, "->")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
@@ -1469,6 +1593,100 @@ function formatHumanDate(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+// {{registration_close_date}} — the day registration closes for one program,
+// formatted the same way as every other date token ("Monday, August 24").
+//
+// Date-only arithmetic, deliberately: the "+T00:00:00" parse makes this a LOCAL
+// midnight, so subtracting whole days can never roll across a boundary the way a
+// UTC parse of a bare "YYYY-MM-DD" would (that lands at 00:00Z, and in any
+// western timezone the previous calendar day). Parents in Portland got the wrong
+// day out of exactly that mistake elsewhere.
+//
+// Returns "" for a missing start date, an unparseable one, or a null/negative
+// window — an empty token drops the deadline sentence, which is the safe
+// failure. Never guess a deadline: a wrong date in a marketing email is a
+// promise the operator has to honor.
+function registrationCloseDate(
+  firstSessionDate: string | null,
+  daysBefore: number | null,
+): string {
+  if (!firstSessionDate) return "";
+  const days = typeof daysBefore === "number" && Number.isFinite(daysBefore) && daysBefore >= 0
+    ? Math.floor(daysBefore)
+    : null;
+  if (days === null) return "";
+  const d = new Date(firstSessionDate + "T00:00:00");
+  if (Number.isNaN(d.getTime())) return "";
+  d.setDate(d.getDate() - days);
+  return d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+}
+
+// {{program_details}} — the afterschool sibling of {{camp_details}}. One <li>
+// per program at this recipient's school, each carrying its own day, start
+// date, session count and sign-up deadline.
+//
+// Why a list and not a sentence: {{curriculum}} names every program a school
+// runs, but the inline tokens beside it ({{first_session_date}},
+// {{registration_close_date}}, {{regular_price}}) describe only ONE of them.
+// At Beatrice Morrow Cannady, which runs three fall classes on three different
+// dates, no single sentence can be true about all three. A row each is.
+//
+// Renders "" for an empty list, so postCleanCopy's empty-paragraph rule strips
+// the wrapper the operator put it in. That is the whole advantage over an
+// inline token: nothing can be left dangling mid-sentence.
+//
+// Every interpolated value is escaped here, which is why the token is listed in
+// PRE_RENDERED_HTML_TOKENS and skips escaping at substitution time.
+function buildProgramDetails(
+  programs: ProgramRow[],
+  daysBefore: number | null,
+): string {
+  const sorted = [...programs].sort((a, b) =>
+    (a.first_session_date ?? "9999").localeCompare(b.first_session_date ?? "9999")
+  );
+  const items = sorted.map((p) => {
+    const name = escapeHtml(p.curriculum ?? "");
+    if (!name) return "";
+    // Each fragment is added only when we actually have the value, so a program
+    // missing a start date degrades to just its name rather than emitting
+    // "starting ." — the same failure the inline token was suppressed for.
+    const bits: string[] = [];
+    const day = (p.day_of_week ?? "").trim();
+    if (day) bits.push(escapeHtml(pluralDay(day)));
+    if (p.first_session_date) bits.push(`starting ${escapeHtml(formatHumanDate(p.first_session_date))}`);
+    const close = registrationCloseDate(p.first_session_date, daysBefore);
+    const closeSentence = close ? ` Sign-ups close ${escapeHtml(close)}.` : "";
+    // Name on its own line, not "Name: Mondays, ...". Curriculum names carry
+    // their own colon ("Pokemon Game Makers: LEGO Game Design"), so a colon
+    // separator here produces two in one breath and the eye stops reading.
+    // "(1 sessions)" is a real row, not a hypothetical: LEGO Game Makers Camp at
+    // Multnomah County Library runs a single session (2026-10-01). The existing
+    // {{session_count}} token emits a bare number and leaves the noun to the
+    // operator's copy, so this is the first place the platform has to agree with
+    // itself about the plural.
+    const sessions = p.session_count != null
+      ? ` (${p.session_count} ${p.session_count === 1 ? "session" : "sessions"})`
+      : "";
+    const schedule = bits.length > 0 ? `${bits.join(", ")}${sessions}.` : "";
+    // Assembled from whichever halves exist rather than hanging the deadline off
+    // the schedule being present. Today a deadline implies a start date implies
+    // a schedule, so the coupling would hold - but it would hold by accident,
+    // and the next person to add a field here should not have to notice that.
+    const detail = (schedule || closeSentence) ? `<br>${schedule}${closeSentence}` : "";
+    return `<li><strong>${name}</strong>${detail}</li>`;
+  }).filter((s) => s.length > 0);
+  return items.length > 0 ? `<ul>${items.join("")}</ul>` : "";
+}
+
+// "Monday" -> "Mondays", so a recurring class reads as recurring. Left alone if
+// the operator already pluralized it or entered something with punctuation
+// ("Mon/Wed"), because guessing at those produces worse copy than echoing what
+// they typed.
+function pluralDay(day: string): string {
+  if (/^(monday|tuesday|wednesday|thursday|friday|saturday|sunday)$/i.test(day)) return `${day}s`;
+  return day;
 }
 
 function extractTopics(what: Record<string, unknown> | undefined): string[] {
@@ -1665,7 +1883,17 @@ async function renderPreview(
   // ALL picked programs at the preview location — used to join {{curriculum}}
   // as a list for multi-program schools. Mirrors the real-send behavior so
   // preview shows what parents at this school will actually see.
-  const programsAtLocation = pickedPrograms.filter((p) => p.program_location_id === locationId);
+  // Sorted the SAME way resolveRecipientPrograms sorts for a real send
+  // (earliest first_session_date first, undated last). This filter used to
+  // return whatever order Postgres handed back, so at a multi-program school
+  // the preview picked a different "first" program than the send did and the
+  // operator approved copy showing one program's date, day and price while
+  // parents received another's. The comment here claimed it mirrored the send;
+  // it did not. Caught 2026-08-10 on a Cannady preview whose subject listed
+  // three programs out of date order.
+  const programsAtLocation = pickedPrograms
+    .filter((p) => p.program_location_id === locationId)
+    .sort((a, b) => (a.first_session_date ?? "9999").localeCompare(b.first_session_date ?? "9999"));
   const programAtLocation = programsAtLocation[0];
   // Also load district (added 2026-06-02) so camps preview synthesizes a
   // parent in this location's area and {{curriculum}} resolves to the camps
@@ -1734,7 +1962,7 @@ async function renderPreview(
   const innerHtml = renderedInner + downloadButtonsHtml;
   const bodyHtml = wrapInEmailShell(innerHtml, tokens);
   const bodyText = (touchpoint.payload!.body_text
-    ? postCleanCopy(replaceTokens(touchpoint.payload!.body_text, tokens, { html: false }))
+    ? postCleanCopy(replaceTokens(touchpoint.payload!.body_text, tokens, { html: false, multiline: true }))
     : stripHtmlToText(renderedInner)) + downloadButtonsText;
 
   // Tell the operator whether the VIP block fired for this school so the
