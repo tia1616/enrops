@@ -84,6 +84,19 @@ verify_jwt = false
 [functions.marketing-touchpoint-send]
 verify_jwt = false
 
+# Deployed with verify_jwt = false on BOTH environments, but that was never
+# recorded here - it survived only because the CLI preserves the current value
+# when the flag is omitted. Pinning it 2026-08-10 so a future deploy cannot
+# silently flip it to the true default.
+#
+# false is correct, not a gap: the function authenticates callers itself and
+# more strictly than the platform gate would. verifyCaller rejects a missing or
+# invalid session with 401, and a caller who is not an admin of the target
+# organization with 403. The platform gate only proves a JWT is valid, which
+# would let any signed-in user reach another org's campaign drafting.
+[functions.marketing-draft-campaign]
+verify_jwt = false
+
 [functions.lifecycle-automations-cron]
 verify_jwt = false
 
