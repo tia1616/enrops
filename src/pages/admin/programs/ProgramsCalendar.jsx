@@ -27,6 +27,14 @@ import { getPermissions } from "../../../lib/permissions.js";
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib/programText.js";
 import { GRADE_OPTIONS, audienceMode, audiencePatch, rangeBackwards, rangeBackwardsMessage } from "../../../lib/grades.js";
+import {
+  publishBlockedByStripe,
+  publishErrorMessage,
+  PUBLISH_GATE_CTA,
+  PUBLISH_GATE_WHY,
+  PUBLISH_GATE_STAYS_DRAFT_HINT,
+  STRIPE_CONNECT_ROUTE,
+} from "../../../lib/publishGate.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -125,13 +133,24 @@ export default function ProgramsCalendar() {
   // Flip a program from draft → open. The only place this was possible until
   // now was a direct SQL update — operators had to ask for help. Self-serve.
   async function publishProgram(programId) {
+    // Stripe gate, second line of defence. The buttons that call this are
+    // already replaced by a Connect link when the org can't be paid (see
+    // ProgramRow and ExpandedProgramPanel), so reaching this branch means the
+    // click came from somewhere those checks don't cover — a stale render, or
+    // devtools. The database trigger is the third and last line; this one exists
+    // so the operator gets a sentence instead of a Postgres error.
+    const target = programs.find((p) => p.id === programId);
+    if (publishBlockedByStripe(org, target)) {
+      alert(`${PUBLISH_GATE_WHY} Connect Stripe on the Payments screen, then publish. ${PUBLISH_GATE_STAYS_DRAFT_HINT}`);
+      return;
+    }
     if (!confirm("Publish this program? It'll show in marketing campaigns and the public catalog.")) return;
     const { error: pubErr } = await supabase
       .from("programs")
       .update({ status: "open" })
       .eq("id", programId);
     if (pubErr) {
-      alert(`Couldn't publish: ${pubErr.message}`);
+      alert(`Couldn't publish: ${publishErrorMessage(pubErr)}`);
       return;
     }
     // Advertising conversion. This is the path a wizard DRAFT takes to become
@@ -149,7 +168,18 @@ export default function ProgramsCalendar() {
   // (a typo, a rethink, a cancellation in negotiation). Hides it from the
   // public catalog and marketing audience filters again.
   async function unpublishProgram(programId) {
-    if (!confirm("Unpublish this program? It'll be hidden from the public catalog and stop appearing in marketing campaigns. Existing registrations are unaffected.")) return;
+    // The gate grandfathers a class that was ALREADY live when Stripe went away
+    // — it stays live and stays editable. Unpublishing surrenders that: the row
+    // stops being grandfathered the moment it leaves 'open', and publishing it
+    // again is a new transition the trigger will refuse. So for these programs
+    // this button is a one-way door, and it has to say so BEFORE the click, not
+    // afterwards when the Publish control has turned into "Connect Stripe".
+    const target = programs.find((p) => p.id === programId);
+    const oneWay = publishBlockedByStripe(org, target);
+    const question = oneWay
+      ? "Unpublish this program? It'll be hidden from the public catalog and stop appearing in marketing campaigns. Existing registrations are unaffected.\n\nHeads up: because Stripe isn't connected, you won't be able to publish it again until it is."
+      : "Unpublish this program? It'll be hidden from the public catalog and stop appearing in marketing campaigns. Existing registrations are unaffected.";
+    if (!confirm(question)) return;
     const { error: unpubErr } = await supabase
       .from("programs")
       .update({ status: "draft" })
@@ -1152,6 +1182,10 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
   const isFull = capacity > 0 && enrolled >= capacity;
   const fillColor = isFull ? BRIGHT : pct >= 0.7 ? VIOLET : "#a8c47f";
   const isDraft = p.status === "draft";
+  // A paid class can't go live before the money has somewhere to land. The
+  // control is REPLACED rather than disabled: a greyed-out button still reads as
+  // a feature you have, and this one has a next step worth offering.
+  const publishBlocked = publishBlockedByStripe(rowOrg, p);
 
   const breakdownParts = [];
   if (enr.paid > 0) breakdownParts.push(`${enr.paid} paid`);
@@ -1242,27 +1276,50 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
                 Draft
               </span>
               {onPublish && (
-                <button
-                  type="button"
-                  onClick={() => onPublish(p.id)}
-                  title="Publish this program — shows in campaigns + public catalog"
-                  style={{
-                    fontSize: 10,
-                    color: "#fff",
-                    background: OK_GREEN,
-                    border: "none",
-                    padding: "2px 10px",
-                    borderRadius: 999,
-                    fontWeight: 700,
-                    textTransform: "uppercase",
-                    letterSpacing: 0.5,
-                    cursor: "pointer",
-                    fontFamily: "inherit",
-                    flexShrink: 0,
-                  }}
-                >
-                  Publish →
-                </button>
+                publishBlocked ? (
+                  <Link
+                    to={STRIPE_CONNECT_ROUTE}
+                    title={`${PUBLISH_GATE_WHY} ${PUBLISH_GATE_STAYS_DRAFT_HINT}`}
+                    style={{
+                      fontSize: 10,
+                      color: "#8a5a00",
+                      background: "#FDF6E3",
+                      border: "1px solid #F0D48A",
+                      padding: "2px 10px",
+                      borderRadius: 999,
+                      fontWeight: 700,
+                      textTransform: "uppercase",
+                      letterSpacing: 0.5,
+                      textDecoration: "none",
+                      fontFamily: "inherit",
+                      flexShrink: 0,
+                    }}
+                  >
+                    {PUBLISH_GATE_CTA} →
+                  </Link>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => onPublish(p.id)}
+                    title="Publish this program — shows in campaigns + public catalog"
+                    style={{
+                      fontSize: 10,
+                      color: "#fff",
+                      background: OK_GREEN,
+                      border: "none",
+                      padding: "2px 10px",
+                      borderRadius: 999,
+                      fontWeight: 700,
+                      textTransform: "uppercase",
+                      letterSpacing: 0.5,
+                      cursor: "pointer",
+                      fontFamily: "inherit",
+                      flexShrink: 0,
+                    }}
+                  >
+                    Publish →
+                  </button>
+                )
               )}
             </>
           )}
@@ -1400,6 +1457,10 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
   // Lean ops don't have partner-run registration or instructors — hide those.
   const { org: panelOrg } = useOutletContext() ?? {};
   const isLean = panelOrg?.instructor_pay_model === "enrops_platform";
+  // Reads the SAVED row, not the local draft below: Publish writes status and
+  // nothing else, so an unsaved price change must not talk the gate out of the
+  // way. Saving first is what moves it.
+  const publishBlocked = publishBlockedByStripe(panelOrg, program);
   // Local draft so the operator can edit several fields and save in one go
   // (avoid round-tripping the DB on every keystroke).
   const [draft, setDraft] = useState({
@@ -2398,15 +2459,30 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         <div style={{ flex: 1 }} />
 
         {isDraft && (
-          <button
-            type="button"
-            onClick={() => onPublish?.(program.id)}
-            style={{
-              background: OK_GREEN, color: "#fff", border: "none", padding: "8px 14px",
-              borderRadius: 6, fontSize: 12.5, fontWeight: 700, fontFamily: "inherit", cursor: "pointer",
-            }}
-            title="Publish — show in catalog + marketing"
-          >Publish →</button>
+          publishBlocked ? (
+            // The reason goes ON the control, where the operator is looking —
+            // not in a banner at the top of a panel they have scrolled past.
+            <Link
+              to={STRIPE_CONNECT_ROUTE}
+              title={`${PUBLISH_GATE_WHY} ${PUBLISH_GATE_STAYS_DRAFT_HINT}`}
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 6,
+                background: "#FDF6E3", color: "#8a5a00", border: "1px solid #F0D48A",
+                padding: "7px 14px", borderRadius: 6, fontSize: 12.5, fontWeight: 700,
+                fontFamily: "inherit", textDecoration: "none",
+              }}
+            >{PUBLISH_GATE_CTA} →</Link>
+          ) : (
+            <button
+              type="button"
+              onClick={() => onPublish?.(program.id)}
+              style={{
+                background: OK_GREEN, color: "#fff", border: "none", padding: "8px 14px",
+                borderRadius: 6, fontSize: 12.5, fontWeight: 700, fontFamily: "inherit", cursor: "pointer",
+              }}
+              title="Publish — show in catalog + marketing"
+            >Publish →</button>
+          )
         )}
         {isOpen && (
           <button

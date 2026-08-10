@@ -21,6 +21,13 @@ import CancellationPolicyInline from "../../../components/CancellationPolicyInli
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib/programText.js";
 import { isUnset, rangeBackwards, rangeBackwardsMessage } from "../../../lib/grades.js";
+import {
+  publishBlockedByStripe,
+  PUBLISH_GATE_CTA_SAVE,
+  PUBLISH_GATE_WHY,
+  PUBLISH_GATE_DRAFT_HINT,
+  STRIPE_CONNECT_ROUTE,
+} from "../../../lib/publishGate.js";
 
 // "" / null / undefined -> NULL, anything else -> a number. isUnset is the shared
 // definition of "not stated" and is the only one in the codebase that knows grade K
@@ -574,6 +581,13 @@ export default function ProgramWizardNew() {
     ? true
     : Boolean(formData.price_cents !== null && formData.price_cents >= 0);
 
+  // "Open registration" publishes, so it carries the Stripe gate. "Save as
+  // draft" writes the same row with status='draft' and is never gated — the
+  // operator keeps working either way. Partner-run and free classes take no
+  // money through enrops and are exempt; publishGate holds that rule, and the
+  // database trigger holds it again.
+  const publishBlocked = publishBlockedByStripe(org, formData);
+
   // Which calendar source the preview was actually able to use. Drives the
   // "Confirmed through ..." line in the preview box.
   //   - 'district' = location has a district set + that district's calendar
@@ -602,6 +616,12 @@ export default function ProgramWizardNew() {
   async function handleSubmit(status) {
     if (!step1Valid || !step2Valid || !step3Valid) {
       setSubmitError("Some required fields are still empty.");
+      return;
+    }
+    // Backstop for the publishing path only — the button is replaced by a
+    // Connect link when this is true. Draft saves are never gated.
+    if (status === "open" && publishBlocked) {
+      setSubmitError(`${PUBLISH_GATE_WHY} ${PUBLISH_GATE_DRAFT_HINT}`);
       return;
     }
     setSubmitting(true);
@@ -662,11 +682,23 @@ export default function ProgramWizardNew() {
       if (status === "open") pixelWorkflowCreated();
       setSavedProgramId(data.id);
       setSavedAsStatus(status);
+      // Returned so save-then-connect can tell success from failure.
+      // savedProgramId is state and would still read stale right after an await.
+      return data.id;
     } catch (e) {
       setSubmitError(e.message ?? String(e));
+      return null;
     } finally {
       setSubmitting(false);
     }
+  }
+
+  // Save what they have as a draft, THEN hand off to Stripe. Never navigate on a
+  // failed save: the error is already on screen and everything they typed is
+  // still in the form, which is the whole point.
+  async function handleSaveDraftAndConnect() {
+    const savedId = await handleSubmit("draft");
+    if (savedId) navigate(STRIPE_CONNECT_ROUTE);
   }
 
   // ---- Render branches ----
@@ -765,8 +797,10 @@ export default function ProgramWizardNew() {
             orgName={org?.name}
             usesEnropsRegistration={org?.uses_enrops_registration}
             onSubmit={handleSubmit}
+            onSaveDraftAndConnect={handleSaveDraftAndConnect}
             onBackToPrograms={() => navigate("/admin/programs")}
             step3Valid={step3Valid}
+            publishBlocked={publishBlocked}
           />
         )}
       </div>
@@ -1376,8 +1410,10 @@ function Step3PriceAndOpen({
   orgName,
   usesEnropsRegistration,
   onSubmit,
+  onSaveDraftAndConnect,
   onBackToPrograms,
   step3Valid,
+  publishBlocked,
 }) {
   const isPartner = formData.runs_own_registration;
 
@@ -1583,11 +1619,37 @@ function Step3PriceAndOpen({
           Ready to publish?
         </div>
         <p style={{ margin: "0 0 14px", color: MUTED, fontSize: 13, lineHeight: 1.5 }}>
-          {isPartner
-            ? "Adding this puts it on your schedule and rosters so you can match instructors. Saving as a draft keeps it private until you're ready."
-            : "Opening registration puts this program in your public catalog so families can sign up. Saving as a draft keeps it private — you can publish from the program list anytime."}
+          {/* Once the gate is up, the primary control no longer opens
+              registration, so describing that is describing a button that is
+              not there. Say what IS true and what still works. */}
+          {publishBlocked
+            ? `${PUBLISH_GATE_WHY} We'll save this as a draft before sending you to Stripe, so nothing you've entered is lost.`
+            : isPartner
+              ? "Adding this puts it on your schedule and rosters so you can match instructors. Saving as a draft keeps it private until you're ready."
+              : "Opening registration puts this program in your public catalog so families can sign up. Saving as a draft keeps it private — you can publish from the program list anytime."}
         </p>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          {publishBlocked ? (
+            // Saves the draft BEFORE handing off to Stripe. A plain link here
+            // would walk away from three steps of typing and lose all of it —
+            // bug B1, which was fixed by never redirecting from a builder. The
+            // gate brought the redirect back, so the save has to come with it.
+            <button
+              type="button"
+              onClick={() => onSaveDraftAndConnect()}
+              disabled={submitting || !step3Valid}
+              style={{
+                display: "inline-flex", alignItems: "center",
+                padding: "10px 18px", background: "#FDF6E3", color: "#8a5a00",
+                border: "1px solid #F0D48A", borderRadius: 8, fontSize: 14,
+                fontWeight: 600, fontFamily: "inherit",
+                cursor: submitting || !step3Valid ? "not-allowed" : "pointer",
+                opacity: submitting || !step3Valid ? 0.5 : 1,
+              }}
+            >
+              {submitting ? "Saving…" : `${PUBLISH_GATE_CTA_SAVE} →`}
+            </button>
+          ) : (
           <button
             onClick={() => onSubmit("open")}
             disabled={submitting || !step3Valid}
@@ -1600,6 +1662,7 @@ function Step3PriceAndOpen({
           >
             {submitting ? "Working…" : isPartner ? "Add to schedule" : "Open registration"}
           </button>
+          )}
           <button
             onClick={() => onSubmit("draft")}
             disabled={submitting || !step3Valid}

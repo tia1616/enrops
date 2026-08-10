@@ -36,6 +36,12 @@ import {
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib/programText.js";
 import { GRADE_OPTIONS, audiencePatch, rangeBackwards, rangeBackwardsMessage } from "../../../lib/grades.js";
+import {
+  publishBlockedByStripe,
+  PUBLISH_GATE_CTA_SAVE,
+  PUBLISH_GATE_WHY,
+  STRIPE_CONNECT_ROUTE,
+} from "../../../lib/publishGate.js";
 
 // Match ProgramWizardNew's palette so the two builders read as one system.
 // Monotonic where available. performance.now() is immune to the system clock
@@ -310,15 +316,32 @@ export default function QuickProgramBuilder() {
     if (!org?.id) return;
     let cancelled = false;
     (async () => {
-      const { data } = await supabase
+      const { data, error: chargesErr } = await supabase
         .from("organizations")
         .select("stripe_charges_enabled")
         .eq("id", org.id)
         .maybeSingle();
-      if (!cancelled) setChargesEnabled(!!data?.stripe_charges_enabled);
+      if (cancelled) return;
+      // A FAILED read is not "no Stripe". This used to coerce both to false with
+      // `!!data?.…`, which was survivable while the value only chose between two
+      // nudges — it is not now that it can withhold Create. A network blip must
+      // not tell a connected operator to go connect Stripe. null = unknown, and
+      // every consumer below treats unknown as "don't act".
+      setChargesEnabled(chargesErr || !data ? null : !!data.stripe_charges_enabled);
     })();
     return () => { cancelled = true; };
   }, [org?.id]);
+
+  // ONE answer to "can this org be paid", used by every consumer on this screen.
+  // The fetch above is the fresher value (it re-reads after a Connect
+  // round-trip); until it lands, or if it failed, the org row AdminLayout
+  // already loaded still knows. Deriving it once matters: making the fetch
+  // return null on failure fixed the publish gate but would have inverted the
+  // SUCCESS screen, which reads `=== false` — an unknown would have flipped it
+  // from "almost live, connect Stripe" to "your program is live" with the share
+  // panel open. Different answers to the same question on one screen, and the
+  // fail-open one sitting on the money surface.
+  const chargesResolved = chargesEnabled ?? org?.stripe_charges_enabled ?? null;
 
   // Locations the operator has set up (Programs -> Locations). One location
   // auto-selects (no need to pick when there's only one); 2+ shows a picker;
@@ -531,6 +554,17 @@ export default function QuickProgramBuilder() {
   const valid =
     name.trim() !== "" && priceValid && spotsNum >= 1 && !audienceBackwards &&
     (isOneOff ? !!startDate : !!day) && !!locationId;
+
+  // Create PUBLISHES, so it carries the Stripe gate; Save as draft does not and
+  // must stay fully available — "you can't publish yet" has to never mean "you
+  // can't work". Every class this builder makes is runs_own_registration:false,
+  // so the price and the org's two flags are the whole question. Reads the LIVE
+  // price field, so typing a price into a free class arms the gate as you type,
+  // rather than after a rejected save.
+  const publishBlocked = publishBlockedByStripe(
+    { ...org, stripe_charges_enabled: chargesResolved },
+    { price_cents: priceValid ? priceCents : 0, runs_own_registration: false },
+  );
 
   // ---- First-program onboarding ----------------------------------------
   //
@@ -755,6 +789,13 @@ export default function QuickProgramBuilder() {
   // publishing the instant you hit Create.
   async function handleCreate(asDraft = false) {
     if (!valid || submitting) return;
+    // Backstop for the publishing path only. The Create button is replaced by a
+    // Connect link when this is true, so getting here means a stale render — and
+    // the DB trigger would reject it anyway. Drafts are never gated.
+    if (!asDraft && publishBlocked) {
+      setErr(`${PUBLISH_GATE_WHY} Save this as a draft instead, then connect Stripe.`);
+      return null;
+    }
     setSubmitting(true);
     // Which button is in flight, so only that one changes its label. Both share
     // `submitting` for the disabled state, which is correct — neither should be
@@ -832,8 +873,15 @@ export default function QuickProgramBuilder() {
       // but keeping the read before the write means nobody has to prove that
       // again later.
       setProgramCount((c) => (typeof c === "number" ? c + 1 : c));
+      // Returns the id so a caller can tell success from failure. The
+      // save-then-connect button needs this: `createdId` is state, so reading it
+      // straight after an await gives the STALE value from this render, and the
+      // button would navigate to Stripe on a failed save — losing the form and
+      // the error message with it.
+      return data.id;
     } catch (e) {
       setErr(e?.message ?? String(e));
+      return null;
     } finally {
       setSubmitting(false);
       setSubmittingAs(null);
@@ -1284,7 +1332,7 @@ export default function QuickProgramBuilder() {
   if (createdId) {
     // Arielle's rule: never a payment-less live page. If Stripe isn't connected
     // yet, lead with that step (the WOW) and dim the share link until it is.
-    const notConnected = chargesEnabled === false;
+    const notConnected = chargesResolved === false;
     return (
       <div style={{ maxWidth: 560, margin: "0 auto", padding: "24px 16px" }}>
         {/* Honest state: with Stripe not connected the page exists but can't take
@@ -1297,14 +1345,26 @@ export default function QuickProgramBuilder() {
           {notConnected ? "Your program is almost live." : "Your program is live."}
         </div>
 
-        {/* Always 3 here, and it needs no branching. Info and Publish are both
-            done, so step 3 is either "Connect Stripe" in progress (when that step
-            exists) or one past the end, meaning all done. The old version threaded
-            notConnected through the first-program branch only and hardcoded 3 for
-            everyone else, which ticked BOTH pips and said "it's live" directly
-            above "One step left: connect Stripe". */}
+        {/* WHICH STEP IS CURRENT DEPENDS ON STRIPE, since the publish gate
+            reordered the strip to Enter -> Connect Stripe -> Publish.
+            A flat 3 was right under the old order, where Stripe was last. Under
+            the new one it marks step 2 — Connect Stripe — as DONE with a tick,
+            which is a green light on the single thing the operator has not done.
+            Reachable: a FREE class is exempt from the gate, so it can go live
+            while charges are off, and this is the screen it lands on.
+            So when Stripe is still missing, Connect Stripe IS the current step.
+            Publish then renders as upcoming even though this class published —
+            imperfect, because one cursor cannot say "3 done, 2 not" — but it
+            points at the real next action instead of falsely clearing it.
+            The old version threaded notConnected through the first-program branch
+            only and hardcoded 3 for everyone else, which ticked BOTH pips and
+            said "it's live" directly above "One step left: connect Stripe". */}
         {isLean && (
-          <ProgramSteps count={programCount} chargesEnabled={chargesEnabled} current={3} />
+          <ProgramSteps
+            count={programCount}
+            chargesEnabled={chargesResolved}
+            current={notConnected ? 2 : 3}
+          />
         )}
 
         {notConnected ? (
@@ -1403,7 +1463,43 @@ export default function QuickProgramBuilder() {
   // Create above Cancel on a phone) can be emitted in real DOM order without
   // writing the markup twice. See the note at the footer for why CSS `order`
   // was the wrong tool.
-  const createButton = (
+  // Stripe not connected and this class would take money: Create becomes the
+  // step that unblocks it. Replaced, not disabled — a dimmed button is a dead
+  // end, and this one has somewhere to send them. Save as draft sits right
+  // beside it, untouched, which is the whole reason the gate is humane.
+  //
+  // SAVES BEFORE IT NAVIGATES. This is bug B1: Jeff filled in a program, was
+  // handed off to Stripe, came back and the form was empty. That was fixed by
+  // the builder never redirecting anywhere — and this gate reintroduced a
+  // redirect, so it reintroduced the data loss until this. Persist the draft
+  // first, then leave; the operator returns from Stripe to a saved class.
+  //
+  // Disabled on `!valid` for the same reason Create and Save as draft are: with
+  // a required field missing there is no row to write, and navigating anyway
+  // would throw away what they HAD typed. Better to keep them here with the
+  // field flagged than to lose it politely.
+  const createButton = publishBlocked ? (
+    <button
+      type="button"
+      onClick={async () => {
+        // Only leave if the draft actually landed. On failure handleCreate has
+        // already surfaced the error above the buttons, and staying put is what
+        // keeps the operator's typing.
+        const savedId = await handleCreate(true);
+        if (savedId) navigate(STRIPE_CONNECT_ROUTE);
+      }}
+      disabled={!valid || submitting}
+      style={{
+        ...primaryBtn, flex: 1, background: "#FDF6E3", color: "#8a5a00",
+        border: "1px solid #F0D48A",
+        opacity: !valid || submitting ? 0.55 : 1,
+        cursor: !valid || submitting ? "not-allowed" : "pointer",
+      }}
+      title={`${PUBLISH_GATE_WHY} We'll save this class as a draft first, so nothing you've typed is lost.`}
+    >
+      {submittingAs === "draft" ? "Saving…" : `${PUBLISH_GATE_CTA_SAVE} →`}
+    </button>
+  ) : (
     <button
       // MUST be wrapped: passing handleCreate directly hands React's click event
       // in as `asDraft`, and a SyntheticEvent is truthy — every Create would
@@ -1483,7 +1579,7 @@ export default function QuickProgramBuilder() {
       {/* Lean only. A legacy operator has had Stripe connected for years, so a
           strip whose third step is "Connect Stripe" would be describing a road
           they finished long ago. */}
-      {isLean && <ProgramSteps count={programCount} chargesEnabled={chargesEnabled} current={1} />}
+      {isLean && <ProgramSteps count={programCount} chargesEnabled={chargesResolved} current={1} />}
 
       <div style={{ display: "grid", gap: 18 }}>
         {/* Every class after the first inherits the questions and waivers set
@@ -2192,9 +2288,15 @@ export default function QuickProgramBuilder() {
             written to escape. `=== true` and not `!== false`, matching that helper:
             the fallback has to be the sentence that is true in BOTH states. */}
         <div style={{ ...helpStyle, marginTop: -4, textAlign: "center" }}>
-          {org?.uses_enrops_registration === true
-            ? "Create puts the class on your registration page straight away. Save as draft keeps it private, with its dates worked out, until you publish it."
-            : "Create makes the class straight away. Save as draft keeps it private, with its dates worked out, until you're ready."}
+          {/* When the gate is up, Create is no longer the button this sentence
+              describes — it says "Connect Stripe to publish". Explaining the
+              publish action beneath a control that does not perform it is the
+              same class of lie the sentence was rewritten to remove. */}
+          {publishBlocked
+            ? `${PUBLISH_GATE_WHY} We'll save this class as a draft before sending you to Stripe, so nothing you've typed is lost.`
+            : org?.uses_enrops_registration === true
+              ? "Create puts the class on your registration page straight away. Save as draft keeps it private, with its dates worked out, until you publish it."
+              : "Create makes the class straight away. Save as draft keeps it private, with its dates worked out, until you're ready."}
         </div>
       </div>
     </div>
