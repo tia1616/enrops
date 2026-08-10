@@ -84,11 +84,39 @@ likely a shared prereq detection helper.
   save on Done editing (DB PATCH); All/None bar on multi-selects;
   "no picked content" badge suppressed for non-program intents.
 
-## N. Per-mode merge-token sets (camps vs afterschool)
+## N. An empty merge token leaves a broken sentence
 
 Filed 2026-08-10, from the code review of the `{{registration_close_date}}` build.
-Deferred deliberately: camps are done for the season, so nothing can hit this
-until next summer.
+Two halves of one root cause. The camps half is deferred safely (camps are done
+for the season). The afterschool half is NOT seasonal - it is live, and only
+avoids today's send by luck of the picks. Fix before the full-fall campaign.
+
+### N.a - Afterschool: a suppressed token still leaves its sentence
+
+`{{registration_close_date}}` deliberately renders empty when a school's picked
+programs do not share one close date (see the all-or-nothing rule in
+`marketing-touchpoint-send`). That is right - a wrong deadline is worse than
+none. But the SENTENCE around it survives, so a parent at Beatrice Morrow
+Cannady (3 fall programs, 2026-09-09 / 09-14 / 09-18) reads:
+
+    ...and sign-ups close on .
+
+and a subject line ending in a bare "close". Verified on staging 2026-08-10.
+
+It does not fire for the week-of-Aug-31 send: all 7 schools in that campaign
+carry exactly one program each, so their dates trivially agree. It WILL fire on
+any campaign wide enough to include Cannady.
+
+**Fix candidate.** Follow the `{{vip_block}}` pattern already in this file -
+a token that resolves to a whole `<p>...</p>` or to empty string, which
+`postCleanCopy`'s empty-paragraph rule then strips cleanly. Either replace the
+date token with a `{{registration_close_block}}`, or add a block sibling and
+document the date token as "only safe inline when you know the school has one
+program". Do NOT try to repair this with a regex in `postCleanCopy`: dangling
+prepositions are copy-shaped, and a rule broad enough to catch "close on ."
+would mangle real sentences.
+
+### N.b - Camps: the token set is not per-mode
 
 **Today.** `APPROVED_TOKENS` in `marketing-draft-campaign` is ONE flat set
 covering both modes. The rule that a token is afterschool-only lives in prose
@@ -112,6 +140,12 @@ operator cannot insert a chip that renders blank.
 **Touches.** `marketing-draft-campaign` (APPROVED_TOKENS + prompt),
 `marketing-touchpoint-send` (keep the two sets in sync), `TouchpointCard.jsx`
 (palette filter). Worth doing before next summer's camps campaigns.
+
+Note N.a and N.b share a root cause: the renderer substitutes an empty string
+and trusts the copy around it to still read. Whoever picks this up should fix
+the mechanism once (block-shaped tokens) rather than patching the two symptoms
+separately - `{{early_bird_deadline}}`, `{{savings}}`, `{{regular_price}}`,
+`{{session_count}}` and `{{day_of_week}}` all have the same shape today.
 
 ---
 
