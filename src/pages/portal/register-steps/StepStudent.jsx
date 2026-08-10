@@ -2,21 +2,10 @@ import React from 'react';
 import { PickupDismissalSection, CustomQuestionsSection, hasPickupSection } from './RegExtraFields.jsx';
 import { GRADE_OPTIONS_LONG } from '../../../lib/grades.js';
 import { needsAftercareProvider } from '../../../lib/dismissal.js';
-
-// Tenant-neutral referral options shared by every operator's registration flow.
-// (Replaced J2S-specific entries — "STEAM Night", "PDX Parent", "NW Kids",
-// "Kids Out and About" — which leaked Journey to STEAM's Portland-area channels
-// to other tenants. Per-tenant configurable options are a queued follow-up.)
-const REFERRAL_OPTIONS = [
-  'School flyer (from my child\'s school)',
-  'School newsletter, PTO, or PTA email',
-  'Friend or family referral',
-  'Social media (Facebook, Instagram)',
-  'Google search',
-  'Community event or fair',
-  'Local parenting magazine or website',
-  'Other',
-];
+// The referral answers, incl. the tenant-derived "<provider> email" option, live
+// in src/lib/referral.js so no tenant's channel can be written into this file
+// again - see the note there and src/lib/referral.test.mjs.
+import { referralOptions } from '../../../lib/referral.js';
 
 // Was a local list that stopped at 6th grade while operators could set a class to
 // any grade, so a family whose child was in 7th could not pick a grade and could not
@@ -24,8 +13,9 @@ const REFERRAL_OPTIONS = [
 // gained, nothing a family could already choose is taken away.
 const GRADE_OPTIONS = GRADE_OPTIONS_LONG;
 
-export default function StepStudent({ student, onUpdate, childIndex, regFields = { std: {}, custom: [] }, child = {}, onUpdateChild = () => {}, lean = false }) {
+export default function StepStudent({ student, onUpdate, childIndex, regFields = { std: {}, custom: [] }, child = {}, onUpdateChild = () => {}, lean = false, orgName = '' }) {
   const { std = {}, custom = [] } = regFields;
+  const referrals = referralOptions(orgName);
   return (
     <div>
       <h1 className="font-titan text-3xl text-j2s-ink sm:text-4xl">
@@ -214,7 +204,7 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
               onChange={(e) => onUpdate({ how_heard: e.target.value })}
             >
               <option value="">Select&hellip;</option>
-              {REFERRAL_OPTIONS.map((r) => (
+              {referrals.map((r) => (
                 <option key={r} value={r}>
                   {r}
                 </option>
