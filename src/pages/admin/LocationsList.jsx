@@ -741,7 +741,7 @@ function EditCard({ title, draft, bind, applyPlace, partners, districts, error, 
         <textarea {...bind("arrival_instructions")} placeholder="e.g. Park in the back lot, enter through the gym door, sign in at the front desk. Door code: 4827#." rows={3} style={textareaStyle} />
       </Field>
 
-      <Field label="Arrival instructions (parents)" hint="What parents need to know to drop their kid off — sent in welcome emails 7 days before the first session. Leave blank to skip the arrival block in parent welcomes.">
+      <Field label="Arrival instructions (parents)" hint="What parents need to know to drop their kid off — sent in welcome emails ahead of the first session, and to anyone who signs up late. Leave blank to skip the arrival block in parent welcomes.">
         <textarea {...bind("parent_arrival_instructions")} placeholder="e.g. A school staff member will bring students to the lunchroom at 3pm. Pickup at 4pm from the front parking lot." rows={3} style={textareaStyle} />
       </Field>
 
