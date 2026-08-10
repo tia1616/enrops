@@ -25,7 +25,9 @@
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
-import { loadOrgBrand, formatFromAddress, renderSignatureBlock, encodeDisplayName, type OrgBrand } from "../_shared/orgBrand.ts";
+import { loadOrgBrand, formatFromAddress, renderSignatureBlock, type OrgBrand } from "../_shared/orgBrand.ts";
+import { listUnsubscribeHeaders } from "../_shared/listUnsubscribe.ts";
+import { assertCommsFull } from "../_shared/entitlements.ts";
 import {
   parseEmailAttachments,
   loadCommsAttachments,
@@ -38,8 +40,36 @@ const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const UNSUBSCRIBE_SECRET = Deno.env.get("MARKETING_UNSUBSCRIBE_SECRET")!;
 const UNSUBSCRIBE_ENDPOINT = `${SUPABASE_URL}/functions/v1/marketing-unsubscribe`;
+// A `!` on Deno.env.get is a COMPILE-time assertion and does nothing at runtime:
+// with the secret unset, hmacToken would sign with the literal string "undefined"
+// and mint a token marketing-unsubscribe rejects with 401 — a footer link that
+// looks fine and fails on click, leaving "report spam" as the recipient's only
+// working exit. unsubscribeConfigured() drives a FAIL-CLOSED refusal in serve()
+// (no secret, no send), matching how lifecycle-automations-cron handles it.
+//
+// READ AT CALL TIME, never once at module load. A Supabase edge isolate is
+// long-lived and is NOT restarted when a project secret changes, so a module-scope
+// capture keeps whatever it saw at cold start: every send would keep being refused
+// after the secret was added, while the refusal text told an admin to set a secret
+// they had already set. One env read per call buys recovery on the next request.
+//
+// Both the guard and the signing key MUST come from these two accessors. Making
+// only the boolean dynamic while hmacToken kept a stale module-scope secret would
+// be WORSE than not fixing it: the guard would open once the secret was added, but
+// every token would still be signed with the old value and 401 on click — the
+// exact silent broken-link failure this workstream exists to remove.
+function unsubscribeSecretRaw(): string {
+  // RAW and untrimmed on purpose. marketing-unsubscribe/index.ts:20 verifies with
+  // `Deno.env.get('MARKETING_UNSUBSCRIBE_SECRET')!` and signs the HMAC with that
+  // exact string, so trimming here would change the key on a secret carrying any
+  // stray whitespace and 401 every unsubscribe link we issue. The emptiness CHECK
+  // below trims; the signing key never does.
+  return Deno.env.get("MARKETING_UNSUBSCRIBE_SECRET") ?? "";
+}
+function unsubscribeConfigured(): boolean {
+  return !!unsubscribeSecretRaw().trim();
+}
 // Public site origin for registration links in emails. Per-environment (set
 // PUBLIC_SITE_URL on staging to the staging site); defaults to prod. Mirrors
 // lifecycle-automations-cron — never hardcode the domain, or staging emails
@@ -179,12 +209,14 @@ type VipOffering = {
   excluded_location_ids?: string[];
 };
 
+// Sender identity is deliberately NOT here — it comes from loadOrgBrand below.
+// The raw columns were still being selected after that switch, which left a
+// second, stale source of the From line sitting in scope where a later edit
+// could reach for it.
 type Org = {
   id: string;
   name: string;
   slug: string;
-  default_sender_name: string | null;
-  default_sender_email: string | null;
   brand_voice: { closer?: string; phone?: string; website?: string } | null;
   logo_url: string | null;
   vip_offering: VipOffering | null;
@@ -282,6 +314,25 @@ serve(async (req: Request) => {
     return json({ error: "preview_location_id required for mode='preview'" }, 400);
   }
 
+  // FAIL CLOSED on a missing unsubscribe secret, matching lifecycle-automations-cron.
+  // Campaign email is promotional by definition, so every one of these sends is
+  // legally required to carry a working unsubscribe. Without the secret we can
+  // only mint a token the unsubscribe endpoint rejects — previously that shipped
+  // a link that looked fine and 401'd on click, leaving "report spam" as the
+  // recipient's only working exit. Refusing the send is the safer failure: it is
+  // loud, it is recoverable, and it never reaches a family.
+  //
+  // Checked BEFORE any recipient is loaded so the batch cannot half-send. Applies
+  // to 'send' and 'test' (both actually deliver mail); 'preview' renders to screen
+  // and never sends, so it stays available for the operator to keep working.
+  if (!unsubscribeConfigured() && body.mode !== "preview") {
+    console.error("[marketing-touchpoint-send] send refused — MARKETING_UNSUBSCRIBE_SECRET is not set");
+    return json({
+      error: "unsubscribe_not_configured",
+      message: "Email can't go out right now: the unsubscribe link can't be signed. Nothing was sent. This needs an admin to set MARKETING_UNSUBSCRIBE_SECRET.",
+    }, 503);
+  }
+
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
   // ---- Load campaign + touchpoint ----
@@ -303,6 +354,15 @@ serve(async (req: Request) => {
     }
   }
 
+  // Plan gate, checked on the DELIVERY path and not only at draft time. This runs
+  // for the cron too, deliberately: the org that drafted a campaign is not
+  // necessarily entitled at the moment it sends, and a campaign row that already
+  // exists must not keep delivering on a tier that no longer includes campaigns.
+  // Draft-time checking alone would leave any already-approved campaign sending
+  // forever. Reads the plan off the org row, never from the request.
+  const planRefusal = await assertCommsFull(supabase, campaign.organization_id);
+  if (planRefusal) return planRefusal;
+
   const { data: touchpoint, error: tErr } = await supabase
     .from("marketing_campaign_touchpoints")
     .select("id, campaign_id, organization_id, status, type, payload, email_attachments")
@@ -323,7 +383,7 @@ serve(async (req: Request) => {
   // ---- Load org ----
   const { data: org, error: oErr } = await supabase
     .from("organizations")
-    .select("id, name, slug, default_sender_name, default_sender_email, brand_voice, logo_url, vip_offering, active_registration_term, mailing_address, org_branding(primary_color)")
+    .select("id, name, slug, brand_voice, logo_url, vip_offering, active_registration_term, mailing_address, org_branding(primary_color)")
     .eq("id", campaign.organization_id)
     .single<Org>();
   if (oErr || !org) return json({ error: `organization not found: ${oErr?.message ?? "unknown"}` }, 404);
@@ -674,17 +734,32 @@ serve(async (req: Request) => {
         ? postCleanCopy(replaceTokens(touchpoint.payload!.body_text, tokens, { html: false }))
         : stripHtmlToText(renderedInner)) + downloadButtonsText;
 
-      return { r, subject, bodyHtml, bodyText };
+      // Read the unsubscribe URL back out of the SAME token map the footer link
+      // is rendered from (wrapInEmailShell reads tokens.unsubscribe_url). One
+      // value, two surfaces — the header can never point somewhere the visible
+      // link doesn't.
+      const unsubscribeUrl = tokens.get("unsubscribe_url") || "";
+
+      return { r, subject, bodyHtml, bodyText, unsubscribeUrl };
     }));
 
-    const batchPayload = rendered.map(({ r, subject, bodyHtml, bodyText }) => ({
-      from: formatFromAddress(brand),
-      reply_to: brand.reply_to,
-      to: [r.email],
-      subject,
-      html: bodyHtml,
-      text: bodyText,
-    }));
+    const batchPayload = rendered.map(({ r, subject, bodyHtml, bodyText, unsubscribeUrl }) => {
+      // Campaign sends are bulk promotional mail by definition — every one of
+      // them gets List-Unsubscribe + one-click. Derived from the URL alone: it is
+      // "" exactly when the secret is missing (computeUnsubscribeUrl) and the
+      // serve() guard has already refused that send, so there is no second
+      // boolean here to drift out of step with the footer.
+      const unsubHeaders = listUnsubscribeHeaders(unsubscribeUrl);
+      return {
+        from: formatFromAddress(brand),
+        reply_to: brand.reply_to,
+        to: [r.email],
+        subject,
+        html: bodyHtml,
+        text: bodyText,
+        ...(Object.keys(unsubHeaders).length ? { headers: unsubHeaders } : {}),
+      };
+    });
 
     let batchResp: { ok: true; ids: string[] } | { ok: false; error: string };
     try {
@@ -1406,37 +1481,12 @@ function extractTopics(what: Record<string, unknown> | undefined): string[] {
 // Resend send
 // ---------------------------------------------------------------------------
 
-async function sendViaResend(opts: {
-  fromName: string;
-  fromEmail: string;
-  toEmail: string;
-  subject: string;
-  html: string;
-  text: string | null;
-}): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${RESEND_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      from: `${encodeDisplayName(opts.fromName)} <${opts.fromEmail}>`,
-      reply_to: opts.fromEmail,
-      to: [opts.toEmail],
-      subject: opts.subject,
-      html: opts.html,
-      text: opts.text,
-    }),
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    return { ok: false, error: `resend ${res.status}: ${body.slice(0, 200)}` };
-  }
-  const data = await res.json();
-  return { ok: true, id: data.id ?? "" };
-}
-
+// DELETED 2026-08-01: a single-send sendViaResend() with zero callers. Its
+// comment claimed it was "kept in sync" with the live batch path, but it had
+// already drifted — it built the From from raw fromName/fromEmail args and set
+// reply_to to the From address, which is exactly the pattern this pass removes.
+// A dead copy of the old shape is a landmine, not a spare.
+//
 // Resend batch endpoint: POST /emails/batch with an array of email objects
 // (up to 100). Returns { data: [{id}, ...] } on success — one id per email
 // in the SAME ORDER as the request. On rate-limit / auth / validation
@@ -1449,6 +1499,9 @@ async function sendBatchViaResend(
     subject: string;
     html: string;
     text: string | null;
+    // RFC 2369/8058 unsubscribe headers. Absent on any email whose unsubscribe
+    // URL failed to build; Resend passes whatever is here straight through.
+    headers?: Record<string, string>;
   }>,
 ): Promise<{ ok: true; ids: string[] } | { ok: false; error: string }> {
   const res = await fetch("https://api.resend.com/emails/batch", {
@@ -1478,6 +1531,12 @@ async function sendBatchViaResend(
 // ---------------------------------------------------------------------------
 
 async function computeUnsubscribeUrl(email: string, orgId: string): Promise<string> {
+  // Mirrors lifecycle-automations-cron: with no secret, return "" rather than a
+  // URL signed with the literal string "undefined". "" makes wrapInEmailShell
+  // omit the footer block and listUnsubscribeHeaders return {}, so nothing
+  // renders a link that cannot work. The serve() guard above already refuses the
+  // send outright; this is the second line of defence for any future caller.
+  if (!unsubscribeConfigured()) return "";
   const lowered = email.toLowerCase();
   const token = await hmacToken(lowered, orgId);
   const params = new URLSearchParams({ email: lowered, org: orgId, t: token });
@@ -1487,7 +1546,7 @@ async function computeUnsubscribeUrl(email: string, orgId: string): Promise<stri
 async function hmacToken(email: string, orgId: string): Promise<string> {
   const key = await crypto.subtle.importKey(
     "raw",
-    new TextEncoder().encode(UNSUBSCRIBE_SECRET),
+    new TextEncoder().encode(unsubscribeSecretRaw()),
     { name: "HMAC", hash: "SHA-256" },
     false,
     ["sign"],

@@ -181,12 +181,46 @@ async function addSuppression(
 //    suppression row would silently stop that family's CAMP LOGISTICS email —
 //    the drop-off details, the recap — because someone hit "junk" once. We
 //    record the complaint and leave the decision to a human.
+// How long to wait before the single re-read above. Sized against what it is
+// racing: the cron's own send-then-upsert gap is one Supabase round trip (tens of
+// milliseconds), so this is generous cover rather than a tuned value. Kept well
+// inside any sane webhook timeout, and paid only on events headed for discard.
+const UNMATCHED_RECHECK_MS = 750;
+
+// The event types this function actually acts on. MUST stay in step with the
+// switch cases below — opens and clicks are here because they are positive
+// PROOF of delivery, not because we track engagement on service email.
+const ACTIONABLE_LIFECYCLE_EVENTS = new Set([
+  "email.delivered",
+  "email.opened",
+  "email.clicked",
+  "email.bounced",
+  "email.complained",
+]);
+
 async function handleLifecycleEvent(
   supabase: SupabaseClient,
   emailId: string,
   type: string,
   data: Record<string, unknown>,
 ): Promise<Response> {
+  // Decide actionability BEFORE the lookup and, critically, before the re-check
+  // delay below. This function is reached for ANY event that missed
+  // marketing_sends, not just delivery verdicts — and `email.sent` fires within
+  // milliseconds of every lifecycle send, i.e. squarely INSIDE the race window
+  // the re-check exists for. So without this guard the row reliably does not
+  // exist yet, every single send burns the full re-check delay, and then falls
+  // through to the switch's default arm having done nothing. A welcome batch to
+  // 200 families would hold 200 invocations for 750ms each for no benefit —
+  // wasted concurrency that can push Resend into webhook timeouts and retries.
+  //
+  // The switch's `default:` arm is deliberately KEPT rather than deleted. It is
+  // now unreachable, but it is what makes the switch safe if this set and the
+  // cases below ever drift apart, and it costs nothing.
+  if (!ACTIONABLE_LIFECYCLE_EVENTS.has(type)) {
+    return json({ ok: true, ignored: "unhandled_type", type }, 200);
+  }
+
   // resend_message_id is not UNIQUE on this table (the unique key is
   // automation_id + context_key), and a retry overwrites the id in place. A
   // Resend id is globally unique so at most one row can hold it, but limit(1)
@@ -203,7 +237,37 @@ async function handleLifecycleEvent(
     return json({ error: "lookup_failed" }, 500);
   }
 
-  const row = rows?.[0];
+  // ONE delayed re-check before giving up. lifecycle-automations-cron sends
+  // through Resend and only THEN upserts the row carrying resend_message_id, so
+  // an event that arrives inside that gap finds nothing and — because we answer
+  // 200 to stop Resend retrying — would be dropped permanently, leaving
+  // delivery_status NULL forever. That is exactly the "it says sent, but did it
+  // land?" blind spot this wiring exists to close, so losing an event to a race
+  // defeats the feature rather than merely delaying it.
+  //
+  // Deliberately NOT solved by returning non-2xx to lean on Resend's retries:
+  // that would also retry every GENUINELY unknown event (a transactional one-off,
+  // or a send predating this wiring) on Resend's full backoff schedule, forever.
+  // A single short re-read costs that latency only on events we are about to
+  // discard anyway, and never on the matching path.
+  let row = rows?.[0];
+  if (!row) {
+    await new Promise((resolve) => setTimeout(resolve, UNMATCHED_RECHECK_MS));
+    const { data: recheckRows, error: recheckErr } = await supabase
+      .from("automation_run_recipients")
+      .select("id, delivery_status, delivered_at, bounced_at, complained_at, bounce_detail")
+      .eq("resend_message_id", emailId)
+      .limit(1);
+    if (recheckErr) {
+      // Same treatment as the first lookup: a read failure is NOT proof the send
+      // is unknown, so 500 and let Resend redeliver rather than silently
+      // recording nothing.
+      console.error("automation_run_recipients re-check failed:", recheckErr);
+      return json({ error: "lookup_failed" }, 500);
+    }
+    row = recheckRows?.[0];
+  }
+
   if (!row) {
     // Genuinely unknown (a transactional one-off, or a send predating this
     // wiring). 200 so Resend stops retrying.
