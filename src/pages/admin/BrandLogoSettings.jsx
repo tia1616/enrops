@@ -108,6 +108,12 @@ export default function BrandLogoSettings() {
   // carry a link.
   const [confirmationHtml, setConfirmationHtml] = useState("");
   const [savedConfirmationHtml, setSavedConfirmationHtml] = useState("");
+  // The button under that note. A label/url PAIR, not a link inside the note, so it
+  // renders as a real button and the wording is a field rather than markup.
+  const [ctaLabel, setCtaLabel] = useState("");
+  const [savedCtaLabel, setSavedCtaLabel] = useState("");
+  const [ctaUrl, setCtaUrl] = useState("");
+  const [savedCtaUrl, setSavedCtaUrl] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -127,7 +133,7 @@ export default function BrandLogoSettings() {
       const { data: o } = await supabase
         .from("organizations").select("logo_url, logo_email_url").eq("id", org.id).maybeSingle();
       const { data: b } = await supabase
-        .from("org_branding").select("primary_color, secondary_color, accent_color, page_bg_color, banner_image_url, hero_headline, hero_subtext, confirmation_page_html")
+        .from("org_branding").select("primary_color, secondary_color, accent_color, page_bg_color, banner_image_url, hero_headline, hero_subtext, confirmation_page_html, confirmation_cta_label, confirmation_cta_url")
         .eq("organization_id", org.id).maybeSingle();
       if (!cancelled) {
         const url = o?.logo_url || o?.logo_email_url || "";
@@ -150,6 +156,10 @@ export default function BrandLogoSettings() {
         setHeroSubtext(hs); setSavedHeroSubtext(hs);
         const cp = b?.confirmation_page_html ?? "";
         setConfirmationHtml(cp); setSavedConfirmationHtml(cp);
+        const cl = b?.confirmation_cta_label ?? "";
+        const cu = b?.confirmation_cta_url ?? "";
+        setCtaLabel(cl); setSavedCtaLabel(cl);
+        setCtaUrl(cu); setSavedCtaUrl(cu);
         setLoading(false);
       }
     })();
@@ -218,7 +228,25 @@ export default function BrandLogoSettings() {
   const bannerDirty = bannerUrl !== savedBanner;
   const heroDirty = heroHeadline !== savedHeroHeadline || heroSubtext !== savedHeroSubtext;
   const confirmationDirty = confirmationHtml !== savedConfirmationHtml;
-  const dirty = logoDirty || colorsDirty || bannerDirty || heroDirty || confirmationDirty;
+  const ctaDirty = ctaLabel !== savedCtaLabel || ctaUrl !== savedCtaUrl;
+  const dirty = logoDirty || colorsDirty || bannerDirty || heroDirty || confirmationDirty || ctaDirty;
+
+  // Accept what an operator actually types ("theukuleleproject.com/shop") and turn it
+  // into something safe to put in an href. Anything that will not parse as http/https
+  // is REFUSED at save time with a plain message rather than quietly stored - the
+  // public page would then simply not render a button and the operator would be left
+  // wondering why. RegisterSuccess re-checks on render regardless.
+  function normalizeCtaUrl(raw) {
+    const v = (raw || "").trim();
+    if (!v) return { url: null, error: null };
+    const candidate = /^https?:\/\//i.test(v) ? v : `https://${v}`;
+    let parsed;
+    try { parsed = new URL(candidate); } catch { return { url: null, error: true }; }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return { url: null, error: true };
+    if (!parsed.hostname.includes(".")) return { url: null, error: true };
+    return { url: parsed.toString(), error: null };
+  }
+  const ctaCheck = normalizeCtaUrl(ctaUrl);
   // Built from the CURRENT origin so the link is right on staging and on prod,
   // and from the org's own slug — never a hardcoded tenant.
   const publicUrl = org?.slug
@@ -238,6 +266,13 @@ export default function BrandLogoSettings() {
   }
 
   async function save() {
+    // Refuse rather than store something the public page would then decline to
+    // render - the operator would see "Saved" and no button, with nothing to explain
+    // it. Checked before setSaving so the button does not flicker into a spinner.
+    if (ctaCheck.error) {
+      setError("That button link doesn't look like a web address. Try something like theukuleleproject.com/shop");
+      return;
+    }
     setSaving(true); setError("");
     try {
       // Logo goes through the edge fn (sets logo_url + derives the email PNG).
@@ -268,7 +303,7 @@ export default function BrandLogoSettings() {
       }
       // Colors + banner go straight to org_branding. Build the payload from only
       // what changed so untouched fields (e.g. default colors) are never written.
-      if (colorsDirty || bannerDirty || heroDirty || confirmationDirty) {
+      if (colorsDirty || bannerDirty || heroDirty || confirmationDirty || ctaDirty) {
         const payload = { organization_id: org.id, updated_at: new Date().toISOString() };
         // Only write colors the operator ACTUALLY changed. Writing all four would
         // pin untouched fields (still showing the platform default in the picker)
@@ -283,6 +318,13 @@ export default function BrandLogoSettings() {
         // this is truthy, so clearing the editor must detach it, not store a blank
         // that would render an empty card.
         if (confirmationDirty) payload.confirmation_page_html = confirmationHtml.trim() || null;
+        if (ctaDirty) {
+          // Store the NORMALIZED url, so the page never has to guess about a missing
+          // scheme, and NULL when cleared so the button disappears rather than
+          // rendering with a dead destination.
+          payload.confirmation_cta_url = ctaCheck.url;
+          payload.confirmation_cta_label = ctaLabel.trim() || null;
+        }
         const { error: e } = await supabase.from("org_branding").upsert(payload, { onConflict: "organization_id" });
         if (e) throw e;
       }
@@ -292,6 +334,11 @@ export default function BrandLogoSettings() {
       // the next save rewrites fields the operator never touched again.
       setSavedHeroHeadline(heroHeadline); setSavedHeroSubtext(heroSubtext);
       setSavedConfirmationHtml(confirmationHtml);
+      // Re-baseline the normalized url, not the raw text, or the form stays dirty
+      // forever after we rewrite "site.com" to "https://site.com/".
+      setSavedCtaLabel(ctaLabel);
+      const normalized = ctaCheck.url ?? "";
+      setCtaUrl(normalized); setSavedCtaUrl(normalized);
     } catch (e) {
       const raw = e?.message ?? "";
       const jargon = /non-2xx|edge function|failed to fetch|network|fetcherror/i.test(raw);
@@ -474,17 +521,82 @@ export default function BrandLogoSettings() {
       <div style={{ marginTop: 16, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 12, padding: 20 }}>
         <div style={{ fontSize: 15, fontWeight: 700, color: INK, marginBottom: 4 }}>Confirmation page wording</div>
         <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 14, lineHeight: 1.5 }}>
-          An extra note on the page families see right after they pay — a good place to link to your
-          own shop or website. Their class details, calendar links and sign-in instructions are always
-          shown above it. Leave this blank and nothing extra appears.
+          A note and a button on the page families see right after they pay — the place to send them
+          to your own shop or website. Their class details, calendar links and sign-in instructions
+          are always shown above it. Leave both blank and nothing extra appears.
         </div>
         <RichBodyEditor
           value={confirmationHtml}
           onChange={setConfirmationHtml}
-          rows={6}
+          rows={5}
           placeholder={"Need a ukulele before the first class? We keep beginner sizes in stock."}
-          helpText={<>Highlight any words and press <strong>Link</strong> to send families to your own site. Leave a blank line to start a new paragraph.</>}
+          helpText={<>Leave a blank line to start a new paragraph. For your main link, use the button below rather than a link in the text.</>}
+          /* The editor's own preview is off here: the true preview is the combined one
+             below, which shows the note AND the button together in the box families
+             actually see. Two previews would be two answers to one question. */
+          showPreview={false}
         />
+
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 16 }}>
+          <label style={{ flex: "1 1 190px", fontSize: 12, fontWeight: 600, color: INK }}>
+            Button wording
+            <input
+              type="text"
+              value={ctaLabel}
+              onChange={(e) => setCtaLabel(e.target.value)}
+              placeholder="Visit our shop"
+              maxLength={40}
+              style={{ width: "100%", boxSizing: "border-box", marginTop: 4, padding: "9px 12px", fontSize: 13, border: `1px solid ${RULE}`, borderRadius: 8, fontFamily: "inherit", fontWeight: 400 }}
+            />
+          </label>
+          <label style={{ flex: "1 1 190px", fontSize: 12, fontWeight: 600, color: INK }}>
+            Button link
+            <input
+              type="text"
+              value={ctaUrl}
+              onChange={(e) => setCtaUrl(e.target.value)}
+              placeholder="theukuleleproject.com/shop"
+              style={{ width: "100%", boxSizing: "border-box", marginTop: 4, padding: "9px 12px", fontSize: 13, border: `1px solid ${ctaCheck.error ? "#dc2626" : RULE}`, borderRadius: 8, fontFamily: "inherit", fontWeight: 400 }}
+            />
+          </label>
+        </div>
+        <div style={{ fontSize: 11.5, color: ctaCheck.error ? "#dc2626" : MUTED, marginTop: 6, lineHeight: 1.5 }}>
+          {ctaCheck.error
+            ? "That doesn't look like a web address yet. Something like theukuleleproject.com/shop."
+            : "No need to type https:// - we add it. Leave the link blank and no button appears."}
+        </div>
+
+        {/* True preview: the box as families see it, in THIS provider's colour.
+            Built with their saved primary rather than the public stylesheet's tokens
+            because this admin page is not inside the public brand wrapper, so those
+            tokens would resolve to the J2S palette and show them the wrong colour. */}
+        {(confirmationHtml.trim() !== "" || (ctaUrl.trim() !== "" && !ctaCheck.error)) && (
+          <div style={{ marginTop: 18 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>
+              What families will see
+            </div>
+            <div style={{
+              border: `2px solid ${colors.primary}40`, background: `${colors.primary}0F`,
+              borderRadius: 16, padding: "20px 18px", textAlign: "center",
+            }}>
+              {confirmationHtml.trim() !== "" && (
+                <div
+                  style={{ fontSize: 14.5, lineHeight: 1.6, color: INK }}
+                  dangerouslySetInnerHTML={{ __html: confirmationHtml }}
+                />
+              )}
+              {ctaUrl.trim() !== "" && !ctaCheck.error && (
+                <div style={{
+                  display: "inline-block", marginTop: confirmationHtml.trim() !== "" ? 16 : 0,
+                  background: colors.primary, color: "#fff", borderRadius: 12,
+                  padding: "12px 24px", fontSize: 14, fontWeight: 700,
+                }}>
+                  {ctaLabel.trim() || "Visit our website"}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 18 }}>

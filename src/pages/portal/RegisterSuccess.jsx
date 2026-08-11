@@ -44,6 +44,11 @@ export default function RegisterSuccess() {
   // purpose: PublicLayout provides only `org` and does not read org_branding at
   // all, so putting it there would add a query to every public page to serve one.
   const [authoredHtml, setAuthoredHtml] = useState('');
+  // The provider's own call-to-action. Kept as a label/url PAIR rather than a link
+  // inside authoredHtml so it can render as a real button and so the wording is a
+  // field an operator edits, not markup they have to construct.
+  const [ctaLabel, setCtaLabel] = useState('');
+  const [ctaUrl, setCtaUrl] = useState('');
 
   useEffect(() => {
     // Clear cart once we're on success
@@ -73,9 +78,13 @@ export default function RegisterSuccess() {
       // scoped to orgs in public_org_directory. A family on this page has no session,
       // so an authenticated-only read would come back empty and silently hide the note.
       const { data } = await supabase
-        .from('org_branding').select('confirmation_page_html')
+        .from('org_branding').select('confirmation_page_html, confirmation_cta_label, confirmation_cta_url')
         .eq('organization_id', org.id).maybeSingle();
-      if (!cancelled) setAuthoredHtml(data?.confirmation_page_html || '');
+      if (!cancelled) {
+        setAuthoredHtml(data?.confirmation_page_html || '');
+        setCtaLabel(data?.confirmation_cta_label || '');
+        setCtaUrl(data?.confirmation_cta_url || '');
+      }
     })();
     return () => { cancelled = true; };
   }, [org?.id]);
@@ -103,6 +112,17 @@ export default function RegisterSuccess() {
       setLoading(false);
     }
   }
+
+  // Second half of the belt-and-braces check on the button destination (the first is
+  // at save time in /admin/branding). This column is world-readable through
+  // public_read_branding, so anything that is not plainly http/https gets NO button
+  // rather than an href we could not vouch for. An empty string here means "no
+  // button", which is also what a blank field means - one branch, not two.
+  const ctaHref = /^https?:\/\//i.test((ctaUrl || '').trim()) ? ctaUrl.trim() : '';
+  // A URL with no wording still gets a usable button rather than a blank one.
+  const ctaText = (ctaLabel || '').trim() || 'Visit our website';
+  const hasNote = authoredHtml.trim() !== '';
+  const showProviderBox = hasNote || ctaHref !== '';
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-12 sm:px-6 sm:py-16">
@@ -316,12 +336,33 @@ export default function RegisterSuccess() {
           http/https/mailto. Only the org's own admins can write this column
           (members_write_branding -> can_admin_org), and it shows on that org's own
           confirmation page only. */}
-      {authoredHtml.trim() !== '' && (
-        <div className="mt-8 rounded-3xl border border-j2s-purple/10 bg-white p-6 shadow-card sm:p-8">
-          <div
-            className="text-j2s-ink/80 [&_a]:font-semibold [&_a]:text-j2s-purple [&_a]:underline [&_p]:mt-3 [&_p:first-child]:mt-0"
-            dangerouslySetInnerHTML={{ __html: authoredHtml }}
-          />
+      {showProviderBox && (
+        /* Deliberately the loudest thing below the fold. It was a plain white card
+           with a hairline border, which read as small print next to the white
+           sign-in card above it and got skipped. Now it carries the provider's soft
+           brand tint, a real border and the same lift as the hero, so a family's eye
+           lands on it. Tinted with the SAME token the "Welcome back" card uses, so it
+           follows each tenant's palette rather than introducing a new colour. */
+        <div className="mt-8 rounded-3xl border-2 border-j2s-purple/25 bg-j2s-purple-soft p-6 text-center shadow-pop sm:p-8">
+          {hasNote && (
+            <div
+              className="text-[15px] leading-relaxed text-j2s-ink [&_a]:font-semibold [&_a]:text-j2s-purple [&_a]:underline [&_p]:mt-3 [&_p:first-child]:mt-0"
+              dangerouslySetInnerHTML={{ __html: authoredHtml }}
+            />
+          )}
+          {ctaHref !== '' && (
+            /* A real button, and the wording is the operator's. rel includes
+               noopener: this href is provider-supplied, so the new tab must not get a
+               handle on window.opener. */
+            <a
+              href={ctaHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`btn-j2s-primary ${hasNote ? 'mt-5' : ''}`}
+            >
+              {ctaText}
+            </a>
+          )}
         </div>
       )}
 
