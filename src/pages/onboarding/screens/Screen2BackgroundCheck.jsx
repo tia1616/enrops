@@ -202,11 +202,16 @@ export default function Screen2BackgroundCheck({ slug, instructor, onboarding, o
             </a>
           )}
 
-          {/* Opens in a new tab, so onboarding stays open behind it — this is
-              why the check can run in parallel instead of blocking the wizard. */}
+          {/* Two separate facts, and only one of them depends on there being a
+              link. The new-tab half described a button that is not rendered when
+              the org configured no provider_url — the same untrue-pointer bug as
+              the "link below" copy above, which I reintroduced here while fixing
+              it there. The parallel-review half is true either way, and it is the
+              one that actually matters: it is why nobody is stuck on this step. */}
           <p className="text-xs leading-relaxed text-neutral-500">
-            This opens in a new tab, so you won&apos;t lose your place. You can carry on with the
-            rest of your onboarding now — your background check is reviewed separately.
+            {providerUrl && "This opens in a new tab, so you won't lose your place. "}
+            You can carry on with the rest of your onboarding now — your background check is
+            reviewed separately.
           </p>
         </div>
       )}
