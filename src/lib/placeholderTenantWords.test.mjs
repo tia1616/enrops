@@ -14,6 +14,15 @@
 // say "e.g. STEAM camp". So this list holds only strings that identify a specific
 // tenant - brand names and domains. Keep the two lists separate on purpose; merging
 // them would either block legitimate wording here or weaken the referral guard there.
+//
+// WHAT THIS DOES NOT COVER — do not read a green run as "no tenant is named anywhere".
+// It scans only INLINE string literals in a placeholder attribute. A placeholder passed
+// as a variable (placeholder={cfg.subjectPlaceholder} in TemplatesTab,
+// placeholder={defaultIntro} on the schedule screens) is invisible to it, as are labels,
+// help text and default body copy. Those were checked BY HAND on 2026-08-11 and were all
+// tenant-neutral — TemplatesTab's examples correctly use {{org_name}} rather than naming
+// anyone. If that check needs to be automatic, the honest way is to resolve the constant,
+// not to widen this regex until it matches things it cannot understand.
 import { readdirSync, statSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -51,7 +60,6 @@ for (const file of walk(SRC)) {
   // This file necessarily contains the words it bans.
   if (file.endsWith('placeholderTenantWords.test.mjs')) continue;
   const text = readFileSync(file, 'utf8');
-  const lines = text.split('\n');
   for (const m of text.matchAll(PLACEHOLDER)) {
     const value = m[2];
     const hit = TENANT_IDENTIFIERS.find((w) => value.toLowerCase().includes(w));
@@ -59,7 +67,6 @@ for (const file of walk(SRC)) {
     const line = text.slice(0, m.index).split('\n').length;
     offenders.push(`${file.replace(SRC, 'src')}:${line} -> placeholder "${value}" contains "${hit}"`);
   }
-  void lines;
 }
 
 if (offenders.length === 0) {
