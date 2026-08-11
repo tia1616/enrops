@@ -5,6 +5,7 @@ import { useCart } from '../../context/CartContext.jsx';
 import { supabase } from '../../lib/supabase.js';
 import { emailIsValid } from '../../lib/validation.js';
 import { sanitizeAuthoredHtml } from '../../lib/sanitizeAuthoredHtml.js';
+import { confirmationBoxStyle, confirmationButtonStyle } from '../../lib/confirmationBoxStyle.js';
 
 export default function RegisterSuccess() {
   const { org } = useOutletContext();
@@ -50,6 +51,11 @@ export default function RegisterSuccess() {
   // field an operator edits, not markup they have to construct.
   const [ctaLabel, setCtaLabel] = useState('');
   const [ctaUrl, setCtaUrl] = useState('');
+  // The provider's own brand colour, for the box below. The rest of this page is
+  // painted by the public shell (.brand-enrops-public, or :root for the legacy J2S
+  // shell) and does NOT read org_branding — so this box is the one place a provider's
+  // saved colour shows up, matching what the confirmation email already does.
+  const [primaryColor, setPrimaryColor] = useState('');
 
   useEffect(() => {
     // Clear cart once we're on success
@@ -79,12 +85,13 @@ export default function RegisterSuccess() {
       // scoped to orgs in public_org_directory. A family on this page has no session,
       // so an authenticated-only read would come back empty and silently hide the note.
       const { data } = await supabase
-        .from('org_branding').select('confirmation_page_html, confirmation_cta_label, confirmation_cta_url')
+        .from('org_branding').select('confirmation_page_html, confirmation_cta_label, confirmation_cta_url, primary_color')
         .eq('organization_id', org.id).maybeSingle();
       if (!cancelled) {
         setAuthoredHtml(data?.confirmation_page_html || '');
         setCtaLabel(data?.confirmation_cta_label || '');
         setCtaUrl(data?.confirmation_cta_url || '');
+        setPrimaryColor(data?.primary_color || '');
       }
     })();
     return () => { cancelled = true; };
@@ -141,6 +148,9 @@ export default function RegisterSuccess() {
   const safeNoteHtml = sanitizeAuthoredHtml(authoredHtml);
   const hasNote = safeNoteHtml.trim() !== '';
   const showProviderBox = hasNote || ctaHref !== '';
+  // Null when the row carries no usable hex, in which case the shell tokens stand.
+  const boxStyle = confirmationBoxStyle(primaryColor);
+  const buttonStyle = confirmationButtonStyle(primaryColor);
 
   return (
     <div className="mx-auto max-w-3xl px-4 py-12 sm:px-6 sm:py-16">
@@ -349,11 +359,19 @@ export default function RegisterSuccess() {
       {showProviderBox && (
         /* Deliberately the loudest thing below the fold. It was a plain white card
            with a hairline border, which read as small print next to the white
-           sign-in card above it and got skipped. Now it carries the provider's soft
-           brand tint, a real border and the same lift as the hero, so a family's eye
-           lands on it. Tinted with the SAME token the "Welcome back" card uses, so it
-           follows each tenant's palette rather than introducing a new colour. */
-        <div className="mt-8 rounded-3xl border-2 border-j2s-purple/25 bg-j2s-purple-soft p-6 text-center shadow-pop sm:p-8">
+           sign-in card above it and got skipped.
+
+           Coloured from the PROVIDER's own org_branding.primary_color, via the shared
+           helper the admin preview also uses. The rest of this page comes from the
+           public shell's CSS tokens, which do not read org_branding at all — so an
+           earlier version of this comment claiming the box "follows each tenant's
+           palette" was false: it followed Enrops purple (or J2S purple on the legacy
+           shell) no matter what the provider had saved. It does now.
+           No usable hex on the row => fall back to the shell tokens, unchanged. */
+        <div
+          className={`mt-8 rounded-3xl border-2 p-6 text-center shadow-pop sm:p-8 ${boxStyle ? '' : 'border-j2s-purple/25 bg-j2s-purple-soft'}`}
+          style={boxStyle || undefined}
+        >
           {hasNote && (
             <div
               className="text-[15px] leading-relaxed text-j2s-ink [&_a]:font-semibold [&_a]:text-j2s-purple [&_a]:underline [&_p]:mt-3 [&_p:first-child]:mt-0"
@@ -368,7 +386,12 @@ export default function RegisterSuccess() {
               href={ctaHref}
               target="_blank"
               rel="noopener noreferrer"
+              /* Keeps btn-j2s-primary for geometry (padding, radius, weight, the press
+                 nudge) and overrides only the fill with the provider's colour. An
+                 inline style outranks the class's hover rule, so the button no longer
+                 darkens on hover; active:translate-y-px still gives press feedback. */
               className={`btn-j2s-primary ${hasNote ? 'mt-5' : ''}`}
+              style={buttonStyle || undefined}
             >
               {ctaText}
             </a>

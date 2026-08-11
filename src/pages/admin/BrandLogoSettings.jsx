@@ -14,6 +14,7 @@ import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
 import RichBodyEditor from "../../components/RichBodyEditor.jsx";
 import { sanitizeAuthoredHtml } from "../../lib/sanitizeAuthoredHtml.js";
+import { confirmationBoxStyle, confirmationButtonStyle } from "../../lib/confirmationBoxStyle.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -610,18 +611,24 @@ export default function BrandLogoSettings() {
             : "No need to type https:// - we add it. Leave the link blank and no button appears."}
         </div>
 
-        {/* True preview: the box as families see it, in THIS provider's colour.
-            Built with their saved primary rather than the public stylesheet's tokens
-            because this admin page is not inside the public brand wrapper, so those
-            tokens would resolve to the J2S palette and show them the wrong colour. */}
+        {/* True preview: the box exactly as families see it. The colours come from the
+            SAME helper the live page uses (lib/confirmationBoxStyle.js), which is the
+            only reason these two can be trusted to agree.
+
+            The previous comment here had the premise backwards — it claimed the public
+            tokens would "show them the wrong colour", when in fact those tokens were
+            what the live page rendered and THIS preview was the thing that diverged.
+            A review caught it. The page now follows primary_color too, so both sides
+            are the provider's own colour and the promise is true. */}
         {(confirmationHtml.trim() !== "" || (ctaUrl.trim() !== "" && !ctaCheck.error)) && (
           <div style={{ marginTop: 18 }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>
               What families will see
             </div>
             <div style={{
-              border: `2px solid ${colors.primary}40`, background: `${colors.primary}0F`,
+              borderStyle: "solid", borderWidth: 2, borderColor: RULE,
               borderRadius: 16, padding: "20px 18px", textAlign: "center",
+              ...(confirmationBoxStyle(colors.primary) || {}),
             }}>
               {confirmationHtml.trim() !== "" && (
                 <div
@@ -635,8 +642,10 @@ export default function BrandLogoSettings() {
               {ctaUrl.trim() !== "" && !ctaCheck.error && (
                 <div style={{
                   display: "inline-block", marginTop: confirmationHtml.trim() !== "" ? 16 : 0,
-                  background: colors.primary, color: "#fff", borderRadius: 12,
+                  color: "#fff", borderRadius: 12,
                   padding: "12px 24px", fontSize: 14, fontWeight: 700,
+                  backgroundColor: PURPLE,
+                  ...(confirmationButtonStyle(colors.primary) || {}),
                 }}>
                   {ctaLabel.trim() || "Visit our website"}
                 </div>
