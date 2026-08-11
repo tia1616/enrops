@@ -61,6 +61,10 @@ function FormatButton({ label, onClick, children }) {
  * @param onChange    (html) => void, fired on every keystroke
  * @param fields      optional [{ group, tokens: [{ key, label, tip }] }] merge-field palette
  * @param showPreview render the result underneath, so authoring is previewable in place
+ * @param allowLink   show the Link button. OFF on the confirmation page, where a
+ *                    dedicated button field sits under this box and owns the link -
+ *                    two ways to make one link is one too many (Jessica, 2026-08-11).
+ *                    Email bodies keep it: it is the whole point of that toolbar.
  */
 export default function RichBodyEditor({
   value,
@@ -70,6 +74,7 @@ export default function RichBodyEditor({
   fields = [],
   showPreview = true,
   helpText = null,
+  allowLink = true,
 }) {
   // editableText is the operator-facing form and the thing they type into. It is
   // local state, NOT derived on every render: re-deriving would fight the caret
@@ -216,15 +221,19 @@ export default function RichBodyEditor({
         <FormatButton label="Italic" onClick={() => wrapSelection("_", "italic text")}>
           <span style={{ fontStyle: "italic", fontFamily: "Georgia, serif" }}>I</span>
         </FormatButton>
-        <span style={{ width: 1, height: 18, background: RULE, margin: "0 4px" }} />
-        <FormatButton label="Add a link" onClick={openLinkPanel}>
-          {/* Chain glyph — the icon every email tool uses for this. */}
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
-            <path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.5 1.5" />
-            <path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.5-1.5" />
-          </svg>
-          <span style={{ marginLeft: 5 }}>Link</span>
-        </FormatButton>
+        {allowLink && (
+          <>
+            <span style={{ width: 1, height: 18, background: RULE, margin: "0 4px" }} />
+            <FormatButton label="Add a link" onClick={openLinkPanel}>
+              {/* Chain glyph — the icon every email tool uses for this. */}
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+                <path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.5 1.5" />
+                <path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.5-1.5" />
+              </svg>
+              <span style={{ marginLeft: 5 }}>Link</span>
+            </FormatButton>
+          </>
+        )}
       </div>
 
       <textarea
@@ -252,7 +261,10 @@ export default function RichBodyEditor({
               <input
                 value={linkPanel.text}
                 onChange={(e) => setLinkPanel((p) => ({ ...p, text: e.target.value }))}
-                placeholder="Shop ukuleles"
+                /* Generic on purpose. A real tenant's wording or domain must never be
+                   the platform's example - every OTHER provider sees it and it reads
+                   as ours. Same rule as the referral list. */
+                placeholder="Our shop"
                 style={linkInputStyle}
               />
             </label>
@@ -262,7 +274,7 @@ export default function RichBodyEditor({
                 value={linkPanel.url}
                 onChange={(e) => setLinkPanel((p) => ({ ...p, url: e.target.value }))}
                 onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); insertLink(); } }}
-                placeholder="theukuleleproject.com/shop"
+                placeholder="yoursite.com/shop"
                 style={linkInputStyle}
               />
             </label>

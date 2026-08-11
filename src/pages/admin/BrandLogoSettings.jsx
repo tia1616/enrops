@@ -231,7 +231,7 @@ export default function BrandLogoSettings() {
   const ctaDirty = ctaLabel !== savedCtaLabel || ctaUrl !== savedCtaUrl;
   const dirty = logoDirty || colorsDirty || bannerDirty || heroDirty || confirmationDirty || ctaDirty;
 
-  // Accept what an operator actually types ("theukuleleproject.com/shop") and turn it
+  // Accept what an operator actually types ("yoursite.com/shop") and turn it
   // into something safe to put in an href. Anything that will not parse as http/https
   // is REFUSED at save time with a plain message rather than quietly stored - the
   // public page would then simply not render a button and the operator would be left
@@ -270,7 +270,7 @@ export default function BrandLogoSettings() {
     // render - the operator would see "Saved" and no button, with nothing to explain
     // it. Checked before setSaving so the button does not flicker into a spinner.
     if (ctaCheck.error) {
-      setError("That button link doesn't look like a web address. Try something like theukuleleproject.com/shop");
+      setError("That button link doesn't look like a web address. Try something like yoursite.com/shop");
       return;
     }
     setSaving(true); setError("");
@@ -490,7 +490,9 @@ export default function BrandLogoSettings() {
             /* An EXAMPLE of what to write, not the default wording: the public
                page's fallback differs by catalog layout, so naming one here
                would be wrong on the other. */
-            placeholder="e.g. After-school ukulele classes in Portland"
+            /* Tenant-neutral. This said "After-school ukulele classes in Portland" -
+               one real provider's business, shown to every other one as the example. */
+            placeholder="e.g. After-school art classes in your city"
             maxLength={120}
             style={{ width: "100%", boxSizing: "border-box", marginTop: 4, padding: "9px 12px", fontSize: 13, border: `1px solid ${RULE}`, borderRadius: 8, fontFamily: "inherit", fontWeight: 400 }}
           />
@@ -501,7 +503,7 @@ export default function BrandLogoSettings() {
           <textarea
             value={heroSubtext}
             onChange={(e) => setHeroSubtext(e.target.value)}
-            placeholder="e.g. After-school ukulele classes across Portland. Pick a school and sign up in a couple of minutes."
+            placeholder="e.g. After-school art classes across the city. Pick a school and sign up in a couple of minutes."
             maxLength={300}
             style={{ width: "100%", boxSizing: "border-box", marginTop: 4, padding: "9px 12px", fontSize: 13, border: `1px solid ${RULE}`, borderRadius: 8, fontFamily: "inherit", fontWeight: 400, minHeight: 66, resize: "vertical" }}
           />
@@ -524,13 +526,35 @@ export default function BrandLogoSettings() {
           A note and a button on the page families see right after they pay — the place to send them
           to your own shop or website. Their class details, calendar links and sign-in instructions
           are always shown above it. Leave both blank and nothing extra appears.
+          {publicUrl && (
+            <>
+              {" "}
+              {/* The preview below shows the BOX. This shows the WHOLE page it sits on,
+                  which is what you actually want to judge before families see it.
+                  Opened directly it has no real registration behind it, so the class
+                  details and calendar buttons are absent - said plainly, because a
+                  preview that quietly omits things is worse than no preview. */}
+              <a href={`${publicUrl}/register/success`} target="_blank" rel="noreferrer" style={{ color: BRIGHT, fontWeight: 600 }}>
+                See the whole page &rarr;
+              </a>{" "}
+              <span style={{ color: MUTED }}>
+                (opens without a real registration, so the class details and calendar buttons
+                won&rsquo;t be there)
+              </span>
+            </>
+          )}
         </div>
         <RichBodyEditor
           value={confirmationHtml}
           onChange={setConfirmationHtml}
           rows={5}
-          placeholder={"Need a ukulele before the first class? We keep beginner sizes in stock."}
+          /* Tenant-NEUTRAL example. A real provider's wording or web address must never
+             be the platform's placeholder - every other operator sees it. */
+          placeholder={"Need supplies before the first class? We keep everything you need in stock."}
           helpText={<>Leave a blank line to start a new paragraph. For your main link, use the button below rather than a link in the text.</>}
+          /* No Link button here: the button fields below own the link, and two ways to
+             make one link is one too many. Email bodies keep theirs. */
+          allowLink={false}
           /* The editor's own preview is off here: the true preview is the combined one
              below, which shows the note AND the button together in the box families
              actually see. Two previews would be two answers to one question. */
@@ -555,14 +579,14 @@ export default function BrandLogoSettings() {
               type="text"
               value={ctaUrl}
               onChange={(e) => setCtaUrl(e.target.value)}
-              placeholder="theukuleleproject.com/shop"
+              placeholder="yoursite.com/shop"
               style={{ width: "100%", boxSizing: "border-box", marginTop: 4, padding: "9px 12px", fontSize: 13, border: `1px solid ${ctaCheck.error ? "#dc2626" : RULE}`, borderRadius: 8, fontFamily: "inherit", fontWeight: 400 }}
             />
           </label>
         </div>
         <div style={{ fontSize: 11.5, color: ctaCheck.error ? "#dc2626" : MUTED, marginTop: 6, lineHeight: 1.5 }}>
           {ctaCheck.error
-            ? "That doesn't look like a web address yet. Something like theukuleleproject.com/shop."
+            ? "That doesn't look like a web address yet. Something like yoursite.com/shop."
             : "No need to type https:// - we add it. Leave the link blank and no button appears."}
         </div>
 

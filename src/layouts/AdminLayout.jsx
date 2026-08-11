@@ -115,7 +115,11 @@ const NAV = [
   // it, so staff/viewer could open it by URL and every save then failed as a
   // 0-row update. Other Settings sub-pages (background-checks, training,
   // branding, registration-questions) have the same gap and are NOT fixed here.
-  { to: "/admin/settings", label: "Settings", gate: "settings", match: ["/admin/settings", "/admin/waivers", "/admin/survey-settings", "/admin/pay-rates", "/admin/email-sender"] }, // owner/admin only
+  // /admin/branding belongs in this match list for the same reason /admin/email-sender
+  // does: it is reached from a Manage button on the Settings page and has no nav item of
+  // its own, so without it the sidebar goes blank while you are editing branding and it
+  // reads as having navigated out of Settings entirely.
+  { to: "/admin/settings", label: "Settings", gate: "settings", match: ["/admin/settings", "/admin/waivers", "/admin/survey-settings", "/admin/pay-rates", "/admin/email-sender", "/admin/branding"] }, // owner/admin only
   { to: "/admin/team", label: "Team", gate: "team" },             // owner/admin only
 ];
 
