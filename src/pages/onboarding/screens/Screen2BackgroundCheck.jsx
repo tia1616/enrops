@@ -167,7 +167,9 @@ export default function Screen2BackgroundCheck({ slug, instructor, onboarding, o
           {alreadyAcknowledged && (
             <p className="text-sm font-semibold text-neutral-900">
               We haven&apos;t received a result for your background check yet.
-              {providerUrl && " If you haven't started it, you can pick it up below."}
+              {providerUrl
+                ? " If you haven't started it, you can pick it up below."
+                : ' Your Program Manager will email you the link.'}
             </p>
           )}
 
@@ -183,9 +185,9 @@ export default function Screen2BackgroundCheck({ slug, instructor, onboarding, o
                   it is the same class of untrue sentence this change is about. */}
               {providerName
                 ? (providerUrl
-                    ? `Complete your background check with ${providerName} using the link below. If you have any trouble, contact your program.`
-                    : `Your background check is run through ${providerName}. Your program will send you what you need to complete it — reach out to them if you haven't heard.`)
-                : 'Your program will send you the details to complete your background check. If you have any questions, reach out to them directly.'}
+                    ? `Complete your background check with ${providerName} using the link below. If you have any trouble, contact your Program Manager.`
+                    : `Your background check is run through ${providerName}. Your Program Manager will email you the link to get started.`)
+                : 'Your Program Manager will email you the link to start your background check.'}
             </p>
           )}
 
