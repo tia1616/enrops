@@ -119,6 +119,13 @@ const NAV = [
   // does: it is reached from a Manage button on the Settings page and has no nav item of
   // its own, so without it the sidebar goes blank while you are editing branding and it
   // reads as having navigated out of Settings entirely.
+  //
+  // THIS ALSO CHANGES ACCESS, deliberately. `match` feeds navItemActive, which the route
+  // guard below uses together with `gate`, so listing a path here puts it behind the
+  // item's gate. Settings is owner/admin, so staff and viewer can no longer open
+  // /admin/branding by URL — previously they could view it read-only via
+  // members_read_branding while their save would fail at RLS, i.e. a page they could
+  // reach but not use. One viewer exists on prod. Same posture as /admin/email-sender.
   { to: "/admin/settings", label: "Settings", gate: "settings", match: ["/admin/settings", "/admin/waivers", "/admin/survey-settings", "/admin/pay-rates", "/admin/email-sender", "/admin/branding"] }, // owner/admin only
   { to: "/admin/team", label: "Team", gate: "team" },             // owner/admin only
 ];

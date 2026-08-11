@@ -4,6 +4,7 @@ import { useAuth } from '../../context/AuthContext.jsx';
 import { useCart } from '../../context/CartContext.jsx';
 import { supabase } from '../../lib/supabase.js';
 import { emailIsValid } from '../../lib/validation.js';
+import { sanitizeAuthoredHtml } from '../../lib/sanitizeAuthoredHtml.js';
 
 export default function RegisterSuccess() {
   const { org } = useOutletContext();
@@ -118,10 +119,27 @@ export default function RegisterSuccess() {
   // public_read_branding, so anything that is not plainly http/https gets NO button
   // rather than an href we could not vouch for. An empty string here means "no
   // button", which is also what a blank field means - one branch, not two.
-  const ctaHref = /^https?:\/\//i.test((ctaUrl || '').trim()) ? ctaUrl.trim() : '';
+  // A scheme test alone is NOT enough: "https://hello@evil.com" passes /^https?:/ while
+  // the real host is evil.com, everything before the "@" being userinfo. The editor
+  // refuses those on save, but this column is writable over the REST API, so the render
+  // has to refuse them independently. Empty string = no button.
+  const ctaHref = (() => {
+    const raw = (ctaUrl || '').trim();
+    if (!/^https?:\/\//i.test(raw)) return '';
+    try {
+      const u = new URL(raw);
+      if (u.username !== '' || u.password !== '') return '';
+      return raw;
+    } catch { return ''; }
+  })();
   // A URL with no wording still gets a usable button rather than a blank one.
   const ctaText = (ctaLabel || '').trim() || 'Visit our website';
-  const hasNote = authoredHtml.trim() !== '';
+  // Allowlist-sanitized HERE, at render, not merely at authoring time. The column is
+  // writable over the REST API by any org admin (and by a platform admin against any
+  // org), so editableToHtml's escaping is not a guarantee — the render is the only
+  // gate that every read path passes through. Also forces target/rel onto note links.
+  const safeNoteHtml = sanitizeAuthoredHtml(authoredHtml);
+  const hasNote = safeNoteHtml.trim() !== '';
   const showProviderBox = hasNote || ctaHref !== '';
 
   return (
@@ -322,11 +340,12 @@ export default function RegisterSuccess() {
           also why this is a note and not a redirect - Jessica's point was that a
           redirect pulls a family off this page before they have read any of it.
 
-          Rendered as HTML because it is authored through RichBodyEditor, whose
-          editableToHtml entity-escapes operator text and restricts hrefs to
-          http/https/mailto. Only the org's own admins can write this column
-          (members_write_branding -> can_admin_org), and it shows on that org's own
-          confirmation page only. */}
+          Rendered as HTML, and sanitized against an allowlist at RENDER time by
+          sanitizeAuthoredHtml. Do NOT weaken that to "the editor escapes it": this
+          column is writable straight over the REST API by any org admin, and by a
+          platform admin against ANY org, so author-time escaping is not a gate.
+          A previous version of this comment claimed editableToHtml was the
+          guarantee. It was not. */}
       {showProviderBox && (
         /* Deliberately the loudest thing below the fold. It was a plain white card
            with a hairline border, which read as small print next to the white
@@ -338,7 +357,7 @@ export default function RegisterSuccess() {
           {hasNote && (
             <div
               className="text-[15px] leading-relaxed text-j2s-ink [&_a]:font-semibold [&_a]:text-j2s-purple [&_a]:underline [&_p]:mt-3 [&_p:first-child]:mt-0"
-              dangerouslySetInnerHTML={{ __html: authoredHtml }}
+              dangerouslySetInnerHTML={{ __html: safeNoteHtml }}
             />
           )}
           {ctaHref !== '' && (

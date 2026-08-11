@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
 import RichBodyEditor from "../../components/RichBodyEditor.jsx";
+import { sanitizeAuthoredHtml } from "../../lib/sanitizeAuthoredHtml.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -244,6 +245,15 @@ export default function BrandLogoSettings() {
     try { parsed = new URL(candidate); } catch { return { url: null, error: true }; }
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return { url: null, error: true };
     if (!parsed.hostname.includes(".")) return { url: null, error: true };
+    // REJECT userinfo. Everything before an "@" is swallowed as user:pass, so the real
+    // host is whatever follows it — which silently sends families somewhere else:
+    //   "mailto:hello@gmail.com"     -> https://mailto:hello@gmail.com/  -> gmail.com
+    //   "hello@myshop.com"           -> https://hello@myshop.com/        -> myshop.com
+    //   "https://user:pass@evil.com" -> evil.com
+    // Both the hostname-has-a-dot check and the render-side /^https?:/ test pass on all
+    // three, so nothing downstream catches it. Typing an email address into a field
+    // labelled "Button link" is an ordinary thing for an operator to do.
+    if (parsed.username !== "" || parsed.password !== "") return { url: null, error: true };
     return { url: parsed.toString(), error: null };
   }
   const ctaCheck = normalizeCtaUrl(ctaUrl);
@@ -616,7 +626,10 @@ export default function BrandLogoSettings() {
               {confirmationHtml.trim() !== "" && (
                 <div
                   style={{ fontSize: 14.5, lineHeight: 1.6, color: INK }}
-                  dangerouslySetInnerHTML={{ __html: confirmationHtml }}
+                  /* Sanitized here too. The preview must render what the live page
+                     renders, and an admin viewing a value another admin injected over
+                     the API is a real reader of this string. */
+                  dangerouslySetInnerHTML={{ __html: sanitizeAuthoredHtml(confirmationHtml) }}
                 />
               )}
               {ctaUrl.trim() !== "" && !ctaCheck.error && (

@@ -15,6 +15,15 @@
 // Mailchimp, HubSpot and MailerSend all work this way — select your words, press
 // a button, a small box asks for the web address.
 //
+// STATE OF ADOPTION — read this before believing the paragraph above. As of
+// 2026-08-11 the ONLY caller is BrandLogoSettings (the confirmation page), and it
+// passes allowLink={false}, showPreview={false} and no fields. So the link panel, the
+// merge-field palette and the preview are all currently UNREACHABLE, and the drift
+// this file was written to end still exists in AutomationEditor, the Campaigns body
+// editor and Templates. Those three are unblocked and at parity — adopting them is
+// the remaining work, and the unreachable code is here for that, not because it is
+// used. Do not read this header as "the four editors are unified". They are not yet.
+//
 // The HTML round-trip itself is NOT reimplemented here. bodyEditorUtils already
 // owns it (and its regexes carry hard-won bug history — the attribute-value
 // lookahead, the bullet marker that must not eat a "- {{sender_name}}" sign-off).
@@ -91,15 +100,21 @@ export default function RichBodyEditor({
   }, [value]);
 
   const areaRef = useRef(null);
-  // Where to put the caret after a programmatic insert. Applied in an effect
+  // Where to put the selection after a programmatic insert. Applied in an effect
   // rather than inline because React has to commit the new text first.
-  const caretRef = useRef(null);
+  //
+  // A RANGE, not a caret position. It used to be a single number applied as
+  // setSelectionRange(pos, pos), which meant the bold/italic PLACEHOLDER was never
+  // actually selected: pressing B on an empty box put the caret between the
+  // asterisks and the next keystroke inserted BEFORE "bold text" instead of
+  // replacing it, so families got "**Ukuleles bold text**" on the page.
+  const caretRef = useRef(null); // null | { start, end }
   useEffect(() => {
     if (caretRef.current == null || !areaRef.current) return;
-    const pos = caretRef.current;
+    const { start, end } = caretRef.current;
     caretRef.current = null;
     areaRef.current.focus();
-    areaRef.current.setSelectionRange(pos, pos);
+    areaRef.current.setSelectionRange(start, end);
   }, [editableText]);
 
   function emit(text) {
@@ -116,14 +131,18 @@ export default function RichBodyEditor({
   }
 
   /** Wrap the selection in `marker`; with nothing selected, drop in a placeholder
-   *  and leave it selected so the next keystroke replaces it. */
+   *  and leave it SELECTED so the next keystroke replaces it. */
   function wrapSelection(marker, placeholder2) {
     const { start, end } = selection();
     const selected = editableText.slice(start, end);
     const inner = selected || placeholder2;
     const next = `${marker}${inner}${marker}`;
     emit(editableText.slice(0, start) + next + editableText.slice(end));
-    caretRef.current = start + (selected ? next.length : marker.length);
+    caretRef.current = selected
+      // Had a selection: land after the whole wrapped run and keep typing.
+      ? { start: start + next.length, end: start + next.length }
+      // No selection: select the placeholder itself, so typing overwrites it.
+      : { start: start + marker.length, end: start + marker.length + inner.length };
   }
 
   const [linkPanel, setLinkPanel] = useState(null); // null | { text, url, start, end }
@@ -151,7 +170,7 @@ export default function RichBodyEditor({
   function insertField(key) {
     const tag = `{{${key}}}`;
     const { start, end } = selection();
-    caretRef.current = start + tag.length;
+    caretRef.current = { start: start + tag.length, end: start + tag.length };
     emit(editableText.slice(0, start) + tag + editableText.slice(end));
   }
 
@@ -309,9 +328,13 @@ export default function RichBodyEditor({
           <div style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>
             What families will see
           </div>
+          {/* Token pills ONLY when this surface actually has merge fields. A caller
+              with no fields does no substitution, so highlighting {{first_name}} as a
+              live-looking field would promise a replacement that never happens and the
+              literal braces would reach the reader. */}
           <div
             style={{ padding: "12px 14px", border: `1px solid ${RULE}`, borderRadius: 8, background: "#faf8f1", fontSize: 13.5, color: INK, lineHeight: 1.55 }}
-            dangerouslySetInnerHTML={{ __html: highlightTokens(editableToHtml(editableText)) }}
+            dangerouslySetInnerHTML={{ __html: hasFields ? highlightTokens(editableToHtml(editableText)) : editableToHtml(editableText) }}
           />
         </div>
       )}

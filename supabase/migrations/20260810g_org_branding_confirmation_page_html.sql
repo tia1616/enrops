@@ -10,4 +10,4 @@ alter table public.org_branding
   add column if not exists confirmation_page_html text;
 
 comment on column public.org_branding.confirmation_page_html is
-  'Operator-authored HTML block shown on the post-checkout confirmation page (RegisterSuccess.jsx). NULL = render nothing. Authored via /admin/branding and produced by editableToHtml, which entity-escapes operator text and sanitizes link hrefs to http/https/mailto only. Readable by anon via the existing public_read_branding policy (public_org_directory orgs), which is intended: this is public page copy.';
+  'Operator-authored HTML block shown on the post-checkout confirmation page (RegisterSuccess.jsx). NULL = render nothing. TREAT THE STORED VALUE AS UNTRUSTED: this column is writable over the REST API by any org admin (members_write_branding = can_admin_org OR is_platform_admin), so the editor is not a gate. Safety comes from src/lib/sanitizeAuthoredHtml.js, applied at RENDER time on every read path. Readable by anon via public_read_branding (public_org_directory orgs), which is intended: this is public page copy.';
