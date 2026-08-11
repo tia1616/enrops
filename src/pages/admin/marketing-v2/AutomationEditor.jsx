@@ -1028,7 +1028,13 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
                         <input
                           value={linkPanel.text}
                           onChange={(e) => setLinkPanel((p) => ({ ...p, text: e.target.value }))}
-                          placeholder="Shop ukuleles"
+                          /* Tenant-NEUTRAL. This named one real provider's shop, and
+                             their actual domain sat in the field below, so every OTHER
+                             operator was shown one tenant's business as the platform's
+                             own suggestion. Same rule as the referral list: never write
+                             a tenant into shared UI. Pinned by
+                             src/lib/placeholderTenantWords.test.mjs. */
+                          placeholder="Our shop"
                           style={linkInputStyle}
                         />
                       </label>
@@ -1038,7 +1044,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
                           value={linkPanel.url}
                           onChange={(e) => setLinkPanel((p) => ({ ...p, url: e.target.value }))}
                           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); insertLink(); } }}
-                          placeholder="theukuleleproject.com/shop"
+                          placeholder="yoursite.com/shop"
                           style={linkInputStyle}
                         />
                       </label>
