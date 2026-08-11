@@ -26,6 +26,7 @@ These set the branching for the rest of onboarding.
 
 ### 1. Org identity + branding
 - [ ] Org name, slug, timezone, contact email
+- [ ] **Add the new provider's brand + domain to `TENANT_IDENTIFIERS` in `src/lib/placeholderTenantWords.test.mjs`.** That test stops one provider's business being shown to every other provider as our example wording — it has already happened twice (the branding page said "After-school ukulele classes in Portland", and the automations link box carried a real shop domain). The list is checked in, because a CI unit test has no database credentials, so **nothing enforces this except this line.** Add the brand phrase, the domain, and the slug; leave bare category words (`chess`, `yoga`, `steam`) alone — they are legitimate wording.
 - [ ] Brand colors + fonts + logo upload (writes `org_branding`)
   - *Why:* every tenant-facing surface reads from `org_branding`; never hardcode tenant identity. (`feedback_workflow.md`)
 - [ ] Brand voice JSON for marketing (defaults out of the box, tune if desired) — `project_enrops_marketing_standing_rules.md:54`

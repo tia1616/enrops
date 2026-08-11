@@ -29,14 +29,35 @@ import { fileURLToPath } from 'node:url';
 
 const SRC = join(fileURLToPath(new URL('.', import.meta.url)), '..');
 
+// EVERY live provider, verified against the prod `organizations` table 2026-08-11.
+// A previous version of this list held only three of six, so "Mrs. Richelle's math club"
+// or "yogaplaygrounds.com/schedule" would have passed the guard whose entire job is to
+// stop exactly that. The false-positive argument above justifies leaving BARE ordinary
+// words alone ('chess', 'steam', 'yoga', 'chase') — it never justified omitting a brand
+// phrase or a domain, which carry no false-positive risk at all.
+//
+// ⚠ ONBOARDING A PROVIDER MEANS ADDING THEM HERE. Nothing enforces that, and it is the
+// weak point of this guard: deriving the list automatically would need the organizations
+// table, which a unit test running in CI has no credentials for, and src/lib/tenants.js
+// is a v1 single-tenant shim that only knows J2S. So it is a checked-in list, and
+// docs/onboarding-checklist.md carries the reminder.
 const TENANT_IDENTIFIERS = [
-  'ukulele',            // The Ukulele Project — their instrument IS their brand
-  'theukuleleproject',
-  'journeytosteam',
-  'journey to steam',
-  'j2s',
+  // Journey to STEAM
+  'journeytosteam', 'journey to steam', 'j2s',
+  // The Ukulele Project — bare 'ukulele' included because the instrument IS their brand
+  'ukulele', 'theukuleleproject', 'the-ukulele-project',
+  // Shoreview Chess — bare 'chess' deliberately allowed, the brand phrase is not
+  'shoreview', 'shoreview chess', 'shoreviewchess', 'shoreview-chess',
+  // Mrs. Richelle
+  'richelle',
+  // Yoga Playgrounds — bare 'yoga' deliberately allowed. NOTE referral.test.mjs DOES ban
+  // bare 'yoga'; that list guards answers a FAMILY reads, where a category word is
+  // already too identifying. Different surface, different threshold, both intentional.
+  'yoga playgrounds', 'yogaplaygrounds', 'yoga-playgrounds',
+  // Chase Youth Programs — bare 'chase' deliberately allowed (it is a verb)
+  'chase youth', 'chaseyouth', 'chase-youth',
+  // Prospect, not yet a tenant, but named in call notes
   'kumon',
-  'shoreview',
 ];
 
 function walk(dir) {
@@ -53,19 +74,44 @@ function walk(dir) {
 // | placeholder={`...`}  — the attribute an operator actually reads.
 const PLACEHOLDER = /placeholder\s*=\s*(?:\{?\s*)(["'`])([\s\S]*?)\1/g;
 
+// The OTHER shape, and the one both real bugs actually took: the copy lives in a named
+// constant and the attribute just points at it —
+//   const defaultIntro = "After-school ukulele classes in Portland";
+//   <textarea placeholder={defaultIntro} />
+// So also read string literals assigned to a name that reads like example copy. Matches
+// `const x = "…"`, `x: "…"` in a config object, and `x = "…"`. Scoped by NAME rather
+// than scanning every string in src, which would be unreadably noisy.
+const NAMED_EXAMPLE = /([A-Za-z_$][\w$]*)\s*[:=]\s*(["'`])([\s\S]*?)\2/g;
+const EXAMPLE_NAME = /placeholder|intro|hint|example|sample|suggest/i;
+
 let pass = 0, fail = 0;
 const offenders = [];
+
+// Deduped by file+line+value: NAMED_EXAMPLE also matches `placeholder="…"` (a valid
+// identifier followed by `=`), so without this every attribute is reported twice and the
+// output reads like twice as many defects as exist.
+const seen = new Set();
+
+function checkValue(file, text, index, value, what) {
+  const hit = TENANT_IDENTIFIERS.find((w) => value.toLowerCase().includes(w));
+  if (!hit) return;
+  const line = text.slice(0, index).split('\n').length;
+  const key = `${file}:${line}:${value}`;
+  if (seen.has(key)) return;
+  seen.add(key);
+  offenders.push(`${file.replace(SRC, 'src')}:${line} -> ${what} "${value}" contains "${hit}"`);
+}
 
 for (const file of walk(SRC)) {
   // This file necessarily contains the words it bans.
   if (file.endsWith('placeholderTenantWords.test.mjs')) continue;
   const text = readFileSync(file, 'utf8');
   for (const m of text.matchAll(PLACEHOLDER)) {
-    const value = m[2];
-    const hit = TENANT_IDENTIFIERS.find((w) => value.toLowerCase().includes(w));
-    if (!hit) continue;
-    const line = text.slice(0, m.index).split('\n').length;
-    offenders.push(`${file.replace(SRC, 'src')}:${line} -> placeholder "${value}" contains "${hit}"`);
+    checkValue(file, text, m.index, m[2], 'placeholder');
+  }
+  for (const m of text.matchAll(NAMED_EXAMPLE)) {
+    if (!EXAMPLE_NAME.test(m[1])) continue;
+    checkValue(file, text, m.index, m[3], `${m[1]}`);
   }
 }
 
