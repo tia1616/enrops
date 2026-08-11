@@ -49,37 +49,50 @@ import WizardLayout, { PrimaryButton, ScreenError } from '../WizardLayout.jsx';
 // admin marks the check clear, so a contractor pressing Continue has never been
 // able to reach a roster early. This screen is display only.
 
-// The statuses that constitute real evidence about the check, and the honest
-// thing to say about each.
+// What we can honestly say about each value checkr_status can hold, and whether
+// the self-serve link still makes sense in that state.
 //
-// Deliberately NOT a total map, and the fallback copy is deliberately worded to
-// be true for EVERYTHING outside it. The writable values are wider than they
-// look: create-checkr-candidate writes 'not_started' and 'pending',
-// admin-upload-background-check and checkr-webhook write 'clear' — but
-// checkr-webhook ALSO writes whatever status Checkr hands it verbatim
-// (index.ts:146), which can be 'suspended', 'dispute' and others. The old code
-// printed those raw at the contractor.
+// The column is CLOSED, not open. Verified against the live CHECK constraint
+// 2026-08-11: exactly not_started | pending | clear | consider | suspended.
+// An earlier version of this comment claimed checkr-webhook wrote arbitrary
+// Checkr statuses "verbatim" including 'dispute'; that was wrong. index.ts:142
+// is `else if (status === 'consider' || status === 'suspended')` and :162 logs
+// and ignores everything else, so only clear / consider / suspended are ever
+// written there. I asserted that from a grep line without reading the block
+// around it. The practical damage: framing the fallback as an unknown-value
+// bucket is what left 'suspended' — the one real occupant — falling through it.
 //
-// So the fallback must not assert what the contractor did. "We haven't received
-// a result yet" is true for null, for 'not_started', and for any unrecognised
-// value, while still justifying showing the link. Claiming "you haven't started"
-// would just be a different false statement for a suspended check.
+// `offerLink` is a SEPARATE axis from having a result, and conflating the two
+// reproduced the exact bug this file exists to fix. 'pending' is written by
+// create-checkr-candidate the moment the INVITATION is created (index.ts:154,
+// :171) — it means invited-and-unfinished, not submitted. Treating it as a
+// finished submission hid the link in the one state where someone most needs it.
 //
-// Verified against prod 2026-08-11: 'clear' x23, 'not_started' x1.
-const SUBMITTED_STATUS = {
+// Prod today: 'clear' x23, 'not_started' x1.
+const STATUS_VIEW = {
   clear: {
     title: 'Your background check is complete.',
     body: 'Nothing else to do here.',
+    offerLink: false,
   },
   pending: {
-    title: 'Your background check has been submitted.',
-    body: "We're waiting on the result. You don't need to do anything else — we'll let you know if we need more from you.",
+    title: "Your background check isn't finished yet.",
+    body: "You've been invited to complete it. Pick up where you left off whenever you're ready.",
+    offerLink: true,
   },
   consider: {
     title: 'Your background check is being reviewed.',
     body: 'Your program is going over the result and will be in touch. You can carry on with the rest of your onboarding.',
+    offerLink: false,
+  },
+  suspended: {
+    title: 'Your background check needs attention.',
+    body: 'Your program has been notified and will be in touch about the next step. Starting a new check yourself will not clear it.',
+    offerLink: false,
   },
 };
+// not_started and NULL have no entry on purpose: there is no result to report,
+// so the link stays on offer.
 
 export default function Screen2BackgroundCheck({ slug, instructor, onboarding, onAdvance, onBack }) {
   const navigate = useNavigate();
@@ -91,12 +104,13 @@ export default function Screen2BackgroundCheck({ slug, instructor, onboarding, o
   // needs to WRITE the step again, and whether we show the status block.
   const alreadyAcknowledged = Boolean(onboarding?.steps_completed?.[STEP_KEYS.CHECKR_SUBMITTED]);
 
-  // The honest read of where the check actually stands. `status` is null
-  // whenever we have no positive evidence — see SUBMITTED_STATUS.
-  const status = SUBMITTED_STATUS[onboarding?.checkr_status] ?? null;
-  // Named for what it actually means: no RESULT we can speak to. Not the same as
-  // "they never started" — see the note on SUBMITTED_STATUS.
-  const noResultYet = !status;
+  // Two independent questions, deliberately not collapsed into one flag.
+  // `status`     — is there a result we can honestly report?
+  // `showHowTo`  — does offering the check still make sense in this state?
+  // A 'pending' check has a status AND still wants the link; a 'suspended' one
+  // has a status and must NOT re-offer it (a second check clears nothing).
+  const status = STATUS_VIEW[onboarding?.checkr_status] ?? null;
+  const showHowTo = status ? status.offerLink : true;
 
   // Provider copy from Settings -> Background checks. All optional; we fall back
   // to neutral guidance when a field is unset.
@@ -162,7 +176,7 @@ export default function Screen2BackgroundCheck({ slug, instructor, onboarding, o
       {/* Gap-based spacing, not per-element margins: this block now stacks up to
           four children whose visibility varies independently, and stacked mt-*
           utilities leave two paragraphs touching in the return-visit case. */}
-      {noResultYet && (
+      {showHowTo && (
         <div className="flex flex-col items-start gap-3">
           {/* STATUS ONLY. This line used to also say what to do next, which put
               the same instruction on screen twice in a row - "Your Program
@@ -171,8 +185,9 @@ export default function Screen2BackgroundCheck({ slug, instructor, onboarding, o
               up below" immediately above "using the link below". Neither was
               visible while reading the branches one at a time; both were obvious
               the moment the page actually rendered. This line reports where
-              things stand; the paragraph under it does the instructing. */}
-          {alreadyAcknowledged && (
+              things stand; the paragraph under it does the instructing.
+              Suppressed when `status` already rendered its own heading above. */}
+          {alreadyAcknowledged && !status && (
             <p className="text-sm font-semibold text-neutral-900">
               We haven&apos;t received a result for your background check yet.
             </p>
@@ -182,17 +197,26 @@ export default function Screen2BackgroundCheck({ slug, instructor, onboarding, o
             <p className="whitespace-pre-line text-sm leading-relaxed text-neutral-800">{instructions}</p>
           ) : (
             <p className="text-sm leading-relaxed text-neutral-800">
-              {/* The pointer at the link is conditional on the link EXISTING.
-                  provider_name and provider_url are independent optional config
-                  fields, so an org can name its provider without giving a
-                  self-serve URL — and the old copy then said "using the link
-                  below" with no link below it. Pre-existing; fixed here because
-                  it is the same class of untrue sentence this change is about. */}
+              {/* Two rules here, both learned the hard way.
+                  1. The pointer at the link is conditional on the link EXISTING.
+                     provider_name and provider_url are independent optional
+                     fields, so an org can name its provider without giving a
+                     self-serve URL, and the old copy still said "using the link
+                     below" with nothing below it.
+                  2. Do NOT promise a CHANNEL we don't control. These lines said
+                     "your Program Manager will email you the link", but
+                     contractor-invite only includes a background-check block when
+                     provider_url is set (index.ts:245) — so in exactly the config
+                     with no URL, nothing emails a link. Worse, background checks
+                     default to ENABLED for an org that never opened the settings
+                     page, so a brand-new provider's instructor would be told to
+                     wait for a message nobody sends. Say a person will be in
+                     touch, and always give them something to DO. */}
               {providerName
                 ? (providerUrl
                     ? `Complete your background check with ${providerName} using the link below. If you have any trouble, contact your Program Manager.`
-                    : `Your background check is run through ${providerName}. Your Program Manager will email you the link to get started.`)
-                : 'Your Program Manager will email you the link to start your background check.'}
+                    : `Your background check is run through ${providerName}. Your Program Manager will send you what you need to get started — reach out to them if you haven't heard.`)
+                : "Your Program Manager will send you what you need to complete your background check. If you haven't heard, reach out to them."}
             </p>
           )}
 
