@@ -316,15 +316,6 @@ export default function RegisterSuccess() {
         </div>
       )}
 
-      {/* Points at the PROVIDER, not at us. A family with a question about their
-          child's class should reach the person teaching it - and "reach us at
-          support@enrops.com" sent them to the platform instead, contradicting
-          the confirmation email, whose reply-to is already the provider's own
-          address.
-          Deliberately not a mailto: the public org record doesn't carry the
-          provider's email, and inventing one risks a bounce. Replying to the
-          confirmation lands with them either way, which is the outcome that
-          matters. */}
       {/* Operator-authored closing note. Deliberately BELOW the class details, the
           calendar and the sign-in instructions: this is where a provider sells
           something (Jeff's ukuleles), and a family's own next steps come first. It is
@@ -366,7 +357,17 @@ export default function RegisterSuccess() {
         </div>
       )}
 
-      {/* Omitted entirely for comp rather than reworded. There is no confirmation
+      {/* Points at the PROVIDER, not at us. A family with a question about their
+          child's class should reach the person teaching it - and "reach us at
+          support@enrops.com" sent them to the platform instead, contradicting
+          the confirmation email, whose reply-to is already the provider's own
+          address.
+          Deliberately not a mailto: the public org record doesn't carry the
+          provider's email, and inventing one risks a bounce. Replying to the
+          confirmation lands with them either way, which is the outcome that
+          matters.
+
+          Omitted entirely for comp rather than reworded. There is no confirmation
           email to reply to, so the sentence cannot be made true — and the block
           above already tells a comp family the provider will be in touch, so a
           second "they'll be in touch" here would just say it twice. */}

@@ -247,6 +247,12 @@ export default function BrandLogoSettings() {
     return { url: parsed.toString(), error: null };
   }
   const ctaCheck = normalizeCtaUrl(ctaUrl);
+  // Don't shout at someone mid-word. Without this, typing the "y" of "yoursite.com"
+  // turns the field red and prints an error before they have finished the first
+  // token. The check itself still gates the save; this only governs when the inline
+  // message is allowed to appear.
+  const [ctaUrlBlurred, setCtaUrlBlurred] = useState(false);
+  const showCtaError = ctaCheck.error && ctaUrlBlurred;
   // Built from the CURRENT origin so the link is right on staging and on prod,
   // and from the org's own slug — never a hardcoded tenant.
   const publicUrl = org?.slug
@@ -270,6 +276,9 @@ export default function BrandLogoSettings() {
     // render - the operator would see "Saved" and no button, with nothing to explain
     // it. Checked before setSaving so the button does not flicker into a spinner.
     if (ctaCheck.error) {
+      // Reveal the field-level message too, so the explanation sits next to the field
+      // that is wrong and not only in the banner and beside the button.
+      setCtaUrlBlurred(true);
       setError("That button link doesn't look like a web address. Try something like yoursite.com/shop");
       return;
     }
@@ -579,13 +588,14 @@ export default function BrandLogoSettings() {
               type="text"
               value={ctaUrl}
               onChange={(e) => setCtaUrl(e.target.value)}
+              onBlur={() => setCtaUrlBlurred(true)}
               placeholder="yoursite.com/shop"
-              style={{ width: "100%", boxSizing: "border-box", marginTop: 4, padding: "9px 12px", fontSize: 13, border: `1px solid ${ctaCheck.error ? "#dc2626" : RULE}`, borderRadius: 8, fontFamily: "inherit", fontWeight: 400 }}
+              style={{ width: "100%", boxSizing: "border-box", marginTop: 4, padding: "9px 12px", fontSize: 13, border: `1px solid ${showCtaError ? "#dc2626" : RULE}`, borderRadius: 8, fontFamily: "inherit", fontWeight: 400 }}
             />
           </label>
         </div>
-        <div style={{ fontSize: 11.5, color: ctaCheck.error ? "#dc2626" : MUTED, marginTop: 6, lineHeight: 1.5 }}>
-          {ctaCheck.error
+        <div style={{ fontSize: 11.5, color: showCtaError ? "#dc2626" : MUTED, marginTop: 6, lineHeight: 1.5 }}>
+          {showCtaError
             ? "That doesn't look like a web address yet. Something like yoursite.com/shop."
             : "No need to type https:// - we add it. Leave the link blank and no button appears."}
         </div>
@@ -623,7 +633,17 @@ export default function BrandLogoSettings() {
         )}
       </div>
 
-      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 18 }}>
+      {/* The refusal has to be readable FROM HERE. The page's error banner is at the
+          very top and this button is at the bottom of a long form, so a save blocked
+          by a bad button link looked like a dead button - clicked, nothing happened.
+          Not gated on the blur flag: by the time someone presses Save they are
+          entitled to know why it did not. */}
+      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 12, marginTop: 18 }}>
+        {ctaCheck.error && (
+          <span style={{ color: "#dc2626", fontSize: 12.5, textAlign: "right", lineHeight: 1.4 }}>
+            Check the button link before saving.
+          </span>
+        )}
         <button type="button" onClick={save} disabled={saving || !dirty} style={primaryBtn(saving || !dirty)}>{saving ? "Saving…" : dirty ? "Save" : "Saved ✓"}</button>
       </div>
     </div>
