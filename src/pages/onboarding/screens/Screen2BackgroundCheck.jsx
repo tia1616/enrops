@@ -164,12 +164,17 @@ export default function Screen2BackgroundCheck({ slug, instructor, onboarding, o
           utilities leave two paragraphs touching in the return-visit case. */}
       {noResultYet && (
         <div className="flex flex-col items-start gap-3">
+          {/* STATUS ONLY. This line used to also say what to do next, which put
+              the same instruction on screen twice in a row - "Your Program
+              Manager will email you the link." immediately above "...will email
+              you the link to get started.", and with a link configured, "pick it
+              up below" immediately above "using the link below". Neither was
+              visible while reading the branches one at a time; both were obvious
+              the moment the page actually rendered. This line reports where
+              things stand; the paragraph under it does the instructing. */}
           {alreadyAcknowledged && (
             <p className="text-sm font-semibold text-neutral-900">
               We haven&apos;t received a result for your background check yet.
-              {providerUrl
-                ? " If you haven't started it, you can pick it up below."
-                : ' Your Program Manager will email you the link.'}
             </p>
           )}
 
