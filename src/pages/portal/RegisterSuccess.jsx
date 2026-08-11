@@ -4,6 +4,8 @@ import { useAuth } from '../../context/AuthContext.jsx';
 import { useCart } from '../../context/CartContext.jsx';
 import { supabase } from '../../lib/supabase.js';
 import { emailIsValid } from '../../lib/validation.js';
+import { sanitizeAuthoredHtml } from '../../lib/sanitizeAuthoredHtml.js';
+import { confirmationBoxStyle, confirmationButtonStyle } from '../../lib/confirmationBoxStyle.js';
 
 export default function RegisterSuccess() {
   const { org } = useOutletContext();
@@ -37,6 +39,23 @@ export default function RegisterSuccess() {
   // Tenant-neutral calendar invite (real, closure-aware session dates) built by
   // checkout-session-status. Lets the family add every class in one tap.
   const [calendar, setCalendar] = useState(null);
+  // Operator-authored closing note (org_branding.confirmation_page_html), edited at
+  // /admin/branding. This is where a provider links to their own shop or site —
+  // Jeff's ask. Empty/absent renders nothing, so a tenant that never sets it gets
+  // exactly the page it had before. Fetched here rather than in PublicLayout on
+  // purpose: PublicLayout provides only `org` and does not read org_branding at
+  // all, so putting it there would add a query to every public page to serve one.
+  const [authoredHtml, setAuthoredHtml] = useState('');
+  // The provider's own call-to-action. Kept as a label/url PAIR rather than a link
+  // inside authoredHtml so it can render as a real button and so the wording is a
+  // field an operator edits, not markup they have to construct.
+  const [ctaLabel, setCtaLabel] = useState('');
+  const [ctaUrl, setCtaUrl] = useState('');
+  // The provider's own brand colour, for the box below. The rest of this page is
+  // painted by the public shell (.brand-enrops-public, or :root for the legacy J2S
+  // shell) and does NOT read org_branding — so this box is the one place a provider's
+  // saved colour shows up, matching what the confirmation email already does.
+  const [primaryColor, setPrimaryColor] = useState('');
 
   useEffect(() => {
     // Clear cart once we're on success
@@ -57,6 +76,26 @@ export default function RegisterSuccess() {
     })();
     return () => { cancelled = true; };
   }, [sessionId]);
+
+  useEffect(() => {
+    if (!org?.id) return;
+    let cancelled = false;
+    (async () => {
+      // Readable anonymously via the existing public_read_branding policy, which is
+      // scoped to orgs in public_org_directory. A family on this page has no session,
+      // so an authenticated-only read would come back empty and silently hide the note.
+      const { data } = await supabase
+        .from('org_branding').select('confirmation_page_html, confirmation_cta_label, confirmation_cta_url, primary_color')
+        .eq('organization_id', org.id).maybeSingle();
+      if (!cancelled) {
+        setAuthoredHtml(data?.confirmation_page_html || '');
+        setCtaLabel(data?.confirmation_cta_label || '');
+        setCtaUrl(data?.confirmation_cta_url || '');
+        setPrimaryColor(data?.primary_color || '');
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [org?.id]);
 
   function downloadIcs() {
     if (!calendar?.ics) return;
@@ -82,6 +121,37 @@ export default function RegisterSuccess() {
     }
   }
 
+  // Second half of the belt-and-braces check on the button destination (the first is
+  // at save time in /admin/branding). This column is world-readable through
+  // public_read_branding, so anything that is not plainly http/https gets NO button
+  // rather than an href we could not vouch for. An empty string here means "no
+  // button", which is also what a blank field means - one branch, not two.
+  // A scheme test alone is NOT enough: "https://hello@evil.com" passes /^https?:/ while
+  // the real host is evil.com, everything before the "@" being userinfo. The editor
+  // refuses those on save, but this column is writable over the REST API, so the render
+  // has to refuse them independently. Empty string = no button.
+  const ctaHref = (() => {
+    const raw = (ctaUrl || '').trim();
+    if (!/^https?:\/\//i.test(raw)) return '';
+    try {
+      const u = new URL(raw);
+      if (u.username !== '' || u.password !== '') return '';
+      return raw;
+    } catch { return ''; }
+  })();
+  // A URL with no wording still gets a usable button rather than a blank one.
+  const ctaText = (ctaLabel || '').trim() || 'Visit our website';
+  // Allowlist-sanitized HERE, at render, not merely at authoring time. The column is
+  // writable over the REST API by any org admin (and by a platform admin against any
+  // org), so editableToHtml's escaping is not a guarantee — the render is the only
+  // gate that every read path passes through. Also forces target/rel onto note links.
+  const safeNoteHtml = sanitizeAuthoredHtml(authoredHtml);
+  const hasNote = safeNoteHtml.trim() !== '';
+  const showProviderBox = hasNote || ctaHref !== '';
+  // Null when the row carries no usable hex, in which case the shell tokens stand.
+  const boxStyle = confirmationBoxStyle(primaryColor);
+  const buttonStyle = confirmationButtonStyle(primaryColor);
+
   return (
     <div className="mx-auto max-w-3xl px-4 py-12 sm:px-6 sm:py-16">
       {/* Success hero */}
@@ -94,12 +164,28 @@ export default function RegisterSuccess() {
         </h1>
         <p className="mt-4 text-lg text-white/90">
           {comp
-            ? 'Your spot is confirmed — no payment needed. Sign in below to see your schedule and class details.'
+            /* Was "Sign in below to see your schedule and class details." A $0
+               registration returns from create-checkout BEFORE Stripe (index.ts:182),
+               so stripe-webhook never runs: no receipt, no magic link, and no account
+               to sign in to. The page was inviting a family to do something that
+               could not work. */
+            /* Just the one sentence. Anything about the registration being saved
+               belongs to the heading immediately below, which already says exactly
+               that - on staging this rendered "Your registration is saved." and then
+               "Your registration is saved" back to back. */
+            ? 'Your spot is confirmed — no payment needed.'
             : 'Thanks for signing up. We just sent your receipt and class details to your email.'}
         </p>
         {sessionId && (
+          /* The FULL id, and called the same thing the email calls it. This was
+             "Confirmation ID: <first 16 chars>…" while the confirmation email prints
+             the whole session id under the heading "Confirmation number" — so a family
+             reading their screen quoted a truncated value under a different name, and
+             nobody could match it to their order. Two names for one number, and only
+             one of them usable. */
           <p className="mt-3 text-xs text-white/60">
-            Confirmation ID: {sessionId.slice(0, 16)}&hellip;
+            Confirmation number{' '}
+            <span className="break-all font-mono text-white/80">{sessionId}</span>
           </p>
         )}
       </div>
@@ -155,7 +241,7 @@ export default function RegisterSuccess() {
       {!user ? (
         <div className="mt-8 rounded-3xl border border-j2s-purple/10 bg-white p-8 shadow-card">
           <h2 className="font-titan text-2xl text-j2s-ink">
-            Check your email
+            {comp ? 'Your registration is saved' : 'Check your email'}
           </h2>
           {/* NAME THE ADDRESS ONLY WHEN WE HAVE A USABLE ONE. This used to read
               "We sent a sign-in link to your inbox" whenever the cart was gone,
@@ -164,7 +250,19 @@ export default function RegisterSuccess() {
               send would most likely have failed on anyway - does not get quoted back
               to the family as though it worked. */}
           <p className="mt-2 text-j2s-ink/70">
-            {emailLooksValid ? (
+            {/* A $0 registration never reaches Stripe, so NOTHING was sent. Both
+                branches below assert an email exists; for a comp family that is
+                simply false, and it was the page's most confident sentence. The
+                wider gap — comp families getting no confirmation and no dashboard
+                at all — is a money-path change tracked separately; this only stops
+                the page claiming otherwise. */}
+            {comp ? (
+              <>
+                There was nothing to pay, so there&rsquo;s no receipt to send and no sign-in link
+                yet. {org?.name || 'Your program provider'} has your registration and will be in
+                touch with class details.
+              </>
+            ) : emailLooksValid ? (
               <>
                 We sent a sign-in link to <span className="font-semibold text-j2s-ink">{email}</span>.
                 Click the link to access your dashboard, view your child's schedule,
@@ -183,6 +281,11 @@ export default function RegisterSuccess() {
             )}
           </p>
 
+          {/* Hidden for comp: every control below is about an email that was never
+              sent, or a sign-in that cannot reach a registration on prod (the
+              claim_parent_record link is staging-only, verified 2026-08-10). Offering
+              them would be the "silent wall" pattern - a door that opens onto nothing. */}
+          {!comp && (
           <div className="mt-6 space-y-4">
             {/* NO RESEND BUTTON HERE, deliberately. Jessica, 2026-08-07, on being
                 shown that the resend arrived from Supabase rather than the provider:
@@ -228,6 +331,7 @@ export default function RegisterSuccess() {
               Continue with Google
             </button>
           </div>
+          )}
 
           {error && <p className="error-text mt-4">{error}</p>}
         </div>
@@ -240,6 +344,61 @@ export default function RegisterSuccess() {
         </div>
       )}
 
+      {/* Operator-authored closing note. Deliberately BELOW the class details, the
+          calendar and the sign-in instructions: this is where a provider sells
+          something (Jeff's ukuleles), and a family's own next steps come first. It is
+          also why this is a note and not a redirect - Jessica's point was that a
+          redirect pulls a family off this page before they have read any of it.
+
+          Rendered as HTML, and sanitized against an allowlist at RENDER time by
+          sanitizeAuthoredHtml. Do NOT weaken that to "the editor escapes it": this
+          column is writable straight over the REST API by any org admin, and by a
+          platform admin against ANY org, so author-time escaping is not a gate.
+          A previous version of this comment claimed editableToHtml was the
+          guarantee. It was not. */}
+      {showProviderBox && (
+        /* Deliberately the loudest thing below the fold. It was a plain white card
+           with a hairline border, which read as small print next to the white
+           sign-in card above it and got skipped.
+
+           Coloured from the PROVIDER's own org_branding.primary_color, via the shared
+           helper the admin preview also uses. The rest of this page comes from the
+           public shell's CSS tokens, which do not read org_branding at all — so an
+           earlier version of this comment claiming the box "follows each tenant's
+           palette" was false: it followed Enrops purple (or J2S purple on the legacy
+           shell) no matter what the provider had saved. It does now.
+           No usable hex on the row => fall back to the shell tokens, unchanged. */
+        <div
+          className={`mt-8 rounded-3xl border-2 p-6 text-center shadow-pop sm:p-8 ${boxStyle ? '' : 'border-j2s-purple/25 bg-j2s-purple-soft'}`}
+          style={boxStyle || undefined}
+        >
+          {hasNote && (
+            <div
+              className="text-[15px] leading-relaxed text-j2s-ink [&_a]:font-semibold [&_a]:text-j2s-purple [&_a]:underline [&_p]:mt-3 [&_p:first-child]:mt-0"
+              dangerouslySetInnerHTML={{ __html: safeNoteHtml }}
+            />
+          )}
+          {ctaHref !== '' && (
+            /* A real button, and the wording is the operator's. rel includes
+               noopener: this href is provider-supplied, so the new tab must not get a
+               handle on window.opener. */
+            <a
+              href={ctaHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              /* Keeps btn-j2s-primary for geometry (padding, radius, weight, the press
+                 nudge) and overrides only the fill with the provider's colour. An
+                 inline style outranks the class's hover rule, so the button no longer
+                 darkens on hover; active:translate-y-px still gives press feedback. */
+              className={`btn-j2s-primary ${hasNote ? 'mt-5' : ''}`}
+              style={buttonStyle || undefined}
+            >
+              {ctaText}
+            </a>
+          )}
+        </div>
+      )}
+
       {/* Points at the PROVIDER, not at us. A family with a question about their
           child's class should reach the person teaching it - and "reach us at
           support@enrops.com" sent them to the platform instead, contradicting
@@ -248,11 +407,18 @@ export default function RegisterSuccess() {
           Deliberately not a mailto: the public org record doesn't carry the
           provider's email, and inventing one risks a bounce. Replying to the
           confirmation lands with them either way, which is the outcome that
-          matters. */}
-      <p className="mt-8 text-center text-sm text-j2s-ink/60">
-        Questions? Just reply to your confirmation email
-        {org?.name ? <> and it goes straight to {org.name}</> : <> and it goes straight to your program provider</>}.
-      </p>
+          matters.
+
+          Omitted entirely for comp rather than reworded. There is no confirmation
+          email to reply to, so the sentence cannot be made true — and the block
+          above already tells a comp family the provider will be in touch, so a
+          second "they'll be in touch" here would just say it twice. */}
+      {!comp && (
+        <p className="mt-8 text-center text-sm text-j2s-ink/60">
+          Questions? Just reply to your confirmation email
+          {org?.name ? <> and it goes straight to {org.name}</> : <> and it goes straight to your program provider</>}.
+        </p>
+      )}
 
       {/* The platform attribution line used to live here as well, which meant
           this page rendered it twice - once here and once in PublicLayout's

@@ -12,6 +12,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
+import RichBodyEditor from "../../components/RichBodyEditor.jsx";
+import { sanitizeAuthoredHtml } from "../../lib/sanitizeAuthoredHtml.js";
+import { confirmationBoxStyle, confirmationButtonStyle } from "../../lib/confirmationBoxStyle.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -100,6 +103,19 @@ export default function BrandLogoSettings() {
   const [savedHeroHeadline, setSavedHeroHeadline] = useState("");
   const [heroSubtext, setHeroSubtext] = useState("");
   const [savedHeroSubtext, setSavedHeroSubtext] = useState("");
+  // Confirmation-page block. Same rationale as the hero copy above — public page
+  // wording that belongs to the operator — but this one holds a LINK, which is
+  // why it gets the rich editor rather than a plain input: Jeff's whole ask was
+  // sending families to his ukulele shop after they pay, and a text input can't
+  // carry a link.
+  const [confirmationHtml, setConfirmationHtml] = useState("");
+  const [savedConfirmationHtml, setSavedConfirmationHtml] = useState("");
+  // The button under that note. A label/url PAIR, not a link inside the note, so it
+  // renders as a real button and the wording is a field rather than markup.
+  const [ctaLabel, setCtaLabel] = useState("");
+  const [savedCtaLabel, setSavedCtaLabel] = useState("");
+  const [ctaUrl, setCtaUrl] = useState("");
+  const [savedCtaUrl, setSavedCtaUrl] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -119,7 +135,7 @@ export default function BrandLogoSettings() {
       const { data: o } = await supabase
         .from("organizations").select("logo_url, logo_email_url").eq("id", org.id).maybeSingle();
       const { data: b } = await supabase
-        .from("org_branding").select("primary_color, secondary_color, accent_color, page_bg_color, banner_image_url, hero_headline, hero_subtext")
+        .from("org_branding").select("primary_color, secondary_color, accent_color, page_bg_color, banner_image_url, hero_headline, hero_subtext, confirmation_page_html, confirmation_cta_label, confirmation_cta_url")
         .eq("organization_id", org.id).maybeSingle();
       if (!cancelled) {
         const url = o?.logo_url || o?.logo_email_url || "";
@@ -140,6 +156,12 @@ export default function BrandLogoSettings() {
         const hs = b?.hero_subtext ?? "";
         setHeroHeadline(hh); setSavedHeroHeadline(hh);
         setHeroSubtext(hs); setSavedHeroSubtext(hs);
+        const cp = b?.confirmation_page_html ?? "";
+        setConfirmationHtml(cp); setSavedConfirmationHtml(cp);
+        const cl = b?.confirmation_cta_label ?? "";
+        const cu = b?.confirmation_cta_url ?? "";
+        setCtaLabel(cl); setSavedCtaLabel(cl);
+        setCtaUrl(cu); setSavedCtaUrl(cu);
         setLoading(false);
       }
     })();
@@ -207,7 +229,41 @@ export default function BrandLogoSettings() {
   const colorsDirty = COLOR_FIELDS.some((f) => colors[f.key] !== savedColors[f.key]);
   const bannerDirty = bannerUrl !== savedBanner;
   const heroDirty = heroHeadline !== savedHeroHeadline || heroSubtext !== savedHeroSubtext;
-  const dirty = logoDirty || colorsDirty || bannerDirty || heroDirty;
+  const confirmationDirty = confirmationHtml !== savedConfirmationHtml;
+  const ctaDirty = ctaLabel !== savedCtaLabel || ctaUrl !== savedCtaUrl;
+  const dirty = logoDirty || colorsDirty || bannerDirty || heroDirty || confirmationDirty || ctaDirty;
+
+  // Accept what an operator actually types ("yoursite.com/shop") and turn it
+  // into something safe to put in an href. Anything that will not parse as http/https
+  // is REFUSED at save time with a plain message rather than quietly stored - the
+  // public page would then simply not render a button and the operator would be left
+  // wondering why. RegisterSuccess re-checks on render regardless.
+  function normalizeCtaUrl(raw) {
+    const v = (raw || "").trim();
+    if (!v) return { url: null, error: null };
+    const candidate = /^https?:\/\//i.test(v) ? v : `https://${v}`;
+    let parsed;
+    try { parsed = new URL(candidate); } catch { return { url: null, error: true }; }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return { url: null, error: true };
+    if (!parsed.hostname.includes(".")) return { url: null, error: true };
+    // REJECT userinfo. Everything before an "@" is swallowed as user:pass, so the real
+    // host is whatever follows it — which silently sends families somewhere else:
+    //   "mailto:hello@gmail.com"     -> https://mailto:hello@gmail.com/  -> gmail.com
+    //   "hello@myshop.com"           -> https://hello@myshop.com/        -> myshop.com
+    //   "https://user:pass@evil.com" -> evil.com
+    // Both the hostname-has-a-dot check and the render-side /^https?:/ test pass on all
+    // three, so nothing downstream catches it. Typing an email address into a field
+    // labelled "Button link" is an ordinary thing for an operator to do.
+    if (parsed.username !== "" || parsed.password !== "") return { url: null, error: true };
+    return { url: parsed.toString(), error: null };
+  }
+  const ctaCheck = normalizeCtaUrl(ctaUrl);
+  // Don't shout at someone mid-word. Without this, typing the "y" of "yoursite.com"
+  // turns the field red and prints an error before they have finished the first
+  // token. The check itself still gates the save; this only governs when the inline
+  // message is allowed to appear.
+  const [ctaUrlBlurred, setCtaUrlBlurred] = useState(false);
+  const showCtaError = ctaCheck.error && ctaUrlBlurred;
   // Built from the CURRENT origin so the link is right on staging and on prod,
   // and from the org's own slug — never a hardcoded tenant.
   const publicUrl = org?.slug
@@ -227,6 +283,16 @@ export default function BrandLogoSettings() {
   }
 
   async function save() {
+    // Refuse rather than store something the public page would then decline to
+    // render - the operator would see "Saved" and no button, with nothing to explain
+    // it. Checked before setSaving so the button does not flicker into a spinner.
+    if (ctaCheck.error) {
+      // Reveal the field-level message too, so the explanation sits next to the field
+      // that is wrong and not only in the banner and beside the button.
+      setCtaUrlBlurred(true);
+      setError("That button link doesn't look like a web address. Try something like yoursite.com/shop");
+      return;
+    }
     setSaving(true); setError("");
     try {
       // Logo goes through the edge fn (sets logo_url + derives the email PNG).
@@ -257,7 +323,7 @@ export default function BrandLogoSettings() {
       }
       // Colors + banner go straight to org_branding. Build the payload from only
       // what changed so untouched fields (e.g. default colors) are never written.
-      if (colorsDirty || bannerDirty || heroDirty) {
+      if (colorsDirty || bannerDirty || heroDirty || confirmationDirty || ctaDirty) {
         const payload = { organization_id: org.id, updated_at: new Date().toISOString() };
         // Only write colors the operator ACTUALLY changed. Writing all four would
         // pin untouched fields (still showing the platform default in the picker)
@@ -268,6 +334,17 @@ export default function BrandLogoSettings() {
         // and an empty string would read as "the operator chose blank wording".
         if (heroHeadline !== savedHeroHeadline) payload.hero_headline = heroHeadline.trim() || null;
         if (heroSubtext !== savedHeroSubtext) payload.hero_subtext = heroSubtext.trim() || null;
+        // Same NULL-not-"" rule: the confirmation page renders the block only when
+        // this is truthy, so clearing the editor must detach it, not store a blank
+        // that would render an empty card.
+        if (confirmationDirty) payload.confirmation_page_html = confirmationHtml.trim() || null;
+        if (ctaDirty) {
+          // Store the NORMALIZED url, so the page never has to guess about a missing
+          // scheme, and NULL when cleared so the button disappears rather than
+          // rendering with a dead destination.
+          payload.confirmation_cta_url = ctaCheck.url;
+          payload.confirmation_cta_label = ctaLabel.trim() || null;
+        }
         const { error: e } = await supabase.from("org_branding").upsert(payload, { onConflict: "organization_id" });
         if (e) throw e;
       }
@@ -276,6 +353,12 @@ export default function BrandLogoSettings() {
       // Re-baseline the hero copy too, or the form stays permanently "dirty" and
       // the next save rewrites fields the operator never touched again.
       setSavedHeroHeadline(heroHeadline); setSavedHeroSubtext(heroSubtext);
+      setSavedConfirmationHtml(confirmationHtml);
+      // Re-baseline the normalized url, not the raw text, or the form stays dirty
+      // forever after we rewrite "site.com" to "https://site.com/".
+      setSavedCtaLabel(ctaLabel);
+      const normalized = ctaCheck.url ?? "";
+      setCtaUrl(normalized); setSavedCtaUrl(normalized);
     } catch (e) {
       const raw = e?.message ?? "";
       const jargon = /non-2xx|edge function|failed to fetch|network|fetcherror/i.test(raw);
@@ -427,7 +510,9 @@ export default function BrandLogoSettings() {
             /* An EXAMPLE of what to write, not the default wording: the public
                page's fallback differs by catalog layout, so naming one here
                would be wrong on the other. */
-            placeholder="e.g. After-school ukulele classes in Portland"
+            /* Tenant-neutral. This said "After-school ukulele classes in Portland" -
+               one real provider's business, shown to every other one as the example. */
+            placeholder="e.g. After-school art classes in your city"
             maxLength={120}
             style={{ width: "100%", boxSizing: "border-box", marginTop: 4, padding: "9px 12px", fontSize: 13, border: `1px solid ${RULE}`, borderRadius: 8, fontFamily: "inherit", fontWeight: 400 }}
           />
@@ -438,14 +523,149 @@ export default function BrandLogoSettings() {
           <textarea
             value={heroSubtext}
             onChange={(e) => setHeroSubtext(e.target.value)}
-            placeholder="e.g. After-school ukulele classes across Portland. Pick a school and sign up in a couple of minutes."
+            placeholder="e.g. After-school art classes across the city. Pick a school and sign up in a couple of minutes."
             maxLength={300}
             style={{ width: "100%", boxSizing: "border-box", marginTop: 4, padding: "9px 12px", fontSize: 13, border: `1px solid ${RULE}`, borderRadius: 8, fontFamily: "inherit", fontWeight: 400, minHeight: 66, resize: "vertical" }}
           />
         </label>
       </div>
 
-      <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 18 }}>
+      {/* Confirmation page wording. Sits with the hero copy because both are
+          operator-authored words on a page families see, and org_branding was
+          already their home. This one is the LAST page of the flow rather than the
+          first: the screen a family lands on straight after paying.
+
+          Why a rich editor and not two inputs like the hero above: the entire ask
+          was Jeff sending families to his ukulele shop once they've paid, and that
+          needs a link. The editor is the same one used for email bodies, so an
+          operator learns one control, and its Link button means nobody has to be
+          told to type bracket-parenthesis notation. */}
+      <div style={{ marginTop: 16, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 12, padding: 20 }}>
+        <div style={{ fontSize: 15, fontWeight: 700, color: INK, marginBottom: 4 }}>Confirmation page wording</div>
+        <div style={{ fontSize: 12.5, color: MUTED, marginBottom: 14, lineHeight: 1.5 }}>
+          A note and a button on the page families see right after they pay — the place to send them
+          to your own shop or website. Their class details, calendar links and sign-in instructions
+          are always shown above it. Leave both blank and nothing extra appears.
+          {publicUrl && (
+            <>
+              {" "}
+              {/* The preview below shows the BOX. This shows the WHOLE page it sits on,
+                  which is what you actually want to judge before families see it.
+                  Opened directly it has no real registration behind it, so the class
+                  details and calendar buttons are absent - said plainly, because a
+                  preview that quietly omits things is worse than no preview. */}
+              <a href={`${publicUrl}/register/success`} target="_blank" rel="noreferrer" style={{ color: BRIGHT, fontWeight: 600 }}>
+                See the whole page &rarr;
+              </a>{" "}
+              <span style={{ color: MUTED }}>
+                (opens without a real registration, so the class details and calendar buttons
+                won&rsquo;t be there)
+              </span>
+            </>
+          )}
+        </div>
+        <RichBodyEditor
+          value={confirmationHtml}
+          onChange={setConfirmationHtml}
+          rows={5}
+          /* Tenant-NEUTRAL example. A real provider's wording or web address must never
+             be the platform's placeholder - every other operator sees it. */
+          placeholder={"Need supplies before the first class? We keep everything you need in stock."}
+          helpText={<>Leave a blank line to start a new paragraph. For your main link, use the button below rather than a link in the text.</>}
+          /* No Link button here: the button fields below own the link, and two ways to
+             make one link is one too many. Email bodies keep theirs. */
+          allowLink={false}
+          /* The editor's own preview is off here: the true preview is the combined one
+             below, which shows the note AND the button together in the box families
+             actually see. Two previews would be two answers to one question. */
+          showPreview={false}
+        />
+
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 16 }}>
+          <label style={{ flex: "1 1 190px", fontSize: 12, fontWeight: 600, color: INK }}>
+            Button wording
+            <input
+              type="text"
+              value={ctaLabel}
+              onChange={(e) => setCtaLabel(e.target.value)}
+              placeholder="Visit our shop"
+              maxLength={40}
+              style={{ width: "100%", boxSizing: "border-box", marginTop: 4, padding: "9px 12px", fontSize: 13, border: `1px solid ${RULE}`, borderRadius: 8, fontFamily: "inherit", fontWeight: 400 }}
+            />
+          </label>
+          <label style={{ flex: "1 1 190px", fontSize: 12, fontWeight: 600, color: INK }}>
+            Button link
+            <input
+              type="text"
+              value={ctaUrl}
+              onChange={(e) => setCtaUrl(e.target.value)}
+              onBlur={() => setCtaUrlBlurred(true)}
+              placeholder="yoursite.com/shop"
+              style={{ width: "100%", boxSizing: "border-box", marginTop: 4, padding: "9px 12px", fontSize: 13, border: `1px solid ${showCtaError ? "#dc2626" : RULE}`, borderRadius: 8, fontFamily: "inherit", fontWeight: 400 }}
+            />
+          </label>
+        </div>
+        <div style={{ fontSize: 11.5, color: showCtaError ? "#dc2626" : MUTED, marginTop: 6, lineHeight: 1.5 }}>
+          {showCtaError
+            ? "That doesn't look like a web address yet. Something like yoursite.com/shop."
+            : "No need to type https:// - we add it. Leave the link blank and no button appears."}
+        </div>
+
+        {/* True preview: the box exactly as families see it. The colours come from the
+            SAME helper the live page uses (lib/confirmationBoxStyle.js), which is the
+            only reason these two can be trusted to agree.
+
+            The previous comment here had the premise backwards — it claimed the public
+            tokens would "show them the wrong colour", when in fact those tokens were
+            what the live page rendered and THIS preview was the thing that diverged.
+            A review caught it. The page now follows primary_color too, so both sides
+            are the provider's own colour and the promise is true. */}
+        {(confirmationHtml.trim() !== "" || (ctaUrl.trim() !== "" && !ctaCheck.error)) && (
+          <div style={{ marginTop: 18 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 1, marginBottom: 8 }}>
+              What families will see
+            </div>
+            <div style={{
+              borderStyle: "solid", borderWidth: 2, borderColor: RULE,
+              borderRadius: 16, padding: "20px 18px", textAlign: "center",
+              ...(confirmationBoxStyle(colors.primary) || {}),
+            }}>
+              {confirmationHtml.trim() !== "" && (
+                <div
+                  style={{ fontSize: 14.5, lineHeight: 1.6, color: INK }}
+                  /* Sanitized here too. The preview must render what the live page
+                     renders, and an admin viewing a value another admin injected over
+                     the API is a real reader of this string. */
+                  dangerouslySetInnerHTML={{ __html: sanitizeAuthoredHtml(confirmationHtml) }}
+                />
+              )}
+              {ctaUrl.trim() !== "" && !ctaCheck.error && (
+                <div style={{
+                  display: "inline-block", marginTop: confirmationHtml.trim() !== "" ? 16 : 0,
+                  color: "#fff", borderRadius: 12,
+                  padding: "12px 24px", fontSize: 14, fontWeight: 700,
+                  backgroundColor: PURPLE,
+                  ...(confirmationButtonStyle(colors.primary) || {}),
+                }}>
+                  {ctaLabel.trim() || "Visit our website"}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* The refusal has to be readable FROM HERE. The page's error banner is at the
+          very top and this button is at the bottom of a long form, so a save blocked
+          by a bad button link looked like a dead button - clicked, nothing happened.
+          Not gated on the blur flag: by the time someone presses Save they are
+          entitled to know why it did not. */}
+      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 12, marginTop: 18 }}>
+        {ctaCheck.error && (
+          <span style={{ color: "#dc2626", fontSize: 12.5, textAlign: "right", lineHeight: 1.4 }}>
+            Check the button link before saving.
+          </span>
+        )}
         <button type="button" onClick={save} disabled={saving || !dirty} style={primaryBtn(saving || !dirty)}>{saving ? "Saving…" : dirty ? "Save" : "Saved ✓"}</button>
       </div>
     </div>
