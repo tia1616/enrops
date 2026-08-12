@@ -3,10 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../../lib/supabase.js';
 import { invokeOnboardingFn, isHandledRedirect } from '../../../lib/onboardingFetch.js';
 import { fetchLegalDocument } from '../../../lib/legalDoc.js';
-import {
-  STEP_KEYS,
-  CONTRACTOR_AGREEMENT_VERSION,
-} from '../../../lib/onboardingSteps.js';
+import { STEP_KEYS } from '../../../lib/onboardingSteps.js';
 import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardLayout.jsx';
 
 // Screen 4 — Contractor Agreement. Fetches body text via get-legal-document
@@ -45,18 +42,34 @@ export default function Screen4Agreement({ slug, instructor, onboarding, onAdvan
 
   useEffect(() => {
     let cancelled = false;
-    fetchLegalDocument('contractor_agreement', {
-      document_version: CONTRACTOR_AGREEMENT_VERSION,
-      navigate,
-    })
+    // NO document_version: fetch whatever this org has published most recently.
+    //
+    // This used to pin CONTRACTOR_AGREEMENT_VERSION — one provider's version
+    // string, hardcoded in frontend code. It worked only because that provider
+    // was the only one with any documents. For anyone else it 404s, and it kept
+    // 404ing even after they wrote their own agreement, unless they happened to
+    // name their version identically. The agreement is the one document an
+    // instructor must sign, so the whole onboarding flow dead-ended there.
+    //
+    // get-legal-document already resolves "no version given" to the newest row
+    // for (org, key) — the same rule the policy screens have always used and the
+    // same rule the authoring screen shows as "live now". So this is now ONE
+    // definition of which version is current instead of two that could disagree.
+    // Safe for the existing provider: verified they have exactly one published
+    // contractor agreement, so newest-wins resolves to the identical row.
+    fetchLegalDocument('contractor_agreement', { navigate })
       .then(({ data, error, status }) => {
         if (cancelled) return;
         if (error) {
           setDocState({
             phase: 'error',
+            // 404 now has a specific, likely cause: the provider has not
+            // published an agreement yet. Saying "try again" would send an
+            // instructor round a loop that cannot succeed, because nothing they
+            // do fixes it — only their Program Manager can.
             message:
               status === 404
-                ? "We can't load this document right now. Please try again or contact Jessica."
+                ? "Your program hasn't published its contractor agreement yet. Your Program Manager needs to add it before you can sign — please reach out to them."
                 : 'Something went wrong loading the agreement. Please try again.',
           });
           return;
@@ -104,7 +117,11 @@ export default function Screen4Agreement({ slug, instructor, onboarding, onAdvan
         signedAt,
         instructor,
       });
-      const path = `${instructor.id}/agreement_${CONTRACTOR_AGREEMENT_VERSION}_${Date.now()}.pdf`;
+      // The filename records the version ACTUALLY signed. It used to interpolate
+      // the hardcoded constant, so every provider's stored PDF would have been
+      // named after one other provider's version regardless of what the
+      // instructor read — a filename that lies about a signed document.
+      const path = `${instructor.id}/agreement_${docState.version}_${Date.now()}.pdf`;
       const { error } = await supabase.storage
         .from('contractor-documents')
         .upload(path, blob, { contentType: 'application/pdf', upsert: false });
@@ -146,7 +163,13 @@ export default function Screen4Agreement({ slug, instructor, onboarding, onAdvan
     setSubmitError('');
     try {
       const payload = {
-        agreement_version: docState.version || CONTRACTOR_AGREEMENT_VERSION,
+        // The version they actually read. No fallback to a constant: canSubmit
+        // requires phase === 'ready', which only happens after a real document
+        // loaded and set this. A fallback here could only ever submit a version
+        // the instructor did not read — and submit-agreement rightly rejects a
+        // version that does not exist for the org, so the fallback's only
+        // possible outcomes were "wrong text recorded" or "confusing error".
+        agreement_version: docState.version,
         typed_signature: signature.trim(),
         ...Object.fromEntries(CONFIRMS.map((c) => [c.key, true])),
       };

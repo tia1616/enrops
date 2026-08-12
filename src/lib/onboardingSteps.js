@@ -66,7 +66,17 @@ export function stepNumber(stepKey, order = STEP_ORDER) {
   return i < 0 ? null : i + 1;
 }
 
-// Current contractor agreement version. Matches the seeded row in
-// legal_documents. We send the version; the edge function looks up canonical
-// body text by version and snapshots it server-side.
-export const CONTRACTOR_AGREEMENT_VERSION = 'v2.0_2026-06-15';
+// CONTRACTOR_AGREEMENT_VERSION was here, hardcoded to one provider's version
+// string ('v2.0_2026-06-15'). Removed 2026-08-11.
+//
+// It pinned the fetch on Screen 4, named the stored PDF, and was the fallback
+// sent to submit-agreement. That worked only while a single provider had any
+// documents at all: for anyone else the fetch 404'd, and it kept 404ing even
+// after they wrote their own agreement unless they named the version
+// identically. The screen now asks for the org's most recently published
+// agreement and carries that version through signing, so which version is
+// current has ONE definition (newest row for the org+key, the rule
+// get-legal-document already applied everywhere else) instead of two.
+//
+// Deliberately not replaced with a per-org constant or a default. There is
+// nothing for a platform-wide value to be correct about here.

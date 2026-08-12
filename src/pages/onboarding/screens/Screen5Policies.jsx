@@ -41,7 +41,7 @@ export default function Screen5Policies({ slug, instructor, onboarding, onAdvanc
         for (const r of results) {
           if (r.error) {
             setLoadError(
-              "We can't load this document right now. Please try again or contact Jessica."
+              "We can't load this document right now. Please try again, or reach out to your Program Manager."
             );
             return;
           }
@@ -91,7 +91,7 @@ export default function Screen5Policies({ slug, instructor, onboarding, onAdvanc
         { navigate }
       );
       if (error) {
-        setSubmitError(error.message || "Something's wrong — please contact Jessica.");
+        setSubmitError(error.message || "Something's wrong — please reach out to your Program Manager.");
         setBusy(false);
         return;
       }
@@ -99,7 +99,7 @@ export default function Screen5Policies({ slug, instructor, onboarding, onAdvanc
     } catch (err) {
       if (isHandledRedirect(err)) return;
       console.error('[Screen5] submit failed', err);
-      setSubmitError("Something's wrong — please contact Jessica.");
+      setSubmitError("Something's wrong — please reach out to your Program Manager.");
       setBusy(false);
     }
   }

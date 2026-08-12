@@ -74,7 +74,8 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
         for (const r of results) {
           if (r.error) {
             setLoadError(
-              "We can't load this document right now. Please try again or contact Jessica."
+              // Named one provider's owner to every other provider's instructors.
+              "We can't load this document right now. Please try again, or reach out to your Program Manager."
             );
             return;
           }
@@ -125,7 +126,7 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
         { navigate }
       );
       if (error) {
-        setSubmitError(error.message || "Something's wrong — please contact Jessica.");
+        setSubmitError(error.message || "Something's wrong — please reach out to your Program Manager.");
         setBusy(false);
         return;
       }
@@ -133,7 +134,7 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
     } catch (err) {
       if (isHandledRedirect(err)) return;
       console.error('[Screen6] submit failed', err);
-      setSubmitError("Something's wrong — please contact Jessica.");
+      setSubmitError("Something's wrong — please reach out to your Program Manager.");
       setBusy(false);
     }
   }
