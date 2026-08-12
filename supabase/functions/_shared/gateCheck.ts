@@ -15,6 +15,7 @@
 import { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { StepKey } from './onboardingStep.ts';
 import { loadOrgBrand, formatFromAddress } from './orgBrand.ts';
+import { stepHasEnabledDocuments } from './instructorDocumentConfig.ts';
 
 // Per-environment site origin. Staging Supabase sets PUBLIC_SITE_URL to the staging
 // site so links in the gate-check admin email point at staging, not prod. Defaults to prod.
@@ -52,19 +53,28 @@ export async function runGateCheck(
     return null;
   }
 
-  // Per-org toggles: two optional steps.
+  // Per-org toggles: two optional steps, plus two that become optional when the
+  // provider has turned off every document they contain.
   // - Background checks off  → drop 'checkr_submitted' from the required set AND
   //   treat the "check must be clear" condition as satisfied (else onboarding
   //   could never reach 'complete'). Default enabled=true (config/column absent).
   // - Training on            → ADD 'training_completed' to the required set, but
   //   only when the org also has at least one active REQUIRED video — an
   //   enabled-but-empty library must not block onboarding. Default off.
+  // - Policies / additional  → each screen renders a fixed set of documents. A
+  //   provider can now switch individual documents off, and a screen with none
+  //   left is skipped by the wizard, so its step key can never be written. It
+  //   must come out of the required set too or onboarding stalls forever one
+  //   step short. Absent config = every document on = both steps required,
+  //   which is exactly today's behaviour for every existing org.
   let bgcEnabled = true;
   let trainingRequired = false;
+  let policiesRequired = true;
+  let additionalRequired = true;
   if (row.organization_id) {
     const { data: org } = await supabase
       .from('organizations')
-      .select('background_check_config, training_config')
+      .select('background_check_config, training_config, instructor_document_config')
       .eq('id', row.organization_id)
       .maybeSingle();
     const cfg = (org?.background_check_config as { enabled?: boolean } | null) ?? null;
@@ -79,12 +89,17 @@ export async function runGateCheck(
         .eq('is_required', true);
       trainingRequired = (count ?? 0) > 0;
     }
+    const docCfg = (org?.instructor_document_config as Record<string, unknown> | null) ?? null;
+    policiesRequired = stepHasEnabledDocuments(docCfg, 'policies');
+    additionalRequired = stepHasEnabledDocuments(docCfg, 'additional');
   }
 
   const steps = (row.steps_completed as Record<string, unknown>) ?? {};
   let requiredSteps: StepKey[] = bgcEnabled
     ? ALL_STEPS
     : ALL_STEPS.filter((k) => k !== 'checkr_submitted');
+  if (!policiesRequired) requiredSteps = requiredSteps.filter((k) => k !== 'policies_acknowledged');
+  if (!additionalRequired) requiredSteps = requiredSteps.filter((k) => k !== 'additional_acks');
   if (trainingRequired) requiredSteps = [...requiredSteps, 'training_completed'];
   const allStepsDone = requiredSteps.every((k) => steps[k]);
   const checkrClear = !bgcEnabled || row.checkr_status === 'clear';

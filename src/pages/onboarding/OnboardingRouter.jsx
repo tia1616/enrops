@@ -115,9 +115,14 @@ export default function OnboardingRouter() {
       // from the public directory view so the wizard can show the right step
       // and copy. Instructors aren't org_members, so they can't read the
       // organizations row directly — the view exposes only this safe subset.
+      // instructor_documents_public is the same story as background_check_public:
+      // the provider's per-document on/off choices live on `organizations`, which
+      // an instructor cannot read, so the view resolves each key to an explicit
+      // boolean. Absent column (an older deploy) → undefined → every document
+      // treated as on, which is the safe default and today's behaviour.
       const { data: org } = await supabase
         .from('public_org_directory')
-        .select('slug, background_check_public, training_enabled')
+        .select('slug, background_check_public, training_enabled, instructor_documents_public')
         .eq('id', instructor.organization_id)
         .single();
       if (!org?.slug) {
@@ -204,6 +209,7 @@ export default function OnboardingRouter() {
         instructor,
         onboarding,
         backgroundCheck: org.background_check_public ?? { enabled: true },
+        documentConfig: org.instructor_documents_public ?? {},
         trainingEnabled,
         trainingVideos,
         initialStep: searchParams.get('step') || onboarding.current_step,
@@ -241,6 +247,7 @@ export default function OnboardingRouter() {
       instructor={state.instructor}
       onboarding={state.onboarding}
       backgroundCheck={state.backgroundCheck}
+      documentConfig={state.documentConfig}
       trainingEnabled={state.trainingEnabled}
       trainingVideos={state.trainingVideos}
       initialStep={state.initialStep}

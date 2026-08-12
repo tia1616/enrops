@@ -11,6 +11,12 @@
 // Adding a key here that no screen reads would produce a document an operator
 // writes and no instructor ever sees. Verified against those three files.
 //
+// `step` records WHICH screen reads each key, and it is load-bearing rather than
+// documentation: turning documents off can empty a whole screen, and a screen
+// with nothing on it must be dropped from the wizard instead of shown blank. The
+// grouping therefore has to be a value both the wizard and the completion gate
+// can read, not a comment. See stepHasEnabledDocuments.
+//
 // ABOUT THE STARTER DRAFTS. They are deliberately SKELETONS with bracketed
 // prompts, not finished policies. Two reasons:
 //   1. We are not the provider's lawyer. Shipping confident-sounding boilerplate
@@ -26,6 +32,14 @@
 export const INSTRUCTOR_DOCUMENTS = [
   {
     key: 'contractor_agreement',
+    step: 'agreement',
+    // NOT TOGGLEABLE, and this flag is what enforces it. It is the one document
+    // that is SIGNED rather than acknowledged: submit-agreement requires it,
+    // contractor_agreements snapshots its text, and onboarding cannot complete
+    // without it. isDocumentEnabled ignores the stored config for this key, and
+    // public_org_directory pins it to a literal true, so the two cannot disagree
+    // even if a `false` were somehow written for it.
+    alwaysOn: true,
     label: 'Contractor agreement',
     // Said in the operator's terms, not the system's.
     // "we keep a copy of exactly what they signed" was the first wording, and
@@ -68,6 +82,7 @@ Ending the agreement
   },
   {
     key: 'pay_schedule',
+    step: 'policies',
     label: 'Pay schedule',
     help: 'How much you pay, for what, and when it lands. Instructors confirm they have read it.',
     starter: `How you are paid
@@ -87,6 +102,7 @@ Questions about a payment
   },
   {
     key: 'attendance_policy',
+    step: 'policies',
     label: 'Attendance policy',
     help: 'What you expect around being there on time, and what to do when they cannot be.',
     starter: `Being on site
@@ -103,6 +119,7 @@ Repeated absence
   },
   {
     key: 'code_of_conduct',
+    step: 'policies',
     label: 'Code of conduct',
     help: 'How you expect instructors to behave with children, families and partner sites.',
     starter: `With students
@@ -125,6 +142,7 @@ If something goes wrong
   },
   {
     key: 'mandatory_reporter_ack',
+    step: 'additional',
     label: 'Mandatory reporting acknowledgment',
     help: 'A short acknowledgment that they understand their duty to report suspected abuse or neglect. Shown in full on screen, not folded away.',
     // Short on purpose: this one renders inline above its checkbox rather than
@@ -137,6 +155,7 @@ If something goes wrong
   },
   {
     key: 'photo_video_release',
+    step: 'additional',
     label: 'Photo and video release',
     help: 'Whether you may use photos or video of your instructors, and how they opt out.',
     starter: `[State whether you take photos or video during classes, and where they might appear — your website, social media, a newsletter.]
@@ -147,6 +166,7 @@ If something goes wrong
   },
   {
     key: 'vehicle_driving_ack',
+    step: 'additional',
     label: 'Driving acknowledgment',
     help: 'Only relevant if instructors drive for you, or transport equipment or students.',
     starter: `[State whether instructors ever drive as part of this work, and what for — travelling between sites, carrying equipment.]
@@ -257,6 +277,68 @@ export const DOCUMENT_KEYS = INSTRUCTOR_DOCUMENTS.map((d) => d.key);
 
 export function documentByKey(key) {
   return INSTRUCTOR_DOCUMENTS.find((d) => d.key === key) ?? null;
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Which documents this provider actually uses.
+ *
+ * Not every provider needs all seven — a chess tutor whose instructors never
+ * drive should not have to write a driving acknowledgment before anyone can
+ * finish onboarding. The choice is stored on
+ * organizations.instructor_document_config, keyed by document key.
+ *
+ * ABSENT MEANS ON, AND THAT IS THE WHOLE SAFETY ARGUMENT. The tempting shortcut
+ * is to treat "no published document" as "this provider doesn't use it" — but a
+ * provider who fully intends to have a code of conduct and simply hasn't written
+ * it yet would then silently onboard instructors who never acknowledged one.
+ * Absence is not a decision. Only an explicit `false` turns a document off, so
+ * an unwritten document keeps blocking onboarding exactly as it does today.
+ *
+ * These read the SAME shape from two places, which is deliberate:
+ *   - the admin screen reads organizations.instructor_document_config directly;
+ *   - the wizard reads public_org_directory.instructor_documents_public, which
+ *     resolves each key to an explicit boolean (instructors cannot read
+ *     `organizations` at all).
+ * Both are "an object of key -> boolean where anything that isn't false is on",
+ * so one predicate serves both and they cannot drift.
+ *
+ * MIRRORED SERVER-SIDE in supabase/functions/_shared/instructorDocumentConfig.ts
+ * for the completion gate. Change one, change the other.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+export function isDocumentEnabled(config, key) {
+  const meta = documentByKey(key);
+  // The agreement is signed, not acknowledged, and onboarding cannot complete
+  // without it. No stored value can switch it off.
+  if (meta?.alwaysOn) return true;
+  return config?.[key] !== false;
+}
+
+export function enabledDocumentKeys(config) {
+  return DOCUMENT_KEYS.filter((k) => isDocumentEnabled(config, k));
+}
+
+/** The keys a given wizard screen reads, in the order it renders them. */
+export function documentKeysForStep(step) {
+  return INSTRUCTOR_DOCUMENTS.filter((d) => d.step === step).map((d) => d.key);
+}
+
+/** The keys a given wizard screen still reads once the config is applied. */
+export function enabledDocumentKeysForStep(config, step) {
+  return documentKeysForStep(step).filter((k) => isDocumentEnabled(config, k));
+}
+
+/**
+ * Does this screen have anything left to show?
+ *
+ * False means the screen must be DROPPED from the wizard entirely, not rendered
+ * empty — and dropped from the completion gate too, or the step key never gets
+ * written to steps_completed and onboarding can never reach 'complete'. Same
+ * rule effectiveStepOrder and gateCheck already apply to the background-check
+ * and training steps.
+ */
+export function stepHasEnabledDocuments(config, step) {
+  return enabledDocumentKeysForStep(config, step).length > 0;
 }
 
 /**

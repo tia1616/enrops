@@ -49,10 +49,29 @@ export const STEP_LABELS = {
 // agree on the same list. `trainingEnabled` must already fold in the "has a
 // required video" check (an enabled-but-empty library drops the step, matching
 // the server gate). Pass this order into stepIndex/stepNumber below.
-export function effectiveStepOrder({ bgcEnabled = true, trainingEnabled = false } = {}) {
+//
+// The two document screens work the same way, one level down: each renders a
+// fixed set of documents from organizations.instructor_document_config, and a
+// provider can now switch individual documents off. A screen with none left must
+// be dropped rather than rendered empty — an instructor staring at a page with
+// no documents and a disabled Continue has no way forward. Callers pass the
+// already-resolved booleans (see stepHasEnabledDocuments in
+// lib/instructorDocuments.js) so the "which documents exist" rule has one home.
+//
+// BOTH DEFAULT TO TRUE. A caller that knows nothing about the config gets
+// today's behaviour — every document required — rather than silently dropping
+// two steps' worth of acknowledgments.
+export function effectiveStepOrder({
+  bgcEnabled = true,
+  trainingEnabled = false,
+  policiesEnabled = true,
+  additionalEnabled = true,
+} = {}) {
   return STEP_ORDER.filter((key) => {
     if (key === STEP_KEYS.CHECKR_SUBMITTED) return bgcEnabled;
     if (key === STEP_KEYS.TRAINING_COMPLETED) return trainingEnabled;
+    if (key === STEP_KEYS.POLICIES_ACKNOWLEDGED) return policiesEnabled;
+    if (key === STEP_KEYS.ADDITIONAL_ACKS) return additionalEnabled;
     return true;
   });
 }

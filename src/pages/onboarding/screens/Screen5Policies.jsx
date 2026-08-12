@@ -1,17 +1,30 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { invokeOnboardingFn, isHandledRedirect } from '../../../lib/onboardingFetch.js';
 import { fetchLegalDocument } from '../../../lib/legalDoc.js';
 import { STEP_KEYS } from '../../../lib/onboardingSteps.js';
 import { linkifyText } from '../../../lib/linkifyText.jsx';
+import { isDocumentEnabled } from '../../../lib/instructorDocuments.js';
+import { useOnboardingConfig } from '../OnboardingConfigContext.jsx';
 import Chevron from '../../../components/Chevron.jsx';
 import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardLayout.jsx';
 
-// Screen 5 — Policy Acknowledgments. Three documents acknowledged together:
-// pay_schedule, attendance_policy, code_of_conduct. Each in its own
-// accordion; each requires a single ack box. All three must be checked.
+// Screen 5 — Policy Acknowledgments. Up to three documents acknowledged
+// together: pay_schedule, attendance_policy, code_of_conduct. Each in its own
+// accordion; each requires a single ack box. Every one still ON must be checked.
+//
+// PER-PROVIDER. Not every provider uses all three, so ALL_DOCS is the catalogue
+// and `docsToShow` is what this provider actually asks for. A document that is
+// off is not fetched, not rendered, and not acknowledged — and critically not
+// WAITED FOR either: `allLoaded` used to require all three, so leaving a
+// disabled document in the list would have left Continue permanently dead.
+//
+// If a provider turns all three off this screen is dropped from the wizard
+// entirely (WizardHost/effectiveStepOrder) and from the completion gate
+// (gateCheck), so it is never rendered empty. The guard in handleSubmit is a
+// belt-and-braces backstop for that, not the mechanism.
 
-const DOCS = [
+const ALL_DOCS = [
   { key: 'pay_schedule', ack: 'I acknowledge I have received and read the Pay Schedule' },
   { key: 'attendance_policy', ack: 'I acknowledge I have received and read the Attendance Policy' },
   { key: 'code_of_conduct', ack: 'I acknowledge I have received and read the Code of Conduct' },
@@ -19,6 +32,11 @@ const DOCS = [
 
 export default function Screen5Policies({ slug, instructor, onboarding, onAdvance, onBack }) {
   const navigate = useNavigate();
+  const { documentConfig } = useOnboardingConfig();
+  const DOCS = useMemo(
+    () => ALL_DOCS.filter((d) => isDocumentEnabled(documentConfig, d.key)),
+    [documentConfig],
+  );
   const [docs, setDocs] = useState({}); // { key: { title, body_text, version } }
   const [loadError, setLoadError] = useState('');
   const [expanded, setExpanded] = useState(() => Object.fromEntries(DOCS.map((d) => [d.key, false])));
@@ -70,17 +88,38 @@ export default function Screen5Policies({ slug, instructor, onboarding, onAdvanc
     return () => {
       cancelled = true;
     };
-  }, [navigate]);
+  }, [navigate, DOCS]);
 
+  // Every check below is over DOCS, the ENABLED set — never the catalogue. A
+  // disabled document has no checkbox and is never fetched, so counting it would
+  // leave Continue disabled with nothing on screen to fix it.
   const allChecked = DOCS.every((d) => checked[d.key]);
   const allLoaded = DOCS.every((d) => docs[d.key]);
+  // Deliberately NOT gated on DOCS.length: with an empty set both checks above
+  // are vacuously true, so Continue stays live and the guard in handleSubmit
+  // advances rather than posting an empty array. A dead button on a screen with
+  // nothing to read would be the worse failure.
   const canSubmit = allChecked && allLoaded;
 
   async function handleSubmit(e) {
     e.preventDefault();
     if (busy || !allLoaded) return;
+    // submit-acknowledgments rejects an empty documents array (400), so an empty
+    // submit would read to the instructor as an unexplained failure. This screen
+    // should already have been dropped from the wizard before it could render —
+    // see the header note.
+    if (DOCS.length === 0) {
+      onAdvance();
+      return;
+    }
     if (!allChecked) {
-      setConfirmError('Acknowledge all three policies to continue.');
+      // Counted, not the literal "all three" this used to say — a provider who
+      // uses two would have been told to check three boxes that do not exist.
+      setConfirmError(
+        DOCS.length === 1
+          ? 'Acknowledge the policy to continue.'
+          : `Acknowledge all ${DOCS.length} policies to continue.`,
+      );
       return;
     }
     setConfirmError('');

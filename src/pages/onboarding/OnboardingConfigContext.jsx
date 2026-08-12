@@ -11,6 +11,12 @@ const DEFAULTS = {
   // { enabled, provider_name, provider_url, instructions } — the instructor-
   // facing subset of organizations.background_check_config.
   backgroundCheck: { enabled: true },
+  // { <document_key>: boolean } — the instructor-facing resolution of
+  // organizations.instructor_document_config, via
+  // public_org_directory.instructor_documents_public. Read through
+  // isDocumentEnabled, never directly: an ABSENT key means ON, so the empty
+  // default below correctly means "every document is required".
+  documentConfig: {},
   // Whether the training step is live for this org (enabled AND at least one
   // active required video). When false, the step is dropped everywhere.
   trainingEnabled: false,

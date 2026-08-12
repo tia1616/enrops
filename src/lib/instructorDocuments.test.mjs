@@ -9,6 +9,8 @@ import {
   nextVersionFor, versionNumberOf, INSTRUCTOR_DOCUMENTS, DOCUMENT_KEYS, documentByKey,
   bodyForPublish, willAppendSignatureBlock, stripAppendedSignatureBlock,
   AGREEMENT_SIGNATURE_BLOCK, AGREEMENT_SIGNATURE_TOKENS,
+  isDocumentEnabled, enabledDocumentKeys, documentKeysForStep,
+  enabledDocumentKeysForStep, stepHasEnabledDocuments,
 } from './instructorDocuments.js';
 
 let pass = 0, fail = 0;
@@ -204,6 +206,79 @@ eq('strip leaves unrelated text untouched',
   stripAppendedSignatureBlock('Just my terms.'), 'Just my terms.');
 eq('strip handles a body that is ONLY the block', stripAppendedSignatureBlock(AGREEMENT_SIGNATURE_BLOCK), '');
 eq('strip is null-safe', stripAppendedSignatureBlock(null), '');
+
+// --- per-document on/off --------------------------------------------------
+//
+// THE ONE THAT MATTERS IS "absent means ON". If that ever inverts, a provider
+// who has not written their code of conduct yet stops being asked for it, and
+// instructors onboard having acknowledged nothing — silently, with no error
+// anywhere. Nothing else in the toolchain would catch it.
+
+ok('absent key is ON', isDocumentEnabled({}, 'code_of_conduct'));
+ok('null config is ON', isDocumentEnabled(null, 'code_of_conduct'));
+ok('undefined config is ON', isDocumentEnabled(undefined, 'code_of_conduct'));
+ok('explicit true is ON', isDocumentEnabled({ code_of_conduct: true }, 'code_of_conduct'));
+ok('explicit false is OFF', !isDocumentEnabled({ code_of_conduct: false }, 'code_of_conduct'));
+
+// Only an exact `false` turns something off. Anything else — a string, a null
+// written by hand, a 0 — resolves ON, which is the safe side: onboarding keeps
+// asking rather than quietly dropping a document.
+ok('the string "false" is still ON', isDocumentEnabled({ code_of_conduct: 'false' }, 'code_of_conduct'));
+ok('null value is still ON', isDocumentEnabled({ code_of_conduct: null }, 'code_of_conduct'));
+ok('0 is still ON', isDocumentEnabled({ code_of_conduct: 0 }, 'code_of_conduct'));
+
+// One key off must not touch the others.
+ok('turning one off leaves the rest ON',
+  isDocumentEnabled({ vehicle_driving_ack: false }, 'photo_video_release'));
+
+// The agreement is signed, not acknowledged, and submit-agreement requires it.
+ok('the agreement ignores an explicit false',
+  isDocumentEnabled({ contractor_agreement: false }, 'contractor_agreement'));
+ok('the agreement is marked alwaysOn', documentByKey('contractor_agreement').alwaysOn === true);
+ok('nothing else is alwaysOn',
+  INSTRUCTOR_DOCUMENTS.filter((d) => d.alwaysOn).length === 1);
+
+eq('empty config enables all seven', enabledDocumentKeys({}).length, DOCUMENT_KEYS.length);
+eq('two off leaves five',
+  enabledDocumentKeys({ photo_video_release: false, vehicle_driving_ack: false }).length,
+  DOCUMENT_KEYS.length - 2);
+eq('everything off still leaves the agreement',
+  enabledDocumentKeys(Object.fromEntries(DOCUMENT_KEYS.map((k) => [k, false]))).length, 1);
+
+// --- screen grouping ------------------------------------------------------
+//
+// Every key belongs to exactly one screen. A key with no step would be written
+// by an operator and fetched by nobody; a key in two would be acknowledged twice.
+eq('every key has a step',
+  INSTRUCTOR_DOCUMENTS.filter((d) => !d.step).length, 0);
+eq('the three groups cover every key',
+  ['agreement', 'policies', 'additional'].reduce((n, s) => n + documentKeysForStep(s).length, 0),
+  DOCUMENT_KEYS.length);
+eq('screen 5 reads three', documentKeysForStep('policies').length, 3);
+eq('screen 6 reads three', documentKeysForStep('additional').length, 3);
+
+// The wizard/gate contract: a screen with nothing left must be DROPPED, not
+// rendered empty — and dropped server-side too, or the step key is never written
+// and onboarding can never reach 'complete'.
+ok('policies required by default', stepHasEnabledDocuments({}, 'policies'));
+ok('additional required by default', stepHasEnabledDocuments({}, 'additional'));
+ok('one document left still keeps the screen',
+  stepHasEnabledDocuments({ photo_video_release: false, vehicle_driving_ack: false }, 'additional'));
+eq('...and it is the remaining one',
+  enabledDocumentKeysForStep({ photo_video_release: false, vehicle_driving_ack: false }, 'additional').join(),
+  'mandatory_reporter_ack');
+ok('all three off drops the screen',
+  !stepHasEnabledDocuments(
+    { mandatory_reporter_ack: false, photo_video_release: false, vehicle_driving_ack: false },
+    'additional',
+  ));
+ok('emptying screen 6 does not empty screen 5',
+  stepHasEnabledDocuments(
+    { mandatory_reporter_ack: false, photo_video_release: false, vehicle_driving_ack: false },
+    'policies',
+  ));
+ok('the agreement screen can never be emptied',
+  stepHasEnabledDocuments({ contractor_agreement: false }, 'agreement'));
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'}  (${pass} passed, ${fail} failed)`);
 process.exit(fail ? 1 : 0);

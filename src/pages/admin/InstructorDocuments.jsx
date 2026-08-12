@@ -34,6 +34,7 @@ import { linkifyText } from "../../lib/linkifyText.jsx";
 import {
   INSTRUCTOR_DOCUMENTS,
   DOCUMENT_KEYS,
+  isDocumentEnabled,
   nextVersionFor,
   versionNumberOf,
   bodyForPublish,
@@ -105,21 +106,38 @@ export default function InstructorDocuments() {
   const [loadFailed, setLoadFailed] = useState(false);
   const [openKey, setOpenKey] = useState(null);
   const [toast, setToast] = useState("");
+  // Which documents this provider actually uses. ABSENT KEY MEANS ON, so `{}` —
+  // every existing org — is all seven, unchanged.
+  const [docConfig, setDocConfig] = useState({});
+  const [savingKey, setSavingKey] = useState(null);
+  const [toggleError, setToggleError] = useState("");
 
   const load = useCallback(async () => {
     if (!org?.id) return;
     setLoadFailed(false);
-    const { data, error } = await supabase
-      .from("legal_documents")
-      .select("id, document_key, document_version, title, body_text, created_at")
-      .eq("organization_id", org.id)
-      .order("created_at", { ascending: false });
-    if (error) {
+    const [{ data, error }, { data: orgRow, error: orgErr }] = await Promise.all([
+      supabase
+        .from("legal_documents")
+        .select("id, document_key, document_version, title, body_text, created_at")
+        .eq("organization_id", org.id)
+        .order("created_at", { ascending: false }),
+      supabase
+        .from("organizations")
+        .select("instructor_document_config")
+        .eq("id", org.id)
+        .maybeSingle(),
+    ]);
+    // A failed CONFIG read is as dangerous as a failed document read, and for the
+    // same reason: falling back to {} would draw every switch in the ON position,
+    // so a provider who had turned two off would see them on, and toggling
+    // anything would write that wrong picture back over their real choices.
+    if (error || orgErr) {
       // Do NOT fall through to an empty list — see the note on loadFailed.
       setLoadFailed(true);
       setRows(null);
       return;
     }
+    setDocConfig(orgRow?.instructor_document_config ?? {});
     setRows(data ?? []);
   }, [org?.id]);
 
@@ -143,6 +161,65 @@ export default function InstructorDocuments() {
   }, [rows]);
 
   function flash(msg) { setToast(msg); setTimeout(() => setToast(""), 4000); }
+
+  // Turn one document on or off for this provider.
+  //
+  // WRITES ONLY THE ONE KEY, onto the config we last read. Spreading the loaded
+  // object rather than rebuilding it from the seven switches on screen is the
+  // whole-row-write bug that is still open in six other editors: rebuilding
+  // would silently reset any key this screen does not know about.
+  //
+  // NOTHING IS DELETED. Turning a document off writes `false` and leaves every
+  // published version exactly where it is, so turning it back on restores the
+  // provider's own text and anyone who already acknowledged it keeps that record.
+  async function setDocEnabled(key, next) {
+    if (savingKey) return;
+    setSavingKey(key);
+    setToggleError("");
+    const updated = { ...docConfig, [key]: next };
+    const { error } = await supabase
+      .from("organizations")
+      .update({ instructor_document_config: updated })
+      .eq("id", org.id);
+    if (error) {
+      // Do not move the switch. A switch that flips and then quietly fails is a
+      // lie about what instructors will be asked for.
+      setSavingKey(null);
+      setToggleError(
+        `Couldn't save that: ${error.message || "unknown error"}. Nothing changed — your instructors are still asked for exactly what they were before.`,
+      );
+      return;
+    }
+    setDocConfig(updated);
+    // The onboarding gate decides overall_status, and it only re-runs from the
+    // wizard and the Checkr/Stripe webhooks — never from a settings save. Without
+    // this, an instructor already waiting on a document the provider just turned
+    // OFF stays stuck until some unrelated webhook happens to fire. Same call the
+    // training toggle makes, for the same reason. Non-fatal: the config is saved
+    // either way and the gate reconciles on its next natural run.
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (token) {
+        await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/reconcile-onboarding-gate`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+            apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+          },
+          body: JSON.stringify({ organization_id: org.id }),
+        });
+      }
+    } catch { /* config saved; gate reconciles on next natural run */ }
+    setSavingKey(null);
+    const label = INSTRUCTOR_DOCUMENTS.find((d) => d.key === key)?.label ?? "Document";
+    flash(
+      next
+        ? `${label} turned on. Instructors will be asked for it from now on.`
+        : `${label} turned off. Instructors won't be asked for it. Anything you've written is kept.`,
+    );
+  }
 
   // Failed read: refuse to render the list at all. Showing seven "Not written
   // yet" rows would invite the operator to overwrite documents that do exist.
@@ -191,7 +268,13 @@ export default function InstructorDocuments() {
     );
   }
 
-  const writtenCount = DOCUMENT_KEYS.filter((k) => liveByKey[k]).length;
+  // COUNTS THE ENABLED SET, not all seven. A provider who has switched two off
+  // and written the other five is finished, and a banner still saying "2 still
+  // to write" about documents nobody will ever be shown is simply untrue —
+  // exactly the class of sentence this screen has already had to fix twice.
+  const enabledKeys = DOCUMENT_KEYS.filter((k) => isDocumentEnabled(docConfig, k));
+  const writtenCount = enabledKeys.filter((k) => liveByKey[k]).length;
+  const enabledCount = enabledKeys.length;
 
   return (
     <div style={{ maxWidth: 760, margin: "0 auto", padding: "8px 0 40px" }}>
@@ -201,7 +284,8 @@ export default function InstructorDocuments() {
       </h1>
       <p style={{ color: MUTED, fontSize: 14, marginTop: 0, lineHeight: 1.55, maxWidth: 580 }}>
         What your instructors read and sign when they join. Each one starts as a draft you
-        rewrite in your own words — they are prompts, not finished policies.
+        rewrite in your own words — they are prompts, not finished policies. Switch off any
+        you don&apos;t use and your instructors are never asked for them.
       </p>
 
       {/* ALL of them block onboarding, not just the agreement. This banner used
@@ -210,17 +294,44 @@ export default function InstructorDocuments() {
           It is not: Screens 5 and 6 fetch the other six by key and refuse to
           advance when any is missing. An operator who followed the old wording
           would publish one document, invite an instructor, and strand them. */}
-      {writtenCount < DOCUMENT_KEYS.length && (
+      {writtenCount < enabledCount && (
         <div style={{ background: "#fbfaf6", border: `1px solid ${RULE}`, borderRadius: 10, padding: "12px 14px", fontSize: 13.5, color: INK, lineHeight: 1.55, marginBottom: 16 }}>
           <strong>
             {writtenCount === 0
               ? "Your instructors can't finish onboarding yet."
-              : `${DOCUMENT_KEYS.length - writtenCount} still to write.`}
+              : `${enabledCount - writtenCount} still to write.`}
           </strong>{" "}
-          They read and sign <strong>all {DOCUMENT_KEYS.length}</strong> of these during
-          onboarding, and it stops at the first one that isn&apos;t published. Start with the
-          contractor agreement &mdash; it&apos;s the one they actually sign &mdash; then work down
-          the list.
+          They read and sign{" "}
+          <strong>
+            {enabledCount === DOCUMENT_KEYS.length
+              ? `all ${DOCUMENT_KEYS.length}`
+              : `the ${enabledCount} you've turned on`}
+          </strong>{" "}
+          during onboarding, and it stops at the first one that isn&apos;t published. Start with
+          the contractor agreement &mdash; it&apos;s the one they actually sign &mdash; then work
+          down the list.{" "}
+          {/* The way OUT of the banner that isn't "write seven documents". Without
+              this a provider reads "you can't finish onboarding yet" and assumes
+              the only fix is more writing — which is the exact complaint that
+              started this build. */}
+          Anything you don&apos;t use, switch off.
+        </div>
+      )}
+
+      {/* Everything is switched off except the agreement. Not an error — a
+          perfectly reasonable setup — but worth saying plainly, because from the
+          list alone five "Off" rows look like something went wrong. */}
+      {enabledCount === 1 && writtenCount === enabledCount && (
+        <div style={{ background: "#fbfaf6", border: `1px solid ${RULE}`, borderRadius: 10, padding: "12px 14px", fontSize: 13.5, color: INK, lineHeight: 1.55, marginBottom: 16 }}>
+          <strong>Just the agreement.</strong> Everything else is switched off, so your
+          instructors sign the contractor agreement and nothing else. Turn any of them back on
+          whenever you want &mdash; nothing you&apos;ve written is lost.
+        </div>
+      )}
+
+      {toggleError && (
+        <div role="alert" style={{ background: "#fbfaf6", border: `1px solid ${RED}`, borderRadius: 10, padding: "12px 14px", fontSize: 13.5, color: INK, lineHeight: 1.55, marginBottom: 16 }}>
+          {toggleError}
         </div>
       )}
 
@@ -236,6 +347,7 @@ export default function InstructorDocuments() {
           // Derived from the STORED version string, never from a row count —
           // see versionNumberOf.
           const shownVersion = live ? versionNumberOf(live.document_version) : null;
+          const on = isDocumentEnabled(docConfig, d.key);
           // A ROW with an explicit button, not a giant clickable card. Two
           // reasons: WaiverManager (the closest sibling — it edits this org's
           // other legal documents) does exactly this, so a provider meets one
@@ -251,7 +363,18 @@ export default function InstructorDocuments() {
                 display: "flex", gap: 14, alignItems: "flex-start", flexWrap: "wrap",
               }}
             >
-              <div style={{ flex: "1 1 320px", minWidth: 0 }}>
+              {/* The switch leads, because on/off is the first decision — there
+                  is no point reading "not written yet" about a document you are
+                  never going to use. Mirrors the Toggle on the registration
+                  questions screen rather than inventing a second switch. */}
+              <DocToggle
+                on={on}
+                locked={d.alwaysOn}
+                busy={savingKey === d.key}
+                label={d.label}
+                onClick={() => setDocEnabled(d.key, !on)}
+              />
+              <div style={{ flex: "1 1 300px", minWidth: 0, opacity: on ? 1 : 0.55 }}>
                 <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
                   <span style={{ fontSize: 15, fontWeight: 700, color: INK }}>{d.label}</span>
                   {d.signed && (
@@ -259,21 +382,33 @@ export default function InstructorDocuments() {
                       Signed
                     </span>
                   )}
-                  <span style={{ fontSize: 12, fontWeight: 600, color: live ? GREEN_INK : AMBER_INK }}>
-                    {live
-                      ? `${shownVersion ? `Version ${shownVersion}` : live.document_version} · ${fmtDate(live.created_at)}`
-                      : "Not written yet"}
+                  {/* HONEST STATE. An off document must not keep saying "Not
+                      written yet" — that reads as an outstanding task when it is
+                      not one, which is what the banner count got wrong too. And
+                      an off document that HAS text says so, because that text is
+                      still there waiting if it gets switched back on. */}
+                  <span style={{ fontSize: 12, fontWeight: 600, color: !on ? MUTED : live ? GREEN_INK : AMBER_INK }}>
+                    {!on
+                      ? live ? "Off · your text is kept" : "Off"
+                      : live
+                        ? `${shownVersion ? `Version ${shownVersion}` : live.document_version} · ${fmtDate(live.created_at)}`
+                        : "Not written yet"}
                   </span>
                 </div>
-                <p style={{ margin: "5px 0 0", fontSize: 13, color: MUTED, lineHeight: 1.5 }}>{d.help}</p>
+                <p style={{ margin: "5px 0 0", fontSize: 13, color: MUTED, lineHeight: 1.5 }}>
+                  {on ? d.help : "Your instructors are not asked for this."}
+                </p>
               </div>
+              {/* Still openable when off. A provider deciding whether to use a
+                  document needs to read it, and one switching it back on should
+                  find their own words where they left them. */}
               <button
                 type="button"
                 onClick={() => setOpenKey(d.key)}
                 style={{
                   flexShrink: 0, marginLeft: "auto", fontFamily: "inherit", cursor: "pointer",
                   padding: "9px 18px", borderRadius: 8, fontSize: 13, fontWeight: 600,
-                  ...(live
+                  ...(live || !on
                     ? { background: "#fff", border: `1px solid ${RULE}`, color: INK }
                     : { background: BRIGHT, border: "none", color: "#fff" }),
                 }}
@@ -285,6 +420,41 @@ export default function InstructorDocuments() {
         })}
       </div>
     </div>
+  );
+}
+
+// The on/off switch on a document row.
+//
+// Mirrors the Toggle in RegistrationQuestions.jsx — same size, same colours, same
+// role="switch" + aria-checked, same `locked` treatment — so a provider meets one
+// switch in this product rather than two that look different and behave the same.
+//
+// LOCKED for the contractor agreement. It is signed rather than acknowledged and
+// onboarding cannot complete without it, so it has no off state to offer. Shown
+// rather than hidden, with the reason on hover: a missing switch on one row of
+// seven reads as a rendering bug.
+function DocToggle({ on, locked, busy, label, onClick }) {
+  const title = locked
+    ? "Always on — this is the one your instructors sign"
+    : busy
+      ? "Saving…"
+      : on
+        ? `${label} is on — click to turn off`
+        : `${label} is off — click to turn on`;
+  return (
+    <button
+      type="button" role="switch" aria-checked={on} aria-label={label}
+      disabled={locked || busy}
+      onClick={locked || busy ? undefined : onClick}
+      title={title}
+      style={{
+        flexShrink: 0, width: 44, height: 26, borderRadius: 999, border: "none", position: "relative",
+        cursor: locked || busy ? "default" : "pointer", background: on ? BRIGHT : "#cfcbc0",
+        opacity: locked ? 0.55 : busy ? 0.7 : 1, transition: "background 120ms", padding: 0, marginTop: 2,
+      }}
+    >
+      <span style={{ position: "absolute", top: 3, left: on ? 21 : 3, width: 20, height: 20, borderRadius: "50%", background: "#fff", transition: "left 120ms", boxShadow: "0 1px 2px rgba(0,0,0,0.2)" }} />
+    </button>
   );
 }
 
