@@ -111,6 +111,7 @@ export default function InstructorPortal() {
   // { <document_key>: boolean } from public_org_directory. Read via
   // isDocumentEnabled — an absent key means ON.
   const [documentConfig, setDocumentConfig] = useState({});
+  const [orgName, setOrgName] = useState("");
   const [assignments, setAssignments] = useState([]);
   const [coInstructors, setCoInstructors] = useState({}); // { [camp_session_id]: [{ name, role, email, phone }] } — camp co-teachers
   const [coInstructorsProgram, setCoInstructorsProgram] = useState({}); // { [program_id]: [...] } — after-school co-teachers
@@ -253,7 +254,7 @@ export default function InstructorPortal() {
       if (fullInstructor.organization_id) {
         const { data: dir } = await supabase
           .from("public_org_directory")
-          .select("slug, background_check_public, active_registration_term, instructor_documents_public")
+          .select("slug, name, background_check_public, active_registration_term, instructor_documents_public")
           .eq("id", fullInstructor.organization_id)
           .maybeSingle();
         if (dir?.slug) resolvedSlug = dir.slug;
@@ -266,6 +267,8 @@ export default function InstructorPortal() {
         // "contact your admin" about a document that deliberately does not exist.
         // Absent (older deploy / missing column) resolves to all on, unchanged.
         setDocumentConfig(dir?.instructor_documents_public ?? {});
+        // For the signed agreement PDF's header, via the wizard embedded below.
+        setOrgName(dir?.name ?? "");
         setActiveTerm(dir?.active_registration_term ?? null);
       }
 
@@ -1015,6 +1018,7 @@ export default function InstructorPortal() {
           // live on one door and missing on the other, with nothing to show for
           // it either way. Whatever OnboardingRouter passes, this must pass too.
           documentConfig={documentConfig}
+          orgName={orgName}
           onComplete={refetchOnboardingStatus}
           onDismiss={async () => {
             // Pending_* and payouts_disabled statuses won't flip to 'complete',

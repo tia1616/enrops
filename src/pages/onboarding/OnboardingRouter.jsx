@@ -122,7 +122,10 @@ export default function OnboardingRouter() {
       // treated as on, which is the safe default and today's behaviour.
       const { data: org } = await supabase
         .from('public_org_directory')
-        .select('slug, background_check_public, training_enabled, instructor_documents_public')
+        // `name` is the provider's own display name, for the header of the
+        // signed agreement PDF. It used to carry one provider's name for
+        // everyone.
+        .select('slug, name, background_check_public, training_enabled, instructor_documents_public')
         .eq('id', instructor.organization_id)
         .single();
       if (!org?.slug) {
@@ -210,6 +213,7 @@ export default function OnboardingRouter() {
         onboarding,
         backgroundCheck: org.background_check_public ?? { enabled: true },
         documentConfig: org.instructor_documents_public ?? {},
+        orgName: org.name ?? '',
         trainingEnabled,
         trainingVideos,
         initialStep: searchParams.get('step') || onboarding.current_step,
@@ -248,6 +252,7 @@ export default function OnboardingRouter() {
       onboarding={state.onboarding}
       backgroundCheck={state.backgroundCheck}
       documentConfig={state.documentConfig}
+      orgName={state.orgName}
       trainingEnabled={state.trainingEnabled}
       trainingVideos={state.trainingVideos}
       initialStep={state.initialStep}

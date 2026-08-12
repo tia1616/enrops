@@ -52,7 +52,7 @@ function resolveInitialStep(initialStep, onboarding, order) {
   return order[order.length - 1];
 }
 
-export default function WizardHost({ slug, instructor, onboarding: initialOnboarding, initialStep, backgroundCheck, documentConfig, trainingEnabled = false, trainingVideos = [], onDismiss }) {
+export default function WizardHost({ slug, instructor, onboarding: initialOnboarding, initialStep, backgroundCheck, documentConfig, orgName = '', trainingEnabled = false, trainingVideos = [], onDismiss }) {
   const navigate = useNavigate();
   const [onboarding, setOnboarding] = useState(initialOnboarding);
 
@@ -136,10 +136,12 @@ export default function WizardHost({ slug, instructor, onboarding: initialOnboar
       backgroundCheck: backgroundCheck ?? { enabled: bgcEnabled },
       // Screens 5 and 6 read this to decide which documents to fetch and require.
       documentConfig: documentConfig ?? {},
+      // The provider's own display name, for the signed agreement PDF header.
+      orgName,
       trainingEnabled,
       trainingVideos,
     }),
-    [stepOrder, bgcEnabled, backgroundCheck, documentConfig, trainingEnabled, trainingVideos],
+    [stepOrder, bgcEnabled, backgroundCheck, documentConfig, orgName, trainingEnabled, trainingVideos],
   );
 
   if (!currentStep || TERMINAL_STATUSES.has(onboarding?.overall_status)) {

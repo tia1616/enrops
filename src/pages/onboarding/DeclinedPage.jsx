@@ -1,9 +1,20 @@
 import React from 'react';
 
 // Shown when overall_status = 'declined' (failed ORS 670.600 or contractor
-// confirmed they don't qualify). Dead end — no resume affordance, only the
-// admin email for follow-up. No tenant branding here for v1 — spec leaves
-// that open; we can wire in org_branding later if Jessica wants.
+// confirmed they don't qualify). Dead end — no resume affordance.
+//
+// This page used to name ONE provider's owner and her email address to EVERY
+// provider's declined instructors. Identical to the five strings fixed on the
+// abandoned-onboarding page on 2026-08-11 — that sweep found this page's sibling
+// and missed this one, because the bug was an address here rather than a name.
+// "Program Manager" is JESSICA'S WORD, chosen by her, and is deliberately a ROLE
+// rather than a person or an address: it is true for every provider, needs no
+// per-org config, and cannot go stale when someone changes job.
+//
+// Do NOT "improve" this by interpolating the org's own support address. There
+// isn't a reliable one — organizations.email and alert_email are both nullable
+// and an operator can clear them — so it would render a dangling "contact "
+// exactly when someone is already stuck. A role always resolves.
 
 export default function DeclinedPage() {
   return (
@@ -17,14 +28,7 @@ export default function DeclinedPage() {
             Your onboarding could not be completed.
           </h1>
           <p className="mt-3 text-sm leading-relaxed text-neutral-600">
-            Please contact{' '}
-            <a
-              href="mailto:arielle@journeytosteam.com"
-              className="font-semibold text-neutral-900 hover:underline"
-            >
-              arielle@journeytosteam.com
-            </a>{' '}
-            if you&rsquo;d like to discuss.
+            Please contact your Program Manager if you&rsquo;d like to discuss.
           </p>
         </div>
       </div>

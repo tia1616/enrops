@@ -17,6 +17,9 @@ const DEFAULTS = {
   // isDocumentEnabled, never directly: an ABSENT key means ON, so the empty
   // default below correctly means "every document is required".
   documentConfig: {},
+  // The provider's own display name. Empty is safe: the PDF header drops the
+  // segment entirely rather than printing "undefined" on a legal document.
+  orgName: '',
   // Whether the training step is live for this org (enabled AND at least one
   // active required video). When false, the step is dropped everywhere.
   trainingEnabled: false,

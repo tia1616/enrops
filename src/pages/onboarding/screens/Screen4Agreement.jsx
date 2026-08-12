@@ -5,6 +5,7 @@ import { invokeOnboardingFn, isHandledRedirect } from '../../../lib/onboardingFe
 import { fetchLegalDocument } from '../../../lib/legalDoc.js';
 import { STEP_KEYS } from '../../../lib/onboardingSteps.js';
 import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardLayout.jsx';
+import { useOnboardingConfig } from '../OnboardingConfigContext.jsx';
 
 // Screen 4 — Contractor Agreement. Fetches body text via get-legal-document
 // (RLS blocks direct legal_documents reads from instructor JWT), renders
@@ -49,6 +50,7 @@ const CONFIRMS = [
 
 export default function Screen4Agreement({ slug, instructor, onboarding, onAdvance, onBack }) {
   const navigate = useNavigate();
+  const { orgName } = useOnboardingConfig();
   const [docState, setDocState] = useState({ phase: 'loading' });
   const [confirms, setConfirms] = useState(() =>
     Object.fromEntries(CONFIRMS.map((c) => [c.key, false]))
@@ -137,6 +139,14 @@ export default function Screen4Agreement({ slug, instructor, onboarding, onAdvan
         typedSignature,
         signedAt,
         instructor,
+        // The header used to be one provider's name and one provider's version
+        // string, printed on every provider's archived contract. All three are
+        // now the real thing: this org's name, the title THEY gave the document,
+        // and the version actually signed — the same value the filename below
+        // records, so the two cannot disagree.
+        orgName,
+        documentTitle: docState.title,
+        documentVersion: docState.version,
       });
       // The filename records the version ACTUALLY signed. It used to interpolate
       // the hardcoded constant, so every provider's stored PDF would have been
