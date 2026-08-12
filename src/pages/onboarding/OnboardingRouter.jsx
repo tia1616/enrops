@@ -120,7 +120,11 @@ export default function OnboardingRouter() {
       // an instructor cannot read, so the view resolves each key to an explicit
       // boolean.
       //
-      // THIS SELECT REQUIRES migration 20260812a. It is NOT tolerant of the
+      // THIS SELECT REQUIRES migrations 20260812a AND 20260812b — the first
+      // adds instructor_documents_public, the second instructor_pay_enabled.
+      // Naming only the first was itself a trap: a deployer reading this to
+      // decide what must land first would have shipped without 20260812b and hit
+      // exactly the failure described below. It is NOT tolerant of the
       // column being absent, and an earlier version of this comment claimed the
       // opposite. PostgREST rejects the WHOLE query with 400 / 42703 when any
       // selected column is missing — it does not omit it — so on a database

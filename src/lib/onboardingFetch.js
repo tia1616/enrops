@@ -25,11 +25,13 @@ import { supabase } from './supabase.js';
 // strictly better as the fallback: it is tenant-neutral and self-resolving.
 function currentInstructorLoginPath() {
   if (typeof window !== 'undefined') {
-    const path = window.location.pathname;
-    const m = path.match(/^\/([^/]+)\/(?:instructor|onboarding)/);
+    const m = window.location.pathname.match(/^\/([^/]+)\/(?:instructor|onboarding)/);
     if (m) return `/${m[1]}/instructor`;
-    if (/^\/instructors?\/?$/.test(path)) return '/instructor';
   }
+  // Everything else — including the tenant-less /instructor and /instructors —
+  // lands here. An explicit branch for those two used to sit above, returning
+  // exactly what this line returns, which invited the reader to believe the
+  // cases differed.
   return '/instructor';
 }
 

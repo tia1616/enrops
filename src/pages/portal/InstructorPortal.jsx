@@ -80,6 +80,35 @@ function dollars(cents) {
 // so the two cannot drift, and matched against App.jsx's route table.
 const TENANTLESS_PORTAL_SEGMENTS = new Set(["instructor", "instructors"]);
 
+/**
+ * Where a sign-in link should return someone: the portal they are signing in
+ * FROM, at the same tenant spelling they used.
+ *
+ * ONE definition, used by both the magic-link and the Google paths, because
+ * they had identical copies of this and only fixing one would have left the bug
+ * alive on the other door.
+ *
+ * The tenant-less guard is the whole point. Deriving the slug from the raw first
+ * path segment means "/instructor" yields the literal word "instructor", so the
+ * return URL became "/instructor/instructor" — which then MATCHES
+ * /:slug/instructor with slug="instructor", so routeSlug is truthy and the guard
+ * in the component is bypassed entirely. Downstream that shows "instructor ·
+ * onboarding" in the header, links the portal switcher at /instructor/dashboard,
+ * and reports org_slug "instructor" to analytics. Worse, if the auth redirect
+ * allowlist is path-scoped rather than a wildcard, the link never sends at all —
+ * and this is the exact URL an instructor types on a phone, which is the reason
+ * the tenant-less route exists.
+ */
+function portalReturnUrl() {
+  const seg = window.location.pathname.split("/").filter(Boolean)[0];
+  if (seg && !TENANTLESS_PORTAL_SEGMENTS.has(seg)) {
+    return `${window.location.origin}/${seg}/instructor`;
+  }
+  // Tenant-less (or bare) path: return to where they already are. The portal
+  // resolves the real org from the instructor's own record.
+  return `${window.location.origin}${window.location.pathname}`;
+}
+
 export default function InstructorPortal() {
   // Unified home for everything instructor: sign-in, onboarding wizard,
   // schedule, profile. The phase machine routes between sub-states.
@@ -677,12 +706,8 @@ export default function InstructorPortal() {
     setSendMsg("");
     setError("");
     try {
-      // Return the user to whatever tenant portal they're signing in from
-      // (derive the slug from the current path; never hardcode a tenant).
-      const seg = window.location.pathname.split("/").filter(Boolean)[0];
-      const returnTo = seg
-        ? `${window.location.origin}/${seg}/instructor`
-        : `${window.location.origin}${window.location.pathname}`;
+      // Return them to the portal they are signing in from — see portalReturnUrl.
+      const returnTo = portalReturnUrl();
       const body = { email, redirect_to: returnTo, context: "instructor" };
       // One silent retry: the magic-link function can cold-start, and the first
       // invoke occasionally returns a transient non-2xx. Retrying once keeps a
@@ -708,10 +733,7 @@ export default function InstructorPortal() {
   async function handleGoogle() {
     setSendBusy(true);
     setError("");
-    const seg = window.location.pathname.split("/").filter(Boolean)[0];
-    const returnTo = seg
-      ? `${window.location.origin}/${seg}/instructor`
-      : `${window.location.origin}${window.location.pathname}`;
+    const returnTo = portalReturnUrl();
     const { error: err } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: { redirectTo: returnTo },
@@ -1210,7 +1232,7 @@ export default function InstructorPortal() {
   if (view === "documents") {
     return (
       <Shell slug={orgSlug} instructorName={displayFirstName(instructor)} onSignOut={signOut}>
-        <DocumentsView onBack={() => setView("schedule")} documentConfig={documentConfig} />
+        <DocumentsView onBack={() => setView("schedule")} documentConfig={documentConfig} stripePayEnabled={stripePayEnabled} />
       </Shell>
     );
   }
@@ -1220,6 +1242,7 @@ export default function InstructorPortal() {
       <Shell slug={orgSlug} instructorName={displayFirstName(instructor)} onSignOut={signOut}>
         <PayView
           instructorId={instructor.id ?? instructor.instructor_id}
+          stripePayEnabled={stripePayEnabled}
           onBack={() => setView("schedule")}
         />
       </Shell>
@@ -2496,7 +2519,7 @@ const DRAWER_DOCS = [
   { key: "attendance_policy", label: "Attendance policy (absence, tardy, pay deductions)" },
 ];
 
-function DocumentsView({ onBack, documentConfig }) {
+function DocumentsView({ onBack, documentConfig, stripePayEnabled }) {
   const [openKey, setOpenKey] = useState(null);
   const docs = DRAWER_DOCS.filter((d) => isDocumentEnabled(documentConfig, d.key));
   // The intro names what is actually in the list. It used to name all three
@@ -2506,14 +2529,19 @@ function DocumentsView({ onBack, documentConfig }) {
     "Your agreement",
     ...docs.filter((d) => d.key === "pay_schedule").map(() => "pay schedule"),
     ...docs.filter((d) => d.key === "attendance_policy").map(() => "attendance policy"),
-    "tax forms",
+    // Only when the tax-forms row is actually rendered below. Naming it while
+    // the row is hidden is the same untrue-pointer bug as the documents.
+    ...(stripePayEnabled ? ["tax forms"] : []),
   ];
   // Said out loud for each reachable state, because a list built by filtering is
   // exactly where a stray comma survives review:
-  //   all on   -> "Your agreement, pay schedule, attendance policy, and tax forms"
-  //   one off  -> "Your agreement, attendance policy, and tax forms"
-  //   both off -> "Your agreement and tax forms"   (NOT "Your agreement, and…")
-  // So the serial comma only appears once there are three things to separate.
+  //   all on          -> "Your agreement, pay schedule, attendance policy, and tax forms"
+  //   one doc off     -> "Your agreement, attendance policy, and tax forms"
+  //   both docs off   -> "Your agreement and tax forms"   (NOT "Your agreement, and…")
+  //   no Stripe       -> "Your agreement, pay schedule, and attendance policy"
+  //   agreement only  -> "Your agreement — all in one place."  (one item, no joiner)
+  // So the serial comma only appears once there are three things to separate,
+  // and the one-item case must not produce a dangling "and".
   const intro = `${
     named.length > 2
       ? `${named.slice(0, -1).join(", ")}, and ${named[named.length - 1]}`
@@ -2555,7 +2583,10 @@ function DocumentsView({ onBack, documentConfig }) {
             onToggle={() => setOpenKey((cur) => (cur === d.key ? null : d.key))}
           />
         ))}
-        <StripeTaxFormsRow />
+        {/* Same reason as the Pay tab's Stripe card: with no Stripe account this
+            row's only outcome is an error telling them to finish a wizard step
+            that no longer exists for them. */}
+        {stripePayEnabled && <StripeTaxFormsRow />}
       </div>
     </div>
   );
@@ -4292,7 +4323,7 @@ function DocLinkRow({ doc }) {
 //   approved -> "Approved for payout"
 //   adjusted -> "Adjusted"
 //   withheld -> "Held — contact admin"
-function PayView({ instructorId, onBack }) {
+function PayView({ instructorId, onBack, stripePayEnabled }) {
   const [data, setData] = useState(null); // null = loading
   const [err, setErr] = useState("");
 
@@ -4492,7 +4523,15 @@ function PayView({ instructorId, onBack }) {
         </>
       )}
 
-      {data !== null && (
+      {/* ONLY when this provider actually pays through Stripe. Otherwise this
+          card is a dead end with a lie in it: the instructor has no Stripe
+          account and never will, so the deep link returns no_stripe_account and
+          the error tells them to "finish your Stripe onboarding — it's in your
+          onboarding wizard", a step effectiveStepOrder deliberately removed and
+          which they can never reach. The copy also promises a setup form for
+          bank details and an SSN that nobody at this provider should ever be
+          asked for. Same gate on the W-9/1099 row in the documents drawer. */}
+      {data !== null && stripePayEnabled && (
         <div style={{ marginTop: 22, padding: "16px 18px", background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12 }}>
           <div style={{ fontSize: 13, color: INK, fontWeight: 600, marginBottom: 4 }}>
             Manage payouts, bank info, and tax docs

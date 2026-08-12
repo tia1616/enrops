@@ -169,7 +169,7 @@ export async function runGateCheck(
 
     // Fire onboarding-complete emails once, on the transition into 'complete'.
     if (nextStatus === 'complete') {
-      await sendOnboardingCompleteEmails(supabase, instructorId, bgcEnabled).catch((err) => {
+      await sendOnboardingCompleteEmails(supabase, instructorId, bgcEnabled, stripePayRequired).catch((err) => {
         console.error('onboarding-complete emails failed:', err);
       });
     }
@@ -187,6 +187,7 @@ async function sendOnboardingCompleteEmails(
   supabase: SupabaseClient,
   instructorId: string,
   bgcEnabled: boolean,
+  stripePayRequired: boolean,
 ): Promise<void> {
   const resendKey = Deno.env.get('RESEND_API_KEY');
   if (!resendKey) return;
@@ -220,12 +221,18 @@ async function sendOnboardingCompleteEmails(
   const portalUrl = org?.slug ? `${PUBLIC_SITE_URL}/${org.slug}/instructor` : null;
   // Only mention the background check when this org actually requires one.
   const bgcPhrase = bgcEnabled ? 'background check cleared, ' : '';
+  // Same treatment for payouts, which the background check already had and this
+  // did not. 'complete' can now be reached with stripeReady true purely BECAUSE
+  // the provider does not pay through Stripe — so "payouts set up" would be told
+  // to someone who was never asked for bank details and has no Stripe account.
+  // Ends the sentence differently in each case so neither reads clipped.
+  const payClause = stripePayRequired ? 'payouts set up' : 'you are all set';
 
   // 1. Contractor — "you're cleared, here's how to access your portal"
   const contractorText = [
     `Hi ${greeting},`,
     ``,
-    `You're fully onboarded with ${orgName} — paperwork signed, ${bgcPhrase}payouts set up.`,
+    `You're fully onboarded with ${orgName} — paperwork signed, ${bgcPhrase}${payClause}.`,
     ``,
     ...(portalUrl
       ? [`Sign in to your portal any time to see your schedule, accept assignments, and view your pay:`, portalUrl]
@@ -270,7 +277,10 @@ async function sendOnboardingCompleteEmails(
   const adminText = [
     `${fullName || instructor.email} is fully onboarded.`,
     ``,
-    `Paperwork signed, ${bgcEnabled ? 'background check cleared, ' : ''}Stripe Connect set up. They're ready to be assigned to camps or programs.`,
+    // Reuses bgcPhrase rather than re-deriving the same ternary a second time —
+    // the two had already drifted in punctuation, and "Stripe Connect set up"
+    // would be asserted to an admin whose org has no Stripe pay at all.
+    `Paperwork signed, ${bgcPhrase}${stripePayRequired ? 'Stripe Connect set up' : 'nothing outstanding'}. They're ready to be assigned to camps or programs.`,
     ``,
     `View their record: ${PUBLIC_SITE_URL}/admin/instructors`, // was /admin/contacts (retired 2026-06-08)
   ].join('\n');

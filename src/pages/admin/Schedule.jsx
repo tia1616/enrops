@@ -8,7 +8,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../context/AuthContext.jsx";
-import { defaultTenantSlug } from "../../lib/tenants.js";
+// defaultTenantSlug import removed 2026-08-12 — its only use was the instructor
+// portal URL below, which no longer resolves to a specific tenant.
 import { fetchOrgTerms } from "../../lib/terms.js";
 import { resolveBoardSendIntro } from "../../lib/boardSendCopy.js";
 import HatGuide from "../../components/HatGuide";
@@ -5311,12 +5312,20 @@ function EmailPreviewPanel({ event, assignment, session, assignments, sessions, 
   const deadlineMatch = /deadline\s+(\d{4}-\d{2}-\d{2})/i.exec(event.message || "");
   const deadline = deadlineMatch ? deadlineMatch[1] : assignment.deadline ?? null;
 
-  // Portal URL embedded in the instructor email. Built from the same tenant
-  // slug the admin's org uses (org info comes via useOutletContext at the
-  // top of the file; threaded down via orgName here -- v1 uses the default
-  // tenant. When multi-tenant lands, plumb orgSlug as a prop alongside
-  // orgName so this string is per-tenant.)
-  const portalUrl = `${window.location.origin}/${defaultTenantSlug()}/instructor`;
+  // Portal URL embedded in the instructor email.
+  //
+  // WAS `/${defaultTenantSlug()}/instructor` — the first key of the TENANTS map,
+  // i.e. one specific provider, in the only call to action of an email every
+  // OTHER provider sends to their own instructors. The comment above it said
+  // "when multi-tenant lands, plumb orgSlug as a prop"; multi-tenant landed and
+  // this did not get plumbed.
+  //
+  // The tenant-less route removes the need for a prop at all: /instructor
+  // resolves the org from the recipient's own instructor record, so this is
+  // correct for every provider AND for an instructor who works for one provider
+  // and receives mail from another. It is also the address that keeps working
+  // when bookmarked or forwarded, which a slug-scoped one does not.
+  const portalUrl = `${window.location.origin}/instructor`;
   const ctx = {
     assignment,
     instructorCamps,
