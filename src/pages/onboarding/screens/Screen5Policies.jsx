@@ -40,8 +40,16 @@ export default function Screen5Policies({ slug, instructor, onboarding, onAdvanc
         const map = {};
         for (const r of results) {
           if (r.error) {
+            // A 404 here is NOT transient: it means the provider has not
+            // published that document yet, and no amount of retrying fixes it.
+            // The old copy said "please try again" for both causes, which sent an
+            // instructor round a loop that could never succeed — `allLoaded`
+            // stays false, so the step can never be completed. Same fix already
+            // applied to the agreement on Screen 4.
             setLoadError(
-              "We can't load this document right now. Please try again, or reach out to your Program Manager."
+              r.status === 404
+                ? "Your program hasn't published these documents yet. Your Program Manager needs to add them before you can continue — please reach out to them."
+                : "We can't load this document right now. Please try again, or reach out to your Program Manager."
             );
             return;
           }

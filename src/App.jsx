@@ -1,6 +1,6 @@
 import React, { Suspense, lazy } from 'react';
 import { Routes, Route, Navigate, useOutletContext } from 'react-router-dom';
-import { canReachCommsTab } from './lib/entitlements.js';
+import { canReachCommsTab, canManageInstructors } from './lib/entitlements.js';
 import PublicLayout from './layouts/PublicLayout.jsx';
 import AdminLayout from './layouts/AdminLayout.jsx';
 import { CartProvider } from './context/CartContext.jsx';
@@ -129,6 +129,18 @@ function CommsTabRoute({ tab, children }) {
   // and an infinite redirect is a far worse failure than landing on Programs.
   if (tab === "contacts") return <Navigate to="/admin/programs" replace />;
   return <Navigate to="/admin/family-comms/contacts" replace />;
+}
+
+// Instructor documents are an instructor-management surface, so an org that
+// cannot manage instructors must not reach the authoring page by URL. Same shape
+// and same reason as CommsTabRoute: the RLS policy behind the page only proves
+// the caller administers the org, not that the org is entitled, so without this
+// a per_registration org's owner could publish documents from a bookmark.
+// org is loaded before AdminLayout renders <Outlet>, so this never flashes.
+function InstructorDocsRoute({ children }) {
+  const { org } = useOutletContext();
+  if (canManageInstructors(org)) return children;
+  return <Navigate to="/admin/settings" replace />;
 }
 
 export default function App() {
@@ -302,11 +314,15 @@ export default function App() {
         <Route path="email-sender" element={<EmailSenderSettings />} />
         <Route path="pay-rates" element={<PayRatesSettings />} />
         <Route path="background-checks" element={<BackgroundCheckSettings />} />
-        {/* Authoring the documents instructors read and sign. Listed in the
-            Settings nav item's `match` below so the owner/admin route guard
-            covers it — writes are also RLS-gated on can_admin_org, but a page
-            staff can open and never successfully save is a dead end, not a gate. */}
-        <Route path="instructor-documents" element={<InstructorDocuments />} />
+        {/* Authoring the documents instructors read and sign.
+            TWO independent gates, and an earlier version of this comment wrongly
+            claimed one covered both. The Settings `match` entry gates ROLE
+            (owner/admin) via AdminLayout's guard. It says nothing about the PLAN,
+            so a non-entitled org could reach this page by URL and publish
+            successfully — the RLS policy checks can_admin_org, which is role-only
+            and carries no plan test. Hiding the Settings card is not a gate, the
+            same lesson CommsTabRoute above exists for. */}
+        <Route path="instructor-documents" element={<InstructorDocsRoute><InstructorDocuments /></InstructorDocsRoute>} />
         <Route path="training" element={<TrainingSettings />} />
         <Route path="branding" element={<BrandLogoSettings />} />
         <Route path="dev/extraction-test" element={<ExtractionTest />} />

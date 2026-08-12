@@ -5,7 +5,7 @@
 // publish fails at the database; a renamed key produces a document an operator
 // writes and no wizard screen ever fetches.
 
-import { nextVersionFor, INSTRUCTOR_DOCUMENTS, DOCUMENT_KEYS, documentByKey } from './instructorDocuments.js';
+import { nextVersionFor, versionNumberOf, INSTRUCTOR_DOCUMENTS, DOCUMENT_KEYS, documentByKey } from './instructorDocuments.js';
 
 let pass = 0, fail = 0;
 function ok(name, cond) {
@@ -84,6 +84,49 @@ ok('no starter draft names a real provider or person',
 // Oregon-specific statute language is J2S's, not the platform's.
 ok('no starter draft cites a specific state statute',
   INSTRUCTOR_DOCUMENTS.every((d) => !/ORS\s*\d|670\.600/i.test(d.starter)));
+
+// --- versionNumberOf must AGREE with nextVersionFor ------------------------
+// The screen showed a row count while the database stored a parsed integer, so
+// for any hand-seeded document the operator was told "version 2" while v3 was
+// written, and the signed PDF was named agreement_v3. This pins them together.
+eq("parses 'v2.0_2026-06-15'", versionNumberOf('v2.0_2026-06-15'), 2);
+eq("parses '3.0'", versionNumberOf('3.0'), 3);
+eq("parses 'v7'", versionNumberOf('v7'), 7);
+eq('null for unparseable', versionNumberOf('draft'), null);
+eq('null for nullish', versionNumberOf(null), null);
+
+// The property that actually matters: the number shown for the NEXT publish is
+// always exactly the number inside the string that gets stored.
+ok('displayed next-version number always matches the stored string',
+  [[], ['v1'], ['3.0'], ['v2.0_2026-06-15'], ['v1', 'v7'], ['a', 'v5']].every((existing) => {
+    const stored = nextVersionFor(existing);
+    return versionNumberOf(stored) === parseInt(stored.replace(/^v/, ''), 10);
+  }));
+// And it is always higher than whatever is live, so "creates version N" is never
+// a number the operator has already seen.
+ok('next number always exceeds every existing number',
+  [['v1'], ['3.0'], ['v2.0_2026-06-15'], ['v1', 'v7']].every((existing) => {
+    const next = versionNumberOf(nextVersionFor(existing));
+    return existing.every((v) => (versionNumberOf(v) ?? 0) < next);
+  }));
+
+// --- the agreement's substitution tokens -----------------------------------
+// renderAgreementText substitutes exactly these four and nothing else. Without
+// them in the starter, a provider-authored agreement's stored snapshot - the
+// text meant to be "exactly what they signed" - names nobody and has no date.
+const AGREEMENT_TOKENS = ['contractor_legal_name', 'signing_date', 'signed_at_timestamp', 'signed_at_ip'];
+const agreement = documentByKey('contractor_agreement');
+ok('the agreement starter declares its tokens',
+  Array.isArray(agreement.tokens) && agreement.tokens.length === 4);
+ok('the agreement starter actually CONTAINS all four tokens',
+  AGREEMENT_TOKENS.every((t) => agreement.starter.includes(`{{${t}}}`)));
+ok('declared tokens and used tokens are the same set',
+  AGREEMENT_TOKENS.every((t) => agreement.tokens.includes(t)) && agreement.tokens.every((t) => AGREEMENT_TOKENS.includes(t)));
+// Only the signed document substitutes anything, so a token anywhere else would
+// reach an instructor as literal braces.
+ok('no OTHER starter contains a substitution token',
+  INSTRUCTOR_DOCUMENTS.filter((d) => d.key !== 'contractor_agreement')
+    .every((d) => !/\{\{\s*\w+\s*\}\}/.test(d.starter)));
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'}  (${pass} passed, ${fail} failed)`);
 process.exit(fail ? 1 : 0);

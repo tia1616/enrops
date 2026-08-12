@@ -51,7 +51,21 @@ Confidentiality
 [Say what family and student information they may see and how they must handle it.]
 
 Ending the agreement
-[Say how either side ends this, and how much notice is expected.]`,
+[Say how either side ends this, and how much notice is expected.]
+
+Signature
+Signed by {{contractor_legal_name}} on {{signing_date}}.
+Recorded electronically at {{signed_at_timestamp}} from {{signed_at_ip}}.`,
+    // The four {{...}} tokens above are the ONLY substitutions the agreement
+    // pipeline performs (agreementTemplate.ts renderAgreementText). They are in
+    // the starter because the text stored against every signature is supposed to
+    // be "exactly what they signed" — and without them the archived record names
+    // nobody, carries no date, and has no audit line. The signer's name, time and
+    // IP do exist in their own columns on contractor_agreements, so the evidence
+    // is not lost, but the snapshot itself would read as an unsigned draft.
+    // Square-bracket prompts are untouched by that substitution, so the rest of
+    // this draft passes through intact.
+    tokens: ['contractor_legal_name', 'signing_date', 'signed_at_timestamp', 'signed_at_ip'],
   },
   {
     key: 'pay_schedule',
@@ -163,6 +177,24 @@ export function documentByKey(key) {
  * '3.0' and '1.0', so a naive count would collide with the UNIQUE constraint on
  * (organization_id, document_key, document_version).
  */
+/**
+ * The number to SHOW for a stored version string.
+ *
+ * Must use the same parse as nextVersionFor, or the screen and the database
+ * disagree. It used to count rows: a document with one hand-seeded row named
+ * 'v2.0_2026-06-15' displayed as "Version 1" and offered to publish "version 2",
+ * while nextVersionFor correctly stored 'v3'. So the operator was told 2, the
+ * row said v3, and the signed PDF was named agreement_v3 — nothing lined up for
+ * anyone reconciling a signed document later.
+ *
+ * Falls back to the raw string when there is no integer in it, because showing
+ * something odd is better than showing a confidently wrong number.
+ */
+export function versionNumberOf(versionString) {
+  const m = /(\d+)/.exec(String(versionString ?? ''));
+  return m ? parseInt(m[1], 10) : null;
+}
+
 export function nextVersionFor(existingVersions = []) {
   let highest = 0;
   for (const v of existingVersions) {

@@ -89,21 +89,29 @@ function todayForOrg(timezone) {
 export default function InstructorDocuments() {
   const { org } = useOutletContext();
   const [rows, setRows] = useState(null); // all legal_documents for this org
-  const [loadError, setLoadError] = useState("");
+  // A failed READ must never look like "you have no documents". It used to set
+  // rows to [], which rendered all seven as "Not written yet" AND opened the
+  // editor with live=null saying "Nothing published yet" — so an admin could
+  // write a draft and publish it as v1, which (newest created_at wins) instantly
+  // became the agreement every instructor signs, silently demoting the real one.
+  // A transient network blip could therefore replace a signed legal document.
+  // Now a failed read blocks the list entirely.
+  const [loadFailed, setLoadFailed] = useState(false);
   const [openKey, setOpenKey] = useState(null);
   const [toast, setToast] = useState("");
 
   const load = useCallback(async () => {
     if (!org?.id) return;
-    setLoadError("");
+    setLoadFailed(false);
     const { data, error } = await supabase
       .from("legal_documents")
-      .select("id, document_key, document_version, title, body_text, effective_from, created_at")
+      .select("id, document_key, document_version, title, body_text, created_at")
       .eq("organization_id", org.id)
       .order("created_at", { ascending: false });
     if (error) {
-      setLoadError("Couldn't load your documents. Refresh and try again.");
-      setRows([]);
+      // Do NOT fall through to an empty list — see the note on loadFailed.
+      setLoadFailed(true);
+      setRows(null);
       return;
     }
     setRows(data ?? []);
@@ -129,6 +137,31 @@ export default function InstructorDocuments() {
   }, [rows]);
 
   function flash(msg) { setToast(msg); setTimeout(() => setToast(""), 4000); }
+
+  // Failed read: refuse to render the list at all. Showing seven "Not written
+  // yet" rows would invite the operator to overwrite documents that do exist.
+  if (loadFailed) {
+    return (
+      <div style={{ maxWidth: 760, margin: "0 auto", padding: "8px 0 40px" }}>
+        <Link to="/admin/settings" style={{ fontSize: 13, color: MUTED, textDecoration: "none" }}>← Settings</Link>
+        <h1 style={{ margin: "8px 0 4px", color: PURPLE, fontSize: 24, fontWeight: 700 }}>Instructor documents</h1>
+        <div role="alert" style={{ background: "#fbfaf6", border: `1px solid ${RED}`, borderRadius: 10, padding: "14px 16px", marginTop: 14 }}>
+          <p style={{ margin: 0, fontSize: 14, color: INK, lineHeight: 1.55 }}>
+            <strong>We couldn&apos;t load your documents.</strong> Nothing is shown because we
+            can&apos;t tell yet what you already have &mdash; and we don&apos;t want you rewriting
+            something that&apos;s already there.
+          </p>
+          <button
+            type="button"
+            onClick={load}
+            style={{ marginTop: 12, background: BRIGHT, color: "#fff", border: "none", borderRadius: 999, padding: "9px 18px", fontSize: 13.5, fontWeight: 700, fontFamily: "inherit", cursor: "pointer" }}
+          >
+            Try again
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (rows === null) {
     return <div style={{ padding: 40, color: MUTED, textAlign: "center" }}>Loading…</div>;
@@ -165,10 +198,23 @@ export default function InstructorDocuments() {
         rewrite in your own words — they are prompts, not finished policies.
       </p>
 
-      {writtenCount === 0 && (
+      {/* ALL of them block onboarding, not just the agreement. This banner used
+          to say "start with the contractor agreement… onboarding cannot be
+          completed until it exists", which reads as "that one is the blocker".
+          It is not: Screens 5 and 6 fetch the other six by key and refuse to
+          advance when any is missing. An operator who followed the old wording
+          would publish one document, invite an instructor, and strand them. */}
+      {writtenCount < DOCUMENT_KEYS.length && (
         <div style={{ background: "#fbfaf6", border: `1px solid ${RULE}`, borderRadius: 10, padding: "12px 14px", fontSize: 13.5, color: INK, lineHeight: 1.55, marginBottom: 16 }}>
-          <strong>Start with the contractor agreement.</strong> It is the one instructors
-          actually sign, and onboarding cannot be completed until it exists.
+          <strong>
+            {writtenCount === 0
+              ? "Your instructors can't finish onboarding yet."
+              : `${DOCUMENT_KEYS.length - writtenCount} still to write.`}
+          </strong>{" "}
+          They read and sign <strong>all {DOCUMENT_KEYS.length}</strong> of these during
+          onboarding, and it stops at the first one that isn&apos;t published. Start with the
+          contractor agreement &mdash; it&apos;s the one they actually sign &mdash; then work down
+          the list.
         </div>
       )}
 
@@ -177,14 +223,13 @@ export default function InstructorDocuments() {
           {toast}
         </div>
       )}
-      {loadError && (
-        <div role="alert" style={{ color: RED, fontSize: 13.5, marginBottom: 14 }}>{loadError}</div>
-      )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {INSTRUCTOR_DOCUMENTS.map((d) => {
           const live = liveByKey[d.key];
-          const count = (versionsByKey[d.key] ?? []).length;
+          // Derived from the STORED version string, never from a row count —
+          // see versionNumberOf.
+          const shownVersion = live ? versionNumberOf(live.document_version) : null;
           return (
             <button
               key={d.key}
@@ -204,7 +249,9 @@ export default function InstructorDocuments() {
                   </span>
                 )}
                 <span style={{ marginLeft: "auto", fontSize: 12, fontWeight: 600, color: live ? GREEN_INK : AMBER_INK }}>
-                  {live ? `Version ${count} · ${fmtDate(live.created_at)}` : "Not written yet"}
+                  {live
+                    ? `${shownVersion ? `Version ${shownVersion}` : live.document_version} · ${fmtDate(live.created_at)}`
+                    : "Not written yet"}
                 </span>
               </div>
               <p style={{ margin: "5px 0 0", fontSize: 13, color: MUTED, lineHeight: 1.5 }}>{d.help}</p>
@@ -224,7 +271,10 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
   const [error, setError] = useState("");
 
   const nextVersion = nextVersionFor(versions.map((v) => v.document_version));
-  const versionNumber = versions.length + 1;
+  // Read the number OUT OF the string we are about to store, so what the screen
+  // promises and what the database records are the same fact.
+  const versionNumber = versionNumberOf(nextVersion);
+  const liveVersionNumber = live ? versionNumberOf(live.document_version) : null;
 
   // Dirty against what is LIVE. A first draft is dirty as soon as it has text.
   const dirty =
@@ -244,8 +294,8 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
       body_text: body.trim(),
       effective_from: todayForOrg(orgTimezone),
     });
-    setBusy(false);
     if (e) {
+      setBusy(false);
       // 23505 = the UNIQUE(org, key, version) constraint. Means another tab (or
       // another admin) published while this form was open, so our computed
       // version is stale. Say so plainly rather than "something went wrong".
@@ -256,7 +306,11 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
       );
       return;
     }
-    onPublished(meta?.label ?? "Document");
+    // Stay disabled THROUGH the parent's reload. setBusy(false) used to run
+    // before this await, so the button re-enabled while live/versions were still
+    // stale — a double-click then re-inserted the same computed version, hit the
+    // unique constraint, and blamed a nonexistent other admin for the conflict.
+    await onPublished(meta?.label ?? "Document");
   }
 
   const inputStyle = {
@@ -278,7 +332,8 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
 
       {live ? (
         <div style={{ background: "#fbfaf6", border: `1px solid ${RULE}`, borderRadius: 10, padding: "11px 13px", fontSize: 13, color: INK, lineHeight: 1.55, margin: "14px 0" }}>
-          Instructors currently see <strong>version {versions.length}</strong>, published{" "}
+          Instructors currently see{" "}
+          <strong>{liveVersionNumber ? `version ${liveVersionNumber}` : live.document_version}</strong>, published{" "}
           {fmtDate(live.created_at)}. Publishing again creates <strong>version {versionNumber}</strong> and
           shows that to everyone from then on. <strong>Earlier versions are kept</strong>, and anyone who
           already signed keeps the exact wording they agreed to.
@@ -319,6 +374,24 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
       <p style={{ margin: "5px 0 0", fontSize: 11.5, color: MUTED, lineHeight: 1.5 }}>
         Leave a blank line to start a new paragraph. Web addresses become clickable on their own.
       </p>
+
+      {/* Only the agreement is signed, and only it substitutes anything. Without
+          this, a provider had no way to know these existed, so their archived
+          signed copy would have named nobody and carried no date. */}
+      {meta?.tokens?.length > 0 && (
+        <div style={{ marginTop: 10, background: "#fbfaf6", border: `1px solid ${RULE}`, borderRadius: 8, padding: "10px 12px", fontSize: 12, color: INK, lineHeight: 1.6 }}>
+          <strong>Keep the signature lines at the bottom.</strong> These four are filled in
+          automatically when an instructor signs, and they are what makes the saved copy a record
+          of who signed and when:
+          <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {meta.tokens.map((t) => (
+              <code key={t} style={{ fontFamily: "ui-monospace, monospace", fontSize: 11.5, background: "#fff", border: `1px solid ${RULE}`, borderRadius: 4, padding: "2px 6px" }}>
+                {`{{${t}}}`}
+              </code>
+            ))}
+          </div>
+        </div>
+      )}
 
       {!body.trim() && meta?.starter && (
         <button
@@ -366,12 +439,18 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
             Earlier versions
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            {versions.map((v, i) => (
-              <div key={v.id} style={{ fontSize: 13, color: MUTED }}>
-                Version {versions.length - i} · {fmtDate(v.created_at)}
-                {i === 0 && <span style={{ color: GREEN_INK, fontWeight: 600 }}> · live now</span>}
-              </div>
-            ))}
+            {/* Each row shows the number parsed from ITS OWN stored version, not
+                its position in the list — otherwise a hand-seeded '3.0' renders
+                as "Version 1" purely because it happens to be the only row. */}
+            {versions.map((v, i) => {
+              const n = versionNumberOf(v.document_version);
+              return (
+                <div key={v.id} style={{ fontSize: 13, color: MUTED }}>
+                  {n ? `Version ${n}` : v.document_version} · {fmtDate(v.created_at)}
+                  {i === 0 && <span style={{ color: GREEN_INK, fontWeight: 600 }}> · live now</span>}
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

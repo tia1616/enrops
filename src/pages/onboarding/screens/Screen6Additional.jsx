@@ -73,9 +73,13 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
         const map = {};
         for (const r of results) {
           if (r.error) {
+            // 404 = the provider hasn't published it, which retrying cannot fix
+            // and which leaves this step permanently uncompletable. Distinguished
+            // from a genuine transient failure, matching Screens 4 and 5.
             setLoadError(
-              // Named one provider's owner to every other provider's instructors.
-              "We can't load this document right now. Please try again, or reach out to your Program Manager."
+              r.status === 404
+                ? "Your program hasn't published these documents yet. Your Program Manager needs to add them before you can continue — please reach out to them."
+                : "We can't load this document right now. Please try again, or reach out to your Program Manager."
             );
             return;
           }

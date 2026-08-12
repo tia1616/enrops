@@ -16,6 +16,27 @@ import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardL
 // presentation PDF client-side and upload it. PDF failure does not block —
 // the legal record exists in the DB; the PDF is just a convenience copy.
 
+// These five are written to contractor_agreements as affirmative legal
+// attestations, so the wording matters and is Jessica's to approve.
+//
+// TWO TENANT-SPECIFIC STRINGS WERE HERE, and until this change they were
+// UNREACHABLE for any other provider because the document fetch 404'd. Dropping
+// the version pin made them live, so removing the dead end turned one of them
+// into a false statement rather than a blocker.
+//
+//   FIXED: "My prior agreement with J2S is superseded" named one specific
+//   company. Every other provider's instructor was being asked to attest that an
+//   agreement with a business they have never contracted with is superseded.
+//   Generalised to the clause's actual intent - superseding a prior agreement
+//   with THIS provider - without weakening it.
+//
+//   LEFT ALONE, DELIBERATELY: the ORS 670.600 reference. Oregon statute, and
+//   Jessica's explicit call on 2026-08-11 was to reuse the Oregon step as-is
+//   because Jeff is in Oregon, with a per-state step recorded as debt (there is
+//   no state column on organizations to branch on yet). Genericising it would
+//   WEAKEN the attestation J2S's 24 signed agreements rely on, which is worse
+//   than the narrower problem it solves. The first non-Oregon contractor is the
+//   deadline for the state step, not this line.
 const CONFIRMS = [
   { key: 'confirm_read', label: 'I have read this Agreement' },
   // confirm_pay_structure intentionally removed -- the Pay & Deductions
@@ -23,7 +44,7 @@ const CONFIRMS = [
   // there. Asking on this screen put the agreement before the document.
   { key: 'confirm_contractor_status', label: 'I confirm my status as an independent contractor under ORS 670.600' },
   { key: 'confirm_confidentiality_ip', label: 'I reaffirm the confidentiality, IP, and non-solicitation obligations' },
-  { key: 'confirm_supersedes_prior', label: 'My prior agreement with J2S is superseded' },
+  { key: 'confirm_supersedes_prior', label: 'Any prior agreement I have with this program is superseded' },
 ];
 
 export default function Screen4Agreement({ slug, instructor, onboarding, onAdvance, onBack }) {
