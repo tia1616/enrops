@@ -298,6 +298,13 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
   // legal document, which a box that is silently live never tells you. A blank
   // one opens straight in edit mode; there is nothing to read yet.
   const [editing, setEditing] = useState(!live);
+  // Publishing OVER a live document is a one-click, instantly-effective change to
+  // the thing instructors sign, and there is no undo beyond publishing again.
+  // That is not hypothetical: during testing today a starter draft reading
+  // "Test publish. [Describe what you are hiring them to do]" became the live
+  // contractor agreement on staging, and stayed live until someone noticed.
+  // First publish needs no ceremony — nothing is being replaced.
+  const [confirming, setConfirming] = useState(false);
 
   const nextVersion = nextVersionFor(versions.map((v) => v.document_version));
   // Read the number OUT OF the string we are about to store, so what the screen
@@ -489,27 +496,62 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
           as a new version for no reason. */}
       <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 18, flexWrap: "wrap" }}>
         {editing ? (
-          <>
-            <button
-              type="button"
-              onClick={publish}
-              disabled={!canPublish}
-              style={{
-                background: canPublish ? BRIGHT : "#cfc6dc", color: "#fff", border: "none",
-                borderRadius: 999, padding: "10px 22px", fontSize: 14, fontWeight: 700,
-                fontFamily: "inherit", cursor: canPublish ? "pointer" : "not-allowed",
-              }}
-            >
-              {busy ? "Publishing…" : live ? `Publish version ${versionNumber}` : "Publish"}
-            </button>
-            <span style={{ fontSize: 12, color: MUTED }}>
-              {!dirty && live
-                ? "No changes yet."
-                : !title.trim() || !body.trim()
-                  ? "Add a title and some words to publish."
-                  : "Your instructors see this as soon as you publish."}
-            </span>
-          </>
+          confirming ? (
+            // Replacing a live document: name what is being replaced and what
+            // happens to people who already signed, then require a second click.
+            <>
+              <button
+                type="button"
+                onClick={publish}
+                disabled={busy}
+                style={{
+                  background: BRIGHT, color: "#fff", border: "none", borderRadius: 999,
+                  padding: "10px 22px", fontSize: 14, fontWeight: 700, fontFamily: "inherit",
+                  cursor: busy ? "wait" : "pointer",
+                }}
+              >
+                {busy ? "Publishing…" : `Yes, publish version ${versionNumber}`}
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirming(false)}
+                disabled={busy}
+                style={{
+                  background: "transparent", border: `1px solid ${RULE}`, color: INK,
+                  borderRadius: 999, padding: "10px 18px", fontSize: 13.5, fontFamily: "inherit",
+                  cursor: "pointer",
+                }}
+              >
+                Cancel
+              </button>
+              <span style={{ fontSize: 12, color: INK, flex: "1 1 240px", lineHeight: 1.5 }}>
+                This replaces what your instructors sign from now on. Everyone who already
+                signed keeps the wording they agreed to.
+              </span>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => (live ? setConfirming(true) : publish())}
+                disabled={!canPublish}
+                style={{
+                  background: canPublish ? BRIGHT : "#cfc6dc", color: "#fff", border: "none",
+                  borderRadius: 999, padding: "10px 22px", fontSize: 14, fontWeight: 700,
+                  fontFamily: "inherit", cursor: canPublish ? "pointer" : "not-allowed",
+                }}
+              >
+                {busy ? "Publishing…" : live ? `Publish version ${versionNumber}` : "Publish"}
+              </button>
+              <span style={{ fontSize: 12, color: MUTED }}>
+                {!dirty && live
+                  ? "No changes yet."
+                  : !title.trim() || !body.trim()
+                    ? "Add a title and some words to publish."
+                    : "Your instructors see this as soon as you publish."}
+              </span>
+            </>
+          )
         ) : (
           <>
             <button
