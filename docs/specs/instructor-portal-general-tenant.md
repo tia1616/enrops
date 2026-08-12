@@ -482,6 +482,46 @@ Grepped all of `src`. Real hardcodes (excluding comments):
 
 Everything else matching "j2s" in `src` is commentary.
 
+## 7b. NEXT BUILD — each document is on/off per provider
+
+Jessica, 2026-08-12, after testing the documents screen: *"these policies should be
+toggle on or off. not every provider will use them all."* Correct, and it is the
+same mistake as everything else in this build — J2S needs all seven, so all seven
+became mandatory for everyone. A chess tutor whose instructors never drive is
+currently forced to write a driving acknowledgment before anyone can finish
+onboarding, because Screens 5 and 6 block on all six non-agreement documents.
+
+**Do NOT infer "off" from "not published."** Tempting and wrong: a provider who
+intends to have a code of conduct but has not written it yet would silently
+onboard instructors who never acknowledged one. Absence is not a decision;
+the toggle has to be explicit.
+
+Shape, in build order:
+
+1. **Storage** — `organizations.instructor_document_config` JSONB, matching the
+   shape of `background_check_config` / `training_config` that already exist.
+   `{ photo_video_release: false, vehicle_driving_ack: false }` — absent key means
+   ON, so **every existing org keeps all seven with no backfill** and J2S is
+   untouched. Additive and inert.
+2. **Expose it to the instructor.** The wizard cannot read `organizations` (RLS),
+   which is why `background_check_public` exists as a column on the
+   `public_org_directory` view. Add the document config the same way. **This is the
+   part that needs a migration** and is the reason this is not a UI-only change.
+3. **Filter the wizard.** `Screen5Policies` DOCS and `Screen6Additional` DOC_KEYS
+   stop being constants and come from the enabled set. If a screen ends up with
+   zero enabled documents it must be skipped entirely, not shown empty — same rule
+   `effectiveStepOrder` already applies to the background-check and training steps.
+4. **The toggle UI** on `/admin/instructor-documents`: a switch per row. Turning one
+   OFF must not delete published versions — a provider who turns the photo release
+   back on should get their old text, and anyone who already signed it keeps their
+   record.
+5. **The banner count** ("all 7 of these") must count ENABLED documents, or it goes
+   straight back to lying.
+
+**The contractor agreement is not toggleable.** It is the one document that is
+signed rather than acknowledged, `submit-agreement` requires it, and onboarding
+cannot complete without it.
+
 ## 8. Not yet done
 
 - Nothing built. Repo is at baseline: main clone on `staging` @ `69c289e`, clean, no
