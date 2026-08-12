@@ -110,7 +110,13 @@ export default function InstructorDocuments() {
   // every existing org — is all seven, unchanged.
   const [docConfig, setDocConfig] = useState({});
   const [savingKey, setSavingKey] = useState(null);
-  const [toggleError, setToggleError] = useState("");
+  // { key, message } — the error renders ON THE ROW THAT FAILED, not at the top
+  // of the page. Measured on staging: the seventh row's switch sits 847px below
+  // the page-level banner, so a failure explained up there is entirely
+  // off-screen. The switch correctly does not move, which without a visible
+  // reason is exactly the "click did nothing" silent failure. The success case
+  // needs no banner — the row itself flips to "Off · your text is kept".
+  const [toggleError, setToggleError] = useState(null);
 
   const load = useCallback(async () => {
     if (!org?.id) return;
@@ -175,7 +181,7 @@ export default function InstructorDocuments() {
   async function setDocEnabled(key, next) {
     if (savingKey) return;
     setSavingKey(key);
-    setToggleError("");
+    setToggleError(null);
     const updated = { ...docConfig, [key]: next };
     const { error } = await supabase
       .from("organizations")
@@ -185,9 +191,10 @@ export default function InstructorDocuments() {
       // Do not move the switch. A switch that flips and then quietly fails is a
       // lie about what instructors will be asked for.
       setSavingKey(null);
-      setToggleError(
-        `Couldn't save that: ${error.message || "unknown error"}. Nothing changed — your instructors are still asked for exactly what they were before.`,
-      );
+      setToggleError({
+        key,
+        message: `Couldn't save that: ${error.message || "unknown error"}. Nothing changed — your instructors are still asked for exactly what they were before.`,
+      });
       return;
     }
     setDocConfig(updated);
@@ -329,11 +336,6 @@ export default function InstructorDocuments() {
         </div>
       )}
 
-      {toggleError && (
-        <div role="alert" style={{ background: "#fbfaf6", border: `1px solid ${RED}`, borderRadius: 10, padding: "12px 14px", fontSize: 13.5, color: INK, lineHeight: 1.55, marginBottom: 16 }}>
-          {toggleError}
-        </div>
-      )}
 
       {toast && (
         <div role="status" style={{ background: GREEN_BG, color: GREEN_INK, border: `1px solid ${GREEN_INK}33`, borderRadius: 8, padding: "10px 12px", fontSize: 13.5, marginBottom: 14 }}>
@@ -398,6 +400,13 @@ export default function InstructorDocuments() {
                 <p style={{ margin: "5px 0 0", fontSize: 13, color: MUTED, lineHeight: 1.5 }}>
                   {on ? d.help : "Your instructors are not asked for this."}
                 </p>
+                {/* Beside the switch that failed, so the reason is on screen
+                    wherever in the list you are. */}
+                {toggleError?.key === d.key && (
+                  <p role="alert" style={{ margin: "7px 0 0", fontSize: 12.5, color: RED, lineHeight: 1.5 }}>
+                    {toggleError.message}
+                  </p>
+                )}
               </div>
               {/* Still openable when off. A provider deciding whether to use a
                   document needs to read it, and one switching it back on should
