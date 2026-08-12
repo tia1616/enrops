@@ -617,10 +617,15 @@ export default function Schedule() {
     let alive = true;
     (async () => {
       if (!org?.id) return;
-      const [progRes, surveyRes, cycleRes] = await Promise.all([
+      const [progRes, surveyRes, cycleRes, campCycleRes] = await Promise.all([
         supabase.from("programs").select("term").eq("organization_id", org.id).not("term", "is", null),
         supabase.from("afterschool_survey_state").select("term").eq("organization_id", org.id),
         supabase.from("scheduling_cycles").select("name").eq("organization_id", org.id).eq("cycle_type", "afterschool").neq("status", "archived"),
+        // Does this org run camps at all? Asked HERE rather than reading the
+        // allCycles state, because loadAll() races this effect and reading a
+        // half-loaded [] would flip an actual camp operator into after-school
+        // mode on a slow connection.
+        supabase.from("scheduling_cycles").select("id").eq("organization_id", org.id).eq("cycle_type", "summer_camp").neq("status", "archived").limit(1),
       ]);
       if (!alive) return;
       const terms = new Set();
@@ -645,9 +650,31 @@ export default function Schedule() {
       const { defaultTerm } = await fetchOrgTerms(org.id);
       if (!alive) return;
       const firstDiscovered = sortedTerms.length ? sortedTerms[0] : null;
-      setDefaultAfterschoolTerm(
-        defaultTerm && sortedTerms.includes(defaultTerm) ? defaultTerm : firstDiscovered,
-      );
+      const landOn = defaultTerm && sortedTerms.includes(defaultTerm) ? defaultTerm : firstDiscovered;
+      setDefaultAfterschoolTerm(landOn);
+
+      // LAND ON THE MODE THIS ORG ACTUALLY RUNS.
+      //
+      // scheduleMode starts as "camp" and nothing ever changed it automatically,
+      // so an after-school-only provider opening Instructors was met with "No
+      // active cycle yet" and a primary button offering to create a CAMP cycle —
+      // their real board hidden behind a secondary link underneath. That was
+      // invisible while this section was hidden from lean orgs; opening it up
+      // makes it the first thing they see.
+      //
+      // Deliberately data-driven rather than a camps switch-off: if this org
+      // later runs a school-break camp, a cycle appears and this stops firing with
+      // no code change and nothing to undo. Only flips when there is genuinely no
+      // camp cycle AND there is an after-school term to show instead, so a camp
+      // operator is never redirected away from their own board.
+      // A query ERROR must not look like "no camps" — that would flip a camp
+      // operator's board on a transient failure. Only an empty, successful
+      // result counts.
+      const hasCampCycles = !campCycleRes.error && (campCycleRes.data ?? []).length > 0;
+      if (landOn && !hasCampCycles && !campCycleRes.error) {
+        setScheduleMode("afterschool");
+        setSelectedTerm((cur) => cur ?? landOn);
+      }
     })();
     return () => { alive = false; };
   }, [org?.id]);

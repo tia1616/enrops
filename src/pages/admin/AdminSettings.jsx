@@ -201,7 +201,7 @@ export default function AdminSettings() {
           keeping a duplicate entry point here would be two doors to one room.
           J2S is unaffected: it keeps its own top-level Locations item. */}
 
-      {org?.instructor_pay_model !== "enrops_platform" && (
+      {canManageInstructors(org) && (
       <section style={{ marginTop: 24 }}>
         <h2 style={sectionTitle}>Availability survey</h2>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
@@ -268,7 +268,7 @@ export default function AdminSettings() {
         </div>
       </section>
 
-      {org?.instructor_pay_model !== "enrops_platform" && (
+      {canManageInstructors(org) && (
       <section style={{ marginTop: 24 }}>
         <h2 style={sectionTitle}>Pay rates</h2>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
@@ -303,7 +303,13 @@ export default function AdminSettings() {
       </section>
       )}
 
-      {org?.instructor_pay_model !== "enrops_platform" && (
+      {/* Entitlement, not nav shape. Jessica confirmed on staging as a
+          lean+founding org: the documents card appeared but this did not, so she
+          could author an agreement and then had no way to configure — or switch
+          OFF — the background-check step, which defaults ON
+          (WizardHost: `backgroundCheck?.enabled !== false`). Her instructor would
+          hit a step with no provider, no link and no way out. */}
+      {canManageInstructors(org) && (
       <section style={{ marginTop: 24 }}>
         <h2 style={sectionTitle}>Background checks</h2>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
@@ -318,7 +324,7 @@ export default function AdminSettings() {
       </section>
       )}
 
-      {org?.instructor_pay_model !== "enrops_platform" && (
+      {canManageInstructors(org) && (
       <section style={{ marginTop: 24 }}>
         <h2 style={sectionTitle}>Training videos</h2>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>

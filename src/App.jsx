@@ -132,10 +132,24 @@ function CommsTabRoute({ tab, children }) {
 }
 
 // Instructor documents are an instructor-management surface, so an org that
-// cannot manage instructors must not reach the authoring page by URL. Same shape
-// and same reason as CommsTabRoute: the RLS policy behind the page only proves
-// the caller administers the org, not that the org is entitled, so without this
-// a per_registration org's owner could publish documents from a bookmark.
+// cannot manage instructors does not get the authoring page by URL.
+//
+// THIS GATE IS PRESENTATIONAL, and an earlier version of this comment implied
+// otherwise by saying it stopped a non-entitled owner publishing "from a
+// bookmark". It stops them reaching the PAGE. It does not stop the write:
+// org_admins_write_legal_docs checks can_admin_org(organization_id), which proves
+// the caller administers that org and carries no plan test — measured on staging
+// as a real lean+free admin, a direct POST to /rest/v1/legal_documents with their
+// own organization_id returns 201.
+//
+// Left that way on purpose. The boundary that matters holds — a CROSS-ORG write
+// is refused with 42501 — so what remains is a commercial gate on an operator
+// writing their own rows, and those documents are inert without the instructor
+// surfaces, which are gated too. Enforcing the plan in SQL would put entitlement
+// logic in a second place where it can drift from entitlements.js, which is a
+// worse failure than the one it prevents. If that trade ever flips, change it
+// here and in the policy together.
+//
 // org is loaded before AdminLayout renders <Outlet>, so this never flashes.
 function InstructorDocsRoute({ children }) {
   const { org } = useOutletContext();

@@ -200,8 +200,35 @@ export const AGREEMENT_SIGNATURE_TOKENS = [
  * would give it two.
  */
 export function bodyForPublish(docKey, body) {
-  if (!willAppendSignatureBlock(docKey, body)) return (body ?? '').trim();
-  return `${(body ?? '').trim()}\n\n${AGREEMENT_SIGNATURE_BLOCK}`;
+  const text = stripAppendedSignatureBlock(body);
+  if (!willAppendSignatureBlock(docKey, text)) return text;
+  return `${text}\n\n${AGREEMENT_SIGNATURE_BLOCK}`;
+}
+
+/**
+ * Remove OUR appended block from the end of a stored body.
+ *
+ * Why this exists: the block used to be appended once and then lived inside
+ * body_text forever. Reopening the document loaded it straight into the editable
+ * textarea, so from the second edit onward it was ordinary text the provider
+ * could delete a line of — and the old `.some()` check then saw a surviving
+ * token, decided the block was intact, and appended nothing. The result was a
+ * permanently half-signed agreement: an audit line naming nobody.
+ *
+ * Stripping on load and re-appending on publish means the editable body NEVER
+ * contains the block, so it cannot be half-deleted, and the locked panel is shown
+ * every time rather than only on the first write.
+ *
+ * Exact-match only, anchored at the end. It must not touch a provider's own
+ * signature prose — the seeded agreement has its own, which is why
+ * willAppendSignatureBlock still checks for tokens afterwards.
+ */
+export function stripAppendedSignatureBlock(body) {
+  const text = (body ?? '').trim();
+  const suffix = `\n\n${AGREEMENT_SIGNATURE_BLOCK}`;
+  if (text.endsWith(suffix)) return text.slice(0, -suffix.length).trim();
+  if (text === AGREEMENT_SIGNATURE_BLOCK) return '';
+  return text;
 }
 
 /**
@@ -216,8 +243,14 @@ export function bodyForPublish(docKey, body) {
 export function willAppendSignatureBlock(docKey, body) {
   const meta = INSTRUCTOR_DOCUMENTS.find((d) => d.key === docKey);
   if (!meta?.autoSignatureBlock) return false;
-  const text = (body ?? '').trim();
-  return !AGREEMENT_SIGNATURE_TOKENS.some((t) => text.includes(`{{${t}}}`));
+  const text = stripAppendedSignatureBlock(body);
+  // EVERY, not SOME. `.some()` treated a body holding one surviving token as
+  // already complete, so a partially deleted block was never repaired — the
+  // stored agreement kept an audit line that named nobody. Requiring all four
+  // means anything less than a complete signature gets a complete one appended.
+  // Worst case is a redundant stray token beside a correct block; the previous
+  // worst case was an archived legal record with no signer on it.
+  return !AGREEMENT_SIGNATURE_TOKENS.every((t) => text.includes(`{{${t}}}`));
 }
 
 export const DOCUMENT_KEYS = INSTRUCTOR_DOCUMENTS.map((d) => d.key);

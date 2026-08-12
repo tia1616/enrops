@@ -7,7 +7,8 @@
 
 import {
   nextVersionFor, versionNumberOf, INSTRUCTOR_DOCUMENTS, DOCUMENT_KEYS, documentByKey,
-  bodyForPublish, willAppendSignatureBlock, AGREEMENT_SIGNATURE_BLOCK, AGREEMENT_SIGNATURE_TOKENS,
+  bodyForPublish, willAppendSignatureBlock, stripAppendedSignatureBlock,
+  AGREEMENT_SIGNATURE_BLOCK, AGREEMENT_SIGNATURE_TOKENS,
 } from './instructorDocuments.js';
 
 let pass = 0, fail = 0;
@@ -130,10 +131,16 @@ ok('publishing the agreement appends the block',
 ok('publishing the STARTER yields all four tokens',
   AGREEMENT_SIGNATURE_TOKENS.every((t) => bodyForPublish('contractor_agreement', agreement.starter).includes(`{{${t}}}`)));
 
-// Not appended twice. The existing seeded agreement already has its own
-// signature wording inline; blindly appending would give it two.
-const alreadySigned = 'Terms.\n\nSigned by {{contractor_legal_name}} on {{signing_date}}.';
-eq('does not double-append when tokens are already present',
+// Not appended twice. The seeded agreement carries its own COMPLETE signature
+// wording inline; appending would give it two.
+//
+// This fixture used to hold only two of the four tokens and assert "no append",
+// which encoded the .some() bug: a two-token body is HALF a signature, and
+// treating it as complete is exactly how an agreement ended up with an audit line
+// that named nobody. All four now, because all four is what complete means.
+const alreadySigned = 'Terms.\n\nSigned by {{contractor_legal_name}} on {{signing_date}}.\n'
+  + 'Recorded electronically at {{signed_at_timestamp}} from {{signed_at_ip}}.';
+eq('does not double-append when a COMPLETE signature is already present',
   bodyForPublish('contractor_agreement', alreadySigned), alreadySigned);
 
 // Unsigned documents are left completely alone — a token in a policy would
@@ -163,9 +170,40 @@ for (const [key, text, expected] of predicateCases) {
 }
 ok('predicate and writer never disagree',
   predicateCases.every(([key, text]) => {
-    const appended = bodyForPublish(key, text) !== (text ?? '').trim();
+    const appended = bodyForPublish(key, text) !== stripAppendedSignatureBlock(text);
     return appended === willAppendSignatureBlock(key, text);
   }));
+
+// --- the block is never editable, and half-deletion cannot survive -----------
+// The bug this replaces: the block was appended once, then lived in body_text,
+// so the SECOND edit put it in the textarea. Deleting three of its four lines
+// left one token, .some() called that "already signed", and the stored agreement
+// kept an audit line naming nobody. Round-tripping now strips it on load.
+const published = bodyForPublish('contractor_agreement', 'My agreement prose.');
+eq('publish then reopen gives back the prose ONLY',
+  stripAppendedSignatureBlock(published), 'My agreement prose.');
+eq('the round trip is stable',
+  bodyForPublish('contractor_agreement', stripAppendedSignatureBlock(published)), published);
+ok('reopening still shows the locked panel',
+  willAppendSignatureBlock('contractor_agreement', stripAppendedSignatureBlock(published)));
+
+// A body holding SOME tokens is incomplete and must get a full block.
+const halfDeleted = 'Terms.\n\nRecorded electronically at {{signed_at_timestamp}} from {{signed_at_ip}}.';
+ok('a half-deleted block is treated as incomplete',
+  willAppendSignatureBlock('contractor_agreement', halfDeleted));
+ok('publishing a half-deleted block yields ALL four tokens',
+  AGREEMENT_SIGNATURE_TOKENS.every((t) => bodyForPublish('contractor_agreement', halfDeleted).includes(`{{${t}}}`)));
+
+// A body with all four already (the seeded agreement's own inline wording) is
+// left alone - no second signature.
+ok('a complete inline signature is not duplicated',
+  !willAppendSignatureBlock('contractor_agreement', alreadySigned));
+
+// Stripping must never eat a provider's own prose.
+eq('strip leaves unrelated text untouched',
+  stripAppendedSignatureBlock('Just my terms.'), 'Just my terms.');
+eq('strip handles a body that is ONLY the block', stripAppendedSignatureBlock(AGREEMENT_SIGNATURE_BLOCK), '');
+eq('strip is null-safe', stripAppendedSignatureBlock(null), '');
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'}  (${pass} passed, ${fail} failed)`);
 process.exit(fail ? 1 : 0);

@@ -37,6 +37,7 @@ import {
   versionNumberOf,
   bodyForPublish,
   willAppendSignatureBlock,
+  stripAppendedSignatureBlock,
   AGREEMENT_SIGNATURE_BLOCK,
 } from "../../lib/instructorDocuments.js";
 
@@ -289,7 +290,11 @@ export default function InstructorDocuments() {
 function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, onPublished }) {
   const meta = INSTRUCTOR_DOCUMENTS.find((d) => d.key === docKey);
   const [title, setTitle] = useState(live?.title ?? meta?.label ?? "");
-  const [body, setBody] = useState(live?.body_text ?? "");
+  // STRIPPED. The signature block is never in the editable box — see
+  // stripAppendedSignatureBlock. Before this, it was appended once and then lived
+  // in body_text, so every edit after the first put it back in the textarea where
+  // a line could be deleted and never repaired.
+  const [body, setBody] = useState(stripAppendedSignatureBlock(live?.body_text ?? ""));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   // A PUBLISHED document opens read-only. You should be able to look at the
@@ -312,10 +317,12 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
   const versionNumber = versionNumberOf(nextVersion);
   const liveVersionNumber = live ? versionNumberOf(live.document_version) : null;
 
-  // Dirty against what is LIVE. A first draft is dirty as soon as it has text.
+  // Dirty against what is LIVE, comparing like with like: `body` is stripped, so
+  // the live text must be stripped too or every published agreement would look
+  // permanently edited and offer a pointless republish.
   const dirty =
     title.trim() !== (live?.title ?? "").trim() ||
-    body.trim() !== (live?.body_text ?? "").trim();
+    body.trim() !== stripAppendedSignatureBlock(live?.body_text ?? "");
   const canPublish = title.trim().length > 0 && body.trim().length > 0 && dirty && !busy;
 
   async function publish() {
@@ -500,14 +507,19 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
             // Replacing a live document: name what is being replaced and what
             // happens to people who already signed, then require a second click.
             <>
+              {/* Gated on canPublish, not just busy. The textarea is still live
+                  behind this confirmation, so emptying the body here used to leave
+                  a fully-enabled button whose handler returned at
+                  `if (!canPublish) return` — a click that did nothing, said
+                  nothing, and looked identical to a working one. */}
               <button
                 type="button"
                 onClick={publish}
-                disabled={busy}
+                disabled={!canPublish}
                 style={{
-                  background: BRIGHT, color: "#fff", border: "none", borderRadius: 999,
-                  padding: "10px 22px", fontSize: 14, fontWeight: 700, fontFamily: "inherit",
-                  cursor: busy ? "wait" : "pointer",
+                  background: canPublish ? BRIGHT : "#cfc6dc", color: "#fff", border: "none",
+                  borderRadius: 999, padding: "10px 22px", fontSize: 14, fontWeight: 700,
+                  fontFamily: "inherit", cursor: canPublish ? "pointer" : "not-allowed",
                 }}
               >
                 {busy ? "Publishing…" : `Yes, publish version ${versionNumber}`}
@@ -525,8 +537,9 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
                 Cancel
               </button>
               <span style={{ fontSize: 12, color: INK, flex: "1 1 240px", lineHeight: 1.5 }}>
-                This replaces what your instructors sign from now on. Everyone who already
-                signed keeps the wording they agreed to.
+                {canPublish
+                  ? "This replaces what your instructors sign from now on. Everyone who already signed keeps the wording they agreed to."
+                  : "Add a title and some words before publishing."}
               </span>
             </>
           ) : (
