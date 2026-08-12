@@ -51,9 +51,12 @@ export default function AbandonedPage() {
               provider's owner named to every OTHER provider's instructors. An
               instructor at any tenant who abandoned onboarding was told to
               contact a person who has nothing to do with their program.
-              "Program Manager" is the role this product already uses for the
-              person an instructor reaches out to (see InstructorPortal's site
-              placeholder), so it is the existing convention, not a new word. */}
+              "Program Manager" is JESSICA'S WORD, chosen by her on 2026-08-11
+              ("we just say the program manager will email you the link").
+              An earlier version of this comment justified it as "the role this
+              product already uses" — that was an overstatement: exactly ONE
+              pre-existing string used it (InstructorPortal's site placeholder).
+              Her decision is the reason; one prior usage is not a convention. */}
           <p className="mt-2 text-sm leading-relaxed text-neutral-600">
             If you&rsquo;d like to resume, contact your Program Manager.
           </p>

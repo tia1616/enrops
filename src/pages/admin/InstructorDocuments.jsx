@@ -55,12 +55,22 @@ function fmtDate(iso) {
 
 // Today's date in the PROVIDER's timezone, not UTC.
 //
-// Caught at runtime, not by reading: publishing at 5:15pm Pacific stamped
-// effective_from as tomorrow, because `new Date().toISOString().slice(0,10)` is
-// a UTC date and Pacific is 7-8 hours behind. Anything published after ~4pm
-// local carried the wrong effective date — on a legal document, where the date
-// is the whole point of the field. Same bug class as the open UTC-date item on
-// the backlog (attendance "today"), so this is one more instance, not a new one.
+// Caught at runtime: publishing at 5:15pm Pacific stamped effective_from as
+// tomorrow, because `new Date().toISOString().slice(0,10)` is a UTC date and
+// Pacific is 7-8 hours behind.
+//
+// HONEST SCOPE, because I first described this as worse than it is: NOTHING
+// READS effective_from. Grepped the whole repo — the only references are this
+// insert and a select that never uses the value. So the stored date is now
+// correct, but no operator or instructor sees it today, and the practical
+// impact of the bug was zero.
+//
+// The instance that DOES matter is the same mistake in
+// supabase/functions/_shared/agreementTemplate.ts, which builds `signing_date`
+// from getUTCDate() and renders it INTO the signed agreement text. 4 of the 22
+// agreements already signed on prod carry a date one day off. That one is
+// unfixed and is not mine to fix mid-change. Same class as the open backlog
+// item on attendance "today".
 //
 // en-CA because it formats as YYYY-MM-DD, which is what a Postgres date wants.
 // Falls back to UTC if the org has no timezone or the runtime rejects it —

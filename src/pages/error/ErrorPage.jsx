@@ -15,8 +15,9 @@ import MagicLinkResend from '../onboarding/MagicLinkResend.jsx';
 // This page is reached by instructors from ANY provider — the header above calls
 // it "intentionally-untenanted", which is exactly why naming a specific person
 // was wrong: it told every other provider's instructor to contact someone with
-// no connection to their program. "Program Manager" is the role this product
-// already uses for the person an instructor reaches out to.
+// no connection to their program. "Program Manager" is Jessica's word, chosen
+// 2026-08-11. (Not, as an earlier version of this comment claimed, an existing
+// product convention — only one prior string used it.)
 const COPY = {
   deactivated: {
     title: 'Your account has been deactivated.',
