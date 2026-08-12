@@ -26,10 +26,10 @@ interface SubmitAgreementBody {
   agreement_version?: string;
   typed_signature?: string;
   confirm_read?: boolean;
-  confirm_pay_structure?: boolean;
   confirm_contractor_status?: boolean;
-  confirm_confidentiality_ip?: boolean;
-  confirm_supersedes_prior?: boolean;
+  // Retired keys (confirm_pay_structure, confirm_confidentiality_ip,
+  // confirm_supersedes_prior) are intentionally not declared. A stale bundle may
+  // still send them; extra body fields are ignored, not rejected.
 }
 
 serve(async (req: Request) => {
@@ -54,16 +54,28 @@ serve(async (req: Request) => {
     if (!agreementVersion) return json({ error: 'agreement_version_required' }, 400);
     if (!typedSignature) return json({ error: 'typed_signature_required' }, 400);
 
-    // Required confirms must all be true. confirm_pay_structure was removed
-    // from Screen 4 (Pay Schedule is acknowledged separately on Screen 5);
-    // the DB column stays NOT NULL with default false, so the row will
-    // record false for it -- harmless, since the explicit acknowledgment
-    // lives in contractor_acknowledgments via submit-acknowledgments.
+    // Required confirms must all be true. THIS LIST IS A GATE, NOT A MIRROR:
+    // anything named here is rejected when absent, so it must match Screen 4's
+    // CONFIRMS exactly. Removing a tick box from the screen without removing it
+    // here stops every contractor signing, with a 400 and no way forward.
+    //
+    // Three keys have been retired from the screen over time. Each keeps its
+    // NOT NULL DEFAULT false column, so the row records FALSE — "not separately
+    // attested" — instead of a fabricated true, and rows signed earlier keep the
+    // true they genuinely earned:
+    //   confirm_pay_structure       — acknowledged on Screen 5 against the real
+    //                                 document (contractor_acknowledgments).
+    //   confirm_confidentiality_ip  — retired 2026-08-12.
+    //   confirm_supersedes_prior    — retired 2026-08-12.
+    // Both clauses remain in the agreement text and are still covered by the
+    // signature; only the separate tick is gone.
+    //
+    // An older cached bundle may still POST the retired keys. They are ignored
+    // rather than rejected — 400-ing a stale tab would strand a real contractor
+    // on a screen with nothing to correct.
     const confirms = {
       confirm_read: body.confirm_read === true,
       confirm_contractor_status: body.confirm_contractor_status === true,
-      confirm_confidentiality_ip: body.confirm_confidentiality_ip === true,
-      confirm_supersedes_prior: body.confirm_supersedes_prior === true,
     };
     const missing = Object.entries(confirms)
       .filter(([, v]) => !v)
@@ -124,12 +136,12 @@ serve(async (req: Request) => {
         ip_address: ip,
         user_agent: ua,
         confirm_read: confirms.confirm_read,
-        // confirm_pay_structure left to its column default (false). Pay
-        // Schedule acknowledgment is captured separately in
-        // contractor_acknowledgments by submit-acknowledgments.
         confirm_contractor_status: confirms.confirm_contractor_status,
-        confirm_confidentiality_ip: confirms.confirm_confidentiality_ip,
-        confirm_supersedes_prior: confirms.confirm_supersedes_prior,
+        // confirm_pay_structure, confirm_confidentiality_ip and
+        // confirm_supersedes_prior are all left to their column default (false).
+        // Writing true for a box nobody was shown is exactly the fabrication
+        // removed from the ORS certification; false is the honest record of
+        // "not separately attested".
       })
       .select('id')
       .maybeSingle();

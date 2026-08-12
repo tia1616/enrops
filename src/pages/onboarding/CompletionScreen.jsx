@@ -33,6 +33,16 @@ export default function CompletionScreen({ slug, onboarding, onDismiss, onRefres
 
   const [refreshing, setRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState('');
+  // WHEN we last successfully checked. There was no success state at all: a
+  // check that ran fine and found nothing changed re-rendered an identical
+  // screen, so the button was indistinguishable from a dead one — which is
+  // exactly how it was reported ("clicked it and nothing happened"). It had in
+  // fact worked every time.
+  //
+  // A TIMESTAMP, not "just now": this message stays on screen, and "just now"
+  // would keep claiming that minutes later. The clock is the browser's own, so
+  // it reads in the contractor's local time.
+  const [checkedAt, setCheckedAt] = useState(null);
 
   // Auto-dismiss into the schedule view as soon as the contractor reaches
   // 'complete'. The success card flashes briefly so they see the 🎉, then
@@ -48,6 +58,7 @@ export default function CompletionScreen({ slug, onboarding, onDismiss, onRefres
     if (refreshing) return;
     setRefreshing(true);
     setRefreshError('');
+    setCheckedAt(null);
     try {
       // For pending_stripe, actively poll Stripe via the edge function — the
       // webhook may be delayed and the contractor often hits Refresh right
@@ -71,6 +82,10 @@ export default function CompletionScreen({ slug, onboarding, onDismiss, onRefres
       // Re-fetch the onboarding row in the parent so this screen re-renders
       // with the new state (or routes away if status flipped to 'complete').
       if (onRefresh) await onRefresh();
+      // Only reached when the check SUCCEEDED. If the status had changed, the
+      // parent has already re-rendered or routed away and this never shows; so
+      // seeing it means "we asked, and the answer is still no".
+      setCheckedAt(new Date());
     } catch (err) {
       if (isHandledRedirect(err)) return;
       console.error('[CompletionScreen] refresh failed', err);
@@ -115,6 +130,18 @@ export default function CompletionScreen({ slug, onboarding, onDismiss, onRefres
               {refreshError && (
                 <div className="mt-3 rounded-md bg-amber-50 p-3 text-sm text-amber-900">
                   {refreshError}
+                </div>
+              )}
+              {/* The success half, which did not exist. Directly under the
+                  button, so the answer is where the finger already is. Says only
+                  what is known: we checked, at this time, and nothing has moved.
+                  It does not promise when it will. */}
+              {!refreshError && checkedAt && (
+                <div className="mt-3 rounded-md bg-neutral-100 p-3 text-sm text-neutral-700" role="status">
+                  Checked at{' '}
+                  {checkedAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })} — no
+                  change yet. You don&rsquo;t need to keep checking; we&rsquo;ll email you as soon as
+                  it clears.
                 </div>
               )}
             </>

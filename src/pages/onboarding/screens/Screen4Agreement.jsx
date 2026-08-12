@@ -44,14 +44,32 @@ import { useOnboardingConfig } from '../OnboardingConfigContext.jsx';
 //   WEAKEN the attestation J2S's 24 signed agreements rely on, which is worse
 //   than the narrower problem it solves. The first non-Oregon contractor is the
 //   deadline for the state step, not this line.
+// THREE TICK BOXES HAVE BEEN REMOVED FROM THIS LIST OVER TIME, and the pattern
+// is the same each time: the clause still binds, it just stops being ticked
+// separately. Signing the agreement binds the contractor to the WHOLE document —
+// a discrete tick box is extra evidence for one clause, not the thing that makes
+// that clause apply. Removing one narrows the evidence; it does not narrow the
+// contract.
+//
+// Each removal leaves its column NOT NULL DEFAULT false on contractor_agreements,
+// so the row records FALSE — "not separately attested" — rather than a
+// fabricated true. That distinction is the whole lesson from the ORS
+// certification: never store an attestation nobody was asked to make. Rows signed
+// before a removal keep the true they genuinely earned, so the record stays
+// readable in both directions.
+//
+//   confirm_pay_structure   — removed earlier. Pay & Deductions is acknowledged
+//     on Screen 5 against the actual document; asking here put the agreement
+//     before the document.
+//   confirm_confidentiality_ip  — removed 2026-08-12 (Jessica).
+//   confirm_supersedes_prior    — removed 2026-08-12 (Jessica).
+//     Both clauses remain in the agreement text and are still covered by the
+//     signature. NOTE: submit-agreement independently REQUIRES every key it
+//     knows about and 400s otherwise, so removing a box here without removing it
+//     there stops anyone signing at all. Both sides changed together.
 const CONFIRMS = [
   { key: 'confirm_read', label: 'I have read this Agreement' },
-  // confirm_pay_structure intentionally removed -- the Pay & Deductions
-  // policy is on Screen 5 and the contractor explicitly acknowledges it
-  // there. Asking on this screen put the agreement before the document.
   { key: 'confirm_contractor_status', label: 'I confirm my status as an independent contractor under ORS 670.600' },
-  { key: 'confirm_confidentiality_ip', label: 'I reaffirm the confidentiality, IP, and non-solicitation obligations' },
-  { key: 'confirm_supersedes_prior', label: 'Any prior agreement I have with this program is superseded' },
 ];
 
 export default function Screen4Agreement({ slug, instructor, onboarding, onAdvance, onBack }) {
