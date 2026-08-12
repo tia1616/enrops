@@ -53,6 +53,29 @@ function fmtDate(iso) {
   } catch { return ""; }
 }
 
+// Today's date in the PROVIDER's timezone, not UTC.
+//
+// Caught at runtime, not by reading: publishing at 5:15pm Pacific stamped
+// effective_from as tomorrow, because `new Date().toISOString().slice(0,10)` is
+// a UTC date and Pacific is 7-8 hours behind. Anything published after ~4pm
+// local carried the wrong effective date — on a legal document, where the date
+// is the whole point of the field. Same bug class as the open UTC-date item on
+// the backlog (attendance "today"), so this is one more instance, not a new one.
+//
+// en-CA because it formats as YYYY-MM-DD, which is what a Postgres date wants.
+// Falls back to UTC if the org has no timezone or the runtime rejects it —
+// wrong by hours at worst, versus throwing during a publish.
+function todayForOrg(timezone) {
+  try {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: timezone || undefined,
+      year: "numeric", month: "2-digit", day: "2-digit",
+    }).format(new Date());
+  } catch {
+    return new Date().toISOString().slice(0, 10);
+  }
+}
+
 export default function InstructorDocuments() {
   const { org } = useOutletContext();
   const [rows, setRows] = useState(null); // all legal_documents for this org
@@ -105,6 +128,7 @@ export default function InstructorDocuments() {
     return (
       <DocumentEditor
         orgId={org?.id}
+        orgTimezone={org?.timezone}
         docKey={openKey}
         live={liveByKey[openKey] ?? null}
         versions={versionsByKey[openKey] ?? []}
@@ -182,7 +206,7 @@ export default function InstructorDocuments() {
   );
 }
 
-function DocumentEditor({ orgId, docKey, live, versions, onBack, onPublished }) {
+function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, onPublished }) {
   const meta = INSTRUCTOR_DOCUMENTS.find((d) => d.key === docKey);
   const [title, setTitle] = useState(live?.title ?? meta?.label ?? "");
   const [body, setBody] = useState(live?.body_text ?? "");
@@ -208,7 +232,7 @@ function DocumentEditor({ orgId, docKey, live, versions, onBack, onPublished }) 
       document_version: nextVersion,
       title: title.trim(),
       body_text: body.trim(),
-      effective_from: new Date().toISOString().slice(0, 10),
+      effective_from: todayForOrg(orgTimezone),
     });
     setBusy(false);
     if (e) {

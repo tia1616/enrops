@@ -356,7 +356,13 @@ export default function AdminLayout() {
           // every org silently resolves to the most limited tier — it fails closed
           // and quietly, with no error anywhere. Caught exactly that way on staging:
           // a 'founding' org rendered the bare-bones Comms surface.
-          .select("id, name, slug, email, active_registration_term, uses_enrops_registration, venue_model, background_check_config, instructor_pay_model, platform_plan, stripe_charges_enabled, fee_pass_through, venue_answer, program_cadence, default_age_min, default_age_max, onboarding_completed_at")
+          // `timezone` is load-bearing for anything that stamps a DATE from the
+          // browser: without it, org?.timezone is undefined, the caller silently
+          // falls back to UTC, and a provider publishing after ~4pm Pacific gets
+          // tomorrow's date. Caught exactly that way on the instructor-documents
+          // screen. Adding a column here is the cheap half; the expensive half is
+          // noticing the read/select mismatch at all, because it does not throw.
+          .select("id, name, slug, email, timezone, active_registration_term, uses_enrops_registration, venue_model, background_check_config, instructor_pay_model, platform_plan, stripe_charges_enabled, fee_pass_through, venue_answer, program_cadence, default_age_min, default_age_max, onboarding_completed_at")
           .eq("id", memberRow.organization_id)
           .maybeSingle();
         if (!mounted) return;
