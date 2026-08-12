@@ -400,13 +400,6 @@ export default function InstructorDocuments() {
                 <p style={{ margin: "5px 0 0", fontSize: 13, color: MUTED, lineHeight: 1.5 }}>
                   {on ? d.help : "Your instructors are not asked for this."}
                 </p>
-                {/* Beside the switch that failed, so the reason is on screen
-                    wherever in the list you are. */}
-                {toggleError?.key === d.key && (
-                  <p role="alert" style={{ margin: "7px 0 0", fontSize: 12.5, color: RED, lineHeight: 1.5 }}>
-                    {toggleError.message}
-                  </p>
-                )}
               </div>
               {/* Still openable when off. A provider deciding whether to use a
                   document needs to read it, and one switching it back on should
@@ -424,6 +417,22 @@ export default function InstructorDocuments() {
               >
                 {live ? "Edit" : "Write it"}
               </button>
+              {/* OUTSIDE the dimmed wrapper above, on its own full-width line.
+                  It cannot live inside it: that wrapper drops to opacity 0.55
+                  when the row is off, and CSS opacity COMPOUNDS down the tree —
+                  an `opacity: 1` on the child multiplies to 0.55, it does not
+                  reset. The commonest failure is clicking an OFF row to switch it
+                  back ON, when `on` is still false, so the single message
+                  explaining why nothing moved would have rendered greyed-out
+                  beside a switch that had not moved. That is the "click did
+                  nothing" silent failure this message exists to prevent, wearing
+                  a disabled look. flex-basis 100% wraps it under the row (the row
+                  is already flexWrap). */}
+              {toggleError?.key === d.key && (
+                <p role="alert" style={{ flex: "1 1 100%", margin: "4px 0 0", fontSize: 12.5, color: RED, lineHeight: 1.5 }}>
+                  {toggleError.message}
+                </p>
+              )}
             </div>
           );
         })}

@@ -197,12 +197,22 @@ export default function InstructorPortal() {
           // Resolve the target org's real slug so portal URLs stay tenant-correct
           // even when an admin impersonates via /j2s/instructor?as=…
           if (target.organization_id) {
-            const { data: dir } = await supabase
+            // Same columns as the real sign-in path below. Selecting only `slug`
+            // here left documentConfig at {}, so an admin previewing an
+            // instructor saw the documents drawer list every document regardless
+            // of which ones that provider had switched off — a preview that
+            // shows something the instructor does not have is worse than no
+            // preview. Admin-only, so a failed read degrades rather than blocks.
+            const { data: dir, error: dirErr } = await supabase
               .from("public_org_directory")
-              .select("slug")
+              .select("slug, name, background_check_public, instructor_documents_public")
               .eq("id", target.organization_id)
               .maybeSingle();
+            if (dirErr) console.error("[InstructorPortal] preview org read failed", dirErr);
             if (dir?.slug) setOrgSlug(dir.slug);
+            if (dir?.name) setOrgName(dir.name);
+            if (dir?.background_check_public) setBackgroundCheck(dir.background_check_public);
+            if (dir?.instructor_documents_public) setDocumentConfig(dir.instructor_documents_public);
           }
           const targetInst = {
             instructor_id: target.id,
@@ -252,11 +262,31 @@ export default function InstructorPortal() {
       // The slug drives every portal URL below so we never hardcode a tenant.
       let resolvedSlug = pathSlug;
       if (fullInstructor.organization_id) {
-        const { data: dir } = await supabase
+        const { data: dir, error: dirErr } = await supabase
           .from("public_org_directory")
           .select("slug, name, background_check_public, active_registration_term, instructor_documents_public")
           .eq("id", fullInstructor.organization_id)
           .maybeSingle();
+        // FOUR org facts come out of this one read, and the fallbacks below are
+        // not harmless defaults — they are wrong answers wearing a default's
+        // clothes. Slug would fall back to the slug TYPED IN THE URL, so portal
+        // identity would come from whatever address the instructor opened rather
+        // than from their own org. Background check would fall back to enabled,
+        // putting that step back into the embedded wizard for an org that
+        // deliberately switched it off. Documents would fall back to all-on.
+        //
+        // The read fails wholesale on any environment missing migration 20260812a
+        // (PostgREST 400s a select naming an absent column), so this is a real
+        // path, not a theoretical one. Fail visibly instead of quietly running the
+        // portal on four substituted facts.
+        if (dirErr) {
+          console.error("[InstructorPortal] org directory read failed", dirErr);
+          if (mounted) {
+            setError("We couldn't load your program's details. Please refresh, or reach out to your Program Manager if it keeps happening.");
+            setPhase("error");
+          }
+          return;
+        }
         if (dir?.slug) resolvedSlug = dir.slug;
         setOrgSlug(resolvedSlug);
         setBackgroundCheck(dir?.background_check_public ?? { enabled: true });

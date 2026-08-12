@@ -72,11 +72,32 @@ export async function runGateCheck(
   let policiesRequired = true;
   let additionalRequired = true;
   if (row.organization_id) {
-    const { data: org } = await supabase
+    const { data: org, error: orgErr } = await supabase
       .from('organizations')
       .select('background_check_config, training_config, instructor_document_config')
       .eq('id', row.organization_id)
       .maybeSingle();
+    // BAIL, never proceed with org=null. This read's `error` used to be
+    // discarded, and the defaults it fell back to are not all on the safe side:
+    // policiesRequired/additionalRequired default to TRUE, which merely asks for
+    // more than needed, but bgcEnabled defaults to TRUE, which puts
+    // 'checkr_submitted' back into requiredSteps AND starts demanding
+    // checkr_status === 'clear'. So a single failed read at an org that
+    // deliberately switched background checks off would leave every contractor
+    // finishing every screen and never reaching 'complete' — allStepsDone false,
+    // status stuck, no completion email — with nothing anywhere saying why.
+    //
+    // Not hypothetical: this read fails for EVERY instructor on any environment
+    // where migration 20260812a has not landed, the moment a function bundling
+    // this module is redeployed, because instructor_document_config would not
+    // exist. Returning null leaves overall_status exactly as it was, which is
+    // recoverable; silently rewriting the rules is not.
+    if (orgErr) {
+      console.error('gate check org config read failed — status left unchanged:', orgErr);
+      return null;
+    }
+    // A SUCCESSFUL read with a null column keeps the documented defaults below:
+    // config absent means "not configured", which is a real answer.
     const cfg = (org?.background_check_config as { enabled?: boolean } | null) ?? null;
     bgcEnabled = cfg?.enabled !== false;
     const tcfg = (org?.training_config as { enabled?: boolean } | null) ?? null;

@@ -121,5 +121,53 @@ ok('gateCheck drops the additional step when its documents are all off',
 ok('gateCheck reads the document config column',
   gate.includes('instructor_document_config'));
 
+// --- the server's copy of the step grouping must match the browser's ---------
+//
+// instructorDocumentConfig.ts holds DOCUMENTS_BY_STEP, duplicating what lives on
+// INSTRUCTOR_DOCUMENTS[].step. Its own header says "change one, change the
+// other" — a rule enforced, until now, by nothing.
+//
+// The failure that allows: add an 8th document with step:'policies' to
+// instructorDocuments.js and forget this file. The wizard then fetches and
+// requires FOUR policy documents while the gate computes policiesRequired from a
+// three-key list. A provider who switches the original three off gets the screen
+// rendered by the wizard while 'policies_acknowledged' is dropped from the
+// required set — or, with the edit made the other way round, the gate waits
+// forever for a step key nobody can write. Both are silent and neither a build
+// nor a type check would notice.
+//
+// Parsed off disk rather than imported: the .ts is Deno source with type
+// annotations node will not run. The regex match is asserted, so a rename fails
+// loudly instead of quietly testing nothing.
+import { documentKeysForStep } from './instructorDocuments.js';
+
+const serverSrc = readFileSync(
+  new URL('../../supabase/functions/_shared/instructorDocumentConfig.ts', import.meta.url),
+  'utf8',
+);
+const byStepMatch = /DOCUMENTS_BY_STEP[^=]*=\s*\{([\s\S]*?)\n\};/.exec(serverSrc);
+ok('DOCUMENTS_BY_STEP was found in the server mirror', Boolean(byStepMatch));
+
+if (byStepMatch) {
+  const parseGroup = (step) => {
+    const m = new RegExp(`${step}\\s*:\\s*\\[([^\\]]*)\\]`).exec(byStepMatch[1]);
+    if (!m) return null;
+    return m[1].split(',').map((s) => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
+  };
+  for (const step of ['agreement', 'policies', 'additional']) {
+    const server = parseGroup(step);
+    ok(`server mirror declares the '${step}' group`, Array.isArray(server) && server.length > 0);
+    eq(`'${step}' group matches the browser definition exactly`,
+      (server ?? []).join(','), documentKeysForStep(step).join(','));
+  }
+  // Nothing extra, nothing missing, across the whole file.
+  const allServer = ['agreement', 'policies', 'additional'].flatMap((s) => parseGroup(s) ?? []);
+  const allBrowser = ['agreement', 'policies', 'additional'].flatMap((s) => documentKeysForStep(s));
+  eq('the two sides cover exactly the same key set',
+    [...allServer].sort().join(','), [...allBrowser].sort().join(','));
+  ok('the server mirror pins the agreement as always-on',
+    /ALWAYS_ON[\s\S]{0,120}contractor_agreement/.test(serverSrc));
+}
+
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'}  (${pass} passed, ${fail} failed)`);
 process.exit(fail ? 1 : 0);
