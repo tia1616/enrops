@@ -28,7 +28,16 @@ export const INSTRUCTOR_DOCUMENTS = [
     key: 'contractor_agreement',
     label: 'Contractor agreement',
     // Said in the operator's terms, not the system's.
-    help: 'The agreement each instructor signs before they can be assigned. They type their name to sign it, and we keep a copy of exactly what they signed.',
+    // "we keep a copy of exactly what they signed" was the first wording, and
+    // Jessica caught it: it implies a provider can go and READ that copy. They
+    // cannot. The snapshot, signature, timestamp and IP are all stored on
+    // contractor_agreements, and a PDF goes to the contractor-documents bucket —
+    // but NOTHING in the product surfaces any of it. Grepped: no read of
+    // agreement_text_snapshot anywhere in src, and the only provider-visible
+    // trace is a COUNT ("1 signed agreement") inside the deactivate-instructor
+    // dialog. So the honest promise is what they can actually observe: it shows
+    // as signed on the roster. Backlogged: give providers a way to open one.
+    help: 'The agreement each instructor signs before they can be assigned. They type their name to sign it, and it shows as signed on their roster record.',
     signed: true,
     starter: `This agreement is between [your business name] and the instructor named below.
 
