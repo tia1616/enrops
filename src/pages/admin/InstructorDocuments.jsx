@@ -34,6 +34,7 @@ import {
   INSTRUCTOR_DOCUMENTS,
   DOCUMENT_KEYS,
   nextVersionFor,
+  versionNumberOf,
 } from "../../lib/instructorDocuments.js";
 
 const PURPLE = "#1C004F";
