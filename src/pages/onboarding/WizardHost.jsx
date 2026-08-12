@@ -2,6 +2,7 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 import { STEP_KEYS, effectiveStepOrder, stepIndex } from '../../lib/onboardingSteps.js';
+import { stepHasEnabledDocuments } from '../../lib/instructorDocuments.js';
 import { OnboardingConfigContext } from './OnboardingConfigContext.jsx';
 import Screen1Welcome from './screens/Screen1Welcome.jsx';
 import Screen2BackgroundCheck from './screens/Screen2BackgroundCheck.jsx';
@@ -51,7 +52,7 @@ function resolveInitialStep(initialStep, onboarding, order) {
   return order[order.length - 1];
 }
 
-export default function WizardHost({ slug, instructor, onboarding: initialOnboarding, initialStep, backgroundCheck, trainingEnabled = false, trainingVideos = [], onDismiss }) {
+export default function WizardHost({ slug, instructor, onboarding: initialOnboarding, initialStep, backgroundCheck, documentConfig, orgName = '', trainingEnabled = false, trainingVideos = [], onDismiss }) {
   const navigate = useNavigate();
   const [onboarding, setOnboarding] = useState(initialOnboarding);
 
@@ -60,8 +61,20 @@ export default function WizardHost({ slug, instructor, onboarding: initialOnboar
   // the step is removed from navigation, progress, and (server-side, in
   // gateCheck) the completion gate. trainingEnabled already folds in the
   // "has a required video" check (see OnboardingRouter).
+  //
+  // The two document screens drop out the same way when the provider has turned
+  // off every document that screen contains. Rendering one empty would leave an
+  // instructor on a page with nothing to read and a Continue button that can
+  // never enable. gateCheck applies the identical rule server-side — if only
+  // this half existed the wizard would skip the screen and the gate would wait
+  // forever for a step key nobody can write.
   const bgcEnabled = backgroundCheck?.enabled !== false;
-  const stepOrder = useMemo(() => effectiveStepOrder({ bgcEnabled, trainingEnabled }), [bgcEnabled, trainingEnabled]);
+  const policiesEnabled = stepHasEnabledDocuments(documentConfig, 'policies');
+  const additionalEnabled = stepHasEnabledDocuments(documentConfig, 'additional');
+  const stepOrder = useMemo(
+    () => effectiveStepOrder({ bgcEnabled, trainingEnabled, policiesEnabled, additionalEnabled }),
+    [bgcEnabled, trainingEnabled, policiesEnabled, additionalEnabled],
+  );
 
   const [currentStep, setCurrentStep] = useState(() =>
     resolveInitialStep(initialStep, onboarding, stepOrder)
@@ -117,8 +130,18 @@ export default function WizardHost({ slug, instructor, onboarding: initialOnboar
   }, [instructor.id, navigate, slug, currentStep, stepOrder]);
 
   const configValue = useMemo(
-    () => ({ stepOrder, bgcEnabled, backgroundCheck: backgroundCheck ?? { enabled: bgcEnabled }, trainingEnabled, trainingVideos }),
-    [stepOrder, bgcEnabled, backgroundCheck, trainingEnabled, trainingVideos],
+    () => ({
+      stepOrder,
+      bgcEnabled,
+      backgroundCheck: backgroundCheck ?? { enabled: bgcEnabled },
+      // Screens 5 and 6 read this to decide which documents to fetch and require.
+      documentConfig: documentConfig ?? {},
+      // The provider's own display name, for the signed agreement PDF header.
+      orgName,
+      trainingEnabled,
+      trainingVideos,
+    }),
+    [stepOrder, bgcEnabled, backgroundCheck, documentConfig, orgName, trainingEnabled, trainingVideos],
   );
 
   if (!currentStep || TERMINAL_STATUSES.has(onboarding?.overall_status)) {

@@ -1,13 +1,15 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { invokeOnboardingFn, isHandledRedirect } from '../../../lib/onboardingFetch.js';
 import { fetchLegalDocument } from '../../../lib/legalDoc.js';
 import { STEP_KEYS } from '../../../lib/onboardingSteps.js';
 import { linkifyText } from '../../../lib/linkifyText.jsx';
+import { isDocumentEnabled } from '../../../lib/instructorDocuments.js';
+import { useOnboardingConfig } from '../OnboardingConfigContext.jsx';
 import Chevron from '../../../components/Chevron.jsx';
 import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardLayout.jsx';
 
-// Screen 6 — Additional Acknowledgments. Three documents, but the
+// Screen 6 — Additional Acknowledgments. Up to three documents, but the
 // mandatory_reporter_ack body is short enough that we render it inline
 // (not in an accordion) above its checkbox. photo_video_release and
 // vehicle_driving_ack are accordions with multiple per-section acks.
@@ -17,12 +19,23 @@ import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardL
 // ack booleans are tracked client-side for UI gating, not persisted
 // per-checkbox (the legal record is "the contractor acknowledged this
 // document at this version at this timestamp from this IP").
+//
+// PER-PROVIDER. This is the screen the toggle work exists for: a provider whose
+// instructors never drive should not have to write a driving acknowledgment
+// before anybody can finish onboarding. Each of the three is independently on or
+// off, so a section that is off is not fetched, not rendered, and — the part
+// that actually bites — not counted in `allLoaded` or `allAcksChecked` either.
+// Its checkbox group cannot be checked because it is not on the page, so
+// including it would leave Continue permanently disabled.
+//
+// With all three off the screen is dropped from the wizard entirely
+// (WizardHost/effectiveStepOrder) and from the completion gate (gateCheck).
 
 const MANDATORY_KEY = 'mandatory_reporter_ack';
 const PHOTO_KEY = 'photo_video_release';
 const VEHICLE_KEY = 'vehicle_driving_ack';
 
-const DOC_KEYS = [MANDATORY_KEY, PHOTO_KEY, VEHICLE_KEY];
+const ALL_DOC_KEYS = [MANDATORY_KEY, PHOTO_KEY, VEHICLE_KEY];
 
 const MANDATORY_ACK =
   'I have completed or will complete the mandatory reporting training and will comply with reporting requirements';
@@ -45,6 +58,14 @@ const VEHICLE_ACKS = [
 
 export default function Screen6Additional({ slug, instructor, onboarding, onAdvance, onBack }) {
   const navigate = useNavigate();
+  const { documentConfig } = useOnboardingConfig();
+  const DOC_KEYS = useMemo(
+    () => ALL_DOC_KEYS.filter((k) => isDocumentEnabled(documentConfig, k)),
+    [documentConfig],
+  );
+  const showMandatory = DOC_KEYS.includes(MANDATORY_KEY);
+  const showPhoto = DOC_KEYS.includes(PHOTO_KEY);
+  const showVehicle = DOC_KEYS.includes(VEHICLE_KEY);
   const [docs, setDocs] = useState({});
   const [loadError, setLoadError] = useState('');
   const [mandatoryAck, setMandatoryAck] = useState(false);
@@ -73,8 +94,13 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
         const map = {};
         for (const r of results) {
           if (r.error) {
+            // 404 = the provider hasn't published it, which retrying cannot fix
+            // and which leaves this step permanently uncompletable. Distinguished
+            // from a genuine transient failure, matching Screens 4 and 5.
             setLoadError(
-              "We can't load this document right now. Please try again or contact Jessica."
+              r.status === 404
+                ? "Your program hasn't published these documents yet. Your Program Manager needs to add them before you can continue — please reach out to them."
+                : "We can't load this document right now. Please try again, or reach out to your Program Manager."
             );
             return;
           }
@@ -94,17 +120,28 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
     return () => {
       cancelled = true;
     };
-  }, [navigate]);
+  }, [navigate, DOC_KEYS]);
 
+  // Each group only counts when its document is actually on the page. A hidden
+  // group's checkboxes can never be ticked, so requiring them would disable
+  // Continue with nothing on screen to explain why.
   const allLoaded = DOC_KEYS.every((k) => docs[k]);
-  const allPhotoChecked = PHOTO_ACKS.every((a) => photoChecked[a.key]);
-  const allVehicleChecked = VEHICLE_ACKS.every((a) => vehicleChecked[a.key]);
-  const allAcksChecked = mandatoryAck && allPhotoChecked && allVehicleChecked;
+  const allPhotoChecked = !showPhoto || PHOTO_ACKS.every((a) => photoChecked[a.key]);
+  const allVehicleChecked = !showVehicle || VEHICLE_ACKS.every((a) => vehicleChecked[a.key]);
+  const allAcksChecked = (!showMandatory || mandatoryAck) && allPhotoChecked && allVehicleChecked;
+  // Not gated on DOC_KEYS.length — see the empty-set guard in handleSubmit.
   const canSubmit = allLoaded && allAcksChecked;
 
   async function handleSubmit(e) {
     e.preventDefault();
     if (busy || !allLoaded) return;
+    // submit-acknowledgments rejects an empty documents array (400). This screen
+    // is dropped from the wizard before it can render with nothing on it, so
+    // this is a backstop rather than the mechanism.
+    if (DOC_KEYS.length === 0) {
+      onAdvance();
+      return;
+    }
     if (!allAcksChecked) {
       setConfirmError('Acknowledge all required items to continue.');
       return;
@@ -125,7 +162,7 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
         { navigate }
       );
       if (error) {
-        setSubmitError(error.message || "Something's wrong — please contact Jessica.");
+        setSubmitError(error.message || "Something's wrong — please reach out to your Program Manager.");
         setBusy(false);
         return;
       }
@@ -133,7 +170,7 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
     } catch (err) {
       if (isHandledRedirect(err)) return;
       console.error('[Screen6] submit failed', err);
-      setSubmitError("Something's wrong — please contact Jessica.");
+      setSubmitError("Something's wrong — please reach out to your Program Manager.");
       setBusy(false);
     }
   }
@@ -151,6 +188,7 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
       ) : (
         <form onSubmit={handleSubmit} noValidate>
           {/* Mandatory reporter — inline body, no accordion */}
+          {showMandatory && (
           <section className="rounded-md border border-neutral-200 p-4">
             <h2 className="text-sm font-semibold text-neutral-900">
               {docs[MANDATORY_KEY]?.title || 'Mandatory Reporting'}
@@ -177,7 +215,9 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
               <span>{MANDATORY_ACK}</span>
             </label>
           </section>
+          )}
 
+          {showPhoto && (
           <MultiAckAccordion
             title={docs[PHOTO_KEY]?.title || 'Photo / Video Release'}
             version={docs[PHOTO_KEY]?.version}
@@ -190,7 +230,9 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
             onCheck={(k, v) => setPhotoChecked((s) => ({ ...s, [k]: v }))}
             className="mt-3"
           />
+          )}
 
+          {showVehicle && (
           <MultiAckAccordion
             title={docs[VEHICLE_KEY]?.title || 'Vehicle and Driving'}
             version={docs[VEHICLE_KEY]?.version}
@@ -203,6 +245,7 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
             onCheck={(k, v) => setVehicleChecked((s) => ({ ...s, [k]: v }))}
             className="mt-3"
           />
+          )}
 
           <FieldError>{confirmError}</FieldError>
           <ScreenError>{submitError}</ScreenError>

@@ -3,11 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '../../../lib/supabase.js';
 import { invokeOnboardingFn, isHandledRedirect } from '../../../lib/onboardingFetch.js';
 import { fetchLegalDocument } from '../../../lib/legalDoc.js';
-import {
-  STEP_KEYS,
-  CONTRACTOR_AGREEMENT_VERSION,
-} from '../../../lib/onboardingSteps.js';
+import { STEP_KEYS } from '../../../lib/onboardingSteps.js';
 import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardLayout.jsx';
+import { useOnboardingConfig } from '../OnboardingConfigContext.jsx';
 
 // Screen 4 — Contractor Agreement. Fetches body text via get-legal-document
 // (RLS blocks direct legal_documents reads from instructor JWT), renders
@@ -19,6 +17,27 @@ import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardL
 // presentation PDF client-side and upload it. PDF failure does not block —
 // the legal record exists in the DB; the PDF is just a convenience copy.
 
+// These five are written to contractor_agreements as affirmative legal
+// attestations, so the wording matters and is Jessica's to approve.
+//
+// TWO TENANT-SPECIFIC STRINGS WERE HERE, and until this change they were
+// UNREACHABLE for any other provider because the document fetch 404'd. Dropping
+// the version pin made them live, so removing the dead end turned one of them
+// into a false statement rather than a blocker.
+//
+//   FIXED: "My prior agreement with J2S is superseded" named one specific
+//   company. Every other provider's instructor was being asked to attest that an
+//   agreement with a business they have never contracted with is superseded.
+//   Generalised to the clause's actual intent - superseding a prior agreement
+//   with THIS provider - without weakening it.
+//
+//   LEFT ALONE, DELIBERATELY: the ORS 670.600 reference. Oregon statute, and
+//   Jessica's explicit call on 2026-08-11 was to reuse the Oregon step as-is
+//   because Jeff is in Oregon, with a per-state step recorded as debt (there is
+//   no state column on organizations to branch on yet). Genericising it would
+//   WEAKEN the attestation J2S's 24 signed agreements rely on, which is worse
+//   than the narrower problem it solves. The first non-Oregon contractor is the
+//   deadline for the state step, not this line.
 const CONFIRMS = [
   { key: 'confirm_read', label: 'I have read this Agreement' },
   // confirm_pay_structure intentionally removed -- the Pay & Deductions
@@ -26,11 +45,12 @@ const CONFIRMS = [
   // there. Asking on this screen put the agreement before the document.
   { key: 'confirm_contractor_status', label: 'I confirm my status as an independent contractor under ORS 670.600' },
   { key: 'confirm_confidentiality_ip', label: 'I reaffirm the confidentiality, IP, and non-solicitation obligations' },
-  { key: 'confirm_supersedes_prior', label: 'My prior agreement with J2S is superseded' },
+  { key: 'confirm_supersedes_prior', label: 'Any prior agreement I have with this program is superseded' },
 ];
 
 export default function Screen4Agreement({ slug, instructor, onboarding, onAdvance, onBack }) {
   const navigate = useNavigate();
+  const { orgName } = useOnboardingConfig();
   const [docState, setDocState] = useState({ phase: 'loading' });
   const [confirms, setConfirms] = useState(() =>
     Object.fromEntries(CONFIRMS.map((c) => [c.key, false]))
@@ -45,18 +65,34 @@ export default function Screen4Agreement({ slug, instructor, onboarding, onAdvan
 
   useEffect(() => {
     let cancelled = false;
-    fetchLegalDocument('contractor_agreement', {
-      document_version: CONTRACTOR_AGREEMENT_VERSION,
-      navigate,
-    })
+    // NO document_version: fetch whatever this org has published most recently.
+    //
+    // This used to pin CONTRACTOR_AGREEMENT_VERSION — one provider's version
+    // string, hardcoded in frontend code. It worked only because that provider
+    // was the only one with any documents. For anyone else it 404s, and it kept
+    // 404ing even after they wrote their own agreement, unless they happened to
+    // name their version identically. The agreement is the one document an
+    // instructor must sign, so the whole onboarding flow dead-ended there.
+    //
+    // get-legal-document already resolves "no version given" to the newest row
+    // for (org, key) — the same rule the policy screens have always used and the
+    // same rule the authoring screen shows as "live now". So this is now ONE
+    // definition of which version is current instead of two that could disagree.
+    // Safe for the existing provider: verified they have exactly one published
+    // contractor agreement, so newest-wins resolves to the identical row.
+    fetchLegalDocument('contractor_agreement', { navigate })
       .then(({ data, error, status }) => {
         if (cancelled) return;
         if (error) {
           setDocState({
             phase: 'error',
+            // 404 now has a specific, likely cause: the provider has not
+            // published an agreement yet. Saying "try again" would send an
+            // instructor round a loop that cannot succeed, because nothing they
+            // do fixes it — only their Program Manager can.
             message:
               status === 404
-                ? "We can't load this document right now. Please try again or contact Jessica."
+                ? "Your program hasn't published its contractor agreement yet. Your Program Manager needs to add it before you can sign — please reach out to them."
                 : 'Something went wrong loading the agreement. Please try again.',
           });
           return;
@@ -103,8 +139,20 @@ export default function Screen4Agreement({ slug, instructor, onboarding, onAdvan
         typedSignature,
         signedAt,
         instructor,
+        // The header used to be one provider's name and one provider's version
+        // string, printed on every provider's archived contract. All three are
+        // now the real thing: this org's name, the title THEY gave the document,
+        // and the version actually signed — the same value the filename below
+        // records, so the two cannot disagree.
+        orgName,
+        documentTitle: docState.title,
+        documentVersion: docState.version,
       });
-      const path = `${instructor.id}/agreement_${CONTRACTOR_AGREEMENT_VERSION}_${Date.now()}.pdf`;
+      // The filename records the version ACTUALLY signed. It used to interpolate
+      // the hardcoded constant, so every provider's stored PDF would have been
+      // named after one other provider's version regardless of what the
+      // instructor read — a filename that lies about a signed document.
+      const path = `${instructor.id}/agreement_${docState.version}_${Date.now()}.pdf`;
       const { error } = await supabase.storage
         .from('contractor-documents')
         .upload(path, blob, { contentType: 'application/pdf', upsert: false });
@@ -146,7 +194,13 @@ export default function Screen4Agreement({ slug, instructor, onboarding, onAdvan
     setSubmitError('');
     try {
       const payload = {
-        agreement_version: docState.version || CONTRACTOR_AGREEMENT_VERSION,
+        // The version they actually read. No fallback to a constant: canSubmit
+        // requires phase === 'ready', which only happens after a real document
+        // loaded and set this. A fallback here could only ever submit a version
+        // the instructor did not read — and submit-agreement rightly rejects a
+        // version that does not exist for the org, so the fallback's only
+        // possible outcomes were "wrong text recorded" or "confusing error".
+        agreement_version: docState.version,
         typed_signature: signature.trim(),
         ...Object.fromEntries(CONFIRMS.map((c) => [c.key, true])),
       };

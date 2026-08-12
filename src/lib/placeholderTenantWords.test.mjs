@@ -58,6 +58,14 @@ const TENANT_IDENTIFIERS = [
   'chase youth', 'chaseyouth', 'chase-youth',
   // Prospect, not yet a tenant, but named in call notes
   'kumon',
+  // PEOPLE, not brands. Added 2026-08-11 after AbandonedPage.jsx was found naming
+  // one provider's owner to every OTHER provider's instructors, in five rendered
+  // strings including `placeholder="Anything you want Jessica to know."` — the
+  // exact attribute shape this guard scans. It stayed CI-green for months because
+  // the list held brands, domains and slugs but no person names. A first name in
+  // tenant-facing copy is the same failure as a brand in it, and carries no more
+  // false-positive risk: nothing generic should be addressing an operator by name.
+  'jessica', 'arielle',
 ];
 
 function walk(dir) {

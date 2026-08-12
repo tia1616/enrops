@@ -12,6 +12,7 @@ import FeedbackWidget from "../components/feedback/FeedbackWidget.jsx";
 import AnnouncementBanner from "../components/feedback/AnnouncementBanner.jsx";
 import { defaultTenantSlug } from "../lib/tenants.js";
 import { getPermissions } from "../lib/permissions";
+import { canManageInstructors } from "../lib/entitlements.js";
 import PortalSwitcher from "../components/PortalSwitcher.jsx";
 import RouteFallback from "../components/RouteFallback.jsx";
 import { setOrgGroup } from "../lib/analytics";
@@ -126,7 +127,7 @@ const NAV = [
   // /admin/branding by URL — previously they could view it read-only via
   // members_read_branding while their save would fail at RLS, i.e. a page they could
   // reach but not use. One viewer exists on prod. Same posture as /admin/email-sender.
-  { to: "/admin/settings", label: "Settings", gate: "settings", match: ["/admin/settings", "/admin/waivers", "/admin/survey-settings", "/admin/pay-rates", "/admin/email-sender", "/admin/branding"] }, // owner/admin only
+  { to: "/admin/settings", label: "Settings", gate: "settings", match: ["/admin/settings", "/admin/waivers", "/admin/survey-settings", "/admin/pay-rates", "/admin/email-sender", "/admin/branding", "/admin/instructor-documents"] }, // owner/admin only
   { to: "/admin/team", label: "Team", gate: "team" },             // owner/admin only
 ];
 
@@ -138,8 +139,20 @@ const NAV = [
 // so it belongs beside the programs it serves and not in Settings, where it
 // briefly lived. Any legacy_own_platform tenant (J2S) keeps the
 // full nav — this returns the SAME array reference for them, so their path is
-// unchanged. Empirically safe: every enrops_platform tenant on prod has zero
-// instructors and zero programs, so nothing they use is being hidden.
+// unchanged.
+//
+// THE "EMPIRICALLY SAFE" CLAIM THAT USED TO BE HERE IS DEAD. It read: "every
+// enrops_platform tenant on prod has zero instructors and zero programs, so
+// nothing they use is being hidden." A founding operator onboarding their own
+// instructors breaks both halves — he already has 21 programs, and the whole
+// point of this work is that he gets instructors. Jessica hit the consequence
+// directly on staging: signed in as a lean+founding org she could author the
+// documents instructors sign, and then had nowhere to add an instructor at all,
+// because this function removes the Instructors section unconditionally.
+//
+// So the instructor surfaces are now gated on the ENTITLEMENT, exactly like the
+// Settings sections that lead to them. Everything else in HIDE_TOP still keys off
+// the lean nav shape, because it genuinely is about shape rather than permission.
 function shapeNavForOrg(nav, org) {
   if (org?.instructor_pay_model !== "enrops_platform") return nav; // full nav (J2S etc.)
   const HIDE_TOP = new Set([
@@ -155,7 +168,6 @@ function shapeNavForOrg(nav, org) {
                                      // this is clutter until they upgrade. The
                                      // ROUTE still works, so any org that
                                      // already has a second admin keeps it.
-    "/admin/schedule",               // Instructors (paid upgrade)
     "/admin/schools",                // Locations -> now a tab under
                                      // Programs (see the tabs block below), so
                                      // it stays off the top-level sidebar.
@@ -166,9 +178,15 @@ function shapeNavForOrg(nav, org) {
     // nav-shape function — see canReachCommsTab, which the routes enforce.
     "/admin/community",              // Community (coming soon)
   ]);
+  // Instructors (/admin/schedule and its tabs) is a PERMISSION question, not a
+  // nav-shape one: a lean org on a full-access plan is entitled to it, a lean org
+  // on a standard plan is not. Same predicate the Settings cards use, so the nav
+  // and the settings that configure it can never disagree.
+  const canInstructors = canManageInstructors(org);
   const out = [];
   for (const item of nav) {
     if (HIDE_TOP.has(item.to)) continue;
+    if (item.to === "/admin/schedule" && !canInstructors) continue;
     if (item.to === "/admin/programs" && item.tabs) {
       // Drop the curriculum "Offerings" library and the afterschool custody log,
       // then add the venue surface as a tab. Locations/Calendars used to sit
@@ -181,7 +199,11 @@ function shapeNavForOrg(nav, org) {
       out.push({
         ...item,
         tabs: [
-          ...item.tabs.filter((t) => t.to !== "/admin/curricula" && t.to !== "/admin/class-reports"),
+          // Class Reports is the arrival/dismissal safety log — an instructor
+          // surface, so it follows the same entitlement rather than being dropped
+          // from every lean org. The curriculum library stays out: that is a
+          // genuine tier difference, not a permission one.
+          ...item.tabs.filter((t) => t.to !== "/admin/curricula" && (t.to !== "/admin/class-reports" || canInstructors)),
           // School calendar promoted to a Programs peer (was buried as an inner
           // tab of Locations, 3 levels deep). It's a scheduling INPUT, so it
           // belongs beside the programs it shapes. navItemActive lights Programs
@@ -356,7 +378,13 @@ export default function AdminLayout() {
           // every org silently resolves to the most limited tier — it fails closed
           // and quietly, with no error anywhere. Caught exactly that way on staging:
           // a 'founding' org rendered the bare-bones Comms surface.
-          .select("id, name, slug, email, active_registration_term, uses_enrops_registration, venue_model, background_check_config, instructor_pay_model, platform_plan, stripe_charges_enabled, fee_pass_through, venue_answer, program_cadence, default_age_min, default_age_max, onboarding_completed_at")
+          // `timezone` is load-bearing for anything that stamps a DATE from the
+          // browser: without it, org?.timezone is undefined, the caller silently
+          // falls back to UTC, and a provider publishing after ~4pm Pacific gets
+          // tomorrow's date. Caught exactly that way on the instructor-documents
+          // screen. Adding a column here is the cheap half; the expensive half is
+          // noticing the read/select mismatch at all, because it does not throw.
+          .select("id, name, slug, email, timezone, active_registration_term, uses_enrops_registration, venue_model, background_check_config, instructor_pay_model, platform_plan, stripe_charges_enabled, fee_pass_through, venue_answer, program_cadence, default_age_min, default_age_max, onboarding_completed_at")
           .eq("id", memberRow.organization_id)
           .maybeSingle();
         if (!mounted) return;

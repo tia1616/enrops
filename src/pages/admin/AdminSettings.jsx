@@ -7,6 +7,7 @@
 import { useEffect, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
+import { canManageInstructors } from "../../lib/entitlements.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -200,7 +201,7 @@ export default function AdminSettings() {
           keeping a duplicate entry point here would be two doors to one room.
           J2S is unaffected: it keeps its own top-level Locations item. */}
 
-      {org?.instructor_pay_model !== "enrops_platform" && (
+      {canManageInstructors(org) && (
       <section style={{ marginTop: 24 }}>
         <h2 style={sectionTitle}>Availability survey</h2>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
@@ -267,7 +268,7 @@ export default function AdminSettings() {
         </div>
       </section>
 
-      {org?.instructor_pay_model !== "enrops_platform" && (
+      {canManageInstructors(org) && (
       <section style={{ marginTop: 24 }}>
         <h2 style={sectionTitle}>Pay rates</h2>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
@@ -282,7 +283,33 @@ export default function AdminSettings() {
       </section>
       )}
 
-      {org?.instructor_pay_model !== "enrops_platform" && (
+      {/* Gated on the ENTITLEMENT, not the nav shape. Every other instructor
+          section here tests `instructor_pay_model !== 'enrops_platform'`, which
+          hides it from a founding operator who is entitled to the whole product
+          — and this is the one surface their instructors cannot onboard without.
+          See canManageInstructors. */}
+      {canManageInstructors(org) && (
+      <section style={{ marginTop: 24 }}>
+        <h2 style={sectionTitle}>Instructor documents</h2>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>What your instructors sign</div>
+            <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
+              Your contractor agreement, pay schedule, code of conduct and the rest — written in your words. Instructors read and sign these when they join.
+            </div>
+          </div>
+          <Link to="/admin/instructor-documents" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
+        </div>
+      </section>
+      )}
+
+      {/* Entitlement, not nav shape. Jessica confirmed on staging as a
+          lean+founding org: the documents card appeared but this did not, so she
+          could author an agreement and then had no way to configure — or switch
+          OFF — the background-check step, which defaults ON
+          (WizardHost: `backgroundCheck?.enabled !== false`). Her instructor would
+          hit a step with no provider, no link and no way out. */}
+      {canManageInstructors(org) && (
       <section style={{ marginTop: 24 }}>
         <h2 style={sectionTitle}>Background checks</h2>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
@@ -297,7 +324,7 @@ export default function AdminSettings() {
       </section>
       )}
 
-      {org?.instructor_pay_model !== "enrops_platform" && (
+      {canManageInstructors(org) && (
       <section style={{ marginTop: 24 }}>
         <h2 style={sectionTitle}>Training videos</h2>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>

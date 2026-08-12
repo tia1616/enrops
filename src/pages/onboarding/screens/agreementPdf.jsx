@@ -1,5 +1,6 @@
 import React from 'react';
 import { Document, Page, Text, View, StyleSheet, pdf } from '@react-pdf/renderer';
+import { versionNumberOf } from '../../../lib/instructorDocuments.js';
 
 // Presentation PDF for the signed contractor agreement. NOT the legal record
 // — that's the server-side snapshot in contractor_agreements.
@@ -53,7 +54,47 @@ const styles = StyleSheet.create({
   },
 });
 
-export function AgreementPdf({ bodyText, typedSignature, signedAt, instructor }) {
+/**
+ * The running header on every page of the signed PDF.
+ *
+ * WAS HARDCODED to one provider's name and one provider's version string
+ * ("Journey to STEAM — Independent Contractor Agreement, Version 2.0"), printed
+ * on the archived agreement of EVERY provider's contractors. Two separate lies
+ * on a legal document: the wrong company, and a version number with no relation
+ * to what was actually signed — which mattered more after the agreement version
+ * became per-provider, because the header then contradicted both the stored row
+ * and the filename beside it.
+ *
+ * Every part is now the real thing, and every part is OPTIONAL. A header is
+ * decoration; a missing org name must never print "undefined — " across the top
+ * of a contract, and must never block the PDF from being produced at all.
+ *
+ * Version display goes through versionNumberOf, the SAME parse the authoring
+ * screen uses, so the operator's "Version 4", the stored `v4`, the filename and
+ * this header cannot disagree. An unparseable stored value falls back to the raw
+ * string rather than inventing a number.
+ *
+ * Exported for its own test — the fallbacks are the point and they are invisible
+ * in a rendered PDF.
+ */
+export function agreementPdfHeader({ orgName, documentTitle, documentVersion } = {}) {
+  const name = (orgName ?? '').trim();
+  const title = (documentTitle ?? '').trim() || 'Independent Contractor Agreement';
+  const raw = (documentVersion ?? '').trim();
+  const n = raw ? versionNumberOf(raw) : null;
+  const version = n ? `Version ${n}` : raw;
+  return [name, [title, version].filter(Boolean).join(', ')].filter(Boolean).join(' — ');
+}
+
+export function AgreementPdf({
+  bodyText,
+  typedSignature,
+  signedAt,
+  instructor,
+  orgName,
+  documentTitle,
+  documentVersion,
+}) {
   // Split body text on blank lines so paragraph spacing matches the on-screen
   // rendering. Single-line breaks within a paragraph become spaces (React PDF
   // will reflow).
@@ -74,7 +115,7 @@ export function AgreementPdf({ bodyText, typedSignature, signedAt, instructor })
     <Document>
       <Page size="LETTER" style={styles.page}>
         <Text style={styles.header} fixed>
-          Journey to STEAM — Independent Contractor Agreement, Version 2.0
+          {agreementPdfHeader({ orgName, documentTitle, documentVersion })}
         </Text>
 
         {paragraphs.map((p, i) => (

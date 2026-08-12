@@ -12,10 +12,16 @@ import MagicLinkResend from '../onboarding/MagicLinkResend.jsx';
 //   link_expired      — magic link rejected at auth (renders resend form)
 // Unknown reasons fall through to the generic default.
 
+// This page is reached by instructors from ANY provider — the header above calls
+// it "intentionally-untenanted", which is exactly why naming a specific person
+// was wrong: it told every other provider's instructor to contact someone with
+// no connection to their program. "Program Manager" is Jessica's word, chosen
+// 2026-08-11. (Not, as an earlier version of this comment claimed, an existing
+// product convention — only one prior string used it.)
 const COPY = {
   deactivated: {
     title: 'Your account has been deactivated.',
-    body: 'Please contact Jessica to discuss.',
+    body: 'Please contact your Program Manager to discuss.',
   },
   link_expired: {
     // Title + body rendered by MagicLinkResend below; nothing here.
@@ -24,7 +30,7 @@ const COPY = {
   },
   org_misconfigured: {
     title: "Something's wrong with your account setup.",
-    body: 'Please contact Jessica.',
+    body: 'Please contact your Program Manager.',
   },
 };
 

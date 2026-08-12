@@ -47,23 +47,33 @@ export default function AbandonedPage() {
           <h1 className="text-lg font-semibold text-neutral-900">
             Your onboarding was marked inactive.
           </h1>
+          {/* "Jessica" was hardcoded in all three of these strings — one
+              provider's owner named to every OTHER provider's instructors. An
+              instructor at any tenant who abandoned onboarding was told to
+              contact a person who has nothing to do with their program.
+              "Program Manager" is JESSICA'S WORD, chosen by her on 2026-08-11
+              ("we just say the program manager will email you the link").
+              An earlier version of this comment justified it as "the role this
+              product already uses" — that was an overstatement: exactly ONE
+              pre-existing string used it (InstructorPortal's site placeholder).
+              Her decision is the reason; one prior usage is not a convention. */}
           <p className="mt-2 text-sm leading-relaxed text-neutral-600">
-            If you&rsquo;d like to resume, contact Jessica.
+            If you&rsquo;d like to resume, contact your Program Manager.
           </p>
 
           {outcome === 'sent' && (
             <div className="mt-4 rounded-md bg-green-50 p-3 text-sm text-green-900">
-              Sent ✓ — Jessica will email you.
+              Sent ✓ — your Program Manager will email you.
             </div>
           )}
           {outcome === 'rate_limited' && (
             <div className="mt-4 rounded-md bg-amber-50 p-3 text-sm text-amber-900">
-              We&rsquo;ve already sent your request. Please wait — Jessica will be in touch.
+              We&rsquo;ve already sent your request. Please wait — your Program Manager will be in touch.
             </div>
           )}
           {outcome === 'error' && (
             <div className="mt-4 rounded-md bg-red-50 p-3 text-sm text-red-900">
-              Something went wrong — please email Jessica directly.
+              Something went wrong — please email your Program Manager directly.
             </div>
           )}
 
@@ -77,7 +87,7 @@ export default function AbandonedPage() {
                 onChange={(e) => setNote(e.target.value)}
                 rows={3}
                 className="mt-1 block w-full rounded-md border border-neutral-300 px-3 py-2 text-sm text-neutral-900 focus:border-neutral-500 focus:outline-none"
-                placeholder="Anything you want Jessica to know."
+                placeholder="Anything you want your Program Manager to know."
               />
               <button
                 type="submit"

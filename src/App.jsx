@@ -1,6 +1,6 @@
 import React, { Suspense, lazy } from 'react';
 import { Routes, Route, Navigate, useOutletContext } from 'react-router-dom';
-import { canReachCommsTab } from './lib/entitlements.js';
+import { canReachCommsTab, canManageInstructors } from './lib/entitlements.js';
 import PublicLayout from './layouts/PublicLayout.jsx';
 import AdminLayout from './layouts/AdminLayout.jsx';
 import { CartProvider } from './context/CartContext.jsx';
@@ -78,6 +78,7 @@ const RegistrationQuestions = lazy(() => import('./pages/admin/RegistrationQuest
 const WaiverManager = lazy(() => import('./pages/admin/WaiverManager.jsx'));
 const EmailSenderSettings = lazy(() => import('./pages/admin/EmailSenderSettings.jsx'));
 const BackgroundCheckSettings = lazy(() => import('./pages/admin/BackgroundCheckSettings.jsx'));
+const InstructorDocuments = lazy(() => import('./pages/admin/InstructorDocuments.jsx'));
 const TrainingSettings = lazy(() => import('./pages/admin/TrainingSettings.jsx'));
 const BrandLogoSettings = lazy(() => import('./pages/admin/BrandLogoSettings.jsx'));
 const PayRatesSettings = lazy(() => import('./pages/admin/PayRatesSettings.jsx'));
@@ -128,6 +129,32 @@ function CommsTabRoute({ tab, children }) {
   // and an infinite redirect is a far worse failure than landing on Programs.
   if (tab === "contacts") return <Navigate to="/admin/programs" replace />;
   return <Navigate to="/admin/family-comms/contacts" replace />;
+}
+
+// Instructor documents are an instructor-management surface, so an org that
+// cannot manage instructors does not get the authoring page by URL.
+//
+// THIS GATE IS PRESENTATIONAL, and an earlier version of this comment implied
+// otherwise by saying it stopped a non-entitled owner publishing "from a
+// bookmark". It stops them reaching the PAGE. It does not stop the write:
+// org_admins_write_legal_docs checks can_admin_org(organization_id), which proves
+// the caller administers that org and carries no plan test — measured on staging
+// as a real lean+free admin, a direct POST to /rest/v1/legal_documents with their
+// own organization_id returns 201.
+//
+// Left that way on purpose. The boundary that matters holds — a CROSS-ORG write
+// is refused with 42501 — so what remains is a commercial gate on an operator
+// writing their own rows, and those documents are inert without the instructor
+// surfaces, which are gated too. Enforcing the plan in SQL would put entitlement
+// logic in a second place where it can drift from entitlements.js, which is a
+// worse failure than the one it prevents. If that trade ever flips, change it
+// here and in the policy together.
+//
+// org is loaded before AdminLayout renders <Outlet>, so this never flashes.
+function InstructorDocsRoute({ children }) {
+  const { org } = useOutletContext();
+  if (canManageInstructors(org)) return children;
+  return <Navigate to="/admin/settings" replace />;
 }
 
 export default function App() {
@@ -301,6 +328,15 @@ export default function App() {
         <Route path="email-sender" element={<EmailSenderSettings />} />
         <Route path="pay-rates" element={<PayRatesSettings />} />
         <Route path="background-checks" element={<BackgroundCheckSettings />} />
+        {/* Authoring the documents instructors read and sign.
+            TWO independent gates, and an earlier version of this comment wrongly
+            claimed one covered both. The Settings `match` entry gates ROLE
+            (owner/admin) via AdminLayout's guard. It says nothing about the PLAN,
+            so a non-entitled org could reach this page by URL and publish
+            successfully — the RLS policy checks can_admin_org, which is role-only
+            and carries no plan test. Hiding the Settings card is not a gate, the
+            same lesson CommsTabRoute above exists for. */}
+        <Route path="instructor-documents" element={<InstructorDocsRoute><InstructorDocuments /></InstructorDocsRoute>} />
         <Route path="training" element={<TrainingSettings />} />
         <Route path="branding" element={<BrandLogoSettings />} />
         <Route path="dev/extraction-test" element={<ExtractionTest />} />

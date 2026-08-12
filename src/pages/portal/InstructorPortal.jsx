@@ -22,6 +22,7 @@ import InstructorProfile from "./InstructorProfile.jsx";
 import Chevron from "../../components/Chevron.jsx";
 import WizardHost from "../onboarding/WizardHost.jsx";
 import { fetchLegalDocument } from "../../lib/legalDoc.js";
+import { isDocumentEnabled } from "../../lib/instructorDocuments.js";
 import { linkifyText } from "../../lib/linkifyText.jsx";
 import PwaInstallButton from "../../components/pwa/PwaInstallButton.jsx";
 import {
@@ -107,6 +108,10 @@ export default function InstructorPortal() {
   // Instructor-facing background-check config for this org (enabled flag +
   // provider name/link/instructions). Drives the wizard's background-check step.
   const [backgroundCheck, setBackgroundCheck] = useState(null);
+  // { <document_key>: boolean } from public_org_directory. Read via
+  // isDocumentEnabled — an absent key means ON.
+  const [documentConfig, setDocumentConfig] = useState({});
+  const [orgName, setOrgName] = useState("");
   const [assignments, setAssignments] = useState([]);
   const [coInstructors, setCoInstructors] = useState({}); // { [camp_session_id]: [{ name, role, email, phone }] } — camp co-teachers
   const [coInstructorsProgram, setCoInstructorsProgram] = useState({}); // { [program_id]: [...] } — after-school co-teachers
@@ -192,12 +197,22 @@ export default function InstructorPortal() {
           // Resolve the target org's real slug so portal URLs stay tenant-correct
           // even when an admin impersonates via /j2s/instructor?as=…
           if (target.organization_id) {
-            const { data: dir } = await supabase
+            // Same columns as the real sign-in path below. Selecting only `slug`
+            // here left documentConfig at {}, so an admin previewing an
+            // instructor saw the documents drawer list every document regardless
+            // of which ones that provider had switched off — a preview that
+            // shows something the instructor does not have is worse than no
+            // preview. Admin-only, so a failed read degrades rather than blocks.
+            const { data: dir, error: dirErr } = await supabase
               .from("public_org_directory")
-              .select("slug")
+              .select("slug, name, background_check_public, instructor_documents_public")
               .eq("id", target.organization_id)
               .maybeSingle();
+            if (dirErr) console.error("[InstructorPortal] preview org read failed", dirErr);
             if (dir?.slug) setOrgSlug(dir.slug);
+            if (dir?.name) setOrgName(dir.name);
+            if (dir?.background_check_public) setBackgroundCheck(dir.background_check_public);
+            if (dir?.instructor_documents_public) setDocumentConfig(dir.instructor_documents_public);
           }
           const targetInst = {
             instructor_id: target.id,
@@ -247,14 +262,46 @@ export default function InstructorPortal() {
       // The slug drives every portal URL below so we never hardcode a tenant.
       let resolvedSlug = pathSlug;
       if (fullInstructor.organization_id) {
-        const { data: dir } = await supabase
+        const { data: dir, error: dirErr } = await supabase
           .from("public_org_directory")
-          .select("slug, background_check_public, active_registration_term")
+          .select("slug, name, background_check_public, active_registration_term, instructor_documents_public")
           .eq("id", fullInstructor.organization_id)
           .maybeSingle();
+        // FOUR org facts come out of this one read, and the fallbacks below are
+        // not harmless defaults — they are wrong answers wearing a default's
+        // clothes. Slug would fall back to the slug TYPED IN THE URL, so portal
+        // identity would come from whatever address the instructor opened rather
+        // than from their own org. Background check would fall back to enabled,
+        // putting that step back into the embedded wizard for an org that
+        // deliberately switched it off. Documents would fall back to all-on.
+        //
+        // The read fails wholesale on any environment missing migration 20260812a
+        // (PostgREST 400s a select naming an absent column), so this is a real
+        // path, not a theoretical one. Fail visibly instead of quietly running the
+        // portal on four substituted facts.
+        // NO `if (mounted)` GUARD HERE, deliberately. `mounted` belongs to the
+        // useEffect above and is not in scope inside linkAndLoad — referencing it
+        // would throw a ReferenceError and turn this handled error into a hard
+        // crash, on precisely the path this branch exists to handle. The rest of
+        // linkAndLoad sets phase directly (see its catch), so this matches.
+        if (dirErr) {
+          console.error("[InstructorPortal] org directory read failed", dirErr);
+          setError("We couldn't load your program's details. Please refresh, or reach out to your Program Manager if this keeps happening.");
+          setPhase("error");
+          return;
+        }
         if (dir?.slug) resolvedSlug = dir.slug;
         setOrgSlug(resolvedSlug);
         setBackgroundCheck(dir?.background_check_public ?? { enabled: true });
+        // The documents drawer lists reference copies of the same documents the
+        // wizard collects, so it has to respect the same on/off choices — a
+        // provider who switched the attendance policy off would otherwise still
+        // see it advertised here, and opening it would tell their instructor to
+        // "contact your admin" about a document that deliberately does not exist.
+        // Absent (older deploy / missing column) resolves to all on, unchanged.
+        setDocumentConfig(dir?.instructor_documents_public ?? {});
+        // For the signed agreement PDF's header, via the wizard embedded below.
+        setOrgName(dir?.name ?? "");
         setActiveTerm(dir?.active_registration_term ?? null);
       }
 
@@ -998,6 +1045,13 @@ export default function InstructorPortal() {
           instructor={{ ...instructor, id: instructor.id ?? instructor.instructor_id }}
           onboarding={onboarding}
           backgroundCheck={backgroundCheck}
+          // SECOND ENTRY POINT. The same wizard is reachable from
+          // /:slug/onboarding (OnboardingRouter) and from here, and the two pass
+          // their own props — so a config threaded through only one of them is
+          // live on one door and missing on the other, with nothing to show for
+          // it either way. Whatever OnboardingRouter passes, this must pass too.
+          documentConfig={documentConfig}
+          orgName={orgName}
           onComplete={refetchOnboardingStatus}
           onDismiss={async () => {
             // Pending_* and payouts_disabled statuses won't flip to 'complete',
@@ -1133,7 +1187,7 @@ export default function InstructorPortal() {
   if (view === "documents") {
     return (
       <Shell slug={orgSlug} instructorName={displayFirstName(instructor)} onSignOut={signOut}>
-        <DocumentsView onBack={() => setView("schedule")} />
+        <DocumentsView onBack={() => setView("schedule")} documentConfig={documentConfig} />
       </Shell>
     );
   }
@@ -2406,14 +2460,42 @@ function ChangeRequestDialog({ assignment, value, onChange, busy, onSubmit, onCl
 // instructor JWTs, so the wizard helper is reused). W-9 / tax forms are
 // not stored here — Stripe handles them and surfaces them via the Express
 // dashboard, so that row links out instead of opening an inline reader.
+//
+// FILTERED BY THE PROVIDER'S CHOICES. Two of these three are toggleable, so the
+// list is a catalogue and `docs` below is what this provider actually uses. The
+// agreement is always on. Listing a switched-off document here would contradict
+// the admin screen's own promise ("your instructors are not asked for this") and
+// send the instructor to an error telling them to contact their admin about a
+// document that deliberately does not exist.
 const DRAWER_DOCS = [
   { key: "contractor_agreement", label: "Independent contractor agreement" },
   { key: "pay_schedule", label: "Pay schedule" },
   { key: "attendance_policy", label: "Attendance policy (absence, tardy, pay deductions)" },
 ];
 
-function DocumentsView({ onBack }) {
+function DocumentsView({ onBack, documentConfig }) {
   const [openKey, setOpenKey] = useState(null);
+  const docs = DRAWER_DOCS.filter((d) => isDocumentEnabled(documentConfig, d.key));
+  // The intro names what is actually in the list. It used to name all three
+  // outright, so a provider using only the agreement had their instructors told
+  // about a pay schedule and an attendance policy that were not there.
+  const named = [
+    "Your agreement",
+    ...docs.filter((d) => d.key === "pay_schedule").map(() => "pay schedule"),
+    ...docs.filter((d) => d.key === "attendance_policy").map(() => "attendance policy"),
+    "tax forms",
+  ];
+  // Said out loud for each reachable state, because a list built by filtering is
+  // exactly where a stray comma survives review:
+  //   all on   -> "Your agreement, pay schedule, attendance policy, and tax forms"
+  //   one off  -> "Your agreement, attendance policy, and tax forms"
+  //   both off -> "Your agreement and tax forms"   (NOT "Your agreement, and…")
+  // So the serial comma only appears once there are three things to separate.
+  const intro = `${
+    named.length > 2
+      ? `${named.slice(0, -1).join(", ")}, and ${named[named.length - 1]}`
+      : named.join(" and ")
+  } — all in one place.`;
 
   return (
     <div>
@@ -2438,10 +2520,10 @@ function DocumentsView({ onBack }) {
         Documents
       </h1>
       <p style={{ color: MUTED, fontSize: 14, margin: "0 0 18px" }}>
-        Your agreement, pay schedule, attendance policy, and tax forms — all in one place.
+        {intro}
       </p>
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-        {DRAWER_DOCS.map((d) => (
+        {docs.map((d) => (
           <LegalDocRow
             key={d.key}
             docKey={d.key}

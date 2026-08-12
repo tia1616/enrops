@@ -115,9 +115,29 @@ export default function OnboardingRouter() {
       // from the public directory view so the wizard can show the right step
       // and copy. Instructors aren't org_members, so they can't read the
       // organizations row directly — the view exposes only this safe subset.
+      // instructor_documents_public is the same story as background_check_public:
+      // the provider's per-document on/off choices live on `organizations`, which
+      // an instructor cannot read, so the view resolves each key to an explicit
+      // boolean.
+      //
+      // THIS SELECT REQUIRES migration 20260812a. It is NOT tolerant of the
+      // column being absent, and an earlier version of this comment claimed the
+      // opposite. PostgREST rejects the WHOLE query with 400 / 42703 when any
+      // selected column is missing — it does not omit it — so on a database
+      // without the migration `org` is null, `!org?.slug` below is true, and
+      // every contractor mid-onboarding is redirected to
+      // /error?reason=org_misconfigured with no route back into the wizard.
+      // Verified against a live PostgREST, not assumed.
+      //
+      // So the migration must reach an environment BEFORE (or with) this
+      // frontend, never after. Same for the admin documents screen, which reads
+      // the underlying column directly.
       const { data: org } = await supabase
         .from('public_org_directory')
-        .select('slug, background_check_public, training_enabled')
+        // `name` is the provider's own display name, for the header of the
+        // signed agreement PDF. It used to carry one provider's name for
+        // everyone.
+        .select('slug, name, background_check_public, training_enabled, instructor_documents_public')
         .eq('id', instructor.organization_id)
         .single();
       if (!org?.slug) {
@@ -204,6 +224,8 @@ export default function OnboardingRouter() {
         instructor,
         onboarding,
         backgroundCheck: org.background_check_public ?? { enabled: true },
+        documentConfig: org.instructor_documents_public ?? {},
+        orgName: org.name ?? '',
         trainingEnabled,
         trainingVideos,
         initialStep: searchParams.get('step') || onboarding.current_step,
@@ -241,6 +263,8 @@ export default function OnboardingRouter() {
       instructor={state.instructor}
       onboarding={state.onboarding}
       backgroundCheck={state.backgroundCheck}
+      documentConfig={state.documentConfig}
+      orgName={state.orgName}
       trainingEnabled={state.trainingEnabled}
       trainingVideos={state.trainingVideos}
       initialStep={state.initialStep}
