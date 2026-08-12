@@ -279,12 +279,15 @@ export default function InstructorPortal() {
         // (PostgREST 400s a select naming an absent column), so this is a real
         // path, not a theoretical one. Fail visibly instead of quietly running the
         // portal on four substituted facts.
+        // NO `if (mounted)` GUARD HERE, deliberately. `mounted` belongs to the
+        // useEffect above and is not in scope inside linkAndLoad — referencing it
+        // would throw a ReferenceError and turn this handled error into a hard
+        // crash, on precisely the path this branch exists to handle. The rest of
+        // linkAndLoad sets phase directly (see its catch), so this matches.
         if (dirErr) {
           console.error("[InstructorPortal] org directory read failed", dirErr);
-          if (mounted) {
-            setError("We couldn't load your program's details. Please refresh, or reach out to your Program Manager if it keeps happening.");
-            setPhase("error");
-          }
+          setError("We couldn't load your program's details. Please refresh, or reach out to your Program Manager if this keeps happening.");
+          setPhase("error");
           return;
         }
         if (dir?.slug) resolvedSlug = dir.slug;
