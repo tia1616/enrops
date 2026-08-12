@@ -60,21 +60,11 @@ Confidentiality
 [Say what family and student information they may see and how they must handle it.]
 
 Ending the agreement
-[Say how either side ends this, and how much notice is expected.]
-
-Signature
-Signed by {{contractor_legal_name}} on {{signing_date}}.
-Recorded electronically at {{signed_at_timestamp}} from {{signed_at_ip}}.`,
-    // The four {{...}} tokens above are the ONLY substitutions the agreement
-    // pipeline performs (agreementTemplate.ts renderAgreementText). They are in
-    // the starter because the text stored against every signature is supposed to
-    // be "exactly what they signed" — and without them the archived record names
-    // nobody, carries no date, and has no audit line. The signer's name, time and
-    // IP do exist in their own columns on contractor_agreements, so the evidence
-    // is not lost, but the snapshot itself would read as an unsigned draft.
-    // Square-bracket prompts are untouched by that substitution, so the rest of
-    // this draft passes through intact.
-    tokens: ['contractor_legal_name', 'signing_date', 'signed_at_timestamp', 'signed_at_ip'],
+[Say how either side ends this, and how much notice is expected.]`,
+    // This document gets AGREEMENT_SIGNATURE_BLOCK appended automatically at
+    // publish time — see below. It is deliberately not part of the starter and
+    // not editable.
+    autoSignatureBlock: true,
   },
   {
     key: 'pay_schedule',
@@ -166,6 +156,57 @@ If something goes wrong
 [State clearly whether instructors may ever transport a student.]`,
   },
 ];
+
+/**
+ * The signature block appended to a signed document at publish time.
+ *
+ * NOT EDITABLE, and not part of the starter draft. Two reasons, and the second
+ * is the one that made this a separate constant:
+ *
+ *   1. These four `{{...}}` are the ONLY substitutions the agreement pipeline
+ *      performs (agreementTemplate.ts renderAgreementText). The text stored
+ *      against every signature is supposed to be "exactly what they signed" —
+ *      without them the archived record names nobody, carries no date and has no
+ *      audit line.
+ *   2. When it lived inside the editable body, a provider could delete it, or
+ *      mangle a token into `{{signing_date}}` with a typo, and the damage would
+ *      only show up in an archived legal record nobody looks at until a dispute.
+ *      Contract tools do not let you free-text a signature field for exactly this
+ *      reason — DocuSign locks the block, PandaDoc makes signature fields their
+ *      own assigned objects rather than body text. So this is appended by the
+ *      system and shown to the operator as read-only.
+ *
+ * Square-bracket prompts elsewhere in a draft are untouched by that
+ * substitution, so the rest of the document passes through intact.
+ */
+export const AGREEMENT_SIGNATURE_BLOCK = `Signature
+
+Signed by {{contractor_legal_name}} on {{signing_date}}.
+Recorded electronically at {{signed_at_timestamp}} from {{signed_at_ip}}.`;
+
+export const AGREEMENT_SIGNATURE_TOKENS = [
+  'contractor_legal_name',
+  'signing_date',
+  'signed_at_timestamp',
+  'signed_at_ip',
+];
+
+/**
+ * Body text as it should be STORED for this document.
+ *
+ * Appends the signature block to a signed document that does not already carry
+ * those tokens. The "already carries them" check is load-bearing: the existing
+ * seeded agreement has its own signature wording inline, and blindly appending
+ * would give it two.
+ */
+export function bodyForPublish(docKey, body) {
+  const meta = INSTRUCTOR_DOCUMENTS.find((d) => d.key === docKey);
+  const text = (body ?? '').trim();
+  if (!meta?.autoSignatureBlock) return text;
+  const alreadyHasBlock = AGREEMENT_SIGNATURE_TOKENS.some((t) => text.includes(`{{${t}}}`));
+  if (alreadyHasBlock) return text;
+  return `${text}\n\n${AGREEMENT_SIGNATURE_BLOCK}`;
+}
 
 export const DOCUMENT_KEYS = INSTRUCTOR_DOCUMENTS.map((d) => d.key);
 

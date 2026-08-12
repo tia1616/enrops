@@ -35,6 +35,8 @@ import {
   DOCUMENT_KEYS,
   nextVersionFor,
   versionNumberOf,
+  bodyForPublish,
+  AGREEMENT_SIGNATURE_BLOCK,
 } from "../../lib/instructorDocuments.js";
 
 const PURPLE = "#1C004F";
@@ -231,32 +233,51 @@ export default function InstructorDocuments() {
           // Derived from the STORED version string, never from a row count —
           // see versionNumberOf.
           const shownVersion = live ? versionNumberOf(live.document_version) : null;
+          // A ROW with an explicit button, not a giant clickable card. Two
+          // reasons: WaiverManager (the closest sibling — it edits this org's
+          // other legal documents) does exactly this, so a provider meets one
+          // pattern rather than two; and a card that silently drops you into a
+          // live textarea gives no signal that you are now editing a legal
+          // document. The button also carries the right verb per state.
           return (
-            <button
+            <div
               key={d.key}
-              type="button"
-              onClick={() => setOpenKey(d.key)}
               style={{
-                display: "block", width: "100%", textAlign: "left", cursor: "pointer",
                 background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10,
-                padding: "14px 16px", fontFamily: "inherit",
+                padding: "14px 16px",
+                display: "flex", gap: 14, alignItems: "flex-start", flexWrap: "wrap",
               }}
             >
-              <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
-                <span style={{ fontSize: 15, fontWeight: 700, color: INK }}>{d.label}</span>
-                {d.signed && (
-                  <span style={{ fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: PURPLE, background: `${PURPLE}0F`, borderRadius: 999, padding: "2px 8px" }}>
-                    Signed
+              <div style={{ flex: "1 1 320px", minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 15, fontWeight: 700, color: INK }}>{d.label}</span>
+                  {d.signed && (
+                    <span style={{ fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: PURPLE, background: `${PURPLE}0F`, borderRadius: 999, padding: "2px 8px" }}>
+                      Signed
+                    </span>
+                  )}
+                  <span style={{ fontSize: 12, fontWeight: 600, color: live ? GREEN_INK : AMBER_INK }}>
+                    {live
+                      ? `${shownVersion ? `Version ${shownVersion}` : live.document_version} · ${fmtDate(live.created_at)}`
+                      : "Not written yet"}
                   </span>
-                )}
-                <span style={{ marginLeft: "auto", fontSize: 12, fontWeight: 600, color: live ? GREEN_INK : AMBER_INK }}>
-                  {live
-                    ? `${shownVersion ? `Version ${shownVersion}` : live.document_version} · ${fmtDate(live.created_at)}`
-                    : "Not written yet"}
-                </span>
+                </div>
+                <p style={{ margin: "5px 0 0", fontSize: 13, color: MUTED, lineHeight: 1.5 }}>{d.help}</p>
               </div>
-              <p style={{ margin: "5px 0 0", fontSize: 13, color: MUTED, lineHeight: 1.5 }}>{d.help}</p>
-            </button>
+              <button
+                type="button"
+                onClick={() => setOpenKey(d.key)}
+                style={{
+                  flexShrink: 0, marginLeft: "auto", fontFamily: "inherit", cursor: "pointer",
+                  padding: "9px 18px", borderRadius: 8, fontSize: 13, fontWeight: 600,
+                  ...(live
+                    ? { background: "#fff", border: `1px solid ${RULE}`, color: INK }
+                    : { background: BRIGHT, border: "none", color: "#fff" }),
+                }}
+              >
+                {live ? "Edit" : "Write it"}
+              </button>
+            </div>
           );
         })}
       </div>
@@ -270,6 +291,12 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
   const [body, setBody] = useState(live?.body_text ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // A PUBLISHED document opens read-only. You should be able to look at the
+  // agreement your instructors sign without the risk of leaning on a key and
+  // changing it — and pressing Edit is the moment you know you are editing a
+  // legal document, which a box that is silently live never tells you. A blank
+  // one opens straight in edit mode; there is nothing to read yet.
+  const [editing, setEditing] = useState(!live);
 
   const nextVersion = nextVersionFor(versions.map((v) => v.document_version));
   // Read the number OUT OF the string we are about to store, so what the screen
@@ -292,7 +319,10 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
       document_key: docKey,
       document_version: nextVersion,
       title: title.trim(),
-      body_text: body.trim(),
+      // The signature block is appended HERE, by the system, not typed by the
+      // operator — so it cannot be deleted, half-edited, or typo'd into a token
+      // that never substitutes.
+      body_text: bodyForPublish(docKey, body),
       effective_from: todayForOrg(orgTimezone),
     });
     if (e) {
@@ -347,8 +377,8 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
               screen — the same untrue-pointer bug fixed twice elsewhere today.
               Only visible in the empty state, which is exactly the state a
               provider setting up for the first time is in. */}
-          Nothing published yet, so your instructors see an empty step. Press{" "}
-          <strong>Start from a draft</strong> below for a skeleton in square brackets, then replace
+          Nothing published yet, so your instructors see an empty step. Use{" "}
+          <strong>Start from a template</strong> for a skeleton in square brackets, then replace
           every bracket with your own wording.{" "}
           {meta?.signed && "This is the one they sign, so it is worth a careful read."}
         </div>
@@ -357,81 +387,141 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
       <label style={{ display: "block", fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600, marginBottom: 5 }}>
         Title
       </label>
-      <input value={title} onChange={(e) => setTitle(e.target.value)} style={inputStyle} />
+      {editing ? (
+        <input value={title} onChange={(e) => setTitle(e.target.value)} style={inputStyle} />
+      ) : (
+        <div style={{ ...inputStyle, background: "#fbfaf6", color: INK }}>{title}</div>
+      )}
       <p style={{ margin: "5px 0 16px", fontSize: 11.5, color: MUTED }}>
         The heading instructors see above this document.
       </p>
 
-      <label style={{ display: "block", fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600, marginBottom: 5 }}>
-        The document
-      </label>
-      <textarea
-        value={body}
-        onChange={(e) => setBody(e.target.value)}
-        rows={22}
-        placeholder="Write the document here, or start from the draft below."
-        style={{ ...inputStyle, lineHeight: 1.6, resize: "vertical", fontSize: 13.5 }}
-      />
-      <p style={{ margin: "5px 0 0", fontSize: 11.5, color: MUTED, lineHeight: 1.5 }}>
-        Leave a blank line to start a new paragraph. Web addresses become clickable on their own.
-      </p>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 5, flexWrap: "wrap" }}>
+        <label style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600 }}>
+          The document
+        </label>
+        {/* THE edit affordance. A box that is silently live never tells you that
+            typing in it changes a legal document; pressing Edit is the moment you
+            know. Mirrors the Edit button on the list and the Edit / Done editing
+            toggle the campaign and automation editors already use. */}
+        {!editing ? (
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            style={{ background: "transparent", border: "none", color: BRIGHT, cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "inherit", padding: 0 }}
+          >
+            Edit
+          </button>
+        ) : (
+          <span style={{ fontSize: 11.5, color: BRIGHT, fontWeight: 600 }}>Editing</span>
+        )}
+        {/* AT THE TOP, not under a 22-row box. Jessica cleared the body and could
+            not find this, because it only appeared below the fold. Renamed from
+            "Start from a draft": "template" is the word every tool uses for
+            prefilled starting content, and it is already the word Comms uses. */}
+        {editing && !body.trim() && meta?.starter && (
+          <button
+            type="button"
+            onClick={() => setBody(meta.starter)}
+            style={{
+              marginLeft: "auto", background: "#fff", border: `1px solid ${BRIGHT}`, color: BRIGHT,
+              borderRadius: 999, padding: "6px 14px", fontSize: 12.5, fontWeight: 600,
+              fontFamily: "inherit", cursor: "pointer",
+            }}
+          >
+            Start from a template
+          </button>
+        )}
+      </div>
 
-      {/* Only the agreement is signed, and only it substitutes anything. Without
-          this, a provider had no way to know these existed, so their archived
-          signed copy would have named nobody and carried no date. */}
-      {meta?.tokens?.length > 0 && (
-        <div style={{ marginTop: 10, background: "#fbfaf6", border: `1px solid ${RULE}`, borderRadius: 8, padding: "10px 12px", fontSize: 12, color: INK, lineHeight: 1.6 }}>
-          <strong>Keep the signature lines at the bottom.</strong> These four are filled in
-          automatically when an instructor signs, and they are what makes the saved copy a record
-          of who signed and when:
-          <div style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 6 }}>
-            {meta.tokens.map((t) => (
-              <code key={t} style={{ fontFamily: "ui-monospace, monospace", fontSize: 11.5, background: "#fff", border: `1px solid ${RULE}`, borderRadius: 4, padding: "2px 6px" }}>
-                {`{{${t}}}`}
-              </code>
-            ))}
-          </div>
+      {editing ? (
+        <textarea
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          rows={22}
+          placeholder="Write the document here, or use Start from a template above."
+          style={{ ...inputStyle, lineHeight: 1.6, resize: "vertical", fontSize: 13.5 }}
+        />
+      ) : (
+        <div style={{ ...inputStyle, background: "#fbfaf6", minHeight: 160, whiteSpace: "pre-wrap", lineHeight: 1.6, fontSize: 13.5 }}>
+          {body || <span style={{ color: MUTED }}>Nothing written yet.</span>}
         </div>
       )}
+      {editing && (
+        <p style={{ margin: "5px 0 0", fontSize: 11.5, color: MUTED, lineHeight: 1.5 }}>
+          Leave a blank line to start a new paragraph. Web addresses become clickable on their own.
+        </p>
+      )}
 
-      {!body.trim() && meta?.starter && (
-        <button
-          type="button"
-          onClick={() => setBody(meta.starter)}
-          style={{
-            marginTop: 10, background: "#fff", border: `1px solid ${BRIGHT}`, color: BRIGHT,
-            borderRadius: 999, padding: "8px 16px", fontSize: 13, fontWeight: 600,
-            fontFamily: "inherit", cursor: "pointer",
-          }}
-        >
-          Start from a draft
-        </button>
+      {/* LOCKED, not editable. It used to live inside the box as text a provider
+          could delete or typo — and the damage would only surface in an archived
+          legal record nobody reads until a dispute. Contract tools do not let you
+          free-text a signature field for this reason. Shown so they know it is
+          there, greyed so it reads as ours rather than theirs. */}
+      {meta?.autoSignatureBlock && (
+        <div style={{ marginTop: 12, background: "#f4f2ee", border: `1px dashed ${RULE}`, borderRadius: 8, padding: "12px 14px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+            <span style={{ fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: MUTED }}>
+              Added automatically · can&apos;t be edited
+            </span>
+          </div>
+          <div style={{ whiteSpace: "pre-wrap", fontSize: 12.5, color: MUTED, lineHeight: 1.6, fontFamily: "ui-monospace, monospace" }}>
+            {AGREEMENT_SIGNATURE_BLOCK}
+          </div>
+          <p style={{ margin: "8px 0 0", fontSize: 11.5, color: MUTED, lineHeight: 1.5 }}>
+            We add this to the bottom when you publish, and fill in the real name, date and time as
+            each instructor signs. It&apos;s what makes the saved copy a record of who agreed to what.
+          </p>
+        </div>
       )}
 
       {error && (
         <div role="alert" style={{ color: RED, fontSize: 13.5, marginTop: 14, lineHeight: 1.5 }}>{error}</div>
       )}
 
-      <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 18 }}>
-        <button
-          type="button"
-          onClick={publish}
-          disabled={!canPublish}
-          style={{
-            background: canPublish ? BRIGHT : "#cfc6dc", color: "#fff", border: "none",
-            borderRadius: 999, padding: "10px 22px", fontSize: 14, fontWeight: 700,
-            fontFamily: "inherit", cursor: canPublish ? "pointer" : "not-allowed",
-          }}
-        >
-          {busy ? "Publishing…" : live ? `Publish version ${versionNumber}` : "Publish"}
-        </button>
-        <span style={{ fontSize: 12, color: MUTED }}>
-          {!dirty && live
-            ? "No changes yet."
-            : !title.trim() || !body.trim()
-              ? "Add a title and some words to publish."
-              : "Your instructors see this as soon as you publish."}
-        </span>
+      {/* Publishing belongs to edit mode. Offering it while you are only reading
+          invites a click that either does nothing or republishes unchanged text
+          as a new version for no reason. */}
+      <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 18, flexWrap: "wrap" }}>
+        {editing ? (
+          <>
+            <button
+              type="button"
+              onClick={publish}
+              disabled={!canPublish}
+              style={{
+                background: canPublish ? BRIGHT : "#cfc6dc", color: "#fff", border: "none",
+                borderRadius: 999, padding: "10px 22px", fontSize: 14, fontWeight: 700,
+                fontFamily: "inherit", cursor: canPublish ? "pointer" : "not-allowed",
+              }}
+            >
+              {busy ? "Publishing…" : live ? `Publish version ${versionNumber}` : "Publish"}
+            </button>
+            <span style={{ fontSize: 12, color: MUTED }}>
+              {!dirty && live
+                ? "No changes yet."
+                : !title.trim() || !body.trim()
+                  ? "Add a title and some words to publish."
+                  : "Your instructors see this as soon as you publish."}
+            </span>
+          </>
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={() => setEditing(true)}
+              style={{
+                background: BRIGHT, color: "#fff", border: "none", borderRadius: 999,
+                padding: "10px 22px", fontSize: 14, fontWeight: 700, fontFamily: "inherit", cursor: "pointer",
+              }}
+            >
+              Edit this document
+            </button>
+            <span style={{ fontSize: 12, color: MUTED }}>
+              Editing writes a new version when you publish. Nobody who already signed is affected.
+            </span>
+          </>
+        )}
       </div>
 
       {versions.length > 0 && (

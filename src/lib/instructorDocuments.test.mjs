@@ -5,7 +5,10 @@
 // publish fails at the database; a renamed key produces a document an operator
 // writes and no wizard screen ever fetches.
 
-import { nextVersionFor, versionNumberOf, INSTRUCTOR_DOCUMENTS, DOCUMENT_KEYS, documentByKey } from './instructorDocuments.js';
+import {
+  nextVersionFor, versionNumberOf, INSTRUCTOR_DOCUMENTS, DOCUMENT_KEYS, documentByKey,
+  bodyForPublish, AGREEMENT_SIGNATURE_BLOCK, AGREEMENT_SIGNATURE_TOKENS,
+} from './instructorDocuments.js';
 
 let pass = 0, fail = 0;
 function ok(name, cond) {
@@ -110,23 +113,40 @@ ok('next number always exceeds every existing number',
     return existing.every((v) => (versionNumberOf(v) ?? 0) < next);
   }));
 
-// --- the agreement's substitution tokens -----------------------------------
-// renderAgreementText substitutes exactly these four and nothing else. Without
-// them in the starter, a provider-authored agreement's stored snapshot - the
-// text meant to be "exactly what they signed" - names nobody and has no date.
-const AGREEMENT_TOKENS = ['contractor_legal_name', 'signing_date', 'signed_at_timestamp', 'signed_at_ip'];
+// --- the signature block is SYSTEM-APPENDED, not typed ---------------------
+// It used to live in the editable starter, where a provider could delete it or
+// typo a token. Now bodyForPublish appends it, and the editor shows it locked.
 const agreement = documentByKey('contractor_agreement');
-ok('the agreement starter declares its tokens',
-  Array.isArray(agreement.tokens) && agreement.tokens.length === 4);
-ok('the agreement starter actually CONTAINS all four tokens',
-  AGREEMENT_TOKENS.every((t) => agreement.starter.includes(`{{${t}}}`)));
-ok('declared tokens and used tokens are the same set',
-  AGREEMENT_TOKENS.every((t) => agreement.tokens.includes(t)) && agreement.tokens.every((t) => AGREEMENT_TOKENS.includes(t)));
-// Only the signed document substitutes anything, so a token anywhere else would
-// reach an instructor as literal braces.
-ok('no OTHER starter contains a substitution token',
+ok('the agreement block carries all four substitution tokens',
+  AGREEMENT_SIGNATURE_TOKENS.every((t) => AGREEMENT_SIGNATURE_BLOCK.includes(`{{${t}}}`)));
+ok('the agreement is flagged for the auto block', agreement.autoSignatureBlock === true);
+ok('no starter contains a substitution token any more',
+  INSTRUCTOR_DOCUMENTS.every((d) => !/\{\{\s*\w+\s*\}\}/.test(d.starter)));
+
+// Publishing the agreement always yields a body with the four tokens, whatever
+// the provider wrote — including if they wrote nothing resembling a signature.
+ok('publishing the agreement appends the block',
+  AGREEMENT_SIGNATURE_TOKENS.every((t) => bodyForPublish('contractor_agreement', 'My own agreement text.').includes(`{{${t}}}`)));
+ok('publishing the STARTER yields all four tokens',
+  AGREEMENT_SIGNATURE_TOKENS.every((t) => bodyForPublish('contractor_agreement', agreement.starter).includes(`{{${t}}}`)));
+
+// Not appended twice. The existing seeded agreement already has its own
+// signature wording inline; blindly appending would give it two.
+const alreadySigned = 'Terms.\n\nSigned by {{contractor_legal_name}} on {{signing_date}}.';
+eq('does not double-append when tokens are already present',
+  bodyForPublish('contractor_agreement', alreadySigned), alreadySigned);
+
+// Unsigned documents are left completely alone — a token in a policy would
+// reach an instructor as literal braces, since only the agreement substitutes.
+for (const key of ['pay_schedule', 'code_of_conduct', 'photo_video_release']) {
+  eq(`${key} is untouched by bodyForPublish`,
+    bodyForPublish(key, 'Some policy text.'), 'Some policy text.');
+}
+ok('no unsigned document is flagged for the auto block',
   INSTRUCTOR_DOCUMENTS.filter((d) => d.key !== 'contractor_agreement')
-    .every((d) => !/\{\{\s*\w+\s*\}\}/.test(d.starter)));
+    .every((d) => !d.autoSignatureBlock));
+// Trims, so a trailing newline in the box cannot produce a ragged stored body.
+eq('trims the provider body', bodyForPublish('pay_schedule', '  text  \n'), 'text');
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'}  (${pass} passed, ${fail} failed)`);
 process.exit(fail ? 1 : 0);
