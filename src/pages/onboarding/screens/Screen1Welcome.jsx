@@ -86,6 +86,21 @@ export default function Screen1Welcome({ slug, instructor, onboarding, onAdvance
     }
   }
 
+  // NO SUBTITLE, DELIBERATELY — WizardLayout renders it only when present.
+  //
+  // This screen carried one tenant's onboarding note: it named that provider as
+  // "your client" and told the reader they would "no longer use Gusto". It was
+  // shown to EVERY provider's instructors, most of whom have never had a payroll
+  // system to leave, and none of whom work for that provider. Same class as the
+  // abandoned-onboarding page naming one provider's owner to everyone.
+  //
+  // DELETED, not rewritten per-tenant (Jessica, 2026-08-12: "even j2s doesn't
+  // need it anymore"). There is nothing a platform can say here that the page
+  // does not already say better: the title names the platform, and each field
+  // explains what it is for. Who an instructor works for is not something they
+  // need telling. A per-org version would just be a config field every provider
+  // has to fill in to say nothing — if one ever wants their own welcome note,
+  // that is a deliberate authoring surface, not a default with a tenant baked in.
   return (
     <WizardLayout
       slug={slug}
@@ -93,7 +108,6 @@ export default function Screen1Welcome({ slug, instructor, onboarding, onAdvance
       stepsCompleted={onboarding?.steps_completed}
       onBack={onBack}
       title="Welcome to enrops"
-      subtitle="Journey to STEAM is your client. enrops is the platform we use for paperwork, scheduling, communication, and payments. You will no longer use Gusto."
     >
       <form onSubmit={handleSubmit} noValidate>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
