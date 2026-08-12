@@ -73,6 +73,27 @@ export function entitlementsFor(org) {
 }
 
 /**
+ * May this org manage instructors at all — onboarding, the documents they sign,
+ * the roster, scheduling?
+ *
+ * The existing instructor surfaces gate on `instructor_pay_model !==
+ * 'enrops_platform'`, which conflates "which nav shape" with "what may you do"
+ * and is exactly the split this file exists to undo. It was a safe shortcut only
+ * while every enrops_platform org had zero instructors; a founding operator
+ * onboarding their own instructors breaks that premise, and gating them out
+ * would hide a surface they are entitled to and paying nothing for by agreement.
+ *
+ * So: everyone on a full nav keeps it, and a lean org gets it when its PLAN says
+ * so. Same shape as entitlementsFor above, deliberately — one definition of
+ * "full access", not a second one drifting alongside it.
+ */
+export function canManageInstructors(org) {
+  const isLean = org?.instructor_pay_model === "enrops_platform";
+  if (!isLean) return true;
+  return FULL_ACCESS_PLANS.has(org?.platform_plan);
+}
+
+/**
  * Which Comms audience pills this org should see.
  *
  * Two independent reasons an audience is hidden, and they must not be confused:

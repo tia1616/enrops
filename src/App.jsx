@@ -78,6 +78,7 @@ const RegistrationQuestions = lazy(() => import('./pages/admin/RegistrationQuest
 const WaiverManager = lazy(() => import('./pages/admin/WaiverManager.jsx'));
 const EmailSenderSettings = lazy(() => import('./pages/admin/EmailSenderSettings.jsx'));
 const BackgroundCheckSettings = lazy(() => import('./pages/admin/BackgroundCheckSettings.jsx'));
+const InstructorDocuments = lazy(() => import('./pages/admin/InstructorDocuments.jsx'));
 const TrainingSettings = lazy(() => import('./pages/admin/TrainingSettings.jsx'));
 const BrandLogoSettings = lazy(() => import('./pages/admin/BrandLogoSettings.jsx'));
 const PayRatesSettings = lazy(() => import('./pages/admin/PayRatesSettings.jsx'));
@@ -301,6 +302,11 @@ export default function App() {
         <Route path="email-sender" element={<EmailSenderSettings />} />
         <Route path="pay-rates" element={<PayRatesSettings />} />
         <Route path="background-checks" element={<BackgroundCheckSettings />} />
+        {/* Authoring the documents instructors read and sign. Listed in the
+            Settings nav item's `match` below so the owner/admin route guard
+            covers it — writes are also RLS-gated on can_admin_org, but a page
+            staff can open and never successfully save is a dead end, not a gate. */}
+        <Route path="instructor-documents" element={<InstructorDocuments />} />
         <Route path="training" element={<TrainingSettings />} />
         <Route path="branding" element={<BrandLogoSettings />} />
         <Route path="dev/extraction-test" element={<ExtractionTest />} />

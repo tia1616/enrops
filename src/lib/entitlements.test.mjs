@@ -10,6 +10,7 @@
 import { readFileSync } from 'node:fs';
 import {
   entitlementsFor,
+  canManageInstructors,
   commsAudiencesFor,
   isAlwaysOnAutomation,
   isOptOutAutomation,
@@ -123,6 +124,27 @@ eq('AdminLayout org query still selects platform_plan',
    Boolean(orgSelect && orgSelect[1].includes('platform_plan')), true);
 eq('AdminLayout org query still selects uses_enrops_registration',
    Boolean(orgSelect && orgSelect[1].includes('uses_enrops_registration')), true);
+
+// --- canManageInstructors -------------------------------------------------
+// Added 2026-08-11 with the instructor-documents authoring screen. The rule it
+// replaces (`instructor_pay_model !== 'enrops_platform'`) hid every instructor
+// surface from a lean org, which was safe only while every lean org had zero
+// instructors. A founding operator onboarding their own instructors breaks that,
+// and the documents screen is the one surface their onboarding cannot run
+// without — so gating it on nav shape would have shipped a page the operator
+// who needs it most cannot open.
+eq('full-nav org may manage instructors', canManageInstructors({ instructor_pay_model: 'legacy_own_platform' }), true);
+eq('lean + founding may manage instructors', canManageInstructors(LEAN_FOUNDING), true);
+eq('lean + standard may NOT', canManageInstructors(LEAN_STANDARD), false);
+eq('lean + pilot may NOT', canManageInstructors({ instructor_pay_model: 'enrops_platform', platform_plan: 'pilot' }), false);
+// Fails CLOSED on junk rather than opening a surface to an org that lost its plan.
+eq('lean with no plan may NOT', canManageInstructors({ instructor_pay_model: 'enrops_platform' }), false);
+// A missing org must not read as lean-and-entitled; it reads as full-nav, which
+// matches entitlementsFor's existing treatment of a null org.
+eq('null org does not crash', canManageInstructors(null), true);
+eq('agrees with comms entitlement for lean orgs',
+   [canManageInstructors(LEAN_FOUNDING), canManageInstructors(LEAN_STANDARD)],
+   [entitlementsFor(LEAN_FOUNDING).comms === 'full', entitlementsFor(LEAN_STANDARD).comms === 'full']);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

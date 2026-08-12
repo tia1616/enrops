@@ -7,6 +7,7 @@
 import { useEffect, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
+import { canManageInstructors } from "../../lib/entitlements.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -278,6 +279,26 @@ export default function AdminSettings() {
             </div>
           </div>
           <Link to="/admin/pay-rates" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
+        </div>
+      </section>
+      )}
+
+      {/* Gated on the ENTITLEMENT, not the nav shape. Every other instructor
+          section here tests `instructor_pay_model !== 'enrops_platform'`, which
+          hides it from a founding operator who is entitled to the whole product
+          — and this is the one surface their instructors cannot onboard without.
+          See canManageInstructors. */}
+      {canManageInstructors(org) && (
+      <section style={{ marginTop: 24 }}>
+        <h2 style={sectionTitle}>Instructor documents</h2>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>What your instructors sign</div>
+            <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
+              Your contractor agreement, pay schedule, code of conduct and the rest — written in your words. Instructors read and sign these when they join.
+            </div>
+          </div>
+          <Link to="/admin/instructor-documents" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
         </div>
       </section>
       )}

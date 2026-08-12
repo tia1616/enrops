@@ -126,7 +126,7 @@ const NAV = [
   // /admin/branding by URL — previously they could view it read-only via
   // members_read_branding while their save would fail at RLS, i.e. a page they could
   // reach but not use. One viewer exists on prod. Same posture as /admin/email-sender.
-  { to: "/admin/settings", label: "Settings", gate: "settings", match: ["/admin/settings", "/admin/waivers", "/admin/survey-settings", "/admin/pay-rates", "/admin/email-sender", "/admin/branding"] }, // owner/admin only
+  { to: "/admin/settings", label: "Settings", gate: "settings", match: ["/admin/settings", "/admin/waivers", "/admin/survey-settings", "/admin/pay-rates", "/admin/email-sender", "/admin/branding", "/admin/instructor-documents"] }, // owner/admin only
   { to: "/admin/team", label: "Team", gate: "team" },             // owner/admin only
 ];
 
