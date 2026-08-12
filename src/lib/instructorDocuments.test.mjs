@@ -7,7 +7,7 @@
 
 import {
   nextVersionFor, versionNumberOf, INSTRUCTOR_DOCUMENTS, DOCUMENT_KEYS, documentByKey,
-  bodyForPublish, AGREEMENT_SIGNATURE_BLOCK, AGREEMENT_SIGNATURE_TOKENS,
+  bodyForPublish, willAppendSignatureBlock, AGREEMENT_SIGNATURE_BLOCK, AGREEMENT_SIGNATURE_TOKENS,
 } from './instructorDocuments.js';
 
 let pass = 0, fail = 0;
@@ -147,6 +147,25 @@ ok('no unsigned document is flagged for the auto block',
     .every((d) => !d.autoSignatureBlock));
 // Trims, so a trailing newline in the box cannot produce a ragged stored body.
 eq('trims the provider body', bodyForPublish('pay_schedule', '  text  \n'), 'text');
+
+// The SCREEN and the WRITE must answer "will a block be appended?" identically,
+// or the editor promises to add a signature it will not add - which is what it
+// did for the seeded agreement, showing a second copy of one it already had.
+const predicateCases = [
+  ['contractor_agreement', 'plain text', true],
+  ['contractor_agreement', alreadySigned, false],
+  ['contractor_agreement', '', true],
+  ['pay_schedule', 'plain text', false],
+  ['photo_video_release', 'has {{signing_date}} oddly', false],
+];
+for (const [key, text, expected] of predicateCases) {
+  eq(`willAppend(${key}, ${JSON.stringify(text).slice(0, 22)}…)`, willAppendSignatureBlock(key, text), expected);
+}
+ok('predicate and writer never disagree',
+  predicateCases.every(([key, text]) => {
+    const appended = bodyForPublish(key, text) !== (text ?? '').trim();
+    return appended === willAppendSignatureBlock(key, text);
+  }));
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'}  (${pass} passed, ${fail} failed)`);
 process.exit(fail ? 1 : 0);

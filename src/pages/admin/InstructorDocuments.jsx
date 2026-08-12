@@ -36,6 +36,7 @@ import {
   nextVersionFor,
   versionNumberOf,
   bodyForPublish,
+  willAppendSignatureBlock,
   AGREEMENT_SIGNATURE_BLOCK,
 } from "../../lib/instructorDocuments.js";
 
@@ -458,7 +459,11 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
           legal record nobody reads until a dispute. Contract tools do not let you
           free-text a signature field for this reason. Shown so they know it is
           there, greyed so it reads as ours rather than theirs. */}
-      {meta?.autoSignatureBlock && (
+      {/* Only when it will ACTUALLY be appended. The seeded agreement already ends
+          with its own signature wording, so for that document this panel claimed
+          "we add this when you publish" while showing the operator a second copy
+          of a signature they already have. */}
+      {willAppendSignatureBlock(docKey, body) && (
         <div style={{ marginTop: 12, background: "#f4f2ee", border: `1px dashed ${RULE}`, borderRadius: 8, padding: "12px 14px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
             <span style={{ fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: MUTED }}>

@@ -200,12 +200,24 @@ export const AGREEMENT_SIGNATURE_TOKENS = [
  * would give it two.
  */
 export function bodyForPublish(docKey, body) {
+  if (!willAppendSignatureBlock(docKey, body)) return (body ?? '').trim();
+  return `${(body ?? '').trim()}\n\n${AGREEMENT_SIGNATURE_BLOCK}`;
+}
+
+/**
+ * Will publishing this body actually append the signature block?
+ *
+ * Exported so the SCREEN and the WRITE ask the same question. The editor shows a
+ * panel saying "we add this to the bottom when you publish" — and for a document
+ * that already carries its own signature wording inline (the seeded agreement
+ * does) that sentence is simply false, and the operator sees the signature twice.
+ * Deriving both from one predicate is the only way they cannot drift.
+ */
+export function willAppendSignatureBlock(docKey, body) {
   const meta = INSTRUCTOR_DOCUMENTS.find((d) => d.key === docKey);
+  if (!meta?.autoSignatureBlock) return false;
   const text = (body ?? '').trim();
-  if (!meta?.autoSignatureBlock) return text;
-  const alreadyHasBlock = AGREEMENT_SIGNATURE_TOKENS.some((t) => text.includes(`{{${t}}}`));
-  if (alreadyHasBlock) return text;
-  return `${text}\n\n${AGREEMENT_SIGNATURE_BLOCK}`;
+  return !AGREEMENT_SIGNATURE_TOKENS.some((t) => text.includes(`{{${t}}}`));
 }
 
 export const DOCUMENT_KEYS = INSTRUCTOR_DOCUMENTS.map((d) => d.key);
