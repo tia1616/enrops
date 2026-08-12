@@ -30,6 +30,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
+import { linkifyText } from "../../lib/linkifyText.jsx";
 import {
   INSTRUCTOR_DOCUMENTS,
   DOCUMENT_KEYS,
@@ -342,14 +343,34 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
     });
     if (e) {
       setBusy(false);
-      // 23505 = the UNIQUE(org, key, version) constraint. Means another tab (or
-      // another admin) published while this form was open, so our computed
-      // version is stale. Say so plainly rather than "something went wrong".
-      setError(
-        e.code === "23505"
-          ? "Someone published a new version of this document while you had it open. Go back, reopen it, and apply your changes to the newer version."
-          : "Couldn't publish this document. Try again, or check you're signed in as an owner or admin."
-      );
+      // Name the CAUSE, and never guess at one.
+      //
+      // This used to answer every non-23505 failure with "check you're signed in
+      // as an owner or admin" — which told Jessica her permissions were wrong
+      // when they were not. can_admin_org returned true for her and the same
+      // insert succeeded against the database, so the real cause was somewhere
+      // else entirely and the message sent her looking in the wrong place. Same
+      // mistake as asserting HOW something failed when you only know THAT it did.
+      //
+      // The most likely real cause for a long-lived admin tab is an expired
+      // session: the access token lapses, the insert comes back 401, and nothing
+      // about that is a permissions problem. So check the session first, name
+      // permissions ONLY on the code that actually means it, and otherwise show
+      // the real message rather than inventing a reason.
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        setError("Your sign-in expired while this was open, so nothing was published. Refresh the page, sign in again, and your text will still be here to re-paste.");
+        return;
+      }
+      if (e.code === "23505") {
+        setError("Someone published a new version of this document while you had it open. Go back, reopen it, and apply your changes to the newer version.");
+        return;
+      }
+      if (e.code === "42501") {
+        setError("Your account isn't allowed to publish documents for this program. You need to be an owner or an admin.");
+        return;
+      }
+      setError(`Couldn't publish this document: ${e.message || "unknown error"}. Nothing was saved — your text is still here.`);
       return;
     }
     // Stay disabled THROUGH the parent's reload. setBusy(false) used to run
@@ -491,6 +512,42 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
             We add this to the bottom when you publish, and fill in the real name, date and time as
             each instructor signs. It&apos;s what makes the saved copy a record of who agreed to what.
           </p>
+        </div>
+      )}
+
+      {/* PREVIEW — the document as the instructor actually reads it.
+          House standard: never draw an approximation, render the real thing.
+          Screens 4/5/6 and the portal all split on blank lines and pass each
+          paragraph through linkifyText, so this uses exactly that, and shows the
+          signature block in place and visibly locked. Without it an operator was
+          publishing a legal document having only ever seen their own raw
+          keystrokes. Same rule as the registration preview and the confirmation
+          page. */}
+      {body.trim() && (
+        <div style={{ marginTop: 20 }}>
+          <label style={{ display: "block", fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600, marginBottom: 5 }}>
+            What your instructors will see
+          </label>
+          <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, background: "#fff", padding: "16px 18px" }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: INK, marginBottom: 10 }}>{title}</div>
+            {body.trim().split(/\n\s*\n/).map((para, i) => (
+              <p key={i} style={{ margin: "0 0 10px", whiteSpace: "pre-wrap", fontSize: 13.5, color: INK, lineHeight: 1.6 }}>
+                {linkifyText(para)}
+              </p>
+            ))}
+            {willAppendSignatureBlock(docKey, body) && (
+              <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px dashed ${RULE}`, position: "relative" }}>
+                {AGREEMENT_SIGNATURE_BLOCK.split(/\n\s*\n/).map((para, i) => (
+                  <p key={i} style={{ margin: "0 0 8px", whiteSpace: "pre-wrap", fontSize: 13.5, color: MUTED, lineHeight: 1.6 }}>
+                    {para}
+                  </p>
+                ))}
+                <span style={{ fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: MUTED }}>
+                  Locked &middot; filled in as each instructor signs
+                </span>
+              </div>
+            )}
+          </div>
         </div>
       )}
 

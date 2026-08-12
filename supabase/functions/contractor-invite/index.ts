@@ -258,7 +258,11 @@ serve(async (req: Request) => {
     const text = [
       `Hi ${firstName},`,
       ``,
-      `${org.name} is moving to enrops for all contractor paperwork, scheduling, and payments. Click below to start your onboarding — it takes about 15 minutes.`,
+      // "is moving to enrops" was true for exactly one provider on exactly one
+      // day in 2026 — it describes a migration off another system. Every provider
+      // who starts on enrops reads it as a statement about a move they never
+      // made, and it dates the email permanently. Present tense, no history.
+      `${org.name} uses enrops for contractor paperwork, scheduling, and payments. Click below to start your onboarding — it takes about 15 minutes.`,
       ``,
       `Start onboarding: ${magicLink}`,
       ...bgcTextLines,
@@ -354,7 +358,7 @@ function buildEmailHtml(args: {
 <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#1a1a1a;max-width:560px;margin:0 auto;padding:24px;line-height:1.6;">
   <h2 style="font-size:20px;margin:0 0 16px 0;">Start your contractor onboarding</h2>
   <p>Hi ${escapeHtml(firstName)},</p>
-  <p>${escapeHtml(orgName)} is moving to enrops for all contractor paperwork, scheduling, and payments. Click below to start your onboarding — it takes about 15 minutes.</p>
+  <p>${escapeHtml(orgName)} uses enrops for contractor paperwork, scheduling, and payments. Click below to start your onboarding — it takes about 15 minutes.</p>
   <p style="margin:24px 0;">
     <a href="${magicLink}" style="display:inline-block;padding:12px 24px;background:#1a1a1a;color:#ffffff;text-decoration:none;border-radius:6px;font-weight:600;">Start onboarding →</a>
   </p>
