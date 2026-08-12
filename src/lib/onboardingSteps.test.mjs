@@ -51,6 +51,35 @@ ok('both off still signs the agreement', neither.includes(STEP_KEYS.AGREEMENT_SI
 ok('both off still collects emergency contact',
   neither.includes(STEP_KEYS.EMERGENCY_AND_PREFS));
 
+// --- the Stripe payment step -----------------------------------------------
+//
+// The step that was unconditional longest. Only a provider who actually pays
+// instructors through Stripe should ever show it; for everyone else it walked
+// their instructor into handing over an SSN and bank details for payouts that
+// would never arrive.
+ok('stripe payment setup is present by default', dflt.includes(STEP_KEYS.STRIPE_SUBMITTED));
+
+const noStripe = effectiveStepOrder({ stripePayEnabled: false });
+ok('stripePayEnabled:false drops the payment step',
+  !noStripe.includes(STEP_KEYS.STRIPE_SUBMITTED));
+eq('...and removes exactly one step', noStripe.length, dflt.length - 1);
+ok('...and still signs the agreement', noStripe.includes(STEP_KEYS.AGREEMENT_SIGNED));
+ok('...and still collects the emergency contact',
+  noStripe.includes(STEP_KEYS.EMERGENCY_AND_PREFS));
+ok('...and leaves the document screens alone',
+  noStripe.includes(STEP_KEYS.POLICIES_ACKNOWLEDGED) && noStripe.includes(STEP_KEYS.ADDITIONAL_ACKS));
+
+// The shape a provider like Jeff actually has: pays instructors himself, uses
+// some documents, no training.
+const jeffish = effectiveStepOrder({
+  stripePayEnabled: false, additionalEnabled: false, trainingEnabled: false,
+});
+ok('a no-Stripe provider never shows payment setup',
+  !jeffish.includes(STEP_KEYS.STRIPE_SUBMITTED));
+eq('...and the wizard is shorter by exactly the two dropped steps',
+  jeffish.length, dflt.length - 2);
+eq('...emergency contact is still last', jeffish[jeffish.length - 1], STEP_KEYS.EMERGENCY_AND_PREFS);
+
 // --- the toggles compose, they do not fight --------------------------------
 const lean = effectiveStepOrder({
   bgcEnabled: false, trainingEnabled: false,
@@ -120,6 +149,20 @@ ok('gateCheck drops the additional step when its documents are all off',
   /additionalRequired[\s\S]{0,200}additional_acks/.test(gate));
 ok('gateCheck reads the document config column',
   gate.includes('instructor_document_config'));
+
+// The Stripe step needs BOTH halves server-side, and the second is the one that
+// silently strands people: drop the step but leave stripeReady demanding
+// stripe_payouts_enabled, and every instructor at a no-Stripe provider finishes
+// the wizard and parks on 'pending_stripe' — whose only recovery is a payment
+// screen they are no longer shown.
+ok('gateCheck reads the instructor pay flag',
+  gate.includes('instructor_pay_enabled'));
+ok('gateCheck drops the stripe step when the provider does not use Stripe pay',
+  /stripePayRequired[\s\S]{0,160}stripe_submitted/.test(gate));
+ok('gateCheck ALSO relaxes the payouts-live condition',
+  /stripeReady\s*=\s*!stripePayRequired\s*\|\|/.test(gate));
+ok('...and still requires payouts live when the provider DOES use Stripe pay',
+  /stripeReady[\s\S]{0,80}stripe_payouts_enabled === true/.test(gate));
 
 // --- the server's copy of the step grouping must match the browser's ---------
 //

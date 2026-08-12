@@ -67,14 +67,21 @@ export async function runGateCheck(
   //   must come out of the required set too or onboarding stalls forever one
   //   step short. Absent config = every document on = both steps required,
   //   which is exactly today's behaviour for every existing org.
+  // - Stripe pay off        → drop 'stripe_submitted' from the required set AND
+  //   treat "payouts must be live" as satisfied. BOTH halves, for the same reason
+  //   the background check needs both: dropping only the step leaves stripeReady
+  //   false forever, so the contractor finishes everything and parks on
+  //   'pending_stripe' — a status whose only recovery is a payment setup screen
+  //   the wizard no longer shows them. Default true = today's behaviour.
   let bgcEnabled = true;
   let trainingRequired = false;
   let policiesRequired = true;
   let additionalRequired = true;
+  let stripePayRequired = true;
   if (row.organization_id) {
     const { data: org, error: orgErr } = await supabase
       .from('organizations')
-      .select('background_check_config, training_config, instructor_document_config')
+      .select('background_check_config, training_config, instructor_document_config, instructor_pay_enabled')
       .eq('id', row.organization_id)
       .maybeSingle();
     // BAIL, never proceed with org=null. This read's `error` used to be
@@ -113,6 +120,9 @@ export async function runGateCheck(
     const docCfg = (org?.instructor_document_config as Record<string, unknown> | null) ?? null;
     policiesRequired = stepHasEnabledDocuments(docCfg, 'policies');
     additionalRequired = stepHasEnabledDocuments(docCfg, 'additional');
+    // Strictly true, not truthy: the column is NOT NULL DEFAULT false, so only an
+    // explicit true means this provider moves instructor money through Stripe.
+    stripePayRequired = org?.instructor_pay_enabled === true;
   }
 
   const steps = (row.steps_completed as Record<string, unknown>) ?? {};
@@ -121,10 +131,14 @@ export async function runGateCheck(
     : ALL_STEPS.filter((k) => k !== 'checkr_submitted');
   if (!policiesRequired) requiredSteps = requiredSteps.filter((k) => k !== 'policies_acknowledged');
   if (!additionalRequired) requiredSteps = requiredSteps.filter((k) => k !== 'additional_acks');
+  if (!stripePayRequired) requiredSteps = requiredSteps.filter((k) => k !== 'stripe_submitted');
   if (trainingRequired) requiredSteps = [...requiredSteps, 'training_completed'];
   const allStepsDone = requiredSteps.every((k) => steps[k]);
   const checkrClear = !bgcEnabled || row.checkr_status === 'clear';
-  const stripeReady = row.stripe_payouts_enabled === true;
+  // Exactly the shape of checkrClear above, and for the same reason: a provider
+  // who does not pay through Stripe can never have stripe_payouts_enabled turn
+  // true, so without this half 'complete' would be unreachable for all of them.
+  const stripeReady = !stripePayRequired || row.stripe_payouts_enabled === true;
 
   let nextStatus = row.overall_status as string;
   let completedAt: string | null = null;

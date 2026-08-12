@@ -137,7 +137,7 @@ export default function OnboardingRouter() {
         // `name` is the provider's own display name, for the header of the
         // signed agreement PDF. It used to carry one provider's name for
         // everyone.
-        .select('slug, name, background_check_public, training_enabled, instructor_documents_public')
+        .select('slug, name, background_check_public, training_enabled, instructor_documents_public, instructor_pay_enabled')
         .eq('id', instructor.organization_id)
         .single();
       if (!org?.slug) {
@@ -226,6 +226,9 @@ export default function OnboardingRouter() {
         backgroundCheck: org.background_check_public ?? { enabled: true },
         documentConfig: org.instructor_documents_public ?? {},
         orgName: org.name ?? '',
+        // Strictly true: only a provider who actually pays instructors through
+        // Stripe gets the payment-setup step.
+        stripePayEnabled: org.instructor_pay_enabled === true,
         trainingEnabled,
         trainingVideos,
         initialStep: searchParams.get('step') || onboarding.current_step,
@@ -265,6 +268,7 @@ export default function OnboardingRouter() {
       backgroundCheck={state.backgroundCheck}
       documentConfig={state.documentConfig}
       orgName={state.orgName}
+      stripePayEnabled={state.stripePayEnabled}
       trainingEnabled={state.trainingEnabled}
       trainingVideos={state.trainingVideos}
       initialStep={state.initialStep}

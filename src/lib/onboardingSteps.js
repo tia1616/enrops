@@ -61,17 +61,35 @@ export const STEP_LABELS = {
 // BOTH DEFAULT TO TRUE. A caller that knows nothing about the config gets
 // today's behaviour — every document required — rather than silently dropping
 // two steps' worth of acknowledgments.
+// STRIPE PAYMENT SETUP is the fourth optional step, and the one that was
+// unconditional longest. Only a provider who actually pays instructors THROUGH
+// Stripe needs it; everyone else pays by cheque, transfer or payroll software,
+// and their instructor was still walked through handing Stripe an SSN and bank
+// details for payouts that would never arrive.
+//
+// Driven by organizations.instructor_pay_enabled — an existing circuit breaker
+// that is already true for the one provider using Stripe pay and false by column
+// default for everyone else, and which pay-instructor already refuses to move
+// money without. Deliberately NOT instructor_pay_model: that column already
+// means three things and this build's spec says not to add a fourth.
+//
+// DEFAULTS TO TRUE so a caller that passes nothing behaves exactly as the wizard
+// did before this change. The real value always arrives (public_org_directory),
+// and gateCheck reads organizations directly, so the default is a
+// belt-and-braces for isolated renders rather than a live path.
 export function effectiveStepOrder({
   bgcEnabled = true,
   trainingEnabled = false,
   policiesEnabled = true,
   additionalEnabled = true,
+  stripePayEnabled = true,
 } = {}) {
   return STEP_ORDER.filter((key) => {
     if (key === STEP_KEYS.CHECKR_SUBMITTED) return bgcEnabled;
     if (key === STEP_KEYS.TRAINING_COMPLETED) return trainingEnabled;
     if (key === STEP_KEYS.POLICIES_ACKNOWLEDGED) return policiesEnabled;
     if (key === STEP_KEYS.ADDITIONAL_ACKS) return additionalEnabled;
+    if (key === STEP_KEYS.STRIPE_SUBMITTED) return stripePayEnabled;
     return true;
   });
 }

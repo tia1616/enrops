@@ -74,6 +74,12 @@ function dollars(cents) {
   return `$${(cents / 100).toFixed(2)}`;
 }
 
+// The route segments that are the PAGE, not a tenant. /instructor and
+// /instructors are the tenant-less shortcuts; their first path segment must
+// never be mistaken for an org slug. Kept next to the component that reads it
+// so the two cannot drift, and matched against App.jsx's route table.
+const TENANTLESS_PORTAL_SEGMENTS = new Set(["instructor", "instructors"]);
+
 export default function InstructorPortal() {
   // Unified home for everything instructor: sign-in, onboarding wizard,
   // schedule, profile. The phase machine routes between sub-states.
@@ -85,14 +91,21 @@ export default function InstructorPortal() {
   //   ready        -> onboarded contractor; render schedule + profile
   //   error        -> unrecoverable load failure
   const navigate = useNavigate();
-  // The slug can come from the route param (/:slug/instructor) OR be baked into a
-  // literal path (/j2s/instructor, the redirect target for /instructor). useParams
-  // is empty on the literal route, so fall back to the first path segment — always
-  // the tenant slug — rather than a hardcoded tenant. Used only until the
-  // authoritative org slug resolves from the instructor's organization_id.
+  // The slug can come from the route param (/:slug/instructor) or be absent
+  // entirely (/instructor and /instructors, the tenant-less shortcuts people type
+  // on a phone). Used ONLY as a placeholder until the authoritative slug resolves
+  // from the instructor's own organization_id — it never decides whose portal
+  // this is.
+  //
+  // The first-path-segment fallback must NOT fire on the tenant-less routes: for
+  // "/instructor" that segment is the literal word "instructor", which would be
+  // taken for a tenant slug and briefly render a portal claiming to belong to a
+  // provider called "instructor". Empty is the honest placeholder — it says "not
+  // known yet", which is exactly true until the org read returns.
   const { slug: routeSlug } = useParams();
   const location = useLocation();
-  const pathSlug = routeSlug || location.pathname.split("/").filter(Boolean)[0] || "";
+  const firstSegment = location.pathname.split("/").filter(Boolean)[0] || "";
+  const pathSlug = routeSlug || (TENANTLESS_PORTAL_SEGMENTS.has(firstSegment) ? "" : firstSegment);
   const [phase, setPhase] = useState("loading");
   const [email, setEmail] = useState("");
   const [sendBusy, setSendBusy] = useState(false);
@@ -112,6 +125,11 @@ export default function InstructorPortal() {
   // isDocumentEnabled — an absent key means ON.
   const [documentConfig, setDocumentConfig] = useState({});
   const [orgName, setOrgName] = useState("");
+  // Defaults FALSE here, unlike the wizard's own default, because this only ever
+  // takes effect once the directory read has succeeded — and a portal that has
+  // not resolved its org yet must not flash a payment-setup step at an
+  // instructor whose provider does not use Stripe.
+  const [stripePayEnabled, setStripePayEnabled] = useState(false);
   const [assignments, setAssignments] = useState([]);
   const [coInstructors, setCoInstructors] = useState({}); // { [camp_session_id]: [{ name, role, email, phone }] } — camp co-teachers
   const [coInstructorsProgram, setCoInstructorsProgram] = useState({}); // { [program_id]: [...] } — after-school co-teachers
@@ -264,7 +282,7 @@ export default function InstructorPortal() {
       if (fullInstructor.organization_id) {
         const { data: dir, error: dirErr } = await supabase
           .from("public_org_directory")
-          .select("slug, name, background_check_public, active_registration_term, instructor_documents_public")
+          .select("slug, name, background_check_public, active_registration_term, instructor_documents_public, instructor_pay_enabled")
           .eq("id", fullInstructor.organization_id)
           .maybeSingle();
         // FOUR org facts come out of this one read, and the fallbacks below are
@@ -302,6 +320,10 @@ export default function InstructorPortal() {
         setDocumentConfig(dir?.instructor_documents_public ?? {});
         // For the signed agreement PDF's header, via the wizard embedded below.
         setOrgName(dir?.name ?? "");
+        // Whether the embedded wizard shows the Stripe payment-setup step. Same
+        // value the standalone wizard reads — this is the second door, and the
+        // one that got missed last time.
+        setStripePayEnabled(dir?.instructor_pay_enabled === true);
         setActiveTerm(dir?.active_registration_term ?? null);
       }
 
@@ -1052,6 +1074,7 @@ export default function InstructorPortal() {
           // it either way. Whatever OnboardingRouter passes, this must pass too.
           documentConfig={documentConfig}
           orgName={orgName}
+          stripePayEnabled={stripePayEnabled}
           onComplete={refetchOnboardingStatus}
           onDismiss={async () => {
             // Pending_* and payouts_disabled statuses won't flip to 'complete',

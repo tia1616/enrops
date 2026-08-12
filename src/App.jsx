@@ -229,18 +229,22 @@ export default function App() {
         {/* Linked from the pay step, so it must exist before checkout offers it. */}
         <Route path="cancellation" element={<PolicyPage policyType="cancellation" />} />
       </Route>
-      <Route path="/j2s/instructor" element={<InstructorPortal />} />
-      {/* /:slug/instructor for multi-tenant — currently J2S only but the
-          pattern is consistent with /:slug/onboarding so contractor-invite
-          can use the slug from the tenant's org row. */}
+      {/* THE PORTAL RESOLVES ITS OWN TENANT. InstructorPortal looks the org up
+          from the signed-in instructor's own record and sets the slug from that
+          (see its public_org_directory read), so the slug in the address is
+          decorative — it is never what decides whose portal you get.
+          That is why all four spellings below can share one element. */}
       <Route path="/:slug/instructor" element={<InstructorPortal />} />
-      {/* Tenant-less shortcut: /instructor and /instructors both bounce to
-          the J2S portal. Contractors typed it on their phones expecting it
-          to work; without this the catch-all sent them to the marketing
-          landing. Once we have a second tenant we revisit (probably a
-          subdomain split). */}
-      <Route path="/instructor" element={<Navigate to="/j2s/instructor" replace />} />
-      <Route path="/instructors" element={<Navigate to="/j2s/instructor" replace />} />
+      {/* Tenant-less shortcuts: the ones people actually type on a phone.
+          These used to REDIRECT to /j2s/instructor — one tenant's portal, hard-
+          coded, for every provider's instructors. Harmless while one provider
+          had all the instructors; wrong the moment a second one hires anybody.
+          Now they render the portal directly and it resolves the right org.
+          The explicit /j2s/instructor route is gone too: /:slug/instructor
+          matches it, with the same component, so every magic link already in an
+          inbox keeps working. */}
+      <Route path="/instructor" element={<InstructorPortal />} />
+      <Route path="/instructors" element={<InstructorPortal />} />
       {/* Same defensive pattern for admin — users type /j2s/admin
           expecting tenant-scoped paths to work. /admin is the canonical
           route (org context comes from the signed-in user's org_members
