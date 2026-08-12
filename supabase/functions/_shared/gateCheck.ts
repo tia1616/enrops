@@ -219,20 +219,42 @@ async function sendOnboardingCompleteEmails(
   // route - an email whose single call to action is a dead link is worse than
   // one that omits it.
   const portalUrl = org?.slug ? `${PUBLIC_SITE_URL}/${org.slug}/instructor` : null;
-  // Only mention the background check when this org actually requires one.
-  const bgcPhrase = bgcEnabled ? 'background check cleared, ' : '';
-  // Same treatment for payouts, which the background check already had and this
-  // did not. 'complete' can now be reached with stripeReady true purely BECAUSE
-  // the provider does not pay through Stripe — so "payouts set up" would be told
-  // to someone who was never asked for bank details and has no Stripe account.
-  // Ends the sentence differently in each case so neither reads clipped.
-  const payClause = stripePayRequired ? 'payouts set up' : 'you are all set';
+  // WHAT WAS ACTUALLY DONE — named only where it is true, and joined so no
+  // branch reads clipped or padded.
+  //
+  // 'complete' can now be reached with stripeReady true purely BECAUSE the
+  // provider does not pay through Stripe, so an unconditional "payouts set up"
+  // asserted a Stripe account to someone never asked for bank details. A first
+  // attempt at this filled the gap with "you are all set", which after
+  // "You're fully onboarding with X" is padding restating the sentence it sits
+  // in. Dropping the clause entirely is the honest version: say the things that
+  // happened, and stop.
+  //
+  // Said out loud, all four states:
+  //   both  -> "paperwork signed, background check cleared, and payouts set up."
+  //   bgc   -> "paperwork signed and background check cleared."
+  //   pay   -> "paperwork signed and payouts set up."
+  //   neither -> "paperwork signed."
+  const joinClauses = (parts: string[]) =>
+    parts.length > 2
+      ? `${parts.slice(0, -1).join(', ')}, and ${parts[parts.length - 1]}`
+      : parts.join(' and ');
+  const contractorDone = joinClauses([
+    'paperwork signed',
+    ...(bgcEnabled ? ['background check cleared'] : []),
+    ...(stripePayRequired ? ['payouts set up'] : []),
+  ]);
+  const adminDone = joinClauses([
+    'Paperwork signed',
+    ...(bgcEnabled ? ['background check cleared'] : []),
+    ...(stripePayRequired ? ['Stripe Connect set up'] : []),
+  ]);
 
   // 1. Contractor — "you're cleared, here's how to access your portal"
   const contractorText = [
     `Hi ${greeting},`,
     ``,
-    `You're fully onboarded with ${orgName} — paperwork signed, ${bgcPhrase}${payClause}.`,
+    `You're fully onboarded with ${orgName} — ${contractorDone}.`,
     ``,
     ...(portalUrl
       ? [`Sign in to your portal any time to see your schedule, accept assignments, and view your pay:`, portalUrl]
@@ -277,10 +299,10 @@ async function sendOnboardingCompleteEmails(
   const adminText = [
     `${fullName || instructor.email} is fully onboarded.`,
     ``,
-    // Reuses bgcPhrase rather than re-deriving the same ternary a second time —
-    // the two had already drifted in punctuation, and "Stripe Connect set up"
-    // would be asserted to an admin whose org has no Stripe pay at all.
-    `Paperwork signed, ${bgcPhrase}${stripePayRequired ? 'Stripe Connect set up' : 'nothing outstanding'}. They're ready to be assigned to camps or programs.`,
+    // Built from the same joiner as the contractor's, so the two can never
+    // disagree about what happened or drift apart in punctuation — which they
+    // already had.
+    `${adminDone}. They're ready to be assigned to camps or programs.`,
     ``,
     `View their record: ${PUBLIC_SITE_URL}/admin/instructors`, // was /admin/contacts (retired 2026-06-08)
   ].join('\n');

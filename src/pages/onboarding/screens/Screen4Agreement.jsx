@@ -9,9 +9,15 @@ import { useOnboardingConfig } from '../OnboardingConfigContext.jsx';
 
 // Screen 4 — Contractor Agreement. Fetches body text via get-legal-document
 // (RLS blocks direct legal_documents reads from instructor JWT), renders
-// scrollable, requires 5 confirm checkboxes + typed signature.
+// scrollable, requires every confirm checkbox in CONFIRMS + a typed signature.
 //
-// On submit: POST to submit-agreement with version + signature + 5 booleans.
+// Deliberately NOT "5 checkboxes": this comment and the validation message both
+// said five after the list had dropped to four, so the screen told instructors
+// to tick a box that no longer existed. The count now comes from CONFIRMS
+// everywhere it is shown.
+//
+// On submit: POST to submit-agreement with version + signature + one boolean
+// per entry in CONFIRMS.
 // The edge function snapshots canonical body text server-side; we never send
 // the agreement text. After server-side success, we best-effort-generate a
 // presentation PDF client-side and upload it. PDF failure does not block —
@@ -170,7 +176,16 @@ export default function Screen4Agreement({ slug, instructor, onboarding, onAdvan
 
     let valid = true;
     if (!allConfirmed) {
-      setConfirmError('Check all five boxes to continue.');
+      // COUNTED, never spelled out. This said "all five boxes" while CONFIRMS
+      // held four — confirm_pay_structure moved to Screen 5 and the message did
+      // not follow — so an instructor who missed one was told to find a box that
+      // does not exist. Deriving it means the sentence cannot go stale again the
+      // next time this list changes. Same rule already applied on Screen 5.
+      setConfirmError(
+        CONFIRMS.length === 1
+          ? 'Check the box to continue.'
+          : `Check all ${CONFIRMS.length} boxes to continue.`,
+      );
       valid = false;
     } else {
       setConfirmError('');

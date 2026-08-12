@@ -244,15 +244,21 @@ export default function InstructorPortal() {
           // Resolve the target org's real slug so portal URLs stay tenant-correct
           // even when an admin impersonates via /j2s/instructor?as=…
           if (target.organization_id) {
-            // Same columns as the real sign-in path below. Selecting only `slug`
-            // here left documentConfig at {}, so an admin previewing an
-            // instructor saw the documents drawer list every document regardless
-            // of which ones that provider had switched off — a preview that
-            // shows something the instructor does not have is worse than no
-            // preview. Admin-only, so a failed read degrades rather than blocks.
+            // MUST select the same columns as the real sign-in path below, and
+            // set every one of them. This is the second door into the portal, and
+            // it has now been the source of the same bug twice: first it selected
+            // only `slug`, so a preview listed every document regardless of which
+            // ones the provider had switched off; then stripePayEnabled was added
+            // to the other door and not this one, which would have hidden the
+            // Stripe card and the W-9 row from an admin previewing an instructor
+            // who genuinely has both. A preview that shows something different
+            // from what the instructor sees is worse than no preview.
+            //
+            // If a config value is added to the select below, it belongs here in
+            // the same edit.
             const { data: dir, error: dirErr } = await supabase
               .from("public_org_directory")
-              .select("slug, name, background_check_public, instructor_documents_public")
+              .select("slug, name, background_check_public, instructor_documents_public, instructor_pay_enabled")
               .eq("id", target.organization_id)
               .maybeSingle();
             if (dirErr) console.error("[InstructorPortal] preview org read failed", dirErr);
@@ -260,6 +266,10 @@ export default function InstructorPortal() {
             if (dir?.name) setOrgName(dir.name);
             if (dir?.background_check_public) setBackgroundCheck(dir.background_check_public);
             if (dir?.instructor_documents_public) setDocumentConfig(dir.instructor_documents_public);
+            // Not `if (dir?.…)` — false is a meaningful value here, and guarding
+            // on truthiness would silently skip it for every provider that does
+            // not use Stripe pay, which is most of them.
+            setStripePayEnabled(dir?.instructor_pay_enabled === true);
           }
           const targetInst = {
             instructor_id: target.id,
