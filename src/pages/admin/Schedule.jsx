@@ -4625,6 +4625,18 @@ function renderCampsTableHtml(camps, locationsById, primary) {
   return `<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">${rows}</table>`;
 }
 
+// SIGN-OFFS: these three previews all read "— Jessica, {orgName}" until
+// 2026-08-11 — one provider's owner hardcoded into what EVERY provider previews
+// before emailing their instructors.
+//
+// Two defects in one, and the second is the worse: the real send does not say
+// that. send-offers signs "— The {org.name} team" (index.ts:530 and :587, HTML
+// and plaintext), so the preview was also DRIFTED from the thing it claims to
+// preview. An operator checking their email before sending was shown a sign-off
+// no instructor would ever receive — which is the whole job of a preview.
+//
+// These now match the send path verbatim. If that sign-off changes, change it in
+// both places, or this drifts again.
 function renderOfferEmailHtml({ assignment, instructorCamps, locationsById, cycle, orgName, portalUrl, deadline }) {
   const firstName = assignment.instructor_first ?? "there";
   const cycleDisp = cycleDisplayName(cycle.name);
@@ -4633,7 +4645,7 @@ function renderOfferEmailHtml({ assignment, instructorCamps, locationsById, cycl
   const deadlineLine = deadline ? `<br /><br /><strong>Please respond by ${emailFmtDateLong(deadline)}.</strong>` : "";
   const headline = `Your ${emailEscape(cycleDisp)} schedule is ready`;
   const body = `Hi ${emailEscape(firstName)},<br /><br />Your proposed schedule for ${emailEscape(cycleDisp)} is below. <strong>Please tap Accept or Request change on each of the ${campCount} ${unit}</strong> — your schedule isn't confirmed until we hear back from you on every one.${deadlineLine}<br /><br />${renderCampsTableHtml(instructorCamps, locationsById, EMAIL_BRAND.primary)}`;
-  const footer = `Once you've responded to every ${unitLabel(cycle.cycle_type, 1)}, you're set. Questions? Just reply to this email.<br /><br />— Jessica, ${emailEscape(orgName)}`;
+  const footer = `Once you've responded to every ${unitLabel(cycle.cycle_type, 1)}, you're set. Questions? Just reply to this email.<br /><br />— The ${emailEscape(orgName)} team`;
   return emailShellHtml({ orgName, headlineHtml: headline, bodyHtml: body, ctaUrl: portalUrl, ctaSubtitle: `You'll see each ${unitLabel(cycle.cycle_type, 1)} with an <strong>Accept</strong> and <strong>Request change</strong> button.`, footerHtml: footer });
 }
 
@@ -4649,7 +4661,7 @@ function renderPatchEmailHtml({ instructorCamps, locationsById, cycle, orgName, 
     ? `Good news — another ${oneUnit} just got added to your ${emailEscape(cycleDisp)} schedule. <strong>Please tap Accept or Request change</strong> when you get a moment.`
     : `${instructorCamps.length} more ${unit} just got added to your ${emailEscape(cycleDisp)} schedule. <strong>Please tap Accept or Request change on each one</strong> when you get a moment.`;
   const body = `Hi ${emailEscape(firstName)},<br /><br />${intro}${deadlineLine}<br /><br />${renderCampsTableHtml(instructorCamps, locationsById, EMAIL_BRAND.primary)}`;
-  const footer = `Questions? Just reply to this email.<br /><br />— Jessica, ${emailEscape(orgName)}`;
+  const footer = `Questions? Just reply to this email.<br /><br />— The ${emailEscape(orgName)} team`;
   return emailShellHtml({ orgName, headlineHtml: headline, bodyHtml: body, ctaUrl: portalUrl, ctaSubtitle: `You'll see ${isOne ? `the new ${oneUnit}` : `each new ${oneUnit}`} with an <strong>Accept</strong> and <strong>Request change</strong> button.`, footerHtml: footer, badgeText: cycleDisp });
 }
 
@@ -4659,7 +4671,7 @@ function renderReminderEmailHtml({ instructorCamps, locationsById, cycle, orgNam
   const unit = unitLabel(cycle.cycle_type, instructorCamps.length);
   const headline = `Quick reminder — please respond`;
   const body = `Hi ${emailEscape(firstName)},<br /><br />Just a nudge — your ${emailEscape(cycleDisp)} schedule is still waiting for your response. <strong>Please tap Accept or Request change on each ${unitLabel(cycle.cycle_type, 1)}</strong> by <strong>${emailFmtDateLong(deadline)}</strong>.<br /><br />${renderCampsTableHtml(instructorCamps, locationsById, EMAIL_BRAND.primary)}`;
-  const footer = `Already responded? You can ignore this email — sometimes the timing crosses. Questions? Just reply.<br /><br />— Jessica, ${emailEscape(orgName)}`;
+  const footer = `Already responded? You can ignore this email — sometimes the timing crosses. Questions? Just reply.<br /><br />— The ${emailEscape(orgName)} team`;
   return emailShellHtml({ orgName, headlineHtml: headline, bodyHtml: body, ctaUrl: portalUrl, ctaSubtitle: null, footerHtml: footer });
 }
 
