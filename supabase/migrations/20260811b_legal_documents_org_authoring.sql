@@ -31,6 +31,19 @@
 -- If in-place editing of an unsigned draft is ever wanted, add a separate
 -- `status`/draft column and a policy scoped to it -- do NOT loosen this one.
 --
+-- HOW THE BLOCK BEHAVES, MEASURED not assumed (staging, 2026-08-11, as a real
+-- org admin over PostgREST): a cross-org INSERT is refused loudly, 403 with
+-- SQLSTATE 42501. An UPDATE or DELETE is refused SILENTLY -- 200 with an empty
+-- result set, because with no permissive policy for those commands the row is
+-- simply invisible to them, so zero rows match and nothing errors. Re-reading
+-- the row confirmed it was untouched, and no attack row was created.
+--
+-- The data guarantee therefore holds, but the failure is quiet. Nothing in the
+-- product issues an UPDATE or DELETE here (the authoring screen only inserts),
+-- so no operator can hit it today. Anyone who later adds an "edit" control MUST
+-- know this: it would appear to succeed and change nothing -- the silent-failure
+-- bug class. Give it a draft policy, or check the affected-row count.
+--
 -- ADDITIVE AND INERT. No operator could write to this table before, so adding
 -- an INSERT policy cannot change any existing behaviour, on either environment,
 -- until an authoring surface exists. Safe to apply to prod in the same pass.

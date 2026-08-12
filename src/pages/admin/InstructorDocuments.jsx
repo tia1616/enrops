@@ -275,9 +275,16 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
         </div>
       ) : (
         <div style={{ background: "#fbfaf6", border: `1px solid ${RULE}`, borderRadius: 10, padding: "11px 13px", fontSize: 13, color: INK, lineHeight: 1.55, margin: "14px 0" }}>
-          Nothing published yet, so your instructors see an empty step. The draft below is a{" "}
-          <strong>starting point in square brackets</strong> — replace every bracket with your own
-          wording. {meta?.signed && "This is the one they sign, so it is worth a careful read."}
+          {/* Points at the BUTTON, not at "the draft below". The box starts
+              empty and the draft only appears once Start from a draft is
+              pressed, so the old wording described something that was not on
+              screen — the same untrue-pointer bug fixed twice elsewhere today.
+              Only visible in the empty state, which is exactly the state a
+              provider setting up for the first time is in. */}
+          Nothing published yet, so your instructors see an empty step. Press{" "}
+          <strong>Start from a draft</strong> below for a skeleton in square brackets, then replace
+          every bracket with your own wording.{" "}
+          {meta?.signed && "This is the one they sign, so it is worth a careful read."}
         </div>
       )}
 
