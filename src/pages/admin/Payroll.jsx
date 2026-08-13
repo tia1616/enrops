@@ -133,7 +133,14 @@ export default function Payroll() {
   // during a Stripe incident — left the Pay via Stripe button sitting there and
   // every click failing. The column's own comment says the manual mark-paid path
   // stays available regardless, which is exactly what should be left standing.
-  // Same flag now hides PayRoutesCard, so the two agree.
+  //
+  // NOT the same condition as PayRoutesCard, though an earlier version of this
+  // comment claimed it was: the card needs only instructor_pay_enabled, this
+  // needs that AND the legacy model. They coincide for every org on both
+  // environments today (one org true+legacy, everyone else false+enrops_platform)
+  // by DATA, not by construction — so the added conjunct changes nothing for
+  // anybody right now, and exists for the incident case where the flag flips and
+  // the model does not.
   const canStripePayout =
     payRoute?.instructor_pay_model === 'legacy_own_platform' &&
     org?.instructor_pay_enabled === true;

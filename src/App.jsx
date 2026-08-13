@@ -159,6 +159,27 @@ function InstructorDocsRoute({ children }) {
   return <Navigate to="/admin/settings" replace />;
 }
 
+// THE REST OF THE INSTRUCTORS SECTION, which was bare while its Settings page was
+// wrapped — the exact shape the note above CommsTabRoute warns about ("wrapping
+// only the gated ones made the bare form look like the norm, so the next route
+// would copy a neighbour and quietly ship ungated").
+//
+// The nav fix on 2026-08-13 closed the ROLE hole (a staff or viewer typing
+// /admin/payouts). It did not close the ENTITLEMENT hole: shapeNavForOrg drops the
+// Instructors item out of navItems entirely for a lean org without the
+// entitlement, and an item that is not in the array can never trigger the block
+// card no matter what it matches. So Schedule, the roster, availability and class
+// reports were all reachable by URL for an org that is not entitled to them.
+//
+// Sends them to Programs rather than Settings: an org without instructor
+// management has nothing to configure there either, so Settings would be a second
+// dead end. Same three-line shape as CommsTabRoute and InstructorDocsRoute.
+function InstructorRoute({ children }) {
+  const { org } = useOutletContext();
+  if (canManageInstructors(org)) return children;
+  return <Navigate to="/admin/programs" replace />;
+}
+
 export default function App() {
   return (
     <>
@@ -292,8 +313,8 @@ export default function App() {
         <Route path="family-comms/contacts" element={<CommsTabRoute tab="contacts"><ContactsTab /></CommsTabRoute>} />
         <Route path="family-comms/templates" element={<CommsTabRoute tab="templates"><TemplatesTab /></CommsTabRoute>} />
         <Route path="marketing-v2" element={<Navigate to="/admin/family-comms/marketing" replace />} />
-        <Route path="schedule" element={<Schedule />} />
-        <Route path="schedule/print" element={<SchedulePrint />} />
+        <Route path="schedule" element={<InstructorRoute><Schedule /></InstructorRoute>} />
+        <Route path="schedule/print" element={<InstructorRoute><SchedulePrint /></InstructorRoute>} />
         <Route path="class-schedule" element={<ClassSchedule />} />
         <Route path="curricula" element={<CurriculaList />} />
         <Route path="curricula/new" element={<CurriculumNew />} />
@@ -316,8 +337,8 @@ export default function App() {
             includes it). */}
         <Route path="calendars" element={<CalendarsList />} />
         <Route path="contacts" element={<Navigate to="/admin/schools" replace />} />
-        <Route path="instructors" element={<InstructorsPage />} />
-        <Route path="availability" element={<SurveyResponses />} />
+        <Route path="instructors" element={<InstructorRoute><InstructorsPage /></InstructorRoute>} />
+        <Route path="availability" element={<InstructorRoute><SurveyResponses /></InstructorRoute>} />
         <Route path="survey-responses" element={<Navigate to="/admin/availability" replace />} />
         {/* Two addresses served the same screen, and this one served it WORSE:
             Payroll.jsx has no heading of its own — it was written to render
@@ -327,7 +348,7 @@ export default function App() {
             not a live route being retired out from under anyone. */}
         <Route path="payroll" element={<Navigate to="/admin/payouts" replace />} />
         <Route path="rosters" element={<Rosters />} />
-        <Route path="class-reports" element={<ClassReports />} />
+        <Route path="class-reports" element={<InstructorRoute><ClassReports /></InstructorRoute>} />
         <Route path="finances" element={<Finances />} />
         <Route path="payouts" element={<Payouts />} />
         <Route path="discounts" element={<Discounts />} />
@@ -338,7 +359,7 @@ export default function App() {
         <Route path="registration-questions" element={<RegistrationQuestions />} />
         <Route path="waivers" element={<WaiverManager />} />
         <Route path="email-sender" element={<EmailSenderSettings />} />
-        <Route path="pay-rates" element={<PayRatesSettings />} />
+        <Route path="pay-rates" element={<InstructorRoute><PayRatesSettings /></InstructorRoute>} />
         <Route path="background-checks" element={<BackgroundCheckSettings />} />
         {/* Authoring the documents instructors read and sign.
             TWO independent gates, and an earlier version of this comment wrongly

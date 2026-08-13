@@ -44,7 +44,15 @@ export function renderWaiverText(content, orgName) {
   // No name should not be possible at any real call site, but a legal document
   // must never show "{{org}}" to a parent, so fall back to wording that is at
   // least true rather than to a placeholder or to some other tenant's name.
-  return content.replace(ORG_TOKEN, name || 'the program provider');
+  //
+  // A FUNCTION, NOT A STRING, and that is the whole point. As a string the
+  // replacement is a PATTERN: `$&`, `$'`, "$`" and `$$` are substitution
+  // directives, so a business called "Kids & Co. $$$" or anything with a
+  // backtick or apostrophe-dollar would silently rewrite the sentence around
+  // itself — in a signed waiver and, since 2026-08-13, in an instructor's
+  // consent checkbox. The function form is passed through verbatim. Same fix in
+  // the server twin, supabase/functions/_shared/waiverText.ts.
+  return content.replace(ORG_TOKEN, () => name || 'the program provider');
 }
 
 /**

@@ -34,6 +34,7 @@ import { linkifyText } from "../../lib/linkifyText.jsx";
 import {
   INSTRUCTOR_DOCUMENTS,
   DOCUMENT_KEYS,
+  documentByKey,
   documentsBannerPhrase,
   isDocumentEnabled,
   nextVersionFor,
@@ -125,6 +126,13 @@ export default function InstructorDocuments() {
   const load = useCallback(async () => {
     if (!org?.id) return;
     setLoadFailed(false);
+    // Any reload invalidates a per-row toggle error, and publishing is a reload.
+    // Without this, following the "Write it first" message's own instructions —
+    // click switch, get the red alert, hit Write it, publish — left the stale red
+    // alert sitting under the row NEXT TO the green "published" toast, each
+    // contradicting the other. The guard's early return skips the only other line
+    // that clears it, so this has to be here rather than beside the write.
+    setToggleError(null);
     const [{ data, error }, { data: orgRow, error: orgErr }] = await Promise.all([
       supabase
         .from("legal_documents")
@@ -164,6 +172,28 @@ export default function InstructorDocuments() {
     return out;
   }, [rows]);
 
+  // "Newest row" and "something an instructor can actually read" are two
+  // different questions, and conflating them is what let the toggle guard and the
+  // wizard disagree: the guard accepted ANY row while the wizard required text,
+  // so an empty-body row passed the guard and then dead-ended the instructor —
+  // the two halves of one fix leaving open exactly the gap each was written to
+  // close.
+  //
+  //   liveByKey      — the row get-legal-document would return. What the EDITOR
+  //                    opens, and what versionsByKey numbers. Body-agnostic on
+  //                    purpose, because that is what the server does.
+  //   publishedByKey — that row IF it has readable text. What an instructor can
+  //                    acknowledge, and therefore the only thing that counts as
+  //                    published for the toggle, the "still to write" count and
+  //                    the row badge. Same test the wizard applies.
+  const publishedByKey = useMemo(() => {
+    const out = {};
+    for (const [k, r] of Object.entries(liveByKey)) {
+      if (r?.body_text?.trim()) out[k] = r;
+    }
+    return out;
+  }, [liveByKey]);
+
   const versionsByKey = useMemo(() => {
     const out = {};
     for (const r of rows ?? []) (out[r.document_key] ??= []).push(r);
@@ -196,18 +226,39 @@ export default function InstructorDocuments() {
     // one-click path straight back into it, under a message promising the
     // opposite ("Instructors will be asked for it from now on").
     //
-    // Guaranteed, not hypothetical: contractor_status is the only default-off
-    // document, so a provider's FIRST click on it always lands on an unpublished
-    // document. Every other key was on before it was written, which is the
-    // deliberate "absent is not a decision" rule and is unaffected — this guard
-    // only refuses the ACT of switching one on.
+    // ONLY FOR THE OPT-IN DOCUMENT, and the first version of this guard got that
+    // wrong in a way that trapped providers. It refused to switch ON any document
+    // with no published row — but SEVEN OF THE EIGHT ship on and unwritten, which
+    // is the deliberate "absent is not a decision" rule. So: a provider switches
+    // photo_video_release off (allowed, nothing checks), changes their mind, and
+    // is refused — permanently, because this is the only write to
+    // instructor_document_config anywhere in the app. Three separate lines of copy
+    // on this same screen promise the opposite ("Turn any of them back on whenever
+    // you want", "click to turn on", "Switch off any you don't use"), and the
+    // comment justifying the guard claimed it left those keys "unaffected". It did
+    // not. A guard that makes a documented, reversible action irreversible is
+    // worse than the bug it prevents.
+    //
+    // The real asymmetry is defaultOff, not published-ness. A default-ON document
+    // being on and unwritten is a state every provider is already in and the
+    // wizard already handles by blocking with an actionable message; switching it
+    // back on returns them to where they started. contractor_status is different:
+    // it has never been on for anyone, so switching it on is a NEW state the
+    // provider is choosing, and choosing it before writing the document is
+    // guaranteed to strand their instructors on a screen that also hides the three
+    // documents that ARE published.
+    //
+    // PUBLISHED MEANS READABLE, via publishedByKey — the same test the wizard
+    // applies. Keyed off liveByKey (any row at all), an empty-body row passed here
+    // and dead-ended the instructor anyway.
     //
     // Refuse rather than warn-and-confirm: there is nothing to weigh. Writing it
     // first costs one click ("Write it" opens the editor while the document is
     // off, deliberately), and the alternative is a provider discovering the block
     // through an instructor who cannot finish.
-    if (next && !liveByKey[key]) {
-      const label = INSTRUCTOR_DOCUMENTS.find((d) => d.key === key)?.label ?? "This document";
+    const meta = documentByKey(key);
+    if (next && meta?.defaultOff && !publishedByKey[key]) {
+      const label = meta.label ?? "This document";
       setToggleError({
         key,
         message: `Write ${label.toLowerCase()} first. Switching it on before it's published would stop your instructors at this step — and hide the documents you have published. Hit “Write it”, publish, then switch it on.`,
@@ -255,7 +306,7 @@ export default function InstructorDocuments() {
       }
     } catch { /* config saved; gate reconciles on next natural run */ }
     setSavingKey(null);
-    const label = INSTRUCTOR_DOCUMENTS.find((d) => d.key === key)?.label ?? "Document";
+    const label = documentByKey(key)?.label ?? "This document";
     flash(
       next
         ? `${label} turned on. Instructors will be asked for it from now on.`
@@ -315,7 +366,10 @@ export default function InstructorDocuments() {
   // to write" about documents nobody will ever be shown is simply untrue —
   // exactly the class of sentence this screen has already had to fix twice.
   const enabledKeys = DOCUMENT_KEYS.filter((k) => isDocumentEnabled(docConfig, k));
-  const writtenCount = enabledKeys.filter((k) => liveByKey[k]).length;
+  // publishedByKey, not liveByKey: an empty-body row is not something an
+  // instructor can read, so counting it as written would tell a provider they had
+  // finished when the wizard would still stop their instructors.
+  const writtenCount = enabledKeys.filter((k) => publishedByKey[k]).length;
   const enabledCount = enabledKeys.length;
 
   return (
@@ -379,7 +433,9 @@ export default function InstructorDocuments() {
 
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {INSTRUCTOR_DOCUMENTS.map((d) => {
-          const live = liveByKey[d.key];
+          // The badge says "Version N · date" or "Not written yet", so it must use the
+    // same published-means-readable test as the count above and the toggle guard.
+    const live = publishedByKey[d.key];
           // Derived from the STORED version string, never from a row count —
           // see versionNumberOf.
           const shownVersion = live ? versionNumberOf(live.document_version) : null;
@@ -511,7 +567,7 @@ function DocToggle({ on, locked, busy, label, onClick }) {
 }
 
 function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, onPublished }) {
-  const meta = INSTRUCTOR_DOCUMENTS.find((d) => d.key === docKey);
+  const meta = documentByKey(docKey);
   const [title, setTitle] = useState(live?.title ?? meta?.label ?? "");
   // STRIPPED. The signature block is never in the editable box — see
   // stripAppendedSignatureBlock. Before this, it was appended once and then lived

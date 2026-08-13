@@ -259,7 +259,11 @@ function shapeNavForOrg(nav, org) {
               label: "Payments",
               tabs: item.tabs.filter((t) => t.to !== "/admin/discounts"),
             }
-          : { ...rest, label: "Payments", match: ["/admin/finances", "/admin/payouts"] },
+          // match derived FROM item.tabs, not retyped. Hand-listing the two routes
+          // worked but added the 12th and 13th hardcoded path literal to this
+          // function, and a fourth Money tab added to NAV would silently not join
+          // this list — reopening the exact hole this line closes.
+          : { ...rest, label: "Payments", match: item.tabs.map((t) => t.to) },
       );
       out.push({ to: "/admin/discounts", label: "Discounts", gate: "viewMoney" });
       continue;

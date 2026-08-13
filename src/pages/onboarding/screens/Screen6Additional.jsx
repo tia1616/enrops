@@ -84,28 +84,6 @@ const photoAcks = (orgName) => [
   { key: 'photo_consent_revocable', label: 'I understand consent is ongoing and revocable in writing' },
 ];
 
-/**
- * Is this document actually READABLE, not merely fetched?
- *
- * `docs[key]` is a wrapper object built after the fetch, so it is truthy no
- * matter what came back — including body_text: ''. An empty body renders one
- * blank <p> and leaves the checkbox live, so an instructor confirms "I meet the
- * requirements for working as an independent contractor" with zero requirements
- * on screen. That is exactly what rendering these inline instead of in an
- * accordion is supposed to make impossible.
- *
- * Reachable: body_text is NOT NULL so null cannot happen, but nothing stops the
- * empty string — legal_documents has no CHECK for it and the only guard is the
- * publish button on the admin screen, which a seed or a direct insert bypasses.
- *
- * Applied to all four sections, not just the new one. The two accordions have
- * the same shape and the same consequence, and fixing the instance rather than
- * the class is how this comes back.
- */
-function hasBody(docs, key) {
-  return Boolean(docs[key]?.body_text?.trim());
-}
-
 const VEHICLE_ACKS = [
   { key: 'vehicle_own_transport', label: 'I am responsible for my own transportation' },
   { key: 'vehicle_insurance', label: 'I maintain valid auto insurance' },
@@ -152,12 +130,28 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
         if (cancelled) return;
         const map = {};
         for (const r of results) {
-          if (r.error) {
+          // AN EMPTY BODY IS TREATED AS UNPUBLISHED, and it is handled HERE rather
+          // than at the checkbox. The first attempt at this disabled the checkbox
+          // when the body was blank, which was strictly worse than the bug it
+          // fixed: get-legal-document returns 200 for an empty body, so the
+          // document loaded, the form rendered, the checkbox could never be
+          // ticked, and Continue was disabled forever — a title, one blank
+          // paragraph, and no explanation anywhere on the page. The comment ten
+          // lines below has warned about exactly that shape the whole time
+          // ("would disable Continue with nothing on screen to explain why").
+          //
+          // A document with no text is not something an instructor can
+          // acknowledge, so it is not a weak checkbox — it is an unpublished
+          // document, and the screen already has an actionable message for that,
+          // naming the person who can fix it. Same branch, same words.
+          if (r.error || !r.data?.body_text?.trim()) {
             // 404 = the provider hasn't published it, which retrying cannot fix
             // and which leaves this step permanently uncompletable. Distinguished
-            // from a genuine transient failure, matching Screens 4 and 5.
+            // from a genuine transient failure, matching Screens 4 and 5. An empty
+            // body is the same situation as a 404 from the instructor's side.
+            const unpublished = !r.error || r.status === 404;
             setLoadError(
-              r.status === 404
+              unpublished
                 ? "Your program hasn't published these documents yet. Your Program Manager needs to add them before you can continue — please reach out to them."
                 : "We can't load this document right now. Please try again, or reach out to your Program Manager."
             );
@@ -276,7 +270,7 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
                 type="checkbox"
                 checked={contractorStatusAck}
                 onChange={(e) => setContractorStatusAck(e.target.checked)}
-                disabled={!hasBody(docs, CONTRACTOR_STATUS_KEY)}
+                disabled={!docs[CONTRACTOR_STATUS_KEY]}
                 className="mt-0.5 h-4 w-4 flex-shrink-0 rounded border-neutral-400 disabled:opacity-50"
               />
               <span>{CONTRACTOR_STATUS_ACK}</span>
@@ -306,7 +300,7 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
                 type="checkbox"
                 checked={mandatoryAck}
                 onChange={(e) => setMandatoryAck(e.target.checked)}
-                disabled={!hasBody(docs, MANDATORY_KEY)}
+                disabled={!docs[MANDATORY_KEY]}
                 className="mt-0.5 h-4 w-4 flex-shrink-0 rounded border-neutral-400 disabled:opacity-50"
               />
               <span>{MANDATORY_ACK}</span>
@@ -321,7 +315,7 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
             bodyText={docs[PHOTO_KEY]?.body_text}
             isExpanded={photoExpanded}
             onToggle={() => setPhotoExpanded((v) => !v)}
-            disabled={!hasBody(docs, PHOTO_KEY)}
+            disabled={!docs[PHOTO_KEY]}
             acks={PHOTO_ACKS}
             checked={photoChecked}
             onCheck={(k, v) => setPhotoChecked((s) => ({ ...s, [k]: v }))}
@@ -336,7 +330,7 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
             bodyText={docs[VEHICLE_KEY]?.body_text}
             isExpanded={vehicleExpanded}
             onToggle={() => setVehicleExpanded((v) => !v)}
-            disabled={!hasBody(docs, VEHICLE_KEY)}
+            disabled={!docs[VEHICLE_KEY]}
             acks={VEHICLE_ACKS}
             checked={vehicleChecked}
             onCheck={(k, v) => setVehicleChecked((s) => ({ ...s, [k]: v }))}

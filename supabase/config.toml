@@ -59,6 +59,15 @@ verify_jwt = true
 verify_jwt = true
 
 # ── verify_jwt = false (public / webhook / cron entrypoints) ──
+[functions.backup-storage-objects]
+# PINNED FIRST, because the header above singles this one out as the highest-risk
+# unlisted function and then — in its first draft — did not actually list it. It
+# authenticates with a Vault secret rather than a JWT and is the only off-site
+# backup of signed contractor agreements and background-check PDFs, so a deploy
+# that flipped it to verify_jwt = true would kill the backups silently: nothing
+# fails visibly, the job just 401s forever. Documenting a risk is not closing it.
+verify_jwt = false
+
 [functions.stripe-webhook]
 verify_jwt = false
 
