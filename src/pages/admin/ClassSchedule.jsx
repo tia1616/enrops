@@ -172,7 +172,10 @@ export default function ClassSchedule() {
         <h1 style={{ color: INK, fontSize: 26, fontWeight: 800, margin: "0 0 8px" }}>Class schedule</h1>
         <p style={{ color: MUTED, fontSize: 15, lineHeight: 1.55, margin: 0 }}>
           Your weekly classes — which class meets on which day and time. Upload your
-          schedule and we&apos;ll build it here. Assign coaches to each class under{" "}
+          {/* "coaches" — the twin of the same word on the Schedule page it links
+              to. Both changed together; leaving one is how the vocabulary gets
+              re-seeded from the other. Nothing else in the product says coach. */}
+          schedule and we&apos;ll build it here. Assign instructors to each class under{" "}
           <Link to="/admin/schedule" style={{ color: BRIGHT, fontWeight: 600 }}>Instructors → Schedule</Link>;
           this also powers your &ldquo;what&apos;s happening this week&rdquo; messages.
         </p>

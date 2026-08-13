@@ -1115,7 +1115,15 @@ export default function Schedule() {
         <div style={{ marginBottom: 16 }}>
           <h1 style={{ color: INK, fontSize: 24, fontWeight: 800, margin: "0 0 6px" }}>Schedule</h1>
           <p style={{ color: MUTED, fontSize: 14, margin: 0, lineHeight: 1.5 }}>
-            Your weekly classes and who teaches them. Assign a coach to each class below.
+            {/* "coach" was one vocabulary leaking into shared UI, the same class
+                of bug as a tenant name. Nothing else in the product calls them
+                that: the menu says Instructors, the tab says Instructor Roster,
+                the emails say instructor. A ukulele teacher, a chess teacher and
+                a yoga teacher are not coaches, and an operator scanning for
+                "where do I assign my instructors" does not read this sentence as
+                the answer. Per-program vocabulary is a real feature and is
+                registered as debt; until it exists the neutral word wins. */}
+            Your weekly classes and who teaches them. Assign an instructor to each class below.
             Add or change classes under{" "}
             <Link to="/admin/class-schedule" style={{ color: BRIGHT, fontWeight: 600 }}>Class schedule</Link>.
           </p>

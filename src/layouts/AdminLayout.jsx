@@ -408,7 +408,13 @@ export default function AdminLayout() {
           // tomorrow's date. Caught exactly that way on the instructor-documents
           // screen. Adding a column here is the cheap half; the expensive half is
           // noticing the read/select mismatch at all, because it does not throw.
-          .select("id, name, slug, email, timezone, active_registration_term, uses_enrops_registration, venue_model, background_check_config, instructor_pay_model, platform_plan, stripe_charges_enabled, fee_pass_through, venue_answer, program_cadence, default_age_min, default_age_max, onboarding_completed_at")
+          // instructor_pay_enabled is here because the Payroll page hides the
+        // "how you can pay your instructors" explainer for every provider who
+        // does NOT pay through us, and a column that is merely absent from this
+        // select arrives as undefined — which would have hidden it from the one
+        // org it is written for. Same flag the onboarding wizard uses to decide
+        // whether to show the Stripe step, so the two surfaces cannot disagree.
+        .select("id, name, slug, email, timezone, active_registration_term, uses_enrops_registration, venue_model, background_check_config, instructor_pay_model, instructor_pay_enabled, platform_plan, stripe_charges_enabled, fee_pass_through, venue_answer, program_cadence, default_age_min, default_age_max, onboarding_completed_at")
           .eq("id", memberRow.organization_id)
           .maybeSingle();
         if (!mounted) return;

@@ -540,7 +540,23 @@ export default function Payroll() {
   // ── render ─────────────────────────────────────────────────────────────
   return (
     <div>
-      <PayRoutesCard org={org} />
+      {/* "How you can pay your instructors — three ways, only some are live
+          right now." GONE for everyone who does not actually pay through us
+          (Jessica, 2026-08-13: "no one will run payroll through us. it is only
+          a payroll calculater (except for j2s)").
+
+          It was a menu of three payment routes where route 2 was never going to
+          be built and route 3 is one provider's pre-Enrops legacy setup — with a
+          mailto inviting operators to ask us to turn on the one we are not
+          building. For every other provider this page is a CALCULATOR: it works
+          out what each instructor is owed and records that you paid them. Saying
+          "only some are live" invites them to wait for the rest.
+
+          Gated on instructor_pay_enabled, the same flag that decides whether the
+          onboarding wizard shows the Stripe step, so the two cannot disagree
+          about whether a provider pays through us. True for J2S alone, and they
+          are on route 3, so nothing changes for the one org the card describes. */}
+      {org?.instructor_pay_enabled === true && <PayRoutesCard org={org} />}
       <Toolbar
         sinceDate={sinceDate}
         setSinceDate={setSinceDate}
