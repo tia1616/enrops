@@ -14,8 +14,13 @@ const DEFAULTS = {
   // { <document_key>: boolean } — the instructor-facing resolution of
   // organizations.instructor_document_config, via
   // public_org_directory.instructor_documents_public. Read through
-  // isDocumentEnabled, never directly: an ABSENT key means ON, so the empty
-  // default below correctly means "every document is required".
+  // isDocumentEnabled, never directly. An ABSENT key means ON for every document
+  // but one: contractor_status is opt-in and needs an explicit true. So this
+  // empty default means "every document except the opt-in one is required",
+  // which is the safe reading in both directions — a document the provider has
+  // not written yet still blocks, and a document nobody was ever offered does
+  // not suddenly block everybody. Reading this object directly gets the
+  // exception wrong; that is the whole reason isDocumentEnabled exists.
   documentConfig: {},
   // The provider's own display name. Empty is safe: the PDF header drops the
   // segment entirely rather than printing "undefined" on a legal document.

@@ -13,11 +13,30 @@
 # onboarding endpoints sat with the gateway wide open until they were pinned
 # here explicitly.
 #
-# Hence the section below: anything that must REQUIRE a JWT is now stated, not
-# assumed. If you add an authed function, list it. The one-line check that this
-# file is telling the truth is a request with no Authorization header — the
-# gateway answers `UNAUTHORIZED_NO_AUTH_HEADER` when verification is on, and the
-# function's own error when it is off.
+# THE SECTION BELOW IS NOT COMPLETE, AND SAYING SO IS THE POINT. It pins the
+# five functions the incident touched. Roughly 73 of 105 function directories
+# still have no entry — including submit-agreement, submit-acknowledgments and
+# get-legal-document, and including pay-instructor, refund-registration,
+# export-finances, admin-invite, admin-set-member-role, admin-remove-member,
+# stripe-oauth-start and stripe-oauth-disconnect. The note at
+# stripe-oauth-disconnect below ("must NEVER be public — it detaches the account
+# a business gets paid through") rests on the very default this incident proved
+# is not a safety net. An earlier draft of this header claimed the file was now
+# exhaustive; it is not, and a config that reads as covered when it is not is
+# worse than one that admits the gap.
+#
+# So: if you add an authed function, list it — and pinning the rest is real work
+# that is written down rather than done here. It needs care, not a loop:
+# backup-storage-objects MUST stay verify_jwt = false (it authenticates with a
+# Vault secret and is the only off-site backup of signed agreements and BGC
+# PDFs), so pinning it true would silently kill it. The right shape is a test
+# that lists supabase/functions/* and fails on anything unlisted, added at the
+# same time as the pins.
+#
+# The one-line check that any given line here is telling the truth is a request
+# with no Authorization header — the gateway answers
+# `UNAUTHORIZED_NO_AUTH_HEADER` when verification is on, and the function's own
+# error when it is off.
 project_id = "enrops"
 
 # ── verify_jwt = true (authed endpoints, pinned rather than assumed) ──

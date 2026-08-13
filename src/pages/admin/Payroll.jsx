@@ -1,5 +1,9 @@
 // src/pages/admin/Payroll.jsx
-// /admin/payroll — instructor pay management.
+// Rendered at /admin/payouts, inside the Payouts.jsx shell which supplies the
+// "Payroll calculator" heading. /admin/payroll now REDIRECTS here — it used to
+// render this component bare, with no page title at all.
+//
+// Instructor pay management.
 //
 // Read-only summary view replaced by an action-driven workflow:
 //   - Groups by (effective_instructor, camp_session) for camp rows and
@@ -122,7 +126,17 @@ export default function Payroll() {
   // is "coming soon" (blocked) and manual/not-connected tenants have no rail, so
   // they get manual-only ("Mark paid manually"). Expand this when enrops_platform
   // ships. Defaults to false until loaded so we never show a dead Pay button.
-  const canStripePayout = payRoute?.instructor_pay_model === 'legacy_own_platform';
+  //
+  // AND THE CIRCUIT BREAKER, which this used to ignore. pay-instructor refuses
+  // with 403 instructor_pay_not_enabled BEFORE it ever reads instructor_pay_model,
+  // so flipping instructor_pay_enabled off — the documented way to stop payouts
+  // during a Stripe incident — left the Pay via Stripe button sitting there and
+  // every click failing. The column's own comment says the manual mark-paid path
+  // stays available regardless, which is exactly what should be left standing.
+  // Same flag now hides PayRoutesCard, so the two agree.
+  const canStripePayout =
+    payRoute?.instructor_pay_model === 'legacy_own_platform' &&
+    org?.instructor_pay_enabled === true;
 
   function toggleExpand(key) {
     setExpanded((prev) => {

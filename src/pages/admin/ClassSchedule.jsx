@@ -170,11 +170,20 @@ export default function ClassSchedule() {
     <div style={{ maxWidth: 960, margin: "0 auto", padding: "24px 32px" }}>
       <header style={{ marginBottom: 20 }}>
         <h1 style={{ color: INK, fontSize: 26, fontWeight: 800, margin: "0 0 8px" }}>Class schedule</h1>
+        {/* "Assign instructors" was "Assign coaches" — the twin of the same word
+            on the Schedule page this links to. Both changed together; leaving one
+            is how the vocabulary gets re-seeded from the other. Nothing else in
+            the product says coach.
+
+            THIS COMMENT LIVES ABOVE THE <p>, NOT INSIDE IT, and that is not
+            style. Between two runs of JSX text a comment is a THIRD child, so
+            the whitespace either side of it is trimmed away and the two runs
+            weld together: the first version of this rendered "Upload
+            yourschedule" on the live page. A comment as the first child of an
+            element is safe (the twin in Schedule.jsx is), a comment between two
+            text runs is not. */}
         <p style={{ color: MUTED, fontSize: 15, lineHeight: 1.55, margin: 0 }}>
           Your weekly classes — which class meets on which day and time. Upload your
-          {/* "coaches" — the twin of the same word on the Schedule page it links
-              to. Both changed together; leaving one is how the vocabulary gets
-              re-seeded from the other. Nothing else in the product says coach. */}
           schedule and we&apos;ll build it here. Assign instructors to each class under{" "}
           <Link to="/admin/schedule" style={{ color: BRIGHT, fontWeight: 600 }}>Instructors → Schedule</Link>;
           this also powers your &ldquo;what&apos;s happening this week&rdquo; messages.

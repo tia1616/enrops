@@ -3,13 +3,26 @@
 //
 // THE KEYS ARE A CONTRACT, NOT A PREFERENCE. Each one is fetched by name by a
 // specific wizard screen, so this list may not invent a key or rename one:
-//   contractor_agreement                     -> Screen4Agreement (signed, snapshotted)
+//   contractor_agreement                      -> Screen4Agreement (signed, snapshotted)
 //   pay_schedule / attendance_policy /
-//   code_of_conduct                          -> Screen5Policies (one ack each)
-//   mandatory_reporter_ack /
+//   code_of_conduct                           -> Screen5Policies (one ack each)
+//   contractor_status / mandatory_reporter_ack /
 //   photo_video_release / vehicle_driving_ack -> Screen6Additional
 // Adding a key here that no screen reads would produce a document an operator
 // writes and no instructor ever sees. Verified against those three files.
+//
+// A FOURTH PLACE HAS TO AGREE: public_org_directory.instructor_documents_public
+// enumerates these keys by hand in SQL, and it is what the WIZARD reads —
+// `organizations.instructor_document_config` is not readable by an instructor.
+// Miss the view and the key resolves to undefined there, which `!== false`
+// treats as ON, so the instructor is asked for a document with no published body
+// and dead-ends on a 404. The JS/TS pair is pinned by a drift guard in
+// onboardingSteps.test.mjs and the view by one in instructorDocuments.test.mjs.
+//
+// ARRAY ORDER IS THE ADMIN SCREEN'S ORDER — InstructorDocuments maps this list
+// raw, under a banner reading "start with the contractor agreement, then work
+// down the list". Keep each entry beside the others its screen reads, or the
+// list stops matching the order an instructor meets them in.
 //
 // `step` records WHICH screen reads each key, and it is load-bearing rather than
 // documentation: turning documents off can empty a whole screen, and a screen
@@ -81,43 +94,6 @@ Ending the agreement
     autoSignatureBlock: true,
   },
   {
-    key: 'contractor_status',
-    step: 'additional',
-    // DEFAULT OFF — the only document that is, and the exception is deliberate.
-    // See defaultOff in isDocumentEnabled for why the usual "absent means ON"
-    // rule had to be broken for exactly this key.
-    //
-    // WHAT IT REPLACES. Screen 4's tick box used to read "...independent
-    // contractor under ORS 670.600" — an Oregon statute, on every provider's
-    // screen, in every state. The recorded plan was a per-state step. Jessica
-    // killed that on 2026-08-13: "we're not going to track all state policies."
-    // Fifty states' classification tests, each amendable, is a compliance
-    // product we are not building and could not keep correct — and a stale
-    // citation is worse than none, because it reads authoritative.
-    //
-    // So the provider writes it. They know their state, their staffing model
-    // and their own counsel's advice; we know none of the three. The starter
-    // asks for a link to their state's own page rather than restating the test,
-    // so what an instructor reads is maintained by the body that wrote it.
-    defaultOff: true,
-    label: 'Independent contractor status',
-    // No "off unless you turn it on" here, though it was the first draft: this
-    // help line is only rendered for a document that is ON, so it would have
-    // read "...Off unless you turn it on" underneath a card saying On.
-    help: "Only if you want instructors to confirm they meet your state's test for independent contractor status. Most providers link to their state's own page rather than restating the rules.",
-    starter: `Working as an independent contractor
-[State plainly that instructors work as independent contractors and not employees, and what that means day to day — they set their own methods, use their own equipment, and may work for others.]
-
-Your state's rules
-[Link to your own state's page on independent contractor classification, and say that the instructor is responsible for meeting it. Search for your state's labour or revenue department page on worker classification; do not paraphrase the test here, because it changes.]
-
-Taxes and insurance
-[Say that you do not withhold taxes, what tax form you issue and when, and whether you require them to carry any insurance.]
-
-If your situation changes
-[Say who to tell if their working arrangement changes in a way that affects this.]`,
-  },
-  {
     key: 'pay_schedule',
     step: 'policies',
     label: 'Pay schedule',
@@ -176,6 +152,43 @@ Photos and social media
 
 If something goes wrong
 [Say who to tell, how fast, and make clear that reporting a concern is always the right call.]`,
+  },
+  {
+    key: 'contractor_status',
+    step: 'additional',
+    // DEFAULT OFF — the only document that is, and the exception is deliberate.
+    // See defaultOff in isDocumentEnabled for why the usual "absent means ON"
+    // rule had to be broken for exactly this key.
+    //
+    // WHAT IT REPLACES. Screen 4's tick box used to read "...independent
+    // contractor under ORS 670.600" — an Oregon statute, on every provider's
+    // screen, in every state. The recorded plan was a per-state step. Jessica
+    // killed that on 2026-08-13: "we're not going to track all state policies."
+    // Fifty states' classification tests, each amendable, is a compliance
+    // product we are not building and could not keep correct — and a stale
+    // citation is worse than none, because it reads authoritative.
+    //
+    // So the provider writes it. They know their state, their staffing model
+    // and their own counsel's advice; we know none of the three. The starter
+    // asks for a link to their state's own page rather than restating the test,
+    // so what an instructor reads is maintained by the body that wrote it.
+    defaultOff: true,
+    label: 'Independent contractor status',
+    // No "off unless you turn it on" here, though it was the first draft: this
+    // help line is only rendered for a document that is ON, so it would have
+    // read "...Off unless you turn it on" underneath a card saying On.
+    help: "Only if you want instructors to confirm they meet your state's test for independent contractor status. Most providers link to their state's own page rather than restating the rules.",
+    starter: `Working as an independent contractor
+[State plainly that instructors work as independent contractors and not employees, and what that means day to day — they set their own methods, use their own equipment, and may work for others.]
+
+Your state's rules
+[Link to your own state's page on independent contractor classification, and say that the instructor is responsible for meeting it. Search for your state's labour or revenue department page on worker classification; do not paraphrase the test here, because it changes.]
+
+Taxes and insurance
+[Say that you do not withhold taxes, what tax form you issue and when, and whether you require them to carry any insurance.]
+
+If your situation changes
+[Say who to tell if their working arrangement changes in a way that affects this.]`,
   },
   {
     key: 'mandatory_reporter_ack',
@@ -312,6 +325,34 @@ export function willAppendSignatureBlock(docKey, body) {
 
 export const DOCUMENT_KEYS = INSTRUCTOR_DOCUMENTS.map((d) => d.key);
 
+/**
+ * How the admin banner names the set an instructor will be asked for.
+ *
+ * LIVES HERE, NOT IN THE JSX, because it has three cases and every one of them
+ * has already been wrong:
+ *
+ *   - "the N you've turned on" attributed a choice nobody made. It was correct
+ *     while the untouched state was all-on; the day contractor_status shipped
+ *     default-off the untouched state became N-1, which selects this branch, so
+ *     the sentence every provider saw on first visit claimed they had turned on
+ *     seven documents they had never touched.
+ *   - "the 1 that are switched on" — reachable (six toggleable documents off,
+ *     contractor_status already off) and ungrammatical. The dedicated
+ *     "Just the agreement" banner does NOT preempt it: that one requires
+ *     writtenCount === enabledCount, and this branch only renders when
+ *     writtenCount is LOWER, so they are mutually exclusive.
+ *
+ * A phrase with three branches inside JSX is a phrase nobody can test. Returned
+ * as a value so the test asserts the sentence rather than grepping the file for
+ * banned wording — which was the previous guard, and which failed on the comment
+ * explaining the fix.
+ */
+export function documentsBannerPhrase(enabledCount) {
+  if (enabledCount === DOCUMENT_KEYS.length) return `all ${DOCUMENT_KEYS.length}`;
+  if (enabledCount === 1) return 'the one that is switched on';
+  return `the ${enabledCount} that are switched on`;
+}
+
 export function documentByKey(key) {
   return INSTRUCTOR_DOCUMENTS.find((d) => d.key === key) ?? null;
 }
@@ -319,7 +360,7 @@ export function documentByKey(key) {
 /* ────────────────────────────────────────────────────────────────────────────
  * Which documents this provider actually uses.
  *
- * Not every provider needs all seven — a chess tutor whose instructors never
+ * Not every provider needs all of them — a chess tutor whose instructors never
  * drive should not have to write a driving acknowledgment before anyone can
  * finish onboarding. The choice is stored on
  * organizations.instructor_document_config, keyed by document key.

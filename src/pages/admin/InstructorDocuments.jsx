@@ -34,6 +34,7 @@ import { linkifyText } from "../../lib/linkifyText.jsx";
 import {
   INSTRUCTOR_DOCUMENTS,
   DOCUMENT_KEYS,
+  documentsBannerPhrase,
   isDocumentEnabled,
   nextVersionFor,
   versionNumberOf,
@@ -97,7 +98,7 @@ export default function InstructorDocuments() {
   const { org } = useOutletContext();
   const [rows, setRows] = useState(null); // all legal_documents for this org
   // A failed READ must never look like "you have no documents". It used to set
-  // rows to [], which rendered all seven as "Not written yet" AND opened the
+  // rows to [], which rendered every document as "Not written yet" AND opened the
   // editor with live=null saying "Nothing published yet" — so an admin could
   // write a draft and publish it as v1, which (newest created_at wins) instantly
   // became the agreement every instructor signs, silently demoting the real one.
@@ -106,8 +107,11 @@ export default function InstructorDocuments() {
   const [loadFailed, setLoadFailed] = useState(false);
   const [openKey, setOpenKey] = useState(null);
   const [toast, setToast] = useState("");
-  // Which documents this provider actually uses. ABSENT KEY MEANS ON, so `{}` —
-  // every existing org — is all seven, unchanged.
+  // Which documents this provider actually uses. ABSENT KEY MEANS ON — with one
+  // deliberate exception, so `{}` (every existing org) is every document EXCEPT
+  // contractor_status, which is opt-in and needs an explicit true. Nobody's
+  // onboarding changed when it shipped. isDocumentEnabled owns both rules; never
+  // re-derive either from this object by hand.
   const [docConfig, setDocConfig] = useState({});
   const [savingKey, setSavingKey] = useState(null);
   // { key, message } — the error renders ON THE ROW THAT FAILED, not at the top
@@ -171,7 +175,7 @@ export default function InstructorDocuments() {
   // Turn one document on or off for this provider.
   //
   // WRITES ONLY THE ONE KEY, onto the config we last read. Spreading the loaded
-  // object rather than rebuilding it from the seven switches on screen is the
+  // object rather than rebuilding it from the switches on screen is the
   // whole-row-write bug that is still open in six other editors: rebuilding
   // would silently reset any key this screen does not know about.
   //
@@ -180,6 +184,37 @@ export default function InstructorDocuments() {
   // provider's own text and anyone who already acknowledged it keeps that record.
   async function setDocEnabled(key, next) {
     if (savingKey) return;
+
+    // TURNING ON A DOCUMENT THAT DOES NOT EXIST YET STOPS EVERY INSTRUCTOR DEAD.
+    //
+    // The wizard fetches each enabled document by key and a 404 is a hard stop —
+    // Screen6Additional sets a screen-wide error and returns before rendering
+    // anything, so the three documents that ARE published disappear too, and
+    // gateCheck still requires the step, so onboarding cannot complete. That is
+    // the precise outage instructorDocuments.js cites as the reason
+    // contractor_status defaults off — and until this guard, the toggle was a
+    // one-click path straight back into it, under a message promising the
+    // opposite ("Instructors will be asked for it from now on").
+    //
+    // Guaranteed, not hypothetical: contractor_status is the only default-off
+    // document, so a provider's FIRST click on it always lands on an unpublished
+    // document. Every other key was on before it was written, which is the
+    // deliberate "absent is not a decision" rule and is unaffected — this guard
+    // only refuses the ACT of switching one on.
+    //
+    // Refuse rather than warn-and-confirm: there is nothing to weigh. Writing it
+    // first costs one click ("Write it" opens the editor while the document is
+    // off, deliberately), and the alternative is a provider discovering the block
+    // through an instructor who cannot finish.
+    if (next && !liveByKey[key]) {
+      const label = INSTRUCTOR_DOCUMENTS.find((d) => d.key === key)?.label ?? "This document";
+      setToggleError({
+        key,
+        message: `Write ${label.toLowerCase()} first. Switching it on before it's published would stop your instructors at this step — and hide the documents you have published. Hit “Write it”, publish, then switch it on.`,
+      });
+      return;
+    }
+
     setSavingKey(key);
     setToggleError(null);
     const updated = { ...docConfig, [key]: next };
@@ -228,7 +263,7 @@ export default function InstructorDocuments() {
     );
   }
 
-  // Failed read: refuse to render the list at all. Showing seven "Not written
+  // Failed read: refuse to render the list at all. Showing a list of "Not written
   // yet" rows would invite the operator to overwrite documents that do exist.
   if (loadFailed) {
     return (
@@ -275,7 +310,7 @@ export default function InstructorDocuments() {
     );
   }
 
-  // COUNTS THE ENABLED SET, not all seven. A provider who has switched two off
+  // COUNTS THE ENABLED SET, not the whole list. A provider who has switched two off
   // and written the other five is finished, and a banner still saying "2 still
   // to write" about documents nobody will ever be shown is simply untrue —
   // exactly the class of sentence this screen has already had to fix twice.
@@ -309,22 +344,10 @@ export default function InstructorDocuments() {
               : `${enabledCount - writtenCount} still to write.`}
           </strong>{" "}
           They read and sign{" "}
-          {/* "you've turned on" WAS TRUE AND STOPPED BEING TRUE THE DAY
-              contractor_status shipped. That document defaults OFF, so a
-              provider who has touched nothing has 7 of 8 enabled and falls to
-              this branch — and was told "the 7 you've turned on" when they had
-              turned on nothing. Not an edge case: it was the sentence EVERY
-              provider saw on their first visit to this screen.
-
-              Attributing a choice nobody made is the same defect class as the
-              banner this screen already fixed twice. The count is the useful
-              part; who chose it is decoration. Passive phrasing is true in all
-              three states — untouched, customised, and fully opted in. */}
-          <strong>
-            {enabledCount === DOCUMENT_KEYS.length
-              ? `all ${DOCUMENT_KEYS.length}`
-              : `the ${enabledCount} that are switched on`}
-          </strong>{" "}
+          {/* Three branches, all of which have been wrong at some point — so the
+              sentence is built in instructorDocuments.js where a test can assert
+              it, rather than inline where it could only be grepped for. */}
+          <strong>{documentsBannerPhrase(enabledCount)}</strong>{" "}
           during onboarding, and it stops at the first one that isn&apos;t published. Start with
           the contractor agreement &mdash; it&apos;s the one they actually sign &mdash; then work
           down the list.{" "}

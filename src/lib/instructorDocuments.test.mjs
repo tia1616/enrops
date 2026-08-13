@@ -11,7 +11,7 @@ import {
   bodyForPublish, willAppendSignatureBlock, stripAppendedSignatureBlock,
   AGREEMENT_SIGNATURE_BLOCK, AGREEMENT_SIGNATURE_TOKENS,
   isDocumentEnabled, enabledDocumentKeys, documentKeysForStep,
-  enabledDocumentKeysForStep, stepHasEnabledDocuments,
+  enabledDocumentKeysForStep, stepHasEnabledDocuments, documentsBannerPhrase,
 } from './instructorDocuments.js';
 
 let pass = 0, fail = 0;
@@ -274,6 +274,53 @@ eq('two off leaves the rest',
 eq('everything off still leaves the agreement',
   enabledDocumentKeys(Object.fromEntries(DOCUMENT_KEYS.map((k) => [k, false]))).length, 1);
 
+// --- THE FOURTH COPY: the SQL view -----------------------------------------
+//
+// instructor_documents_public is a hand-written enumeration of these keys inside
+// public_org_directory, and it is the copy the WIZARD actually reads — an
+// instructor cannot select organizations.instructor_document_config at all.
+// Until now the JS<->TS pair was pinned and the view was pinned by nothing, and
+// the drift is silent AND unsafe in one direction: omit a key from the view, it
+// resolves to undefined, `!== false` treats undefined as ON, and the instructor
+// is asked for a document with no published body — a 404 dead end.
+//
+// Parsed out of the migration rather than queried, because a unit test has no
+// database. That means this pins what the repo SAYS the view is; schema-parity
+// is what proves the database agrees. Both are needed and neither substitutes.
+{
+  const migrationSrc = readFileSync(
+    new URL('../../supabase/migrations/20260813a_contractor_status_document.sql', import.meta.url),
+    'utf8',
+  );
+  // ANCHOR ON THE ALIAS AND SCAN BACK, rather than matching
+  // /jsonb_build_object\(...\) as instructor_documents_public/ — the view builds
+  // background_check_public with the SAME function twenty lines earlier, so even
+  // a non-greedy match starts at THAT opening paren and swallows its four keys.
+  // The first run of this test failed with `enabled, provider_name, provider_url,
+  // instructions` in the list, which is the test being wrong, not the view.
+  const aliasAt = migrationSrc.indexOf('as instructor_documents_public');
+  ok('instructor_documents_public was found in the migration', aliasAt > 0);
+  if (aliasAt > 0) {
+    const before = migrationSrc.slice(0, aliasAt);
+    const openAt = before.lastIndexOf('jsonb_build_object(');
+    // Keys are the quoted first element of each pair; strip SQL comments first
+    // so a key named in a `--` note cannot pass for a key in the object.
+    const body = before.slice(openAt).replace(/--.*$/gm, '');
+    const viewKeys = [...body.matchAll(/'([a-z_]+)'\s*,/g)].map((m) => m[1]);
+    eq('the view enumerates exactly the documents this file defines',
+      [...new Set(viewKeys)].sort().join(','), [...DOCUMENT_KEYS].sort().join(','));
+    // The opt-in document is the one the view must get RIGHT, not merely list:
+    // `<> 'false'` here instead of `= 'true'` would default it ON for everybody
+    // and hand every provider's instructors an unpublished document.
+    ok('the view resolves contractor_status with = true, not <> false',
+      /'contractor_status',\s*coalesce\(\(instructor_document_config -> 'contractor_status'\) = 'true'::jsonb, false\)/
+        .test(body));
+    // ...and the agreement stays pinned true regardless of stored config.
+    ok('the view pins contractor_agreement to a literal true',
+      /'contractor_agreement',\s*true/.test(body));
+  }
+}
+
 // --- the banner may not attribute a choice nobody made --------------------
 //
 // A default-off document means the UNTOUCHED state is no longer "all of them",
@@ -286,34 +333,41 @@ eq('everything off still leaves the agreement',
 // invariant is the reason, not the wording: the untouched config must not equal
 // the full set, and the branch it therefore selects must not claim the operator
 // chose it.
-{
-  const rawSrc = readFileSync(
-    new URL('../pages/admin/InstructorDocuments.jsx', import.meta.url),
-    'utf8',
-  );
-  // COMMENTS STRIPPED FIRST, and this is not tidiness — the first run of this
-  // test failed on the comment directly above the fix, which quotes the wording
-  // it is warning about. A grep that cannot tell rendered copy from a note about
-  // rendered copy reports the fix as the bug, and the honest repair is to make
-  // the test read what ships rather than to reword the explanation around it.
-  const screenSrc = rawSrc
-    .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, ' ')   // {/* JSX comment */}
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')             // /* block comment */
-    .replace(/^[ \t]*\/\/.*$/gm, ' ');             // // line comment
-  ok('the untouched config is NOT the full set (this is what breaks the copy)',
-    enabledDocumentKeys({}).length !== DOCUMENT_KEYS.length);
-  // Proves the stripper actually ran: the comment above the fix contains the
-  // banned phrase, so if stripping silently no-ops this assertion fails and the
-  // one below becomes meaningless without anyone noticing.
-  ok('the comment stripper works (the raw file DOES contain the banned phrase)',
-    /you'(ve|d)\s+turned\s+on/.test(rawSrc));
-  ok('the documents banner does not tell an operator they turned these on',
-    !/you'(ve|d)\s+turned\s+on|you\s+have\s+turned\s+on/.test(screenSrc));
-  // The assertion above only means something if the branch is still there to
-  // get wrong; a rename would otherwise make it pass forever against nothing.
-  ok('...and the branch it guards still exists',
-    /enabledCount === DOCUMENT_KEYS\.length/.test(screenSrc));
-}
+// THE FIRST VERSION OF THIS TEST GREPPED THE SCREEN FOR BANNED WORDING, and
+// /code-review was right that it was weaker than it looked: it failed on the
+// comment explaining the fix, needed a comment stripper to compensate, then
+// needed a meta-assertion to prove the stripper had run, and STILL missed
+// `you&apos;ve` and the U+2019 apostrophe — both idiomatic in this file. Three
+// layers of scaffolding around a regex that could not see the thing it guarded.
+//
+// The phrase is now a function, so these assert the sentence itself. All the
+// scaffolding is gone.
+eq('untouched: names the enabled set, claims no choice',
+  documentsBannerPhrase(enabledDocumentKeys({}).length), 'the 7 that are switched on');
+ok('untouched does NOT hit the all-N branch (this is what broke the old copy)',
+  enabledDocumentKeys({}).length !== DOCUMENT_KEYS.length);
+eq('fully opted in: all N',
+  documentsBannerPhrase(DOCUMENT_KEYS.length), `all ${DOCUMENT_KEYS.length}`);
+// Reachable — six toggleable documents off with contractor_status already off —
+// and "the 1 that are switched on" is what the previous wording produced.
+eq('exactly one left is grammatical', documentsBannerPhrase(1), 'the one that is switched on');
+eq('two left', documentsBannerPhrase(2), 'the 2 that are switched on');
+ok('no branch tells an operator they turned these on',
+  [0, 1, 2, 7, DOCUMENT_KEYS.length].every((n) => !/turned on/.test(documentsBannerPhrase(n))));
+// The sentence reads "They read and sign <phrase> during onboarding", so every
+// branch has to survive that frame — a phrase starting with a capital or ending
+// in a full stop would read as two sentences jammed together.
+ok('every branch fits the sentence it is dropped into',
+  [1, 2, 7, DOCUMENT_KEYS.length].every((n) => {
+    const p = documentsBannerPhrase(n);
+    return p === p.toLowerCase().replace(/^./, p[0]) && !p.endsWith('.') && !/^[A-Z]/.test(p);
+  }));
+// The screen must actually USE it; asserting a function nobody calls is the
+// same failure the grep version had, one level up.
+ok('the admin screen renders the shared phrase',
+  /documentsBannerPhrase\(enabledCount\)/.test(
+    readFileSync(new URL('../pages/admin/InstructorDocuments.jsx', import.meta.url), 'utf8'),
+  ));
 
 // --- screen grouping ------------------------------------------------------
 //

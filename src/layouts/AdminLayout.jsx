@@ -235,6 +235,21 @@ function shapeNavForOrg(nav, org) {
       // Same predicate as the nav item and the Settings cards, so the three can
       // never disagree. A lean op with no instructor entitlement still gets the
       // one clean page the comment above describes.
+      // THE TABLESS BRANCH STILL HAS TO CLAIM /admin/payouts, and this is a
+      // money-read guard, not cosmetics. navItemActive derives an item's roots
+      // from `tabs` when it has them and from `match || [to]` when it does not,
+      // and the whole viewMoney block card keys off that: blockedItem only fires
+      // for a gated item that is ACTIVE. Drop the tabs without a `match` and
+      // /admin/payouts matches no nav item at all, so a staff or viewer member
+      // who types the URL gets the page rendered instead of the block card.
+      //
+      // Nothing downstream catches them. Payouts has no permission check of its
+      // own, Payroll gates only its write controls, and v_effective_pay_lines is
+      // security_invoker with its pay columns coming from a table whose SELECT
+      // policy is org-scoped with NO role filter — so they read real
+      // per-instructor pay. Pre-existing (the old code pushed the tabless item
+      // unconditionally) and narrowed rather than introduced by the branch above,
+      // but the asymmetry is new and this is the line that closes it.
       const { tabs: _drop, ...rest } = item;
       void _drop;
       out.push(
@@ -244,7 +259,7 @@ function shapeNavForOrg(nav, org) {
               label: "Payments",
               tabs: item.tabs.filter((t) => t.to !== "/admin/discounts"),
             }
-          : { ...rest, label: "Payments" },
+          : { ...rest, label: "Payments", match: ["/admin/finances", "/admin/payouts"] },
       );
       out.push({ to: "/admin/discounts", label: "Discounts", gate: "viewMoney" });
       continue;

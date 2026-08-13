@@ -94,3 +94,12 @@ where status = 'active';
 -- create or replace view drops grants in some paths; reassert them. The wizard
 -- reads this view before an instructor has a session (anon) and after (authenticated).
 grant select on public.public_org_directory to anon, authenticated;
+
+-- The column comment still stated the old rule as absolute. It is what `\d+
+-- organizations` and the Supabase table editor surface, so it is the first thing
+-- the next person reads about this column — and it would have told them absence
+-- always means ON, which is now wrong for exactly one key and wrong in the
+-- dangerous direction (they would "fix" the opt-in back to default-on and hand
+-- every provider's instructors an unpublished document).
+comment on column public.organizations.instructor_document_config is
+  'Per-document on/off for instructor onboarding documents, keyed by legal_documents.document_key. An ABSENT key means ON — only an explicit false turns a document off, so a document that has simply not been written yet still blocks onboarding. ONE EXCEPTION: contractor_status is opt-in and needs an explicit true; it is new, optional, and defaulting it on would block every existing provider''s instructors on a document nobody was asked to write. contractor_agreement is always on and is ignored here. Instructor-facing copy is exposed via public_org_directory.instructor_documents_public, which resolves every key to a boolean — that view must list every key in src/lib/instructorDocuments.js or the missing one reads as ON.';

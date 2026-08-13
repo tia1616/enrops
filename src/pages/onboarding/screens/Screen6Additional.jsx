@@ -5,6 +5,7 @@ import { fetchLegalDocument } from '../../../lib/legalDoc.js';
 import { STEP_KEYS } from '../../../lib/onboardingSteps.js';
 import { linkifyText } from '../../../lib/linkifyText.jsx';
 import { isDocumentEnabled } from '../../../lib/instructorDocuments.js';
+import { renderWaiverText } from '../../../lib/waiverText.js';
 import { useOnboardingConfig } from '../OnboardingConfigContext.jsx';
 import Chevron from '../../../components/Chevron.jsx';
 import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardLayout.jsx';
@@ -62,18 +63,48 @@ const MANDATORY_ACK =
 // me" — one company's name, in a consent every OTHER provider's instructors were
 // asked to give, about photographs that provider would never take. Same class as
 // the four tenant names removed from this wizard on 2026-08-12; this one survived
-// because it is a label rather than body text. orgName is already resolved for
-// this wizard, and falls back to the neutral phrasing rather than to a name.
+// because it is a label rather than body text.
+//
+// THROUGH renderWaiverText RATHER THAN A TERNARY, because the first version was a
+// hand-rolled truthiness check and orgName is operator-supplied free text threaded
+// here untrimmed. A name of "   " is truthy, so a consent checkbox rendered
+// "I consent to     photographing/recording me at program sites" — on a legal
+// attestation. renderWaiverText already trims, already falls back to wording that
+// is true rather than to a placeholder or another tenant's name, and is already
+// the convention every other org-name interpolation in this repo uses.
 const photoAcks = (orgName) => [
   {
     key: 'photo_consent_record',
-    label: orgName
-      ? `I consent to ${orgName} photographing/recording me at program sites`
-      : 'I consent to being photographed/recorded at program sites',
+    label: renderWaiverText(
+      'I consent to {{org}} photographing/recording me at program sites',
+      orgName,
+    ),
   },
   { key: 'photo_consent_marketing', label: 'I consent to use of my likeness in marketing materials' },
   { key: 'photo_consent_revocable', label: 'I understand consent is ongoing and revocable in writing' },
 ];
+
+/**
+ * Is this document actually READABLE, not merely fetched?
+ *
+ * `docs[key]` is a wrapper object built after the fetch, so it is truthy no
+ * matter what came back — including body_text: ''. An empty body renders one
+ * blank <p> and leaves the checkbox live, so an instructor confirms "I meet the
+ * requirements for working as an independent contractor" with zero requirements
+ * on screen. That is exactly what rendering these inline instead of in an
+ * accordion is supposed to make impossible.
+ *
+ * Reachable: body_text is NOT NULL so null cannot happen, but nothing stops the
+ * empty string — legal_documents has no CHECK for it and the only guard is the
+ * publish button on the admin screen, which a seed or a direct insert bypasses.
+ *
+ * Applied to all four sections, not just the new one. The two accordions have
+ * the same shape and the same consequence, and fixing the instance rather than
+ * the class is how this comes back.
+ */
+function hasBody(docs, key) {
+  return Boolean(docs[key]?.body_text?.trim());
+}
 
 const VEHICLE_ACKS = [
   { key: 'vehicle_own_transport', label: 'I am responsible for my own transportation' },
@@ -245,7 +276,7 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
                 type="checkbox"
                 checked={contractorStatusAck}
                 onChange={(e) => setContractorStatusAck(e.target.checked)}
-                disabled={!docs[CONTRACTOR_STATUS_KEY]}
+                disabled={!hasBody(docs, CONTRACTOR_STATUS_KEY)}
                 className="mt-0.5 h-4 w-4 flex-shrink-0 rounded border-neutral-400 disabled:opacity-50"
               />
               <span>{CONTRACTOR_STATUS_ACK}</span>
@@ -275,7 +306,7 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
                 type="checkbox"
                 checked={mandatoryAck}
                 onChange={(e) => setMandatoryAck(e.target.checked)}
-                disabled={!docs[MANDATORY_KEY]}
+                disabled={!hasBody(docs, MANDATORY_KEY)}
                 className="mt-0.5 h-4 w-4 flex-shrink-0 rounded border-neutral-400 disabled:opacity-50"
               />
               <span>{MANDATORY_ACK}</span>
@@ -290,7 +321,7 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
             bodyText={docs[PHOTO_KEY]?.body_text}
             isExpanded={photoExpanded}
             onToggle={() => setPhotoExpanded((v) => !v)}
-            disabled={!docs[PHOTO_KEY]}
+            disabled={!hasBody(docs, PHOTO_KEY)}
             acks={PHOTO_ACKS}
             checked={photoChecked}
             onCheck={(k, v) => setPhotoChecked((s) => ({ ...s, [k]: v }))}
@@ -305,7 +336,7 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
             bodyText={docs[VEHICLE_KEY]?.body_text}
             isExpanded={vehicleExpanded}
             onToggle={() => setVehicleExpanded((v) => !v)}
-            disabled={!docs[VEHICLE_KEY]}
+            disabled={!hasBody(docs, VEHICLE_KEY)}
             acks={VEHICLE_ACKS}
             checked={vehicleChecked}
             onCheck={(k, v) => setVehicleChecked((s) => ({ ...s, [k]: v }))}
