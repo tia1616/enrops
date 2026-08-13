@@ -101,7 +101,10 @@ Ending the agreement
     // so what an instructor reads is maintained by the body that wrote it.
     defaultOff: true,
     label: 'Independent contractor status',
-    help: "Only if you want instructors to confirm they meet your state's test for independent contractor status. Most providers link to their state's own page rather than restating the rules. Off unless you turn it on.",
+    // No "off unless you turn it on" here, though it was the first draft: this
+    // help line is only rendered for a document that is ON, so it would have
+    // read "...Off unless you turn it on" underneath a card saying On.
+    help: "Only if you want instructors to confirm they meet your state's test for independent contractor status. Most providers link to their state's own page rather than restating the rules.",
     starter: `Working as an independent contractor
 [State plainly that instructors work as independent contractors and not employees, and what that means day to day — they set their own methods, use their own equipment, and may work for others.]
 
