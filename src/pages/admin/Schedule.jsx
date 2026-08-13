@@ -8,7 +8,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../context/AuthContext.jsx";
-import { defaultTenantSlug } from "../../lib/tenants.js";
+// defaultTenantSlug import removed 2026-08-12 — its only use was the instructor
+// portal URL below, which no longer resolves to a specific tenant.
 import { fetchOrgTerms } from "../../lib/terms.js";
 import HatGuide from "../../components/HatGuide";
 import Chevron from "../../components/Chevron.jsx";
@@ -2442,11 +2443,17 @@ export default function Schedule() {
           onClose={() => setSurveyDialog(null)}
         />
       )}
+      {/* orgName's fallback below was one provider's NAME, rendered into the
+          preview of an email every OTHER provider sends to their instructors.
+          org is loaded before this page renders, so it is defensive only — but a
+          defensive default must never be a tenant. orgSlug is threaded so the
+          preview's portal link matches what the senders actually emit. */}
       {emailActivityOpen && (
         <EmailActivityModal
           cycleDisplay={`${cycleDisplayName(cycle.name)} · ${cycle.status}`}
           cycle={cycle}
-          orgName={org?.name ?? "Journey to STEAM"}
+          orgName={org?.name ?? ""}
+          orgSlug={org?.slug ?? ""}
           assignments={state.assignments}
           sessions={state.sessions}
           instructors={state.instructors}
@@ -2477,12 +2484,14 @@ export default function Schedule() {
           sending={busy === "patching"}
         />
       )}
+      {/* Same reason as the modal above: a defensive default must not be a
+          tenant's name. No orgSlug here — this one builds no portal link. */}
       {changeRequestFor && (
         <ChangeRequestReview
           session={changeRequestFor.session}
           assignment={changeRequestFor.assignment}
           cycle={cycle}
-          orgName={org?.name ?? "Journey to STEAM"}
+          orgName={org?.name ?? ""}
           instructors={state.instructors}
           onClose={() => {
             setChangeRequestFor(null);
@@ -5086,7 +5095,7 @@ function computeWeeks(startISO, endISO) {
 // any assignment in this cycle. Reads directly from instructor_offer_messages —
 // send-offers, send-patch-offer, offer-reminders-cron, and offer-message-reply all
 // write to that table now, so the timeline is complete without JS-side synthesis.
-function EmailActivityModal({ cycleDisplay, cycle, orgName, assignments, sessions, instructors, onClose }) {
+function EmailActivityModal({ cycleDisplay, cycle, orgName, orgSlug, assignments, sessions, instructors, onClose }) {
   const instructorsById = useMemo(() => {
     const m = new Map();
     for (const i of instructors ?? []) m.set(i.id, i);
@@ -5404,6 +5413,7 @@ function EmailActivityModal({ cycleDisplay, cycle, orgName, assignments, session
                       locationsById={locationsById}
                       cycle={cycle}
                       orgName={orgName}
+                      orgSlug={orgSlug}
                     />
                   )}
                 </div>
@@ -5419,7 +5429,7 @@ function EmailActivityModal({ cycleDisplay, cycle, orgName, assignments, session
 // Renders the actual email an instructor saw, inline below a clicked row in
 // EmailActivityModal. Looks up the same bundled-camps logic each send function
 // uses (one instructor can get several camps in one email when timestamps match).
-function EmailPreviewPanel({ event, assignment, session, assignments, sessions, sessionsById, locationsById, cycle, orgName }) {
+function EmailPreviewPanel({ event, assignment, session, assignments, sessions, sessionsById, locationsById, cycle, orgName, orgSlug }) {
   if (!assignment || !session || !cycle) {
     return (
       <div style={{ marginTop: 8, padding: 12, border: `1px solid ${RULE}`, borderRadius: 6, background: CREAM, fontSize: 12, color: MUTED }}>
@@ -5456,12 +5466,29 @@ function EmailPreviewPanel({ event, assignment, session, assignments, sessions, 
   const deadlineMatch = /deadline\s+(\d{4}-\d{2}-\d{2})/i.exec(event.message || "");
   const deadline = deadlineMatch ? deadlineMatch[1] : assignment.deadline ?? null;
 
-  // Portal URL embedded in the instructor email. Built from the same tenant
-  // slug the admin's org uses (org info comes via useOutletContext at the
-  // top of the file; threaded down via orgName here -- v1 uses the default
-  // tenant. When multi-tenant lands, plumb orgSlug as a prop alongside
-  // orgName so this string is per-tenant.)
-  const portalUrl = `${window.location.origin}/${defaultTenantSlug()}/instructor`;
+  // Portal URL embedded in the instructor email.
+  //
+  // THIS IS A PREVIEW, SO ITS ONLY JOB IS TO MATCH THE REAL SEND. All four
+  // sending paths — send-offers, send-patch-offer and both branches of
+  // offer-reminders-cron — build `${PUBLIC_SITE_URL}/${org.slug}/instructor`.
+  //
+  // It was `/${defaultTenantSlug()}/instructor`: the first key of the TENANTS
+  // map, i.e. one specific provider, in the only call to action of an email
+  // every OTHER provider sends to their own instructors. The comment beside it
+  // said "when multi-tenant lands, plumb orgSlug as a prop"; multi-tenant landed
+  // and it never was. So it is plumbed now.
+  //
+  // A first attempt swapped it for the tenant-less `/instructor`, which is a
+  // perfectly good address — but the senders do not use it, so the preview would
+  // have shown an operator a link no instructor ever receives. A preview that
+  // drifts from the thing it previews is the same defect as the "— Jessica"
+  // sign-off fixed a few lines below, and is worse than the hardcode it replaced
+  // because it looks right.
+  //
+  // If the senders ever move to the tenant-less route, this moves WITH them.
+  const portalUrl = orgSlug
+    ? `${window.location.origin}/${orgSlug}/instructor`
+    : `${window.location.origin}/instructor`;
   const ctx = {
     assignment,
     instructorCamps,
