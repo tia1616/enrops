@@ -65,7 +65,9 @@ const SchoolsLocations = lazy(() => import('./pages/admin/SchoolsLocations.jsx')
 const CalendarsList = lazy(() => import('./pages/admin/CalendarsList.jsx'));
 const InstructorsPage = lazy(() => import('./pages/admin/instructors/InstructorsPage.jsx'));
 const SurveyResponses = lazy(() => import('./pages/admin/instructors/SurveyResponses.jsx'));
-const Payroll = lazy(() => import('./pages/admin/Payroll.jsx'));
+// Payroll.jsx is no longer lazily imported here: /admin/payroll redirects and
+// Payouts.jsx imports it directly. Leaving the lazy() behind would have kept a
+// separate chunk in the build for a route that no longer renders it.
 const Rosters = lazy(() => import('./pages/admin/Rosters.jsx'));
 const ClassReports = lazy(() => import('./pages/admin/ClassReports.jsx'));
 const Finances = lazy(() => import('./pages/admin/Finances.jsx'));
@@ -317,7 +319,13 @@ export default function App() {
         <Route path="instructors" element={<InstructorsPage />} />
         <Route path="availability" element={<SurveyResponses />} />
         <Route path="survey-responses" element={<Navigate to="/admin/availability" replace />} />
-        <Route path="payroll" element={<Payroll />} />
+        {/* Two addresses served the same screen, and this one served it WORSE:
+            Payroll.jsx has no heading of its own — it was written to render
+            inside the Payouts shell — so /admin/payroll rendered a bare table
+            with no title on the page. Nothing links here (checked: no nav item,
+            no email from any edge function), so this is old-bookmark insurance,
+            not a live route being retired out from under anyone. */}
+        <Route path="payroll" element={<Navigate to="/admin/payouts" replace />} />
         <Route path="rosters" element={<Rosters />} />
         <Route path="class-reports" element={<ClassReports />} />
         <Route path="finances" element={<Finances />} />

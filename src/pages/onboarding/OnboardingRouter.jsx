@@ -7,7 +7,11 @@ import { readAuthRedirectError } from '../../lib/authRedirectError.js';
 // Top-level resolver for /:slug/onboarding. Runs on every visit and decides:
 //
 //   - magic link expired      → /error?reason=link_expired
-//   - no session              → /j2s/instructor (existing instructor login)
+//   - no session              → the inline sign-in panel, on this same URL
+//     (it used to say "/j2s/instructor" here, which is what the code did before
+//     the sign-in panel landed AND named one tenant. Nothing sends anyone to a
+//     hardcoded slug any more: every branch below builds /${org.slug}/… and the
+//     senders all emit ${PUBLIC_SITE_URL}/${org.slug}/instructor.)
 //   - no instructor row       → / (landing — not an instructor)
 //   - is_active=false         → /error?reason=deactivated
 //   - org.slug missing        → /error?reason=org_misconfigured

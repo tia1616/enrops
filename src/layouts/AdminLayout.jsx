@@ -89,7 +89,11 @@ const NAV = [
     gate: "viewMoney",   // owner/admin only — staff + viewer are money-blind
     tabs: [
       { to: "/admin/finances", label: "Receivables" },
-      { to: "/admin/payouts", label: "Payouts" },
+      // "Payouts" promised Stripe payout history, which was two empty tabs and
+      // is now deleted (see Payouts.jsx). The page is the payroll calculator and
+      // the label says so — an operator looking for "what do I owe my teachers"
+      // was never going to guess "Payouts".
+      { to: "/admin/payouts", label: "Payroll calculator" },
       { to: "/admin/discounts", label: "Discounts" },
     ],
   },

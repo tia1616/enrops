@@ -1,109 +1,53 @@
 // src/pages/admin/Payouts.jsx
-// /admin/payouts — money going out from the operator.
-//   - Bank:    Stripe payout schedule + history to operator's bank (coming).
-//   - Payroll: existing /admin/payroll content, rendered as a tab here.
-//   - Reports: 1099s, statement exports (coming).
+// /admin/payouts — the payroll calculator. What each instructor is owed, and
+// marking it paid.
 //
-// Operator chrome (sidebar nav, brand colors) lives in AdminLayout. This
-// page only renders inside its <Outlet />. Multi-tenant: org comes from
-// useOutletContext; no hardcoded tenant assumptions.
+// BANK AND REPORTS WERE DELETED, NOT HIDDEN (Jessica, 2026-08-13: "the payroll
+// screen for all providers will just be the payroll calculater"). They were two
+// static cards reading "will show here" and "coming next" — no query, no data,
+// no action, on every provider's account since the page was built. They were not
+// almost-finished; they were a promise in the shape of a feature, and a tab that
+// never does anything teaches an operator to stop clicking tabs.
+//
+// They are also not coming back, because Stripe already does both and does them
+// better:
+//   - Bank was Stripe payout schedule + history to the operator's own bank. That
+//     is their Stripe dashboard, which is authoritative, live, and ours would
+//     only ever be a lagging copy of it.
+//   - Reports was 1099s and statement exports. Stripe issues 1099s for Connect
+//     payouts; anything else belongs to the provider's accountant.
+// And for a provider who pays instructors by cheque or transfer — which is
+// everyone except one — there are no Stripe payouts at all, so Bank would have
+// been permanently empty for them no matter how much we built.
+//
+// With one thing left the tab strip goes too: a single tab is chrome pretending
+// to be navigation.
+//
+// Operator chrome (sidebar nav, brand colors) lives in AdminLayout. This page
+// only renders inside its <Outlet />. Multi-tenant: org comes from
+// useOutletContext in Payroll; no hardcoded tenant assumptions.
+//
+// This file still exists rather than routing straight to Payroll.jsx because
+// Payroll has no heading of its own — it was written to render inside this
+// shell. /admin/payroll now redirects here (App.jsx) so there is one page, at
+// one address, with a title on it.
 
-import { useState } from "react";
 import Payroll from "./Payroll.jsx";
 
 const PURPLE = "#1C004F";
-const BRIGHT = "#5847C9";   // indigo - active tabs/actions (Figma)
 const MUTED = "#6b6b6b";
-const RULE = "#e2dfd5";
 
 export default function Payouts() {
-  const [tab, setTab] = useState("payroll");
-
   return (
     <div style={{ maxWidth: 1100 }}>
       <h1 style={{ margin: "0 0 4px", color: PURPLE, fontSize: 28, fontWeight: 700 }}>
-        Payouts
+        Payroll calculator
       </h1>
       <p style={{ margin: "0 0 24px", color: MUTED, fontSize: 14 }}>
-        Money going out — your bank, your team.
+        What each instructor is owed, and marking it paid.
       </p>
 
-      <TabsNav tab={tab} onTab={setTab} />
-
-      {tab === "bank"    && <BankTab />}
-      {tab === "payroll" && <Payroll />}
-      {tab === "reports" && <ReportsTab />}
-    </div>
-  );
-}
-
-function TabsNav({ tab, onTab }) {
-  const items = [
-    { key: "bank",    label: "Bank" },
-    { key: "payroll", label: "Payroll" },
-    { key: "reports", label: "Reports" },
-  ];
-  return (
-    <div style={{
-      display: "flex",
-      gap: 4,
-      borderBottom: `1px solid ${RULE}`,
-      marginBottom: 16,
-    }}>
-      {items.map((it) => {
-        const active = tab === it.key;
-        return (
-          <button
-            key={it.key}
-            type="button"
-            onClick={() => onTab(it.key)}
-            style={{
-              padding: "10px 14px",
-              background: "transparent",
-              color: active ? BRIGHT : MUTED,
-              border: "none",
-              borderBottom: active ? `2px solid ${BRIGHT}` : "2px solid transparent",
-              fontSize: 14,
-              fontWeight: active ? 700 : 500,
-              fontFamily: "inherit",
-              cursor: "pointer",
-              marginBottom: -1,
-            }}
-          >
-            {it.label}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
-function BankTab() {
-  return (
-    <div style={{
-      background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12,
-      padding: 32, textAlign: "center", color: MUTED, fontSize: 14,
-    }}>
-      Stripe payout schedule and history will show here — when Stripe sends
-      money to your operator bank, see exactly what landed and when.
-      <div style={{ fontSize: 12, marginTop: 8 }}>
-        Coming next — choose daily/weekly/monthly payout cadence.
-      </div>
-    </div>
-  );
-}
-
-function ReportsTab() {
-  return (
-    <div style={{
-      background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12,
-      padding: 32, textAlign: "center", color: MUTED, fontSize: 14,
-    }}>
-      Annual statements, instructor 1099s, and enrops service fee summaries will
-      live here.
-      <div style={{ fontSize: 12, marginTop: 8 }}>
-        Coming next — exportable for your accountant.
-      </div>
+      <Payroll />
     </div>
   );
 }
