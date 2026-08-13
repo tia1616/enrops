@@ -215,13 +215,33 @@ function shapeNavForOrg(nav, org) {
       continue;
     }
     if (item.to === "/admin/finances" && item.tabs) {
-      // "Money" reads as "Payments" for lean ops. Drop the whole
-      // Receivables/Payouts tab strip (Payouts is instructor payroll; a lean op
-      // has none, and Stripe payout history lives in their Stripe dashboard), so
-      // it's one clean page. Discounts is promoted to its own top-level item.
+      // "Money" reads as "Payments" for lean ops, and Discounts is promoted to
+      // its own top-level item either way.
+      //
+      // PAYOUTS IS THE SAME BUG THE INSTRUCTORS SECTION HAD. The reason written
+      // here was "Payouts is instructor payroll; a lean op has none" — the exact
+      // "empirically safe, every lean tenant has zero instructors" premise that a
+      // founding operator onboarding their own instructors breaks. Chunk 2 fixed
+      // it for /admin/schedule and left it standing here, so an operator could
+      // write the documents, invite an instructor, have them mark sessions
+      // taught — and then have NO LINK ANYWHERE to the page that pays them. The
+      // route is ungated, so it was reachable only by typing the URL, which is
+      // not access.
+      //
+      // Same predicate as the nav item and the Settings cards, so the three can
+      // never disagree. A lean op with no instructor entitlement still gets the
+      // one clean page the comment above describes.
       const { tabs: _drop, ...rest } = item;
       void _drop;
-      out.push({ ...rest, label: "Payments" });
+      out.push(
+        canInstructors
+          ? {
+              ...item,
+              label: "Payments",
+              tabs: item.tabs.filter((t) => t.to !== "/admin/discounts"),
+            }
+          : { ...rest, label: "Payments" },
+      );
       out.push({ to: "/admin/discounts", label: "Discounts", gate: "viewMoney" });
       continue;
     }
