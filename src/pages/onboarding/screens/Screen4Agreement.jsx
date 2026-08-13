@@ -37,13 +37,26 @@ import { useOnboardingConfig } from '../OnboardingConfigContext.jsx';
 //   Generalised to the clause's actual intent - superseding a prior agreement
 //   with THIS provider - without weakening it.
 //
-//   LEFT ALONE, DELIBERATELY: the ORS 670.600 reference. Oregon statute, and
-//   Jessica's explicit call on 2026-08-11 was to reuse the Oregon step as-is
-//   because Jeff is in Oregon, with a per-state step recorded as debt (there is
-//   no state column on organizations to branch on yet). Genericising it would
-//   WEAKEN the attestation J2S's 24 signed agreements rely on, which is worse
-//   than the narrower problem it solves. The first non-Oregon contractor is the
-//   deadline for the state step, not this line.
+//   FIXED 2026-08-13: the ORS 670.600 reference. An Oregon statute, cited to
+//   instructors in every state, on a box they had to tick to be onboarded. It
+//   was left in on 2026-08-11 against a planned per-state step, on the argument
+//   that genericising it would weaken the attestation J2S's signed agreements
+//   rely on. Jessica cancelled the per-state step on 2026-08-13 — "we're not
+//   going to track all state policies" — which removed the thing this line was
+//   waiting for, so leaving it meant leaving it forever.
+//
+//   The attestation is not weakened, it MOVED, and to a better place. What is
+//   left here is the general confirmation, which is all this box could honestly
+//   ask of a contractor in an unknown state. The state-specific version is now
+//   the optional `contractor_status` document (default off): the provider states
+//   their own state's rules, links to that state's own page, and the instructor
+//   acknowledges it on Screen 6 with those rules rendered directly above the
+//   box. That is strictly more evidence than a statute number in a label, and it
+//   is correct in fifty states instead of one. J2S can turn it on and cite ORS
+//   670.600 in their own words.
+//
+//   Rows signed before today keep the true they earned; the stored boolean is
+//   `confirm_contractor_status` either way and its column does not move.
 // THREE TICK BOXES HAVE BEEN REMOVED FROM THIS LIST OVER TIME, and the pattern
 // is the same each time: the clause still binds, it just stops being ticked
 // separately. Signing the agreement binds the contractor to the WHOLE document —
@@ -69,7 +82,7 @@ import { useOnboardingConfig } from '../OnboardingConfigContext.jsx';
 //     there stops anyone signing at all. Both sides changed together.
 const CONFIRMS = [
   { key: 'confirm_read', label: 'I have read this Agreement' },
-  { key: 'confirm_contractor_status', label: 'I confirm my status as an independent contractor under ORS 670.600' },
+  { key: 'confirm_contractor_status', label: 'I confirm my status as an independent contractor' },
 ];
 
 export default function Screen4Agreement({ slug, instructor, onboarding, onAdvance, onBack }) {

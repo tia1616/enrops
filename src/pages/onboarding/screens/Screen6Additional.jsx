@@ -9,9 +9,9 @@ import { useOnboardingConfig } from '../OnboardingConfigContext.jsx';
 import Chevron from '../../../components/Chevron.jsx';
 import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardLayout.jsx';
 
-// Screen 6 — Additional Acknowledgments. Up to three documents, but the
-// mandatory_reporter_ack body is short enough that we render it inline
-// (not in an accordion) above its checkbox. photo_video_release and
+// Screen 6 — Additional Acknowledgments. Up to four documents. contractor_status
+// and mandatory_reporter_ack are short enough to render inline (not in an
+// accordion) above a single checkbox each; photo_video_release and
 // vehicle_driving_ack are accordions with multiple per-section acks.
 //
 // All required checkboxes must be checked before submit. The edge-function
@@ -22,20 +22,33 @@ import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardL
 //
 // PER-PROVIDER. This is the screen the toggle work exists for: a provider whose
 // instructors never drive should not have to write a driving acknowledgment
-// before anybody can finish onboarding. Each of the three is independently on or
+// before anybody can finish onboarding. Each of the four is independently on or
 // off, so a section that is off is not fetched, not rendered, and — the part
 // that actually bites — not counted in `allLoaded` or `allAcksChecked` either.
 // Its checkbox group cannot be checked because it is not on the page, so
 // including it would leave Continue permanently disabled.
 //
-// With all three off the screen is dropped from the wizard entirely
+// With all four off the screen is dropped from the wizard entirely
 // (WizardHost/effectiveStepOrder) and from the completion gate (gateCheck).
+// contractor_status defaults OFF rather than on, so for every provider today
+// this screen is exactly what it was — three documents, unchanged — until
+// somebody turns it on.
 
+const CONTRACTOR_STATUS_KEY = 'contractor_status';
 const MANDATORY_KEY = 'mandatory_reporter_ack';
 const PHOTO_KEY = 'photo_video_release';
 const VEHICLE_KEY = 'vehicle_driving_ack';
 
-const ALL_DOC_KEYS = [MANDATORY_KEY, PHOTO_KEY, VEHICLE_KEY];
+const ALL_DOC_KEYS = [CONTRACTOR_STATUS_KEY, MANDATORY_KEY, PHOTO_KEY, VEHICLE_KEY];
+
+// OFF unless the provider opts in — the only document that defaults off, and the
+// reason it exists at all is that Screen 4's tick box used to cite an Oregon
+// statute to instructors in every state. The rules are the provider's to state
+// (and to link to), because they are the ones who know which state's test
+// applies. The wording here stays deliberately general: what the instructor is
+// confirming is described in THEIR provider's document, rendered right above it.
+const CONTRACTOR_STATUS_ACK =
+  'I have read this and I confirm I meet the requirements for working as an independent contractor';
 
 const MANDATORY_ACK =
   'I have completed or will complete the mandatory reporting training and will comply with reporting requirements';
@@ -44,8 +57,20 @@ const MANDATORY_ACK =
 // fourth checkbox here. Removed 2026-05-25 per Arielle — compensation
 // terms belong in the agreement / pay schedule, not buried in a photo
 // release ack.
-const PHOTO_ACKS = [
-  { key: 'photo_consent_record', label: 'I consent to J2S photographing/recording me at program sites' },
+//
+// TAKES THE PROVIDER'S NAME. It said "I consent to J2S photographing/recording
+// me" — one company's name, in a consent every OTHER provider's instructors were
+// asked to give, about photographs that provider would never take. Same class as
+// the four tenant names removed from this wizard on 2026-08-12; this one survived
+// because it is a label rather than body text. orgName is already resolved for
+// this wizard, and falls back to the neutral phrasing rather than to a name.
+const photoAcks = (orgName) => [
+  {
+    key: 'photo_consent_record',
+    label: orgName
+      ? `I consent to ${orgName} photographing/recording me at program sites`
+      : 'I consent to being photographed/recorded at program sites',
+  },
   { key: 'photo_consent_marketing', label: 'I consent to use of my likeness in marketing materials' },
   { key: 'photo_consent_revocable', label: 'I understand consent is ongoing and revocable in writing' },
 ];
@@ -58,16 +83,19 @@ const VEHICLE_ACKS = [
 
 export default function Screen6Additional({ slug, instructor, onboarding, onAdvance, onBack }) {
   const navigate = useNavigate();
-  const { documentConfig } = useOnboardingConfig();
+  const { documentConfig, orgName } = useOnboardingConfig();
   const DOC_KEYS = useMemo(
     () => ALL_DOC_KEYS.filter((k) => isDocumentEnabled(documentConfig, k)),
     [documentConfig],
   );
+  const PHOTO_ACKS = useMemo(() => photoAcks(orgName), [orgName]);
+  const showContractorStatus = DOC_KEYS.includes(CONTRACTOR_STATUS_KEY);
   const showMandatory = DOC_KEYS.includes(MANDATORY_KEY);
   const showPhoto = DOC_KEYS.includes(PHOTO_KEY);
   const showVehicle = DOC_KEYS.includes(VEHICLE_KEY);
   const [docs, setDocs] = useState({});
   const [loadError, setLoadError] = useState('');
+  const [contractorStatusAck, setContractorStatusAck] = useState(false);
   const [mandatoryAck, setMandatoryAck] = useState(false);
   const [photoExpanded, setPhotoExpanded] = useState(false);
   const [vehicleExpanded, setVehicleExpanded] = useState(false);
@@ -128,7 +156,11 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
   const allLoaded = DOC_KEYS.every((k) => docs[k]);
   const allPhotoChecked = !showPhoto || PHOTO_ACKS.every((a) => photoChecked[a.key]);
   const allVehicleChecked = !showVehicle || VEHICLE_ACKS.every((a) => vehicleChecked[a.key]);
-  const allAcksChecked = (!showMandatory || mandatoryAck) && allPhotoChecked && allVehicleChecked;
+  const allAcksChecked =
+    (!showContractorStatus || contractorStatusAck) &&
+    (!showMandatory || mandatoryAck) &&
+    allPhotoChecked &&
+    allVehicleChecked;
   // Not gated on DOC_KEYS.length — see the empty-set guard in handleSubmit.
   const canSubmit = allLoaded && allAcksChecked;
 
@@ -187,6 +219,40 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
         <div className="rounded-md bg-red-50 p-3 text-sm text-red-900">{loadError}</div>
       ) : (
         <form onSubmit={handleSubmit} noValidate>
+          {/* Independent contractor status — inline body like the mandatory
+              reporter one, and for the same reason: it is short, it is the
+              provider's own words about their own state's rules, and folding it
+              into an accordion would let someone tick "I confirm I meet the
+              requirements" without the requirements ever being on screen. */}
+          {showContractorStatus && (
+          <section className="mb-3 rounded-md border border-neutral-200 p-4">
+            <h2 className="text-sm font-semibold text-neutral-900">
+              {docs[CONTRACTOR_STATUS_KEY]?.title || 'Independent contractor status'}
+            </h2>
+            {docs[CONTRACTOR_STATUS_KEY] ? (
+              <div className="mt-2 text-sm leading-relaxed text-neutral-800">
+                {(docs[CONTRACTOR_STATUS_KEY].body_text || '').split(/\n\s*\n/).map((para, i) => (
+                  <p key={i} className="mb-2 whitespace-pre-wrap">
+                    {linkifyText(para)}
+                  </p>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-2 text-sm text-neutral-500">Loading…</p>
+            )}
+            <label className="mt-3 flex items-start gap-3 text-sm text-neutral-800">
+              <input
+                type="checkbox"
+                checked={contractorStatusAck}
+                onChange={(e) => setContractorStatusAck(e.target.checked)}
+                disabled={!docs[CONTRACTOR_STATUS_KEY]}
+                className="mt-0.5 h-4 w-4 flex-shrink-0 rounded border-neutral-400 disabled:opacity-50"
+              />
+              <span>{CONTRACTOR_STATUS_ACK}</span>
+            </label>
+          </section>
+          )}
+
           {/* Mandatory reporter — inline body, no accordion */}
           {showMandatory && (
           <section className="rounded-md border border-neutral-200 p-4">

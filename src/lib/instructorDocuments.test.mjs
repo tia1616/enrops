@@ -49,13 +49,14 @@ ok('never collides with an existing version',
   cases.every((existing) => !existing.includes(nextVersionFor(existing))));
 
 // --- the key contract -----------------------------------------------------
-// These seven are fetched BY NAME by Screen4Agreement, Screen5Policies and
+// These eight are fetched BY NAME by Screen4Agreement, Screen5Policies and
 // Screen6Additional. Changing one silently orphans a document.
 const REQUIRED_KEYS = [
   'contractor_agreement',
   'pay_schedule',
   'attendance_policy',
   'code_of_conduct',
+  'contractor_status',
   'mandatory_reporter_ack',
   'photo_video_release',
   'vehicle_driving_ack',
@@ -238,10 +239,37 @@ ok('the agreement is marked alwaysOn', documentByKey('contractor_agreement').alw
 ok('nothing else is alwaysOn',
   INSTRUCTOR_DOCUMENTS.filter((d) => d.alwaysOn).length === 1);
 
-eq('empty config enables all seven', enabledDocumentKeys({}).length, DOCUMENT_KEYS.length);
-eq('two off leaves five',
+// --- the one opt-in document ----------------------------------------------
+//
+// contractor_status inverts the rule above, and these pin the inversion in both
+// directions. It is the ONLY exception; if a second document ever wants to
+// default off it needs its own argument, so the count is asserted too.
+const DEFAULT_OFF_KEYS = INSTRUCTOR_DOCUMENTS.filter((d) => d.defaultOff).map((d) => d.key);
+eq('exactly one document defaults off', DEFAULT_OFF_KEYS.join(), 'contractor_status');
+ok('contractor_status is OFF when absent', !isDocumentEnabled({}, 'contractor_status'));
+ok('contractor_status is OFF for undefined config', !isDocumentEnabled(undefined, 'contractor_status'));
+ok('contractor_status is OFF for an explicit false',
+  !isDocumentEnabled({ contractor_status: false }, 'contractor_status'));
+ok('contractor_status is ON only for an explicit true',
+  isDocumentEnabled({ contractor_status: true }, 'contractor_status'));
+// Strict === true. A hand-written truthy value in the JSONB must not switch on a
+// legal acknowledgment nobody chose in the UI — the inverse of the "0 is still
+// ON" case above, and deliberately so.
+for (const truthy of ['true', 1, 'yes', {}]) {
+  ok(`contractor_status stays OFF for ${JSON.stringify(truthy)}`,
+    !isDocumentEnabled({ contractor_status: truthy }, 'contractor_status'));
+}
+// The whole point of shipping it off: nobody's onboarding changes today.
+ok('turning contractor_status on does not disturb the others',
+  isDocumentEnabled({ contractor_status: true }, 'code_of_conduct'));
+
+eq('empty config enables all but the opt-in one',
+  enabledDocumentKeys({}).length, DOCUMENT_KEYS.length - 1);
+eq('opting in enables all eight',
+  enabledDocumentKeys({ contractor_status: true }).length, DOCUMENT_KEYS.length);
+eq('two off leaves the rest',
   enabledDocumentKeys({ photo_video_release: false, vehicle_driving_ack: false }).length,
-  DOCUMENT_KEYS.length - 2);
+  DOCUMENT_KEYS.length - 3);
 eq('everything off still leaves the agreement',
   enabledDocumentKeys(Object.fromEntries(DOCUMENT_KEYS.map((k) => [k, false]))).length, 1);
 
@@ -255,7 +283,15 @@ eq('the three groups cover every key',
   ['agreement', 'policies', 'additional'].reduce((n, s) => n + documentKeysForStep(s).length, 0),
   DOCUMENT_KEYS.length);
 eq('screen 5 reads three', documentKeysForStep('policies').length, 3);
-eq('screen 6 reads three', documentKeysForStep('additional').length, 3);
+eq('screen 6 offers four', documentKeysForStep('additional').length, 4);
+// ...but shows three unless the provider opts in. documentKeysForStep is what
+// EXISTS; enabledDocumentKeysForStep is what an instructor is asked for, and the
+// gap between them is the default-off document.
+eq('screen 6 shows three by default',
+  enabledDocumentKeysForStep({}, 'additional').join(),
+  'mandatory_reporter_ack,photo_video_release,vehicle_driving_ack');
+eq('screen 6 shows four once opted in',
+  enabledDocumentKeysForStep({ contractor_status: true }, 'additional').length, 4);
 
 // The wizard/gate contract: a screen with nothing left must be DROPPED, not
 // rendered empty — and dropped server-side too, or the step key is never written

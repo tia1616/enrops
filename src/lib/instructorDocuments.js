@@ -81,6 +81,40 @@ Ending the agreement
     autoSignatureBlock: true,
   },
   {
+    key: 'contractor_status',
+    step: 'additional',
+    // DEFAULT OFF — the only document that is, and the exception is deliberate.
+    // See defaultOff in isDocumentEnabled for why the usual "absent means ON"
+    // rule had to be broken for exactly this key.
+    //
+    // WHAT IT REPLACES. Screen 4's tick box used to read "...independent
+    // contractor under ORS 670.600" — an Oregon statute, on every provider's
+    // screen, in every state. The recorded plan was a per-state step. Jessica
+    // killed that on 2026-08-13: "we're not going to track all state policies."
+    // Fifty states' classification tests, each amendable, is a compliance
+    // product we are not building and could not keep correct — and a stale
+    // citation is worse than none, because it reads authoritative.
+    //
+    // So the provider writes it. They know their state, their staffing model
+    // and their own counsel's advice; we know none of the three. The starter
+    // asks for a link to their state's own page rather than restating the test,
+    // so what an instructor reads is maintained by the body that wrote it.
+    defaultOff: true,
+    label: 'Independent contractor status',
+    help: "Only if you want instructors to confirm they meet your state's test for independent contractor status. Most providers link to their state's own page rather than restating the rules. Off unless you turn it on.",
+    starter: `Working as an independent contractor
+[State plainly that instructors work as independent contractors and not employees, and what that means day to day — they set their own methods, use their own equipment, and may work for others.]
+
+Your state's rules
+[Link to your own state's page on independent contractor classification, and say that the instructor is responsible for meeting it. Search for your state's labour or revenue department page on worker classification; do not paraphrase the test here, because it changes.]
+
+Taxes and insurance
+[Say that you do not withhold taxes, what tax form you issue and when, and whether you require them to carry any insurance.]
+
+If your situation changes
+[Say who to tell if their working arrangement changes in a way that affects this.]`,
+  },
+  {
     key: 'pay_schedule',
     step: 'policies',
     label: 'Pay schedule',
@@ -294,6 +328,28 @@ export function documentByKey(key) {
  * Absence is not a decision. Only an explicit `false` turns a document off, so
  * an unwritten document keeps blocking onboarding exactly as it does today.
  *
+ * ONE DOCUMENT DEFAULTS OFF, AND THE EXCEPTION PROVES THE RULE RATHER THAN
+ * BENDING IT. contractor_status carries `defaultOff`, so it needs an explicit
+ * `true`. The reason the safety argument above does not apply to it:
+ *
+ *   - The rule protects a document a provider MEANT to have. Nobody has ever
+ *     been asked for this one, so there is no provider intent to preserve — an
+ *     absent value here means "never offered", not "not yet written".
+ *   - Defaulting it on would take every existing provider, and every one of
+ *     their instructors mid-onboarding, and block them on a document that does
+ *     not exist and that nobody has been told to write. That is not a safer
+ *     failure; it is an outage with a safety-shaped justification.
+ *   - Nothing is lost by it being off. The contractor agreement is signed
+ *     either way and is never toggleable, and it already covers contractor
+ *     status in its own body. This document adds a SEPARATE, per-state
+ *     acknowledgment on top; a provider who does not opt in is where they are
+ *     today, not somewhere worse.
+ *
+ * The general rule is "absence is not a decision". For a brand-new optional
+ * document, shipping it off IS the decision, and it was Jessica's (2026-08-13).
+ * A future default-off document needs its own version of this argument; this
+ * flag is not a convenience.
+ *
  * These read the SAME shape from two places, which is deliberate:
  *   - the admin screen reads organizations.instructor_document_config directly;
  *   - the wizard reads public_org_directory.instructor_documents_public, which
@@ -311,6 +367,10 @@ export function isDocumentEnabled(config, key) {
   // The agreement is signed, not acknowledged, and onboarding cannot complete
   // without it. No stored value can switch it off.
   if (meta?.alwaysOn) return true;
+  // Opt-in: needs an explicit true, not merely "not false". Strict === true, so
+  // a stray truthy value someone hand-writes into the JSONB (1, "yes") does not
+  // quietly switch on a legal acknowledgment nobody chose in the UI.
+  if (meta?.defaultOff) return config?.[key] === true;
   return config?.[key] !== false;
 }
 
