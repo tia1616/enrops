@@ -63,10 +63,15 @@ export function entitlementsFor(org) {
   if (!isLean) return { comms: "full" };
 
   // A lean org on a full-access plan (Jeff, founding) gets everything a lean
-  // NAV can honestly show. Note this is not the same as J2S's surface: the
-  // instructor audience stays hidden for every lean org regardless of plan,
-  // because those sends fire from a Schedule tab lean nav does not render.
-  // That is a truth constraint, not a pricing one — see commsAudiencesFor.
+  // NAV can honestly show.
+  //
+  // This comment used to say the instructor audience stays hidden for every lean
+  // org regardless of plan. That WAS true and is not any more — shapeNavForOrg
+  // now renders the Instructors section for a lean org that passes
+  // canManageInstructors, so the Schedule tab those sends point at exists, and
+  // commsAudiencesFor below shows the audience to exactly those orgs. Left
+  // stale, this paragraph flatly contradicted the function 60 lines down and
+  // would have talked the next reader out of a correct behaviour.
   if (FULL_ACCESS_PLANS.has(org?.platform_plan)) return { comms: "full" };
 
   return { comms: "registration_only" };

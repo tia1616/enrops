@@ -261,7 +261,16 @@ export default function InstructorPortal() {
               .select("slug, name, background_check_public, instructor_documents_public, instructor_pay_enabled")
               .eq("id", target.organization_id)
               .maybeSingle();
-            if (dirErr) console.error("[InstructorPortal] preview org read failed", dirErr);
+            if (dirErr || !dir?.slug) {
+              // Admin-only, so this degrades rather than blocks — but it must not
+              // leave orgSlug empty. pathSlug is "" on the tenant-less routes, and
+              // an empty slug renders "//dashboard" in the portal switcher. An
+              // admin previewing from /instructor?as=… hits exactly that.
+              console.error("[InstructorPortal] preview org directory unavailable", {
+                organization_id: target.organization_id,
+                reason: dirErr ? "read_failed" : "no_active_row",
+              });
+            }
             if (dir?.slug) setOrgSlug(dir.slug);
             if (dir?.name) setOrgName(dir.name);
             if (dir?.background_check_public) setBackgroundCheck(dir.background_check_public);
@@ -341,13 +350,32 @@ export default function InstructorPortal() {
         // would throw a ReferenceError and turn this handled error into a hard
         // crash, on precisely the path this branch exists to handle. The rest of
         // linkAndLoad sets phase directly (see its catch), so this matches.
-        if (dirErr) {
-          console.error("[InstructorPortal] org directory read failed", dirErr);
+        // NO ROW COUNTS AS FAILURE, NOT AS "USE THE DEFAULTS".
+        //
+        // maybeSingle() returns { data: null, error: null } when nothing matches,
+        // and public_org_directory only exposes orgs with status = 'active'. So a
+        // paused or archived org produced no row, no error, and fell straight
+        // through into every fallback the comment above calls a wrong answer:
+        // background check back to enabled, documents back to all-on, and — since
+        // pathSlug is now deliberately "" on the tenant-less routes — an empty
+        // slug that renders "//onboarding/declined" and a "//dashboard" link in
+        // the portal switcher. Guarding only dirErr covered half the hole.
+        //
+        // The message states the shared truth of both causes. It does not tell
+        // the instructor their program is inactive: we know the row is missing,
+        // not why, and being wrong about that to someone already stuck is worse
+        // than being vague.
+        if (dirErr || !dir?.slug) {
+          console.error("[InstructorPortal] org directory unavailable", {
+            organization_id: fullInstructor.organization_id,
+            reason: dirErr ? "read_failed" : "no_active_row",
+            dirErr,
+          });
           setError("We couldn't load your program's details. Please refresh, or reach out to your Program Manager if this keeps happening.");
           setPhase("error");
           return;
         }
-        if (dir?.slug) resolvedSlug = dir.slug;
+        resolvedSlug = dir.slug;
         setOrgSlug(resolvedSlug);
         setBackgroundCheck(dir?.background_check_public ?? { enabled: true });
         // The documents drawer lists reference copies of the same documents the
