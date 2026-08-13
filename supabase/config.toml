@@ -1,8 +1,43 @@
 # Supabase project config — primarily codifies per-function verify_jwt so
 # deploys can't silently flip a webhook to require-JWT (which breaks Stripe/
 # Checkr) or expose an authed endpoint. Values mirror PROD's live settings
-# (verified 2026-06-08). Functions not listed default to verify_jwt = true.
+# (verified 2026-06-08).
+#
+# "FUNCTIONS NOT LISTED DEFAULT TO verify_jwt = true" WAS TRUE AND IS NOT A
+# SAFETY NET, which cost a real incident on 2026-08-13 (staging only, caught and
+# reverted the same minute). The default applies when a function is FIRST
+# created. On a redeploy the CLI simply omits the field for any function it has
+# no config entry for, and the API keeps whatever the last deploy set — so a
+# single `--no-verify-jwt` deploy turns verification off PERMANENTLY, and
+# redeploying "correctly" without the flag does not put it back. Five authed
+# onboarding endpoints sat with the gateway wide open until they were pinned
+# here explicitly.
+#
+# Hence the section below: anything that must REQUIRE a JWT is now stated, not
+# assumed. If you add an authed function, list it. The one-line check that this
+# file is telling the truth is a request with no Authorization header — the
+# gateway answers `UNAUTHORIZED_NO_AUTH_HEADER` when verification is on, and the
+# function's own error when it is off.
 project_id = "enrops"
+
+# ── verify_jwt = true (authed endpoints, pinned rather than assumed) ──
+# These take a signed-in user's JWT. Each also does its own auth check, which is
+# why the outage above was not a data breach — but that check is defence in
+# depth, not the gate, and it must not be the only thing standing there.
+[functions.update-onboarding-step]
+verify_jwt = true
+
+[functions.reconcile-onboarding-gate]
+verify_jwt = true
+
+[functions.submit-training]
+verify_jwt = true
+
+[functions.admin-upload-background-check]
+verify_jwt = true
+
+[functions.refresh-stripe-status]
+verify_jwt = true
 
 # ── verify_jwt = false (public / webhook / cron entrypoints) ──
 [functions.stripe-webhook]
