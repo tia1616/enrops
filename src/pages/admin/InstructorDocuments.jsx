@@ -298,7 +298,7 @@ export default function InstructorDocuments() {
       {/* ALL of them block onboarding, not just the agreement. This banner used
           to say "start with the contractor agreement… onboarding cannot be
           completed until it exists", which reads as "that one is the blocker".
-          It is not: Screens 5 and 6 fetch the other six by key and refuse to
+          It is not: Screens 5 and 6 fetch the other seven by key and refuse to
           advance when any is missing. An operator who followed the old wording
           would publish one document, invite an instructor, and strand them. */}
       {writtenCount < enabledCount && (
@@ -309,10 +309,21 @@ export default function InstructorDocuments() {
               : `${enabledCount - writtenCount} still to write.`}
           </strong>{" "}
           They read and sign{" "}
+          {/* "you've turned on" WAS TRUE AND STOPPED BEING TRUE THE DAY
+              contractor_status shipped. That document defaults OFF, so a
+              provider who has touched nothing has 7 of 8 enabled and falls to
+              this branch — and was told "the 7 you've turned on" when they had
+              turned on nothing. Not an edge case: it was the sentence EVERY
+              provider saw on their first visit to this screen.
+
+              Attributing a choice nobody made is the same defect class as the
+              banner this screen already fixed twice. The count is the useful
+              part; who chose it is decoration. Passive phrasing is true in all
+              three states — untouched, customised, and fully opted in. */}
           <strong>
             {enabledCount === DOCUMENT_KEYS.length
               ? `all ${DOCUMENT_KEYS.length}`
-              : `the ${enabledCount} you've turned on`}
+              : `the ${enabledCount} that are switched on`}
           </strong>{" "}
           during onboarding, and it stops at the first one that isn&apos;t published. Start with
           the contractor agreement &mdash; it&apos;s the one they actually sign &mdash; then work

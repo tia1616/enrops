@@ -5,6 +5,7 @@
 // publish fails at the database; a renamed key produces a document an operator
 // writes and no wizard screen ever fetches.
 
+import { readFileSync } from 'node:fs';
 import {
   nextVersionFor, versionNumberOf, INSTRUCTOR_DOCUMENTS, DOCUMENT_KEYS, documentByKey,
   bodyForPublish, willAppendSignatureBlock, stripAppendedSignatureBlock,
@@ -272,6 +273,47 @@ eq('two off leaves the rest',
   DOCUMENT_KEYS.length - 3);
 eq('everything off still leaves the agreement',
   enabledDocumentKeys(Object.fromEntries(DOCUMENT_KEYS.map((k) => [k, false]))).length, 1);
+
+// --- the banner may not attribute a choice nobody made --------------------
+//
+// A default-off document means the UNTOUCHED state is no longer "all of them",
+// so any copy that reaches for the not-all branch is now the DEFAULT sentence
+// rather than an edge case. The admin banner said "the 7 you've turned on" to a
+// provider who had turned on nothing — true the day it was written, false the
+// day contractor_status shipped, and shown to every provider on first visit.
+//
+// Asserted against the source because it is JSX copy with no seam to call. The
+// invariant is the reason, not the wording: the untouched config must not equal
+// the full set, and the branch it therefore selects must not claim the operator
+// chose it.
+{
+  const rawSrc = readFileSync(
+    new URL('../pages/admin/InstructorDocuments.jsx', import.meta.url),
+    'utf8',
+  );
+  // COMMENTS STRIPPED FIRST, and this is not tidiness — the first run of this
+  // test failed on the comment directly above the fix, which quotes the wording
+  // it is warning about. A grep that cannot tell rendered copy from a note about
+  // rendered copy reports the fix as the bug, and the honest repair is to make
+  // the test read what ships rather than to reword the explanation around it.
+  const screenSrc = rawSrc
+    .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, ' ')   // {/* JSX comment */}
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')             // /* block comment */
+    .replace(/^[ \t]*\/\/.*$/gm, ' ');             // // line comment
+  ok('the untouched config is NOT the full set (this is what breaks the copy)',
+    enabledDocumentKeys({}).length !== DOCUMENT_KEYS.length);
+  // Proves the stripper actually ran: the comment above the fix contains the
+  // banned phrase, so if stripping silently no-ops this assertion fails and the
+  // one below becomes meaningless without anyone noticing.
+  ok('the comment stripper works (the raw file DOES contain the banned phrase)',
+    /you'(ve|d)\s+turned\s+on/.test(rawSrc));
+  ok('the documents banner does not tell an operator they turned these on',
+    !/you'(ve|d)\s+turned\s+on|you\s+have\s+turned\s+on/.test(screenSrc));
+  // The assertion above only means something if the branch is still there to
+  // get wrong; a rename would otherwise make it pass forever against nothing.
+  ok('...and the branch it guards still exists',
+    /enabledCount === DOCUMENT_KEYS\.length/.test(screenSrc));
+}
 
 // --- screen grouping ------------------------------------------------------
 //
