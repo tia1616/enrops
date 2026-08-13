@@ -52,7 +52,7 @@ function resolveInitialStep(initialStep, onboarding, order) {
   return order[order.length - 1];
 }
 
-export default function WizardHost({ slug, instructor, onboarding: initialOnboarding, initialStep, backgroundCheck, documentConfig, orgName = '', trainingEnabled = false, trainingVideos = [], onDismiss }) {
+export default function WizardHost({ slug, instructor, onboarding: initialOnboarding, initialStep, backgroundCheck, documentConfig, orgName = '', stripePayEnabled = true, trainingEnabled = false, trainingVideos = [], onDismiss }) {
   const navigate = useNavigate();
   const [onboarding, setOnboarding] = useState(initialOnboarding);
 
@@ -72,8 +72,8 @@ export default function WizardHost({ slug, instructor, onboarding: initialOnboar
   const policiesEnabled = stepHasEnabledDocuments(documentConfig, 'policies');
   const additionalEnabled = stepHasEnabledDocuments(documentConfig, 'additional');
   const stepOrder = useMemo(
-    () => effectiveStepOrder({ bgcEnabled, trainingEnabled, policiesEnabled, additionalEnabled }),
-    [bgcEnabled, trainingEnabled, policiesEnabled, additionalEnabled],
+    () => effectiveStepOrder({ bgcEnabled, trainingEnabled, policiesEnabled, additionalEnabled, stripePayEnabled }),
+    [bgcEnabled, trainingEnabled, policiesEnabled, additionalEnabled, stripePayEnabled],
   );
 
   const [currentStep, setCurrentStep] = useState(() =>
@@ -138,10 +138,11 @@ export default function WizardHost({ slug, instructor, onboarding: initialOnboar
       documentConfig: documentConfig ?? {},
       // The provider's own display name, for the signed agreement PDF header.
       orgName,
+      stripePayEnabled,
       trainingEnabled,
       trainingVideos,
     }),
-    [stepOrder, bgcEnabled, backgroundCheck, documentConfig, orgName, trainingEnabled, trainingVideos],
+    [stepOrder, bgcEnabled, backgroundCheck, documentConfig, orgName, stripePayEnabled, trainingEnabled, trainingVideos],
   );
 
   if (!currentStep || TERMINAL_STATUSES.has(onboarding?.overall_status)) {

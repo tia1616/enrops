@@ -74,6 +74,41 @@ function dollars(cents) {
   return `$${(cents / 100).toFixed(2)}`;
 }
 
+// The route segments that are the PAGE, not a tenant. /instructor and
+// /instructors are the tenant-less shortcuts; their first path segment must
+// never be mistaken for an org slug. Kept next to the component that reads it
+// so the two cannot drift, and matched against App.jsx's route table.
+const TENANTLESS_PORTAL_SEGMENTS = new Set(["instructor", "instructors"]);
+
+/**
+ * Where a sign-in link should return someone: the portal they are signing in
+ * FROM, at the same tenant spelling they used.
+ *
+ * ONE definition, used by both the magic-link and the Google paths, because
+ * they had identical copies of this and only fixing one would have left the bug
+ * alive on the other door.
+ *
+ * The tenant-less guard is the whole point. Deriving the slug from the raw first
+ * path segment means "/instructor" yields the literal word "instructor", so the
+ * return URL became "/instructor/instructor" — which then MATCHES
+ * /:slug/instructor with slug="instructor", so routeSlug is truthy and the guard
+ * in the component is bypassed entirely. Downstream that shows "instructor ·
+ * onboarding" in the header, links the portal switcher at /instructor/dashboard,
+ * and reports org_slug "instructor" to analytics. Worse, if the auth redirect
+ * allowlist is path-scoped rather than a wildcard, the link never sends at all —
+ * and this is the exact URL an instructor types on a phone, which is the reason
+ * the tenant-less route exists.
+ */
+function portalReturnUrl() {
+  const seg = window.location.pathname.split("/").filter(Boolean)[0];
+  if (seg && !TENANTLESS_PORTAL_SEGMENTS.has(seg)) {
+    return `${window.location.origin}/${seg}/instructor`;
+  }
+  // Tenant-less (or bare) path: return to where they already are. The portal
+  // resolves the real org from the instructor's own record.
+  return `${window.location.origin}${window.location.pathname}`;
+}
+
 export default function InstructorPortal() {
   // Unified home for everything instructor: sign-in, onboarding wizard,
   // schedule, profile. The phase machine routes between sub-states.
@@ -85,14 +120,21 @@ export default function InstructorPortal() {
   //   ready        -> onboarded contractor; render schedule + profile
   //   error        -> unrecoverable load failure
   const navigate = useNavigate();
-  // The slug can come from the route param (/:slug/instructor) OR be baked into a
-  // literal path (/j2s/instructor, the redirect target for /instructor). useParams
-  // is empty on the literal route, so fall back to the first path segment — always
-  // the tenant slug — rather than a hardcoded tenant. Used only until the
-  // authoritative org slug resolves from the instructor's organization_id.
+  // The slug can come from the route param (/:slug/instructor) or be absent
+  // entirely (/instructor and /instructors, the tenant-less shortcuts people type
+  // on a phone). Used ONLY as a placeholder until the authoritative slug resolves
+  // from the instructor's own organization_id — it never decides whose portal
+  // this is.
+  //
+  // The first-path-segment fallback must NOT fire on the tenant-less routes: for
+  // "/instructor" that segment is the literal word "instructor", which would be
+  // taken for a tenant slug and briefly render a portal claiming to belong to a
+  // provider called "instructor". Empty is the honest placeholder — it says "not
+  // known yet", which is exactly true until the org read returns.
   const { slug: routeSlug } = useParams();
   const location = useLocation();
-  const pathSlug = routeSlug || location.pathname.split("/").filter(Boolean)[0] || "";
+  const firstSegment = location.pathname.split("/").filter(Boolean)[0] || "";
+  const pathSlug = routeSlug || (TENANTLESS_PORTAL_SEGMENTS.has(firstSegment) ? "" : firstSegment);
   const [phase, setPhase] = useState("loading");
   const [email, setEmail] = useState("");
   const [sendBusy, setSendBusy] = useState(false);
@@ -112,6 +154,11 @@ export default function InstructorPortal() {
   // isDocumentEnabled — an absent key means ON.
   const [documentConfig, setDocumentConfig] = useState({});
   const [orgName, setOrgName] = useState("");
+  // Defaults FALSE here, unlike the wizard's own default, because this only ever
+  // takes effect once the directory read has succeeded — and a portal that has
+  // not resolved its org yet must not flash a payment-setup step at an
+  // instructor whose provider does not use Stripe.
+  const [stripePayEnabled, setStripePayEnabled] = useState(false);
   const [assignments, setAssignments] = useState([]);
   const [coInstructors, setCoInstructors] = useState({}); // { [camp_session_id]: [{ name, role, email, phone }] } — camp co-teachers
   const [coInstructorsProgram, setCoInstructorsProgram] = useState({}); // { [program_id]: [...] } — after-school co-teachers
@@ -197,22 +244,41 @@ export default function InstructorPortal() {
           // Resolve the target org's real slug so portal URLs stay tenant-correct
           // even when an admin impersonates via /j2s/instructor?as=…
           if (target.organization_id) {
-            // Same columns as the real sign-in path below. Selecting only `slug`
-            // here left documentConfig at {}, so an admin previewing an
-            // instructor saw the documents drawer list every document regardless
-            // of which ones that provider had switched off — a preview that
-            // shows something the instructor does not have is worse than no
-            // preview. Admin-only, so a failed read degrades rather than blocks.
+            // MUST select the same columns as the real sign-in path below, and
+            // set every one of them. This is the second door into the portal, and
+            // it has now been the source of the same bug twice: first it selected
+            // only `slug`, so a preview listed every document regardless of which
+            // ones the provider had switched off; then stripePayEnabled was added
+            // to the other door and not this one, which would have hidden the
+            // Stripe card and the W-9 row from an admin previewing an instructor
+            // who genuinely has both. A preview that shows something different
+            // from what the instructor sees is worse than no preview.
+            //
+            // If a config value is added to the select below, it belongs here in
+            // the same edit.
             const { data: dir, error: dirErr } = await supabase
               .from("public_org_directory")
-              .select("slug, name, background_check_public, instructor_documents_public")
+              .select("slug, name, background_check_public, instructor_documents_public, instructor_pay_enabled")
               .eq("id", target.organization_id)
               .maybeSingle();
-            if (dirErr) console.error("[InstructorPortal] preview org read failed", dirErr);
+            if (dirErr || !dir?.slug) {
+              // Admin-only, so this degrades rather than blocks — but it must not
+              // leave orgSlug empty. pathSlug is "" on the tenant-less routes, and
+              // an empty slug renders "//dashboard" in the portal switcher. An
+              // admin previewing from /instructor?as=… hits exactly that.
+              console.error("[InstructorPortal] preview org directory unavailable", {
+                organization_id: target.organization_id,
+                reason: dirErr ? "read_failed" : "no_active_row",
+              });
+            }
             if (dir?.slug) setOrgSlug(dir.slug);
             if (dir?.name) setOrgName(dir.name);
             if (dir?.background_check_public) setBackgroundCheck(dir.background_check_public);
             if (dir?.instructor_documents_public) setDocumentConfig(dir.instructor_documents_public);
+            // Not `if (dir?.…)` — false is a meaningful value here, and guarding
+            // on truthiness would silently skip it for every provider that does
+            // not use Stripe pay, which is most of them.
+            setStripePayEnabled(dir?.instructor_pay_enabled === true);
           }
           const targetInst = {
             instructor_id: target.id,
@@ -264,7 +330,7 @@ export default function InstructorPortal() {
       if (fullInstructor.organization_id) {
         const { data: dir, error: dirErr } = await supabase
           .from("public_org_directory")
-          .select("slug, name, background_check_public, active_registration_term, instructor_documents_public")
+          .select("slug, name, background_check_public, active_registration_term, instructor_documents_public, instructor_pay_enabled")
           .eq("id", fullInstructor.organization_id)
           .maybeSingle();
         // FOUR org facts come out of this one read, and the fallbacks below are
@@ -284,13 +350,32 @@ export default function InstructorPortal() {
         // would throw a ReferenceError and turn this handled error into a hard
         // crash, on precisely the path this branch exists to handle. The rest of
         // linkAndLoad sets phase directly (see its catch), so this matches.
-        if (dirErr) {
-          console.error("[InstructorPortal] org directory read failed", dirErr);
+        // NO ROW COUNTS AS FAILURE, NOT AS "USE THE DEFAULTS".
+        //
+        // maybeSingle() returns { data: null, error: null } when nothing matches,
+        // and public_org_directory only exposes orgs with status = 'active'. So a
+        // paused or archived org produced no row, no error, and fell straight
+        // through into every fallback the comment above calls a wrong answer:
+        // background check back to enabled, documents back to all-on, and — since
+        // pathSlug is now deliberately "" on the tenant-less routes — an empty
+        // slug that renders "//onboarding/declined" and a "//dashboard" link in
+        // the portal switcher. Guarding only dirErr covered half the hole.
+        //
+        // The message states the shared truth of both causes. It does not tell
+        // the instructor their program is inactive: we know the row is missing,
+        // not why, and being wrong about that to someone already stuck is worse
+        // than being vague.
+        if (dirErr || !dir?.slug) {
+          console.error("[InstructorPortal] org directory unavailable", {
+            organization_id: fullInstructor.organization_id,
+            reason: dirErr ? "read_failed" : "no_active_row",
+            dirErr,
+          });
           setError("We couldn't load your program's details. Please refresh, or reach out to your Program Manager if this keeps happening.");
           setPhase("error");
           return;
         }
-        if (dir?.slug) resolvedSlug = dir.slug;
+        resolvedSlug = dir.slug;
         setOrgSlug(resolvedSlug);
         setBackgroundCheck(dir?.background_check_public ?? { enabled: true });
         // The documents drawer lists reference copies of the same documents the
@@ -302,6 +387,10 @@ export default function InstructorPortal() {
         setDocumentConfig(dir?.instructor_documents_public ?? {});
         // For the signed agreement PDF's header, via the wizard embedded below.
         setOrgName(dir?.name ?? "");
+        // Whether the embedded wizard shows the Stripe payment-setup step. Same
+        // value the standalone wizard reads — this is the second door, and the
+        // one that got missed last time.
+        setStripePayEnabled(dir?.instructor_pay_enabled === true);
         setActiveTerm(dir?.active_registration_term ?? null);
       }
 
@@ -655,12 +744,8 @@ export default function InstructorPortal() {
     setSendMsg("");
     setError("");
     try {
-      // Return the user to whatever tenant portal they're signing in from
-      // (derive the slug from the current path; never hardcode a tenant).
-      const seg = window.location.pathname.split("/").filter(Boolean)[0];
-      const returnTo = seg
-        ? `${window.location.origin}/${seg}/instructor`
-        : `${window.location.origin}${window.location.pathname}`;
+      // Return them to the portal they are signing in from — see portalReturnUrl.
+      const returnTo = portalReturnUrl();
       const body = { email, redirect_to: returnTo, context: "instructor" };
       // One silent retry: the magic-link function can cold-start, and the first
       // invoke occasionally returns a transient non-2xx. Retrying once keeps a
@@ -686,10 +771,7 @@ export default function InstructorPortal() {
   async function handleGoogle() {
     setSendBusy(true);
     setError("");
-    const seg = window.location.pathname.split("/").filter(Boolean)[0];
-    const returnTo = seg
-      ? `${window.location.origin}/${seg}/instructor`
-      : `${window.location.origin}${window.location.pathname}`;
+    const returnTo = portalReturnUrl();
     const { error: err } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: { redirectTo: returnTo },
@@ -1052,6 +1134,7 @@ export default function InstructorPortal() {
           // it either way. Whatever OnboardingRouter passes, this must pass too.
           documentConfig={documentConfig}
           orgName={orgName}
+          stripePayEnabled={stripePayEnabled}
           onComplete={refetchOnboardingStatus}
           onDismiss={async () => {
             // Pending_* and payouts_disabled statuses won't flip to 'complete',
@@ -1187,7 +1270,7 @@ export default function InstructorPortal() {
   if (view === "documents") {
     return (
       <Shell slug={orgSlug} instructorName={displayFirstName(instructor)} onSignOut={signOut}>
-        <DocumentsView onBack={() => setView("schedule")} documentConfig={documentConfig} />
+        <DocumentsView onBack={() => setView("schedule")} documentConfig={documentConfig} stripePayEnabled={stripePayEnabled} />
       </Shell>
     );
   }
@@ -1197,6 +1280,7 @@ export default function InstructorPortal() {
       <Shell slug={orgSlug} instructorName={displayFirstName(instructor)} onSignOut={signOut}>
         <PayView
           instructorId={instructor.id ?? instructor.instructor_id}
+          stripePayEnabled={stripePayEnabled}
           onBack={() => setView("schedule")}
         />
       </Shell>
@@ -2473,7 +2557,7 @@ const DRAWER_DOCS = [
   { key: "attendance_policy", label: "Attendance policy (absence, tardy, pay deductions)" },
 ];
 
-function DocumentsView({ onBack, documentConfig }) {
+function DocumentsView({ onBack, documentConfig, stripePayEnabled }) {
   const [openKey, setOpenKey] = useState(null);
   const docs = DRAWER_DOCS.filter((d) => isDocumentEnabled(documentConfig, d.key));
   // The intro names what is actually in the list. It used to name all three
@@ -2483,14 +2567,19 @@ function DocumentsView({ onBack, documentConfig }) {
     "Your agreement",
     ...docs.filter((d) => d.key === "pay_schedule").map(() => "pay schedule"),
     ...docs.filter((d) => d.key === "attendance_policy").map(() => "attendance policy"),
-    "tax forms",
+    // Only when the tax-forms row is actually rendered below. Naming it while
+    // the row is hidden is the same untrue-pointer bug as the documents.
+    ...(stripePayEnabled ? ["tax forms"] : []),
   ];
   // Said out loud for each reachable state, because a list built by filtering is
   // exactly where a stray comma survives review:
-  //   all on   -> "Your agreement, pay schedule, attendance policy, and tax forms"
-  //   one off  -> "Your agreement, attendance policy, and tax forms"
-  //   both off -> "Your agreement and tax forms"   (NOT "Your agreement, and…")
-  // So the serial comma only appears once there are three things to separate.
+  //   all on          -> "Your agreement, pay schedule, attendance policy, and tax forms"
+  //   one doc off     -> "Your agreement, attendance policy, and tax forms"
+  //   both docs off   -> "Your agreement and tax forms"   (NOT "Your agreement, and…")
+  //   no Stripe       -> "Your agreement, pay schedule, and attendance policy"
+  //   agreement only  -> "Your agreement — all in one place."  (one item, no joiner)
+  // So the serial comma only appears once there are three things to separate,
+  // and the one-item case must not produce a dangling "and".
   const intro = `${
     named.length > 2
       ? `${named.slice(0, -1).join(", ")}, and ${named[named.length - 1]}`
@@ -2532,7 +2621,10 @@ function DocumentsView({ onBack, documentConfig }) {
             onToggle={() => setOpenKey((cur) => (cur === d.key ? null : d.key))}
           />
         ))}
-        <StripeTaxFormsRow />
+        {/* Same reason as the Pay tab's Stripe card: with no Stripe account this
+            row's only outcome is an error telling them to finish a wizard step
+            that no longer exists for them. */}
+        {stripePayEnabled && <StripeTaxFormsRow />}
       </div>
     </div>
   );
@@ -4269,7 +4361,7 @@ function DocLinkRow({ doc }) {
 //   approved -> "Approved for payout"
 //   adjusted -> "Adjusted"
 //   withheld -> "Held — contact admin"
-function PayView({ instructorId, onBack }) {
+function PayView({ instructorId, onBack, stripePayEnabled }) {
   const [data, setData] = useState(null); // null = loading
   const [err, setErr] = useState("");
 
@@ -4469,7 +4561,15 @@ function PayView({ instructorId, onBack }) {
         </>
       )}
 
-      {data !== null && (
+      {/* ONLY when this provider actually pays through Stripe. Otherwise this
+          card is a dead end with a lie in it: the instructor has no Stripe
+          account and never will, so the deep link returns no_stripe_account and
+          the error tells them to "finish your Stripe onboarding — it's in your
+          onboarding wizard", a step effectiveStepOrder deliberately removed and
+          which they can never reach. The copy also promises a setup form for
+          bank details and an SSN that nobody at this provider should ever be
+          asked for. Same gate on the W-9/1099 row in the documents drawer. */}
+      {data !== null && stripePayEnabled && (
         <div style={{ marginTop: 22, padding: "16px 18px", background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12 }}>
           <div style={{ fontSize: 13, color: INK, fontWeight: 600, marginBottom: 4 }}>
             Manage payouts, bank info, and tax docs

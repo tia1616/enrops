@@ -13,29 +13,33 @@ import WizardLayout, { PrimaryButton, ScreenError } from '../WizardLayout.jsx';
 // "we provide legal advice" corner and didn't generalize for other states.
 //
 // New behavior: a single informational notice + an IRS link. The instructor
-// reads, acknowledges, and continues. The submit-ors-certification edge
-// function is still called so the step persists in steps_completed; we
-// send authority_to_hire: false and all four criteria as true (the
-// operator vouches for these — the instructor is just being informed).
+// reads, acknowledges, and continues. submit-ors-certification is still called,
+// but ONLY to advance the onboarding step — it writes nothing.
 //
-// When the operator-facing contractor-classification config lands, the
-// vouching becomes explicit on the admin side. This screen stays as a
-// quick FYI on the contractor side.
+// WHAT WAS HERE, AND WHY IT WENT. This screen used to post five hardcoded
+// booleans so the old edge function would still write its row. The intent was
+// "the operator vouches for these", but nothing in the record said so: the row
+// landed under the CONTRACTOR's id, with certified_at and their own IP address,
+// attesting to specifics they were never shown. On production that produced 23
+// rows, every one identical, from 2026-05-27 onward — and the agreement those
+// people signed promises the opposite in as many words: "which the Contractor
+// will confirm by separate self-certification in enrops".
+//
+// A fabricated attestation is weaker than none: an identical machine-generated
+// answer across every contractor is exactly what reads as pro-forma. So nothing
+// is posted and nothing is stored.
+//
+// The contractor DOES still attest to their status — on Screen 4, where they
+// read and sign, recorded as contractor_agreements.confirm_contractor_status
+// beside their typed signature, IP and a snapshot of the exact text. That is the
+// real record and it always was.
 
 const IRS_CONTRACTOR_URL =
   'https://www.irs.gov/businesses/small-businesses-self-employed/independent-contractor-defined';
 
-// What gets sent to the existing edge function. Hardcoded "true" for the
-// four criteria keys because the operator has already vouched for them by
-// onboarding this contractor. The legal record is now "operator-asserted +
-// contractor-acknowledged" rather than "contractor self-attested".
-const VOUCHED_PAYLOAD = {
-  authority_to_hire: false,
-  separate_business_location: true,
-  bears_risk_of_loss: true,
-  multiple_clients: true,
-  significant_investment: true,
-};
+// No payload. The function ignores the body and only advances the step.
+// Do NOT reintroduce one: any value posted here would be stored under the
+// contractor's name against criteria this screen does not ask about.
 
 export default function Screen3ORS({ slug, instructor, onboarding, onAdvance, onBack }) {
   const navigate = useNavigate();
@@ -51,7 +55,7 @@ export default function Screen3ORS({ slug, instructor, onboarding, onAdvance, on
     try {
       const { error } = await invokeOnboardingFn(
         'submit-ors-certification',
-        VOUCHED_PAYLOAD,
+        {},
         { navigate }
       );
       if (error) {
@@ -93,6 +97,23 @@ export default function Screen3ORS({ slug, instructor, onboarding, onAdvance, on
               You may work with other clients alongside this engagement.
             </li>
           </ul>
+          {/* Points at where the specifics actually live, now that this screen
+              stores nothing.
+              STATE-NEUTRAL: naming a statute here is what got the old version
+              removed on 2026-05-25 and would not generalise past one state.
+              SECTION-NEUTRAL too, which is less obvious. The draft of this line
+              said "Section 3 — please read it before you sign", and Section 3 is
+              a section of ONE provider's agreement. Every other provider writes
+              their own from a starter whose parts are headed "The work",
+              "Independent contractor status", "Pay" and so on — no numbers at
+              all — so a section reference would point at nothing for everyone
+              except the tenant it was written for. Same bug as every other
+              hardcode removed from this path. */}
+          <p className="mt-3">
+            Your contractor agreement, on the next screen, sets out the specific
+            criteria for independent-business status — please read it before you
+            sign.
+          </p>
           <p className="mt-3">
             The federal and state rules around contractor classification vary
             by jurisdiction. If you want the official IRS overview, here it is:

@@ -6,20 +6,33 @@
 // 5xx → bubbled to caller as { error } so the screen can show retry UI
 
 import { supabase } from './supabase.js';
-import { defaultTenantSlug } from './tenants.js';
+// defaultTenantSlug import removed 2026-08-12 — it was only used for the 401
+// fallback below, which no longer resolves to a specific tenant.
 
-// Derive the current tenant slug from the URL (e.g., /j2s/instructor → "j2s")
-// so the 401 redirect lands on the right tenant's instructor portal in a
-// future multi-tenant world. Falls back to the v1 single-tenant default
-// if the URL doesn't include a slug (shouldn't happen from onboarding
-// surfaces, but safe).
+// Where a 401 sends someone: back to the sign-in for the portal they were
+// actually using.
+//
+// Derive the tenant slug from the URL when there is one (/acme/onboarding →
+// /acme/instructor). When there ISN'T one — /instructor and /instructors, the
+// tenant-less shortcuts — send them back to the same tenant-less portal, which
+// resolves the right org from their own instructor record.
+//
+// THE FALLBACK USED TO BE A TENANT. defaultTenantSlug() returns the first (and
+// only) key in the TENANTS map, i.e. one specific provider, so any path this
+// regex failed to match bounced that provider's portal at everyone. That was
+// invisible while /instructor redirected there anyway; now that it does not, the
+// fallback would have been the last place the hardcode survived. /instructor is
+// strictly better as the fallback: it is tenant-neutral and self-resolving.
 function currentInstructorLoginPath() {
   if (typeof window !== 'undefined') {
     const m = window.location.pathname.match(/^\/([^/]+)\/(?:instructor|onboarding)/);
     if (m) return `/${m[1]}/instructor`;
   }
-  const slug = defaultTenantSlug();
-  return slug ? `/${slug}/instructor` : '/admin/login';
+  // Everything else — including the tenant-less /instructor and /instructors —
+  // lands here. An explicit branch for those two used to sit above, returning
+  // exactly what this line returns, which invited the reader to believe the
+  // cases differed.
+  return '/instructor';
 }
 
 class OnboardingNavigated extends Error {

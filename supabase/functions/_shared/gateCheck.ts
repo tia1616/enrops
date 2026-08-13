@@ -67,14 +67,21 @@ export async function runGateCheck(
   //   must come out of the required set too or onboarding stalls forever one
   //   step short. Absent config = every document on = both steps required,
   //   which is exactly today's behaviour for every existing org.
+  // - Stripe pay off        → drop 'stripe_submitted' from the required set AND
+  //   treat "payouts must be live" as satisfied. BOTH halves, for the same reason
+  //   the background check needs both: dropping only the step leaves stripeReady
+  //   false forever, so the contractor finishes everything and parks on
+  //   'pending_stripe' — a status whose only recovery is a payment setup screen
+  //   the wizard no longer shows them. Default true = today's behaviour.
   let bgcEnabled = true;
   let trainingRequired = false;
   let policiesRequired = true;
   let additionalRequired = true;
+  let stripePayRequired = true;
   if (row.organization_id) {
     const { data: org, error: orgErr } = await supabase
       .from('organizations')
-      .select('background_check_config, training_config, instructor_document_config')
+      .select('background_check_config, training_config, instructor_document_config, instructor_pay_enabled')
       .eq('id', row.organization_id)
       .maybeSingle();
     // BAIL, never proceed with org=null. This read's `error` used to be
@@ -113,6 +120,9 @@ export async function runGateCheck(
     const docCfg = (org?.instructor_document_config as Record<string, unknown> | null) ?? null;
     policiesRequired = stepHasEnabledDocuments(docCfg, 'policies');
     additionalRequired = stepHasEnabledDocuments(docCfg, 'additional');
+    // Strictly true, not truthy: the column is NOT NULL DEFAULT false, so only an
+    // explicit true means this provider moves instructor money through Stripe.
+    stripePayRequired = org?.instructor_pay_enabled === true;
   }
 
   const steps = (row.steps_completed as Record<string, unknown>) ?? {};
@@ -121,10 +131,14 @@ export async function runGateCheck(
     : ALL_STEPS.filter((k) => k !== 'checkr_submitted');
   if (!policiesRequired) requiredSteps = requiredSteps.filter((k) => k !== 'policies_acknowledged');
   if (!additionalRequired) requiredSteps = requiredSteps.filter((k) => k !== 'additional_acks');
+  if (!stripePayRequired) requiredSteps = requiredSteps.filter((k) => k !== 'stripe_submitted');
   if (trainingRequired) requiredSteps = [...requiredSteps, 'training_completed'];
   const allStepsDone = requiredSteps.every((k) => steps[k]);
   const checkrClear = !bgcEnabled || row.checkr_status === 'clear';
-  const stripeReady = row.stripe_payouts_enabled === true;
+  // Exactly the shape of checkrClear above, and for the same reason: a provider
+  // who does not pay through Stripe can never have stripe_payouts_enabled turn
+  // true, so without this half 'complete' would be unreachable for all of them.
+  const stripeReady = !stripePayRequired || row.stripe_payouts_enabled === true;
 
   let nextStatus = row.overall_status as string;
   let completedAt: string | null = null;
@@ -155,7 +169,7 @@ export async function runGateCheck(
 
     // Fire onboarding-complete emails once, on the transition into 'complete'.
     if (nextStatus === 'complete') {
-      await sendOnboardingCompleteEmails(supabase, instructorId, bgcEnabled).catch((err) => {
+      await sendOnboardingCompleteEmails(supabase, instructorId, bgcEnabled, stripePayRequired).catch((err) => {
         console.error('onboarding-complete emails failed:', err);
       });
     }
@@ -173,6 +187,7 @@ async function sendOnboardingCompleteEmails(
   supabase: SupabaseClient,
   instructorId: string,
   bgcEnabled: boolean,
+  stripePayRequired: boolean,
 ): Promise<void> {
   const resendKey = Deno.env.get('RESEND_API_KEY');
   if (!resendKey) return;
@@ -204,14 +219,42 @@ async function sendOnboardingCompleteEmails(
   // route - an email whose single call to action is a dead link is worse than
   // one that omits it.
   const portalUrl = org?.slug ? `${PUBLIC_SITE_URL}/${org.slug}/instructor` : null;
-  // Only mention the background check when this org actually requires one.
-  const bgcPhrase = bgcEnabled ? 'background check cleared, ' : '';
+  // WHAT WAS ACTUALLY DONE — named only where it is true, and joined so no
+  // branch reads clipped or padded.
+  //
+  // 'complete' can now be reached with stripeReady true purely BECAUSE the
+  // provider does not pay through Stripe, so an unconditional "payouts set up"
+  // asserted a Stripe account to someone never asked for bank details. A first
+  // attempt at this filled the gap with "you are all set", which after
+  // "You're fully onboarding with X" is padding restating the sentence it sits
+  // in. Dropping the clause entirely is the honest version: say the things that
+  // happened, and stop.
+  //
+  // Said out loud, all four states:
+  //   both  -> "paperwork signed, background check cleared, and payouts set up."
+  //   bgc   -> "paperwork signed and background check cleared."
+  //   pay   -> "paperwork signed and payouts set up."
+  //   neither -> "paperwork signed."
+  const joinClauses = (parts: string[]) =>
+    parts.length > 2
+      ? `${parts.slice(0, -1).join(', ')}, and ${parts[parts.length - 1]}`
+      : parts.join(' and ');
+  const contractorDone = joinClauses([
+    'paperwork signed',
+    ...(bgcEnabled ? ['background check cleared'] : []),
+    ...(stripePayRequired ? ['payouts set up'] : []),
+  ]);
+  const adminDone = joinClauses([
+    'Paperwork signed',
+    ...(bgcEnabled ? ['background check cleared'] : []),
+    ...(stripePayRequired ? ['Stripe Connect set up'] : []),
+  ]);
 
   // 1. Contractor — "you're cleared, here's how to access your portal"
   const contractorText = [
     `Hi ${greeting},`,
     ``,
-    `You're fully onboarded with ${orgName} — paperwork signed, ${bgcPhrase}payouts set up.`,
+    `You're fully onboarded with ${orgName} — ${contractorDone}.`,
     ``,
     ...(portalUrl
       ? [`Sign in to your portal any time to see your schedule, accept assignments, and view your pay:`, portalUrl]
@@ -256,7 +299,10 @@ async function sendOnboardingCompleteEmails(
   const adminText = [
     `${fullName || instructor.email} is fully onboarded.`,
     ``,
-    `Paperwork signed, ${bgcEnabled ? 'background check cleared, ' : ''}Stripe Connect set up. They're ready to be assigned to camps or programs.`,
+    // Built from the same joiner as the contractor's, so the two can never
+    // disagree about what happened or drift apart in punctuation — which they
+    // already had.
+    `${adminDone}. They're ready to be assigned to camps or programs.`,
     ``,
     `View their record: ${PUBLIC_SITE_URL}/admin/instructors`, // was /admin/contacts (retired 2026-06-08)
   ].join('\n');

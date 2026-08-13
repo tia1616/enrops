@@ -50,15 +50,46 @@ eq('lean with plan missing -> reduced (fails CLOSED)', entitlementsFor({ instruc
 eq('null org             -> full (never lock out a load failure)', entitlementsFor(null).comms, 'full');
 
 // --- audiences ---
-// Instructors is hidden for every lean org REGARDLESS of plan: two of its three
-// automations send from a Schedule tab lean nav does not render.
+// CHANGED 2026-08-12. Instructors used to be hidden for every lean org
+// regardless of plan, because two of its three automations say "send from your
+// Schedule tab" and lean nav removed that tab — pills pointing at a surface the
+// operator could not open. Sound reasoning, now obsolete: shapeNavForOrg renders
+// the Instructors section for a lean org that passes canManageInstructors, so
+// for those orgs the tab exists and the instruction is true.
+//
+// THE RULE THAT REPLACES IT: the audience follows the tab. Whatever decides
+// whether an org gets the Instructors section must also decide whether it can
+// email them, or the operator gets one without the other and nothing explains it.
 eq('lean standard audiences', commsAudiencesFor(LEAN_STANDARD), ['families']);
-eq('lean founding audiences (no instructors)', commsAudiencesFor(LEAN_FOUNDING), ['families', 'partners']);
+eq('lean founding audiences (now WITH instructors)',
+   commsAudiencesFor(LEAN_FOUNDING), ['families', 'instructors', 'partners']);
 eq('legacy audiences (all three)', commsAudiencesFor(LEGACY), ['families', 'instructors', 'partners']);
-eq('lean never sees instructors, any plan',
-   ['per_registration', 'founding', 'pilot', 'enterprise']
-     .every((p) => !commsAudiencesFor({ instructor_pay_model: 'enrops_platform', platform_plan: p }).includes('instructors')),
-   true);
+
+// The pairing, asserted directly across every plan rather than as two separate
+// expectations that could drift: an org sees the instructors pill if and only if
+// it may manage instructors at all. This is the assertion that fails if someone
+// changes one side and not the other.
+for (const p of ['per_registration', 'founding', 'pilot', 'enterprise', 'free', undefined]) {
+  const lean = { instructor_pay_model: 'enrops_platform', platform_plan: p };
+  eq(`lean/${p}: instructors pill matches canManageInstructors`,
+     commsAudiencesFor(lean).includes('instructors'), canManageInstructors(lean));
+}
+for (const p of ['free', 'founding', undefined]) {
+  const full = { instructor_pay_model: 'legacy_own_platform', platform_plan: p };
+  eq(`full-nav/${p}: instructors pill matches canManageInstructors`,
+     commsAudiencesFor(full).includes('instructors'), canManageInstructors(full));
+}
+
+// A lean org with NO instructor entitlement must still never see the pill —
+// the original protection, kept.
+eq('a lean org that may not manage instructors never sees the pill',
+   commsAudiencesFor(LEAN_STANDARD).includes('instructors'), false);
+eq('...and neither does a lean org whose plan went missing',
+   commsAudiencesFor({ instructor_pay_model: 'enrops_platform' }).includes('instructors'), false);
+
+// Order is stable — AudienceSwitcher renders these as pills in sequence.
+eq('families is always first', commsAudiencesFor(LEAN_FOUNDING)[0], 'families');
+eq('no duplicates', new Set(commsAudiencesFor(LEGACY)).size, commsAudiencesFor(LEGACY).length);
 
 // --- tab reachability (the route guards read this) ---
 eq('standard: contacts reachable',    canReachCommsTab(LEAN_STANDARD, 'contacts'), true);

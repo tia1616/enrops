@@ -63,10 +63,15 @@ export function entitlementsFor(org) {
   if (!isLean) return { comms: "full" };
 
   // A lean org on a full-access plan (Jeff, founding) gets everything a lean
-  // NAV can honestly show. Note this is not the same as J2S's surface: the
-  // instructor audience stays hidden for every lean org regardless of plan,
-  // because those sends fire from a Schedule tab lean nav does not render.
-  // That is a truth constraint, not a pricing one — see commsAudiencesFor.
+  // NAV can honestly show.
+  //
+  // This comment used to say the instructor audience stays hidden for every lean
+  // org regardless of plan. That WAS true and is not any more — shapeNavForOrg
+  // now renders the Instructors section for a lean org that passes
+  // canManageInstructors, so the Schedule tab those sends point at exists, and
+  // commsAudiencesFor below shows the audience to exactly those orgs. Left
+  // stale, this paragraph flatly contradicted the function 60 lines down and
+  // would have talked the next reader out of a correct behaviour.
   if (FULL_ACCESS_PLANS.has(org?.platform_plan)) return { comms: "full" };
 
   return { comms: "registration_only" };
@@ -98,10 +103,25 @@ export function canManageInstructors(org) {
  *
  * Two independent reasons an audience is hidden, and they must not be confused:
  *
- *   Instructors — hidden for EVERY lean org, paid or not. Two of the three
- *     instructor automations say "send from your Schedule tab", and lean nav
- *     hides that tab (AdminLayout.shapeNavForOrg). Showing them would be three
- *     cards pointing at a surface the operator cannot open. Truth, not tier.
+ *   Instructors — gated on whether this org may manage instructors AT ALL.
+ *     This used to be hidden for EVERY lean org, paid or not, and the reason was
+ *     a good one: two of the three instructor automations say "send from your
+ *     Schedule tab", and lean nav removed that tab, so the pills would have
+ *     pointed at a surface the operator could not open. A truth constraint, not
+ *     a pricing one.
+ *
+ *     THAT REASON HAS NOW GONE. shapeNavForOrg renders the Instructors section
+ *     for a lean org that passes canManageInstructors, so for those orgs the
+ *     tab exists and the automations' instruction is true. Leaving this as-is
+ *     would have been the other half of the same bug: the operator gets the
+ *     Schedule tab and still no instructor audience, with nothing anywhere
+ *     explaining why.
+ *
+ *     Deliberately expressed as canManageInstructors rather than re-deriving the
+ *     plan check. For a lean org that predicate and `comms === "full"` resolve
+ *     identically today — but they mean different things, and if the plan sets
+ *     ever diverge, "can you email your instructors" must follow "do you have
+ *     instructors", not "how much Comms did you buy".
  *
  *   Partners — hidden on the registration_only tier only. The single partner
  *     automation (class roster to the school) is an upgrade, so the pill would
@@ -112,7 +132,10 @@ export function commsAudiencesFor(org) {
   if (!isLean) return ["families", "instructors", "partners"];
 
   const { comms } = entitlementsFor(org);
-  return comms === "full" ? ["families", "partners"] : ["families"];
+  if (comms !== "full") return ["families"];
+  return canManageInstructors(org)
+    ? ["families", "instructors", "partners"]
+    : ["families", "partners"];
 }
 
 /**

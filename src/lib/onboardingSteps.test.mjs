@@ -51,6 +51,35 @@ ok('both off still signs the agreement', neither.includes(STEP_KEYS.AGREEMENT_SI
 ok('both off still collects emergency contact',
   neither.includes(STEP_KEYS.EMERGENCY_AND_PREFS));
 
+// --- the Stripe payment step -----------------------------------------------
+//
+// The step that was unconditional longest. Only a provider who actually pays
+// instructors through Stripe should ever show it; for everyone else it walked
+// their instructor into handing over an SSN and bank details for payouts that
+// would never arrive.
+ok('stripe payment setup is present by default', dflt.includes(STEP_KEYS.STRIPE_SUBMITTED));
+
+const noStripe = effectiveStepOrder({ stripePayEnabled: false });
+ok('stripePayEnabled:false drops the payment step',
+  !noStripe.includes(STEP_KEYS.STRIPE_SUBMITTED));
+eq('...and removes exactly one step', noStripe.length, dflt.length - 1);
+ok('...and still signs the agreement', noStripe.includes(STEP_KEYS.AGREEMENT_SIGNED));
+ok('...and still collects the emergency contact',
+  noStripe.includes(STEP_KEYS.EMERGENCY_AND_PREFS));
+ok('...and leaves the document screens alone',
+  noStripe.includes(STEP_KEYS.POLICIES_ACKNOWLEDGED) && noStripe.includes(STEP_KEYS.ADDITIONAL_ACKS));
+
+// The shape a provider like Jeff actually has: pays instructors himself, uses
+// some documents, no training.
+const jeffish = effectiveStepOrder({
+  stripePayEnabled: false, additionalEnabled: false, trainingEnabled: false,
+});
+ok('a no-Stripe provider never shows payment setup',
+  !jeffish.includes(STEP_KEYS.STRIPE_SUBMITTED));
+eq('...and the wizard is shorter by exactly the two dropped steps',
+  jeffish.length, dflt.length - 2);
+eq('...emergency contact is still last', jeffish[jeffish.length - 1], STEP_KEYS.EMERGENCY_AND_PREFS);
+
 // --- the toggles compose, they do not fight --------------------------------
 const lean = effectiveStepOrder({
   bgcEnabled: false, trainingEnabled: false,
@@ -121,6 +150,20 @@ ok('gateCheck drops the additional step when its documents are all off',
 ok('gateCheck reads the document config column',
   gate.includes('instructor_document_config'));
 
+// The Stripe step needs BOTH halves server-side, and the second is the one that
+// silently strands people: drop the step but leave stripeReady demanding
+// stripe_payouts_enabled, and every instructor at a no-Stripe provider finishes
+// the wizard and parks on 'pending_stripe' — whose only recovery is a payment
+// screen they are no longer shown.
+ok('gateCheck reads the instructor pay flag',
+  gate.includes('instructor_pay_enabled'));
+ok('gateCheck drops the stripe step when the provider does not use Stripe pay',
+  /stripePayRequired[\s\S]{0,160}stripe_submitted/.test(gate));
+ok('gateCheck ALSO relaxes the payouts-live condition',
+  /stripeReady\s*=\s*!stripePayRequired\s*\|\|/.test(gate));
+ok('...and still requires payouts live when the provider DOES use Stripe pay',
+  /stripeReady[\s\S]{0,80}stripe_payouts_enabled === true/.test(gate));
+
 // --- the server's copy of the step grouping must match the browser's ---------
 //
 // instructorDocumentConfig.ts holds DOCUMENTS_BY_STEP, duplicating what lives on
@@ -167,6 +210,62 @@ if (byStepMatch) {
     [...allServer].sort().join(','), [...allBrowser].sort().join(','));
   ok('the server mirror pins the agreement as always-on',
     /ALWAYS_ON[\s\S]{0,120}contractor_agreement/.test(serverSrc));
+}
+
+// --- the agreement tick boxes and the server gate must name the SAME keys ---
+//
+// submit-agreement keeps its own list of required confirms and returns 400
+// all_confirms_required for any key that is absent. It is a GATE, not a mirror
+// of the screen — so the failure is asymmetric and brutal:
+//
+//   key on the screen but not the server -> the extra tick is never recorded
+//   key on the server but not the screen -> NOBODY CAN SIGN, AT ALL. Every
+//     contractor hits 400 on the last action of the agreement screen, with
+//     nothing on the page to correct.
+//
+// Two tick boxes were retired on 2026-08-12 and a third earlier. Each time, both
+// sides had to move together. Nothing enforced that until this test.
+//
+// Parsed off disk: the edge function is Deno source. Both regexes are asserted
+// to have matched, so a rename fails loudly rather than silently comparing two
+// empty lists — which would "pass" forever.
+const screenSrc = readFileSync(
+  new URL('../pages/onboarding/screens/Screen4Agreement.jsx', import.meta.url), 'utf8');
+const agreementFnSrc = readFileSync(
+  new URL('../../supabase/functions/submit-agreement/index.ts', import.meta.url), 'utf8');
+
+const confirmsBlock = /const CONFIRMS = \[([\s\S]*?)\n\];/.exec(screenSrc);
+ok('Screen 4 CONFIRMS list was found', Boolean(confirmsBlock));
+const serverBlock = /const confirms = \{([\s\S]*?)\n\s*\};/.exec(agreementFnSrc);
+ok('submit-agreement required-confirms block was found', Boolean(serverBlock));
+
+if (confirmsBlock && serverBlock) {
+  const screenKeys = [...confirmsBlock[1].matchAll(/key:\s*'([a-z_]+)'/g)].map((m) => m[1]);
+  const serverKeys = [...serverBlock[1].matchAll(/([a-z_]+):\s*body\./g)].map((m) => m[1]);
+  ok('the screen actually lists some tick boxes', screenKeys.length > 0);
+  ok('the server actually requires some confirms', serverKeys.length > 0);
+  eq('screen tick boxes and server required confirms match exactly',
+    [...screenKeys].sort().join(','), [...serverKeys].sort().join(','));
+
+  // The retired ones must not have crept back into EITHER side. If one returns
+  // to the server only, nobody can sign.
+  for (const retired of ['confirm_pay_structure', 'confirm_confidentiality_ip', 'confirm_supersedes_prior']) {
+    ok(`${retired} is not required by the server`, !serverKeys.includes(retired));
+    ok(`${retired} is not a tick box on the screen`, !screenKeys.includes(retired));
+  }
+
+  // A retired column must never be WRITTEN true — it has to fall to its NOT NULL
+  // DEFAULT false, i.e. "not separately attested". Writing true would fabricate
+  // an attestation nobody was shown, which is the exact bug removed from the ORS
+  // certification.
+  const insertBlock = /\.insert\(\{([\s\S]*?)\n\s*\}\)/.exec(agreementFnSrc);
+  ok('submit-agreement insert block was found', Boolean(insertBlock));
+  if (insertBlock) {
+    for (const retired of ['confirm_pay_structure', 'confirm_confidentiality_ip', 'confirm_supersedes_prior']) {
+      ok(`${retired} is not written on insert (falls to DEFAULT false)`,
+        !new RegExp(`^\\s*${retired}\\s*:`, 'm').test(insertBlock[1]));
+    }
+  }
 }
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'}  (${pass} passed, ${fail} failed)`);

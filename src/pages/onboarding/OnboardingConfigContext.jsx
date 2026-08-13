@@ -20,6 +20,10 @@ const DEFAULTS = {
   // The provider's own display name. Empty is safe: the PDF header drops the
   // segment entirely rather than printing "undefined" on a legal document.
   orgName: '',
+  // Does this provider pay instructors through Stripe? When false the
+  // payment-setup step is dropped from the wizard AND from the completion gate.
+  // True by default so an isolated render behaves as the wizard always has.
+  stripePayEnabled: true,
   // Whether the training step is live for this org (enabled AND at least one
   // active required video). When false, the step is dropped everywhere.
   trainingEnabled: false,
