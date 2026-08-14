@@ -327,6 +327,7 @@ export default function CalendarsList() {
                     isViewing={viewing.has(row.key)}
                     onToggleView={() => toggleViewing(row.key)}
                     onEdit={() => setEditing({ key: row.key })}
+                    onEditEarlyRelease={() => setErPrompt({ key: row.key })}
                   />
                 )}
               </div>
@@ -350,7 +351,7 @@ function isCalendarConfigured(cal) {
   return hasBounds || hasDates;
 }
 
-function DistrictRow({ district, locationCount, cal, isViewing, onToggleView, onEdit }) {
+function DistrictRow({ district, locationCount, cal, isViewing, onToggleView, onEdit, onEditEarlyRelease }) {
   const noSchoolCount = Array.isArray(cal?.no_school_dates) ? cal.no_school_dates.length : 0;
   const earlyReleaseCount = Array.isArray(cal?.early_release_dates) ? cal.early_release_dates.length : 0;
   const status = isCalendarConfigured(cal) ? "configured" : cal ? "started" : "missing";
@@ -414,6 +415,19 @@ function DistrictRow({ district, locationCount, cal, isViewing, onToggleView, on
         {hasViewableDates && (
           <button type="button" onClick={onToggleView} style={btn("transparent", BRIGHT, true)}>
             {isViewing ? "Hide dates" : "View dates"}
+          </button>
+        )}
+        {/* A PERMANENT WAY BACK IN. The early-release question used to appear
+            only in the moment after a calendar was saved, which made it a
+            one-shot: an operator who mistyped the time, or whose school moved
+            its dismissal, had no way to reach it from here at all — they had to
+            know that re-saving the calendar would re-ask. Jessica, 14 Aug.
+            Shown whenever this calendar HAS early-release dates; the screen
+            itself works out whether any class is actually affected and closes
+            straight away if none is. */}
+        {earlyReleaseCount > 0 && (
+          <button type="button" onClick={onEditEarlyRelease} style={btn("transparent", BRIGHT, true)}>
+            Class times
           </button>
         )}
         <button type="button" onClick={onEdit} style={btn(cal ? "transparent" : BRIGHT, cal ? BRIGHT : "#fff", !!cal)}>

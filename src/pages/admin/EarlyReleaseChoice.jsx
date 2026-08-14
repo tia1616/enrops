@@ -90,6 +90,16 @@ export default function EarlyReleaseChoice({ org, districtId, districtText, dist
         start: to24h(r.early_release_start_time ?? ""),
         end: to24h(r.early_release_end_time ?? ""),
       }])));
+      // ALREADY ANSWERED -> go straight to the list.
+      //
+      // Asking "do you still teach on early-release days?" of somebody who
+      // answered yes last month and just wants to change 12:45 to 1:00 is a
+      // question with an obvious answer standing between them and the edit. The
+      // yes/no is for the FIRST time; after that this screen is an editor.
+      // Answering no is still reachable from the list ("Turn these off").
+      if (list.some((r) => (r.early_release_start_time ?? "").trim() !== "")) {
+        setStep("list");
+      }
       setLoading(false);
     })();
     return () => { cancelled = true; };
@@ -416,6 +426,20 @@ export default function EarlyReleaseChoice({ org, districtId, districtText, dist
           {saving ? "Saving…" : "Save"}
         </button>
         <button type="button" style={btnPlain} disabled={saving} onClick={() => onDone?.({ changed: false })}>Not now</button>
+        {/* The "no" answer, reachable from here too. Once a district is set up
+            this list IS the screen, so stopping teaching on early-release days
+            has to be doable without going back through the first question.
+            Routed through the same confirmation, so it still says what it costs. */}
+        {alreadySet.length > 0 && (
+          <button
+            type="button"
+            style={{ ...btnPlain, marginLeft: "auto", color: "#991b1b", borderColor: "#fecaca" }}
+            disabled={saving}
+            onClick={() => setStep("clearConfirm")}
+          >
+            We don&rsquo;t teach on these days
+          </button>
+        )}
       </div>
     </>
   );
