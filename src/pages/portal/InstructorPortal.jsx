@@ -615,9 +615,11 @@ export default function InstructorPortal() {
         if (results[i]?.error) {
           console.warn("[loadAfterschoolAssignments] schedule fetch failed:", results[i].error.message);
         }
-        // The RPC returns rows keyed entry_date/kind/reason; normalize entry_date -> date
-        // so the card render matches the batch RPC's { date, kind, reason } shape.
-        map[pid] = (results[i]?.data || []).map((x) => ({ date: x.entry_date, kind: x.kind, reason: x.reason }));
+        // The RPC returns rows keyed entry_date/kind/reason/session_time; normalize
+        // entry_date -> date so the card render matches the batch RPC's shape.
+        // session_time is the EARLIER start on a kept early-release date — the one
+        // day an instructor must not turn up at the usual time.
+        map[pid] = (results[i]?.data || []).map((x) => ({ date: x.entry_date, kind: x.kind, reason: x.reason, session_time: x.session_time }));
       });
       setScheduleByProgram(map);
     } else {
@@ -2338,7 +2340,17 @@ function AfterschoolAssignmentCard({ assignment, coInstructors = [], schedule = 
                   return (
                     <div key={`s-${idx}`} style={{ fontSize: 13, color: INK, display: "flex", gap: 8 }}>
                       <span style={{ width: 92, flexShrink: 0, fontVariantNumeric: "tabular-nums" }}>{label}</span>
-                      <span style={{ color: MUTED }}>Session {n}</span>
+                      <span style={{ color: MUTED }}>
+                        Session {n}
+                        {/* The one date that does NOT start at the class's usual
+                            time. Said on the row, because this list is what an
+                            instructor checks before a shift. */}
+                        {x.reason === "Early release" && (
+                          <span style={{ color: "#a16207", fontStyle: "italic" }}>
+                            {" · early release"}{x.session_time ? ` ${x.session_time}` : ""}
+                          </span>
+                        )}
+                      </span>
                     </div>
                   );
                 });

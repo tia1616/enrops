@@ -265,7 +265,11 @@ export default function ProgramsCalendar() {
         { p_program_id: programId },
       );
       if (schErr) throw schErr;
-      const arr = (sched ?? []).map((r) => ({ date: r.entry_date, kind: r.kind, reason: r.reason }));
+      // session_time must be carried here too. The batch loader
+      // (programs_with_session_schedule) supplies it on page load, so dropping
+      // it here would make an early-release time disappear the moment the
+      // schedule was re-read after an edit.
+      const arr = (sched ?? []).map((r) => ({ date: r.entry_date, kind: r.kind, reason: r.reason, session_time: r.session_time }));
       setSessionDatesByProgram((prev) => ({ ...prev, [programId]: arr }));
     } catch (e) {
       console.warn("Couldn't refresh derived dates after skip:", e?.message ?? e);
@@ -513,6 +517,7 @@ export default function ProgramsCalendar() {
           .from("programs")
           .select(`
             id, curriculum, curriculum_id, day_of_week, start_time, end_time, room,
+            early_release_start_time, early_release_end_time,
             max_capacity, status, term, instructor_name, price_cents,
             short_description,
             grade_min, grade_max, age_min, age_max, age_format,
@@ -1470,6 +1475,13 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
     // Stored as 12-hour text ("2:45 PM"); <input type="time"> needs 24-hour.
     start_time: to24h(program.start_time),
     end_time: to24h(program.end_time),
+    // On an OCCASIONAL early-release day the class still meets, earlier. Blank
+    // means it is skipped that day, which is what every program did before
+    // 20260814a. Set here as well as in the post-calendar-upload question,
+    // because that question only fires when a calendar is saved and an operator
+    // changes their mind (or adds a class) long after that.
+    early_release_start_time: to24h(program.early_release_start_time),
+    early_release_end_time: to24h(program.early_release_end_time),
     first_session_date: program.first_session_date ?? "",
     session_count: program.session_count ?? "",
     // Range mode: 'count' (default, the J2S way) vs 'range' (Jeff's way -- count
@@ -1504,6 +1516,49 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
   const [savedFlash, setSavedFlash] = useState(false);
+
+  // How many OCCASIONAL early-release days land on this class's weekday.
+  //
+  // Fetched rather than assumed, and fetched from the same SQL the date
+  // derivation uses, because "occasional" is not a property of the calendar --
+  // it is a property of this class's weekday AT this location. A weekday that
+  // is early-release every week all year is that location's normal schedule and
+  // returns nothing here, which is correct: it was never skipped and there is
+  // nothing to decide.
+  //
+  // 0 -> the two fields below are not rendered at all. Showing "what time on
+  // early-release days?" to a class that has none is a question with no
+  // consequence, and the operator cannot tell that from a question that matters.
+  const [erDayCount, setErDayCount] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    const weekday = program.first_session_date
+      ? new Date(`${program.first_session_date}T00:00:00Z`).getUTCDay()
+      : null;
+    if (!panelOrg?.id || !program.program_location_id || weekday === null) {
+      setErDayCount(0);
+      return;
+    }
+    (async () => {
+      const { data, error } = await supabase.rpc("resolve_district_early_release_exceptions", {
+        p_org_id: panelOrg.id,
+        p_location_id: program.program_location_id,
+        p_term: program.term,
+        p_weekday: weekday,
+      });
+      if (cancelled) return;
+      if (error) {
+        // Leave the fields hidden rather than showing a control whose effect we
+        // could not verify. A value already set still saves and still works --
+        // this only governs whether the inputs are offered.
+        console.error("[ProgramsCalendar] early-release lookup failed", error);
+        setErDayCount(0);
+        return;
+      }
+      setErDayCount(Array.isArray(data) ? data.length : 0);
+    })();
+    return () => { cancelled = true; };
+  }, [panelOrg?.id, program.program_location_id, program.term, program.first_session_date]);
 
   // Which pair the panel is currently editing, and the one coercion that has to be
   // right: "" means NOT STATED, but grade K is 0, which is falsy. `Number("") || null`
@@ -1754,6 +1809,10 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         // Convert the 24-hour input values back to the stored 12-hour text format.
         start_time: draft.start_time ? to12hText(draft.start_time) : null,
         end_time: draft.end_time ? to12hText(draft.end_time) : null,
+        // Clearing this is a real answer ("skip that day again"), not a missing
+        // value, so a blank writes NULL rather than being left alone.
+        early_release_start_time: draft.early_release_start_time ? to12hText(draft.early_release_start_time) : null,
+        early_release_end_time: draft.early_release_end_time ? to12hText(draft.early_release_end_time) : null,
         first_session_date: isRange ? rangeFirstSession : (draft.first_session_date || null),
         schedule_mode: isRange ? "range" : "count",
         // end_date only means anything in range mode; null it in count mode so a
@@ -2080,6 +2139,29 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         <ExpandField label="End time">
           <input type="time" value={draft.end_time ?? ""} onChange={(e) => set("end_time", e.target.value)} style={expandInputStyle} />
         </ExpandField>
+        {/* Only for a class that actually HAS occasional early-release days.
+            Blank = skipped that day, which is what this class did before the
+            option existed, so an untouched class is unchanged. */}
+        {erDayCount > 0 && (
+          <>
+            <ExpandField label={`Early release start (${erDayCount} ${erDayCount === 1 ? "day" : "days"})`}>
+              <input
+                type="time"
+                value={draft.early_release_start_time ?? ""}
+                onChange={(e) => set("early_release_start_time", e.target.value)}
+                style={expandInputStyle}
+              />
+            </ExpandField>
+            <ExpandField label="Early release end">
+              <input
+                type="time"
+                value={draft.early_release_end_time ?? ""}
+                onChange={(e) => set("early_release_end_time", e.target.value)}
+                style={expandInputStyle}
+              />
+            </ExpandField>
+          </>
+        )}
         <ExpandField label="Scheduling">
           {/* Count = the usual way (set a number of sessions). Range = set a start
               and end date; the count derives. Default count; range is opt-in per program. */}
@@ -2782,6 +2864,17 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, onScheduleChan
             <div key={`${x.date}-ns-${idx}`} style={{ fontSize: 13, fontVariantNumeric: "tabular-nums", color: MUTED }}>
               <span style={{ textDecoration: "line-through" }}>{formatSessionDate(x.date)}</span>
               <span style={{ fontStyle: "italic" }}> · {x.reason || "No school"}</span>
+            </div>
+          ) : x.reason === "Early release" ? (
+            // A KEPT early-release date. It is a real session, so it is not
+            // struck through -- but it does not meet at the class's usual time,
+            // and a date that looks identical to every other one is how an
+            // instructor turns up an hour late.
+            <div key={`${x.date}-s-${idx}`} style={{ color: INK, fontSize: 13, fontVariantNumeric: "tabular-nums" }}>
+              {formatSessionDate(x.date)}
+              <span style={{ color: AMBER, fontStyle: "italic" }}>
+                {" · early release"}{x.session_time ? ` ${formatTime(x.session_time)}` : ""}
+              </span>
             </div>
           ) : (
             <div key={`${x.date}-s-${idx}`} style={{ color: INK, fontSize: 13, fontVariantNumeric: "tabular-nums" }}>

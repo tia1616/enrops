@@ -409,8 +409,11 @@ export default function Dashboard() {
           )
         );
         programIdsForDates.forEach(({ enrollmentId }, i) => {
-          // The RPC returns rows keyed entry_date/kind/reason; normalize entry_date -> date.
-          const schedule = (dateResults[i]?.data || []).map((x) => ({ date: x.entry_date, kind: x.kind, reason: x.reason }));
+          // The RPC returns rows keyed entry_date/kind/reason/session_time;
+          // normalize entry_date -> date. session_time carries the EARLIER time
+          // on a kept early-release date — the one day a parent must not assume
+          // the usual pickup time.
+          const schedule = (dateResults[i]?.data || []).map((x) => ({ date: x.entry_date, kind: x.kind, reason: x.reason, session_time: x.session_time }));
           const entry = merged.find((e) => e.id === enrollmentId);
           if (entry) {
             entry.sessionSchedule = schedule;
@@ -794,6 +797,15 @@ function ScheduleTab({ enrollments }) {
                           </p>
                         ) : (
                           <p className="text-sm text-j2s-ink/50">Session {idx + 1}</p>
+                        )}
+                        {/* EARLY RELEASE. School lets out early, so this one
+                            class starts earlier than the time on the card
+                            above. Said on the row itself because a parent reads
+                            the date, not the header, when working out pickup. */}
+                        {row.reason === 'Early release' && (
+                          <p className="text-xs text-j2s-ink/60">
+                            Early release{row.session_time ? ` · starts ${fmtTime(row.session_time)}` : ''}
+                          </p>
                         )}
                       </div>
 
