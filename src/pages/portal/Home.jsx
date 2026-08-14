@@ -17,15 +17,17 @@ import { formatTermLabel, termSeasonName, schoolYearTermsForFall } from '../../l
 import { programScheduleSummary, formatDayLabel } from '../../lib/programSchedule.js';
 import { audienceLabel } from '../../lib/grades.js';
 import { feeOnCents, totalWithFee } from '../../lib/platformFee.js';
+import { buildCatalogPicker, OTHER_DISTRICT } from '../../lib/regCatalogPicker.js';
 
 // Tenant resolution: `org` (id, slug, name, active_registration_term, ...) is
 // provided by PublicLayout via Outlet context (from the public_org_directory
 // view). Page reads org.id / org.slug from there instead of hardcoding 'j2s'.
 // The catalog term is per-org from org.active_registration_term — NOT hardcoded.
-// Catch-all bucket for venues with no public district (private/charter schools,
-// libraries, community sites). Keeps them on the reg page instead of hidden, and
-// stops each one rendering as its own one-school "district".
-const OTHER_DISTRICT = 'Other schools & sites';
+//
+// OTHER_DISTRICT (the catch-all bucket for venues with no public district) and
+// the whole lean district->school picker now live in lib/regCatalogPicker.js, so
+// they can be tested. They used to be inline here, which is why the picker
+// reached prod on 2026-08-14 with no coverage at all.
 
 // Week order for the recurring class schedule (day_of_week stored Title-Case).
 const WEEKLY_DAY_ORDER = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 };
@@ -420,37 +422,15 @@ export default function Home() {
   if (isLeanReg) {
     const allOpen = programs || [];
 
-    // Distinct locations among the open programs — drives the school select.
-    //
-    // Keyed on location ID, not name. Two real locations can share a name: staging
-    // riverbend has two rows both called "Ainsworth Elementary School", one in PPS
-    // and one with no district. Keying on the name collapsed them into a single
-    // option that filtered by name and so showed BOTH locations' classes, and under
-    // grouping the same label could appear beneath two different district headings
-    // with no way to tell them apart. Verified none exist on prod TODAY, so this is
-    // a latent bug being closed rather than a live one - and J2S has 63 locations,
-    // so it was going to happen.
-    const seenLoc = new Set();
-    const locOptions = []; // { id, name, district }
-    for (const p of allOpen) {
-      const id = p.program_location_id;
-      const nm = p.program_locations?.name;
-      if (!id || !nm || seenLoc.has(id)) continue;
-      seenLoc.add(id);
-      const dId = p.program_locations?.district_id;
-      locOptions.push({ id, name: nm, district: (dId && districtNames[dId]) || OTHER_DISTRICT });
-    }
-    const hasMultiLoc = locOptions.length >= 2;
-
     // DISTRICT, THEN SCHOOL, THEN THE CLASSES - and nothing priced before a
     // school is chosen. Same shape as J2S's page below, deliberately.
     //
-    // This replaces one grouped select defaulting to "All schools and sites"
+    // This replaced one grouped select defaulting to "All schools and sites"
     // above a list of every open class. The argument for that was that a parent
     // knows their school, so a district step is a dead click and an optgroup
     // organises without becoming one. What it missed is what the FIRST SCREEN
     // says. Jeff's catalog opens on 18 classes ordered by weekday, so the first
-    // price a family reads is Oak Creek at $329 - his most expensive district -
+    // price a family read was Oak Creek at $329 - his most expensive district -
     // when their own school is $279 or $299. Jeff: "I don't want someone to get
     // scared off by looking at a price tag for a program at a more expensive
     // district." A filter cannot fix that, because the list is already rendered
@@ -464,44 +444,22 @@ export default function Home() {
     // Native selects rather than a custom dropdown or a modal: on a phone this
     // opens the OS picker, which is scrollable, typeable and accessible for free.
     //
-    // The district select is skipped entirely when it would group nothing (fewer
-    // than 2 named districts) - a one-option dropdown is a dead click for real.
-    // The school gate still applies, so a small provider gets one control and the
-    // same "pick your school first" behaviour.
-    const groups = new Map(); // district name (or OTHER_DISTRICT) -> [{ id, name }]
-    for (const loc of locOptions) {
-      if (!groups.has(loc.district)) groups.set(loc.district, []);
-      groups.get(loc.district).push(loc);
-    }
-    for (const list of groups.values()) list.sort((a, b) => a.name.localeCompare(b.name));
-
-    // Named districts alphabetically; the undistricted bucket always last, so it
-    // reads as a remainder rather than competing with real district names. Jessica
-    // named what lives there: parks and rec, libraries, charters.
-    const namedGroups = [...groups.keys()]
-      .filter((d) => d !== OTHER_DISTRICT)
-      .sort((a, b) => a.localeCompare(b));
-    const groupNames = groups.has(OTHER_DISTRICT) ? [...namedGroups, OTHER_DISTRICT] : namedGroups;
-
-    // A district step only when it groups something: with one district or none
-    // (shoreview-chess: 2 locations, zero districts) it is a dropdown with a
-    // single answer. Below this line the page shows the school select alone.
-    const useGroups = namedGroups.length >= 2;
-
-    // Which schools the school select offers. With a district step, only that
-    // district's; without one, all of them.
-    const schoolChoices = useGroups
-      ? (groups.get(locationDistrict) || [])
-      : [...locOptions].sort((a, b) => a.name.localeCompare(b.name));
-
-    // THE GATE. No school chosen = no classes, which is the whole point: the
-    // first screen must not lead with a price from a district the family is not
-    // in. hasMultiLoc keeps a single-site provider gate-free - there is nothing
-    // to choose, so asking would be theatre.
-    const schoolChosen = !hasMultiLoc || !!locationFilter;
-    const openPrograms = !hasMultiLoc
-      ? allOpen
-      : (locationFilter ? allOpen.filter((p) => p.program_location_id === locationFilter) : []);
+    // THE RULES THEMSELVES LIVE IN lib/regCatalogPicker.js, with 40 tests and a
+    // mutation check that proves those tests detect. Keep them there: inline was
+    // how this shipped untested.
+    const picker = buildCatalogPicker(allOpen, districtNames, {
+      district: locationDistrict,
+      school: locationFilter,
+    });
+    const {
+      groupNames, hasMultiLoc, useGroups, schoolChoices, schoolChosen,
+      visiblePrograms: openPrograms,
+    } = picker;
+    // The SANITISED selection, not the raw state. If a value is not among the
+    // options the module hands back '' - a select whose value is not in its own
+    // option list renders blank and disagrees with the list beneath it.
+    const districtValue = picker.district;
+    const schoolValue = picker.school;
     const leanCard = (hl) => ({
       display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16,
       padding: '16px 18px', border: `1px solid ${hl ? '#5847C9' : '#e2dfd5'}`,
@@ -623,7 +581,7 @@ export default function Home() {
                         </label>
                         <select
                           id="catalog-district"
-                          value={locationDistrict}
+                          value={districtValue}
                           onChange={(e) => {
                             // Changing district always clears the school. Keeping
                             // it would leave a school selected that the new
@@ -654,15 +612,15 @@ export default function Home() {
                       </label>
                       <select
                         id="catalog-school"
-                        value={locationFilter}
-                        disabled={useGroups && !locationDistrict}
+                        value={schoolValue}
+                        disabled={useGroups && !districtValue}
                         onChange={(e) => setLocationFilter(e.target.value)}
                         style={{
                           width: '100%', padding: '11px 12px', fontSize: 15,
                           fontFamily: 'inherit', background: '#fff',
-                          color: useGroups && !locationDistrict ? '#9a9a9a' : '#1a1a1a',
+                          color: useGroups && !districtValue ? '#9a9a9a' : '#1a1a1a',
                           border: '1px solid #cfcbc0', borderRadius: 10,
-                          cursor: useGroups && !locationDistrict ? 'not-allowed' : 'pointer',
+                          cursor: useGroups && !districtValue ? 'not-allowed' : 'pointer',
                         }}
                       >
                         <option value="">
@@ -671,7 +629,7 @@ export default function Home() {
                               render as the seven characters "&hellip;". The
                               district option below is JSX TEXT, where the entity
                               is correct - the two are not inconsistent. */}
-                          {useGroups && !locationDistrict ? 'Pick a district first' : 'Select a school…'}
+                          {useGroups && !districtValue ? 'Pick a district first' : 'Select a school…'}
                         </option>
                         {schoolChoices.map((loc) => (
                           <option key={loc.id} value={loc.id}>{loc.name}</option>
