@@ -291,7 +291,24 @@ export default function InstructorPortal() {
             setStripePayEnabled(dir?.instructor_pay_enabled === true);
             // Preview must show the same wizard the instructor gets, training
             // step included — that is the whole point of the comment above.
+            //
+            // AND IT MUST TREAT A FAILED READ THE SAME WAY. Accepting the
+            // fallback `false` here would render the preview WITHOUT the training
+            // step and tell the admin this instructor has no training to do,
+            // while the server gate still blocks them on training_completed — the
+            // preview would be confidently wrong about the exact thing it exists
+            // to show. Admin-only, so it degrades loudly rather than blocking,
+            // matching how this branch handles a failed directory read above.
+            // Code-review finding #4.
             const t = await loadTrainingConfig(supabase, target.organization_id, dir?.training_enabled);
+            if (t.error) {
+              console.error("[InstructorPortal] preview training config unavailable", {
+                organization_id: target.organization_id, error: t.error,
+              });
+              setError("We couldn't load this instructor's training settings, so the preview would be misleading. Please refresh.");
+              setPhase("error");
+              return;
+            }
             setTrainingEnabled(t.trainingEnabled);
             setTrainingVideos(t.trainingVideos);
           }

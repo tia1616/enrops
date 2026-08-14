@@ -1721,13 +1721,23 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
       p_day_of_week: titleDay(draft.day_of_week),
       p_start_date: draft.first_session_date,
       p_end_date: draft.end_date,
+      // THE PENDING VALUE, not the saved row. In range mode this preview's count
+      // is materialized straight into session_count by the same save, so if the
+      // preview still subtracts the early-release dates while the patch also
+      // turns them back ON, the two halves of one write contradict each other and
+      // the schedule silently ends weeks early. Code-review finding #2.
+      p_early_release_start_time: draft.early_release_start_time
+        ? to12hText(draft.early_release_start_time)
+        : null,
     }).then(({ data, error }) => {
       if (!alive) return;
       setRangeLoading(false);
       setRangePreview(error ? { error: error.message } : data);
     });
     return () => { alive = false; };
-  }, [draft.schedule_mode, draft.day_of_week, draft.first_session_date, draft.end_date, draft.program_location_id, program.organization_id, program.term]);
+    // early_release_start_time is a dependency for the same reason: typing it
+    // changes the count this preview is about to hand to the save.
+  }, [draft.schedule_mode, draft.day_of_week, draft.first_session_date, draft.end_date, draft.program_location_id, draft.early_release_start_time, program.organization_id, program.term]);
 
   function set(field, value) {
     setDraft((d) => ({ ...d, [field]: value }));
@@ -1816,6 +1826,14 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
       // Listing on the public reg page needs somewhere to send families.
       if (draft.runs_own_registration && draft.list_in_public_catalog && !draft.external_registration_url?.trim()) {
         throw new Error("Add the partner's registration link before listing it on your public page.");
+      }
+      // An early-release class that ends before it starts reaches a parent as
+      // "Class is 2:00–12:00 PM" and reaches their calendar as a VEVENT with the
+      // end before the start, which RFC 5545 forbids. Same check the calendar
+      // screen makes, so the two editors cannot disagree. Code-review finding #3.
+      if (draft.early_release_start_time && draft.early_release_end_time
+          && durationMinutes(draft.early_release_start_time, draft.early_release_end_time) === null) {
+        throw new Error("The early-release end time must be after the start time.");
       }
       const patch = {
         // The class weekday is the operator's choice in BOTH modes.

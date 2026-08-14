@@ -189,6 +189,30 @@ export default function EarlyReleaseChoice({ org, districtId, districtText, dist
           .eq("organization_id", org.id);
         if (error) throw error;
       }
+      // RANGE PROGRAMS MATERIALIZE THEIR SESSION COUNT, so changing whether the
+      // early-release dates count as meetings changes that number. Writing the
+      // times without re-deriving it leaves the row asserting N-k sessions while
+      // the dates say N, and the schedule then stops k weeks early. Count-mode
+      // programs are untouched: their count is what the operator typed.
+      // Code-review finding #2.
+      const rangeIds = rows
+        .filter((r) => r.schedule_mode === "range" && values[r.program_id])
+        .map((r) => r.program_id);
+      for (const id of rangeIds) {
+        const { data: n, error: cErr } = await supabase.rpc("compute_range_session_count", { p_program_id: id });
+        if (cErr || !Number.isFinite(n) || n < 1) {
+          // Do not write a count we could not compute. The drift check already
+          // flags a stale one on the Scheduled Programs row, which is a visible
+          // state; a guessed number is not.
+          console.error("[EarlyReleaseChoice] range count re-derive failed", { id, cErr, n });
+          continue;
+        }
+        const { error: uErr } = await supabase
+          .from("programs").update({ session_count: n })
+          .eq("id", id).eq("organization_id", org.id);
+        if (uErr) console.error("[EarlyReleaseChoice] range count write failed", { id, uErr });
+      }
+
       const setCount = Object.values(values).filter((v) => (v.start ?? "") !== "").length;
       setSavedCount(setCount);
       setClearedCount(clearing ? Object.keys(values).length : Object.values(values).filter((v) => (v.start ?? "") === "").length);
@@ -204,6 +228,27 @@ export default function EarlyReleaseChoice({ org, districtId, districtText, dist
   }
 
   function saveList() {
+    // END MUST FOLLOW START. Nothing checked a hand-typed pair: the derivation
+    // refuses a backwards one, but typing 12:45 then 12:00 -- or accepting the
+    // auto-filled 1:45 and then editing the start down to 2:00 -- saved both.
+    // That reaches a parent as "Class is 2:00–12:00 PM on this date" and reaches
+    // their calendar as a VEVENT that ends before it starts, which RFC 5545
+    // forbids and clients place unpredictably. Code-review finding #3.
+    //
+    // Blocks the save rather than silently dropping the end, because a dropped
+    // end would quietly turn a typo into "we don't know when it finishes".
+    const bad = rows.filter((r) => {
+      const d = draft[r.program_id] ?? {};
+      return d.start && d.end && durationMinutes(d.start, d.end) === null;
+    });
+    if (bad.length > 0) {
+      setSaveError(
+        bad.length === 1
+          ? `${bad[0].curriculum || "That class"} ends before it starts. Check its times.`
+          : `${bad.length} classes end before they start. Check their times.`
+      );
+      return;
+    }
     const values = {};
     for (const r of rows) {
       const d = draft[r.program_id] ?? { start: "", end: "" };
