@@ -1,29 +1,24 @@
--- public_read_districts let ANY authenticated operator read EVERY active org's
--- districts. Its USING clause is
---   organization_id IN (SELECT id FROM public_org_directory)
--- and public_org_directory is every org with status='active' — so the predicate
--- is "belongs to any live tenant", not "belongs to yours". Postgres ORs policies
--- together, so this quietly overrode the org-scoped org_access_districts sitting
--- beside it.
+-- Drops public_read_districts. SUPERSEDED IN THE SAME PASS by 20260813d, which
+-- recreates it scoped `to anon`. Both are applied; read them as one change.
 --
--- MEASURED, not reasoned: on staging an operator whose org owns 1 district could
--- read all 8. After this migration the same request returns 1.
+-- WHY IT IS SPLIT RATHER THAN REWRITTEN: this one was applied to prod before I
+-- understood the policy, and rewriting an applied migration to look like it was
+-- always right would hide the sequence that actually ran. It ran, it was wrong
+-- for four minutes, and 20260813d fixed it.
 --
--- THIS MUST SHIP WITH 20260813b, NOT AFTER IT. The two are one change. The grant
--- alone would widen this leak from (id, name, organization_id) — all the
--- column-level grants exposed — to the whole row, including calendar_key,
--- flyer_distribution and flyer_notes. On PROD the grant alone is worse still,
--- because prod has no column grants at all today, so the leak is currently
--- unreachable there and the grant would open it.
+-- WHAT WAS ACTUALLY WRONG. public_read_districts is `to public`, which includes
+-- `authenticated`. Postgres ORs policies together, so it overrode the org-scoped
+-- org_access_districts beside it and any operator could read every active org's
+-- districts. Measured on staging: an operator owning 1 district could read all 8.
 --
--- DROPPED RATHER THAN NARROWED because nothing needs it: every reader of
--- districts in the repo is under /admin (ProgramWizardNew, AddSchoolModal,
--- SchoolsList, VenueEditor, CalendarsList, LocationsList), and no edge function
--- reads the table at all. There is no public or parent-facing surface for a
--- "public read" policy to serve.
+-- WHAT I GOT WRONG. I concluded the policy served nothing, because I grepped for
+-- `.from("districts")` and found only /admin callers. The public registration
+-- catalog reads it as a POSTGREST EMBED —
+--   program_locations?select=...,districts(name)
+-- — which never contains the string I searched for. 20260806d states this in its
+-- own header, which I had not read at that point. Dropping the policy broke the
+-- district grouping on every public catalog until 20260813d restored it.
 --
--- org_access_districts (check_org_access(organization_id)) remains and is the
--- correct rule. anon keeps its inert column grants on staging; with no policy
--- left it reads zero rows, which is what nothing-asks-for should look like.
+-- The defect was the ROLE, not the policy. Grep finds; reading confirms.
 
 drop policy if exists public_read_districts on public.districts;
