@@ -237,7 +237,14 @@ export default function ProgramsCalendar() {
     // over a stale number. Refetch THIS one program's schedule and merge it so the row
     // reflects the save immediately (honest state). Only when a schedule-affecting field
     // actually changed, to avoid a needless round-trip on price/room/capacity edits.
-    const SCHEDULE_KEYS = ["first_session_date", "session_count", "end_date", "schedule_mode", "program_location_id", "day_of_week"];
+    // early_release_start_time belongs here: setting it ADDS the occasional
+    // early-release dates back as real sessions and clearing it removes them
+    // again, so it changes the derived list exactly as much as day_of_week does.
+    // Found by clicking it on staging -- the save succeeded, the row said
+    // "Saved", and the dates underneath still showed 16 Sep struck through until
+    // a full page reload. That is the stale-number-under-a-tick this list exists
+    // to prevent. The end time rides along so a pair set together is one refetch.
+    const SCHEDULE_KEYS = ["first_session_date", "session_count", "end_date", "schedule_mode", "program_location_id", "day_of_week", "early_release_start_time", "early_release_end_time"];
     if (SCHEDULE_KEYS.some((k) => k in patch)) {
       // A schedule save re-materializes session_count from the CURRENT calendars,
       // so this program is drift-free by construction now — clear any stale flag
