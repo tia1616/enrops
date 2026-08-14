@@ -154,13 +154,33 @@ for (const [path, why] of MUST_STAY_GUARDED) {
 // it prints, so the gap stays visible on every run instead of living in a chat
 // log nobody rereads.
 // ---------------------------------------------------------------------------
-const KNOWN_OPEN_FINDINGS = ['schedule', 'instructors', 'availability', 'class-reports', 'payouts'];
+// CLOSED 2026-08-13. All five entries this list shipped with are resolved, so it
+// is empty rather than deleted — the mechanism is worth keeping for the next
+// finding, and an empty list is the honest state.
+//
+// Four of them (schedule, instructors, availability, class-reports — plus
+// schedule/print and pay-rates, never listed) are now wrapped in InstructorRoute.
+// `payouts` was listed wrongly: its hole was the ROLE one, staff/viewer reading
+// pay, and that is closed at the nav layer by giving the tabless Money item a
+// `match` so the viewMoney block card fires. It is not hidden by
+// canManageInstructors at all, so both halves of the note were false for it.
+//
+// THIS LIST NEEDS THE SAME BOTH-DIRECTIONS CHECK AS BARE_ROUTES, which is the
+// lesson: the file already asserts "a ledger entry may not outlive the thing it
+// describes" for BARE_ROUTES, and then carried a second list with no such guard —
+// so it spent a commit printing a fixed gap as if it were open. The assertion
+// below is that guard.
+const KNOWN_OPEN_FINDINGS = [];
+const staleFindings = KNOWN_OPEN_FINDINGS.filter((p) => !bare.includes(p));
+ok(staleFindings.length === 0,
+  'KNOWN_OPEN_FINDINGS has no stale entries',
+  `these are no longer bare — remove them: ${staleFindings.join(', ')}`);
 const stillOpen = KNOWN_OPEN_FINDINGS.filter((p) => bare.includes(p));
 if (stillOpen.length) {
-  console.log(`\nNOTE  ${stillOpen.length} instructor/money surfaces are hidden from lean nav by`);
-  console.log(`      canManageInstructors but remain reachable by URL: ${stillOpen.join(', ')}`);
-  console.log(`      Reported by /code-review 2026-08-13. Guard them, or decide they are fine`);
-  console.log(`      and delete this block. Not failing the build — pre-existing, not a regression.`);
+  console.log(`\nNOTE  ${stillOpen.length} surface(s) reported by /code-review remain reachable by URL:`);
+  console.log(`      ${stillOpen.join(', ')}`);
+  console.log(`      Guard them, or decide they are fine and remove them from the list.`);
+  console.log(`      Not failing the build — recorded so the gap stays visible.`);
 }
 
 console.log(`\n${routes.length} admin routes: ${guarded.length} guarded, ${bare.length} bare, ${routes.length - guarded.length - bare.length} redirects`);

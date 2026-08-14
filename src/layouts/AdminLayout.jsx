@@ -263,7 +263,18 @@ function shapeNavForOrg(nav, org) {
           // worked but added the 12th and 13th hardcoded path literal to this
           // function, and a fourth Money tab added to NAV would silently not join
           // this list — reopening the exact hole this line closes.
-          : { ...rest, label: "Payments", match: item.tabs.map((t) => t.to) },
+          // DISCOUNTS IS EXCLUDED, the same way the canInstructors arm one line
+          // above excludes it. It is pushed as its OWN top-level item on the next
+          // line, so claiming it here lit both sidebar entries at once on
+          // /admin/discounts and partly undid the promotion. The hand-written
+          // list this replaced excluded it deliberately; deriving from item.tabs
+          // silently put it back. Same filter, one source, no hardcoded paths —
+          // a fourth Money tab still joins automatically.
+          : {
+              ...rest,
+              label: "Payments",
+              match: item.tabs.filter((t) => t.to !== "/admin/discounts").map((t) => t.to),
+            },
       );
       out.push({ to: "/admin/discounts", label: "Discounts", gate: "viewMoney" });
       continue;

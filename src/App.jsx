@@ -171,13 +171,24 @@ function InstructorDocsRoute({ children }) {
 // card no matter what it matches. So Schedule, the roster, availability and class
 // reports were all reachable by URL for an org that is not entitled to them.
 //
-// Sends them to Programs rather than Settings: an org without instructor
-// management has nothing to configure there either, so Settings would be a second
-// dead end. Same three-line shape as CommsTabRoute and InstructorDocsRoute.
+// WHERE IT SENDS THEM IS PER-ORG, and hardcoding /admin/programs was wrong for
+// exactly the orgs most likely to hit this. An org that brings its own
+// registration has "Scheduled programs" greyed out with
+// offReason: "You bring your own registration — use Class schedule instead."
+// (AdminLayout marks a tab not-applicable on `t.regOnly && !usesReg`). So the
+// redirect landed them on a page whose own tab tells them to go somewhere else —
+// a second dead end, which is the thing the first draft of this comment claimed
+// it was avoiding. Two of seven prod orgs match that shape today
+// (mrs-richelle, shoreview-chess: enrops_platform, uses_enrops_registration
+// false). /admin is not a fallback either — HIDE_TOP drops it for lean orgs and
+// AdminOverview redirects it back to Programs.
+//
+// Picks the same way the nav does, off the same column, so the two cannot
+// disagree. Same three-line shape as CommsTabRoute and InstructorDocsRoute.
 function InstructorRoute({ children }) {
   const { org } = useOutletContext();
   if (canManageInstructors(org)) return children;
-  return <Navigate to="/admin/programs" replace />;
+  return <Navigate to={org?.uses_enrops_registration ? "/admin/programs" : "/admin/class-schedule"} replace />;
 }
 
 export default function App() {
