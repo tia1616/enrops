@@ -286,6 +286,9 @@ export default function CalendarsList() {
                     // existed still matches on.
                     districtText={cal?.district ?? row.calendarKey ?? row.label}
                     districtLabel={row.label}
+                    // Clicked "Class times" vs appeared after a save. Only
+                    // governs whether "nothing to set here" is said out loud.
+                    explicit={!!erPrompt.explicit}
                     onDone={async ({ changed }) => {
                       setErPrompt(null);
                       // Session dates just moved for these classes, so the
@@ -327,7 +330,7 @@ export default function CalendarsList() {
                     isViewing={viewing.has(row.key)}
                     onToggleView={() => toggleViewing(row.key)}
                     onEdit={() => setEditing({ key: row.key })}
-                    onEditEarlyRelease={() => setErPrompt({ key: row.key })}
+                    onEditEarlyRelease={() => setErPrompt({ key: row.key, explicit: true })}
                   />
                 )}
               </div>

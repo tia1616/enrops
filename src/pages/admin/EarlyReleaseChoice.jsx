@@ -50,12 +50,25 @@ const timeInput = {
   fontSize: 13.5, fontFamily: "inherit", color: INK, width: 130,
 };
 
-export default function EarlyReleaseChoice({ org, districtId, districtText, districtLabel, onDone }) {
+// `explicit` = the operator CLICKED "Class times", rather than this appearing by
+// itself after a calendar save. It changes only one thing: what happens when no
+// class is affected. Auto-closing is right for the automatic entry (there was
+// nothing to ask, so say nothing); for a deliberate click it is a dead end —
+// the row flickers and nothing else happens, and clicking again does the same.
+// Same standard the training toggle states: a control that refuses has to say
+// what to do instead.
+export default function EarlyReleaseChoice({ org, districtId, districtText, districtLabel, explicit = false, onDone }) {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [rows, setRows] = useState([]);          // from the RPC, untouched
   const [draft, setDraft] = useState({});        // { [program_id]: { start, end } } as 24h input values
   const [step, setStep] = useState("ask");       // ask | scope | time | list | clearConfirm | done
+  // Where Cancel on the clear-confirmation should return to. Hardcoding "ask"
+  // was right while that screen had one entrance; it now has two, and sending a
+  // list-editor back to the first question strands their per-row edits behind a
+  // bulk flow that would overwrite every row with one time — the exact failure
+  // the editable list exists to prevent.
+  const [clearFrom, setClearFrom] = useState("ask");
   const [bulk, setBulk] = useState({ start: "", end: "" });
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
@@ -109,10 +122,10 @@ export default function EarlyReleaseChoice({ org, districtId, districtText, dist
   // and leaving a blank space where the district's row should be. A calendar
   // can have early-release days that land on no class's weekday at all.
   useEffect(() => {
-    if (!loading && !loadError && rows.length === 0) onDone?.({ changed: false });
+    if (!loading && !loadError && rows.length === 0 && !explicit) onDone?.({ changed: false });
     // onDone is intentionally out of the deps: a parent that recreates the
     // callback each render would turn this into a loop.
-  }, [loading, loadError, rows.length]);
+  }, [loading, loadError, rows.length, explicit]);
 
   const alreadySet = rows.filter((r) => (r.early_release_start_time ?? "").trim() !== "");
   const dateCount = rows.reduce((max, r) => Math.max(max, r.exception_count ?? 0), 0);
@@ -269,6 +282,7 @@ export default function EarlyReleaseChoice({ org, districtId, districtText, dist
       onDone?.({ changed: false });
       return;
     }
+    setClearFrom("ask");
     setStep("clearConfirm");
   }
 
@@ -300,10 +314,29 @@ export default function EarlyReleaseChoice({ org, districtId, districtText, dist
     );
   }
 
-  // Nothing to ask. The calendar may still have early-release days -- they just
-  // do not land on any class's weekday, or they are that location's normal
-  // schedule and were never skipped.
-  if (rows.length === 0) return null;
+  // Nothing to ask. Two ordinary reasons, both real customer data: the district's
+  // early-release days fall on a weekday this provider does not teach (LOSD
+  // releases Thursdays, he runs Mon/Tue/Wed), or the weekday is early-release
+  // EVERY week all year, which is that location's normal schedule and was never
+  // skipped in the first place (the 16 Jul rule).
+  //
+  // Clicked deliberately -> say so. Appeared by itself -> the effect above has
+  // already handed control back.
+  if (rows.length === 0) {
+    if (!explicit) return null;
+    return shell(
+      <>
+        <div style={{ fontSize: 17, fontWeight: 700, color: INK }}>Nothing to set for {districtLabel}</div>
+        <div style={{ fontSize: 14, color: INK, lineHeight: 1.55 }}>
+          None of your classes at these schools meet on a day {districtLabel} releases early, so there is no time to set.
+        </div>
+        <div style={{ fontSize: 13, color: MUTED, lineHeight: 1.5 }}>
+          That happens when the early-release days fall on a weekday you don&rsquo;t teach, or when the day is early release <em>every</em> week &mdash; in which case your class already keeps its normal spot and only its time needs to suit the earlier finish.
+        </div>
+        <div><button type="button" style={btnPlain} onClick={() => onDone?.({ changed: false })}>Close</button></div>
+      </>
+    );
+  }
 
   if (step === "done") {
     return shell(
@@ -339,7 +372,9 @@ export default function EarlyReleaseChoice({ org, districtId, districtText, dist
           <button type="button" style={btnPrimary} disabled={saving} onClick={confirmClear}>
             {saving ? "Clearing…" : "Yes, clear them"}
           </button>
-          <button type="button" style={btnPlain} disabled={saving} onClick={() => setStep("ask")}>Cancel</button>
+          {/* Back where they actually were, so a misclick from the list does not
+              discard the edits sitting in it. */}
+          <button type="button" style={btnPlain} disabled={saving} onClick={() => setStep(clearFrom)}>Cancel</button>
         </div>
       </>
     );
@@ -480,7 +515,7 @@ export default function EarlyReleaseChoice({ org, districtId, districtText, dist
             type="button"
             style={{ ...btnPlain, marginLeft: "auto", color: "#991b1b", borderColor: "#fecaca" }}
             disabled={saving}
-            onClick={() => setStep("clearConfirm")}
+            onClick={() => { setClearFrom("list"); setStep("clearConfirm"); }}
           >
             We don&rsquo;t teach on these days
           </button>
