@@ -1,0 +1,42 @@
+-- districts: grant table-level SELECT to authenticated.
+--
+-- REPORTED BY A LIVE TENANT. Jeff opened Locations -> School calendar and got
+-- "Couldn't load: permission denied for table districts". Reproduced on staging
+-- through PostgREST with a real operator JWT, with a control:
+--
+--   select=id,name,calendar_key  -> 403 {"code":"42501", ...}   <- the page
+--   select=id,name               -> 200                          <- control
+--
+-- THE CAUSE IS COLUMN-LEVEL GRANTS, which is why it looked like a policy problem
+-- and is not. `districts` was granted SELECT on three COLUMNS
+-- (id, name, organization_id) rather than on the table. CalendarsList asks for
+-- `id, name, calendar_key`, and calendar_key was never in that set — so Postgres
+-- refuses the whole statement before RLS is ever consulted, which is why the
+-- error is a flat 42501 rather than an empty result.
+--
+-- Two things this cost, worth writing down:
+--   * information_schema.role_table_grants shows nothing for a column-level
+--     grant, so the table read as "no SELECT at all" — and a first look at PROD
+--     agreed with that and was wrong about the reason.
+--   * has_table_privilege('authenticated','public.districts','SELECT') returns
+--     FALSE when the privilege is held per-column, so it disagrees with an API
+--     call that actually succeeds. Neither is a lie; they answer different
+--     questions. The only trustworthy check was the request itself.
+--
+-- PROD IS WORSE, not the same: it has no column grants either, so every select
+-- on districts fails there, not just ones naming calendar_key.
+--
+-- WHY TABLE-LEVEL AND WHY ONLY `authenticated`:
+--   * Table-level, because enumerating columns is what broke this. The next
+--     column added would repeat it silently, and nothing in the app reads
+--     districts expecting a subset.
+--   * authenticated only. The two RLS policies already scope rows —
+--     org_access_districts (check_org_access) and public_read_districts (org in
+--     public_org_directory) — so this grants no row an operator could not
+--     already be shown. anon deliberately keeps its existing three columns:
+--     widening it to the table would newly expose flyer_distribution and
+--     flyer_notes to anonymous visitors, which nothing asks for.
+--   * Mirrors program_locations, the sibling table on this same page, which is
+--     table-level SELECT for authenticated and nothing for anon.
+
+grant select on public.districts to authenticated;

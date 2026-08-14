@@ -1,0 +1,29 @@
+-- public_read_districts let ANY authenticated operator read EVERY active org's
+-- districts. Its USING clause is
+--   organization_id IN (SELECT id FROM public_org_directory)
+-- and public_org_directory is every org with status='active' — so the predicate
+-- is "belongs to any live tenant", not "belongs to yours". Postgres ORs policies
+-- together, so this quietly overrode the org-scoped org_access_districts sitting
+-- beside it.
+--
+-- MEASURED, not reasoned: on staging an operator whose org owns 1 district could
+-- read all 8. After this migration the same request returns 1.
+--
+-- THIS MUST SHIP WITH 20260813b, NOT AFTER IT. The two are one change. The grant
+-- alone would widen this leak from (id, name, organization_id) — all the
+-- column-level grants exposed — to the whole row, including calendar_key,
+-- flyer_distribution and flyer_notes. On PROD the grant alone is worse still,
+-- because prod has no column grants at all today, so the leak is currently
+-- unreachable there and the grant would open it.
+--
+-- DROPPED RATHER THAN NARROWED because nothing needs it: every reader of
+-- districts in the repo is under /admin (ProgramWizardNew, AddSchoolModal,
+-- SchoolsList, VenueEditor, CalendarsList, LocationsList), and no edge function
+-- reads the table at all. There is no public or parent-facing surface for a
+-- "public read" policy to serve.
+--
+-- org_access_districts (check_org_access(organization_id)) remains and is the
+-- correct rule. anon keeps its inert column grants on staging; with no policy
+-- left it reads zero rows, which is what nothing-asks-for should look like.
+
+drop policy if exists public_read_districts on public.districts;
