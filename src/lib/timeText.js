@@ -26,6 +26,44 @@ export function formatTimeText(t) {
   return m === 0 ? `${hr12}${ampm}` : `${hr12}:${String(m).padStart(2, "0")}${ampm}`;
 }
 
+// "12:45pm-1:45pm", or just the start when no end is known.
+//
+// A PARENT NEEDS THE WHOLE WINDOW, not the start. Jessica, 14 Aug: "it can't
+// just say 'early release 12:45'. it has to say class today is 12:45-1:45."
+// A start time alone tells someone when to drop off and leaves them guessing
+// the one thing they actually came to the page for -- when to collect.
+export function formatTimeRange(startText, endText) {
+  const s = formatTimeText(startText);
+  if (!s) return "";
+  const e = formatTimeText(endText);
+  return e ? `${s}–${e}` : s;
+}
+
+// Minutes between two stored times, or null when either is unparseable.
+export function durationMinutes(startText, endText) {
+  const s = to24h(startText);
+  const e = to24h(endText);
+  if (!s || !e) return null;
+  const [sh, sm] = s.split(":").map(Number);
+  const [eh, em] = e.split(":").map(Number);
+  const mins = (eh * 60 + em) - (sh * 60 + sm);
+  // A class never runs backwards or crosses midnight. Anything else is bad data
+  // and must not silently become a negative or day-long duration.
+  return mins > 0 && mins < 24 * 60 ? mins : null;
+}
+
+// "12:45" + 60 -> "13:45", as an <input type="time"> value. Clamps rather than
+// wrapping past midnight: an after-school class that would run to 00:15 is bad
+// input, and wrapping would put the end BEFORE the start.
+export function addMinutes24h(hhmm, mins) {
+  if (!hhmm || !Number.isFinite(mins)) return "";
+  const [h, m] = hhmm.split(":").map(Number);
+  if (Number.isNaN(h) || Number.isNaN(m)) return "";
+  const total = h * 60 + m + mins;
+  if (total >= 24 * 60 || total < 0) return "";
+  return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
+}
+
 // Stored text -> "HH:MM" for an <input type="time">. Returns "" for anything
 // unparseable, which leaves the input empty rather than showing a broken value.
 export function to24h(t) {

@@ -2346,8 +2346,11 @@ function AfterschoolAssignmentCard({ assignment, coInstructors = [], schedule = 
                             time. Said on the row, because this list is what an
                             instructor checks before a shift. */}
                         {x.reason === "Early release" && (
-                          <span style={{ color: "#a16207", fontStyle: "italic" }}>
-                            {" · early release"}{x.session_time ? ` ${x.session_time}` : ""}
+                          <span style={{ color: "#a16207", fontWeight: 600 }}>
+                            {" · early release — "}
+                            {x.session_time
+                              ? `${x.session_time}${x.session_end_time ? `–${x.session_end_time}` : ""}`
+                              : "earlier"}
                           </span>
                         )}
                       </span>

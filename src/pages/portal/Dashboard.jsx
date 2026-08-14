@@ -803,8 +803,10 @@ function ScheduleTab({ enrollments }) {
                             above. Said on the row itself because a parent reads
                             the date, not the header, when working out pickup. */}
                         {row.reason === 'Early release' && (
-                          <p className="text-xs text-j2s-ink/60">
-                            Early release{row.session_time ? ` · starts ${fmtTime(row.session_time)}` : ''}
+                          <p className="text-xs font-semibold text-j2s-ink/70">
+                            {row.session_time
+                              ? `Early release — class is ${fmtTime(row.session_time)}${row.session_end_time ? `–${fmtTime(row.session_end_time)}` : ''}`
+                              : 'Early release'}
                           </p>
                         )}
                       </div>

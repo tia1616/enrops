@@ -25,6 +25,10 @@ import { buildCatalogUrl } from "../../../lib/regLinks.js";
 import { fetchOrgTerms, formatTermLabel } from "../../../lib/terms.js";
 import { getPermissions } from "../../../lib/permissions.js";
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
+// Only the two helpers this file does not already have of its own. Its local
+// to24h/to12hText/formatTime stay as they are — swapping them out is a separate
+// change with its own blast radius across a 3,000-line file.
+import { durationMinutes, addMinutes24h } from "../../../lib/timeText.js";
 import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib/programText.js";
 import { GRADE_OPTIONS, audienceMode, audiencePatch, rangeBackwards, rangeBackwardsMessage } from "../../../lib/grades.js";
 import {
@@ -2158,7 +2162,18 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
               <input
                 type="time"
                 value={draft.early_release_start_time ?? ""}
-                onChange={(e) => set("early_release_start_time", e.target.value)}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  set("early_release_start_time", v);
+                  // Fill the end from the class's usual length, but only when it
+                  // is blank — a parent needs the whole window, and nobody should
+                  // have to work out 12:45 + 60 minutes themselves. Never
+                  // overwrites an end that was typed.
+                  if (v && !draft.early_release_end_time) {
+                    const mins = durationMinutes(program.start_time, program.end_time);
+                    if (mins) set("early_release_end_time", addMinutes24h(v, mins));
+                  }
+                }}
                 style={expandInputStyle}
               />
             </ExpandField>
@@ -2882,8 +2897,9 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, onScheduleChan
             // instructor turns up an hour late.
             <div key={`${x.date}-s-${idx}`} style={{ color: INK, fontSize: 13, fontVariantNumeric: "tabular-nums" }}>
               {formatSessionDate(x.date)}
-              <span style={{ color: AMBER, fontStyle: "italic" }}>
-                {" · early release"}{x.session_time ? ` ${formatTime(x.session_time)}` : ""}
+              <span style={{ color: AMBER, fontWeight: 600 }}>
+                {" · early release "}
+                {formatTime(x.session_time)}{x.session_end_time ? `–${formatTime(x.session_end_time)}` : ""}
               </span>
             </div>
           ) : (

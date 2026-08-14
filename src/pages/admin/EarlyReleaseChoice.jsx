@@ -27,7 +27,7 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
-import { formatTimeText, to24h, to12hText } from "../../lib/timeText";
+import { formatTimeText, formatTimeRange, to24h, to12hText, durationMinutes, addMinutes24h } from "../../lib/timeText";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -107,18 +107,44 @@ export default function EarlyReleaseChoice({ org, districtId, districtText, dist
   const alreadySet = rows.filter((r) => (r.early_release_start_time ?? "").trim() !== "");
   const dateCount = rows.reduce((max, r) => Math.max(max, r.exception_count ?? 0), 0);
 
+  // The end time this class WOULD have if it kept its usual length, starting at
+  // `start24`. A parent needs the whole window, not the start, so an end is
+  // filled in for them rather than left to be typed 13 times — and a class that
+  // normally runs 2:35-3:35 starting at 12:45 ends at 1:45, which is almost
+  // always right. Still editable; this only fills a BLANK.
+  function derivedEnd(row, start24) {
+    if (!start24) return "";
+    const mins = durationMinutes(row.start_time, row.end_time);
+    return mins ? addMinutes24h(start24, mins) : "";
+  }
+
   function setRowField(id, field, value) {
     // Writes ONE field of ONE row onto what we already hold, rather than
     // rebuilding the map from the inputs on screen. Same reason the document
     // toggle does: rebuilding drops anything this render does not know about.
-    setDraft((d) => ({ ...d, [id]: { ...(d[id] ?? { start: "", end: "" }), [field]: value } }));
+    setDraft((d) => {
+      const cur = d[id] ?? { start: "", end: "" };
+      const next = { ...cur, [field]: value };
+      // Typing a start fills the end IF it is empty. Never overwrites an end the
+      // operator typed, and clearing the start does not wipe their end either.
+      if (field === "start" && value && !cur.end) {
+        const row = rows.find((r) => r.program_id === id);
+        if (row) next.end = derivedEnd(row, value);
+      }
+      return { ...d, [id]: next };
+    });
   }
 
   function applyBulkAndContinue() {
     setDraft((d) => {
       const next = { ...d };
       for (const r of rows) {
-        next[r.program_id] = { start: bulk.start, end: bulk.end };
+        // Per row, not one shared end: two classes can start at the same time on
+        // an early-release day and still run different lengths.
+        next[r.program_id] = {
+          start: bulk.start,
+          end: bulk.end || derivedEnd(r, bulk.start),
+        };
       }
       return next;
     });
@@ -317,7 +343,7 @@ export default function EarlyReleaseChoice({ org, districtId, districtText, dist
             <input type="time" style={timeInput} value={bulk.start} onChange={(e) => setBulk((b) => ({ ...b, start: e.target.value }))} />
           </label>
           <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12.5, fontWeight: 600, color: INK }}>
-            Ends <span style={{ fontWeight: 400, color: MUTED }}>(optional)</span>
+            Ends <span style={{ fontWeight: 400, color: MUTED }}>(we'll match your usual length)</span>
             <input type="time" style={timeInput} value={bulk.end} onChange={(e) => setBulk((b) => ({ ...b, end: e.target.value }))} />
           </label>
         </div>
@@ -356,7 +382,7 @@ export default function EarlyReleaseChoice({ org, districtId, districtText, dist
                   <div style={{ flex: "1 1 220px", minWidth: 0 }}>
                     <div style={{ fontSize: 13.5, fontWeight: 600, color: INK }}>{r.curriculum || "Class"}</div>
                     <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>
-                      Normally {r.day_of_week ?? "weekly"} {formatTimeText(r.start_time) || "—"}
+                      Normally {r.day_of_week ?? "weekly"} {formatTimeRange(r.start_time, r.end_time) || "—"}
                       {" · "}
                       {r.exception_count} early-release {r.exception_count === 1 ? "day" : "days"}
                     </div>
