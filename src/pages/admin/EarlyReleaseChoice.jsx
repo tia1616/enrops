@@ -307,7 +307,9 @@ export default function EarlyReleaseChoice({ org, districtId, districtText, dist
       <>
         <div style={{ fontSize: 17, fontWeight: 700, color: INK }}>What time do your classes start on those days?</div>
         <div style={{ fontSize: 13, color: MUTED, lineHeight: 1.5 }}>
-          This fills in all {rows.length}. You can change any of them on the next screen.
+          {rows.length === 1
+            ? "You can change it on the next screen."
+            : `This fills in all ${rows.length}. You can change any of them on the next screen.`}
         </div>
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "flex-end" }}>
           <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 12.5, fontWeight: 600, color: INK }}>
