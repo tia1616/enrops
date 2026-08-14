@@ -12,6 +12,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
+import EarlyReleaseChoice from "./EarlyReleaseChoice.jsx";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -85,6 +86,11 @@ export default function CalendarsList() {
   const [calendars, setCalendars] = useState([]); // district_calendars rows for current school year
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null); // { key } | null
+  // Shown in the district's row straight after its calendar is saved, when that
+  // calendar has occasional early-release days landing on a class's weekday.
+  // Asked here rather than buried in Scheduled Programs because this is the
+  // moment the dates arrive and the operator has the context in front of them.
+  const [erPrompt, setErPrompt] = useState(null); // { key } | null
   const [viewing, setViewing] = useState(() => new Set()); // row keys currently showing their dates inline
   const [topError, setTopError] = useState(null);
 
@@ -270,7 +276,24 @@ export default function CalendarsList() {
             const isEditing = editing?.key === row.key;
             return (
               <div key={row.key}>
-                {isEditing ? (
+                {erPrompt?.key === row.key ? (
+                  <EarlyReleaseChoice
+                    org={org}
+                    districtId={row.districtId}
+                    // Both keys, for the same reason the calendar row itself
+                    // carries both: district_id is the structured link, and the
+                    // free-text string is what a school linked before districts
+                    // existed still matches on.
+                    districtText={cal?.district ?? row.calendarKey ?? row.label}
+                    districtLabel={row.label}
+                    onDone={async ({ changed }) => {
+                      setErPrompt(null);
+                      // Session dates just moved for these classes, so the
+                      // counts on this page are stale.
+                      if (changed) await loadAll();
+                    }}
+                  />
+                ) : isEditing ? (
                   <CalendarEditor
                     org={org}
                     districtId={row.districtId}
@@ -281,6 +304,10 @@ export default function CalendarsList() {
                     onClose={() => setEditing(null)}
                     onSaved={async (savedSchoolYear) => {
                       setEditing(null);
+                      // Ask the early-release question now. The component works
+                      // out whether there is anything to ask and closes itself
+                      // if not, so this never leaves an empty row behind.
+                      setErPrompt({ key: row.key });
                       // Jump the dropdown to the year just saved so the new
                       // row shows up immediately. No-op if it already matches.
                       if (savedSchoolYear && savedSchoolYear !== schoolYear) {
