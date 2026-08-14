@@ -151,8 +151,12 @@ const NAV = [
 
 // Lean registration operators (instructor_pay_model === 'enrops_platform') run a
 // registration-only surface — no instructors, curriculum library, or comms yet.
-// Trim the sidebar to Home . Programs . Finances . Discounts . Settings and hide
-// the paid / curriculum surfaces. Locations (the /admin/schools surface) is a TAB
+// Trim the sidebar to Programs . Money . Comms . Settings and hide the paid /
+// curriculum surfaces. (This line used to read "Home . Programs . Finances .
+// Discounts . Settings" and was wrong on three counts by 14 Aug: Home is in
+// HIDE_TOP below, Comms is no longer hidden, and Discounts went back to being a
+// Money tab rather than a top-level item of its own.)
+// Locations (the /admin/schools surface) is a TAB
 // under Programs for lean ops — they pick a venue every time they build a class,
 // so it belongs beside the programs it serves and not in Settings, where it
 // briefly lived. Any legacy_own_platform tenant (J2S) keeps the
@@ -623,14 +627,13 @@ export default function AdminLayout() {
   const activeTabSection = navItems.find(
     (it) => it.tabs && it.tabs.some((t) => location.pathname === t.to || location.pathname.startsWith(t.to + "/"))
   );
-  // ...and only when the tab for THIS page is one the tenant can actually see.
-  // A page whose own tab is hidden (typed as a URL) would otherwise render a
-  // strip with nothing lit in it — the same "nothing lit, no way back" shape
-  // Jessica hit on Cascade, arrived at from the other direction. tabApplies is
-  // the shared rule, so the strip can't disagree with the sidebar about it.
+  // DELIBERATELY NOT filtered by tabApplies. Landing on a page whose own tab is
+  // hidden (only reachable by typing the URL — navLandingTo stops every click
+  // from doing it) shows a strip with nothing lit, which reads oddly. Hiding the
+  // strip there is worse: it also removes the tabs that DO apply, which are the
+  // way back out. The odd-looking strip is the escape hatch.
   const showSectionTabs =
-    activeTabSection &&
-    activeTabSection.tabs.some((t) => location.pathname === t.to && tabApplies(t, org));
+    activeTabSection && activeTabSection.tabs.some((t) => location.pathname === t.to);
 
   // Page column: sidebar+content grid on top, legal footer underneath it. The
   // footer is a PAGE footer - it must span the full width below both the sidebar

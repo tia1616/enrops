@@ -597,6 +597,16 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
   const [replaceArmed, setReplaceArmed] = useState(false);
   const [templateCopied, setTemplateCopied] = useState(false);
 
+  // ONE definition of "is the template button the apply-it one or the read-it
+  // one", because the button, its panel and the empty-state banner all have to
+  // agree about which control exists right now. The banner used to hardcode
+  // "Start from a template" and went on saying it after the button had become
+  // "View template" — copy naming a control that is not on screen.
+  const templateApplies = editing && !body.trim();
+  const templateButtonLabel = templateApplies
+    ? "Start from a template"
+    : templateOpen ? "Hide template" : "View template";
+
   function closeTemplate() {
     setTemplateOpen(false);
     setReplaceArmed(false);
@@ -704,9 +714,22 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
               screen — the same untrue-pointer bug fixed twice elsewhere today.
               Only visible in the empty state, which is exactly the state a
               provider setting up for the first time is in. */}
-          Nothing published yet, so your instructors see an empty step. Use{" "}
-          <strong>Start from a template</strong> for a skeleton in square brackets, then replace
-          every bracket with your own wording.{" "}
+          Nothing published yet, so your instructors see an empty step.{" "}
+          {templateApplies ? (
+            <>
+              Use <strong>{templateButtonLabel}</strong> for a skeleton in square brackets, then
+              replace every bracket with your own wording.{" "}
+            </>
+          ) : !templateOpen ? (
+            // Only while the panel is SHUT. With it open the template is already
+            // on screen, and the button reads "Hide template", so pointing at
+            // "View template" would name a control that is not currently there —
+            // the same bug this branch exists to fix.
+            <>
+              The starter wording is still there under <strong>View template</strong> if you want
+              to check it against what you have written.{" "}
+            </>
+          ) : null}
           {meta?.signed && "This is the one they sign, so it is worth a careful read."}
         </div>
       )}
@@ -772,7 +795,7 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
           <button
             type="button"
             onClick={() => {
-              if (editing && !body.trim()) { setBody(meta.starter); return; }
+              if (templateApplies) { setBody(meta.starter); return; }
               if (templateOpen) { closeTemplate(); return; }
               setTemplateOpen(true);
               setReplaceArmed(false);
@@ -784,9 +807,7 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
               fontFamily: "inherit", cursor: "pointer",
             }}
           >
-            {editing && !body.trim()
-              ? "Start from a template"
-              : templateOpen ? "Hide template" : "View template"}
+            {templateButtonLabel}
           </button>
         )}
       </div>
