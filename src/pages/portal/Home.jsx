@@ -46,6 +46,7 @@ export default function Home() {
   const [orgId, setOrgId] = useState(org?.id ?? null);
   const [branding, setBranding] = useState(null);
   const [schools, setSchools] = useState([]);
+  const [districtNames, setDistrictNames] = useState({}); // district id -> name, from districts_public
   const [programs, setPrograms] = useState([]);
   const [vipBundles, setVipBundles] = useState({}); // fallProgramId -> { winter, spring }
   const [selectedDistrict, setSelectedDistrict] = useState('');
@@ -55,7 +56,10 @@ export default function Home() {
   const [highlightProgram, setHighlightProgram] = useState('');
   const [weeklyClasses, setWeeklyClasses] = useState([]); // recurring class_schedule (outside-registration tenants), safe public view
   const [loading, setLoading] = useState(true);
-  const [locationFilter, setLocationFilter] = useState('all'); // lean catalog: which school
+  // Lean catalog picker. Both start EMPTY: no school chosen means no classes
+  // shown, so a family never lands on a price from someone else's district.
+  const [locationDistrict, setLocationDistrict] = useState(''); // lean catalog: which district
+  const [locationFilter, setLocationFilter] = useState(''); // lean catalog: which school
   // Fee config, so the class card can show what a family will actually pay.
   // The doc's rule is "never a surprise at the end" - until now the service fee
   // first appeared at the Pay step, after they had entered a child's details.
@@ -103,6 +107,19 @@ export default function Home() {
       .then(({ data }) => setFeeConfig(data || null))
       .catch(() => setFeeConfig(null));
 
+    // The picker belongs to the org we are ABOUT to load, so clear it here.
+    // This component does NOT remount when the :slug route param changes - that
+    // is the whole reason load() is keyed on org?.id - so without this the
+    // previous provider's school id survives into the next provider's catalog.
+    // `locationFilter` being truthy makes schoolChosen true, the filter then
+    // matches none of the new org's programs, and the page renders "No classes
+    // at that school right now." at a provider that has plenty. The old code
+    // had the same hole but escaped it with a "Show all classes" button, which
+    // the school gate removed - so the stale state stopped being recoverable
+    // and had to stop happening instead.
+    setLocationDistrict('');
+    setLocationFilter('');
+
     // The one term the catalog serves, per org. Every term-derived label on
     // this page reads from this same value, so the page can't claim one season
     // while listing another's programs.
@@ -142,7 +159,7 @@ export default function Home() {
     // out {} either way, exactly as it did before.
     //
     // Fee config stays OUT of this batch deliberately - see below.
-    const [brRes, scRes, pgRes, futureRes, wcRes] = await Promise.all([
+    const [brRes, scRes, pgRes, futureRes, wcRes, dtRes] = await Promise.all([
       // Branding (hero copy, colors, etc) - multi-tenant ready. Any provider
       // can customize these via org_branding row; defaults apply if blank.
       supabase
@@ -150,23 +167,31 @@ export default function Home() {
         .select('hero_headline, hero_subtext, banner_image_url')
         .eq('organization_id', org.id)
         .maybeSingle(),
-      // districts(name) is the district a provider actually PICKED. The
-      // `district` text column beside it is the legacy free-text code - the
-      // admin UI labels it "Legacy district code (internal), kept only to match
-      // calendars you uploaded before districts existed". This page read that
-      // legacy field, so a provider who used the picker (Jeff: all 22 locations
-      // via district_id, all 22 with district = NULL) had every location fall
-      // into "Other schools & sites" and the picker was useless to them. It is
-      // still selected here because other surfaces match calendars on it; it is
-      // no longer what this page groups by.
+      // district_id is the district a provider actually PICKED. The `district`
+      // text column beside it is the legacy free-text code - the admin UI labels
+      // it "Legacy district code (internal), kept only to match calendars you
+      // uploaded before districts existed". This page read that legacy field, so
+      // a provider who used the picker (Jeff: all 22 locations via district_id,
+      // all 22 with district = NULL) had every location fall into "Other schools
+      // & sites" and the picker was useless to them. It is still selected here
+      // because other surfaces match calendars on it; it is no longer what this
+      // page groups by.
+      //
+      // The NAME no longer comes from a `districts(name)` embed. That embed hits
+      // the districts TABLE, whose public policy is scoped `to anon` and whose
+      // other policy grants by org_members - and PARENTS ARE NOT ORG MEMBERS. So
+      // the moment a family signed in, every district name came back null and
+      // the grouping silently vanished (prod 2026-08-14: j2s 19 districts signed
+      // out, 0 signed in). Names now come from districts_public below, which
+      // both roles can read. See 20260814k.
       supabase
         .from('program_locations')
-        .select('id, name, district, district_id, address, organization_id, districts(name)')
+        .select('id, name, district, district_id, address, organization_id')
         .eq('organization_id', org.id)
         .order('name'),
       supabase
         .from('programs')
-        .select('*, program_locations(name, district_id, districts(name))')
+        .select('*, program_locations(name, district_id)')
         .eq('organization_id', org.id)
         .eq('term', catalogTerm)
         .eq('status', 'open')
@@ -196,12 +221,43 @@ export default function Home() {
         .from('class_schedule_public')
         .select('id, title, day_of_week, start_time, end_time, location_text, age_min, age_max, capacity')
         .eq('organization_id', org.id),
+      // District names, from the anon-safe view rather than the districts table,
+      // so a SIGNED-IN family sees the same grouping a signed-out one does. Same
+      // pattern as class_schedule_public above.
+      //
+      // DEPLOY ORDER: migration 20260814k MUST be applied to an environment
+      // BEFORE this frontend reaches it. PostgREST fails the whole statement on
+      // an unknown relation, so without the view this read returns an error, not
+      // a partial row - see the failure branch below for what that costs.
+      // Measured 2026-08-14: the view is on STAGING, NOT on prod.
+      supabase
+        .from('districts_public')
+        .select('id, name')
+        .eq('organization_id', org.id),
     ]);
 
     const br = brRes.data;
     const sc = scRes.data;
     const pg = pgRes.data;
     const wc = wcRes.data;
+    // id -> name. A district whose name we cannot read falls out of the map and
+    // its schools land in the OTHER_DISTRICT bucket, which is what happened to
+    // EVERY district while signed in before this - the difference is that it is
+    // now the failure mode, not the normal case.
+    //
+    // EMPTY AND FAILED MUST STAY DISTINGUISHABLE. `dtRes.data || []` alone makes
+    // "this org has no districts" and "the districts read errored" produce the
+    // identical page, and the second one is precisely the bug this commit exists
+    // to fix - it would have gone silent all over again, on a page no operator
+    // has an error report for. The degrade is deliberate and soft (the school
+    // select still works, families can still register, so there is nothing a
+    // family could act on and no error is shown to them) but it does not get to
+    // be invisible to US.
+    if (dtRes.error) {
+      console.warn('[registration] district names unavailable; catalog will group everything as "%s". Cause: %o', OTHER_DISTRICT, dtRes.error);
+    }
+    const dn = {};
+    (dtRes.data || []).forEach((d) => { dn[d.id] = d.name; });
 
     // Look up Winter/Spring matches for each fall program to determine VIP
     // eligibility. A fall program is VIP-eligible only if that school year's
@@ -223,6 +279,7 @@ export default function Home() {
     }
 
     setBranding(br);
+    setDistrictNames(dn);
     setSchools(sc || []);
     setPrograms(pg || []);
     setVipBundles(bundles);
@@ -253,7 +310,7 @@ export default function Home() {
   // wording (Jeff's "PPS" would have rendered as "Portland Public Schools").
   // Uniformity is already guaranteed upstream: a location's district is PICKED
   // from the provider's own districts list, not typed per school.
-  const districtOf = (school) => school?.districts?.name || null;
+  const districtOf = (school) => (school?.district_id ? districtNames[school.district_id] : null) || null;
 
   // Only districts that have at least one school with an open program. Schools
   // with no district collect under a single "Other schools & sites" bucket
@@ -271,7 +328,7 @@ export default function Home() {
     const sorted = [...districts].sort((a, b) => a.localeCompare(b));
     if (hasOther) sorted.push(OTHER_DISTRICT);
     return sorted;
-  }, [schools, programs]);
+  }, [schools, programs, districtNames]);
 
   const schoolsInDistrict = useMemo(() => {
     if (!selectedDistrict) return [];
@@ -280,7 +337,7 @@ export default function Home() {
       .filter((s) => withPrograms.has(s.id)
         && (selectedDistrict === OTHER_DISTRICT ? !districtOf(s) : districtOf(s) === selectedDistrict))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [selectedDistrict, schools, programs]);
+  }, [selectedDistrict, schools, programs, districtNames]);
 
   const programsAtSchool = useMemo(() => {
     if (!selectedSchool) return [];
@@ -303,8 +360,19 @@ export default function Home() {
     if (!school) return;
     setSelectedDistrict(districtOf(school) || OTHER_DISTRICT);
     setSelectedSchool(school.id);
+    // The lean catalog's own picker, which is a SEPARATE pair of state values.
+    // It has to be set too now that the lean list is gated on a school: before
+    // the gate a deep link landed on every class and merely highlighted one, so
+    // leaving these empty was harmless. Now it would render an empty page for
+    // every shared class link.
+    setLocationDistrict(districtOf(school) || OTHER_DISTRICT);
+    setLocationFilter(school.id);
     setHighlightProgram(programId);
-  }, [programs, schools, searchParams, selectedSchool]);
+    // districtNames is listed because this effect reads it through districtOf.
+    // It is inert today - names, schools and programs are set in one batch from
+    // the same Promise.all, so they arrive together - but leaving a read out of
+    // the deps is how that stops being true silently.
+  }, [programs, schools, searchParams, selectedSchool, districtNames]);
 
   // Once the highlighted card is in the DOM, scroll to it and fade the ring.
   useEffect(() => {
@@ -329,12 +397,20 @@ export default function Home() {
 
   // Lean, enrops-branded registration for self-serve operators (everyone except
   // legacy J2S). No hardcoded J2S hero, and the open programs render as a list
-  // straight to checkout so a location-less program is still reachable. J2S
-  // (legacy_own_platform) keeps its existing page below.
+  // straight to checkout. J2S (legacy_own_platform) keeps its existing page below.
   //
-  // This comment used to say "no district->school picker". That stopped being true
-  // when the school select landed: locations ARE grouped by district here now, it
-  // just filters the list rather than gating it behind a district choice.
+  // This used to add "so a location-less program is still reachable". The school
+  // gate makes that false - a program whose location has no id or no name is
+  // skipped by locOptions and can never be filtered TO. It describes a row that
+  // cannot exist anyway: programs.program_location_id and program_locations.name
+  // are both NOT NULL on prod, with zero blank names (checked 2026-08-14). If
+  // either ever becomes nullable, this gate needs an "everything else" bucket.
+  //
+  // The picker here is now the SAME SHAPE as J2S's below: district, then school,
+  // then the classes. It used to be one grouped select that FILTERED a list every
+  // visitor could already see, on the reasoning that a parent knows their school
+  // and a district step is a dead click. That reasoning held at 2 open classes and
+  // died at 18. See the note above the selects for what changed.
   const isLeanReg = org?.instructor_pay_model !== 'legacy_own_platform';
   // Can this provider actually be paid? Only gates the LEAN catalog — J2S is
   // connected and its page below is untouched. `!== false` so an older cached
@@ -361,28 +437,37 @@ export default function Home() {
       const nm = p.program_locations?.name;
       if (!id || !nm || seenLoc.has(id)) continue;
       seenLoc.add(id);
-      locOptions.push({ id, name: nm, district: p.program_locations?.districts?.name || OTHER_DISTRICT });
+      const dId = p.program_locations?.district_id;
+      locOptions.push({ id, name: nm, district: (dId && districtNames[dId]) || OTHER_DISTRICT });
     }
     const hasMultiLoc = locOptions.length >= 2;
 
-    // ONE control, with districts as group headings inside it.
+    // DISTRICT, THEN SCHOOL, THEN THE CLASSES - and nothing priced before a
+    // school is chosen. Same shape as J2S's page below, deliberately.
     //
-    // This was two rows of pills (district, then school) and that does not scale
-    // to the real catalogs: Jeff's school year is ~25 programs across 18+ schools,
-    // and J2S's open term is 30 locations across 19 districts. Pills are good for
-    // two to four options and wrap into an unreadable block past that - on a phone,
-    // which is where most families register.
+    // This replaces one grouped select defaulting to "All schools and sites"
+    // above a list of every open class. The argument for that was that a parent
+    // knows their school, so a district step is a dead click and an optgroup
+    // organises without becoming one. What it missed is what the FIRST SCREEN
+    // says. Jeff's catalog opens on 18 classes ordered by weekday, so the first
+    // price a family reads is Oak Creek at $329 - his most expensive district -
+    // when their own school is $279 or $299. Jeff: "I don't want someone to get
+    // scared off by looking at a price tag for a program at a more expensive
+    // district." A filter cannot fix that, because the list is already rendered
+    // behind it. A gate can.
     //
-    // Why not a district control AND a school control: a parent knows their
-    // SCHOOL. The district only exists to help them find it in a list of 30, which
-    // is exactly what an optgroup does - it organises without becoming a step. Two
-    // dependent selects add a "pick a district first" dead state for no gain.
+    // It also matches how school-based enrichment registration works elsewhere:
+    // a Jumbula district catalog puts one TAB per school across the top and
+    // shows no class until you pick one, and Homeroom gives each school its own
+    // page. Nobody in this category opens on a priced list spanning every site.
     //
-    // Why a native select rather than a custom dropdown or a filter modal: on a
-    // phone this opens the OS picker, which is scrollable, typeable and accessible
-    // for free. A modal would hide the one thing the family came for behind an
-    // extra tap, and it earns its keep only for multi-dimensional filtering. Here
-    // there is one dimension.
+    // Native selects rather than a custom dropdown or a modal: on a phone this
+    // opens the OS picker, which is scrollable, typeable and accessible for free.
+    //
+    // The district select is skipped entirely when it would group nothing (fewer
+    // than 2 named districts) - a one-option dropdown is a dead click for real.
+    // The school gate still applies, so a small provider gets one control and the
+    // same "pick your school first" behaviour.
     const groups = new Map(); // district name (or OTHER_DISTRICT) -> [{ id, name }]
     for (const loc of locOptions) {
       if (!groups.has(loc.district)) groups.set(loc.district, []);
@@ -398,15 +483,25 @@ export default function Home() {
       .sort((a, b) => a.localeCompare(b));
     const groupNames = groups.has(OTHER_DISTRICT) ? [...namedGroups, OTHER_DISTRICT] : namedGroups;
 
-    // Group headings only when they group something: with one district (Jeff
-    // today: 2 open programs, both PPS) or none at all (shoreview-chess: 2
-    // locations, zero districts) a heading adds a line of chrome and no meaning,
-    // so the select degrades to a flat list of schools.
+    // A district step only when it groups something: with one district or none
+    // (shoreview-chess: 2 locations, zero districts) it is a dropdown with a
+    // single answer. Below this line the page shows the school select alone.
     const useGroups = namedGroups.length >= 2;
 
-    const openPrograms = !hasMultiLoc || locationFilter === 'all'
+    // Which schools the school select offers. With a district step, only that
+    // district's; without one, all of them.
+    const schoolChoices = useGroups
+      ? (groups.get(locationDistrict) || [])
+      : [...locOptions].sort((a, b) => a.name.localeCompare(b.name));
+
+    // THE GATE. No school chosen = no classes, which is the whole point: the
+    // first screen must not lead with a price from a district the family is not
+    // in. hasMultiLoc keeps a single-site provider gate-free - there is nothing
+    // to choose, so asking would be theatre.
+    const schoolChosen = !hasMultiLoc || !!locationFilter;
+    const openPrograms = !hasMultiLoc
       ? allOpen
-      : allOpen.filter((p) => p.program_location_id === locationFilter);
+      : (locationFilter ? allOpen.filter((p) => p.program_location_id === locationFilter) : []);
     const leanCard = (hl) => ({
       display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16,
       padding: '16px 18px', border: `1px solid ${hl ? '#5847C9' : '#e2dfd5'}`,
@@ -433,8 +528,13 @@ export default function Home() {
         <div style={{ background: '#1C004F', color: '#fff', padding: '56px 20px 72px' }}>
           <div style={{ maxWidth: 820, margin: '0 auto' }}>
             {/* Don't announce "registration is open" above a page that then says
-                it isn't — the hero and the body have to tell the same story. */}
-            {paymentsReady && (
+                it isn't — the hero and the body have to tell the same story.
+                `allOpen.length` is the second half of that rule and was missing:
+                an org with Stripe connected and nothing published showed the
+                green "registration is open" badge directly above a body reading
+                "No open programs yet." Stripe being ready is not the same fact
+                as there being something to register for. */}
+            {paymentsReady && allOpen.length > 0 && (
               <span style={{ display: 'inline-block', background: 'rgba(38,214,135,0.14)', border: '1px solid rgba(38,214,135,0.35)', color: '#26D687', borderRadius: 100, padding: '5px 14px', fontSize: 12, fontWeight: 600 }}>
                 {termLabel ? `${termLabel} registration is open` : 'Registration is open'}
               </span>
@@ -442,10 +542,22 @@ export default function Home() {
             <h1 style={{ fontSize: 38, fontWeight: 700, lineHeight: 1.12, margin: '18px 0 12px' }}>
               {branding?.hero_headline || org?.name || 'Register today'}
             </h1>
+            {/* The DEFAULT tracks what the body actually shows. Three states, three
+                sentences: nothing published yet, a school still to pick, or a class
+                list right below. Getting this wrong is the hero-vs-body
+                contradiction the badge above guards against - the empty-catalog
+                case used to promise "Pick a class below" over a body reading "No
+                open programs yet." An operator's own hero_subtext is left exactly
+                as they wrote it - their page, their words. */}
             <p style={{ fontSize: 17, lineHeight: 1.6, color: 'rgba(255,255,255,0.82)', maxWidth: 560, margin: 0 }}>
-              {paymentsReady
-                ? (branding?.hero_subtext || 'Pick a class below and sign your child up in under a minute.')
-                : 'Classes are coming soon.'}
+              {!paymentsReady
+                ? 'Classes are coming soon.'
+                : (branding?.hero_subtext
+                  || (allOpen.length === 0
+                    ? 'Classes are coming soon.'
+                    : hasMultiLoc
+                      ? 'Find your school and sign your child up in under a minute.'
+                      : 'Pick a class below and sign your child up in under a minute.'))}
             </p>
           </div>
         </div>
@@ -480,62 +592,100 @@ export default function Home() {
               <div style={{ color: '#6b6b6b', padding: '24px 0', textAlign: 'center' }}>No open programs yet. Check back soon.</div>
             ) : (
               <>
-                <h2 style={{ fontSize: 19, fontWeight: 700, margin: '2px 0 16px' }}>
-                  {openPrograms.length === 1 ? '1 open program' : `${openPrograms.length} open programs`}
+                {/* The heading counts what is ON SCREEN. Before a school is
+                    chosen there are no classes on screen, so counting the whole
+                    catalog there would be the same "18 open programs, here they
+                    all are" first impression the gate exists to remove. */}
+                <h2 style={{ fontSize: 19, fontWeight: 700, margin: '2px 0 4px' }}>
+                  {!schoolChosen
+                    ? 'Find your child’s class'
+                    : (openPrograms.length === 1 ? '1 open program' : `${openPrograms.length} open programs`)}
                 </h2>
-                {/* One control. Districts are optgroup headings inside it, not a
-                    second control - see the note where `groups` is built. */}
+                {hasMultiLoc && !schoolChosen && (
+                  <p style={{ fontSize: 14, color: '#6b6b6b', margin: '0 0 16px' }}>
+                    {useGroups ? 'Pick your district, then your school.' : 'Pick your school to see its classes.'}
+                  </p>
+                )}
+                {/* District, then school - see the note where `groups` is built. */}
                 {hasMultiLoc && (
-                  <div style={{ margin: '0 0 16px' }}>
-                    <label
-                      htmlFor="catalog-school"
-                      style={{ display: 'block', fontSize: 13, fontWeight: 600, color: '#1a1a1a', margin: '0 0 6px' }}
-                    >
-                      Find your school
-                    </label>
-                    <select
-                      id="catalog-school"
-                      value={locationFilter}
-                      onChange={(e) => setLocationFilter(e.target.value)}
-                      style={{
-                        width: '100%', maxWidth: 420, padding: '11px 12px', fontSize: 15,
-                        fontFamily: 'inherit', color: '#1a1a1a', background: '#fff',
-                        border: '1px solid #cfcbc0', borderRadius: 10, cursor: 'pointer',
-                      }}
-                    >
-                      <option value="all">All schools and sites</option>
-                      {useGroups
-                        ? groupNames.map((d) => (
-                            <optgroup key={d} label={d}>
-                              {groups.get(d).map((loc) => (
-                                <option key={loc.id} value={loc.id}>{loc.name}</option>
-                              ))}
-                            </optgroup>
-                          ))
-                        : locOptions
-                            .slice()
-                            .sort((a, b) => a.name.localeCompare(b.name))
-                            .map((loc) => (
-                              <option key={loc.id} value={loc.id}>{loc.name}</option>
-                            ))}
-                    </select>
+                  <div style={{
+                    display: 'grid', gap: 12, margin: '12px 0 16px',
+                    gridTemplateColumns: useGroups ? 'repeat(auto-fit, minmax(200px, 1fr))' : '1fr',
+                    maxWidth: 560,
+                  }}>
+                    {useGroups && (
+                      <div>
+                        <label
+                          htmlFor="catalog-district"
+                          style={{ display: 'block', fontSize: 13, fontWeight: 600, color: '#1a1a1a', margin: '0 0 6px' }}
+                        >
+                          District
+                        </label>
+                        <select
+                          id="catalog-district"
+                          value={locationDistrict}
+                          onChange={(e) => {
+                            // Changing district always clears the school. Keeping
+                            // it would leave a school selected that the new
+                            // district does not contain, and the class list below
+                            // would show a school the select no longer offers.
+                            setLocationDistrict(e.target.value);
+                            setLocationFilter('');
+                          }}
+                          style={{
+                            width: '100%', padding: '11px 12px', fontSize: 15,
+                            fontFamily: 'inherit', color: '#1a1a1a', background: '#fff',
+                            border: '1px solid #cfcbc0', borderRadius: 10, cursor: 'pointer',
+                          }}
+                        >
+                          <option value="">Select a district&hellip;</option>
+                          {groupNames.map((d) => (
+                            <option key={d} value={d}>{d}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                    <div>
+                      <label
+                        htmlFor="catalog-school"
+                        style={{ display: 'block', fontSize: 13, fontWeight: 600, color: '#1a1a1a', margin: '0 0 6px' }}
+                      >
+                        School
+                      </label>
+                      <select
+                        id="catalog-school"
+                        value={locationFilter}
+                        disabled={useGroups && !locationDistrict}
+                        onChange={(e) => setLocationFilter(e.target.value)}
+                        style={{
+                          width: '100%', padding: '11px 12px', fontSize: 15,
+                          fontFamily: 'inherit', background: '#fff',
+                          color: useGroups && !locationDistrict ? '#9a9a9a' : '#1a1a1a',
+                          border: '1px solid #cfcbc0', borderRadius: 10,
+                          cursor: useGroups && !locationDistrict ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        <option value="">
+                          {/* A literal ellipsis, NOT &hellip;. This is a JS string
+                              inside a JSX expression, so an HTML entity would
+                              render as the seven characters "&hellip;". The
+                              district option below is JSX TEXT, where the entity
+                              is correct - the two are not inconsistent. */}
+                          {useGroups && !locationDistrict ? 'Pick a district first' : 'Select a school…'}
+                        </option>
+                        {schoolChoices.map((loc) => (
+                          <option key={loc.id} value={loc.id}>{loc.name}</option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
                 )}
-                {/* A filter that hides everything must say so, or the page reads as
-                    broken rather than filtered. Reachable only if a location's
-                    programs disappear between render and change. */}
-                {openPrograms.length === 0 && (
+                {/* A school with nothing in it must say so, or an empty page reads
+                    as broken. Only reachable if a school's classes disappear
+                    between render and the change event. */}
+                {schoolChosen && openPrograms.length === 0 && (
                   <div style={{ color: '#6b6b6b', padding: '18px 0', textAlign: 'center', fontSize: 14 }}>
-                    No classes at that school right now.{' '}
-                    <button
-                      onClick={() => setLocationFilter('all')}
-                      style={{
-                        background: 'none', border: 'none', padding: 0, font: 'inherit',
-                        color: '#5847C9', fontWeight: 600, cursor: 'pointer', textDecoration: 'underline',
-                      }}
-                    >
-                      Show all classes
-                    </button>
+                    No classes at that school right now.
                   </div>
                 )}
                 <div style={{ display: 'grid', gap: 12 }}>
