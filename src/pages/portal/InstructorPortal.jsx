@@ -23,6 +23,7 @@ import Chevron from "../../components/Chevron.jsx";
 import WizardHost from "../onboarding/WizardHost.jsx";
 import { fetchLegalDocument } from "../../lib/legalDoc.js";
 import { isDocumentEnabled } from "../../lib/instructorDocuments.js";
+import { loadTrainingConfig } from "../../lib/instructorTrainingConfig.js";
 import { linkifyText } from "../../lib/linkifyText.jsx";
 import PwaInstallButton from "../../components/pwa/PwaInstallButton.jsx";
 import {
@@ -159,6 +160,14 @@ export default function InstructorPortal() {
   // not resolved its org yet must not flash a payment-setup step at an
   // instructor whose provider does not use Stripe.
   const [stripePayEnabled, setStripePayEnabled] = useState(false);
+  // Training step for the wizard embedded below. Defaults FALSE for the same
+  // reason as stripePayEnabled — but note the asymmetry that made this a live
+  // bug: leaving it false is NOT the safe side. The server gate still requires
+  // `training_completed` whenever the org has training on with an active
+  // required video, so a false here means the step is never shown and onboarding
+  // can never complete. Both doors must set it. See instructorTrainingConfig.js.
+  const [trainingEnabled, setTrainingEnabled] = useState(false);
+  const [trainingVideos, setTrainingVideos] = useState([]);
   const [assignments, setAssignments] = useState([]);
   const [coInstructors, setCoInstructors] = useState({}); // { [camp_session_id]: [{ name, role, email, phone }] } — camp co-teachers
   const [coInstructorsProgram, setCoInstructorsProgram] = useState({}); // { [program_id]: [...] } — after-school co-teachers
@@ -258,7 +267,7 @@ export default function InstructorPortal() {
             // the same edit.
             const { data: dir, error: dirErr } = await supabase
               .from("public_org_directory")
-              .select("slug, name, background_check_public, instructor_documents_public, instructor_pay_enabled")
+              .select("slug, name, background_check_public, instructor_documents_public, instructor_pay_enabled, training_enabled")
               .eq("id", target.organization_id)
               .maybeSingle();
             if (dirErr || !dir?.slug) {
@@ -279,6 +288,11 @@ export default function InstructorPortal() {
             // on truthiness would silently skip it for every provider that does
             // not use Stripe pay, which is most of them.
             setStripePayEnabled(dir?.instructor_pay_enabled === true);
+            // Preview must show the same wizard the instructor gets, training
+            // step included — that is the whole point of the comment above.
+            const t = await loadTrainingConfig(supabase, target.organization_id, dir?.training_enabled);
+            setTrainingEnabled(t.trainingEnabled);
+            setTrainingVideos(t.trainingVideos);
           }
           const targetInst = {
             instructor_id: target.id,
@@ -330,7 +344,7 @@ export default function InstructorPortal() {
       if (fullInstructor.organization_id) {
         const { data: dir, error: dirErr } = await supabase
           .from("public_org_directory")
-          .select("slug, name, background_check_public, active_registration_term, instructor_documents_public, instructor_pay_enabled")
+          .select("slug, name, background_check_public, active_registration_term, instructor_documents_public, instructor_pay_enabled, training_enabled")
           .eq("id", fullInstructor.organization_id)
           .maybeSingle();
         // FOUR org facts come out of this one read, and the fallbacks below are
@@ -392,6 +406,21 @@ export default function InstructorPortal() {
         // one that got missed last time.
         setStripePayEnabled(dir?.instructor_pay_enabled === true);
         setActiveTerm(dir?.active_registration_term ?? null);
+        // THE STEP THIS DOOR USED TO DROP. WizardHost defaults trainingEnabled to
+        // false, so before this the embedded wizard never rendered the training
+        // step while the server gate kept requiring `training_completed` — the
+        // instructor finished everything and parked one step short forever.
+        // Treated like the directory read above: a failed video read is a wrong
+        // answer, not a default, so it fails visibly rather than silently
+        // stranding them.
+        const t = await loadTrainingConfig(supabase, fullInstructor.organization_id, dir?.training_enabled);
+        if (t.error) {
+          setError("We couldn't load your program's details. Please refresh, or reach out to your Program Manager if this keeps happening.");
+          setPhase("error");
+          return;
+        }
+        setTrainingEnabled(t.trainingEnabled);
+        setTrainingVideos(t.trainingVideos);
       }
 
       // Check onboarding status. If they're an unfinished contractor invite,
@@ -1135,6 +1164,8 @@ export default function InstructorPortal() {
           documentConfig={documentConfig}
           orgName={orgName}
           stripePayEnabled={stripePayEnabled}
+          trainingEnabled={trainingEnabled}
+          trainingVideos={trainingVideos}
           onComplete={refetchOnboardingStatus}
           onDismiss={async () => {
             // Pending_* and payouts_disabled statuses won't flip to 'complete',

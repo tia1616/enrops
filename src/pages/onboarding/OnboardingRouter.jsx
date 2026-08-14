@@ -3,6 +3,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 import WizardHost from './WizardHost.jsx';
 import { readAuthRedirectError } from '../../lib/authRedirectError.js';
+import { loadTrainingConfig } from '../../lib/instructorTrainingConfig.js';
 
 // Top-level resolver for /:slug/onboarding. Runs on every visit and decides:
 //
@@ -201,29 +202,17 @@ export default function OnboardingRouter() {
 
       // Training videos: the step is live only when the org enabled training AND
       // has at least one active required video (enabled-but-empty drops the step,
-      // matching the server gate). Instructors can read active videos of their
-      // own org via RLS. Answers are never selected here — the player fetches a
-      // signed URL + answer-stripped quiz per video from get-training-video-url.
-      let trainingVideos = [];
-      if (org.training_enabled) {
-        // NB: never select the `quiz` column here — RLS is row-level, not
-        // column-level, so it would ship every correct_index to the browser.
-        // The player fetches an answer-stripped quiz from get-training-video-url.
-        const { data: vids } = await supabase
-          .from('instructor_training_videos')
-          .select('id, title, duration_seconds')
-          .eq('organization_id', instructor.organization_id)
-          .eq('active', true)
-          .eq('is_required', true)
-          .order('sort_order', { ascending: true })
-          .order('created_at', { ascending: true });
-        trainingVideos = (vids ?? []).map((v) => ({
-          id: v.id,
-          title: v.title,
-          duration_seconds: v.duration_seconds,
-        }));
+      // matching the server gate). Shared with the portal-embedded wizard — see
+      // instructorTrainingConfig.js for why this is not inline in each door.
+      const { trainingEnabled, trainingVideos, error: trainingErr } =
+        await loadTrainingConfig(supabase, instructor.organization_id, org.training_enabled);
+      // Same reasoning as the directory read above: a failed read here would drop
+      // a step the server still requires, so the instructor would finish every
+      // screen and never reach 'complete'. Fail visibly instead.
+      if (trainingErr) {
+        navigate('/error?reason=org_misconfigured', { replace: true });
+        return;
       }
-      const trainingEnabled = Boolean(org.training_enabled) && trainingVideos.length > 0;
 
       // Wizard in progress.
       setState({

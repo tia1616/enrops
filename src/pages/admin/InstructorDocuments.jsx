@@ -258,10 +258,11 @@ export default function InstructorDocuments() {
     // through an instructor who cannot finish.
     const meta = documentByKey(key);
     if (next && meta?.defaultOff && !publishedByKey[key]) {
-      const label = meta.label ?? "This document";
+      // Jessica's exact words, 2026-08-14. "Write it" is the literal label on the
+      // button in this same row, so the instruction points at something on screen.
       setToggleError({
         key,
-        message: `Write ${label.toLowerCase()} first. Switching it on before it's published would stop your instructors at this step — and hide the documents you have published. Hit “Write it”, publish, then switch it on.`,
+        message: "Before publishing, you must write the document. Click 'Write it'",
       });
       return;
     }
