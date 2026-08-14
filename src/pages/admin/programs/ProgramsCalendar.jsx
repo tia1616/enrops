@@ -276,7 +276,10 @@ export default function ProgramsCalendar() {
       // (programs_with_session_schedule) supplies it on page load, so dropping
       // it here would make an early-release time disappear the moment the
       // schedule was re-read after an edit.
-      const arr = (sched ?? []).map((r) => ({ date: r.entry_date, kind: r.kind, reason: r.reason, session_time: r.session_time }));
+      const arr = (sched ?? []).map((r) => ({
+        date: r.entry_date, kind: r.kind, reason: r.reason,
+        session_time: r.session_time, session_end_time: r.session_end_time,
+      }));
       setSessionDatesByProgram((prev) => ({ ...prev, [programId]: arr }));
     } catch (e) {
       console.warn("Couldn't refresh derived dates after skip:", e?.message ?? e);
