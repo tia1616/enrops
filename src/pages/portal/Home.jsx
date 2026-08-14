@@ -107,6 +107,19 @@ export default function Home() {
       .then(({ data }) => setFeeConfig(data || null))
       .catch(() => setFeeConfig(null));
 
+    // The picker belongs to the org we are ABOUT to load, so clear it here.
+    // This component does NOT remount when the :slug route param changes - that
+    // is the whole reason load() is keyed on org?.id - so without this the
+    // previous provider's school id survives into the next provider's catalog.
+    // `locationFilter` being truthy makes schoolChosen true, the filter then
+    // matches none of the new org's programs, and the page renders "No classes
+    // at that school right now." at a provider that has plenty. The old code
+    // had the same hole but escaped it with a "Show all classes" button, which
+    // the school gate removed - so the stale state stopped being recoverable
+    // and had to stop happening instead.
+    setLocationDistrict('');
+    setLocationFilter('');
+
     // The one term the catalog serves, per org. Every term-derived label on
     // this page reads from this same value, so the page can't claim one season
     // while listing another's programs.
