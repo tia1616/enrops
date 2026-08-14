@@ -24,6 +24,7 @@ import WizardHost from "../onboarding/WizardHost.jsx";
 import { fetchLegalDocument } from "../../lib/legalDoc.js";
 import { isDocumentEnabled } from "../../lib/instructorDocuments.js";
 import { loadTrainingConfig } from "../../lib/instructorTrainingConfig.js";
+import { earlyReleaseLine } from "../../lib/timeText.js";
 import { linkifyText } from "../../lib/linkifyText.jsx";
 import PwaInstallButton from "../../components/pwa/PwaInstallButton.jsx";
 import {
@@ -2350,10 +2351,7 @@ function AfterschoolAssignmentCard({ assignment, coInstructors = [], schedule = 
                             instructor checks before a shift. */}
                         {x.reason === "Early release" && (
                           <span style={{ color: "#a16207", fontWeight: 600 }}>
-                            {" · early release — "}
-                            {x.session_time
-                              ? `${x.session_time}${x.session_end_time ? `–${x.session_end_time}` : ""}`
-                              : "earlier"}
+                            {" · "}{earlyReleaseLine(x.session_time, x.session_end_time)}
                           </span>
                         )}
                       </span>

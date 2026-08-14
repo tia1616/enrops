@@ -8,7 +8,7 @@
 // The corpus is mixed on purpose: program times are TEXT and real rows hold both
 // "2:35 PM" and "14:35". Every helper is tested against both.
 
-import { formatTimeText, formatTimeRange, to24h, to12hText, durationMinutes, addMinutes24h } from './timeText.js';
+import { formatTimeText, formatTimeRange, formatClockRange, earlyReleaseLine, to24h, to12hText, durationMinutes, addMinutes24h } from './timeText.js';
 
 let pass = 0, fail = 0;
 function eq(name, actual, expected) {
@@ -71,6 +71,30 @@ eq('midnight reads as 12 AM', to12hText('00:15'), '12:15 AM');
 eq('noon reads as 12 PM', to12hText('12:15'), '12:15 PM');
 eq('formatTimeText handles noon', formatTimeText('12:15'), '12:15pm');
 eq('formatTimeText handles midnight', formatTimeText('00:15'), '12:15am');
+
+// --- the clock range a parent reads -----------------------------------------
+// Same half of the day says the meridiem once; straddling noon says it twice,
+// because "11:45–1:15 PM" would read as a two-minute class.
+eq('same half, one meridiem', formatClockRange('12:45 PM', '1:45 PM'), '12:45–1:45 PM');
+eq('same half from 24h', formatClockRange('12:45', '13:45'), '12:45–1:45 PM');
+eq('straddles noon, two meridiems', formatClockRange('11:45', '13:15'), '11:45 AM–1:15 PM');
+eq('morning only', formatClockRange('09:15', '10:15'), '9:15–10:15 AM');
+eq('start only keeps its meridiem', formatClockRange('12:45 PM', null), '12:45 PM');
+eq('nothing in, nothing out', formatClockRange(null, null), '');
+
+// --- the one sentence all three screens show --------------------------------
+eq('Jessica 14 Aug, verbatim shape',
+  earlyReleaseLine('12:45 PM', '1:45 PM'),
+  'Early Release — Class is 12:45–1:45 PM on this date');
+eq('no end time -> starts, not is',
+  earlyReleaseLine('12:45 PM', null),
+  'Early Release — Class starts 12:45 PM on this date');
+// Never a dangling sentence when the provider set nothing at all.
+eq('no times at all', earlyReleaseLine(null, null), 'Early Release');
+// "on this date" must survive — without it the line reads as the class's normal
+// time, which is the confusion the whole feature exists to remove.
+eq('always says on this date',
+  earlyReleaseLine('12:45', '13:45').endsWith('on this date'), true);
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'}  (${pass} passed, ${fail} failed)`);
 if (fail > 0) process.exit(1);

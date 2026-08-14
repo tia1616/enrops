@@ -28,7 +28,7 @@ import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 // Only the two helpers this file does not already have of its own. Its local
 // to24h/to12hText/formatTime stay as they are — swapping them out is a separate
 // change with its own blast radius across a 3,000-line file.
-import { durationMinutes, addMinutes24h } from "../../../lib/timeText.js";
+import { durationMinutes, addMinutes24h, earlyReleaseLine } from "../../../lib/timeText.js";
 import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib/programText.js";
 import { GRADE_OPTIONS, audienceMode, audiencePatch, rangeBackwards, rangeBackwardsMessage } from "../../../lib/grades.js";
 import {
@@ -2898,8 +2898,7 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, onScheduleChan
             <div key={`${x.date}-s-${idx}`} style={{ color: INK, fontSize: 13, fontVariantNumeric: "tabular-nums" }}>
               {formatSessionDate(x.date)}
               <span style={{ color: AMBER, fontWeight: 600 }}>
-                {" · early release "}
-                {formatTime(x.session_time)}{x.session_end_time ? `–${formatTime(x.session_end_time)}` : ""}
+                {" · "}{earlyReleaseLine(x.session_time, x.session_end_time)}
               </span>
             </div>
           ) : (

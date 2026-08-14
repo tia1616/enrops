@@ -7,6 +7,7 @@ import { formatTermLabel } from '../../lib/terms.js';
 import { getUserRoles } from '../../lib/useUserRoles.js';
 import { renderWaiverText } from '../../lib/waiverText.js';
 import { dismissalAnswerIncomplete } from '../../lib/dismissal.js';
+import { earlyReleaseLine } from '../../lib/timeText.js';
 import WaiverGate from './WaiverGate.jsx';
 import PickupInfoGate from './PickupInfoGate.jsx';
 
@@ -807,9 +808,7 @@ function ScheduleTab({ enrollments }) {
                             the date, not the header, when working out pickup. */}
                         {row.reason === 'Early release' && (
                           <p className="text-xs font-semibold text-j2s-ink/70">
-                            {row.session_time
-                              ? `Early release — class is ${fmtTime(row.session_time)}${row.session_end_time ? `–${fmtTime(row.session_end_time)}` : ''}`
-                              : 'Early release'}
+                            {earlyReleaseLine(row.session_time, row.session_end_time)}
                           </p>
                         )}
                       </div>

@@ -39,6 +39,41 @@ export function formatTimeRange(startText, endText) {
   return e ? `${s}–${e}` : s;
 }
 
+// "12:45–1:45 PM", collapsing the meridiem when both ends share one, and
+// keeping both when they don't ("11:45 AM–1:15 PM"). Upper-case AM/PM, because
+// this reads as a real clock time to a parent rather than a code comment.
+export function formatClockRange(startText, endText) {
+  const s24 = to24h(startText);
+  const e24 = to24h(endText);
+  const say = (hhmm, withMeridiem) => {
+    const [h, m] = hhmm.split(":").map(Number);
+    const hr12 = ((h + 11) % 12) + 1;
+    const mer = h >= 12 ? "PM" : "AM";
+    return `${hr12}:${String(m).padStart(2, "0")}${withMeridiem ? ` ${mer}` : ""}`;
+  };
+  if (!s24) return "";
+  if (!e24) return say(s24, true);
+  const sameHalf = (Number(s24.split(":")[0]) >= 12) === (Number(e24.split(":")[0]) >= 12);
+  return sameHalf ? `${say(s24, false)}–${say(e24, true)}` : `${say(s24, true)}–${say(e24, true)}`;
+}
+
+// THE one sentence every surface shows for a kept early-release date.
+//
+// Jessica's wording, 14 Aug: "it needs to say 'Early Release - Class is
+// 12:45-1:45 on this date'." — and she asked for it on the PROVIDER and
+// INSTRUCTOR screens too, not just the parent's. So it lives here and all three
+// import it; three hand-written copies of a sentence is how they end up saying
+// three different things, which is the bug she has already caught twice today.
+//
+// "on this date" is load-bearing: without it the line reads like the class's
+// normal time, which is the exact confusion the whole feature exists to remove.
+export function earlyReleaseLine(startText, endText) {
+  const range = formatClockRange(startText, endText);
+  if (!range) return "Early Release";
+  const verb = to24h(endText) ? "Class is" : "Class starts";
+  return `Early Release — ${verb} ${range} on this date`;
+}
+
 // Minutes between two stored times, or null when either is unparseable.
 export function durationMinutes(startText, endText) {
   const s = to24h(startText);
