@@ -500,9 +500,17 @@ export default function Home() {
             <h1 style={{ fontSize: 38, fontWeight: 700, lineHeight: 1.12, margin: '18px 0 12px' }}>
               {branding?.hero_headline || org?.name || 'Register today'}
             </h1>
+            {/* The DEFAULT tracks the gate: with a school still to pick there is
+                no class "below" to pick, and a hero that says otherwise is the
+                same hero-vs-body contradiction the badge above avoids. An
+                operator's own hero_subtext is left exactly as they wrote it -
+                their page, their words. */}
             <p style={{ fontSize: 17, lineHeight: 1.6, color: 'rgba(255,255,255,0.82)', maxWidth: 560, margin: 0 }}>
               {paymentsReady
-                ? (branding?.hero_subtext || 'Pick a class below and sign your child up in under a minute.')
+                ? (branding?.hero_subtext
+                  || (hasMultiLoc
+                    ? 'Find your school and sign your child up in under a minute.'
+                    : 'Pick a class below and sign your child up in under a minute.'))
                 : 'Classes are coming soon.'}
             </p>
           </div>
