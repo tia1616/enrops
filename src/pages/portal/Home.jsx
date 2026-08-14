@@ -210,7 +210,13 @@ export default function Home() {
         .eq('organization_id', org.id),
       // District names, from the anon-safe view rather than the districts table,
       // so a SIGNED-IN family sees the same grouping a signed-out one does. Same
-      // pattern as class_schedule_public above. See 20260814k.
+      // pattern as class_schedule_public above.
+      //
+      // DEPLOY ORDER: migration 20260814k MUST be applied to an environment
+      // BEFORE this frontend reaches it. PostgREST fails the whole statement on
+      // an unknown relation, so without the view this read returns an error, not
+      // a partial row - see the failure branch below for what that costs.
+      // Measured 2026-08-14: the view is on STAGING, NOT on prod.
       supabase
         .from('districts_public')
         .select('id, name')
@@ -225,6 +231,18 @@ export default function Home() {
     // its schools land in the OTHER_DISTRICT bucket, which is what happened to
     // EVERY district while signed in before this - the difference is that it is
     // now the failure mode, not the normal case.
+    //
+    // EMPTY AND FAILED MUST STAY DISTINGUISHABLE. `dtRes.data || []` alone makes
+    // "this org has no districts" and "the districts read errored" produce the
+    // identical page, and the second one is precisely the bug this commit exists
+    // to fix - it would have gone silent all over again, on a page no operator
+    // has an error report for. The degrade is deliberate and soft (the school
+    // select still works, families can still register, so there is nothing a
+    // family could act on and no error is shown to them) but it does not get to
+    // be invisible to US.
+    if (dtRes.error) {
+      console.warn('[registration] district names unavailable; catalog will group everything as "%s". Cause: %o', OTHER_DISTRICT, dtRes.error);
+    }
     const dn = {};
     (dtRes.data || []).forEach((d) => { dn[d.id] = d.name; });
 
@@ -620,6 +638,11 @@ export default function Home() {
                         }}
                       >
                         <option value="">
+                          {/* A literal ellipsis, NOT &hellip;. This is a JS string
+                              inside a JSX expression, so an HTML entity would
+                              render as the seven characters "&hellip;". The
+                              district option below is JSX TEXT, where the entity
+                              is correct - the two are not inconsistent. */}
                           {useGroups && !locationDistrict ? 'Pick a district first' : 'Select a school…'}
                         </option>
                         {schoolChoices.map((loc) => (
