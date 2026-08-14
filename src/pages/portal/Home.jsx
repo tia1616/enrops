@@ -397,8 +397,14 @@ export default function Home() {
 
   // Lean, enrops-branded registration for self-serve operators (everyone except
   // legacy J2S). No hardcoded J2S hero, and the open programs render as a list
-  // straight to checkout so a location-less program is still reachable. J2S
-  // (legacy_own_platform) keeps its existing page below.
+  // straight to checkout. J2S (legacy_own_platform) keeps its existing page below.
+  //
+  // This used to add "so a location-less program is still reachable". The school
+  // gate makes that false - a program whose location has no id or no name is
+  // skipped by locOptions and can never be filtered TO. It describes a row that
+  // cannot exist anyway: programs.program_location_id and program_locations.name
+  // are both NOT NULL on prod, with zero blank names (checked 2026-08-14). If
+  // either ever becomes nullable, this gate needs an "everything else" bucket.
   //
   // The picker here is now the SAME SHAPE as J2S's below: district, then school,
   // then the classes. It used to be one grouped select that FILTERED a list every
@@ -522,8 +528,13 @@ export default function Home() {
         <div style={{ background: '#1C004F', color: '#fff', padding: '56px 20px 72px' }}>
           <div style={{ maxWidth: 820, margin: '0 auto' }}>
             {/* Don't announce "registration is open" above a page that then says
-                it isn't — the hero and the body have to tell the same story. */}
-            {paymentsReady && (
+                it isn't — the hero and the body have to tell the same story.
+                `allOpen.length` is the second half of that rule and was missing:
+                an org with Stripe connected and nothing published showed the
+                green "registration is open" badge directly above a body reading
+                "No open programs yet." Stripe being ready is not the same fact
+                as there being something to register for. */}
+            {paymentsReady && allOpen.length > 0 && (
               <span style={{ display: 'inline-block', background: 'rgba(38,214,135,0.14)', border: '1px solid rgba(38,214,135,0.35)', color: '#26D687', borderRadius: 100, padding: '5px 14px', fontSize: 12, fontWeight: 600 }}>
                 {termLabel ? `${termLabel} registration is open` : 'Registration is open'}
               </span>
@@ -531,18 +542,22 @@ export default function Home() {
             <h1 style={{ fontSize: 38, fontWeight: 700, lineHeight: 1.12, margin: '18px 0 12px' }}>
               {branding?.hero_headline || org?.name || 'Register today'}
             </h1>
-            {/* The DEFAULT tracks the gate: with a school still to pick there is
-                no class "below" to pick, and a hero that says otherwise is the
-                same hero-vs-body contradiction the badge above avoids. An
-                operator's own hero_subtext is left exactly as they wrote it -
-                their page, their words. */}
+            {/* The DEFAULT tracks what the body actually shows. Three states, three
+                sentences: nothing published yet, a school still to pick, or a class
+                list right below. Getting this wrong is the hero-vs-body
+                contradiction the badge above guards against - the empty-catalog
+                case used to promise "Pick a class below" over a body reading "No
+                open programs yet." An operator's own hero_subtext is left exactly
+                as they wrote it - their page, their words. */}
             <p style={{ fontSize: 17, lineHeight: 1.6, color: 'rgba(255,255,255,0.82)', maxWidth: 560, margin: 0 }}>
-              {paymentsReady
-                ? (branding?.hero_subtext
-                  || (hasMultiLoc
-                    ? 'Find your school and sign your child up in under a minute.'
-                    : 'Pick a class below and sign your child up in under a minute.'))
-                : 'Classes are coming soon.'}
+              {!paymentsReady
+                ? 'Classes are coming soon.'
+                : (branding?.hero_subtext
+                  || (allOpen.length === 0
+                    ? 'Classes are coming soon.'
+                    : hasMultiLoc
+                      ? 'Find your school and sign your child up in under a minute.'
+                      : 'Pick a class below and sign your child up in under a minute.'))}
             </p>
           </div>
         </div>
