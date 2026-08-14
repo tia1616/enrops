@@ -282,12 +282,28 @@ export default function Payroll() {
             .filter((r) => r.pay_status !== 'withheld' && r.pay_amount_cents != null)
             .reduce((s, r) => s + (r.pay_amount_cents ?? 0) + (r.pay_adjustment_cents ?? 0), 0);
 
-          // Distance bonus (regular only, not yet paid).
-          const sampleForBonus = g.rows.find((r) => r.source === 'regular');
-          const distanceBonusCents = (sampleForBonus && sampleForBonus.distance_bonus_paid_at === null)
-            ? (sampleForBonus.distance_bonus_cents_if_regular ?? 0)
+          // Distance bonus, WHAT THIS WEEK IS WORTH — pairs with totalPayable
+          // above, which likewise counts every non-withheld day rather than only
+          // the ones payable this second. A bonus rides on the regular
+          // instructor's assignment, so any regular row in the group carries it.
+          //
+          // The `g.source === 'regular'` test that used to gate this at the three
+          // display sites is gone. `g.source` is just whichever row happened to be
+          // seen FIRST when the group was built (see the groupMap loop above), so
+          // a week mixing regular and sub days dropped the bonus out of the
+          // displayed total while the server still paid it. It under-stated, so
+          // nobody was ever shorted, and there are zero mixed groups on either
+          // environment today — but it is money, and the row that decides it was
+          // never meant to be a property of the group.
+          const anyRegularRow = g.rows.find((r) => r.source === 'regular');
+          const distanceBonusCents = (anyRegularRow && anyRegularRow.distance_bonus_paid_at === null)
+            ? (anyRegularRow.distance_bonus_cents_if_regular ?? 0)
             : 0;
-          const distanceBonusPaid = sampleForBonus?.distance_bonus_paid_at != null;
+          // Informational chip. Sampled across ALL rows on purpose: once the
+          // bonus is paid its rows carry a payout id and leave eligibleRows, so
+          // an eligible-only sample would make "bonus paid" vanish the instant it
+          // became true.
+          const distanceBonusPaid = anyRegularRow?.distance_bonus_paid_at != null;
 
           // Aggregate status.
           const statuses = [...new Set(g.rows.map((r) => r.pay_status))];
@@ -311,6 +327,23 @@ export default function Payroll() {
             r.pay_status !== 'withheld'
           );
 
+          // Distance bonus, WHAT WILL ACTUALLY MOVE if you pay right now. This
+          // mirrors pay-instructor (index.ts:263-278) line for line: the server
+          // samples the first ELIGIBLE row with source='regular' and pays the
+          // bonus when it is unpaid and > 0. It has no notion of a group-level
+          // source, and it never looks at rows it is not paying.
+          //
+          // Distinct from distanceBonusCents above because the pay modals answer a
+          // different question from the week card, exactly as eligibleAmount is
+          // distinct from totalPayable. Sampling the modals off ALL rows let a
+          // regular day that was withheld, unconfirmed or already paid contribute
+          // a bonus the server would refuse — the modal promising a bigger total
+          // than the payout it was about to make.
+          const bonusRow = eligibleRows.find((r) => r.source === 'regular');
+          const payableBonusCents = (bonusRow && bonusRow.distance_bonus_paid_at === null)
+            ? (bonusRow.distance_bonus_cents_if_regular ?? 0)
+            : 0;
+
           // Counts per status for the aggregate display.
           const counts = g.rows.reduce((acc, r) => {
             acc[r.pay_status] = (acc[r.pay_status] || 0) + 1;
@@ -321,13 +354,14 @@ export default function Payroll() {
             ...g,
             totalPayable,
             distanceBonusCents,
+            payableBonusCents,
             distanceBonusPaid,
             groupStatus,
             eligibleRows,
             unconfirmedRows,
             counts,
             // Total IF paid now (base + bonus when applicable)
-            payableTotalNow: totalPayable + (g.source === 'regular' ? distanceBonusCents : 0),
+            payableTotalNow: totalPayable + distanceBonusCents,
           };
         });
 
@@ -1416,7 +1450,10 @@ function PayDrawer({ group, onClose, onPaid }) {
   const eligibleAmount = group.eligibleRows.reduce(
     (s, r) => s + (r.pay_amount_cents ?? 0) + (r.pay_adjustment_cents ?? 0), 0,
   );
-  const total = eligibleAmount + (group.source === 'regular' && !group.distanceBonusPaid ? group.distanceBonusCents : 0);
+  // payableBonusCents, not distanceBonusCents: this is the number the server is
+  // about to move, so it is sampled from the eligible rows the same way
+  // pay-instructor samples them. It is already 0 once the bonus is paid.
+  const total = eligibleAmount + group.payableBonusCents;
 
   const stripeReady = group.stripePayoutsEnabled && group.stripeDestination;
 
@@ -1479,9 +1516,9 @@ function PayDrawer({ group, onClose, onPaid }) {
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontSize: 13 }}>
           <span>Base pay</span><span>{dollars(eligibleAmount)}</span>
         </div>
-        {group.source === 'regular' && group.distanceBonusCents > 0 && !group.distanceBonusPaid && (
+        {group.payableBonusCents > 0 && (
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontSize: 13 }}>
-            <span>Distance bonus</span><span>+{dollars(group.distanceBonusCents)}</span>
+            <span>Distance bonus</span><span>+{dollars(group.payableBonusCents)}</span>
           </div>
         )}
         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, paddingTop: 8, borderTop: `1px solid ${RULE}`, fontWeight: 700, fontSize: 15 }}>
@@ -1522,7 +1559,10 @@ function MarkPaidDrawer({ group, onClose, onMarked }) {
   const eligibleAmount = group.eligibleRows.reduce(
     (s, r) => s + (r.pay_amount_cents ?? 0) + (r.pay_adjustment_cents ?? 0), 0,
   );
-  const total = eligibleAmount + (group.source === 'regular' && !group.distanceBonusPaid ? group.distanceBonusCents : 0);
+  // payableBonusCents, not distanceBonusCents: this is the number the server is
+  // about to move, so it is sampled from the eligible rows the same way
+  // pay-instructor samples them. It is already 0 once the bonus is paid.
+  const total = eligibleAmount + group.payableBonusCents;
 
   async function submit() {
     if (note.trim().length === 0) {
@@ -1580,7 +1620,7 @@ function MarkPaidDrawer({ group, onClose, onMarked }) {
         </div>
         <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
           {group.eligibleRows.length} day{group.eligibleRows.length === 1 ? '' : 's'}
-          {group.source === 'regular' && group.distanceBonusCents > 0 && !group.distanceBonusPaid && ' + distance bonus'}
+          {group.payableBonusCents > 0 && ' + distance bonus'}
         </div>
       </div>
       <label style={{ display: 'block', fontSize: 13, color: MUTED, marginBottom: 6 }}>

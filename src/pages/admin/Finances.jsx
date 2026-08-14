@@ -835,18 +835,19 @@ export default function Finances() {
 
   return (
     <PageShell>
-      {/* Heading and subtitle follow the nav. A registration operator's nav says
-          "Payments", so a page titled "Receivables" reads as a different screen —
-          and the old subtitle promised "invoices to schools", which they don't
-          have and can't get. Say what this page actually is for them. J2S keeps
-          the accounting language its nav still uses. */}
+      {/* Heading and subtitle follow the nav. The tab is "Payments" for EVERY
+          tenant now (Jessica, 2026-08-14), so the title is too — it used to be
+          "Receivables" for J2S, matching the accounting language its nav then
+          used. The subtitle still splits: "invoices to schools" is real for a
+          tenant with school partners and is something a registration operator
+          does not have and cannot get. */}
       {/* ONE tip per page, at the title. Same place on every screen, so the "?"
           becomes something an operator learns once rather than hunts for. It
           used to sit mid-paragraph further down this page, which read as
           floating and broke that rule. Lean only: the fee it explains is the
           registration operator's fee. */}
       <h1 style={{ margin: "0 0 4px", color: PURPLE, fontSize: 28, fontWeight: 700, display: "flex", alignItems: "center", gap: 2 }}>
-        {isLean ? "Payments" : "Receivables"}
+        Payments
         {/* `feePassThrough`, not `feeCfg` - feeCfg only exists inside ActivityTab
             further down this file, and referencing it here rendered a blank page
             (a ReferenceError the build cannot catch, because an undefined

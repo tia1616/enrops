@@ -85,15 +85,29 @@ const NAV = [
     ],
   },
   {
+    // ONE Money section for every tenant. The lean nav used to rename this
+    // "Payments" and promote Discounts to a top-level item of its own; both are
+    // gone (Jessica, 2026-08-14). "Payments" is now the FIRST TAB — the thing
+    // that really is a list of payments — and "Money" is the section that holds
+    // it, so the sidebar word and the tab word each name what they open.
     to: "/admin/finances", label: "Money",
     gate: "viewMoney",   // owner/admin only — staff + viewer are money-blind
     tabs: [
-      { to: "/admin/finances", label: "Receivables" },
+      // Was "Receivables": accounting language an operator does not use. Refunds
+      // live on this page too, so "Payments" covers money in AND money back out.
+      { to: "/admin/finances", label: "Payments" },
       // "Payouts" promised Stripe payout history, which was two empty tabs and
       // is now deleted (see Payouts.jsx). The page is the payroll calculator and
       // the label says so — an operator looking for "what do I owe my teachers"
       // was never going to guess "Payouts".
-      { to: "/admin/payouts", label: "Payroll calculator" },
+      //
+      // instructorsOnly: an org with no instructor entitlement has nobody to pay,
+      // so the tab is hidden — but it stays IN this array, and that is what keeps
+      // /admin/payouts among the section's roots for navItemActive, hence behind
+      // `viewMoney`. shapeNavForOrg used to get the hiding by dropping the tabs
+      // wholesale, which then needed a hand-maintained `match` list to put the
+      // route back under the gate. One rule now does both jobs.
+      { to: "/admin/payouts", label: "Payroll calculator", instructorsOnly: true },
       { to: "/admin/discounts", label: "Discounts" },
     ],
   },
@@ -218,67 +232,26 @@ function shapeNavForOrg(nav, org) {
       });
       continue;
     }
-    if (item.to === "/admin/finances" && item.tabs) {
-      // "Money" reads as "Payments" for lean ops, and Discounts is promoted to
-      // its own top-level item either way.
-      //
-      // PAYOUTS IS THE SAME BUG THE INSTRUCTORS SECTION HAD. The reason written
-      // here was "Payouts is instructor payroll; a lean op has none" — the exact
-      // "empirically safe, every lean tenant has zero instructors" premise that a
-      // founding operator onboarding their own instructors breaks. Chunk 2 fixed
-      // it for /admin/schedule and left it standing here, so an operator could
-      // write the documents, invite an instructor, have them mark sessions
-      // taught — and then have NO LINK ANYWHERE to the page that pays them. The
-      // route is ungated, so it was reachable only by typing the URL, which is
-      // not access.
-      //
-      // Same predicate as the nav item and the Settings cards, so the three can
-      // never disagree. A lean op with no instructor entitlement still gets the
-      // one clean page the comment above describes.
-      // THE TABLESS BRANCH STILL HAS TO CLAIM /admin/payouts, and this is a
-      // money-read guard, not cosmetics. navItemActive derives an item's roots
-      // from `tabs` when it has them and from `match || [to]` when it does not,
-      // and the whole viewMoney block card keys off that: blockedItem only fires
-      // for a gated item that is ACTIVE. Drop the tabs without a `match` and
-      // /admin/payouts matches no nav item at all, so a staff or viewer member
-      // who types the URL gets the page rendered instead of the block card.
-      //
-      // Nothing downstream catches them. Payouts has no permission check of its
-      // own, Payroll gates only its write controls, and v_effective_pay_lines is
-      // security_invoker with its pay columns coming from a table whose SELECT
-      // policy is org-scoped with NO role filter — so they read real
-      // per-instructor pay. Pre-existing (the old code pushed the tabless item
-      // unconditionally) and narrowed rather than introduced by the branch above,
-      // but the asymmetry is new and this is the line that closes it.
-      const { tabs: _drop, ...rest } = item;
-      void _drop;
-      out.push(
-        canInstructors
-          ? {
-              ...item,
-              label: "Payments",
-              tabs: item.tabs.filter((t) => t.to !== "/admin/discounts"),
-            }
-          // match derived FROM item.tabs, not retyped. Hand-listing the two routes
-          // worked but added the 12th and 13th hardcoded path literal to this
-          // function, and a fourth Money tab added to NAV would silently not join
-          // this list — reopening the exact hole this line closes.
-          // DISCOUNTS IS EXCLUDED, the same way the canInstructors arm one line
-          // above excludes it. It is pushed as its OWN top-level item on the next
-          // line, so claiming it here lit both sidebar entries at once on
-          // /admin/discounts and partly undid the promotion. The hand-written
-          // list this replaced excluded it deliberately; deriving from item.tabs
-          // silently put it back. Same filter, one source, no hardcoded paths —
-          // a fourth Money tab still joins automatically.
-          : {
-              ...rest,
-              label: "Payments",
-              match: item.tabs.filter((t) => t.to !== "/admin/discounts").map((t) => t.to),
-            },
-      );
-      out.push({ to: "/admin/discounts", label: "Discounts", gate: "viewMoney" });
-      continue;
-    }
+    // MONEY IS NO LONGER RESHAPED HERE (Jessica, 2026-08-14). This function used
+    // to rename the section "Payments" for lean orgs, promote Discounts to its
+    // own top-level item, and — for a lean org with no instructor entitlement —
+    // drop the tabs wholesale and rebuild a `match` list so /admin/payouts stayed
+    // behind `viewMoney`. All three are gone: every tenant now gets one Money
+    // section with Payments / Payroll calculator / Discounts.
+    //
+    // The one thing that block did which still has to happen is HIDING the
+    // payroll tab from an org that cannot manage instructors — the same
+    // entitlement question as /admin/schedule above, not a nav-shape one. That
+    // now rides on the tab's own `instructorsOnly` flag through tabApplies, so
+    // the tab strip and the sidebar landing read it from one rule and the tab
+    // stays in `tabs` for navItemActive. Keeping it in `tabs` is the money-read
+    // guard, not cosmetics: navItemActive derives an item's roots from `tabs`
+    // when it has them, and the viewMoney block card only fires for a gated item
+    // that is ACTIVE. Nothing downstream would catch a staff or viewer member who
+    // typed /admin/payouts — the route is ungated, Payroll gates only its write
+    // controls, and v_effective_pay_lines is security_invoker over a table whose
+    // SELECT policy is org-scoped with no role filter, so they would read real
+    // per-instructor pay.
     // NOTE: Settings no longer claims /admin/schools in its `match` list. That
     // existed only to keep Settings lit while the venue surface was reached
     // from there; now it is a Programs tab, so Programs owns the highlight and
@@ -294,6 +267,12 @@ function shapeNavForOrg(nav, org) {
 // programs) OR they upload their own schedule (Class schedule). The tab that
 // cannot apply is hidden rather than greyed out.
 //
+// `instructorsOnly` is the third rule and the only one that asks an ENTITLEMENT
+// rather than a tenant type: a tab that only means something once you have
+// instructors to manage (Money > Payroll calculator). It lives here, with the
+// other two, so a hidden tab is hidden the same way everywhere — strip, sidebar
+// landing — and stays in `tabs` for navItemActive's route roots.
+//
 // SHARED so the tab strip and the sidebar landing below cannot disagree. They
 // did: the strip learned this rule and the sidebar never got told, so clicking
 // "Programs" at a bring-your-own-registration provider dropped them on
@@ -304,6 +283,7 @@ function tabApplies(tab, org) {
   const usesReg = org?.uses_enrops_registration !== false; // default true
   if (tab.regOnly && !usesReg) return false;
   if (tab.outsideRegOnly && usesReg) return false;
+  if (tab.instructorsOnly && !canManageInstructors(org)) return false;
   return true;
 }
 
@@ -643,8 +623,14 @@ export default function AdminLayout() {
   const activeTabSection = navItems.find(
     (it) => it.tabs && it.tabs.some((t) => location.pathname === t.to || location.pathname.startsWith(t.to + "/"))
   );
+  // ...and only when the tab for THIS page is one the tenant can actually see.
+  // A page whose own tab is hidden (typed as a URL) would otherwise render a
+  // strip with nothing lit in it — the same "nothing lit, no way back" shape
+  // Jessica hit on Cascade, arrived at from the other direction. tabApplies is
+  // the shared rule, so the strip can't disagree with the sidebar about it.
   const showSectionTabs =
-    activeTabSection && activeTabSection.tabs.some((t) => location.pathname === t.to);
+    activeTabSection &&
+    activeTabSection.tabs.some((t) => location.pathname === t.to && tabApplies(t, org));
 
   // Page column: sidebar+content grid on top, legal footer underneath it. The
   // footer is a PAGE footer - it must span the full width below both the sidebar

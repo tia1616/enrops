@@ -4,6 +4,7 @@ import { supabase } from '../../../lib/supabase.js';
 import { invokeOnboardingFn, isHandledRedirect } from '../../../lib/onboardingFetch.js';
 import { fetchLegalDocument } from '../../../lib/legalDoc.js';
 import { STEP_KEYS } from '../../../lib/onboardingSteps.js';
+import { linkifyText } from '../../../lib/linkifyText.jsx';
 import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardLayout.jsx';
 import { useOnboardingConfig } from '../OnboardingConfigContext.jsx';
 
@@ -308,9 +309,18 @@ export default function Screen4Agreement({ slug, instructor, onboarding, onAdvan
           )}
 
           <div className="max-h-[60vh] overflow-y-auto rounded-md border border-neutral-200 bg-neutral-50 p-4 text-sm leading-relaxed text-neutral-800">
+            {/* linkifyText, like every other reader of a provider-written
+                document: Screen5Policies, Screen6Additional, the admin preview
+                in InstructorDocuments and the portal's drawer. This screen was
+                the one holdout rendering {para} raw, so a URL a provider put in
+                their contractor agreement was dead text an instructor had to
+                retype. It only started mattering on 12 Aug, when providers began
+                writing their own agreements instead of signing the stock one.
+                linkifyText handles http(s) only and its output is React-escaped,
+                so this adds no injection surface. */}
             {docState.bodyText.split(/\n\s*\n/).map((para, i) => (
               <p key={i} className="mb-3 whitespace-pre-wrap">
-                {para}
+                {linkifyText(para)}
               </p>
             ))}
           </div>
