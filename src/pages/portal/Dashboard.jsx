@@ -413,7 +413,10 @@ export default function Dashboard() {
           // normalize entry_date -> date. session_time carries the EARLIER time
           // on a kept early-release date — the one day a parent must not assume
           // the usual pickup time.
-          const schedule = (dateResults[i]?.data || []).map((x) => ({ date: x.entry_date, kind: x.kind, reason: x.reason, session_time: x.session_time }));
+          const schedule = (dateResults[i]?.data || []).map((x) => ({
+            date: x.entry_date, kind: x.kind, reason: x.reason,
+            session_time: x.session_time, session_end_time: x.session_end_time,
+          }));
           const entry = merged.find((e) => e.id === enrollmentId);
           if (entry) {
             entry.sessionSchedule = schedule;

@@ -619,7 +619,10 @@ export default function InstructorPortal() {
         // entry_date -> date so the card render matches the batch RPC's shape.
         // session_time is the EARLIER start on a kept early-release date — the one
         // day an instructor must not turn up at the usual time.
-        map[pid] = (results[i]?.data || []).map((x) => ({ date: x.entry_date, kind: x.kind, reason: x.reason, session_time: x.session_time }));
+        map[pid] = (results[i]?.data || []).map((x) => ({
+          date: x.entry_date, kind: x.kind, reason: x.reason,
+          session_time: x.session_time, session_end_time: x.session_end_time,
+        }));
       });
       setScheduleByProgram(map);
     } else {
