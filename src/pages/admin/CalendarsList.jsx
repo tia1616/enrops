@@ -12,6 +12,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
+import EarlyReleaseChoice from "./EarlyReleaseChoice.jsx";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -85,6 +86,11 @@ export default function CalendarsList() {
   const [calendars, setCalendars] = useState([]); // district_calendars rows for current school year
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null); // { key } | null
+  // Shown in the district's row straight after its calendar is saved, when that
+  // calendar has occasional early-release days landing on a class's weekday.
+  // Asked here rather than buried in Scheduled Programs because this is the
+  // moment the dates arrive and the operator has the context in front of them.
+  const [erPrompt, setErPrompt] = useState(null); // { key } | null
   const [viewing, setViewing] = useState(() => new Set()); // row keys currently showing their dates inline
   const [topError, setTopError] = useState(null);
 
@@ -270,7 +276,27 @@ export default function CalendarsList() {
             const isEditing = editing?.key === row.key;
             return (
               <div key={row.key}>
-                {isEditing ? (
+                {erPrompt?.key === row.key ? (
+                  <EarlyReleaseChoice
+                    org={org}
+                    districtId={row.districtId}
+                    // Both keys, for the same reason the calendar row itself
+                    // carries both: district_id is the structured link, and the
+                    // free-text string is what a school linked before districts
+                    // existed still matches on.
+                    districtText={cal?.district ?? row.calendarKey ?? row.label}
+                    districtLabel={row.label}
+                    // Clicked "Class times" vs appeared after a save. Only
+                    // governs whether "nothing to set here" is said out loud.
+                    explicit={!!erPrompt.explicit}
+                    onDone={async ({ changed }) => {
+                      setErPrompt(null);
+                      // Session dates just moved for these classes, so the
+                      // counts on this page are stale.
+                      if (changed) await loadAll();
+                    }}
+                  />
+                ) : isEditing ? (
                   <CalendarEditor
                     org={org}
                     districtId={row.districtId}
@@ -281,6 +307,10 @@ export default function CalendarsList() {
                     onClose={() => setEditing(null)}
                     onSaved={async (savedSchoolYear) => {
                       setEditing(null);
+                      // Ask the early-release question now. The component works
+                      // out whether there is anything to ask and closes itself
+                      // if not, so this never leaves an empty row behind.
+                      setErPrompt({ key: row.key });
                       // Jump the dropdown to the year just saved so the new
                       // row shows up immediately. No-op if it already matches.
                       if (savedSchoolYear && savedSchoolYear !== schoolYear) {
@@ -300,6 +330,7 @@ export default function CalendarsList() {
                     isViewing={viewing.has(row.key)}
                     onToggleView={() => toggleViewing(row.key)}
                     onEdit={() => setEditing({ key: row.key })}
+                    onEditEarlyRelease={() => setErPrompt({ key: row.key, explicit: true })}
                   />
                 )}
               </div>
@@ -323,7 +354,7 @@ function isCalendarConfigured(cal) {
   return hasBounds || hasDates;
 }
 
-function DistrictRow({ district, locationCount, cal, isViewing, onToggleView, onEdit }) {
+function DistrictRow({ district, locationCount, cal, isViewing, onToggleView, onEdit, onEditEarlyRelease }) {
   const noSchoolCount = Array.isArray(cal?.no_school_dates) ? cal.no_school_dates.length : 0;
   const earlyReleaseCount = Array.isArray(cal?.early_release_dates) ? cal.early_release_dates.length : 0;
   const status = isCalendarConfigured(cal) ? "configured" : cal ? "started" : "missing";
@@ -387,6 +418,19 @@ function DistrictRow({ district, locationCount, cal, isViewing, onToggleView, on
         {hasViewableDates && (
           <button type="button" onClick={onToggleView} style={btn("transparent", BRIGHT, true)}>
             {isViewing ? "Hide dates" : "View dates"}
+          </button>
+        )}
+        {/* A PERMANENT WAY BACK IN. The early-release question used to appear
+            only in the moment after a calendar was saved, which made it a
+            one-shot: an operator who mistyped the time, or whose school moved
+            its dismissal, had no way to reach it from here at all — they had to
+            know that re-saving the calendar would re-ask. Jessica, 14 Aug.
+            Shown whenever this calendar HAS early-release dates; the screen
+            itself works out whether any class is actually affected and closes
+            straight away if none is. */}
+        {earlyReleaseCount > 0 && (
+          <button type="button" onClick={onEditEarlyRelease} style={btn("transparent", BRIGHT, true)}>
+            Class times
           </button>
         )}
         <button type="button" onClick={onEdit} style={btn(cal ? "transparent" : BRIGHT, cal ? BRIGHT : "#fff", !!cal)}>

@@ -7,6 +7,7 @@ import { formatTermLabel } from '../../lib/terms.js';
 import { getUserRoles } from '../../lib/useUserRoles.js';
 import { renderWaiverText } from '../../lib/waiverText.js';
 import { dismissalAnswerIncomplete } from '../../lib/dismissal.js';
+import { earlyReleaseLine } from '../../lib/timeText.js';
 import WaiverGate from './WaiverGate.jsx';
 import PickupInfoGate from './PickupInfoGate.jsx';
 
@@ -390,8 +391,14 @@ export default function Dashboard() {
           )
         );
         programIdsForDates.forEach(({ enrollmentId }, i) => {
-          // The RPC returns rows keyed entry_date/kind/reason; normalize entry_date -> date.
-          const schedule = (dateResults[i]?.data || []).map((x) => ({ date: x.entry_date, kind: x.kind, reason: x.reason }));
+          // The RPC returns rows keyed entry_date/kind/reason/session_time/
+          // session_end_time; normalize entry_date -> date. The two times carry
+          // the EARLIER window on a kept early-release date — the one day a
+          // parent must not assume the usual pickup time.
+          const schedule = (dateResults[i]?.data || []).map((x) => ({
+            date: x.entry_date, kind: x.kind, reason: x.reason,
+            session_time: x.session_time, session_end_time: x.session_end_time,
+          }));
           const entry = merged.find((e) => e.id === enrollmentId);
           if (entry) {
             entry.sessionSchedule = schedule;
@@ -775,6 +782,15 @@ function ScheduleTab({ enrollments }) {
                           </p>
                         ) : (
                           <p className="text-sm text-j2s-ink/50">Session {idx + 1}</p>
+                        )}
+                        {/* EARLY RELEASE. School lets out early, so this one
+                            class runs at a different time from the card above.
+                            Said on the row itself because a parent reads the
+                            date, not the header, when working out pickup. */}
+                        {row.reason === 'Early release' && (
+                          <p className="text-xs font-semibold text-j2s-ink/70">
+                            {earlyReleaseLine(row.session_time, row.session_end_time)}
+                          </p>
                         )}
                       </div>
 

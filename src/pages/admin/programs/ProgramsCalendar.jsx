@@ -25,6 +25,10 @@ import { buildCatalogUrl } from "../../../lib/regLinks.js";
 import { fetchOrgTerms, formatTermLabel } from "../../../lib/terms.js";
 import { getPermissions } from "../../../lib/permissions.js";
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
+// Only the two helpers this file does not already have of its own. Its local
+// to24h/to12hText/formatTime stay as they are — swapping them out is a separate
+// change with its own blast radius across a 3,000-line file.
+import { durationMinutes, addMinutes24h, earlyReleaseLine } from "../../../lib/timeText.js";
 import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib/programText.js";
 import { GRADE_OPTIONS, audienceMode, audiencePatch, rangeBackwards, rangeBackwardsMessage } from "../../../lib/grades.js";
 import {
@@ -237,7 +241,14 @@ export default function ProgramsCalendar() {
     // over a stale number. Refetch THIS one program's schedule and merge it so the row
     // reflects the save immediately (honest state). Only when a schedule-affecting field
     // actually changed, to avoid a needless round-trip on price/room/capacity edits.
-    const SCHEDULE_KEYS = ["first_session_date", "session_count", "end_date", "schedule_mode", "program_location_id", "day_of_week"];
+    // early_release_start_time belongs here: setting it ADDS the occasional
+    // early-release dates back as real sessions and clearing it removes them
+    // again, so it changes the derived list exactly as much as day_of_week does.
+    // Found by clicking it on staging -- the save succeeded, the row said
+    // "Saved", and the dates underneath still showed 16 Sep struck through until
+    // a full page reload. That is the stale-number-under-a-tick this list exists
+    // to prevent. The end time rides along so a pair set together is one refetch.
+    const SCHEDULE_KEYS = ["first_session_date", "session_count", "end_date", "schedule_mode", "program_location_id", "day_of_week", "early_release_start_time", "early_release_end_time"];
     if (SCHEDULE_KEYS.some((k) => k in patch)) {
       // A schedule save re-materializes session_count from the CURRENT calendars,
       // so this program is drift-free by construction now — clear any stale flag
@@ -265,7 +276,14 @@ export default function ProgramsCalendar() {
         { p_program_id: programId },
       );
       if (schErr) throw schErr;
-      const arr = (sched ?? []).map((r) => ({ date: r.entry_date, kind: r.kind, reason: r.reason }));
+      // session_time must be carried here too. The batch loader
+      // (programs_with_session_schedule) supplies it on page load, so dropping
+      // it here would make an early-release time disappear the moment the
+      // schedule was re-read after an edit.
+      const arr = (sched ?? []).map((r) => ({
+        date: r.entry_date, kind: r.kind, reason: r.reason,
+        session_time: r.session_time, session_end_time: r.session_end_time,
+      }));
       setSessionDatesByProgram((prev) => ({ ...prev, [programId]: arr }));
     } catch (e) {
       console.warn("Couldn't refresh derived dates after skip:", e?.message ?? e);
@@ -513,6 +531,7 @@ export default function ProgramsCalendar() {
           .from("programs")
           .select(`
             id, curriculum, curriculum_id, day_of_week, start_time, end_time, room,
+            early_release_start_time, early_release_end_time,
             max_capacity, status, term, instructor_name, price_cents,
             short_description,
             grade_min, grade_max, age_min, age_max, age_format,
@@ -1470,6 +1489,13 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
     // Stored as 12-hour text ("2:45 PM"); <input type="time"> needs 24-hour.
     start_time: to24h(program.start_time),
     end_time: to24h(program.end_time),
+    // On an OCCASIONAL early-release day the class still meets, earlier. Blank
+    // means it is skipped that day, which is what every program did before
+    // 20260814a. Set here as well as in the post-calendar-upload question,
+    // because that question only fires when a calendar is saved and an operator
+    // changes their mind (or adds a class) long after that.
+    early_release_start_time: to24h(program.early_release_start_time),
+    early_release_end_time: to24h(program.early_release_end_time),
     first_session_date: program.first_session_date ?? "",
     session_count: program.session_count ?? "",
     // Range mode: 'count' (default, the J2S way) vs 'range' (Jeff's way -- count
@@ -1504,6 +1530,49 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
   const [savedFlash, setSavedFlash] = useState(false);
+
+  // How many OCCASIONAL early-release days land on this class's weekday.
+  //
+  // Fetched rather than assumed, and fetched from the same SQL the date
+  // derivation uses, because "occasional" is not a property of the calendar --
+  // it is a property of this class's weekday AT this location. A weekday that
+  // is early-release every week all year is that location's normal schedule and
+  // returns nothing here, which is correct: it was never skipped and there is
+  // nothing to decide.
+  //
+  // 0 -> the two fields below are not rendered at all. Showing "what time on
+  // early-release days?" to a class that has none is a question with no
+  // consequence, and the operator cannot tell that from a question that matters.
+  const [erDayCount, setErDayCount] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    const weekday = program.first_session_date
+      ? new Date(`${program.first_session_date}T00:00:00Z`).getUTCDay()
+      : null;
+    if (!panelOrg?.id || !program.program_location_id || weekday === null) {
+      setErDayCount(0);
+      return;
+    }
+    (async () => {
+      const { data, error } = await supabase.rpc("resolve_district_early_release_exceptions", {
+        p_org_id: panelOrg.id,
+        p_location_id: program.program_location_id,
+        p_term: program.term,
+        p_weekday: weekday,
+      });
+      if (cancelled) return;
+      if (error) {
+        // Leave the fields hidden rather than showing a control whose effect we
+        // could not verify. A value already set still saves and still works --
+        // this only governs whether the inputs are offered.
+        console.error("[ProgramsCalendar] early-release lookup failed", error);
+        setErDayCount(0);
+        return;
+      }
+      setErDayCount(Array.isArray(data) ? data.length : 0);
+    })();
+    return () => { cancelled = true; };
+  }, [panelOrg?.id, program.program_location_id, program.term, program.first_session_date]);
 
   // Which pair the panel is currently editing, and the one coercion that has to be
   // right: "" means NOT STATED, but grade K is 0, which is falsy. `Number("") || null`
@@ -1652,13 +1721,23 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
       p_day_of_week: titleDay(draft.day_of_week),
       p_start_date: draft.first_session_date,
       p_end_date: draft.end_date,
+      // THE PENDING VALUE, not the saved row. In range mode this preview's count
+      // is materialized straight into session_count by the same save, so if the
+      // preview still subtracts the early-release dates while the patch also
+      // turns them back ON, the two halves of one write contradict each other and
+      // the schedule silently ends weeks early. Code-review finding #2.
+      p_early_release_start_time: draft.early_release_start_time
+        ? to12hText(draft.early_release_start_time)
+        : null,
     }).then(({ data, error }) => {
       if (!alive) return;
       setRangeLoading(false);
       setRangePreview(error ? { error: error.message } : data);
     });
     return () => { alive = false; };
-  }, [draft.schedule_mode, draft.day_of_week, draft.first_session_date, draft.end_date, draft.program_location_id, program.organization_id, program.term]);
+    // early_release_start_time is a dependency for the same reason: typing it
+    // changes the count this preview is about to hand to the save.
+  }, [draft.schedule_mode, draft.day_of_week, draft.first_session_date, draft.end_date, draft.program_location_id, draft.early_release_start_time, program.organization_id, program.term]);
 
   function set(field, value) {
     setDraft((d) => ({ ...d, [field]: value }));
@@ -1748,12 +1827,24 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
       if (draft.runs_own_registration && draft.list_in_public_catalog && !draft.external_registration_url?.trim()) {
         throw new Error("Add the partner's registration link before listing it on your public page.");
       }
+      // An early-release class that ends before it starts reaches a parent as
+      // "Class is 2:00–12:00 PM" and reaches their calendar as a VEVENT with the
+      // end before the start, which RFC 5545 forbids. Same check the calendar
+      // screen makes, so the two editors cannot disagree. Code-review finding #3.
+      if (draft.early_release_start_time && draft.early_release_end_time
+          && durationMinutes(draft.early_release_start_time, draft.early_release_end_time) === null) {
+        throw new Error("The early-release end time must be after the start time.");
+      }
       const patch = {
         // The class weekday is the operator's choice in BOTH modes.
         day_of_week: draft.day_of_week ? titleDay(draft.day_of_week) : null,
         // Convert the 24-hour input values back to the stored 12-hour text format.
         start_time: draft.start_time ? to12hText(draft.start_time) : null,
         end_time: draft.end_time ? to12hText(draft.end_time) : null,
+        // Clearing this is a real answer ("skip that day again"), not a missing
+        // value, so a blank writes NULL rather than being left alone.
+        early_release_start_time: draft.early_release_start_time ? to12hText(draft.early_release_start_time) : null,
+        early_release_end_time: draft.early_release_end_time ? to12hText(draft.early_release_end_time) : null,
         first_session_date: isRange ? rangeFirstSession : (draft.first_session_date || null),
         schedule_mode: isRange ? "range" : "count",
         // end_date only means anything in range mode; null it in count mode so a
@@ -2080,6 +2171,40 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         <ExpandField label="End time">
           <input type="time" value={draft.end_time ?? ""} onChange={(e) => set("end_time", e.target.value)} style={expandInputStyle} />
         </ExpandField>
+        {/* Only for a class that actually HAS occasional early-release days.
+            Blank = skipped that day, which is what this class did before the
+            option existed, so an untouched class is unchanged. */}
+        {erDayCount > 0 && (
+          <>
+            <ExpandField label={`Early release start (${erDayCount} ${erDayCount === 1 ? "day" : "days"})`}>
+              <input
+                type="time"
+                value={draft.early_release_start_time ?? ""}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  set("early_release_start_time", v);
+                  // Fill the end from the class's usual length, but only when it
+                  // is blank — a parent needs the whole window, and nobody should
+                  // have to work out 12:45 + 60 minutes themselves. Never
+                  // overwrites an end that was typed.
+                  if (v && !draft.early_release_end_time) {
+                    const mins = durationMinutes(program.start_time, program.end_time);
+                    if (mins) set("early_release_end_time", addMinutes24h(v, mins));
+                  }
+                }}
+                style={expandInputStyle}
+              />
+            </ExpandField>
+            <ExpandField label="Early release end">
+              <input
+                type="time"
+                value={draft.early_release_end_time ?? ""}
+                onChange={(e) => set("early_release_end_time", e.target.value)}
+                style={expandInputStyle}
+              />
+            </ExpandField>
+          </>
+        )}
         <ExpandField label="Scheduling">
           {/* Count = the usual way (set a number of sessions). Range = set a start
               and end date; the count derives. Default count; range is opt-in per program. */}
@@ -2782,6 +2907,17 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, onScheduleChan
             <div key={`${x.date}-ns-${idx}`} style={{ fontSize: 13, fontVariantNumeric: "tabular-nums", color: MUTED }}>
               <span style={{ textDecoration: "line-through" }}>{formatSessionDate(x.date)}</span>
               <span style={{ fontStyle: "italic" }}> · {x.reason || "No school"}</span>
+            </div>
+          ) : x.reason === "Early release" ? (
+            // A KEPT early-release date. It is a real session, so it is not
+            // struck through -- but it does not meet at the class's usual time,
+            // and a date that looks identical to every other one is how an
+            // instructor turns up an hour late.
+            <div key={`${x.date}-s-${idx}`} style={{ color: INK, fontSize: 13, fontVariantNumeric: "tabular-nums" }}>
+              {formatSessionDate(x.date)}
+              <span style={{ color: AMBER, fontWeight: 600 }}>
+                {" · "}{earlyReleaseLine(x.session_time, x.session_end_time)}
+              </span>
             </div>
           ) : (
             <div key={`${x.date}-s-${idx}`} style={{ color: INK, fontSize: 13, fontVariantNumeric: "tabular-nums" }}>

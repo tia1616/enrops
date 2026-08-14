@@ -234,6 +234,41 @@ function shapeNavForOrg(nav, org) {
   return out;
 }
 
+// Does this tab apply to this tenant at all?
+//
+// A tenant is one type: they run registration through Enrops (Scheduled
+// programs) OR they upload their own schedule (Class schedule). The tab that
+// cannot apply is hidden rather than greyed out.
+//
+// SHARED so the tab strip and the sidebar landing below cannot disagree. They
+// did: the strip learned this rule and the sidebar never got told, so clicking
+// "Programs" at a bring-your-own-registration provider dropped them on
+// Scheduled programs — a page with no tab in the strip, nothing lit, and no way
+// back to it once they clicked anything else. Jessica hit that on Cascade,
+// 14 Aug.
+function tabApplies(tab, org) {
+  const usesReg = org?.uses_enrops_registration !== false; // default true
+  if (tab.regOnly && !usesReg) return false;
+  if (tab.outsideRegOnly && usesReg) return false;
+  return true;
+}
+
+// Where a sidebar item should actually land: its first tab that this tenant can
+// see AND this role may open. Falls back to the item's own `to` for untabbed
+// items and for the impossible case where no tab qualifies.
+//
+// For every group as currently defined, tabs[0].to === item.to, so this changes
+// nothing unless a tab is genuinely filtered out — which is the bug it fixes.
+// The permission half is a bonus: landing on the first PERMITTED tab beats
+// landing on one the route guard is about to block.
+function navLandingTo(item, org, perm) {
+  if (!item.tabs) return item.to;
+  const first = item.tabs.find(
+    (t) => (!t.gate || perm.can(t.gate)) && tabApplies(t, org)
+  );
+  return first ? first.to : item.to;
+}
+
 // A sidebar item is "active" when the current path is (or is under) any of its
 // routes. Overview matches exactly; tabbed sections match any tab route;
 // Partners matches its `match` list; otherwise the item's own `to`.
@@ -731,7 +766,7 @@ export default function AdminLayout() {
               return (
                 <Link
                   key={item.to}
-                  to={item.soon ? location.pathname : item.to}
+                  to={item.soon ? location.pathname : navLandingTo(item, org, perm)}
                   style={{
                     display: "flex",
                     alignItems: "center",
@@ -857,9 +892,7 @@ export default function AdminLayout() {
                 // never do anything is just noise, and the hover reason is
                 // invisible on a phone anyway. The PAGE and its route stay, so the
                 // tenants it does apply to are unaffected.
-                const usesReg = org?.uses_enrops_registration !== false; // default true
-                const notApplicable = (t.regOnly && !usesReg) || (t.outsideRegOnly && usesReg);
-                if (notApplicable) return null;
+                if (!tabApplies(t, org)) return null;
                 return (
                   <Link
                     key={t.to}

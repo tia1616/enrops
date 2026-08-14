@@ -45,3 +45,15 @@ jobs:
         # flag pre-existing warnings in non-test files and block CI on
         # unrelated noise.
         run: deno test --allow-net --allow-read=supabase/functions,src --no-check supabase/functions/
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run src unit tests
+        # The src/**/*.test.mjs files are plain node scripts (pass/fail counter +
+        # process.exit), which `deno test` above does not pick up. This runner
+        # executes each with node and fails the job if any fails. No `npm ci` -
+        # these tests import only local source + node builtins, no deps.
+        run: npm test

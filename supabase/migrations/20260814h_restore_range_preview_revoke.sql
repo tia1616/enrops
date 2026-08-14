@@ -1,0 +1,40 @@
+-- 20260814h_restore_range_preview_revoke.sql
+--
+-- Code-review finding (security), 14 Aug. 20260814f used DROP + CREATE to add the
+-- early-release argument to preview_program_range_schedule. DROP FUNCTION
+-- destroys the object AND ITS ACL; CREATE then makes a new object with a null
+-- ACL, which Postgres reads as the built-in default -- owner ALL, and
+-- **PUBLIC = EXECUTE**. anon is a member of PUBLIC.
+--
+-- That silently undid 20260717_revoke_anon_range_fns.sql, which revoked this
+-- exact function for two stated reasons: least privilege, and "an unbounded date
+-- range is a cheap anon-callable server loop". Verified on staging before
+-- writing this: has_function_privilege('anon', ..., 'EXECUTE') came back TRUE and
+-- the ACL showed both `=X/postgres` (PUBLIC) and `anon=X/postgres`.
+--
+-- NOT a data leak -- the function is SECURITY INVOKER, so RLS still gates every
+-- read. It is availability: an anon POST with p_start_date 0001-01-01 and
+-- p_end_date 9999-12-31 passes both entry guards and walks ~521,000 weeks,
+-- appending to a plpgsql array each time (array append copies the whole array,
+-- so the loop is O(n^2)), pinning a backend per request.
+--
+-- THE GENERAL RULE, because this will happen again: CREATE OR REPLACE keeps the
+-- ACL, DROP + CREATE does not. Any migration that DROPs a function to change its
+-- signature or return type must re-apply that function's REVOKEs, not just its
+-- GRANTs. compute_range_session_count in the same migration used CREATE OR
+-- REPLACE and kept its revoke, which is why only one of the two regressed.
+--
+-- Scope check, so this fixes the actual regression and nothing else:
+--   - preview_program_session_dates (DROP+CREATEd in 20260814a) and
+--     programs_needing_early_release_choice (in 20260814g) were NEVER revoked
+--     from public/anon, so their PUBLIC execute is status quo, not a regression.
+--     programs_needing_early_release_choice also fails closed for anon anyway via
+--     its explicit is_org_member/is_platform_admin guard.
+--   - derive_program_session_schedule (DROP+CREATEd in 20260814d) is granted to
+--     anon deliberately -- the public catalog reads it.
+--
+-- service_role is re-granted explicitly rather than left riding on PUBLIC, so a
+-- future tightening of PUBLIC cannot quietly break a server caller.
+
+REVOKE EXECUTE ON FUNCTION public.preview_program_range_schedule(uuid, uuid, text, text, date, date, text) FROM public, anon;
+GRANT  EXECUTE ON FUNCTION public.preview_program_range_schedule(uuid, uuid, text, text, date, date, text) TO authenticated, service_role;

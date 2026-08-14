@@ -85,6 +85,10 @@ export default function TrainingSettings() {
   const [enabled, setEnabled] = useState(false);
   const [savedEnabled, setSavedEnabled] = useState(false);
   const [savingToggle, setSavingToggle] = useState(false);
+  // Refusal message for the toggle, rendered beside the toggle rather than in the
+  // page-level `error` banner above — the click that triggers it happens down
+  // here, and feedback that lands somewhere else reads as "the click did nothing".
+  const [toggleError, setToggleError] = useState("");
 
   const [videos, setVideos] = useState([]);
   const [roster, setRoster] = useState(null); // { rows: [{id,name,complete,doneCount,total,latest}], requiredCount } | null
@@ -181,8 +185,45 @@ export default function TrainingSettings() {
 
   const activeRequiredCount = videos.filter((v) => v.active && v.is_required).length;
 
+  // Clear the refusal the moment the reason for it goes away, whichever door did
+  // it — adding a video, un-hiding one, or marking one required. Keyed on the
+  // count rather than wired into each handler so a fourth door cannot miss it and
+  // leave a stale "you must add a video" sitting above a library that has one.
+  useEffect(() => {
+    if (activeRequiredCount > 0) setToggleError("");
+  }, [activeRequiredCount]);
+
   async function saveToggle(next) {
     if (!canAdmin) return;
+    setToggleError("");
+
+    // TURNING TRAINING ON WITH NO REQUIRED VIDEO ASKS NOTHING OF ANYONE.
+    //
+    // Unlike the document toggle this guard mirrors, the state it refuses is not
+    // an outage: gateCheck.ts computes trainingRequired as "enabled AND at least
+    // one active required video", and loadTrainingConfig does the same on the
+    // client, so on-with-no-videos is inert on BOTH sides. What it is instead is
+    // a lie — the provider believes new instructors are now being trained, and
+    // nobody is. The hint below already said so, but a provider who has just
+    // clicked "On — required" and seen it light up does not read a hint.
+    //
+    // WHAT THIS NOW REFUSES THAT USED TO WORK: turning the requirement on BEFORE
+    // uploading the video, which is a natural order to work in. That is why it
+    // must stay cheap to undo and must never touch the OFF direction:
+    //   - Only `next === true` is refused. Turning training off is always allowed,
+    //     including from the on-with-no-videos state an earlier deploy allowed
+    //     them into — otherwise this guard would strand exactly the providers it
+    //     is meant to help.
+    //   - The button is NOT disabled. A greyed-out control with no explanation is
+    //     the dead end the document toggle already learned not to build; the
+    //     refusal has to say what to do instead.
+    //   - Adding a required video clears it, so the "on first, upload second"
+    //     provider just does the two clicks in the other order.
+    if (next && activeRequiredCount === 0) {
+      setToggleError("Before turning training on, you must add a required video. Click '+ Add video'");
+      return;
+    }
+
     setSavingToggle(true); setError("");
     try {
       const { error: e } = await supabase
@@ -359,6 +400,11 @@ export default function TrainingSettings() {
           <button type="button" disabled={!canAdmin || savingToggle} onClick={() => saveToggle(true)} style={segBtn(enabled, !canAdmin || savingToggle)}>On — required</button>
           <button type="button" disabled={!canAdmin || savingToggle} onClick={() => saveToggle(false)} style={segBtn(!enabled, !canAdmin || savingToggle)}>Off</button>
         </div>
+        {toggleError && (
+          <div style={{ marginTop: 10, padding: "10px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, color: "#991b1b", fontSize: 13 }}>
+            {toggleError}
+          </div>
+        )}
         <div style={hint}>
           {!canAdmin
             ? "Only owners and admins can turn the training requirement on or off. You can still add and edit videos below."
