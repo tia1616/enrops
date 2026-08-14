@@ -1649,9 +1649,15 @@ async function sendConfirmationEmail({
     const events = await calendarEventsFromRegistrations(
       registrations,
       brand.org_name,
+      // The SCHEDULE, not just the dates: a class can meet at a different time
+      // on an occasional early-release day, and this .ics is what a parent's
+      // reminder fires from.
       async (pid: string) => {
-        const { data } = await admin.rpc('derive_program_session_dates', { p_program_id: pid });
-        return (data as string[] | null) ?? [];
+        const { data } = await admin.rpc('derive_program_session_schedule', { p_program_id: pid });
+        type Row = { entry_date: string; kind: string; session_time: string | null; session_end_time: string | null };
+        return ((data as Row[] | null) ?? [])
+          .filter((r) => r?.kind === 'session')
+          .map((r) => ({ date: r.entry_date, startTime: r.session_time, endTime: r.session_end_time }));
       },
     );
     const ics = buildIcs(events, { uidSeed: sessionId, nowIso: new Date().toISOString() });

@@ -63,9 +63,14 @@ async function buildCalendarPayload(sessionId: string, metaRegIds: string) {
   const events = await calendarEventsFromRegistrations(
     regs as unknown as Parameters<typeof calendarEventsFromRegistrations>[0],
     orgName,
+    // The SCHEDULE, not just the dates: a class can meet at a different time on
+    // an occasional early-release day, and the invite has to say so.
     async (pid: string) => {
-      const { data } = await admin.rpc('derive_program_session_dates', { p_program_id: pid });
-      return (data as string[] | null) ?? [];
+      const { data } = await admin.rpc('derive_program_session_schedule', { p_program_id: pid });
+      type Row = { entry_date: string; kind: string; session_time: string | null; session_end_time: string | null };
+      return ((data as Row[] | null) ?? [])
+        .filter((r) => r?.kind === 'session')
+        .map((r) => ({ date: r.entry_date, startTime: r.session_time, endTime: r.session_end_time }));
     },
   );
   // This endpoint is anon (verify_jwt=false) and reachable by anyone holding the

@@ -25,8 +25,18 @@ export interface CalendarEvent {
   sessionDates: string[];
   // Free-form stored time. Observed formats in the wild: "3:30 PM", "15:30:00",
   // "15:30", "2:30". parseTime() handles all; unparseable -> all-day events.
+  // This is the class's USUAL time and the fallback for any date not overridden.
   startTime?: string | null;
   endTime?: string | null;
+  // PER-DATE overrides, keyed by the same 'YYYY-MM-DD' used in sessionDates.
+  //
+  // Exists because a class can meet at a different time on a specific date: an
+  // OCCASIONAL early-release day, where school lets out early and the class
+  // starts early with it. Those dates used to be skipped entirely, so one
+  // startTime for the whole series was true by construction. It is not any more,
+  // and an invite is the worst place to be wrong about it -- the parent's
+  // reminder fires at the usual time on precisely the day pickup moved.
+  sessionTimes?: Record<string, { start?: string | null; end?: string | null }>;
   // Optional extra description text (e.g. arrival note). Plain text.
   description?: string | null;
 }
@@ -119,6 +129,28 @@ function locationFor(ev: CalendarEvent): string {
   return [ev.locationName?.trim(), ev.locationAddress?.trim()].filter(Boolean).join(', ');
 }
 
+/**
+ * The parsed start/end for ONE session date: the per-date override when this
+ * date has one, otherwise the class's usual time.
+ *
+ * An override with an unparseable or absent END is deliberately left null rather
+ * than borrowing the class's normal end time. Borrowing would run an
+ * early-release class past the early dismissal — the exact error this exists to
+ * prevent — whereas null lets the caller apply its documented +1h default from
+ * the earlier start, which at worst ends slightly late relative to a shorter
+ * session and never contradicts the start.
+ */
+export function timesForDate(
+  ev: CalendarEvent,
+  iso: string,
+): { start: { h: number; m: number } | null; end: { h: number; m: number } | null } {
+  const override = ev.sessionTimes?.[iso];
+  if (override && String(override.start ?? '').trim()) {
+    return { start: parseTime(override.start), end: parseTime(override.end) };
+  }
+  return { start: parseTime(ev.startTime), end: parseTime(ev.endTime) };
+}
+
 function descriptionFor(ev: CalendarEvent): string {
   const org = (ev.orgName?.trim() || 'your provider').replace(/\.+$/, ''); // avoid "Co.." double period
   const parts = [`${ev.programName?.trim() || 'Program'} with ${org}.`];
@@ -148,8 +180,6 @@ export function buildIcs(
 
   let count = 0;
   events.forEach((ev, ei) => {
-    const start = parseTime(ev.startTime);
-    const end = parseTime(ev.endTime);
     const summary = summaryFor(ev);
     const location = locationFor(ev);
     const description = descriptionFor(ev);
@@ -157,6 +187,9 @@ export function buildIcs(
     (ev.sessionDates || []).forEach((iso, di) => {
       const day = compactDate(iso);
       if (!day) return;
+      // Resolved PER DATE, not once per event. An early-release date carries its
+      // own pair; every other date falls back to the class's usual time.
+      const { start, end } = timesForDate(ev, iso);
       count += 1;
       const uid = `enrops-${opts.uidSeed}-${ei}-${di}@enrops.com`;
       lines.push('BEGIN:VEVENT');
@@ -192,10 +225,12 @@ export function buildIcs(
  * Returns null when there is no usable first date.
  */
 export function googleCalendarUrl(ev: CalendarEvent): string | null {
-  const first = (ev.sessionDates || []).map(compactDate).find(Boolean);
-  if (!first) return null;
-  const start = parseTime(ev.startTime);
-  const end = parseTime(ev.endTime);
+  const firstIso = (ev.sessionDates || []).find((d) => compactDate(d));
+  const first = firstIso ? compactDate(firstIso) : null;
+  if (!first || !firstIso) return null;
+  // The first session can itself be an early-release one, so its time is
+  // resolved the same way every other date's is.
+  const { start, end } = timesForDate(ev, firstIso);
   let dates: string;
   if (start) {
     const endHM = end ?? { h: (start.h + 1) % 24, m: start.m };
@@ -226,10 +261,33 @@ export function googleCalendarUrl(ev: CalendarEvent): string | null {
   // shouldn't attend, which is worse than one correct event. In that case we
   // fall back to the single first session; the .ics attachment always carries
   // the exact, gap-accurate series for every calendar app.
-  const rule = weeklyRecurrenceRule(ev.sessionDates || []);
+  //
+  // AND only when every session runs at the SAME time. A recurrence rule carries
+  // one start/end for all occurrences, so a series containing an early-release
+  // date would put that date at the usual time — the identical failure to the
+  // gap case above, and on the one day it matters most. Mixed times fall back to
+  // the single first session; the .ics attachment still carries every date at
+  // its own time.
+  const rule = uniformTimes(ev) ? weeklyRecurrenceRule(ev.sessionDates || []) : null;
   if (rule) parts.push(`recur=${enc(rule)}`);
 
   return `https://calendar.google.com/calendar/render?${parts.join('&')}`;
+}
+
+/**
+ * True when every session date resolves to the same start and end. False as soon
+ * as one date carries a different time (an early-release session), which is what
+ * disqualifies a series from being expressed as a single recurrence rule.
+ */
+export function uniformTimes(ev: CalendarEvent): boolean {
+  const dates = (ev.sessionDates || []).filter((d) => compactDate(d));
+  if (dates.length < 2) return true;
+  const key = (iso: string) => {
+    const { start, end } = timesForDate(ev, iso);
+    return `${start ? `${start.h}:${start.m}` : '-'}|${end ? `${end.h}:${end.m}` : '-'}`;
+  };
+  const first = key(dates[0]);
+  return dates.every((d) => key(d) === first);
 }
 
 /**
@@ -266,36 +324,63 @@ export interface RegLike {
   students?: { first_name?: string | null; last_name?: string | null } | null;
 }
 
+/** One meeting: its date and the time IT runs at (not the class's usual time). */
+export interface SessionSlot {
+  date: string;
+  startTime?: string | null;
+  endTime?: string | null;
+}
+
 /**
  * Map registration rows to CalendarEvent[], deriving each program's real,
- * closure-aware session dates via the caller-supplied `deriveDates` callback
- * (a thin wrapper over the derive_program_session_dates RPC — kept out of this
+ * closure-aware sessions via the caller-supplied `deriveSessions` callback (a
+ * thin wrapper over the derive_program_session_schedule RPC — kept out of this
  * module so it stays free of a Supabase dependency). Programs with no id or no
- * derivable dates are skipped (no dates -> nothing to put on a calendar).
+ * derivable sessions are skipped (nothing to put on a calendar).
+ *
+ * THE CALLBACK RETURNS SLOTS, NOT BARE DATES, and that is deliberate rather than
+ * an optional extra. A program can now meet at a different time on an
+ * early-release date, and a per-date time that a caller may or may not supply is
+ * a fail-open: the caller that forgets produces an invite that is confidently
+ * wrong, with nothing to signal it. Making it part of the shape means a caller
+ * cannot omit it without the compiler saying so.
  */
 export async function calendarEventsFromRegistrations(
   regs: RegLike[],
   orgName: string,
-  deriveDates: (programId: string) => Promise<string[]>,
+  deriveSessions: (programId: string) => Promise<SessionSlot[]>,
 ): Promise<CalendarEvent[]> {
   const events: CalendarEvent[] = [];
   for (const r of regs || []) {
     const p = r.programs;
     if (!p?.id) continue;
-    let dates: string[] = [];
-    try { dates = (await deriveDates(p.id)) || []; } catch { dates = []; }
-    dates = dates.filter((d) => typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d));
-    if (dates.length === 0) continue;
+    let slots: SessionSlot[] = [];
+    try { slots = (await deriveSessions(p.id)) || []; } catch { slots = []; }
+    slots = slots.filter((s) => s && typeof s.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s.date));
+    if (slots.length === 0) continue;
     const student = [r.students?.first_name, r.students?.last_name].filter(Boolean).join(' ').trim() || null;
+    // Only dates that genuinely differ from the class's usual time become
+    // overrides, so an ordinary series carries no map at all and behaves exactly
+    // as it did before this existed.
+    const sessionTimes: Record<string, { start?: string | null; end?: string | null }> = {};
+    for (const s of slots) {
+      const differs =
+        (s.startTime ?? null) !== (p.start_time ?? null) ||
+        (s.endTime ?? null) !== (p.end_time ?? null);
+      if (differs && String(s.startTime ?? '').trim()) {
+        sessionTimes[s.date] = { start: s.startTime ?? null, end: s.endTime ?? null };
+      }
+    }
     events.push({
       programName: p.curriculum || 'Program',
       studentName: student,
       orgName,
       locationName: p.program_locations?.name ?? null,
       locationAddress: p.program_locations?.address ?? null,
-      sessionDates: dates,
+      sessionDates: slots.map((s) => s.date),
       startTime: p.start_time ?? null,
       endTime: p.end_time ?? null,
+      ...(Object.keys(sessionTimes).length > 0 ? { sessionTimes } : {}),
     });
   }
   return events;
