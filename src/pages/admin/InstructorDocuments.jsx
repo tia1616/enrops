@@ -590,9 +590,6 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
   // contractor agreement on staging, and stayed live until someone noticed.
   // First publish needs no ceremony — nothing is being replaced.
   const [confirming, setConfirming] = useState(false);
-  // The template panel below. `replaceArmed` is the second click on the one
-  // action in it that destroys work; it resets whenever the panel closes so a
-  // stale armed state can never be clicked into by accident.
   // Write vs Preview, INSIDE one box. The page used to show the textarea AND a
   // rendered copy stacked under it, which is the "two boxes showing the same thing"
   // Jessica flagged twice - the first fix only removed the pair in read-only mode
@@ -609,7 +606,6 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
   // the signature block. A toggle shows all four.
   const [previewMode, setPreviewMode] = useState(false);
   const [templateOpen, setTemplateOpen] = useState(false);
-  const [replaceArmed, setReplaceArmed] = useState(false);
   const [templateCopied, setTemplateCopied] = useState(false);
 
   // ONE definition of "is the template button the apply-it one or the read-it
@@ -624,7 +620,6 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
 
   function closeTemplate() {
     setTemplateOpen(false);
-    setReplaceArmed(false);
     setTemplateCopied(false);
   }
 
@@ -867,21 +862,19 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
             lives, which is exactly what you want to re-read halfway through
             writing one.
 
-            Checked against the tools operators already use before designing
-            anything here, per the standing rule. Mailchimp keeps "switch
-            template" available at every point in the builder and puts a confirm
-            in front of the content loss. Notion's templates and template buttons
-            INSERT beside what is already on the page — they never replace it.
-            Docusign's "apply template" stays on the menu for a document that
-            already has content and merges into it. All three keep the control
-            visible; none of them silently overwrite. So: visible always, and the
-            destructive path is opt-in.
-
-            Empty box -> apply immediately, because there is nothing to destroy;
-            friction belongs in proportion to what is at risk (GitLab Pajamas /
-            NN-g both say the same). Written-in box -> the button OPENS the
-            template instead, because RE-READING is the thing that was actually
-            missing. Replacing is a separate, armed choice inside the panel. */}
+            Empty box -> apply immediately, because there is nothing to destroy.
+            Written-in box -> the button OPENS the template read-only, because
+            RE-READING is the thing that was actually missing. Jessica's whole
+            ask, in her words: "I just wanted the writer to be able to see the
+            template and copy bits of it if they want to after having already
+            edited their own." There is deliberately NO replace-what-I-wrote
+            path once something is written — it was built, she said she does not
+            want it, and it was the only control here that could destroy work.
+            Taking bits needs no feature at all: the panel renders the template
+            as ordinary selectable text, so highlight + Ctrl+C. That is also how
+            the tools do it — Notion opens a template in a side peek you copy
+            from, Google Docs opens it as a second document; nobody builds
+            per-fragment copy buttons. */}
         {meta?.starter && (
           <button
             type="button"
@@ -889,7 +882,6 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
               if (templateApplies) { setBody(meta.starter); return; }
               if (templateOpen) { closeTemplate(); return; }
               setTemplateOpen(true);
-              setReplaceArmed(false);
               setTemplateCopied(false);
             }}
             style={{
@@ -903,10 +895,9 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
         )}
       </div>
 
-      {/* The template, readable without giving anything up. Read-only, so opening
-          it is always safe — the two things that can change your document are
-          both explicit buttons underneath, and the one that destroys work is
-          separated from the one that does not and needs a second click. */}
+      {/* The template, readable without giving anything up. Read-only, and
+          nothing in here can change your document at all — the one button copies
+          to the clipboard. That is the entire feature Jessica asked for. */}
       {templateOpen && meta?.starter && (
         <div style={{ border: `1px solid ${RULE}`, borderRadius: 10, background: "#fbfaf6", padding: "12px 14px", marginBottom: 10 }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
@@ -914,16 +905,18 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
               The template
             </span>
             <span style={{ fontSize: 11.5, color: MUTED, lineHeight: 1.5 }}>
-              Replace every square bracket with your own wording. Nothing here touches your
-              document unless you press one of the buttons below.
+              Replace every square bracket with your own wording. Nothing here changes your
+              document — highlight any part of it to copy just that bit.
             </span>
           </div>
           <div style={{ maxHeight: 240, overflowY: "auto", whiteSpace: "pre-wrap", fontSize: 12.5, color: INK, lineHeight: 1.6, background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: "10px 12px" }}>
             {meta.starter}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
-            {/* The safe path, and the one Notion and Docusign both lead with:
-                take the wording, keep what you have already written. */}
+            {/* The whole-thing shortcut. "Copy all" rather than "Copy template",
+                because copying a PART is the more likely thing here and it is
+                done by selecting text, not by this button — a label saying
+                "Copy template" reads as though it were the only way. */}
             <button
               type="button"
               onClick={async () => {
@@ -944,47 +937,8 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
                 padding: "6px 14px", fontSize: 12.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer",
               }}
             >
-              {templateCopied === true ? "Copied" : templateCopied === "failed" ? "Press Ctrl+C to copy" : "Copy template"}
+              {templateCopied === true ? "Copied" : templateCopied === "failed" ? "Press Ctrl+C to copy" : "Copy all"}
             </button>
-            {/* Destructive, so: only while editing, pushed away from the safe
-                button rather than sitting beside it, and it names what goes and
-                whether it comes back. */}
-            {editing && (replaceArmed ? (
-              <span style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-                <span style={{ fontSize: 12, color: RED, fontWeight: 600 }}>
-                  This deletes everything you have written here. It cannot be undone.
-                </span>
-                <button
-                  type="button"
-                  onClick={() => { setBody(meta.starter); closeTemplate(); }}
-                  style={{
-                    background: RED, border: `1px solid ${RED}`, color: "#fff", borderRadius: 999,
-                    padding: "6px 14px", fontSize: 12.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer",
-                  }}
-                >
-                  Yes, replace it
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setReplaceArmed(false)}
-                  style={{ background: "transparent", border: "none", color: MUTED, fontSize: 12.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", padding: 0 }}
-                >
-                  Keep what I wrote
-                </button>
-              </span>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setReplaceArmed(true)}
-                style={{
-                  marginLeft: "auto", background: "transparent", border: `1px solid ${RULE}`, color: RED,
-                  borderRadius: 999, padding: "6px 14px", fontSize: 12.5, fontWeight: 600,
-                  fontFamily: "inherit", cursor: "pointer",
-                }}
-              >
-                Replace what I&apos;ve written
-              </button>
-            ))}
           </div>
         </div>
       )}
