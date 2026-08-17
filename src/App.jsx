@@ -361,7 +361,23 @@ export default function App() {
         <Route path="rosters" element={<Rosters />} />
         <Route path="class-reports" element={<InstructorRoute><ClassReports /></InstructorRoute>} />
         <Route path="finances" element={<Finances />} />
-        <Route path="payouts" element={<Payouts />} />
+        {/* WRAPPED as of 2026-08-17, and the trigger was a nav change in this same
+            branch. Giving the Money > Payroll calculator tab `instructorsOnly`
+            (AdminLayout NAV) made /admin/payouts an instructor-ENTITLEMENT surface
+            for the first time, and it was the only one still bare — schedule,
+            schedule/print, instructors, availability, class-reports, pay-rates and
+            instructor-documents are all wrapped. Hiding the tab does nothing for a
+            typed URL: the org passes the `viewMoney` ROLE gate, so blockedItem never
+            fires, and Payroll's own canManage is role-only — so Confirm, Approve,
+            Withhold and Pay via Stripe were all live for an org with no entitlement
+            to instructors at all. That is the nav-half-without-the-route-half shape
+            adminRouteGuards.test.mjs exists to catch.
+            Takes nothing away from anyone holding data: checked prod 17 Aug, only
+            j2s has instructors, pay lines or payouts (25 / 221 / 50) and it is
+            legacy_own_platform, for which canManageInstructors returns true. Every
+            enrops_platform org is 0 / 0 / 0, and Jeff is `founding` so he stays
+            entitled. */}
+        <Route path="payouts" element={<InstructorRoute><Payouts /></InstructorRoute>} />
         <Route path="discounts" element={<Discounts />} />
         <Route path="team" element={<TeamPage />} />
         <Route path="time-saved" element={<TimeSavedPage />} />

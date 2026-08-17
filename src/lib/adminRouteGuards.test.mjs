@@ -63,10 +63,18 @@ const BARE_ROUTES = new Set([
   // THE INSTRUCTOR SURFACES CAME OFF THIS LIST on 2026-08-13. schedule,
   // schedule/print, instructors, availability, class-reports and pay-rates are
   // now wrapped in InstructorRoute — the /code-review finding this ledger's
-  // KNOWN_OPEN_FINDINGS was holding open. `payouts` stays bare: its hole was the
-  // ROLE one (staff/viewer reading pay), and that is closed at the nav layer by
-  // giving the tabless Money item a `match` so the viewMoney block card fires.
-  'payouts',
+  // KNOWN_OPEN_FINDINGS was holding open.
+  //
+  // `payouts` CAME OFF IT TOO, on 2026-08-17, and the note that used to sit here
+  // is why this ledger checks bareness in both directions. It read: "its hole was
+  // the ROLE one (staff/viewer reading pay), and that is closed at the nav layer
+  // by giving the tabless Money item a `match`". Both halves went false in one
+  // commit. shapeNavForOrg no longer builds a tabless Money item or a `match`
+  // list at all — the role hole is now closed through `tabs`, so the assertion
+  // stayed green for a reason that no longer existed. And the same commit gave
+  // the Payroll calculator tab `instructorsOnly`, which made payouts an
+  // ENTITLEMENT surface, the one thing the old note swore it was not. It is now
+  // wrapped in InstructorRoute and lives in MUST_STAY_GUARDED below.
   // The section index and the classic wizard. Both reachable only from inside an
   // authenticated admin shell; the wizard has its own ProgramWizardRoute redirect
   // for lean orgs, which this parser reads as bare because it is a lone
@@ -135,6 +143,7 @@ ok(stale.length === 0, 'the BARE_ROUTES ledger has no stale entries',
 // ---------------------------------------------------------------------------
 const MUST_STAY_GUARDED = [
   ['instructor-documents', 'entitlement gate added 2026-08-12 after a non-entitled org could publish by URL'],
+  ['payouts', 'InstructorRoute added 2026-08-17: the Payroll calculator tab became instructorsOnly, so hiding the tab left the full calculator plus Confirm/Approve/Withhold/Pay reachable by URL for a non-entitled org'],
   ['family-comms/marketing', 'CommsTabRoute'],
   ['family-comms/automations', 'CommsTabRoute'],
   ['family-comms/contacts', 'CommsTabRoute'],
@@ -160,10 +169,16 @@ for (const [path, why] of MUST_STAY_GUARDED) {
 //
 // Four of them (schedule, instructors, availability, class-reports — plus
 // schedule/print and pay-rates, never listed) are now wrapped in InstructorRoute.
-// `payouts` was listed wrongly: its hole was the ROLE one, staff/viewer reading
-// pay, and that is closed at the nav layer by giving the tabless Money item a
-// `match` so the viewMoney block card fires. It is not hidden by
-// canManageInstructors at all, so both halves of the note were false for it.
+//
+// `payouts` WAS NOT LISTED WRONGLY AFTER ALL, and this note used to say it was:
+// "its hole was the ROLE one ... It is not hidden by canManageInstructors at all,
+// so both halves of the note were false for it." That was true on 13 Aug and
+// false four days later. On 2026-08-17 the Payroll calculator tab gained
+// `instructorsOnly`, so canManageInstructors DOES hide it now, and the original
+// entry was early rather than wrong. It is wrapped and in MUST_STAY_GUARDED.
+// The lesson is the one this file already teaches in the other direction: a
+// rationale is a claim with a date on it, and this ledger only asserts BARENESS,
+// so a stale reason survives every green run until someone reads it and believes it.
 //
 // THIS LIST NEEDS THE SAME BOTH-DIRECTIONS CHECK AS BARE_ROUTES, which is the
 // lesson: the file already asserts "a ledger entry may not outlive the thing it
