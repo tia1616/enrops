@@ -686,6 +686,44 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
     fontSize: 14, fontFamily: "inherit", color: INK, background: "#fff", boxSizing: "border-box",
   };
 
+  // ONE renderer for "the document as an instructor actually reads it", because
+  // the page needs it in two places and they must not drift.
+  //
+  // It used to be drawn once, as a PREVIEW below a second box holding the same
+  // words as raw grey text. Jessica: "why are there two boxes showing the same
+  // thing." In read-only mode they genuinely were the same thing, and the raw one
+  // was strictly worse — unsplit paragraphs, dead links, no title, no signature
+  // block. Nobody stacks a raw copy above a rendered copy: Google Docs and Notion
+  // have no preview at all because the surface IS the document, and GitLab deleted
+  // its Write/Preview tabs once the editor rendered inline.
+  //
+  // So: read-only renders THIS as the document. Edit mode keeps it below the
+  // textarea, where it is a real preview — editable input above, rendered output
+  // below — and only there does the "what your instructors will see" label earn
+  // its keep.
+  const renderedDocument = (
+    <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, background: "#fff", padding: "16px 18px" }}>
+      <div style={{ fontSize: 15, fontWeight: 700, color: INK, marginBottom: 10 }}>{title}</div>
+      {body.trim().split(/\n\s*\n/).map((para, i) => (
+        <p key={i} style={{ margin: "0 0 10px", whiteSpace: "pre-wrap", fontSize: 13.5, color: INK, lineHeight: 1.6 }}>
+          {linkifyText(para)}
+        </p>
+      ))}
+      {willAppendSignatureBlock(docKey, body) && (
+        <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px dashed ${RULE}` }}>
+          {AGREEMENT_SIGNATURE_BLOCK.split(/\n\s*\n/).map((para, i) => (
+            <p key={i} style={{ margin: "0 0 8px", whiteSpace: "pre-wrap", fontSize: 13.5, color: MUTED, lineHeight: 1.6 }}>
+              {para}
+            </p>
+          ))}
+          <span style={{ fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: MUTED }}>
+            Locked &middot; filled in as each instructor signs
+          </span>
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div style={{ maxWidth: 760, margin: "0 auto", padding: "8px 0 40px" }}>
       <button
@@ -754,11 +792,26 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
             typing in it changes a legal document; pressing Edit is the moment you
             know. Mirrors the Edit button on the list and the Edit / Done editing
             toggle the campaign and automation editors already use. */}
+        {/* THE ONLY Edit control. There used to be a second one — a big "Edit this
+            document" button in the action row at the bottom — and both called
+            setEditing(true). Jessica: "why edit button at the top and bottom."
+            One entry point per action; the duplicate is removed rather than made
+            to agree.
+            This is the one that survives, and it is a real button now rather than
+            a bare text link, because the action row it used to share is BELOW a
+            22-row document. That fold is not hypothetical in this exact file: it
+            is why the template button was moved up here. Publish deliberately
+            stays at the bottom, and that asymmetry is the point — Edit is a mode
+            switch you must be able to find, Publish is a commitment you should
+            reach by scrolling PAST the document you are about to make live. */}
         {!editing ? (
           <button
             type="button"
             onClick={() => setEditing(true)}
-            style={{ background: "transparent", border: "none", color: BRIGHT, cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "inherit", padding: 0 }}
+            style={{
+              background: "#fff", border: `1px solid ${BRIGHT}`, color: BRIGHT, borderRadius: 999,
+              padding: "6px 14px", fontSize: 12.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer",
+            }}
           >
             Edit
           </button>
@@ -906,9 +959,12 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
           placeholder="Write the document here, or use Start from a template above."
           style={{ ...inputStyle, lineHeight: 1.6, resize: "vertical", fontSize: 13.5 }}
         />
+      ) : body.trim() ? (
+        // Read-only: the rendered document IS the document. No raw second copy.
+        renderedDocument
       ) : (
-        <div style={{ ...inputStyle, background: "#fbfaf6", minHeight: 160, whiteSpace: "pre-wrap", lineHeight: 1.6, fontSize: 13.5 }}>
-          {body || <span style={{ color: MUTED }}>Nothing written yet.</span>}
+        <div style={{ ...inputStyle, background: "#fbfaf6", minHeight: 160, lineHeight: 1.6, fontSize: 13.5, color: MUTED }}>
+          Nothing written yet.
         </div>
       )}
       {editing && (
@@ -926,7 +982,14 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
           with its own signature wording, so for that document this panel claimed
           "we add this when you publish" while showing the operator a second copy
           of a signature they already have. */}
-      {willAppendSignatureBlock(docKey, body) && (
+      {/* EMPTY BODY ONLY, and that is the whole reason this panel still exists.
+          willAppendSignatureBlock is TRUE for an empty signed document, so on a
+          blank contractor agreement this is the only place an operator learns a
+          signature block gets added — there is no rendered document yet to show it
+          in place. The moment they write anything, the rendering below carries it
+          in context and labelled, and showing both was the third copy of the same
+          words on one screen. */}
+      {!body.trim() && willAppendSignatureBlock(docKey, body) && (
         <div style={{ marginTop: 12, background: "#f4f2ee", border: `1px dashed ${RULE}`, borderRadius: 8, padding: "12px 14px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
             <span style={{ fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: MUTED }}>
@@ -951,31 +1014,14 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
           publishing a legal document having only ever seen their own raw
           keystrokes. Same rule as the registration preview and the confirmation
           page. */}
-      {body.trim() && (
+      {/* EDIT MODE ONLY. In read-only the box above already IS this, so rendering
+          it twice was the duplicate Jessica flagged. */}
+      {editing && body.trim() && (
         <div style={{ marginTop: 20 }}>
           <label style={{ display: "block", fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600, marginBottom: 5 }}>
             What your instructors will see
           </label>
-          <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, background: "#fff", padding: "16px 18px" }}>
-            <div style={{ fontSize: 15, fontWeight: 700, color: INK, marginBottom: 10 }}>{title}</div>
-            {body.trim().split(/\n\s*\n/).map((para, i) => (
-              <p key={i} style={{ margin: "0 0 10px", whiteSpace: "pre-wrap", fontSize: 13.5, color: INK, lineHeight: 1.6 }}>
-                {linkifyText(para)}
-              </p>
-            ))}
-            {willAppendSignatureBlock(docKey, body) && (
-              <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px dashed ${RULE}`, position: "relative" }}>
-                {AGREEMENT_SIGNATURE_BLOCK.split(/\n\s*\n/).map((para, i) => (
-                  <p key={i} style={{ margin: "0 0 8px", whiteSpace: "pre-wrap", fontSize: 13.5, color: MUTED, lineHeight: 1.6 }}>
-                    {para}
-                  </p>
-                ))}
-                <span style={{ fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: MUTED }}>
-                  Locked &middot; filled in as each instructor signs
-                </span>
-              </div>
-            )}
-          </div>
+          {renderedDocument}
         </div>
       )}
 
@@ -986,8 +1032,9 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
       {/* Publishing belongs to edit mode. Offering it while you are only reading
           invites a click that either does nothing or republishes unchanged text
           as a new version for no reason. */}
+      {editing && (
       <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 18, flexWrap: "wrap" }}>
-        {editing ? (
+        {(
           confirming ? (
             // Replacing a live document: name what is being replaced and what
             // happens to people who already signed, then require a second click.
@@ -1050,24 +1097,16 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
               </span>
             </>
           )
-        ) : (
-          <>
-            <button
-              type="button"
-              onClick={() => setEditing(true)}
-              style={{
-                background: BRIGHT, color: "#fff", border: "none", borderRadius: 999,
-                padding: "10px 22px", fontSize: 14, fontWeight: 700, fontFamily: "inherit", cursor: "pointer",
-              }}
-            >
-              Edit this document
-            </button>
-            <span style={{ fontSize: 12, color: MUTED }}>
-              Editing writes a new version when you publish. Nobody who already signed is affected.
-            </span>
-          </>
         )}
       </div>
+      )}
+      {/* The second Edit button lived in that row. Removed — the one in the
+          document header does this job, so the row is now edit-mode only and
+          Publish is the single thing in it.
+          Its caption went with it and is NOT re-homed anywhere: "Editing writes a
+          new version when you publish. Nobody who already signed is affected." is
+          the banner at the top of this page said twice, and the banner says it
+          better because it names the actual version number. */}
 
       {versions.length > 0 && (
         <div style={{ marginTop: 26, borderTop: `1px solid ${RULE}`, paddingTop: 14 }}>
