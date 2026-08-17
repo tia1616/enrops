@@ -176,7 +176,7 @@ export default function LocationsList({ embedded = false }) {
   const [districts, setDistricts] = useState([]);
   async function fetchDistricts() {
     if (!org?.id) return;
-    const { data } = await supabase
+    const { data, error: fErr } = await supabase
       .from("districts")
       // district_type so the PICKER can exclude independent_school rows. Loaded
       // unfiltered on purpose: the name-match-before-create below and the id -> name
@@ -185,6 +185,19 @@ export default function LocationsList({ embedded = false }) {
       .select("id, name, district_type")
       .eq("organization_id", org.id)
       .order("name", { ascending: true });
+    // DO NOT SWALLOW THIS. It was `const { data } = ...`, so any failure set
+    // districts to [] and the page rendered as though the org had NO districts:
+    // every picker empty, every row showing the amber "No district" nudge, and
+    // match-before-create finding nothing - so re-entering an existing district
+    // name died on the unique index. Selecting `district_type` makes that
+    // reachable rather than theoretical, because on an environment where 20260817a
+    // has not run PostgREST rejects the whole statement (found by /code-review
+    // 2026-08-17). Keep whatever we already had, and say so.
+    if (fErr) {
+      console.error("Loading districts failed:", fErr);
+      setError(`Couldn't load your districts: ${fErr.message ?? "unknown error"}. The district picker may be incomplete, so refresh before changing one.`);
+      return;
+    }
     setDistricts(data ?? []);
   }
   useEffect(() => {
@@ -624,6 +637,12 @@ function EditCard({ title, draft, bind, applyPlace, partners, districts, error, 
   // Whether the Google lookup actually started. Without this the field degrades
   // to a plain box on failure and says nothing, which reads as broken.
   const [lookupDown, setLookupDown] = useState(false);
+  // The row this location is ACTUALLY linked to. Looked up in the UNFILTERED list
+  // on purpose: the district select below filters independent_school rows out, and
+  // this is how the currently-linked one stays selectable. `find` over an id, so a
+  // NEW_DISTRICT / NO_DISTRICT sentinel or "" simply matches nothing.
+  const linkedRow = (districts ?? []).find((d) => d.id === draft.district_id) ?? null;
+  const linkedOwnsCalendar = !!linkedRow && !isGroupingDistrict(linkedRow);
   return (
     <div style={{
       background: "#fff",
@@ -698,6 +717,20 @@ function EditCard({ title, draft, bind, applyPlace, partners, districts, error, 
           {/* Only offered on a NEW location: "" is the untouched state we refuse,
               so it must never be a resting value on an existing row. */}
           {isNew && <option value="">Choose a district…</option>}
+          {/* THE CURRENT VALUE MUST ALWAYS BE REPRESENTABLE. groupingDistricts drops
+              independent_school rows, which is right for the "which district is this
+              school in?" question - but this venue may BE the school that owns one,
+              because that is exactly what the Calendars page's "Give it its own
+              calendar" button creates. Without this option the select renders at
+              selectedIndex -1: blank, on a field that looks required, while the row
+              behind it says "Own calendar". An operator reads that as unset, picks a
+              real district to "fix" it, and silently relinks the school's calendar
+              source and moves it out of the public picker's "Other schools & sites"
+              bucket. Filtering a list must never make an existing value unselectable
+              (found by /code-review 2026-08-17). */}
+          {linkedOwnsCalendar && (
+            <option value={linkedRow.id}>{linkedRow.name} &mdash; its own calendar</option>
+          )}
           {/* groupingDistricts: an independent_school row exists only so ONE private
               school can have a calendar, so offering it here would let a second
               school be filed under it - inheriting its calendar and dropping into
@@ -709,7 +742,7 @@ function EditCard({ title, draft, bind, applyPlace, partners, districts, error, 
           <option value={NEW_DISTRICT}>+ Create a new district…</option>
           <option value={NO_DISTRICT}>No district (studio, library, private site)</option>
         </select>
-        {/* Three states, three sentences. The positive one is deliberately
+        {/* FOUR states, four sentences. The positive one is deliberately
             conditional: a district you just created has no calendar on file yet,
             so promising dates "will skip" outright would be false right then. */}
         <div style={{ fontSize: 12, marginTop: 6, lineHeight: 1.5, color: draft.district_id === NO_DISTRICT ? "#8a6d1f" : "#6b6b6b" }}>
@@ -717,7 +750,11 @@ function EditCard({ title, draft, bind, applyPlace, partners, districts, error, 
             ? "No district means no school calendar here, so this location's class dates won't skip no-school days."
             : draft.district_id === ""
               ? "The district's calendar is what makes class dates skip no-school days. Pick the one this location follows."
-              : "Class dates here will skip this district's no-school days once its school calendar is on file."}
+              : linkedOwnsCalendar
+                // Saying "this district's no-school days" here would name a district
+                // that does not exist - the row IS this school.
+                ? "This school doesn't follow a district calendar. Its own no-school days are set under School calendar, and its class dates skip those."
+                : "Class dates here will skip this district's no-school days once its school calendar is on file."}
         </div>
         {draft.district_id === NEW_DISTRICT && (
           <input

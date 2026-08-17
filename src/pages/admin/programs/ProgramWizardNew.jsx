@@ -216,6 +216,10 @@ export default function ProgramWizardNew() {
   const [locations, setLocations] = useState([]);
   // For the inline "Add a school" modal (reused from the Schools surface).
   const [districts, setDistricts] = useState([]);
+  // SEPARATE from `error`, which the wizard uses for its own save failures and which
+  // gates the whole screen. A districts read failing must not look like a save
+  // failure, and must not stop the wizard - but must not be invisible either.
+  const [districtLoadError, setDistrictLoadError] = useState("");
   const [partners, setPartners] = useState([]);
   const [addingSchool, setAddingSchool] = useState(false);
 
@@ -270,6 +274,15 @@ export default function ProgramWizardNew() {
             .order("name"),
           // Districts + partners feed the inline "Add a school" modal. Non-blocking
           // if they fail — the wizard still works, the modal just has empty pickers.
+          //
+          // "EMPTY PICKERS" IS NOT HARMLESS NOW, which is why the failure is logged
+          // and surfaced below rather than dropped. AddSchoolModal's District field
+          // is REQUIRED, and its match-before-create reads this same list: with an
+          // empty list the operator cannot pick their existing district, types its
+          // name into "+ Create a new district", and the insert dies on the unique
+          // index. Reachable on any environment missing 20260817a, because selecting
+          // district_type makes PostgREST reject the whole statement (found by
+          // /code-review 2026-08-17).
           supabase
             .from("districts")
             // district_type feeds AddSchoolModal's picker, which excludes
@@ -285,6 +298,14 @@ export default function ProgramWizardNew() {
         ]);
         if (cRes.error) throw cRes.error;
         if (lRes.error) throw lRes.error;
+        // NOT thrown - curricula and locations are what the wizard needs to run, and
+        // failing the whole screen over the modal's pickers would be worse. But it is
+        // no longer silent: see the comment on the districts select above for what an
+        // empty list actually costs.
+        if (dRes.error) {
+          console.error("[ProgramWizardNew] loading districts failed:", dRes.error);
+          if (mounted) setDistrictLoadError(dRes.error.message ?? String(dRes.error));
+        }
         if (mounted) {
           setCurricula(cRes.data ?? []);
           setLocations(lRes.data ?? []);
@@ -498,13 +519,22 @@ export default function ProgramWizardNew() {
     setLocations(data ?? []);
   }
   async function reloadDistricts() {
-    const { data } = await supabase
+    const { data, error: dErr } = await supabase
       .from("districts")
       // Must match the select in the initial load above, or a district created
       // mid-wizard loses its type and starts appearing in the picker.
       .select("id, name, district_type")
       .eq("organization_id", org.id)
       .order("name");
+    // Surfaced, not swallowed. This runs immediately after the operator created a
+    // school in the modal, which is the worst moment to clobber the list to []: the
+    // district they just used would vanish from the picker.
+    if (dErr) {
+      console.error("[ProgramWizardNew] reloading districts failed:", dErr);
+      setDistrictLoadError(dErr.message ?? String(dErr));
+      return;
+    }
+    setDistrictLoadError("");
     setDistricts(data ?? []);
   }
   async function handleSchoolCreated({ locationId }) {
@@ -858,6 +888,16 @@ export default function ProgramWizardNew() {
         </div>
       )}
 
+      {/* WHERE THE OPERATOR IS LOOKING. This warning belongs next to the modal that
+          is about to show an empty required District picker, not at the top of a
+          three-step wizard they have already scrolled past. */}
+      {addingSchool && districtLoadError && (
+        <div role="alert" style={{ background: "#fbeaea", border: "1px solid #D9694F", borderRadius: 8, padding: "10px 14px", color: "#7a2a2a", fontSize: 13, marginBottom: 12 }}>
+          Couldn&apos;t load your districts ({districtLoadError}), so the District list below may be
+          empty or incomplete. Reload this page before adding a school, or you may create a
+          duplicate district.
+        </div>
+      )}
       {addingSchool && (
         <AddSchoolModal
           org={org}

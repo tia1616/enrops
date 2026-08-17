@@ -66,3 +66,14 @@ create or replace view districts_public
   select id, organization_id, name, district_type
   from districts
   where organization_id in (select public_org_directory.id from public_org_directory);
+
+-- RESTATED, because CREATE OR REPLACE VIEW keeps the OLD comment. The previous one
+-- said "Only (id, organization_id, name)" and listed the operator-only columns it
+-- excluded -- so after the statement above it told anyone auditing what anon can read
+-- that this view carries THREE columns when it now carries four. That audit is
+-- exactly the one that followed the 13/14 Aug district-read incidents, and a stale
+-- comment is the worst possible thing for it to find (/code-review, 2026-08-17).
+-- Same class as the reloptions note above: CREATE OR REPLACE preserves more than
+-- people expect, so anything it preserves has to be restated deliberately.
+comment on view districts_public is
+  'Anon-safe district rows for the public registration catalog. Readable by anon AND authenticated, because parents are not org_members and a signed-in family must see the same grouping a signed-out one does. Exposes exactly (id, organization_id, name, district_type) -- district_type was appended by 20260817a so the picker can keep an independent_school out of its own heading. Operator-only columns (calendar_key, flyer_distribution, flyer_notes) stay behind org_access_districts on the base table.';

@@ -12,6 +12,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
+import { isGroupingDistrict } from "../../lib/districts.js";
 import EarlyReleaseChoice from "./EarlyReleaseChoice.jsx";
 
 const PURPLE = "#1C004F";
@@ -83,6 +84,9 @@ export default function CalendarsList() {
   const venueLabel = "Locations";
   const [schoolYear, setSchoolYear] = useState(defaultSchoolYear());
   const [districts, setDistricts] = useState([]); // merged rows: [{ key, label, districtId, calendarKey, location_count }]
+  // The RAW districts rows, kept alongside the merged display rows above because
+  // giveSchoolItsOwnCalendar needs `district_type` and the merged shape drops it.
+  const [districtRows, setDistrictRows] = useState([]);
   const [calendars, setCalendars] = useState([]); // district_calendars rows for current school year
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null); // { key } | null
@@ -108,16 +112,58 @@ export default function CalendarsList() {
     setCreatingFor(school.id);
     setTopError(null);
     try {
-      const { data: created, error: dErr } = await supabase
-        .from("districts")
-        .insert({
-          organization_id: org.id,
-          name: school.name,
-          district_type: "independent_school",
-        })
-        .select("id")
-        .single();
-      if (dErr) throw dErr;
+      // MATCH BEFORE CREATE, the same rule LocationsList and VenueEditor already
+      // follow, and here it is load-bearing rather than tidy. These are TWO writes
+      // with no transaction: if the insert lands and the link below fails (dropped
+      // connection, an RLS hiccup), a districts row named after the school exists
+      // linked to zero schools, the school stays in the candidate list, and every
+      // retry then dies on `districts_org_name_lower_uniq` FOREVER - with no UI
+      // anywhere to delete the orphan. Reusing a same-name row makes the whole
+      // operation idempotent, so a retry finishes the job instead of wedging.
+      //
+      // It also fixes the second case /code-review found: an org with two
+      // districtless sites of the SAME name (two "Kumon Math and Reading Center"
+      // rows) could only ever set up the first. Both now point at one calendar,
+      // which is what two entries for one school should do.
+      const sameName = (districtRows ?? []).find(
+        (d) => (d.name ?? "").trim().toLowerCase() === (school.name ?? "").trim().toLowerCase(),
+      );
+
+      // A REAL district of that name is a different thing and must not be silently
+      // reused: filing the school under it would give it that district's calendar,
+      // which is the opposite of "its own". Say so instead.
+      if (sameName && isGroupingDistrict(sameName)) {
+        setTopError(
+          `You already have a district called "${sameName.name}". Open ${school.name} under Locations and set its district to that one, or rename one of them first.`,
+        );
+        return;
+      }
+
+      let calendarRowId = sameName?.id ?? null;
+      if (!calendarRowId) {
+        const { data: created, error: dErr } = await supabase
+          .from("districts")
+          .insert({
+            organization_id: org.id,
+            name: school.name,
+            district_type: "independent_school",
+          })
+          .select("id")
+          .single();
+        // 23505 is the unique index above. Reachable despite the match: another tab
+        // or another admin can insert the same name between our read and this write.
+        // Naming the cause beats echoing Postgres at an operator.
+        if (dErr) {
+          if (dErr.code === "23505") {
+            setTopError(
+              `Something already uses the name "${school.name}" as a calendar. Reload this page and try again.`,
+            );
+            return;
+          }
+          throw dErr;
+        }
+        calendarRowId = created.id;
+      }
 
       // Targeted single-field update, not a whole-row write: this screen holds none
       // of the school's other columns (arrival notes, contacts, room) and writing a
@@ -125,7 +171,7 @@ export default function CalendarsList() {
       // it cannot reach another tenant's row even if an id were wrong.
       const { error: lErr } = await supabase
         .from("program_locations")
-        .update({ district_id: created.id })
+        .update({ district_id: calendarRowId })
         .eq("id", school.id)
         .eq("organization_id", org.id);
       if (lErr) throw lErr;
@@ -174,7 +220,17 @@ export default function CalendarsList() {
           .eq("school_year", schoolYear),
         supabase
           .from("districts")
-          .select("id, name, calendar_key")
+          // district_type so giveSchoolItsOwnCalendar can tell an ORPHANED
+          // independent_school row (reuse it) from a real district of the same name
+          // (refuse, and say why). Without it the unique index on
+          // (organization_id, lower(name)) is the only thing that notices, and it
+          // reports a raw Postgres error the operator cannot act on.
+          //
+          // DEPLOY ORDER: this column ships in 20260817a, which goes to an
+          // environment BEFORE this frontend. PostgREST fails the whole statement on
+          // an unknown column, and the throw below turns that into a visible error
+          // rather than a silent empty list.
+          .select("id, name, calendar_key, district_type")
           .eq("organization_id", org.id),
       ]);
       if (locsRes.error) throw locsRes.error;
@@ -183,6 +239,7 @@ export default function CalendarsList() {
 
       const locs = locsRes.data ?? [];
       const structured = distRes.data ?? [];
+      setDistrictRows(structured);
 
       // Structured districts (the entity) — count schools linked via district_id.
       const linkedCounts = new Map();

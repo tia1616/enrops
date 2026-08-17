@@ -15,7 +15,7 @@
 
 import { useState } from "react";
 import { supabase } from "../../../lib/supabase";
-import { groupingDistricts } from "../../../lib/districts.js";
+import { groupingDistricts, isGroupingDistrict } from "../../../lib/districts.js";
 import PlacesAutocomplete, { PlacesLookupHint } from "../../../components/PlacesAutocomplete";
 
 const BRIGHT = "#5847C9";
@@ -118,6 +118,11 @@ export default function VenueEditor({
   // Whether the Google lookup actually started. Without this the field degrades
   // to a plain box on failure and says nothing, which reads as broken.
   const [lookupDown, setLookupDown] = useState(false);
+  // The row this venue is ACTUALLY linked to, from the UNFILTERED list, so the
+  // district select can always represent its own current value even when that
+  // value is an independent_school row the select otherwise filters out.
+  const linkedRow = (districts ?? []).find((d) => d.id === draft.district_id) ?? null;
+  const linkedOwnsCalendar = !!linkedRow && !isGroupingDistrict(linkedRow);
 
   function bind(field) {
     return {
@@ -260,6 +265,18 @@ export default function VenueEditor({
           {/* Only on a NEW venue: "" is the untouched state save refuses, so it
               must never be a resting value on an existing row. */}
           {isNew && <option value="">Choose a district…</option>}
+          {/* THE CURRENT VALUE MUST ALWAYS BE REPRESENTABLE - identical fix to
+              LocationsList's EditCard, and the same bug. groupingDistricts drops
+              independent_school rows, but this venue may BE the school that owns
+              one (the Calendars page's "Give it its own calendar" button creates
+              exactly that link). Without this option an existing venue renders a
+              BLANK select on a field labelled District, and the obvious "fix" -
+              picking a real district - silently relinks its calendar source
+              (found by /code-review 2026-08-17). AddSchoolModal is add-only, so it
+              always starts at "" and is not affected. */}
+          {linkedOwnsCalendar && (
+            <option value={linkedRow.id}>{linkedRow.name} &mdash; its own calendar</option>
+          )}
           {/* groupingDistricts: an independent_school row exists only so ONE private
               school can own a calendar, so offering it here would let a second school
               be filed under it - inheriting that school's calendar and dropping into
@@ -273,14 +290,18 @@ export default function VenueEditor({
           <option value={NEW_DISTRICT}>+ Create a new district…</option>
           <option value={NO_DISTRICT}>No district (library, church, private site)</option>
         </select>
-        {/* Three states, three sentences. The positive one is conditional on
+        {/* FOUR states, four sentences. The positive one is conditional on
             purpose: a district created just now has no calendar on file yet. */}
         <div style={{ fontSize: 12, marginTop: 6, lineHeight: 1.5, color: draft.district_id === NO_DISTRICT ? "#8a6d1f" : MUTED }}>
           {draft.district_id === NO_DISTRICT
             ? "No district means no school calendar here, so this venue's class dates won't skip no-school days."
             : draft.district_id === ""
               ? "The district's calendar is what makes class dates skip no-school days. Pick the one this venue follows."
-              : "Class dates here will skip this district's no-school days once its school calendar is on file."}
+              : linkedOwnsCalendar
+                // Naming "this district" here would name one that does not exist -
+                // the row IS this school.
+                ? "This school doesn't follow a district calendar. Its own no-school days are set under School calendar, and its class dates skip those."
+                : "Class dates here will skip this district's no-school days once its school calendar is on file."}
         </div>
         {draft.district_id === NEW_DISTRICT && (
           <input

@@ -305,6 +305,24 @@ export default function Payroll() {
           // became true.
           const distanceBonusPaid = anyRegularRow?.distance_bonus_paid_at != null;
 
+          // THE SUB BADGE, from the rows for the same reason the bonus above is.
+          // `g.source` was removed from every money path in this branch because it is
+          // only the first row seen, but it was left deciding the header badge and the
+          // "Subbing for X" line (/code-review, 2026-08-17). The grouping key is
+          // `effective_instructor_id|kind:targetId` and does NOT include source, so a
+          // group genuinely mixes when one person is both the regular teacher and the
+          // sub for the same program: the badge then came from whichever session was
+          // most recent, and disappeared when a later regular day was added.
+          const subRows = g.rows.filter((r) => r.source === 'sub');
+          const hasSubDay = subRows.length > 0;
+          // Name someone ONLY when every sub day points at the same person. Resolved
+          // HERE because rows carry `original_instructor_id` and the name map lives in
+          // this scope; GroupRow has neither. Ambiguous (two different people subbed
+          // for) -> badge only, no name, rather than naming one of them at random,
+          // which is what reading it off the first row did.
+          const origIds = [...new Set(subRows.map((r) => r.original_instructor_id).filter(Boolean))];
+          const subbedForOne = origIds.length === 1 ? (instById.get(origIds[0]) ?? null) : null;
+
           // Aggregate status.
           const statuses = [...new Set(g.rows.map((r) => r.pay_status))];
           const groupStatus = statuses.length === 1 ? statuses[0] : 'mixed';
@@ -382,6 +400,8 @@ export default function Payroll() {
             distanceBonusCents,
             payableBonusCents,
             distanceBonusPaid,
+            hasSubDay,
+            subbedForOne,
             groupStatus,
             eligibleRows,
             unconfirmedRows,
@@ -1008,9 +1028,10 @@ function GroupRow({
   canManage, busy,
 }) {
   const g = group;
-  const sourceBadge = g.source === 'sub'
-    ? <Badge color={VIOLET}>Sub</Badge>
-    : null;
+  // `g.hasSubDay` / `g.subbedForOne`, both derived from the ROWS in the decorate pass
+  // (see the note there). NOT `g.source`, which is only the first row seen and which
+  // this branch already removed from every money path for that reason.
+  const sourceBadge = g.hasSubDay ? <Badge color={VIOLET}>Sub</Badge> : null;
   const unconfirmedCount = g.unconfirmedRows.length;
 
   const statusBadge = (
@@ -1062,9 +1083,9 @@ function GroupRow({
               </>
             )}
           </div>
-          {g.source === 'sub' && g.originalInstructor && (
+          {g.hasSubDay && g.subbedForOne && (
             <div style={{ fontSize: 12, color: MUTED, marginTop: 2, fontStyle: 'italic' }}>
-              Subbing for {shortName(g.originalInstructor)}
+              Subbing for {shortName(g.subbedForOne)}
             </div>
           )}
         </div>
@@ -1118,7 +1139,6 @@ function GroupRow({
       {expanded && (
         <DayBreakdown
           rows={g.rows}
-          originalInstructor={g.originalInstructor}
           onApproveRow={onApproveRow}
           onConfirmRow={onConfirmRow}
           onWithholdRow={onWithholdRow}
@@ -1154,7 +1174,17 @@ function GroupRow({
 // entirely, so no per-row test can identify one. When the model does grow to show
 // both instructors on one day, rebuild it from the ROW (a sub override on a regular
 // row), never from a group-level source.
-function DayBreakdown({ rows, originalInstructor, onApproveRow, onConfirmRow, onWithholdRow, onReapproveRow, onAdjustRow, canManage, busy }) {
+//
+// NOT the same question as the header's Sub badge, which IS now derived per-row
+// (`hasSubDay` in the decorate pass). That asks "is this row a sub row", which
+// `row.source` answers directly. This asks "was this regular day covered by someone
+// else", and that row is the one the view removes. Two different questions; only the
+// second one is underivable.
+// `originalInstructor` is NOT a prop here any more. It was passed in and never read -
+// the group-level display it existed for is the one deleted above - and leaving an
+// unused prop carrying the arbitrary-first-row value is an invitation to render it,
+// which is the exact bug /code-review found in the header badge.
+function DayBreakdown({ rows, onApproveRow, onConfirmRow, onWithholdRow, onReapproveRow, onAdjustRow, canManage, busy }) {
   return (
     <div style={{ borderTop: `1px solid ${RULE}`, padding: 12, background: '#fafafa' }}>
       {rows.map((r) => {
