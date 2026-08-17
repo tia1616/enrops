@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams, useOutletContext, useLocation } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 import { useCart } from '../../context/CartContext.jsx';
@@ -32,6 +32,86 @@ import { isGroupingDistrict } from '../../lib/districts.js';
 
 // Week order for the recurring class schedule (day_of_week stored Title-Case).
 const WEEKLY_DAY_ORDER = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 };
+
+// The operator's own description on a lean program card: three lines, then More.
+//
+// ONE component for BOTH lean cards (external-registration and ours). Every
+// previous change to this description had to be made twice - the spacing fix and
+// the "show it at all" fix both did - so sharing it is how a change here cannot
+// miss its twin.
+//
+// Three lines is the card-list convention (Airbnb, Eventbrite, Amazon clamp
+// secondary text this way). The facts BELOW this - day, time, location, who it is
+// for, dates and PRICE - are deliberately never clamped; those are the things a
+// family must not miss.
+//
+// WHY THIS MEASURES INSTEAD OF COUNTING CHARACTERS. The first version offered
+// More whenever the text was over 150 characters, which is a PROXY for "text is
+// hidden", not the same thing as it. At 198px on a phone three lines holds about
+// 90 characters, so 150 was safe there - but at 628px on a desktop three lines
+// holds nearly 290, so a 200-character description showed a More button that
+// revealed nothing when clicked. A control may only claim what its condition
+// proves. scrollHeight > clientHeight IS the claim: it is true exactly when the
+// clamped box is hiding something, at every width and font size.
+function LeanDescription({ text }) {
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  const boxRef = useRef(null);
+
+  useEffect(() => {
+    // Only meaningful while CLAMPED. Expanded, scrollHeight === clientHeight, so
+    // measuring then would report "nothing hidden", drop the Less button, and
+    // strand the reader in the expanded state with no way back.
+    if (expanded) return undefined;
+    const measure = () => {
+      const el = boxRef.current;
+      if (!el) return;
+      // 1px of slack: sub-pixel line heights make scrollHeight exceed
+      // clientHeight by a fraction on text that actually fits.
+      setOverflows(el.scrollHeight > el.clientHeight + 1);
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [text, expanded]);
+
+  if (!text) return null;
+  // Expanded always keeps its toggle, or there is no way back. Collapsed shows
+  // one only when something is genuinely hidden.
+  const showToggle = expanded || overflows;
+  return (
+    <>
+      <div
+        ref={boxRef}
+        style={{
+          fontSize: 13, color: '#6b6b6b', marginTop: 4,
+          marginBottom: showToggle ? 2 : 10,
+          lineHeight: 1.45, whiteSpace: 'pre-line',
+          ...(expanded ? null : {
+            display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical',
+            overflow: 'hidden',
+          }),
+        }}
+      >
+        {text}
+      </div>
+      {showToggle && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          style={{
+            background: 'none', border: 'none', padding: 0, marginBottom: 10,
+            color: '#5847C9', fontSize: 12.5, fontWeight: 600,
+            fontFamily: 'inherit', cursor: 'pointer', textDecoration: 'underline',
+          }}
+        >
+          {expanded ? 'Less' : 'More'}
+        </button>
+      )}
+    </>
+  );
+}
 
 export default function Home() {
   const { org } = useOutletContext();
@@ -83,18 +163,6 @@ export default function Home() {
     const onResize = () => setNarrowCards(window.innerWidth < 560);
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
-  }, []);
-  // How much description a card shows before "More". Three lines is the card-list
-  // convention (Airbnb, Eventbrite, Amazon all clamp secondary text this way);
-  // the facts BELOW it - day, time, location, who it is for, dates and price -
-  // are never clamped, because those are the things a family must not miss.
-  const [expandedDescriptions, setExpandedDescriptions] = useState(() => new Set());
-  const toggleDescription = useCallback((id) => {
-    setExpandedDescriptions((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
   }, []);
   // Lean catalog picker. Both start EMPTY: no school chosen means no classes
   // shown, so a family never lands on a price from someone else's district.
@@ -555,51 +623,6 @@ export default function Home() {
       width: narrowCards ? '100%' : undefined,
       textAlign: 'center',
     };
-    // ONE description renderer for both lean cards. There are two nearly
-    // identical cards below (external-registration and ours) and every previous
-    // change to this description has had to be made twice - the marginBottom fix
-    // and the "show it at all" fix both did. A shared renderer is how the clamp
-    // cannot land on one card and miss the other.
-    const leanDescription = (p) => {
-      if (!p.short_description) return null;
-      const expanded = expandedDescriptions.has(p.id);
-      // Only offer More when there is plausibly something to reveal. Character
-      // count, not line count: lines are not measurable here without a ref, and
-      // a wrong guess either hides text behind a needless toggle or clamps three
-      // lines with nothing after them.
-      const clampable = p.short_description.length > 150;
-      return (
-        <>
-          <div
-            style={{
-              fontSize: 13, color: '#6b6b6b', marginTop: 4,
-              marginBottom: clampable ? 2 : 10,
-              lineHeight: 1.45, whiteSpace: 'pre-line',
-              ...(clampable && !expanded ? {
-                display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical',
-                overflow: 'hidden',
-              } : null),
-            }}
-          >
-            {p.short_description}
-          </div>
-          {clampable && (
-            <button
-              type="button"
-              onClick={() => toggleDescription(p.id)}
-              aria-expanded={expanded}
-              style={{
-                background: 'none', border: 'none', padding: 0, marginBottom: 10,
-                color: '#5847C9', fontSize: 12.5, fontWeight: 600,
-                fontFamily: 'inherit', cursor: 'pointer', textDecoration: 'underline',
-              }}
-            >
-              {expanded ? 'Less' : 'More'}
-            </button>
-          )}
-        </>
-      );
-    };
     return (
       <div style={{
         minHeight: isEmbed ? 0 : '100vh',
@@ -818,11 +841,11 @@ export default function Home() {
                             {photo}
                             <div style={{ minWidth: 0 }}>
                               <div style={{ fontWeight: 600, fontSize: 16 }}>{p.curriculum}</div>
-                              {/* The operator's own description, clamped to 3 lines
-                                  with a More toggle. See leanDescription above -
-                                  shared with the card below so a change here cannot
-                                  miss its twin. */}
-                              {leanDescription(p)}
+                              {/* Clamped to 3 lines with a More toggle. See
+                                  LeanDescription at the top of this file - shared
+                                  with the card below so a change here cannot miss
+                                  its twin. */}
+                              <LeanDescription text={p.short_description} />
                               <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>{meta}</div>
                               {scheduleStr && (
                                 <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>{scheduleStr}</div>
@@ -839,9 +862,9 @@ export default function Home() {
                           {photo}
                           <div style={{ minWidth: 0 }}>
                             <div style={{ fontWeight: 600, fontSize: 16 }}>{p.curriculum}</div>
-                            {/* Same shared renderer as the external-registration card
-                                above. This is the one Jeff's families actually see. */}
-                            {leanDescription(p)}
+                            {/* Same shared component as the external-registration
+                                card above. This is the one Jeff's families see. */}
+                            <LeanDescription text={p.short_description} />
                             <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>
                               {meta}
                             </div>
