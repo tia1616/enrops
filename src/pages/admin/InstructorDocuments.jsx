@@ -26,11 +26,13 @@
 // documents drawer) splits on blank lines and renders through linkifyText, which
 // only linkifies http(s) and is React-escaped. So there is no markup to sanitize
 // and no injection surface — do not add dangerouslySetInnerHTML here.
+//
+// This SCREEN does not import linkifyText any more. It used to, for a preview
+// that no longer exists; the readers above still do, which is where it matters.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
-import { linkifyText } from "../../lib/linkifyText.jsx";
 import {
   INSTRUCTOR_DOCUMENTS,
   DOCUMENT_KEYS,
@@ -577,12 +579,22 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
   const [body, setBody] = useState(stripAppendedSignatureBlock(live?.body_text ?? ""));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  // A PUBLISHED document opens read-only. You should be able to look at the
-  // agreement your instructors sign without the risk of leaning on a key and
-  // changing it — and pressing Edit is the moment you know you are editing a
-  // legal document, which a box that is silently live never tells you. A blank
-  // one opens straight in edit mode; there is nothing to read yet.
-  const [editing, setEditing] = useState(!live);
+  // THE BOX IS ALWAYS EDITABLE. There is no read-only mode and no Edit button.
+  //
+  // Jessica called this screen confusing three times, so on the third pass the
+  // question stopped being "which control is wrong" and became "what shape do
+  // other tools use". Every product that has a tenant write their own legal
+  // document gives them ONE always-editable box: Shopify's store policies
+  // (Insert template, then Save), Gusto's contractor agreements, WordPress's
+  // privacy policy, Google Docs, Notion. Not one of them locks the document and
+  // asks you to press Edit first. Doing a third thing nobody does IS the tell.
+  //
+  // The safety argument for the old gate does not survive contact with how this
+  // screen actually works: typing here changes nothing an instructor sees.
+  // PUBLISH is the only thing that does, it is a separate deliberate button with
+  // its own confirmation on a live document, and every earlier version is kept.
+  // So the gate was protecting against a risk `confirming` below already covers,
+  // at the price of a whole mode on screen. Jessica chose to drop it, 17 Aug.
   // Publishing OVER a live document is a one-click, instantly-effective change to
   // the thing instructors sign, and there is no undo beyond publishing again.
   // That is not hypothetical: during testing today a starter draft reading
@@ -590,21 +602,23 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
   // contractor agreement on staging, and stayed live until someone noticed.
   // First publish needs no ceremony — nothing is being replaced.
   const [confirming, setConfirming] = useState(false);
-  // Write vs Preview, INSIDE one box. The page used to show the textarea AND a
-  // rendered copy stacked under it, which is the "two boxes showing the same thing"
-  // Jessica flagged twice - the first fix only removed the pair in read-only mode
-  // and left it standing while editing, which is where she was looking.
+  // THERE IS NO PREVIEW. It went through all three shapes and every one was
+  // wrong: stacked under the textarea it was Jessica's "two boxes showing the
+  // same thing", and as a Write/Preview toggle it was a mode on a screen she
+  // then called confusing again.
   //
-  // Every tool that has a preview treats it as a MODE, not a second panel: a
-  // preview is a CHECKING screen for output, an editor is for writing on the page
-  // while it is still live, and stacking both makes the writer decide which box is
-  // real. Google Docs and Notion have no preview at all because the surface IS the
-  // document; GitHub's Write/Preview tabs are the plain-text version of the same
-  // idea; Mailchimp and Docusign open a preview rather than pinning one open.
-  // Full WYSIWYG is not worth building here - body_text is plain text, so the only
-  // differences the preview reveals are paragraph breaks, live links, the title and
-  // the signature block. A toggle shows all four.
-  const [previewMode, setPreviewMode] = useState(false);
+  // The research settles it - nobody previews a document like this. Google Docs
+  // and Notion have none because the surface IS the document. Shopify's policy
+  // editor has none. Gusto's has none. WordPress's has none. A preview earns its
+  // keep when the output differs from the input; here body_text is plain text and
+  // the only differences were paragraph spacing, auto-linked URLs, the title and
+  // the signature block.
+  //
+  // So each of those four is handled without a mode: the title sits in its own
+  // field directly above, the hint under the box states the blank-line and link
+  // rules, and THE SIGNATURE BLOCK IS NOW PERMANENTLY ON SCREEN below the box
+  // rather than only inside the preview. That last one was the only genuinely
+  // invisible thing, and it is strictly more visible than it was before.
   const [templateOpen, setTemplateOpen] = useState(false);
   const [templateCopied, setTemplateCopied] = useState(false);
 
@@ -613,7 +627,7 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
   // agree about which control exists right now. The banner used to hardcode
   // "Start from a template" and went on saying it after the button had become
   // "View template" — copy naming a control that is not on screen.
-  const templateApplies = editing && !body.trim();
+  const templateApplies = !body.trim();
   const templateButtonLabel = templateApplies
     ? "Start from a template"
     : templateOpen ? "Hide template" : "View template";
@@ -696,44 +710,6 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
     fontSize: 14, fontFamily: "inherit", color: INK, background: "#fff", boxSizing: "border-box",
   };
 
-  // ONE renderer for "the document as an instructor actually reads it", because
-  // the page needs it in two places and they must not drift.
-  //
-  // It used to be drawn once, as a PREVIEW below a second box holding the same
-  // words as raw grey text. Jessica: "why are there two boxes showing the same
-  // thing." In read-only mode they genuinely were the same thing, and the raw one
-  // was strictly worse — unsplit paragraphs, dead links, no title, no signature
-  // block. Nobody stacks a raw copy above a rendered copy: Google Docs and Notion
-  // have no preview at all because the surface IS the document, and GitLab deleted
-  // its Write/Preview tabs once the editor rendered inline.
-  //
-  // So: read-only renders THIS as the document. Edit mode keeps it below the
-  // textarea, where it is a real preview — editable input above, rendered output
-  // below — and only there does the "what your instructors will see" label earn
-  // its keep.
-  const renderedDocument = (
-    <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, background: "#fff", padding: "16px 18px" }}>
-      <div style={{ fontSize: 15, fontWeight: 700, color: INK, marginBottom: 10 }}>{title}</div>
-      {body.trim().split(/\n\s*\n/).map((para, i) => (
-        <p key={i} style={{ margin: "0 0 10px", whiteSpace: "pre-wrap", fontSize: 13.5, color: INK, lineHeight: 1.6 }}>
-          {linkifyText(para)}
-        </p>
-      ))}
-      {willAppendSignatureBlock(docKey, body) && (
-        <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px dashed ${RULE}` }}>
-          {AGREEMENT_SIGNATURE_BLOCK.split(/\n\s*\n/).map((para, i) => (
-            <p key={i} style={{ margin: "0 0 8px", whiteSpace: "pre-wrap", fontSize: 13.5, color: MUTED, lineHeight: 1.6 }}>
-              {para}
-            </p>
-          ))}
-          <span style={{ fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: MUTED }}>
-            Locked &middot; filled in as each instructor signs
-          </span>
-        </div>
-      )}
-    </div>
-  );
-
   return (
     <div style={{ maxWidth: 760, margin: "0 auto", padding: "8px 0 40px" }}>
       <button
@@ -787,11 +763,7 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
       <label style={{ display: "block", fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600, marginBottom: 5 }}>
         Title
       </label>
-      {editing ? (
-        <input value={title} onChange={(e) => setTitle(e.target.value)} style={inputStyle} />
-      ) : (
-        <div style={{ ...inputStyle, background: "#fbfaf6", color: INK }}>{title}</div>
-      )}
+      <input value={title} onChange={(e) => setTitle(e.target.value)} style={inputStyle} />
       <p style={{ margin: "5px 0 16px", fontSize: 11.5, color: MUTED }}>
         The heading instructors see above this document.
       </p>
@@ -800,59 +772,11 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
         <label style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600 }}>
           The document
         </label>
-        {/* THE edit affordance. A box that is silently live never tells you that
-            typing in it changes a legal document; pressing Edit is the moment you
-            know. Mirrors the Edit button on the list and the Edit / Done editing
-            toggle the campaign and automation editors already use. */}
-        {/* THE ONLY Edit control. There used to be a second one — a big "Edit this
-            document" button in the action row at the bottom — and both called
-            setEditing(true). Jessica: "why edit button at the top and bottom."
-            One entry point per action; the duplicate is removed rather than made
-            to agree.
-            This is the one that survives, and it is a real button now rather than
-            a bare text link, because the action row it used to share is BELOW a
-            22-row document. That fold is not hypothetical in this exact file: it
-            is why the template button was moved up here. Publish deliberately
-            stays at the bottom, and that asymmetry is the point — Edit is a mode
-            switch you must be able to find, Publish is a commitment you should
-            reach by scrolling PAST the document you are about to make live. */}
-        {!editing ? (
-          <button
-            type="button"
-            onClick={() => setEditing(true)}
-            style={{
-              background: "#fff", border: `1px solid ${BRIGHT}`, color: BRIGHT, borderRadius: 999,
-              padding: "6px 14px", fontSize: 12.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer",
-            }}
-          >
-            Edit
-          </button>
-        ) : (
-          <>
-            <span style={{ fontSize: 11.5, color: BRIGHT, fontWeight: 600 }}>Editing</span>
-            {/* One box, two modes. Only offered once there is something to preview. */}
-            {body.trim() && (
-              <span style={{ display: "inline-flex", border: `1px solid ${RULE}`, borderRadius: 999, overflow: "hidden" }}>
-                {[["Write", false], ["Preview", true]].map(([label, on]) => (
-                  <button
-                    key={label}
-                    type="button"
-                    onClick={() => setPreviewMode(on)}
-                    aria-pressed={previewMode === on}
-                    style={{
-                      background: previewMode === on ? BRIGHT : "#fff",
-                      color: previewMode === on ? "#fff" : MUTED,
-                      border: "none", padding: "4px 12px", fontSize: 12, fontWeight: 600,
-                      fontFamily: "inherit", cursor: "pointer",
-                    }}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </span>
-            )}
-          </>
-        )}
+        {/* THE ONLY CONTROL IN THIS ROW. It used to hold an Edit button, an
+            "Editing" badge and a Write/Preview toggle as well - four things above
+            the box on a screen whose whole job is "type the words". Edit and
+            Preview are both gone (see the state block at the top for why: no other
+            product doing this has either), so what is left is the template. */}
         {/* AT THE TOP, not under a 22-row box. Jessica cleared the body and could
             not find this, because it only appeared below the fold. Renamed from
             "Start from a draft": "template" is the word every tool uses for
@@ -952,35 +876,20 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
         </div>
       )}
 
-      {editing && previewMode && body.trim() ? (
-        // Preview MODE, in the same slot the textarea occupies. Not a second box.
-        renderedDocument
-      ) : editing ? (
-        <textarea
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          rows={22}
-          placeholder="Write the document here, or use Start from a template above."
-          style={{ ...inputStyle, lineHeight: 1.6, resize: "vertical", fontSize: 13.5 }}
-        />
-      ) : body.trim() ? (
-        // Read-only: the rendered document IS the document. No raw second copy.
-        renderedDocument
-      ) : (
-        <div style={{ ...inputStyle, background: "#fbfaf6", minHeight: 160, lineHeight: 1.6, fontSize: 13.5, color: MUTED }}>
-          Nothing written yet.
-        </div>
-      )}
-      {editing && !previewMode && (
-        <p style={{ margin: "5px 0 0", fontSize: 11.5, color: MUTED, lineHeight: 1.5 }}>
-          Leave a blank line to start a new paragraph. Web addresses become clickable on their own.
-        </p>
-      )}
-      {editing && previewMode && body.trim() && (
-        <p style={{ margin: "5px 0 0", fontSize: 11.5, color: MUTED, lineHeight: 1.5 }}>
-          This is exactly what your instructors read. Switch back to <strong>Write</strong> to change it.
-        </p>
-      )}
+      {/* ONE BOX, ONE STATE. No read-only variant, no preview variant, no
+          "Nothing written yet" placeholder panel - an empty textarea with a
+          placeholder already says that, and it lets you start typing rather than
+          hunting for the control that unlocks it. */}
+      <textarea
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
+        rows={22}
+        placeholder="Write the document here, or use Start from a template above."
+        style={{ ...inputStyle, lineHeight: 1.6, resize: "vertical", fontSize: 13.5 }}
+      />
+      <p style={{ margin: "5px 0 0", fontSize: 11.5, color: MUTED, lineHeight: 1.5 }}>
+        Leave a blank line to start a new paragraph. Web addresses become clickable on their own.
+      </p>
 
       {/* LOCKED, not editable. It used to live inside the box as text a provider
           could delete or typo — and the damage would only surface in an archived
@@ -991,14 +900,14 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
           with its own signature wording, so for that document this panel claimed
           "we add this when you publish" while showing the operator a second copy
           of a signature they already have. */}
-      {/* EMPTY BODY ONLY, and that is the whole reason this panel still exists.
-          willAppendSignatureBlock is TRUE for an empty signed document, so on a
-          blank contractor agreement this is the only place an operator learns a
-          signature block gets added — there is no rendered document yet to show it
-          in place. The moment they write anything, the rendering below carries it
-          in context and labelled, and showing both was the third copy of the same
-          words on one screen. */}
-      {!body.trim() && willAppendSignatureBlock(docKey, body) && (
+      {/* ALWAYS, not just on an empty body. This used to be `!body.trim() && ...`
+          because the preview carried the block once you had written something -
+          so with the preview gone, that condition would have hidden the ONE thing
+          on this screen a provider cannot otherwise see. It is the only part of
+          the published document that is not in the box in front of them.
+          Permanently visible under the box is what replaces the preview, and it
+          costs no mode. */}
+      {willAppendSignatureBlock(docKey, body) && (
         <div style={{ marginTop: 12, background: "#f4f2ee", border: `1px dashed ${RULE}`, borderRadius: 8, padding: "12px 14px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
             <span style={{ fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: MUTED }}>
@@ -1015,28 +924,19 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
         </div>
       )}
 
-      {/* PREVIEW — the document as the instructor actually reads it.
-          House standard: never draw an approximation, render the real thing.
-          Screens 4/5/6 and the portal all split on blank lines and pass each
-          paragraph through linkifyText, so this uses exactly that, and shows the
-          signature block in place and visibly locked. Without it an operator was
-          publishing a legal document having only ever seen their own raw
-          keystrokes. Same rule as the registration preview and the confirmation
-          page. */}
-      {/* THE STACKED PREVIEW PANEL IS GONE. It lived here, under the textarea,
-          labelled "What your instructors will see" - the second of the two boxes
-          showing the same words. Preview is now a MODE inside the one box above
-          (see previewMode), so this page has exactly ONE document box in every
-          state: reading, writing, and checking. */}
+      {/* NO PREVIEW PANEL HERE, AND NO PREVIEW MODE ABOVE. Both existed; both
+          were wrong. See the state block at the top of this component for the
+          research - this is the third and last shape, so do not add a fourth
+          without Jessica asking for one. */}
 
       {error && (
         <div role="alert" style={{ color: RED, fontSize: 13.5, marginTop: 14, lineHeight: 1.5 }}>{error}</div>
       )}
 
-      {/* Publishing belongs to edit mode. Offering it while you are only reading
-          invites a click that either does nothing or republishes unchanged text
-          as a new version for no reason. */}
-      {editing && (
+      {/* Always offered, because there is no longer a mode this could be wrong in.
+          It stays disabled until something has actually changed (`canPublish`
+          requires `dirty`), which is what stops a pointless republish of identical
+          text - that used to be the job of hiding it outside edit mode. */}
       <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 18, flexWrap: "wrap" }}>
         {(
           confirming ? (
@@ -1103,14 +1003,9 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
           )
         )}
       </div>
-      )}
-      {/* The second Edit button lived in that row. Removed — the one in the
-          document header does this job, so the row is now edit-mode only and
-          Publish is the single thing in it.
-          Its caption went with it and is NOT re-homed anywhere: "Editing writes a
-          new version when you publish. Nobody who already signed is affected." is
-          the banner at the top of this page said twice, and the banner says it
-          better because it names the actual version number. */}
+      {/* Publish is the only thing in this row. There was once an "Edit this
+          document" button here too, and later the row was hidden outside edit
+          mode; both are gone with the mode itself. */}
 
       {versions.length > 0 && (
         <div style={{ marginTop: 26, borderTop: `1px solid ${RULE}`, paddingTop: 14 }}>
