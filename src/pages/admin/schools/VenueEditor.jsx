@@ -15,6 +15,7 @@
 
 import { useState } from "react";
 import { supabase } from "../../../lib/supabase";
+import { groupingDistricts } from "../../../lib/districts.js";
 import PlacesAutocomplete, { PlacesLookupHint } from "../../../components/PlacesAutocomplete";
 
 const BRIGHT = "#5847C9";
@@ -259,7 +260,14 @@ export default function VenueEditor({
           {/* Only on a NEW venue: "" is the untouched state save refuses, so it
               must never be a resting value on an existing row. */}
           {isNew && <option value="">Choose a district…</option>}
-          {(districts ?? []).map((d) => (
+          {/* groupingDistricts: an independent_school row exists only so ONE private
+              school can own a calendar, so offering it here would let a second school
+              be filed under it - inheriting that school's calendar and dropping into
+              the public picker's "Other schools & sites" bucket. The "No district"
+              option below is the right answer for a venue following nobody's
+              calendar. `districts` itself stays UNFILTERED, because the
+              match-before-create above needs every row or it inserts a duplicate. */}
+          {groupingDistricts(districts).map((d) => (
             <option key={d.id} value={d.id}>{d.name}</option>
           ))}
           <option value={NEW_DISTRICT}>+ Create a new district…</option>

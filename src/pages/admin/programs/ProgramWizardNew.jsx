@@ -272,7 +272,9 @@ export default function ProgramWizardNew() {
           // if they fail — the wizard still works, the modal just has empty pickers.
           supabase
             .from("districts")
-            .select("id, name")
+            // district_type feeds AddSchoolModal's picker, which excludes
+            // independent_school rows. Unfiltered here (lib/districts.js).
+            .select("id, name, district_type")
             .eq("organization_id", org.id)
             .order("name"),
           supabase
@@ -498,7 +500,9 @@ export default function ProgramWizardNew() {
   async function reloadDistricts() {
     const { data } = await supabase
       .from("districts")
-      .select("id, name")
+      // Must match the select in the initial load above, or a district created
+      // mid-wizard loses its type and starts appearing in the picker.
+      .select("id, name, district_type")
       .eq("organization_id", org.id)
       .order("name");
     setDistricts(data ?? []);

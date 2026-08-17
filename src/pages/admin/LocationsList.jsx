@@ -9,6 +9,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext, useSearchParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
+import { groupingDistricts } from "../../lib/districts.js";
 import PlacesAutocomplete, { PlacesLookupHint } from "../../components/PlacesAutocomplete";
 import FindMissingAddressesModal from "./FindMissingAddressesModal";
 
@@ -177,7 +178,11 @@ export default function LocationsList({ embedded = false }) {
     if (!org?.id) return;
     const { data } = await supabase
       .from("districts")
-      .select("id, name")
+      // district_type so the PICKER can exclude independent_school rows. Loaded
+      // unfiltered on purpose: the name-match-before-create below and the id -> name
+      // map both need every row (see lib/districts.js for why filtering here would
+      // create duplicate district rows).
+      .select("id, name, district_type")
       .eq("organization_id", org.id)
       .order("name", { ascending: true });
     setDistricts(data ?? []);
@@ -674,7 +679,12 @@ function EditCard({ title, draft, bind, applyPlace, partners, districts, error, 
           {/* Only offered on a NEW location: "" is the untouched state we refuse,
               so it must never be a resting value on an existing row. */}
           {isNew && <option value="">Choose a district…</option>}
-          {(districts ?? []).map((d) => (
+          {/* groupingDistricts: an independent_school row exists only so ONE private
+              school can have a calendar, so offering it here would let a second
+              school be filed under it - inheriting its calendar and dropping into
+              the public picker's "Other schools & sites" bucket. "No district" below
+              is the right answer for a venue that follows nobody's calendar. */}
+          {groupingDistricts(districts).map((d) => (
             <option key={d.id} value={d.id}>{d.name}</option>
           ))}
           <option value={NEW_DISTRICT}>+ Create a new district…</option>

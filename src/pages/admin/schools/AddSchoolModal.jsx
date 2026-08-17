@@ -24,6 +24,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "../../../lib/supabase";
+import { groupingDistricts } from "../../../lib/districts.js";
 import PlacesAutocomplete, { PlacesLookupHint } from "../../../components/PlacesAutocomplete";
 
 const BRIGHT = "#5847C9";
@@ -247,7 +248,10 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
               <Lbl>District *</Lbl>
               <select value={districtId} onChange={(e) => setDistrictId(e.target.value)} style={inputStyle} disabled={busy}>
                 <option value="">Choose a district…</option>
-                {districts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                {/* groupingDistricts: never offer an independent_school row as another
+                    school's district. `districts` stays unfiltered for the
+                    name-match-before-create in ensureDistrict above. */}
+                {groupingDistricts(districts).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
                 <option value={NEW_DISTRICT}>+ Create a new district…</option>
                 <option value={NO_DISTRICT}>No district (library, church, private site)</option>
               </select>

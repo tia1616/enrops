@@ -10,6 +10,7 @@
 // Everything here is deliberately data-in / data-out: no React, no Supabase, no
 // DOM. The component decides how to draw the result; this decides what the
 // result IS.
+import { isGroupingDistrict } from './districts.js';
 
 // Catch-all bucket for venues with no public district (private/charter schools,
 // libraries, parks and rec, community sites). Keeps them on the reg page instead
@@ -31,6 +32,10 @@
 // private/charter: this bucket holds a county library too, and that is not a
 // private school (Jessica chose this over "Private/charter/other", 17 Aug).
 export const OTHER_DISTRICT = 'Other schools & sites';
+
+// The type rule itself lives in lib/districts.js, because the admin's three
+// "pick a district" dropdowns need the identical rule and a second copy of the
+// string 'independent_school' is how they drift apart.
 
 const byName = (a, b) => a.name.localeCompare(b.name);
 
@@ -69,7 +74,7 @@ export function buildLocationOptions(openPrograms, districtsById = {}) {
     seen.add(id);
     const districtId = p.program_locations?.district_id;
     const row = districtId ? districtsById?.[districtId] : null;
-    const ownsHeading = !!row?.name && row.district_type !== 'independent_school';
+    const ownsHeading = !!row?.name && isGroupingDistrict(row);
     out.push({ id, name, district: ownsHeading ? row.name : OTHER_DISTRICT });
   }
   return out;

@@ -5,6 +5,7 @@
 // This shipped to prod on 2026-08-14 with no test at all. Every case below is
 // either a state the picker can actually be in, or a bug that really happened.
 import { buildCatalogPicker, buildLocationOptions, groupByDistrict, OTHER_DISTRICT } from './regCatalogPicker.js';
+import { isGroupingDistrict, groupingDistricts } from './districts.js';
 
 let pass = 0, fail = 0;
 function eq(name, actual, expected) {
@@ -213,6 +214,32 @@ eq('null catalog is not an error', buildCatalogPicker(null, null, {}).visiblePro
   eq('namedCount excludes the catch-all bucket', namedCount, 3);
   eq('the catch-all sorts last even though "O" < "P"',
     groupNames[groupNames.length - 1], OTHER_DISTRICT);
+}
+
+// --- the shared district-type rule (lib/districts.js) -----------------------
+// The admin's three "pick a district" dropdowns and this picker must apply the
+// SAME rule, which is why it lives in one module. These pin the rule itself and
+// the distinction that a filtered list is for DROPDOWNS only.
+{
+  const real = { id: 'd1', name: 'PPS', district_type: 'district' };
+  const priv = { id: 'd2', name: 'Catlin Gabel School', district_type: 'independent_school' };
+
+  eq('a district groups', isGroupingDistrict(real), true);
+  eq('an independent school does not', isGroupingDistrict(priv), false);
+  // Legacy rows read before 20260817a, and rows from a select that forgot the
+  // column, must behave like a district rather than silently vanishing from every
+  // dropdown in the admin.
+  eq('a row with no district_type at all still groups', isGroupingDistrict({ id: 'd3', name: 'X' }), true);
+  eq('null is not a crash', isGroupingDistrict(null), true);
+
+  eq('groupingDistricts drops only the independent rows',
+    groupingDistricts([real, priv]).map((d) => d.name), ['PPS']);
+  // The list a DROPDOWN offers is not the list a name-match may use: matching
+  // against the filtered set would miss the private school and insert a duplicate
+  // districts row of the same name.
+  eq('...and does not mutate or lose the caller\'s full list',
+    [real, priv].length, 2);
+  eq('undefined in, empty out', groupingDistricts(undefined), []);
 }
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'}  (${pass} passed, ${fail} failed)`);

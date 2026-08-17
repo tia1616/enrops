@@ -74,7 +74,9 @@ export default function SchoolsList() {
 
   async function loadDistricts() {
     if (!org?.id) return [];
-    const { data } = await supabase.from("districts").select("id, name").eq("organization_id", org.id).order("name");
+    // district_type so VenueEditor's picker can exclude independent_school rows.
+    // UNFILTERED here: its match-before-create needs every row (lib/districts.js).
+    const { data } = await supabase.from("districts").select("id, name, district_type").eq("organization_id", org.id).order("name");
     setDistricts(data ?? []);
     return data ?? [];
   }
