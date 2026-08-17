@@ -757,9 +757,11 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
       ) : (
         <div style={{ background: "#fbfaf6", border: `1px solid ${RULE}`, borderRadius: 10, padding: "11px 13px", fontSize: 13, color: INK, lineHeight: 1.55, margin: "14px 0" }}>
           {/* Points at the BUTTON, not at "the draft below". The box starts
-              empty and the draft only appears once Start from a draft is
+              empty and the starter only appears once Start from a template is
               pressed, so the old wording described something that was not on
               screen — the same untrue-pointer bug fixed twice elsewhere today.
+              (This comment itself said "Start from a draft" until 17 Aug, three
+              commits after the button was renamed. A comment is a claim.)
               Only visible in the empty state, which is exactly the state a
               provider setting up for the first time is in. */}
           Nothing published yet, so your instructors see an empty step.{" "}
@@ -879,7 +881,14 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
           <button
             type="button"
             onClick={() => {
-              if (templateApplies) { setBody(meta.starter); return; }
+              // Apply-and-close, not just apply. `templateApplies` short-circuits
+              // ahead of the close branch, so with the panel OPEN and the body
+              // then emptied this button reads "Start from a template" and the
+              // close path becomes unreachable — the panel is stuck open with no
+              // control that shuts it. Closing here also stops the panel showing
+              // the same words that are now in the box. This is what the deleted
+              // "Yes, replace it" handler did, for the same reason.
+              if (templateApplies) { setBody(meta.starter); closeTemplate(); return; }
               if (templateOpen) { closeTemplate(); return; }
               setTemplateOpen(true);
               setTemplateCopied(false);
