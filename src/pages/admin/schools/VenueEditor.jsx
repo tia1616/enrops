@@ -16,6 +16,7 @@
 import { useState } from "react";
 import { supabase } from "../../../lib/supabase";
 import { groupingDistricts, isGroupingDistrict } from "../../../lib/districts.js";
+import DistrictsWarning from "../../../components/DistrictsWarning.jsx";
 import PlacesAutocomplete, { PlacesLookupHint } from "../../../components/PlacesAutocomplete";
 
 const BRIGHT = "#5847C9";
@@ -106,6 +107,7 @@ export default function VenueEditor({
   onSaved,
   onCancel,
   onDistrictsChanged,
+  districtsWarning = "",
 }) {
   const isNew = !location;
   const [draft, setDraft] = useState(
@@ -306,6 +308,10 @@ export default function VenueEditor({
           <option value={NEW_DISTRICT}>+ Create a new district…</option>
           <option value={NO_DISTRICT}>No district (library, church, private site)</option>
         </select>
+        {/* INSIDE the drawer that owns this select. SchoolDetailDrawer is
+            position:fixed at zIndex 90, so the page banner behind it is not
+            visible while this field is on screen. */}
+        <DistrictsWarning message={districtsWarning} />
         {/* FOUR states, four sentences. The positive one is conditional on
             purpose: a district created just now has no calendar on file yet. */}
         <div style={{ fontSize: 12, marginTop: 6, lineHeight: 1.5, color: draft.district_id === NO_DISTRICT ? "#8a6d1f" : MUTED }}>

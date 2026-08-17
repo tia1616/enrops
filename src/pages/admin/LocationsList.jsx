@@ -10,6 +10,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useOutletContext, useSearchParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { groupingDistricts, isGroupingDistrict } from "../../lib/districts.js";
+import DistrictsWarning from "../../components/DistrictsWarning.jsx";
 import PlacesAutocomplete, { PlacesLookupHint } from "../../components/PlacesAutocomplete";
 import FindMissingAddressesModal from "./FindMissingAddressesModal";
 
@@ -540,6 +541,7 @@ export default function LocationsList({ embedded = false }) {
               partners={partners}
               districts={districts}
               savedDistrictId={savedDistrictId}
+              districtsWarning={districtLoadError}
               error={error}
               saving={saving}
               onSave={save}
@@ -658,7 +660,7 @@ function DisplayCard({ loc, campCount, district, onEdit, isLean = false }) {
   );
 }
 
-function EditCard({ title, draft, bind, applyPlace, partners, districts, savedDistrictId = null, error, saving, onSave, onCancel, isNew, isLean = false, inDrawer }) {
+function EditCard({ title, draft, bind, applyPlace, partners, districts, savedDistrictId = null, districtsWarning = "", error, saving, onSave, onCancel, isNew, isLean = false, inDrawer }) {
   const placesEnabled = !!import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
   // Whether the Google lookup actually started. Without this the field degrades
   // to a plain box on failure and says nothing, which reads as broken.
@@ -788,6 +790,10 @@ function EditCard({ title, draft, bind, applyPlace, partners, districts, savedDi
           <option value={NEW_DISTRICT}>+ Create a new district…</option>
           <option value={NO_DISTRICT}>No district (studio, library, private site)</option>
         </select>
+        {/* INSIDE the drawer that owns this select. Editing always happens in a
+            position:fixed zIndex 80 overlay, so the page banner is behind the scrim
+            while this field is on screen - un-gating it was not enough. */}
+        <DistrictsWarning message={districtsWarning} />
         {/* FOUR states, four sentences. The positive one is deliberately
             conditional: a district you just created has no calendar on file yet,
             so promising dates "will skip" outright would be false right then. */}

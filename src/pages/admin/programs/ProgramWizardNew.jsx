@@ -888,21 +888,19 @@ export default function ProgramWizardNew() {
         </div>
       )}
 
-      {/* WHERE THE OPERATOR IS LOOKING. This warning belongs next to the modal that
-          is about to show an empty required District picker, not at the top of a
-          three-step wizard they have already scrolled past. */}
-      {addingSchool && districtLoadError && (
-        <div role="alert" style={{ background: "#fbeaea", border: "1px solid #D9694F", borderRadius: 8, padding: "10px 14px", color: "#7a2a2a", fontSize: 13, marginBottom: 12 }}>
-          Couldn&apos;t load your districts ({districtLoadError}), so the District list below may be
-          empty or incomplete. Reload this page before adding a school, or you may create a
-          duplicate district.
-        </div>
-      )}
+      {/* THE BANNER THAT USED TO BE HERE IS GONE, and its removal is the fix rather
+          than a tidy-up. It rendered in page flow immediately above AddSchoolModal -
+          which is position:fixed at zIndex 200 and therefore covers it completely. It
+          said "WHERE THE OPERATOR IS LOOKING" while being invisible in the only state
+          that renders it (/code-review 2026-08-17, second round). The warning now
+          travels INTO the modal as `districtsWarning` and renders beside the District
+          select itself, which is the field it is about. */}
       {addingSchool && (
         <AddSchoolModal
           org={org}
           districts={districts}
           partners={partners}
+          districtsWarning={districtLoadError}
           onClose={() => setAddingSchool(false)}
           onDistrictsChanged={reloadDistricts}
           onCreated={handleSchoolCreated}

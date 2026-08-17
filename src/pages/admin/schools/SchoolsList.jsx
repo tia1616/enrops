@@ -413,6 +413,7 @@ export default function SchoolsList() {
       {adding && (
         <AddSchoolModal
           org={org} districts={districts} partners={(partners ?? [])}
+          districtsWarning={districtLoadError}
           onClose={() => setAdding(false)}
           onDistrictsChanged={loadDistricts}
           onCreated={async ({ partnerId }) => {
@@ -450,6 +451,7 @@ export default function SchoolsList() {
       {selectedPartner && (
         <SchoolDetailDrawer
           org={org} partner={selectedPartner} districts={districts} partners={(partners ?? [])}
+          districtsWarning={districtLoadError}
           onClose={() => setSelectedPartner(null)}
           onDistrictsChanged={loadDistricts}
           onChanged={refresh}

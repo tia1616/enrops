@@ -38,7 +38,7 @@ const PARTNER_TYPE_LABELS = {
   church: "Church",
 };
 
-export default function SchoolDetailDrawer({ org, partner, districts = [], partners = [], onClose, onChanged, onDistrictsChanged }) {
+export default function SchoolDetailDrawer({ org, partner, districts = [], partners = [], onClose, onChanged, onDistrictsChanged, districtsWarning = "" }) {
   const navigate = useNavigate();
   const [venues, setVenues] = useState(null);   // null = loading
   const [activity, setActivity] = useState({ programs: 0, camps: 0 });
@@ -156,7 +156,7 @@ export default function SchoolDetailDrawer({ org, partner, districts = [], partn
                 <div style={editorWrap}>
                   <VenueEditor org={org} location={null} districts={districts} partners={partners}
                     lockedPartnerId={partner.id} onSaved={afterVenueSaved} onCancel={() => setAddingVenue(false)}
-                    onDistrictsChanged={onDistrictsChanged} />
+                    onDistrictsChanged={onDistrictsChanged} districtsWarning={districtsWarning} />
                 </div>
               ) : (
                 <div style={{ background: CREAM, border: `1px dashed ${RULE}`, borderRadius: 8, padding: 16, fontSize: 13, color: MUTED }}>
@@ -182,7 +182,7 @@ export default function SchoolDetailDrawer({ org, partner, districts = [], partn
                         <div style={{ padding: "14px 14px 18px", borderTop: `1px solid ${RULE}` }}>
                           <VenueEditor org={org} location={v} districts={districts} partners={partners}
                             lockedPartnerId={partner.id} onSaved={afterVenueSaved}
-                            onDistrictsChanged={onDistrictsChanged} />
+                            onDistrictsChanged={onDistrictsChanged} districtsWarning={districtsWarning} />
                         </div>
                       )}
                     </div>
@@ -193,7 +193,7 @@ export default function SchoolDetailDrawer({ org, partner, districts = [], partn
                     <div style={{ fontSize: 12.5, fontWeight: 600, color: PURPLE, marginBottom: 10 }}>New venue under {partner.partner_name}</div>
                     <VenueEditor org={org} location={null} districts={districts} partners={partners}
                       lockedPartnerId={partner.id} onSaved={afterVenueSaved} onCancel={() => setAddingVenue(false)}
-                      onDistrictsChanged={onDistrictsChanged} />
+                      onDistrictsChanged={onDistrictsChanged} districtsWarning={districtsWarning} />
                   </div>
                 ) : (
                   <button type="button" onClick={() => setAddingVenue(true)} style={{ ...linkBtn, alignSelf: "flex-start", marginTop: 2 }}>
