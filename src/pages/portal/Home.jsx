@@ -80,10 +80,20 @@ function LeanDescription({ text }) {
     // WIDTH changes, which is what actually decides how many lines this wraps to:
     // the card flipping to its stacked phone layout, a sibling appearing, any
     // container resize that never touches the window. A window `resize` listener
-    // (what this used to be) misses every one of those.
+    // alone (what this used to be) misses every one of those.
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
     if (ro) ro.observe(el);
-    else window.addEventListener('resize', measure);
+
+    // BOTH, not either/or. ResizeObserver is the more precise signal but it is
+    // delivered on the rendering lifecycle, so a document that is not compositing
+    // gets NO callbacks at all - not even the initial one the spec guarantees on
+    // observe(). Measured 2026-08-17: in a non-compositing embedded view,
+    // requestAnimationFrame ran 0 times and a control ResizeObserver fired 0 times,
+    // while `document.fonts.ready` (a microtask) still settled. A background tab,
+    // an offscreen iframe and the operator's own embedded catalog are all plausible
+    // versions of that. The window listener costs one comparison per resize and
+    // keeps the common case working where RO is silent.
+    window.addEventListener('resize', measure);
 
     // THE FONT SWAP, and it needs its own hook because nothing above catches it.
     // Poppins arrives from Google Fonts with `display=swap` (index.html), so the
@@ -104,7 +114,7 @@ function LeanDescription({ text }) {
     return () => {
       alive = false;
       if (ro) ro.disconnect();
-      else window.removeEventListener('resize', measure);
+      window.removeEventListener('resize', measure);
     };
   }, [text, expanded]);
 
