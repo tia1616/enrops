@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams, useOutletContext, useLocation } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 import { useCart } from '../../context/CartContext.jsx';
@@ -63,6 +63,39 @@ export default function Home() {
   const [highlightProgram, setHighlightProgram] = useState('');
   const [weeklyClasses, setWeeklyClasses] = useState([]); // recurring class_schedule (outside-registration tenants), safe public view
   const [loading, setLoading] = useState(true);
+  // PHONE LAYOUT for the lean program cards. Mirrors QuickProgramBuilder's
+  // `narrow` pattern (the only responsive convention in this inline-styled
+  // codebase) rather than inventing a second one.
+  //
+  // Measured on Jeff's live page at 375px before this existed: the card is a
+  // flex ROW that never wrapped, and two siblings inside it refuse to shrink -
+  // the 56px photo and the ~94px Register button. Of 310px of card, 150px went
+  // to those two, leaving the class name AND a 726-character description sharing
+  // a 93px ribbon 1187px tall. The card's own min-content also blew past its
+  // grid track, so cards overhung their container.
+  //
+  // 560, not 480: the card holds photo + button + a description that needs a
+  // readable measure, so it runs out of room well before a phone's width. Above
+  // this the row layout is unchanged.
+  const [narrowCards, setNarrowCards] = useState(() =>
+    typeof window !== 'undefined' && window.innerWidth < 560);
+  useEffect(() => {
+    const onResize = () => setNarrowCards(window.innerWidth < 560);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  // How much description a card shows before "More". Three lines is the card-list
+  // convention (Airbnb, Eventbrite, Amazon all clamp secondary text this way);
+  // the facts BELOW it - day, time, location, who it is for, dates and price -
+  // are never clamped, because those are the things a family must not miss.
+  const [expandedDescriptions, setExpandedDescriptions] = useState(() => new Set());
+  const toggleDescription = useCallback((id) => {
+    setExpandedDescriptions((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }, []);
   // Lean catalog picker. Both start EMPTY: no school chosen means no classes
   // shown, so a family never lands on a price from someone else's district.
   const [locationDistrict, setLocationDistrict] = useState(''); // lean catalog: which district
@@ -496,16 +529,76 @@ export default function Home() {
     // option list renders blank and disagrees with the list beneath it.
     const districtValue = picker.district;
     const schoolValue = picker.school;
+    // On a phone the card STACKS: content, then a full-width Register. Above 560
+    // it is the same side-by-side row it always was. alignItems flips to stretch
+    // so the stacked button spans the card instead of sitting centred and stubby.
     const leanCard = (hl) => ({
-      display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16,
+      display: 'flex',
+      flexDirection: narrowCards ? 'column' : 'row',
+      alignItems: narrowCards ? 'stretch' : 'center',
+      justifyContent: 'space-between',
+      gap: narrowCards ? 12 : 16,
       padding: '16px 18px', border: `1px solid ${hl ? '#5847C9' : '#e2dfd5'}`,
       borderRadius: 14, background: '#fff',
       boxShadow: hl ? '0 0 0 3px rgba(88,71,201,0.15)' : 'none',
+      // Without this the card's min-content width (photo + button + the longest
+      // unbreakable word) exceeded its grid track and cards overhung the page.
+      minWidth: 0,
     });
     const leanBtn = {
       flexShrink: 0, padding: '10px 18px', background: '#5847C9', color: '#fff',
       border: 'none', borderRadius: 10, fontSize: 14, fontWeight: 600,
-      fontFamily: 'inherit', cursor: 'pointer', textDecoration: 'none', display: 'inline-block',
+      fontFamily: 'inherit', cursor: 'pointer', textDecoration: 'none',
+      display: 'inline-block',
+      // Stacked, it is the card's primary action and gets the whole width as a
+      // tap target. In a row it must not stretch, so width stays auto.
+      width: narrowCards ? '100%' : undefined,
+      textAlign: 'center',
+    };
+    // ONE description renderer for both lean cards. There are two nearly
+    // identical cards below (external-registration and ours) and every previous
+    // change to this description has had to be made twice - the marginBottom fix
+    // and the "show it at all" fix both did. A shared renderer is how the clamp
+    // cannot land on one card and miss the other.
+    const leanDescription = (p) => {
+      if (!p.short_description) return null;
+      const expanded = expandedDescriptions.has(p.id);
+      // Only offer More when there is plausibly something to reveal. Character
+      // count, not line count: lines are not measurable here without a ref, and
+      // a wrong guess either hides text behind a needless toggle or clamps three
+      // lines with nothing after them.
+      const clampable = p.short_description.length > 150;
+      return (
+        <>
+          <div
+            style={{
+              fontSize: 13, color: '#6b6b6b', marginTop: 4,
+              marginBottom: clampable ? 2 : 10,
+              lineHeight: 1.45, whiteSpace: 'pre-line',
+              ...(clampable && !expanded ? {
+                display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical',
+                overflow: 'hidden',
+              } : null),
+            }}
+          >
+            {p.short_description}
+          </div>
+          {clampable && (
+            <button
+              type="button"
+              onClick={() => toggleDescription(p.id)}
+              aria-expanded={expanded}
+              style={{
+                background: 'none', border: 'none', padding: 0, marginBottom: 10,
+                color: '#5847C9', fontSize: 12.5, fontWeight: 600,
+                fontFamily: 'inherit', cursor: 'pointer', textDecoration: 'underline',
+              }}
+            >
+              {expanded ? 'Less' : 'More'}
+            </button>
+          )}
+        </>
+      );
     };
     return (
       <div style={{
@@ -721,24 +814,15 @@ export default function Home() {
                     if (p.runs_own_registration) {
                       return (
                         <div key={p.id} id={`program-card-${p.id}`} style={leanCard(hl)}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: narrowCards ? 'flex-start' : 'center', gap: 12, minWidth: 0 }}>
                             {photo}
                             <div style={{ minWidth: 0 }}>
                               <div style={{ fontWeight: 600, fontSize: 16 }}>{p.curriculum}</div>
-                              {/* The operator's own description. The legacy layout
-                                  has always shown this; the lean cards never did,
-                                  so the builder's Description field saved copy
-                                  that reached no family. */}
-                              {/* marginBottom separates the provider's PROSE from the
-                                  facts beneath it (day, time, location, who it's for,
-                                  dates, price). Those facts are a tight group 2px
-                                  apart; with no gap here a three-paragraph description
-                                  ran straight into the schedule line and the card read
-                                  as one block. Only became visible once descriptions
-                                  got room to breathe earlier today. */}
-                              {p.short_description && (
-                                <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 4, marginBottom: 10, lineHeight: 1.45, whiteSpace: 'pre-line' }}>{p.short_description}</div>
-                              )}
+                              {/* The operator's own description, clamped to 3 lines
+                                  with a More toggle. See leanDescription above -
+                                  shared with the card below so a change here cannot
+                                  miss its twin. */}
+                              {leanDescription(p)}
                               <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>{meta}</div>
                               {scheduleStr && (
                                 <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>{scheduleStr}</div>
@@ -751,19 +835,13 @@ export default function Home() {
                     }
                     return (
                       <div key={p.id} id={`program-card-${p.id}`} style={leanCard(hl)}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: narrowCards ? 'flex-start' : 'center', gap: 12, minWidth: 0 }}>
                           {photo}
                           <div style={{ minWidth: 0 }}>
                             <div style={{ fontWeight: 600, fontSize: 16 }}>{p.curriculum}</div>
-                            {/* Same as the external-registration card above: the
-                                operator's description belongs in front of the
-                                family, right under the class name. */}
-                            {/* Same gap as the card above: the provider's prose needs
-                                separating from the facts block, or a multi-paragraph
-                                description runs into the schedule line. */}
-                            {p.short_description && (
-                              <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 4, marginBottom: 10, lineHeight: 1.45, whiteSpace: 'pre-line' }}>{p.short_description}</div>
-                            )}
+                            {/* Same shared renderer as the external-registration card
+                                above. This is the one Jeff's families actually see. */}
+                            {leanDescription(p)}
                             <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>
                               {meta}
                             </div>
