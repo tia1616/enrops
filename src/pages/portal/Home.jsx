@@ -63,16 +63,49 @@ function LeanDescription({ text }) {
     // measuring then would report "nothing hidden", drop the Less button, and
     // strand the reader in the expanded state with no way back.
     if (expanded) return undefined;
+    const el = boxRef.current;
+    if (!el) return undefined;
+    // The fonts.ready promise can settle after unmount; without this we setState on
+    // a dead component.
+    let alive = true;
     const measure = () => {
-      const el = boxRef.current;
-      if (!el) return;
+      const node = boxRef.current;
+      if (!alive || !node) return;
       // 1px of slack: sub-pixel line heights make scrollHeight exceed
       // clientHeight by a fraction on text that actually fits.
-      setOverflows(el.scrollHeight > el.clientHeight + 1);
+      setOverflows(node.scrollHeight > node.clientHeight + 1);
     };
     measure();
-    window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
+
+    // WIDTH changes, which is what actually decides how many lines this wraps to:
+    // the card flipping to its stacked phone layout, a sibling appearing, any
+    // container resize that never touches the window. A window `resize` listener
+    // (what this used to be) misses every one of those.
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+    if (ro) ro.observe(el);
+    else window.addEventListener('resize', measure);
+
+    // THE FONT SWAP, and it needs its own hook because nothing above catches it.
+    // Poppins arrives from Google Fonts with `display=swap` (index.html), so the
+    // fallback paints first and the text REWRAPS when Poppins lands. The clamped box
+    // keeps its three-line height throughout, so its border box never changes and
+    // ResizeObserver stays silent - while scrollHeight, the thing we actually
+    // measure, changes underneath us.
+    //
+    // Measuring once against fallback metrics is how a description ends up clamped
+    // with NO More button: lines four and five exist in the DOM, are hidden by
+    // -webkit-line-clamp, and have no control to reveal them. On a public
+    // registration page that is silent content loss, on a cold cache, for a family
+    // deciding whether to sign up (found by /code-review 2026-08-17).
+    if (typeof document !== 'undefined' && document.fonts?.ready) {
+      document.fonts.ready.then(measure).catch(() => {});
+    }
+
+    return () => {
+      alive = false;
+      if (ro) ro.disconnect();
+      else window.removeEventListener('resize', measure);
+    };
   }, [text, expanded]);
 
   if (!text) return null;

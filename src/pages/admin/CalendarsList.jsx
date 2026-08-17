@@ -101,6 +101,10 @@ export default function CalendarsList() {
   // calendar for. See the filter in loadAll.
   const [ownCalendarCandidates, setOwnCalendarCandidates] = useState([]);
   const [creatingFor, setCreatingFor] = useState(null); // school id mid-create
+  // { id, message } - the failure that belongs BESIDE one candidate row rather than
+  // in the page banner far above it. Keyed by school id so it cannot appear against
+  // the wrong row.
+  const [candidateError, setCandidateError] = useState(null);
 
   // Give ONE school its own calendar source. This is the whole point of
   // district_type: the row it creates is a calendar target exactly like a district
@@ -111,6 +115,9 @@ export default function CalendarsList() {
   async function giveSchoolItsOwnCalendar(school) {
     setCreatingFor(school.id);
     setTopError(null);
+    // Clear the previous attempt's message, or a retry that succeeds leaves a stale
+    // explanation sitting under a row that is about to disappear from the list.
+    setCandidateError(null);
     try {
       // MATCH BEFORE CREATE, the same rule LocationsList and VenueEditor already
       // follow, and here it is load-bearing rather than tidy. These are TWO writes
@@ -133,9 +140,17 @@ export default function CalendarsList() {
       // reused: filing the school under it would give it that district's calendar,
       // which is the opposite of "its own". Say so instead.
       if (sameName && isGroupingDistrict(sameName)) {
-        setTopError(
-          `You already have a district called "${sameName.name}". Open ${school.name} under Locations and set its district to that one, or rename one of them first.`,
-        );
+        // NEXT TO THE ROW, not in the page banner. The candidates section is at the
+        // BOTTOM of a long page and the banner is at the top, so setTopError here
+        // meant the button flashed "Setting up..." and then looked like it had done
+        // nothing at all - the explanation was off-screen. Unlike the catch block
+        // below, this branch fires on an ordinary data condition (J2S has a real
+        // "Cascadia" district on prod today), so it is the COMMON path, not an
+        // exception (/code-review 2026-08-17).
+        setCandidateError({
+          id: school.id,
+          message: `You already have a district called "${sameName.name}". Open ${school.name} under ${venueLabel} and set its district to that one, or rename one of them first.`,
+        });
         return;
       }
 
@@ -155,9 +170,11 @@ export default function CalendarsList() {
         // Naming the cause beats echoing Postgres at an operator.
         if (dErr) {
           if (dErr.code === "23505") {
-            setTopError(
-              `Something already uses the name "${school.name}" as a calendar. Reload this page and try again.`,
-            );
+            // Beside the row too, for the same reason as the refusal above.
+            setCandidateError({
+              id: school.id,
+              message: `Something already uses the name "${school.name}" as a calendar. Reload this page and try again.`,
+            });
             return;
           }
           throw dErr;
@@ -503,6 +520,13 @@ export default function CalendarsList() {
               >
                 <span style={{ fontWeight: 600, color: INK, fontSize: 14, flex: "1 1 200px" }}>{s.name}</span>
                 <span style={{ fontSize: 12, color: MUTED }}>No calendar yet</span>
+                {/* IN THE ROW, beside the button that produced it. flex-basis 100%
+                    puts it on its own line so it never squeezes the button. */}
+                {candidateError?.id === s.id && (
+                  <div role="alert" style={{ flex: "1 1 100%", order: 9, fontSize: 12.5, color: "#7a2a2a", background: "#fbeaea", border: "1px solid #D9694F", borderRadius: 6, padding: "8px 10px", lineHeight: 1.5 }}>
+                    {candidateError.message}
+                  </div>
+                )}
                 <button
                   type="button"
                   onClick={() => giveSchoolItsOwnCalendar(s)}

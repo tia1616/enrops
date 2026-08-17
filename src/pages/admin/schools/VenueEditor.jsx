@@ -121,8 +121,24 @@ export default function VenueEditor({
   // The row this venue is ACTUALLY linked to, from the UNFILTERED list, so the
   // district select can always represent its own current value even when that
   // value is an independent_school row the select otherwise filters out.
-  const linkedRow = (districts ?? []).find((d) => d.id === draft.district_id) ?? null;
+  //
+  // ANCHORED ON `location`, THE SAVED ROW - NOT on draft.district_id. Anchoring on
+  // the draft made the option delete itself the moment the operator picked anything
+  // else: change the select to a real district and linkedRow re-resolved to THAT
+  // district, linkedOwnsCalendar went false, and the "its own calendar" entry
+  // disappeared from the list - so the value they arrived with became unselectable
+  // again and the only way back was Cancel. Saving from that state silently relinked
+  // the school's calendar source, which is the exact damage this option exists to
+  // prevent (/code-review 2026-08-17). The saved row cannot change while the form is
+  // open, so the option stays available for the whole edit.
+  const linkedRow = (districts ?? []).find((d) => d.id === location?.district_id) ?? null;
   const linkedOwnsCalendar = !!linkedRow && !isGroupingDistrict(linkedRow);
+  // TWO DIFFERENT QUESTIONS, two booleans - see the same pair in LocationsList.
+  // linkedOwnsCalendar decides whether the OPTION is offered (from the saved row, so
+  // it cannot move mid-edit); draftOwnsCalendar decides whether the SENTENCE below is
+  // true (from the current selection, because copy describes what is selected).
+  const draftRow = (districts ?? []).find((d) => d.id === draft.district_id) ?? null;
+  const draftOwnsCalendar = !!draftRow && !isGroupingDistrict(draftRow);
 
   function bind(field) {
     return {
@@ -297,9 +313,10 @@ export default function VenueEditor({
             ? "No district means no school calendar here, so this venue's class dates won't skip no-school days."
             : draft.district_id === ""
               ? "The district's calendar is what makes class dates skip no-school days. Pick the one this venue follows."
-              : linkedOwnsCalendar
-                // Naming "this district" here would name one that does not exist -
-                // the row IS this school.
+              : draftOwnsCalendar
+                // draftOwnsCalendar, not linkedOwnsCalendar: this describes what is
+                // SELECTED. Naming "this district" would name one that does not
+                // exist - the row IS this school.
                 ? "This school doesn't follow a district calendar. Its own no-school days are set under School calendar, and its class dates skip those."
                 : "Class dates here will skip this district's no-school days once its school calendar is on file."}
         </div>
