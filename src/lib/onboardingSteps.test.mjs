@@ -182,7 +182,7 @@ ok('...and still requires payouts live when the provider DOES use Stripe pay',
 // Parsed off disk rather than imported: the .ts is Deno source with type
 // annotations node will not run. The regex match is asserted, so a rename fails
 // loudly instead of quietly testing nothing.
-import { documentKeysForStep } from './instructorDocuments.js';
+import { documentKeysForStep, INSTRUCTOR_DOCUMENTS } from './instructorDocuments.js';
 
 const serverSrc = readFileSync(
   new URL('../../supabase/functions/_shared/instructorDocumentConfig.ts', import.meta.url),
@@ -210,6 +210,32 @@ if (byStepMatch) {
     [...allServer].sort().join(','), [...allBrowser].sort().join(','));
   ok('the server mirror pins the agreement as always-on',
     /ALWAYS_ON[\s\S]{0,120}contractor_agreement/.test(serverSrc));
+
+  // THE OPT-IN DOCUMENT, ON BOTH SIDES. contractor_status is the one key that
+  // needs an explicit true, and the drift here is silent and bad in both
+  // directions: if only the browser knew, the wizard would skip a screen the
+  // gate still required and onboarding would stall at 100% forever; if only the
+  // server knew, every instructor would be shown a document their provider never
+  // opted into and never wrote, and the fetch would 404 them into a dead end.
+  ok('the server mirror knows contractor_status defaults off',
+    /DEFAULT_OFF[\s\S]{0,120}contractor_status/.test(serverSrc));
+  // ...and tests the SAME way. `!== false` here instead of `=== true` would make
+  // it default ON while the browser defaults it off — the stall above, from a
+  // one-operator typo that reads correct.
+  ok('the server mirror requires a strict true, not merely not-false',
+    /DEFAULT_OFF\.has\(key\)\)\s*return\s+config\?\.\[key\]\s*===\s*true/.test(serverSrc));
+
+  // Both sides must agree on WHICH keys are opt-in, not just that the mechanism
+  // exists. Parsed rather than pattern-matched so an added key fails loudly.
+  const defaultOffMatch = /DEFAULT_OFF\s*=\s*new Set\(\[([^\]]*)\]\)/.exec(serverSrc);
+  ok('DEFAULT_OFF was found in the server mirror', Boolean(defaultOffMatch));
+  if (defaultOffMatch) {
+    const serverDefaultOff = defaultOffMatch[1]
+      .split(',').map((s) => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
+    eq('the two sides agree on which documents are opt-in',
+      serverDefaultOff.sort().join(','),
+      INSTRUCTOR_DOCUMENTS.filter((d) => d.defaultOff).map((d) => d.key).sort().join(','));
+  }
 }
 
 // --- the agreement tick boxes and the server gate must name the SAME keys ---
