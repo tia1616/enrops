@@ -16,8 +16,17 @@ function eq(name, actual, expected) {
 // --- fixtures --------------------------------------------------------------
 // Shaped like Jeff's real prod catalog: several districts at different prices,
 // which is the whole reason the gate exists.
-const D = { pps: 'd-pps', losd: 'd-losd', ever: 'd-ever' };
-const NAMES = { [D.pps]: 'PPS', [D.losd]: 'LOSD', [D.ever]: 'Evergreen Public Schools' };
+const D = { pps: 'd-pps', losd: 'd-losd', ever: 'd-ever', catlin: 'd-catlin' };
+// id -> the districts_public ROW, not just the name: district_type decides whether
+// a row earns its own heading (20260817a).
+const NAMES = {
+  [D.pps]: { name: 'PPS', district_type: 'district' },
+  [D.losd]: { name: 'LOSD', district_type: 'district' },
+  [D.ever]: { name: 'Evergreen Public Schools', district_type: 'district' },
+  // A private school with its own calendar. Real row, real calendar, must NOT be
+  // its own heading. Shaped like j2s's Catlin Gabel School on prod.
+  [D.catlin]: { name: 'Catlin Gabel School', district_type: 'independent_school' },
+};
 
 const prog = (id, locId, locName, districtId, price) => ({
   id, program_location_id: locId, price_cents: price,
@@ -170,6 +179,34 @@ eq('null catalog is not an error', buildCatalogPicker(null, null, {}).visiblePro
     locs.find((l) => l.id === 'l-lib').district, OTHER_DISTRICT);
   eq('a district id with no NAME in the map also gets the bucket',
     buildLocationOptions([prog('x', 'l-x', 'X', 'd-unknown', 1)], NAMES)[0].district, OTHER_DISTRICT);
+}
+
+// --- private / charter schools do not get their own heading (20260817a) -----
+// The bug Jessica named on 17 Aug: a private school needs a districts row so it can
+// have a calendar uploaded, and that row then rendered as a district heading with
+// exactly one school of the same name under it. Four of those on prod j2s.
+{
+  const catlin = [prog('p1', 'l-catlin', 'Catlin Gabel School', D.catlin, 29900)];
+  eq('an independent_school row goes in the bucket, not its own heading',
+    buildLocationOptions(catlin, NAMES)[0].district, OTHER_DISTRICT);
+
+  // ...and it does NOT count toward the district STEP, so a provider whose only
+  // non-public venues are private schools gets the school select alone rather than
+  // a district dropdown whose every answer is "Other schools & sites".
+  const mixed = [
+    prog('p1', 'l-rieke', 'Rieke Elementary', D.pps, 29900),
+    prog('p2', 'l-catlin', 'Catlin Gabel School', D.catlin, 29900),
+  ];
+  const v = buildCatalogPicker(mixed, NAMES, {});
+  eq('one real district + one private school is not two districts', v.namedCount ?? groupByDistrict(v.locOptions).namedCount, 1);
+  eq('so the district step does not appear', v.useGroups, false);
+  eq('both venues are still offered', v.locOptions.length, 2);
+
+  // The distinction that must survive: a MISSING row and an independent_school row
+  // both land in the bucket, but only one of them is a broken read. Proven by the
+  // row being present and named while still bucketed.
+  eq('the independent row is present in the map, not absent from it',
+    NAMES[D.catlin].name, 'Catlin Gabel School');
 }
 {
   const { groupNames, namedCount } = groupByDistrict(buildLocationOptions(JEFF, NAMES));

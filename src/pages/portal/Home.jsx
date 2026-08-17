@@ -232,9 +232,17 @@ export default function Home() {
       // an unknown relation, so without the view this read returns an error, not
       // a partial row - see the failure branch below for what that costs.
       // Measured 2026-08-14: the view is on STAGING, NOT on prod.
+      // district_type comes with the name because the grouping rule needs it:
+      // an `independent_school` row is a private/charter school that owns its own
+      // calendar and must fall into the shared bucket rather than become its own
+      // heading (20260817a). Selecting it is a deploy-order contract exactly like
+      // the view itself was - the column must exist on an environment before this
+      // frontend reaches it, or PostgREST fails the whole statement rather than
+      // returning a partial row. Measured 2026-08-17: 20260817a is on STAGING,
+      // NOT on prod.
       supabase
         .from('districts_public')
-        .select('id, name')
+        .select('id, name, district_type')
         .eq('organization_id', org.id),
     ]);
 
@@ -258,8 +266,15 @@ export default function Home() {
     if (dtRes.error) {
       console.warn('[registration] district names unavailable; catalog will group everything as "%s". Cause: %o', OTHER_DISTRICT, dtRes.error);
     }
+    // id -> the ROW, so district_type travels with the name. An
+    // `independent_school` row is a private/charter school that owns its own
+    // calendar: it stays IN this map (it is a real, readable district row) and the
+    // grouping rule in regCatalogPicker sends it to the bucket. Keeping it in the
+    // map rather than filtering it out here is what keeps "correctly-configured
+    // private school" distinguishable from "the read broke", which is the whole
+    // point of the paragraph above.
     const dn = {};
-    (dtRes.data || []).forEach((d) => { dn[d.id] = d.name; });
+    (dtRes.data || []).forEach((d) => { dn[d.id] = { name: d.name, district_type: d.district_type }; });
 
     // Look up Winter/Spring matches for each fall program to determine VIP
     // eligibility. A fall program is VIP-eligible only if that school year's
@@ -312,7 +327,18 @@ export default function Home() {
   // wording (Jeff's "PPS" would have rendered as "Portland Public Schools").
   // Uniformity is already guaranteed upstream: a location's district is PICKED
   // from the provider's own districts list, not typed per school.
-  const districtOf = (school) => (school?.district_id ? districtNames[school.district_id] : null) || null;
+  //
+  // Returns null for an `independent_school` row as well as for a missing one, so
+  // a private/charter school falls into the OTHER_DISTRICT bucket below instead of
+  // becoming its own heading (20260817a). THE LEAN PATH HAS THE SAME RULE, in
+  // regCatalogPicker.buildLocationOptions - this page drives two different pickers
+  // off the same map and they must agree, which is exactly the drift that put
+  // "Catlin Gabel School" up as a district heading in the first place.
+  const districtOf = (school) => {
+    const row = school?.district_id ? districtNames[school.district_id] : null;
+    if (!row?.name || row.district_type === 'independent_school') return null;
+    return row.name;
+  };
 
   // Only districts that have at least one school with an open program. Schools
   // with no district collect under a single "Other schools & sites" bucket

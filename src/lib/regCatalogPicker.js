@@ -14,8 +14,22 @@
 // Catch-all bucket for venues with no public district (private/charter schools,
 // libraries, parks and rec, community sites). Keeps them on the reg page instead
 // of hidden, and stops each one rendering as its own one-school "district".
-// On prod today this holds exactly one live venue: J2S's Multnomah County
-// Library - Capitol Hill, which correctly has no school district.
+//
+// TWO KINDS OF VENUE LAND HERE NOW.
+//   1. No district at all (district_id null) - a library, a park, a community
+//      room. On prod that was J2S's Multnomah County Library - Capitol Hill.
+//   2. A district row explicitly typed `independent_school` - a private or
+//      charter school that owns its own calendar. It NEEDS a districts row,
+//      because that table is what CalendarsList offers as a calendar-upload
+//      target, but it must not render as its own heading. On prod j2s that is
+//      Catlin Gabel School, Oregon Episcopal School, Portland Christian Schools
+//      and North Clackamas Christian School - four headings each containing
+//      exactly one school of the same name. Jessica: "i've always not liked
+//      this." See 20260817a.
+//
+// The label deliberately stays "Other schools & sites" rather than naming
+// private/charter: this bucket holds a county library too, and that is not a
+// private school (Jessica chose this over "Private/charter/other", 17 Aug).
 export const OTHER_DISTRICT = 'Other schools & sites';
 
 const byName = (a, b) => a.name.localeCompare(b.name);
@@ -30,11 +44,22 @@ const byName = (a, b) => a.name.localeCompare(b.name);
 // grouping the same label can appear beneath two different district headings
 // with no way to tell them apart.
 //
-// `districtNames` is id -> name, from the districts_public view. A district
-// whose name is missing from that map falls into OTHER_DISTRICT. That is the
-// signalled failure mode of the read, not a normal case - see
-// 20260814k_districts_public_view.sql.
-export function buildLocationOptions(openPrograms, districtNames = {}) {
+// `districtsById` is id -> { name, district_type }, from the districts_public
+// view. It holds the ROW rather than just the name, so the one rule that decides
+// whether a district gets its own heading lives here and not in the two callers.
+//
+// THREE OUTCOMES, and they are deliberately distinguishable in code even though
+// two of them look the same on screen:
+//   - a known row typed 'district'          -> its own heading, by name
+//   - a known row typed 'independent_school' -> OTHER_DISTRICT (a real, expected
+//     case: a private school with its own calendar, see 20260817a)
+//   - an id that is NOT in the map           -> OTHER_DISTRICT, but this is the
+//     SIGNALLED FAILURE MODE of the read, not a normal case. It is what a broken
+//     districts_public read looks like (20260814k_districts_public_view.sql).
+// Collapsing those last two into "absent from the map" would make a genuine read
+// failure indistinguishable from a correctly-configured private school, which is
+// how the next incident hides.
+export function buildLocationOptions(openPrograms, districtsById = {}) {
   const seen = new Set();
   const out = [];
   for (const p of openPrograms || []) {
@@ -43,7 +68,9 @@ export function buildLocationOptions(openPrograms, districtNames = {}) {
     if (!id || !name || seen.has(id)) continue;
     seen.add(id);
     const districtId = p.program_locations?.district_id;
-    out.push({ id, name, district: (districtId && districtNames[districtId]) || OTHER_DISTRICT });
+    const row = districtId ? districtsById?.[districtId] : null;
+    const ownsHeading = !!row?.name && row.district_type !== 'independent_school';
+    out.push({ id, name, district: ownsHeading ? row.name : OTHER_DISTRICT });
   }
   return out;
 }
@@ -67,9 +94,9 @@ export function groupByDistrict(locOptions) {
 //
 // `selection` is { district, school } - the district NAME and the location ID
 // the family has picked, both '' when they have picked nothing.
-export function buildCatalogPicker(openPrograms, districtNames, selection = {}) {
+export function buildCatalogPicker(openPrograms, districtsById, selection = {}) {
   const all = openPrograms || [];
-  const locOptions = buildLocationOptions(all, districtNames);
+  const locOptions = buildLocationOptions(all, districtsById);
   const { groups, groupNames, namedCount } = groupByDistrict(locOptions);
 
   // Nothing to choose between = do not ask. A single-site provider is gate-free.
