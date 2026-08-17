@@ -593,6 +593,21 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
   // The template panel below. `replaceArmed` is the second click on the one
   // action in it that destroys work; it resets whenever the panel closes so a
   // stale armed state can never be clicked into by accident.
+  // Write vs Preview, INSIDE one box. The page used to show the textarea AND a
+  // rendered copy stacked under it, which is the "two boxes showing the same thing"
+  // Jessica flagged twice - the first fix only removed the pair in read-only mode
+  // and left it standing while editing, which is where she was looking.
+  //
+  // Every tool that has a preview treats it as a MODE, not a second panel: a
+  // preview is a CHECKING screen for output, an editor is for writing on the page
+  // while it is still live, and stacking both makes the writer decide which box is
+  // real. Google Docs and Notion have no preview at all because the surface IS the
+  // document; GitHub's Write/Preview tabs are the plain-text version of the same
+  // idea; Mailchimp and Docusign open a preview rather than pinning one open.
+  // Full WYSIWYG is not worth building here - body_text is plain text, so the only
+  // differences the preview reveals are paragraph breaks, live links, the title and
+  // the signature block. A toggle shows all four.
+  const [previewMode, setPreviewMode] = useState(false);
   const [templateOpen, setTemplateOpen] = useState(false);
   const [replaceArmed, setReplaceArmed] = useState(false);
   const [templateCopied, setTemplateCopied] = useState(false);
@@ -816,7 +831,30 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
             Edit
           </button>
         ) : (
-          <span style={{ fontSize: 11.5, color: BRIGHT, fontWeight: 600 }}>Editing</span>
+          <>
+            <span style={{ fontSize: 11.5, color: BRIGHT, fontWeight: 600 }}>Editing</span>
+            {/* One box, two modes. Only offered once there is something to preview. */}
+            {body.trim() && (
+              <span style={{ display: "inline-flex", border: `1px solid ${RULE}`, borderRadius: 999, overflow: "hidden" }}>
+                {[["Write", false], ["Preview", true]].map(([label, on]) => (
+                  <button
+                    key={label}
+                    type="button"
+                    onClick={() => setPreviewMode(on)}
+                    aria-pressed={previewMode === on}
+                    style={{
+                      background: previewMode === on ? BRIGHT : "#fff",
+                      color: previewMode === on ? "#fff" : MUTED,
+                      border: "none", padding: "4px 12px", fontSize: 12, fontWeight: 600,
+                      fontFamily: "inherit", cursor: "pointer",
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </span>
+            )}
+          </>
         )}
         {/* AT THE TOP, not under a 22-row box. Jessica cleared the body and could
             not find this, because it only appeared below the fold. Renamed from
@@ -951,7 +989,10 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
         </div>
       )}
 
-      {editing ? (
+      {editing && previewMode && body.trim() ? (
+        // Preview MODE, in the same slot the textarea occupies. Not a second box.
+        renderedDocument
+      ) : editing ? (
         <textarea
           value={body}
           onChange={(e) => setBody(e.target.value)}
@@ -967,9 +1008,14 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
           Nothing written yet.
         </div>
       )}
-      {editing && (
+      {editing && !previewMode && (
         <p style={{ margin: "5px 0 0", fontSize: 11.5, color: MUTED, lineHeight: 1.5 }}>
           Leave a blank line to start a new paragraph. Web addresses become clickable on their own.
+        </p>
+      )}
+      {editing && previewMode && body.trim() && (
+        <p style={{ margin: "5px 0 0", fontSize: 11.5, color: MUTED, lineHeight: 1.5 }}>
+          This is exactly what your instructors read. Switch back to <strong>Write</strong> to change it.
         </p>
       )}
 
@@ -1014,16 +1060,11 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
           publishing a legal document having only ever seen their own raw
           keystrokes. Same rule as the registration preview and the confirmation
           page. */}
-      {/* EDIT MODE ONLY. In read-only the box above already IS this, so rendering
-          it twice was the duplicate Jessica flagged. */}
-      {editing && body.trim() && (
-        <div style={{ marginTop: 20 }}>
-          <label style={{ display: "block", fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600, marginBottom: 5 }}>
-            What your instructors will see
-          </label>
-          {renderedDocument}
-        </div>
-      )}
+      {/* THE STACKED PREVIEW PANEL IS GONE. It lived here, under the textarea,
+          labelled "What your instructors will see" - the second of the two boxes
+          showing the same words. Preview is now a MODE inside the one box above
+          (see previewMode), so this page has exactly ONE document box in every
+          state: reading, writing, and checking. */}
 
       {error && (
         <div role="alert" style={{ color: RED, fontSize: 13.5, marginTop: 14, lineHeight: 1.5 }}>{error}</div>

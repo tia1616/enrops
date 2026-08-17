@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext, useSearchParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
-import { groupingDistricts } from "../../lib/districts.js";
+import { groupingDistricts, isGroupingDistrict } from "../../lib/districts.js";
 import PlacesAutocomplete, { PlacesLookupHint } from "../../components/PlacesAutocomplete";
 import FindMissingAddressesModal from "./FindMissingAddressesModal";
 
@@ -192,9 +192,14 @@ export default function LocationsList({ embedded = false }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [org?.id]);
 
-  const districtNameById = useMemo(() => {
+  // id -> the ROW, not just the name. The row's chip needs the TYPE as well: for an
+  // independent_school the name is the SCHOOL's own name, so printing it as the
+  // school's district renders "Ainsworth / AINSWORTH" and implies a district
+  // relationship that does not exist. Unfiltered, per lib/districts.js use 3 - a
+  // school legitimately linked to an independent row still has to resolve.
+  const districtById = useMemo(() => {
     const m = new Map();
-    for (const d of districts) m.set(d.id, d.name);
+    for (const d of districts) m.set(d.id, d);
     return m;
   }, [districts]);
 
@@ -474,7 +479,7 @@ export default function LocationsList({ embedded = false }) {
       ) : (
         locations.map((loc) => (
           <div key={loc.id} id={`location-row-${loc.id}`}>
-            <DisplayCard loc={loc} campCount={campCounts.get(loc.id) ?? 0} districtName={districtNameById.get(loc.district_id)} onEdit={() => startEdit(loc)} isLean={isLean} />
+            <DisplayCard loc={loc} campCount={campCounts.get(loc.id) ?? 0} district={districtById.get(loc.district_id)} onEdit={() => startEdit(loc)} isLean={isLean} />
           </div>
         ))
       )}
@@ -511,7 +516,12 @@ export default function LocationsList({ embedded = false }) {
   );
 }
 
-function DisplayCard({ loc, campCount, districtName, onEdit, isLean = false }) {
+function DisplayCard({ loc, campCount, district, onEdit, isLean = false }) {
+  // An independent_school row is named after the school itself, so printing it as
+  // this school's district repeats the name back and claims a district it does not
+  // have. Say what the row actually means instead.
+  const ownsItsCalendar = !!district && !isGroupingDistrict(district);
+  const districtName = ownsItsCalendar ? null : district?.name;
   // A registration-only operator has no instructors to brief, so the fields
   // that exist to brief them aren't shown. Everything below the address is
   // written for someone teaching at a venue they don't control - staff
@@ -546,7 +556,16 @@ function DisplayCard({ loc, campCount, districtName, onEdit, isLean = false }) {
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
           <div style={{ fontSize: 18, fontWeight: 700, color: INK }}>{loc.name}</div>
-          {(districtName || loc.district) ? (
+          {ownsItsCalendar ? (
+            // Not a warning: this venue HAS a calendar, its own. The amber
+            // "no district" nudge below would be a lie here.
+            <div
+              title="This school doesn't follow a district calendar - it has its own, under School calendar"
+              style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}
+            >
+              Own calendar
+            </div>
+          ) : (districtName || loc.district) ? (
             <div style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>
               {districtName || loc.district}
             </div>
