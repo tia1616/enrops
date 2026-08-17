@@ -18,6 +18,7 @@ import { programScheduleSummary, formatDayLabel } from '../../lib/programSchedul
 import { audienceLabel } from '../../lib/grades.js';
 import { feeOnCents, totalWithFee } from '../../lib/platformFee.js';
 import { buildCatalogPicker, OTHER_DISTRICT } from '../../lib/regCatalogPicker.js';
+import { isGroupingDistrict } from '../../lib/districts.js';
 
 // Tenant resolution: `org` (id, slug, name, active_registration_term, ...) is
 // provided by PublicLayout via Outlet context (from the public_org_directory
@@ -338,9 +339,14 @@ export default function Home() {
   // regCatalogPicker.buildLocationOptions - this page drives two different pickers
   // off the same map and they must agree, which is exactly the drift that put
   // "Catlin Gabel School" up as a district heading in the first place.
+  //
+  // So the rule is CALLED, not restated. This line held its own copy of the
+  // literal 'independent_school' while regCatalogPicker (the other picker named
+  // two lines up) had been moved onto the shared helper - the two agreed only by
+  // coincidence, which is the precise shape of the drift this comment warns about.
   const districtOf = (school) => {
     const row = school?.district_id ? districtsById[school.district_id] : null;
-    if (!row?.name || row.district_type === 'independent_school') return null;
+    if (!row?.name || !isGroupingDistrict(row)) return null;
     return row.name;
   };
 
