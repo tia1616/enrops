@@ -1,5 +1,9 @@
 // src/pages/admin/Payroll.jsx
-// /admin/payroll — instructor pay management.
+// Rendered at /admin/payouts, inside the Payouts.jsx shell which supplies the
+// "Payroll calculator" heading. /admin/payroll now REDIRECTS here — it used to
+// render this component bare, with no page title at all.
+//
+// Instructor pay management.
 //
 // Read-only summary view replaced by an action-driven workflow:
 //   - Groups by (effective_instructor, camp_session) for camp rows and
@@ -122,7 +126,24 @@ export default function Payroll() {
   // is "coming soon" (blocked) and manual/not-connected tenants have no rail, so
   // they get manual-only ("Mark paid manually"). Expand this when enrops_platform
   // ships. Defaults to false until loaded so we never show a dead Pay button.
-  const canStripePayout = payRoute?.instructor_pay_model === 'legacy_own_platform';
+  //
+  // AND THE CIRCUIT BREAKER, which this used to ignore. pay-instructor refuses
+  // with 403 instructor_pay_not_enabled BEFORE it ever reads instructor_pay_model,
+  // so flipping instructor_pay_enabled off — the documented way to stop payouts
+  // during a Stripe incident — left the Pay via Stripe button sitting there and
+  // every click failing. The column's own comment says the manual mark-paid path
+  // stays available regardless, which is exactly what should be left standing.
+  //
+  // NOT the same condition as PayRoutesCard, though an earlier version of this
+  // comment claimed it was: the card needs only instructor_pay_enabled, this
+  // needs that AND the legacy model. They coincide for every org on both
+  // environments today (one org true+legacy, everyone else false+enrops_platform)
+  // by DATA, not by construction — so the added conjunct changes nothing for
+  // anybody right now, and exists for the incident case where the flag flips and
+  // the model does not.
+  const canStripePayout =
+    payRoute?.instructor_pay_model === 'legacy_own_platform' &&
+    org?.instructor_pay_enabled === true;
 
   function toggleExpand(key) {
     setExpanded((prev) => {
@@ -261,23 +282,78 @@ export default function Payroll() {
             .filter((r) => r.pay_status !== 'withheld' && r.pay_amount_cents != null)
             .reduce((s, r) => s + (r.pay_amount_cents ?? 0) + (r.pay_adjustment_cents ?? 0), 0);
 
-          // Distance bonus (regular only, not yet paid).
-          const sampleForBonus = g.rows.find((r) => r.source === 'regular');
-          const distanceBonusCents = (sampleForBonus && sampleForBonus.distance_bonus_paid_at === null)
-            ? (sampleForBonus.distance_bonus_cents_if_regular ?? 0)
+          // Distance bonus, WHAT THIS WEEK IS WORTH — pairs with totalPayable
+          // above, which likewise counts every non-withheld day rather than only
+          // the ones payable this second. A bonus rides on the regular
+          // instructor's assignment, so any regular row in the group carries it.
+          //
+          // The `g.source === 'regular'` test that used to gate this at the three
+          // display sites is gone. `g.source` is just whichever row happened to be
+          // seen FIRST when the group was built (see the groupMap loop above), so
+          // a week mixing regular and sub days dropped the bonus out of the
+          // displayed total while the server still paid it. It under-stated, so
+          // nobody was ever shorted, and there are zero mixed groups on either
+          // environment today — but it is money, and the row that decides it was
+          // never meant to be a property of the group.
+          const anyRegularRow = g.rows.find((r) => r.source === 'regular');
+          const distanceBonusCents = (anyRegularRow && anyRegularRow.distance_bonus_paid_at === null)
+            ? (anyRegularRow.distance_bonus_cents_if_regular ?? 0)
             : 0;
-          const distanceBonusPaid = sampleForBonus?.distance_bonus_paid_at != null;
+          // Informational chip. Sampled across ALL rows on purpose: once the
+          // bonus is paid its rows carry a payout id and leave eligibleRows, so
+          // an eligible-only sample would make "bonus paid" vanish the instant it
+          // became true.
+          const distanceBonusPaid = anyRegularRow?.distance_bonus_paid_at != null;
+
+          // THE SUB BADGE, from the rows for the same reason the bonus above is.
+          // `g.source` was removed from every money path in this branch because it is
+          // only the first row seen, but it was left deciding the header badge and the
+          // "Subbing for X" line (/code-review, 2026-08-17). The grouping key is
+          // `effective_instructor_id|kind:targetId` and does NOT include source, so a
+          // group genuinely mixes when one person is both the regular teacher and the
+          // sub for the same program: the badge then came from whichever session was
+          // most recent, and disappeared when a later regular day was added.
+          const subRows = g.rows.filter((r) => r.source === 'sub');
+          const hasSubDay = subRows.length > 0;
+          // Name someone ONLY when every sub day points at the same person. Resolved
+          // HERE because rows carry `original_instructor_id` and the name map lives in
+          // this scope; GroupRow has neither. Ambiguous (two different people subbed
+          // for) -> badge only, no name, rather than naming one of them at random,
+          // which is what reading it off the first row did.
+          const origIds = [...new Set(subRows.map((r) => r.original_instructor_id).filter(Boolean))];
+          const subbedForOne = origIds.length === 1 ? (instById.get(origIds[0]) ?? null) : null;
 
           // Aggregate status.
           const statuses = [...new Set(g.rows.map((r) => r.pay_status))];
           const groupStatus = statuses.length === 1 ? statuses[0] : 'mixed';
 
-          // Eligibility for the Pay action.
+          // Eligibility for the Pay action. THIS IS THE MIRROR of pay-instructor's
+          // own `eligible` filter (index.ts:235-244) and the last two lines were
+          // missing from it, so the client believed it could pay rows the server
+          // drops on the floor:
+          //
+          //   pay_amount_cents >= 0        — the server requires it as well as
+          //     non-null. A negative amount is not payable.
+          //   camp_assignment_status       — a CANCELLED camp assignment. The view
+          //     exposes ca.status raw with no filtering, so cancelled rows really do
+          //     reach this page.
+          //
+          // Fixed HERE rather than on the bonus line below, because everything
+          // downstream of eligibleRows was wrong by the same rows: eligibleAmount in
+          // both pay modals, hasEligible (which draws the Pay button at all), and
+          // payableBonusCents. A group whose only eligible rows were cancelled has
+          // been showing a Pay button that comes back `nothing_to_pay` — pre-existing,
+          // and it goes away with this.
+          //
+          // The org check the server also applies (r.organization_id === instructor's)
+          // is NOT repeated: this page's whole query is already .eq('organization_id',
+          // org.id), so there is no cross-org row here to filter.
           const eligibleRows = g.rows.filter((r) =>
             r.pay_status === 'approved' &&
             r.instructor_payout_id == null &&
             r.confirmed_by != null && r.confirmed_by !== 'pending' &&
-            r.pay_amount_cents != null
+            r.pay_amount_cents != null && r.pay_amount_cents >= 0 &&
+            (r.camp_assignment_status == null || r.camp_assignment_status !== 'cancelled')
           );
 
           // Days the instructor hasn't confirmed yet (auto-confirm was removed
@@ -290,6 +366,28 @@ export default function Payroll() {
             r.pay_status !== 'withheld'
           );
 
+          // Distance bonus, WHAT WILL ACTUALLY MOVE if you pay right now. The server
+          // samples the first ELIGIBLE row with source='regular' and pays the bonus
+          // when it is unpaid and > 0 (index.ts:263-278). It has no notion of a
+          // group-level source, and it never looks at rows it is not paying.
+          //
+          // This says "mirrors" and MEANS it now: the claim was here before
+          // eligibleRows above actually matched the server's filter, so a cancelled
+          // camp assignment could put a bonus in the modal that the server would
+          // refuse — the exact over-promise this pair of values exists to kill,
+          // reintroduced one level down by the set it samples from.
+          //
+          // Distinct from distanceBonusCents above because the pay modals answer a
+          // different question from the week card, exactly as eligibleAmount is
+          // distinct from totalPayable. Sampling the modals off ALL rows let a
+          // regular day that was withheld, unconfirmed or already paid contribute
+          // a bonus the server would refuse — the modal promising a bigger total
+          // than the payout it was about to make.
+          const bonusRow = eligibleRows.find((r) => r.source === 'regular');
+          const payableBonusCents = (bonusRow && bonusRow.distance_bonus_paid_at === null)
+            ? (bonusRow.distance_bonus_cents_if_regular ?? 0)
+            : 0;
+
           // Counts per status for the aggregate display.
           const counts = g.rows.reduce((acc, r) => {
             acc[r.pay_status] = (acc[r.pay_status] || 0) + 1;
@@ -300,13 +398,16 @@ export default function Payroll() {
             ...g,
             totalPayable,
             distanceBonusCents,
+            payableBonusCents,
             distanceBonusPaid,
+            hasSubDay,
+            subbedForOne,
             groupStatus,
             eligibleRows,
             unconfirmedRows,
             counts,
             // Total IF paid now (base + bonus when applicable)
-            payableTotalNow: totalPayable + (g.source === 'regular' ? distanceBonusCents : 0),
+            payableTotalNow: totalPayable + distanceBonusCents,
           };
         });
 
@@ -540,7 +641,23 @@ export default function Payroll() {
   // ── render ─────────────────────────────────────────────────────────────
   return (
     <div>
-      <PayRoutesCard org={org} />
+      {/* "How you can pay your instructors — three ways, only some are live
+          right now." GONE for everyone who does not actually pay through us
+          (Jessica, 2026-08-13: "no one will run payroll through us. it is only
+          a payroll calculater (except for j2s)").
+
+          It was a menu of three payment routes where route 2 was never going to
+          be built and route 3 is one provider's pre-Enrops legacy setup — with a
+          mailto inviting operators to ask us to turn on the one we are not
+          building. For every other provider this page is a CALCULATOR: it works
+          out what each instructor is owed and records that you paid them. Saying
+          "only some are live" invites them to wait for the rest.
+
+          Gated on instructor_pay_enabled, the same flag that decides whether the
+          onboarding wizard shows the Stripe step, so the two cannot disagree
+          about whether a provider pays through us. True for J2S alone, and they
+          are on route 3, so nothing changes for the one org the card describes. */}
+      {org?.instructor_pay_enabled === true && <PayRoutesCard org={org} />}
       <Toolbar
         sinceDate={sinceDate}
         setSinceDate={setSinceDate}
@@ -911,9 +1028,10 @@ function GroupRow({
   canManage, busy,
 }) {
   const g = group;
-  const sourceBadge = g.source === 'sub'
-    ? <Badge color={VIOLET}>Sub</Badge>
-    : null;
+  // `g.hasSubDay` / `g.subbedForOne`, both derived from the ROWS in the decorate pass
+  // (see the note there). NOT `g.source`, which is only the first row seen and which
+  // this branch already removed from every money path for that reason.
+  const sourceBadge = g.hasSubDay ? <Badge color={VIOLET}>Sub</Badge> : null;
   const unconfirmedCount = g.unconfirmedRows.length;
 
   const statusBadge = (
@@ -965,9 +1083,9 @@ function GroupRow({
               </>
             )}
           </div>
-          {g.source === 'sub' && g.originalInstructor && (
+          {g.hasSubDay && g.subbedForOne && (
             <div style={{ fontSize: 12, color: MUTED, marginTop: 2, fontStyle: 'italic' }}>
-              Subbing for {shortName(g.originalInstructor)}
+              Subbing for {shortName(g.subbedForOne)}
             </div>
           )}
         </div>
@@ -1021,7 +1139,6 @@ function GroupRow({
       {expanded && (
         <DayBreakdown
           rows={g.rows}
-          originalInstructor={g.originalInstructor}
           onApproveRow={onApproveRow}
           onConfirmRow={onConfirmRow}
           onWithholdRow={onWithholdRow}
@@ -1029,22 +1146,48 @@ function GroupRow({
           onAdjustRow={onAdjustRow}
           canManage={canManage}
           busy={busy}
-          groupSource={g.source}
         />
       )}
     </div>
   );
 }
 
-function DayBreakdown({ rows, originalInstructor, onApproveRow, onConfirmRow, onWithholdRow, onReapproveRow, onAdjustRow, canManage, busy, groupSource }) {
+// `groupSource` AND THE `isCovered` BRANCH IT FED ARE GONE (2026-08-17).
+//
+// isCovered was `r.source === 'sub' && groupSource === 'regular'`, and it rendered a
+// day as "Covered by sub — $0" with Confirm, Adjust and the withheld-reconfirm
+// action all suppressed. Its own comment conceded it was unreachable: sub rows are
+// routed to the SUB's group by v_effective_pay_lines (effective_instructor_id =
+// COALESCE(sub.sub_instructor_id, instructor_id)), so a regular's group never
+// contains one. It was "forward-looking for when the schema model evolves".
+//
+// It had to go because groupSource is `g.source`, which is whichever row happened to
+// be seen FIRST when the group was built — the property this same branch removed from
+// every money path for exactly that reason. In the one group that CAN mix (the
+// effective instructor is both the regular and the sub), a first-seen regular row
+// made every sub row in it render as $0 with its controls suppressed, while
+// totalPayable still counted that row's pay — so the day rows would not sum to the
+// headline. Flip which row is seen first and the same data renders correctly.
+//
+// It is deleted rather than derived because there is nothing correct to derive it
+// FROM today: the view collapses the regular's covered day out of their group
+// entirely, so no per-row test can identify one. When the model does grow to show
+// both instructors on one day, rebuild it from the ROW (a sub override on a regular
+// row), never from a group-level source.
+//
+// NOT the same question as the header's Sub badge, which IS now derived per-row
+// (`hasSubDay` in the decorate pass). That asks "is this row a sub row", which
+// `row.source` answers directly. This asks "was this regular day covered by someone
+// else", and that row is the one the view removes. Two different questions; only the
+// second one is underivable.
+// `originalInstructor` is NOT a prop here any more. It was passed in and never read -
+// the group-level display it existed for is the one deleted above - and leaving an
+// unused prop carrying the arbitrary-first-row value is an invitation to render it,
+// which is the exact bug /code-review found in the header badge.
+function DayBreakdown({ rows, onApproveRow, onConfirmRow, onWithholdRow, onReapproveRow, onAdjustRow, canManage, busy }) {
   return (
     <div style={{ borderTop: `1px solid ${RULE}`, padding: 12, background: '#fafafa' }}>
       {rows.map((r) => {
-        const isCovered = r.source === 'sub' && groupSource === 'regular';
-        // covered: this view's group is REGULAR but the row's source is SUB.
-        // (Today subs don't appear under regular's group because sub rows are
-        //  routed to the sub's group. This branch is forward-looking for
-        //  when the schema model evolves to show both.)
         // neverConfirmed = no one (instructor/admin/auto) has confirmed this
         // day, so it's not payable no matter its pay_status. unconfirmed is the
         // active "awaiting" state (neverConfirmed and not withheld). For a
@@ -1061,12 +1204,10 @@ function DayBreakdown({ rows, originalInstructor, onApproveRow, onConfirmRow, on
           }}>
             <div style={{ flex: '0 0 110px', color: INK }}>{fmtDate(r.session_date)}</div>
             <div style={{ flex: '0 0 90px', color: MUTED, textTransform: 'capitalize' }}>{r.session_type}</div>
-            <div style={{ flex: '1 1 auto', color: isCovered || unconfirmed ? MUTED : INK, fontStyle: isCovered || unconfirmed ? 'italic' : 'normal' }}>
-              {isCovered
-                ? `Covered by sub — $0`
-                : unconfirmed
-                  ? 'Not yet confirmed by instructor'
-                  : dollars((r.pay_amount_cents ?? 0) + (r.pay_adjustment_cents ?? 0))}
+            <div style={{ flex: '1 1 auto', color: unconfirmed ? MUTED : INK, fontStyle: unconfirmed ? 'italic' : 'normal' }}>
+              {unconfirmed
+                ? 'Not yet confirmed by instructor'
+                : dollars((r.pay_amount_cents ?? 0) + (r.pay_adjustment_cents ?? 0))}
             </div>
             <div style={{ flex: '0 0 90px' }}>
               <span style={{ color: unconfirmed ? AMBER : (STATUS_COLOR[r.pay_status] ?? AMBER), fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.3 }}>
@@ -1076,12 +1217,12 @@ function DayBreakdown({ rows, originalInstructor, onApproveRow, onConfirmRow, on
             {canManage && r.pay_status !== 'paid' && (
               <div style={{ display: 'flex', gap: 6 }}>
                 {unconfirmed ? (
-                  onConfirmRow && !isCovered && (
+                  onConfirmRow && (
                     <MicroButton onClick={() => onConfirmRow(r.confirmation_id)} disabled={busy}>Confirm</MicroButton>
                   )
                 ) : (
                   <>
-                    {onAdjustRow && !isCovered && !neverConfirmed && (
+                    {onAdjustRow && !neverConfirmed && (
                       <MicroButton onClick={() => onAdjustRow(r)} disabled={busy} tone="adjust">
                         {(r.pay_adjustment_cents ?? 0) !== 0 ? 'Edit $' : 'Adjust'}
                       </MicroButton>
@@ -1092,7 +1233,7 @@ function DayBreakdown({ rows, originalInstructor, onApproveRow, onConfirmRow, on
                     {r.pay_status === 'approved' && r.instructor_payout_id == null && (
                       <MicroButton onClick={() => onWithholdRow(r.confirmation_id)} disabled={busy} tone="danger">Withhold</MicroButton>
                     )}
-                    {r.pay_status === 'withheld' && !isCovered && neverConfirmed && onConfirmRow && (
+                    {r.pay_status === 'withheld' && neverConfirmed && onConfirmRow && (
                       <MicroButton onClick={() => onConfirmRow(r.confirmation_id)} disabled={busy}>Confirm</MicroButton>
                     )}
                     {r.pay_status === 'withheld' && !neverConfirmed && (
@@ -1312,7 +1453,11 @@ function formatPayError(data, status) {
   if (errCode === 'operator_stripe_not_connected') {
     return {
       headline: 'Your organization\'s Stripe account isn\'t connected.',
-      hint: 'Go to Receivables in the admin portal and finish Stripe Connect onboarding before paying instructors.',
+      // "Receivables" no longer exists anywhere: the sidebar says Money, the tab
+      // says Payments and so does the page heading (2026-08-17). This sent an admin
+      // hunting for a nav item that is not there - the same untrue-pointer class the
+      // template banner and the Finances heading were both fixed for.
+      hint: 'Go to Money > Payments in the admin portal and finish Stripe Connect onboarding before paying instructors.',
     };
   }
   if (errCode === 'payout_already_in_flight') {
@@ -1379,7 +1524,10 @@ function PayDrawer({ group, onClose, onPaid }) {
   const eligibleAmount = group.eligibleRows.reduce(
     (s, r) => s + (r.pay_amount_cents ?? 0) + (r.pay_adjustment_cents ?? 0), 0,
   );
-  const total = eligibleAmount + (group.source === 'regular' && !group.distanceBonusPaid ? group.distanceBonusCents : 0);
+  // payableBonusCents, not distanceBonusCents: this is the number the server is
+  // about to move, so it is sampled from the eligible rows the same way
+  // pay-instructor samples them. It is already 0 once the bonus is paid.
+  const total = eligibleAmount + group.payableBonusCents;
 
   const stripeReady = group.stripePayoutsEnabled && group.stripeDestination;
 
@@ -1442,9 +1590,9 @@ function PayDrawer({ group, onClose, onPaid }) {
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontSize: 13 }}>
           <span>Base pay</span><span>{dollars(eligibleAmount)}</span>
         </div>
-        {group.source === 'regular' && group.distanceBonusCents > 0 && !group.distanceBonusPaid && (
+        {group.payableBonusCents > 0 && (
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontSize: 13 }}>
-            <span>Distance bonus</span><span>+{dollars(group.distanceBonusCents)}</span>
+            <span>Distance bonus</span><span>+{dollars(group.payableBonusCents)}</span>
           </div>
         )}
         <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, paddingTop: 8, borderTop: `1px solid ${RULE}`, fontWeight: 700, fontSize: 15 }}>
@@ -1485,7 +1633,10 @@ function MarkPaidDrawer({ group, onClose, onMarked }) {
   const eligibleAmount = group.eligibleRows.reduce(
     (s, r) => s + (r.pay_amount_cents ?? 0) + (r.pay_adjustment_cents ?? 0), 0,
   );
-  const total = eligibleAmount + (group.source === 'regular' && !group.distanceBonusPaid ? group.distanceBonusCents : 0);
+  // payableBonusCents, not distanceBonusCents: this is the number the server is
+  // about to move, so it is sampled from the eligible rows the same way
+  // pay-instructor samples them. It is already 0 once the bonus is paid.
+  const total = eligibleAmount + group.payableBonusCents;
 
   async function submit() {
     if (note.trim().length === 0) {
@@ -1543,7 +1694,7 @@ function MarkPaidDrawer({ group, onClose, onMarked }) {
         </div>
         <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
           {group.eligibleRows.length} day{group.eligibleRows.length === 1 ? '' : 's'}
-          {group.source === 'regular' && group.distanceBonusCents > 0 && !group.distanceBonusPaid && ' + distance bonus'}
+          {group.payableBonusCents > 0 && ' + distance bonus'}
         </div>
       </div>
       <label style={{ display: 'block', fontSize: 13, color: MUTED, marginBottom: 6 }}>

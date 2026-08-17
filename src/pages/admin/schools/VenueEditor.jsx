@@ -15,6 +15,8 @@
 
 import { useState } from "react";
 import { supabase } from "../../../lib/supabase";
+import { groupingDistricts, isGroupingDistrict } from "../../../lib/districts.js";
+import DistrictsWarning from "../../../components/DistrictsWarning.jsx";
 import PlacesAutocomplete, { PlacesLookupHint } from "../../../components/PlacesAutocomplete";
 
 const BRIGHT = "#5847C9";
@@ -105,6 +107,7 @@ export default function VenueEditor({
   onSaved,
   onCancel,
   onDistrictsChanged,
+  districtsWarning = "",
 }) {
   const isNew = !location;
   const [draft, setDraft] = useState(
@@ -117,6 +120,27 @@ export default function VenueEditor({
   // Whether the Google lookup actually started. Without this the field degrades
   // to a plain box on failure and says nothing, which reads as broken.
   const [lookupDown, setLookupDown] = useState(false);
+  // The row this venue is ACTUALLY linked to, from the UNFILTERED list, so the
+  // district select can always represent its own current value even when that
+  // value is an independent_school row the select otherwise filters out.
+  //
+  // ANCHORED ON `location`, THE SAVED ROW - NOT on draft.district_id. Anchoring on
+  // the draft made the option delete itself the moment the operator picked anything
+  // else: change the select to a real district and linkedRow re-resolved to THAT
+  // district, linkedOwnsCalendar went false, and the "its own calendar" entry
+  // disappeared from the list - so the value they arrived with became unselectable
+  // again and the only way back was Cancel. Saving from that state silently relinked
+  // the school's calendar source, which is the exact damage this option exists to
+  // prevent (/code-review 2026-08-17). The saved row cannot change while the form is
+  // open, so the option stays available for the whole edit.
+  const linkedRow = (districts ?? []).find((d) => d.id === location?.district_id) ?? null;
+  const linkedOwnsCalendar = !!linkedRow && !isGroupingDistrict(linkedRow);
+  // TWO DIFFERENT QUESTIONS, two booleans - see the same pair in LocationsList.
+  // linkedOwnsCalendar decides whether the OPTION is offered (from the saved row, so
+  // it cannot move mid-edit); draftOwnsCalendar decides whether the SENTENCE below is
+  // true (from the current selection, because copy describes what is selected).
+  const draftRow = (districts ?? []).find((d) => d.id === draft.district_id) ?? null;
+  const draftOwnsCalendar = !!draftRow && !isGroupingDistrict(draftRow);
 
   function bind(field) {
     return {
@@ -259,20 +283,48 @@ export default function VenueEditor({
           {/* Only on a NEW venue: "" is the untouched state save refuses, so it
               must never be a resting value on an existing row. */}
           {isNew && <option value="">Choose a district…</option>}
-          {(districts ?? []).map((d) => (
+          {/* THE CURRENT VALUE MUST ALWAYS BE REPRESENTABLE - identical fix to
+              LocationsList's EditCard, and the same bug. groupingDistricts drops
+              independent_school rows, but this venue may BE the school that owns
+              one (the Calendars page's "Give it its own calendar" button creates
+              exactly that link). Without this option an existing venue renders a
+              BLANK select on a field labelled District, and the obvious "fix" -
+              picking a real district - silently relinks its calendar source
+              (found by /code-review 2026-08-17). AddSchoolModal is add-only, so it
+              always starts at "" and is not affected. */}
+          {linkedOwnsCalendar && (
+            <option value={linkedRow.id}>{linkedRow.name} &mdash; its own calendar</option>
+          )}
+          {/* groupingDistricts: an independent_school row exists only so ONE private
+              school can own a calendar, so offering it here would let a second school
+              be filed under it - inheriting that school's calendar and dropping into
+              the public picker's "Other schools & sites" bucket. The "No district"
+              option below is the right answer for a venue following nobody's
+              calendar. `districts` itself stays UNFILTERED, because the
+              match-before-create above needs every row or it inserts a duplicate. */}
+          {groupingDistricts(districts).map((d) => (
             <option key={d.id} value={d.id}>{d.name}</option>
           ))}
           <option value={NEW_DISTRICT}>+ Create a new district…</option>
           <option value={NO_DISTRICT}>No district (library, church, private site)</option>
         </select>
-        {/* Three states, three sentences. The positive one is conditional on
+        {/* INSIDE the drawer that owns this select. SchoolDetailDrawer is
+            position:fixed at zIndex 90, so the page banner behind it is not
+            visible while this field is on screen. */}
+        <DistrictsWarning message={districtsWarning} />
+        {/* FOUR states, four sentences. The positive one is conditional on
             purpose: a district created just now has no calendar on file yet. */}
         <div style={{ fontSize: 12, marginTop: 6, lineHeight: 1.5, color: draft.district_id === NO_DISTRICT ? "#8a6d1f" : MUTED }}>
           {draft.district_id === NO_DISTRICT
             ? "No district means no school calendar here, so this venue's class dates won't skip no-school days."
             : draft.district_id === ""
               ? "The district's calendar is what makes class dates skip no-school days. Pick the one this venue follows."
-              : "Class dates here will skip this district's no-school days once its school calendar is on file."}
+              : draftOwnsCalendar
+                // draftOwnsCalendar, not linkedOwnsCalendar: this describes what is
+                // SELECTED. Naming "this district" would name one that does not
+                // exist - the row IS this school.
+                ? "This school doesn't follow a district calendar. Its own no-school days are set under School calendar, and its class dates skip those."
+                : "Class dates here will skip this district's no-school days once its school calendar is on file."}
         </div>
         {draft.district_id === NEW_DISTRICT && (
           <input

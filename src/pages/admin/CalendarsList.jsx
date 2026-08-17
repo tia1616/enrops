@@ -12,6 +12,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
+import { isGroupingDistrict } from "../../lib/districts.js";
 import EarlyReleaseChoice from "./EarlyReleaseChoice.jsx";
 
 const PURPLE = "#1C004F";
@@ -83,6 +84,9 @@ export default function CalendarsList() {
   const venueLabel = "Locations";
   const [schoolYear, setSchoolYear] = useState(defaultSchoolYear());
   const [districts, setDistricts] = useState([]); // merged rows: [{ key, label, districtId, calendarKey, location_count }]
+  // The RAW districts rows, kept alongside the merged display rows above because
+  // giveSchoolItsOwnCalendar needs `district_type` and the merged shape drops it.
+  const [districtRows, setDistrictRows] = useState([]);
   const [calendars, setCalendars] = useState([]); // district_calendars rows for current school year
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(null); // { key } | null
@@ -93,6 +97,110 @@ export default function CalendarsList() {
   const [erPrompt, setErPrompt] = useState(null); // { key } | null
   const [viewing, setViewing] = useState(() => new Set()); // row keys currently showing their dates inline
   const [topError, setTopError] = useState(null);
+  // Schools with no district at all, which this page could not previously offer a
+  // calendar for. See the filter in loadAll.
+  const [ownCalendarCandidates, setOwnCalendarCandidates] = useState([]);
+  const [creatingFor, setCreatingFor] = useState(null); // school id mid-create
+  // { id, message } - the failure that belongs BESIDE one candidate row rather than
+  // in the page banner far above it. Keyed by school id so it cannot appear against
+  // the wrong row.
+  const [candidateError, setCandidateError] = useState(null);
+
+  // Give ONE school its own calendar source. This is the whole point of
+  // district_type: the row it creates is a calendar target exactly like a district
+  // (so upload, parse, early release and derive_program_session_dates all work with
+  // no special case), but it is typed independent_school so the public registration
+  // picker groups it under "Other schools & sites" instead of giving a single
+  // private school its own district heading.
+  async function giveSchoolItsOwnCalendar(school) {
+    setCreatingFor(school.id);
+    setTopError(null);
+    // Clear the previous attempt's message, or a retry that succeeds leaves a stale
+    // explanation sitting under a row that is about to disappear from the list.
+    setCandidateError(null);
+    try {
+      // MATCH BEFORE CREATE, the same rule LocationsList and VenueEditor already
+      // follow, and here it is load-bearing rather than tidy. These are TWO writes
+      // with no transaction: if the insert lands and the link below fails (dropped
+      // connection, an RLS hiccup), a districts row named after the school exists
+      // linked to zero schools, the school stays in the candidate list, and every
+      // retry then dies on `districts_org_name_lower_uniq` FOREVER - with no UI
+      // anywhere to delete the orphan. Reusing a same-name row makes the whole
+      // operation idempotent, so a retry finishes the job instead of wedging.
+      //
+      // It also fixes the second case /code-review found: an org with two
+      // districtless sites of the SAME name (two "Kumon Math and Reading Center"
+      // rows) could only ever set up the first. Both now point at one calendar,
+      // which is what two entries for one school should do.
+      const sameName = (districtRows ?? []).find(
+        (d) => (d.name ?? "").trim().toLowerCase() === (school.name ?? "").trim().toLowerCase(),
+      );
+
+      // A REAL district of that name is a different thing and must not be silently
+      // reused: filing the school under it would give it that district's calendar,
+      // which is the opposite of "its own". Say so instead.
+      if (sameName && isGroupingDistrict(sameName)) {
+        // NEXT TO THE ROW, not in the page banner. The candidates section is at the
+        // BOTTOM of a long page and the banner is at the top, so setTopError here
+        // meant the button flashed "Setting up..." and then looked like it had done
+        // nothing at all - the explanation was off-screen. Unlike the catch block
+        // below, this branch fires on an ordinary data condition (J2S has a real
+        // "Cascadia" district on prod today), so it is the COMMON path, not an
+        // exception (/code-review 2026-08-17).
+        setCandidateError({
+          id: school.id,
+          message: `You already have a district called "${sameName.name}". Open ${school.name} under ${venueLabel} and set its district to that one, or rename one of them first.`,
+        });
+        return;
+      }
+
+      let calendarRowId = sameName?.id ?? null;
+      if (!calendarRowId) {
+        const { data: created, error: dErr } = await supabase
+          .from("districts")
+          .insert({
+            organization_id: org.id,
+            name: school.name,
+            district_type: "independent_school",
+          })
+          .select("id")
+          .single();
+        // 23505 is the unique index above. Reachable despite the match: another tab
+        // or another admin can insert the same name between our read and this write.
+        // Naming the cause beats echoing Postgres at an operator.
+        if (dErr) {
+          if (dErr.code === "23505") {
+            // Beside the row too, for the same reason as the refusal above.
+            setCandidateError({
+              id: school.id,
+              message: `Something already uses the name "${school.name}" as a calendar. Reload this page and try again.`,
+            });
+            return;
+          }
+          throw dErr;
+        }
+        calendarRowId = created.id;
+      }
+
+      // Targeted single-field update, not a whole-row write: this screen holds none
+      // of the school's other columns (arrival notes, contacts, room) and writing a
+      // whole row from here would blank whatever it did not load. Org-scoped too, so
+      // it cannot reach another tenant's row even if an id were wrong.
+      const { error: lErr } = await supabase
+        .from("program_locations")
+        .update({ district_id: calendarRowId })
+        .eq("id", school.id)
+        .eq("organization_id", org.id);
+      if (lErr) throw lErr;
+
+      await loadAll();
+    } catch (e) {
+      console.error("Give school its own calendar failed:", e);
+      setTopError(`Couldn't set that school up: ${e.message ?? "unknown error"}`);
+    } finally {
+      setCreatingFor(null);
+    }
+  }
 
   function toggleViewing(key) {
     setViewing((prev) => {
@@ -114,9 +222,13 @@ export default function CalendarsList() {
     setTopError(null);
     try {
       const [locsRes, calsRes, distRes] = await Promise.all([
+        // id + name as well as the district link, because a school with NEITHER a
+        // district_id nor a legacy free-text district has to be offered its own
+        // calendar below, and that needs its name to create the row and its id to
+        // link it.
         supabase
           .from("program_locations")
-          .select("district, district_id")
+          .select("id, name, district, district_id")
           .eq("organization_id", org.id),
         supabase
           .from("district_calendars")
@@ -125,7 +237,17 @@ export default function CalendarsList() {
           .eq("school_year", schoolYear),
         supabase
           .from("districts")
-          .select("id, name, calendar_key")
+          // district_type so giveSchoolItsOwnCalendar can tell an ORPHANED
+          // independent_school row (reuse it) from a real district of the same name
+          // (refuse, and say why). Without it the unique index on
+          // (organization_id, lower(name)) is the only thing that notices, and it
+          // reports a raw Postgres error the operator cannot act on.
+          //
+          // DEPLOY ORDER: this column ships in 20260817a, which goes to an
+          // environment BEFORE this frontend. PostgREST fails the whole statement on
+          // an unknown column, and the throw below turns that into a visible error
+          // rather than a silent empty list.
+          .select("id, name, calendar_key, district_type")
           .eq("organization_id", org.id),
       ]);
       if (locsRes.error) throw locsRes.error;
@@ -134,6 +256,7 @@ export default function CalendarsList() {
 
       const locs = locsRes.data ?? [];
       const structured = distRes.data ?? [];
+      setDistrictRows(structured);
 
       // Structured districts (the entity) — count schools linked via district_id.
       const linkedCounts = new Map();
@@ -174,6 +297,22 @@ export default function CalendarsList() {
       const merged = [...structuredRows, ...legacyRows].sort((a, b) => a.label.localeCompare(b.label));
       setDistricts(merged);
       setCalendars(calsRes.data ?? []);
+
+      // Schools this page could not offer a calendar for AT ALL: no district_id and
+      // no legacy free-text district either, so they appear in neither list above.
+      // Before 17 Aug the only route was to invent a district for them, which this
+      // page's own empty state used to instruct - and inventing one is what put four
+      // single-school "districts" in front of J2S families in the registration
+      // picker. Now they get their own calendar source, typed independent_school so
+      // the picker keeps them in one shared bucket (20260817a).
+      //
+      // Counted on prod 17 Aug: 12 of J2S's 63 sites, 3 of Jeff's 23, all 4 of
+      // play-fit-fun's and both of shoreview-chess's.
+      setOwnCalendarCandidates(
+        (locs || [])
+          .filter((r) => !r.district_id && !(r.district ?? "").trim())
+          .sort((a, b) => (a.name ?? "").localeCompare(b.name ?? "")),
+      );
     } catch (e) {
       console.error("Load calendars failed:", e);
       setTopError(`Couldn't load: ${e.message ?? "unknown error"}`);
@@ -264,10 +403,21 @@ export default function CalendarsList() {
 
       {loading ? (
         <div style={{ color: MUTED, fontSize: 14, padding: 16 }}>Loading…</div>
-      ) : districts.length === 0 ? (
+      ) : districts.length === 0 && ownCalendarCandidates.length === 0 ? (
         <div style={emptyState}>
-          No districts yet. Give a school a <strong>District</strong> under <strong>{venueLabel}</strong>
-          (or add one there with a district name), then come back here.
+          No schools yet. Add one under <strong>{venueLabel}</strong>, then come back here to give
+          it a calendar &mdash; either its district&rsquo;s, or its own if it doesn&rsquo;t follow one.
+        </div>
+      ) : districts.length === 0 ? (
+        // Schools exist but none has a calendar source yet. This used to read "No
+        // districts yet. Give a school a District ... then come back here", which
+        // instructed the operator to invent a district for a private school - the
+        // exact thing that put four one-school district headings in front of J2S
+        // families. The list below is now the answer instead.
+        <div style={emptyState}>
+          None of your schools has a calendar yet. If a school follows a district calendar, set its{" "}
+          <strong>District</strong> under <strong>{venueLabel}</strong>. If it doesn&rsquo;t &mdash; a
+          private, charter or independent school &mdash; give it its own calendar below.
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -337,6 +487,62 @@ export default function CalendarsList() {
             );
           })}
         </div>
+      )}
+
+      {/* SCHOOLS THAT FOLLOW NOBODY'S CALENDAR. A private, charter or independent
+          school has its own calendar and belongs to no district, so before 17 Aug it
+          appeared nowhere on this page and the only way to give it dates was to
+          invent a one-school district - which is what put "Catlin Gabel School" up
+          as a district heading in front of J2S families.
+          Giving it its own calendar creates a calendar source typed
+          independent_school: every existing calendar mechanism treats it like a
+          district, and the public picker keeps it in the shared
+          "Other schools & sites" bucket instead of promoting it. */}
+      {!loading && ownCalendarCandidates.length > 0 && (
+        <section style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: "16px 18px" }}>
+          <h2 style={{ fontSize: 16, fontWeight: 700, color: INK, margin: 0 }}>
+            Schools that don&rsquo;t follow a district calendar
+          </h2>
+          <p style={{ color: MUTED, fontSize: 13.5, margin: "6px 0 14px", lineHeight: 1.55, maxWidth: 640 }}>
+            Private, charter and independent schools set their own dates, and so do libraries and
+            community sites. Give one its own calendar and it works exactly like a district here
+            &mdash; no-school days, early release, the lot. Families still see it grouped with your
+            other non-district sites, not as a district of its own.
+          </p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {ownCalendarCandidates.map((s) => (
+              <div
+                key={s.id}
+                style={{
+                  display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
+                  border: `1px solid ${RULE}`, borderRadius: 8, padding: "10px 12px",
+                }}
+              >
+                <span style={{ fontWeight: 600, color: INK, fontSize: 14, flex: "1 1 200px" }}>{s.name}</span>
+                <span style={{ fontSize: 12, color: MUTED }}>No calendar yet</span>
+                {/* IN THE ROW, beside the button that produced it. flex-basis 100%
+                    puts it on its own line so it never squeezes the button. */}
+                {candidateError?.id === s.id && (
+                  <div role="alert" style={{ flex: "1 1 100%", order: 9, fontSize: 12.5, color: "#7a2a2a", background: "#fbeaea", border: "1px solid #D9694F", borderRadius: 6, padding: "8px 10px", lineHeight: 1.5 }}>
+                    {candidateError.message}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => giveSchoolItsOwnCalendar(s)}
+                  disabled={creatingFor === s.id}
+                  style={{
+                    background: creatingFor === s.id ? "#cfc6dc" : BRIGHT, color: "#fff", border: "none",
+                    borderRadius: 999, padding: "7px 16px", fontSize: 13, fontWeight: 600,
+                    fontFamily: "inherit", cursor: creatingFor === s.id ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {creatingFor === s.id ? "Setting up…" : "Give it its own calendar"}
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
       )}
     </div>
   );

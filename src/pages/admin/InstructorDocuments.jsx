@@ -26,14 +26,18 @@
 // documents drawer) splits on blank lines and renders through linkifyText, which
 // only linkifies http(s) and is React-escaped. So there is no markup to sanitize
 // and no injection surface — do not add dangerouslySetInnerHTML here.
+//
+// This SCREEN does not import linkifyText any more. It used to, for a preview
+// that no longer exists; the readers above still do, which is where it matters.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
-import { linkifyText } from "../../lib/linkifyText.jsx";
 import {
   INSTRUCTOR_DOCUMENTS,
   DOCUMENT_KEYS,
+  documentByKey,
+  documentsBannerPhrase,
   isDocumentEnabled,
   nextVersionFor,
   versionNumberOf,
@@ -97,7 +101,7 @@ export default function InstructorDocuments() {
   const { org } = useOutletContext();
   const [rows, setRows] = useState(null); // all legal_documents for this org
   // A failed READ must never look like "you have no documents". It used to set
-  // rows to [], which rendered all seven as "Not written yet" AND opened the
+  // rows to [], which rendered every document as "Not written yet" AND opened the
   // editor with live=null saying "Nothing published yet" — so an admin could
   // write a draft and publish it as v1, which (newest created_at wins) instantly
   // became the agreement every instructor signs, silently demoting the real one.
@@ -106,8 +110,11 @@ export default function InstructorDocuments() {
   const [loadFailed, setLoadFailed] = useState(false);
   const [openKey, setOpenKey] = useState(null);
   const [toast, setToast] = useState("");
-  // Which documents this provider actually uses. ABSENT KEY MEANS ON, so `{}` —
-  // every existing org — is all seven, unchanged.
+  // Which documents this provider actually uses. ABSENT KEY MEANS ON — with one
+  // deliberate exception, so `{}` (every existing org) is every document EXCEPT
+  // contractor_status, which is opt-in and needs an explicit true. Nobody's
+  // onboarding changed when it shipped. isDocumentEnabled owns both rules; never
+  // re-derive either from this object by hand.
   const [docConfig, setDocConfig] = useState({});
   const [savingKey, setSavingKey] = useState(null);
   // { key, message } — the error renders ON THE ROW THAT FAILED, not at the top
@@ -121,6 +128,13 @@ export default function InstructorDocuments() {
   const load = useCallback(async () => {
     if (!org?.id) return;
     setLoadFailed(false);
+    // Any reload invalidates a per-row toggle error, and publishing is a reload.
+    // Without this, following the "Write it first" message's own instructions —
+    // click switch, get the red alert, hit Write it, publish — left the stale red
+    // alert sitting under the row NEXT TO the green "published" toast, each
+    // contradicting the other. The guard's early return skips the only other line
+    // that clears it, so this has to be here rather than beside the write.
+    setToggleError(null);
     const [{ data, error }, { data: orgRow, error: orgErr }] = await Promise.all([
       supabase
         .from("legal_documents")
@@ -160,6 +174,28 @@ export default function InstructorDocuments() {
     return out;
   }, [rows]);
 
+  // "Newest row" and "something an instructor can actually read" are two
+  // different questions, and conflating them is what let the toggle guard and the
+  // wizard disagree: the guard accepted ANY row while the wizard required text,
+  // so an empty-body row passed the guard and then dead-ended the instructor —
+  // the two halves of one fix leaving open exactly the gap each was written to
+  // close.
+  //
+  //   liveByKey      — the row get-legal-document would return. What the EDITOR
+  //                    opens, and what versionsByKey numbers. Body-agnostic on
+  //                    purpose, because that is what the server does.
+  //   publishedByKey — that row IF it has readable text. What an instructor can
+  //                    acknowledge, and therefore the only thing that counts as
+  //                    published for the toggle, the "still to write" count and
+  //                    the row badge. Same test the wizard applies.
+  const publishedByKey = useMemo(() => {
+    const out = {};
+    for (const [k, r] of Object.entries(liveByKey)) {
+      if (r?.body_text?.trim()) out[k] = r;
+    }
+    return out;
+  }, [liveByKey]);
+
   const versionsByKey = useMemo(() => {
     const out = {};
     for (const r of rows ?? []) (out[r.document_key] ??= []).push(r);
@@ -171,7 +207,7 @@ export default function InstructorDocuments() {
   // Turn one document on or off for this provider.
   //
   // WRITES ONLY THE ONE KEY, onto the config we last read. Spreading the loaded
-  // object rather than rebuilding it from the seven switches on screen is the
+  // object rather than rebuilding it from the switches on screen is the
   // whole-row-write bug that is still open in six other editors: rebuilding
   // would silently reset any key this screen does not know about.
   //
@@ -180,6 +216,59 @@ export default function InstructorDocuments() {
   // provider's own text and anyone who already acknowledged it keeps that record.
   async function setDocEnabled(key, next) {
     if (savingKey) return;
+
+    // TURNING ON A DOCUMENT THAT DOES NOT EXIST YET STOPS EVERY INSTRUCTOR DEAD.
+    //
+    // The wizard fetches each enabled document by key and a 404 is a hard stop —
+    // Screen6Additional sets a screen-wide error and returns before rendering
+    // anything, so the three documents that ARE published disappear too, and
+    // gateCheck still requires the step, so onboarding cannot complete. That is
+    // the precise outage instructorDocuments.js cites as the reason
+    // contractor_status defaults off — and until this guard, the toggle was a
+    // one-click path straight back into it, under a message promising the
+    // opposite ("Instructors will be asked for it from now on").
+    //
+    // ONLY FOR THE OPT-IN DOCUMENT, and the first version of this guard got that
+    // wrong in a way that trapped providers. It refused to switch ON any document
+    // with no published row — but SEVEN OF THE EIGHT ship on and unwritten, which
+    // is the deliberate "absent is not a decision" rule. So: a provider switches
+    // photo_video_release off (allowed, nothing checks), changes their mind, and
+    // is refused — permanently, because this is the only write to
+    // instructor_document_config anywhere in the app. Three separate lines of copy
+    // on this same screen promise the opposite ("Turn any of them back on whenever
+    // you want", "click to turn on", "Switch off any you don't use"), and the
+    // comment justifying the guard claimed it left those keys "unaffected". It did
+    // not. A guard that makes a documented, reversible action irreversible is
+    // worse than the bug it prevents.
+    //
+    // The real asymmetry is defaultOff, not published-ness. A default-ON document
+    // being on and unwritten is a state every provider is already in and the
+    // wizard already handles by blocking with an actionable message; switching it
+    // back on returns them to where they started. contractor_status is different:
+    // it has never been on for anyone, so switching it on is a NEW state the
+    // provider is choosing, and choosing it before writing the document is
+    // guaranteed to strand their instructors on a screen that also hides the three
+    // documents that ARE published.
+    //
+    // PUBLISHED MEANS READABLE, via publishedByKey — the same test the wizard
+    // applies. Keyed off liveByKey (any row at all), an empty-body row passed here
+    // and dead-ended the instructor anyway.
+    //
+    // Refuse rather than warn-and-confirm: there is nothing to weigh. Writing it
+    // first costs one click ("Write it" opens the editor while the document is
+    // off, deliberately), and the alternative is a provider discovering the block
+    // through an instructor who cannot finish.
+    const meta = documentByKey(key);
+    if (next && meta?.defaultOff && !publishedByKey[key]) {
+      // Jessica's exact words, 2026-08-14. "Write it" is the literal label on the
+      // button in this same row, so the instruction points at something on screen.
+      setToggleError({
+        key,
+        message: "Before publishing, you must write the document. Click 'Write it'",
+      });
+      return;
+    }
+
     setSavingKey(key);
     setToggleError(null);
     const updated = { ...docConfig, [key]: next };
@@ -220,7 +309,7 @@ export default function InstructorDocuments() {
       }
     } catch { /* config saved; gate reconciles on next natural run */ }
     setSavingKey(null);
-    const label = INSTRUCTOR_DOCUMENTS.find((d) => d.key === key)?.label ?? "Document";
+    const label = documentByKey(key)?.label ?? "This document";
     flash(
       next
         ? `${label} turned on. Instructors will be asked for it from now on.`
@@ -228,7 +317,7 @@ export default function InstructorDocuments() {
     );
   }
 
-  // Failed read: refuse to render the list at all. Showing seven "Not written
+  // Failed read: refuse to render the list at all. Showing a list of "Not written
   // yet" rows would invite the operator to overwrite documents that do exist.
   if (loadFailed) {
     return (
@@ -275,12 +364,15 @@ export default function InstructorDocuments() {
     );
   }
 
-  // COUNTS THE ENABLED SET, not all seven. A provider who has switched two off
+  // COUNTS THE ENABLED SET, not the whole list. A provider who has switched two off
   // and written the other five is finished, and a banner still saying "2 still
   // to write" about documents nobody will ever be shown is simply untrue —
   // exactly the class of sentence this screen has already had to fix twice.
   const enabledKeys = DOCUMENT_KEYS.filter((k) => isDocumentEnabled(docConfig, k));
-  const writtenCount = enabledKeys.filter((k) => liveByKey[k]).length;
+  // publishedByKey, not liveByKey: an empty-body row is not something an
+  // instructor can read, so counting it as written would tell a provider they had
+  // finished when the wizard would still stop their instructors.
+  const writtenCount = enabledKeys.filter((k) => publishedByKey[k]).length;
   const enabledCount = enabledKeys.length;
 
   return (
@@ -298,7 +390,7 @@ export default function InstructorDocuments() {
       {/* ALL of them block onboarding, not just the agreement. This banner used
           to say "start with the contractor agreement… onboarding cannot be
           completed until it exists", which reads as "that one is the blocker".
-          It is not: Screens 5 and 6 fetch the other six by key and refuse to
+          It is not: Screens 5 and 6 fetch the other seven by key and refuse to
           advance when any is missing. An operator who followed the old wording
           would publish one document, invite an instructor, and strand them. */}
       {writtenCount < enabledCount && (
@@ -309,11 +401,10 @@ export default function InstructorDocuments() {
               : `${enabledCount - writtenCount} still to write.`}
           </strong>{" "}
           They read and sign{" "}
-          <strong>
-            {enabledCount === DOCUMENT_KEYS.length
-              ? `all ${DOCUMENT_KEYS.length}`
-              : `the ${enabledCount} you've turned on`}
-          </strong>{" "}
+          {/* Three branches, all of which have been wrong at some point — so the
+              sentence is built in instructorDocuments.js where a test can assert
+              it, rather than inline where it could only be grepped for. */}
+          <strong>{documentsBannerPhrase(enabledCount)}</strong>{" "}
           during onboarding, and it stops at the first one that isn&apos;t published. Start with
           the contractor agreement &mdash; it&apos;s the one they actually sign &mdash; then work
           down the list.{" "}
@@ -345,7 +436,9 @@ export default function InstructorDocuments() {
 
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         {INSTRUCTOR_DOCUMENTS.map((d) => {
-          const live = liveByKey[d.key];
+          // The badge says "Version N · date" or "Not written yet", so it must use the
+    // same published-means-readable test as the count above and the toggle guard.
+    const live = publishedByKey[d.key];
           // Derived from the STORED version string, never from a row count —
           // see versionNumberOf.
           const shownVersion = live ? versionNumberOf(live.document_version) : null;
@@ -477,7 +570,7 @@ function DocToggle({ on, locked, busy, label, onClick }) {
 }
 
 function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, onPublished }) {
-  const meta = INSTRUCTOR_DOCUMENTS.find((d) => d.key === docKey);
+  const meta = documentByKey(docKey);
   const [title, setTitle] = useState(live?.title ?? meta?.label ?? "");
   // STRIPPED. The signature block is never in the editable box — see
   // stripAppendedSignatureBlock. Before this, it was appended once and then lived
@@ -486,12 +579,22 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
   const [body, setBody] = useState(stripAppendedSignatureBlock(live?.body_text ?? ""));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  // A PUBLISHED document opens read-only. You should be able to look at the
-  // agreement your instructors sign without the risk of leaning on a key and
-  // changing it — and pressing Edit is the moment you know you are editing a
-  // legal document, which a box that is silently live never tells you. A blank
-  // one opens straight in edit mode; there is nothing to read yet.
-  const [editing, setEditing] = useState(!live);
+  // THE BOX IS ALWAYS EDITABLE. There is no read-only mode and no Edit button.
+  //
+  // Jessica called this screen confusing three times, so on the third pass the
+  // question stopped being "which control is wrong" and became "what shape do
+  // other tools use". Every product that has a tenant write their own legal
+  // document gives them ONE always-editable box: Shopify's store policies
+  // (Insert template, then Save), Gusto's contractor agreements, WordPress's
+  // privacy policy, Google Docs, Notion. Not one of them locks the document and
+  // asks you to press Edit first. Doing a third thing nobody does IS the tell.
+  //
+  // The safety argument for the old gate does not survive contact with how this
+  // screen actually works: typing here changes nothing an instructor sees.
+  // PUBLISH is the only thing that does, it is a separate deliberate button with
+  // its own confirmation on a live document, and every earlier version is kept.
+  // So the gate was protecting against a risk `confirming` below already covers,
+  // at the price of a whole mode on screen. Jessica chose to drop it, 17 Aug.
   // Publishing OVER a live document is a one-click, instantly-effective change to
   // the thing instructors sign, and there is no undo beyond publishing again.
   // That is not hypothetical: during testing today a starter draft reading
@@ -499,6 +602,40 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
   // contractor agreement on staging, and stayed live until someone noticed.
   // First publish needs no ceremony — nothing is being replaced.
   const [confirming, setConfirming] = useState(false);
+  // THERE IS NO PREVIEW. It went through all three shapes and every one was
+  // wrong: stacked under the textarea it was Jessica's "two boxes showing the
+  // same thing", and as a Write/Preview toggle it was a mode on a screen she
+  // then called confusing again.
+  //
+  // The research settles it - nobody previews a document like this. Google Docs
+  // and Notion have none because the surface IS the document. Shopify's policy
+  // editor has none. Gusto's has none. WordPress's has none. A preview earns its
+  // keep when the output differs from the input; here body_text is plain text and
+  // the only differences were paragraph spacing, auto-linked URLs, the title and
+  // the signature block.
+  //
+  // So each of those four is handled without a mode: the title sits in its own
+  // field directly above, the hint under the box states the blank-line and link
+  // rules, and THE SIGNATURE BLOCK IS NOW PERMANENTLY ON SCREEN below the box
+  // rather than only inside the preview. That last one was the only genuinely
+  // invisible thing, and it is strictly more visible than it was before.
+  const [templateOpen, setTemplateOpen] = useState(false);
+  const [templateCopied, setTemplateCopied] = useState(false);
+
+  // ONE definition of "is the template button the apply-it one or the read-it
+  // one", because the button, its panel and the empty-state banner all have to
+  // agree about which control exists right now. The banner used to hardcode
+  // "Start from a template" and went on saying it after the button had become
+  // "View template" — copy naming a control that is not on screen.
+  const templateApplies = !body.trim();
+  const templateButtonLabel = templateApplies
+    ? "Start from a template"
+    : templateOpen ? "Hide template" : "View template";
+
+  function closeTemplate() {
+    setTemplateOpen(false);
+    setTemplateCopied(false);
+  }
 
   const nextVersion = nextVersionFor(versions.map((v) => v.document_version));
   // Read the number OUT OF the string we are about to store, so what the screen
@@ -596,14 +733,29 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
       ) : (
         <div style={{ background: "#fbfaf6", border: `1px solid ${RULE}`, borderRadius: 10, padding: "11px 13px", fontSize: 13, color: INK, lineHeight: 1.55, margin: "14px 0" }}>
           {/* Points at the BUTTON, not at "the draft below". The box starts
-              empty and the draft only appears once Start from a draft is
+              empty and the starter only appears once Start from a template is
               pressed, so the old wording described something that was not on
               screen — the same untrue-pointer bug fixed twice elsewhere today.
+              (This comment itself said "Start from a draft" until 17 Aug, three
+              commits after the button was renamed. A comment is a claim.)
               Only visible in the empty state, which is exactly the state a
               provider setting up for the first time is in. */}
-          Nothing published yet, so your instructors see an empty step. Use{" "}
-          <strong>Start from a template</strong> for a skeleton in square brackets, then replace
-          every bracket with your own wording.{" "}
+          Nothing published yet, so your instructors see an empty step.{" "}
+          {templateApplies ? (
+            <>
+              Use <strong>{templateButtonLabel}</strong> for a skeleton in square brackets, then
+              replace every bracket with your own wording.{" "}
+            </>
+          ) : !templateOpen ? (
+            // Only while the panel is SHUT. With it open the template is already
+            // on screen, and the button reads "Hide template", so pointing at
+            // "View template" would name a control that is not currently there —
+            // the same bug this branch exists to fix.
+            <>
+              The starter wording is still there under <strong>View template</strong> if you want
+              to check it against what you have written.{" "}
+            </>
+          ) : null}
           {meta?.signed && "This is the one they sign, so it is worth a careful read."}
         </div>
       )}
@@ -611,11 +763,7 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
       <label style={{ display: "block", fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600, marginBottom: 5 }}>
         Title
       </label>
-      {editing ? (
-        <input value={title} onChange={(e) => setTitle(e.target.value)} style={inputStyle} />
-      ) : (
-        <div style={{ ...inputStyle, background: "#fbfaf6", color: INK }}>{title}</div>
-      )}
+      <input value={title} onChange={(e) => setTitle(e.target.value)} style={inputStyle} />
       <p style={{ margin: "5px 0 16px", fontSize: 11.5, color: MUTED }}>
         The heading instructors see above this document.
       </p>
@@ -624,58 +772,124 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
         <label style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600 }}>
           The document
         </label>
-        {/* THE edit affordance. A box that is silently live never tells you that
-            typing in it changes a legal document; pressing Edit is the moment you
-            know. Mirrors the Edit button on the list and the Edit / Done editing
-            toggle the campaign and automation editors already use. */}
-        {!editing ? (
-          <button
-            type="button"
-            onClick={() => setEditing(true)}
-            style={{ background: "transparent", border: "none", color: BRIGHT, cursor: "pointer", fontSize: 13, fontWeight: 600, fontFamily: "inherit", padding: 0 }}
-          >
-            Edit
-          </button>
-        ) : (
-          <span style={{ fontSize: 11.5, color: BRIGHT, fontWeight: 600 }}>Editing</span>
-        )}
+        {/* THE ONLY CONTROL IN THIS ROW. It used to hold an Edit button, an
+            "Editing" badge and a Write/Preview toggle as well - four things above
+            the box on a screen whose whole job is "type the words". Edit and
+            Preview are both gone (see the state block at the top for why: no other
+            product doing this has either), so what is left is the template. */}
         {/* AT THE TOP, not under a 22-row box. Jessica cleared the body and could
             not find this, because it only appeared below the fold. Renamed from
             "Start from a draft": "template" is the word every tool uses for
-            prefilled starting content, and it is already the word Comms uses. */}
-        {editing && !body.trim() && meta?.starter && (
+            prefilled starting content, and it is already the word Comms uses.
+
+            PERMANENT NOW. This carried `!body.trim()`, so the moment a provider
+            typed one character the starter was gone for good — and the starter is
+            where the square-bracket checklist of what the document has to cover
+            lives, which is exactly what you want to re-read halfway through
+            writing one.
+
+            Empty box -> apply immediately, because there is nothing to destroy.
+            Written-in box -> the button OPENS the template read-only, because
+            RE-READING is the thing that was actually missing. Jessica's whole
+            ask, in her words: "I just wanted the writer to be able to see the
+            template and copy bits of it if they want to after having already
+            edited their own." There is deliberately NO replace-what-I-wrote
+            path once something is written — it was built, she said she does not
+            want it, and it was the only control here that could destroy work.
+            Taking bits needs no feature at all: the panel renders the template
+            as ordinary selectable text, so highlight + Ctrl+C. That is also how
+            the tools do it — Notion opens a template in a side peek you copy
+            from, Google Docs opens it as a second document; nobody builds
+            per-fragment copy buttons. */}
+        {meta?.starter && (
           <button
             type="button"
-            onClick={() => setBody(meta.starter)}
+            onClick={() => {
+              // Apply-and-close, not just apply. `templateApplies` short-circuits
+              // ahead of the close branch, so with the panel OPEN and the body
+              // then emptied this button reads "Start from a template" and the
+              // close path becomes unreachable — the panel is stuck open with no
+              // control that shuts it. Closing here also stops the panel showing
+              // the same words that are now in the box. This is what the deleted
+              // "Yes, replace it" handler did, for the same reason.
+              if (templateApplies) { setBody(meta.starter); closeTemplate(); return; }
+              if (templateOpen) { closeTemplate(); return; }
+              setTemplateOpen(true);
+              setTemplateCopied(false);
+            }}
             style={{
               marginLeft: "auto", background: "#fff", border: `1px solid ${BRIGHT}`, color: BRIGHT,
               borderRadius: 999, padding: "6px 14px", fontSize: 12.5, fontWeight: 600,
               fontFamily: "inherit", cursor: "pointer",
             }}
           >
-            Start from a template
+            {templateButtonLabel}
           </button>
         )}
       </div>
 
-      {editing ? (
-        <textarea
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          rows={22}
-          placeholder="Write the document here, or use Start from a template above."
-          style={{ ...inputStyle, lineHeight: 1.6, resize: "vertical", fontSize: 13.5 }}
-        />
-      ) : (
-        <div style={{ ...inputStyle, background: "#fbfaf6", minHeight: 160, whiteSpace: "pre-wrap", lineHeight: 1.6, fontSize: 13.5 }}>
-          {body || <span style={{ color: MUTED }}>Nothing written yet.</span>}
+      {/* The template, readable without giving anything up. Read-only, and
+          nothing in here can change your document at all — the one button copies
+          to the clipboard. That is the entire feature Jessica asked for. */}
+      {templateOpen && meta?.starter && (
+        <div style={{ border: `1px solid ${RULE}`, borderRadius: 10, background: "#fbfaf6", padding: "12px 14px", marginBottom: 10 }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: MUTED }}>
+              The template
+            </span>
+            <span style={{ fontSize: 11.5, color: MUTED, lineHeight: 1.5 }}>
+              Replace every square bracket with your own wording. Nothing here changes your
+              document — highlight any part of it to copy just that bit.
+            </span>
+          </div>
+          <div style={{ maxHeight: 240, overflowY: "auto", whiteSpace: "pre-wrap", fontSize: 12.5, color: INK, lineHeight: 1.6, background: "#fff", border: `1px solid ${RULE}`, borderRadius: 8, padding: "10px 12px" }}>
+            {meta.starter}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10, flexWrap: "wrap" }}>
+            {/* The whole-thing shortcut. "Copy all" rather than "Copy template",
+                because copying a PART is the more likely thing here and it is
+                done by selecting text, not by this button — a label saying
+                "Copy template" reads as though it were the only way. */}
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(meta.starter);
+                  setTemplateCopied(true);
+                  setTimeout(() => setTemplateCopied(false), 2000);
+                } catch {
+                  // Clipboard is blocked in some browsers/contexts. Say so rather
+                  // than flashing "Copied" over a copy that did not happen — the
+                  // text is on screen and selectable either way.
+                  setTemplateCopied("failed");
+                  setTimeout(() => setTemplateCopied(false), 4000);
+                }
+              }}
+              style={{
+                background: "#fff", border: `1px solid ${BRIGHT}`, color: BRIGHT, borderRadius: 999,
+                padding: "6px 14px", fontSize: 12.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer",
+              }}
+            >
+              {templateCopied === true ? "Copied" : templateCopied === "failed" ? "Press Ctrl+C to copy" : "Copy all"}
+            </button>
+          </div>
         </div>
       )}
-      {editing && (
-        <p style={{ margin: "5px 0 0", fontSize: 11.5, color: MUTED, lineHeight: 1.5 }}>
-          Leave a blank line to start a new paragraph. Web addresses become clickable on their own.
-        </p>
-      )}
+
+      {/* ONE BOX, ONE STATE. No read-only variant, no preview variant, no
+          "Nothing written yet" placeholder panel - an empty textarea with a
+          placeholder already says that, and it lets you start typing rather than
+          hunting for the control that unlocks it. */}
+      <textarea
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
+        rows={22}
+        placeholder="Write the document here, or use Start from a template above."
+        style={{ ...inputStyle, lineHeight: 1.6, resize: "vertical", fontSize: 13.5 }}
+      />
+      <p style={{ margin: "5px 0 0", fontSize: 11.5, color: MUTED, lineHeight: 1.5 }}>
+        Leave a blank line to start a new paragraph. Web addresses become clickable on their own.
+      </p>
 
       {/* LOCKED, not editable. It used to live inside the box as text a provider
           could delete or typo — and the damage would only surface in an archived
@@ -686,6 +900,13 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
           with its own signature wording, so for that document this panel claimed
           "we add this when you publish" while showing the operator a second copy
           of a signature they already have. */}
+      {/* ALWAYS, not just on an empty body. This used to be `!body.trim() && ...`
+          because the preview carried the block once you had written something -
+          so with the preview gone, that condition would have hidden the ONE thing
+          on this screen a provider cannot otherwise see. It is the only part of
+          the published document that is not in the box in front of them.
+          Permanently visible under the box is what replaces the preview, and it
+          costs no mode. */}
       {willAppendSignatureBlock(docKey, body) && (
         <div style={{ marginTop: 12, background: "#f4f2ee", border: `1px dashed ${RULE}`, borderRadius: 8, padding: "12px 14px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
@@ -703,51 +924,21 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
         </div>
       )}
 
-      {/* PREVIEW — the document as the instructor actually reads it.
-          House standard: never draw an approximation, render the real thing.
-          Screens 4/5/6 and the portal all split on blank lines and pass each
-          paragraph through linkifyText, so this uses exactly that, and shows the
-          signature block in place and visibly locked. Without it an operator was
-          publishing a legal document having only ever seen their own raw
-          keystrokes. Same rule as the registration preview and the confirmation
-          page. */}
-      {body.trim() && (
-        <div style={{ marginTop: 20 }}>
-          <label style={{ display: "block", fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600, marginBottom: 5 }}>
-            What your instructors will see
-          </label>
-          <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, background: "#fff", padding: "16px 18px" }}>
-            <div style={{ fontSize: 15, fontWeight: 700, color: INK, marginBottom: 10 }}>{title}</div>
-            {body.trim().split(/\n\s*\n/).map((para, i) => (
-              <p key={i} style={{ margin: "0 0 10px", whiteSpace: "pre-wrap", fontSize: 13.5, color: INK, lineHeight: 1.6 }}>
-                {linkifyText(para)}
-              </p>
-            ))}
-            {willAppendSignatureBlock(docKey, body) && (
-              <div style={{ marginTop: 14, paddingTop: 12, borderTop: `1px dashed ${RULE}`, position: "relative" }}>
-                {AGREEMENT_SIGNATURE_BLOCK.split(/\n\s*\n/).map((para, i) => (
-                  <p key={i} style={{ margin: "0 0 8px", whiteSpace: "pre-wrap", fontSize: 13.5, color: MUTED, lineHeight: 1.6 }}>
-                    {para}
-                  </p>
-                ))}
-                <span style={{ fontSize: 10.5, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: MUTED }}>
-                  Locked &middot; filled in as each instructor signs
-                </span>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+      {/* NO PREVIEW PANEL HERE, AND NO PREVIEW MODE ABOVE. Both existed; both
+          were wrong. See the state block at the top of this component for the
+          research - this is the third and last shape, so do not add a fourth
+          without Jessica asking for one. */}
 
       {error && (
         <div role="alert" style={{ color: RED, fontSize: 13.5, marginTop: 14, lineHeight: 1.5 }}>{error}</div>
       )}
 
-      {/* Publishing belongs to edit mode. Offering it while you are only reading
-          invites a click that either does nothing or republishes unchanged text
-          as a new version for no reason. */}
+      {/* Always offered, because there is no longer a mode this could be wrong in.
+          It stays disabled until something has actually changed (`canPublish`
+          requires `dirty`), which is what stops a pointless republish of identical
+          text - that used to be the job of hiding it outside edit mode. */}
       <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 18, flexWrap: "wrap" }}>
-        {editing ? (
+        {(
           confirming ? (
             // Replacing a live document: name what is being replaced and what
             // happens to people who already signed, then require a second click.
@@ -810,24 +1001,11 @@ function DocumentEditor({ orgId, orgTimezone, docKey, live, versions, onBack, on
               </span>
             </>
           )
-        ) : (
-          <>
-            <button
-              type="button"
-              onClick={() => setEditing(true)}
-              style={{
-                background: BRIGHT, color: "#fff", border: "none", borderRadius: 999,
-                padding: "10px 22px", fontSize: 14, fontWeight: 700, fontFamily: "inherit", cursor: "pointer",
-              }}
-            >
-              Edit this document
-            </button>
-            <span style={{ fontSize: 12, color: MUTED }}>
-              Editing writes a new version when you publish. Nobody who already signed is affected.
-            </span>
-          </>
         )}
       </div>
+      {/* Publish is the only thing in this row. There was once an "Edit this
+          document" button here too, and later the row was hidden outside edit
+          mode; both are gone with the mode itself. */}
 
       {versions.length > 0 && (
         <div style={{ marginTop: 26, borderTop: `1px solid ${RULE}`, paddingTop: 14 }}>

@@ -65,7 +65,9 @@ const SchoolsLocations = lazy(() => import('./pages/admin/SchoolsLocations.jsx')
 const CalendarsList = lazy(() => import('./pages/admin/CalendarsList.jsx'));
 const InstructorsPage = lazy(() => import('./pages/admin/instructors/InstructorsPage.jsx'));
 const SurveyResponses = lazy(() => import('./pages/admin/instructors/SurveyResponses.jsx'));
-const Payroll = lazy(() => import('./pages/admin/Payroll.jsx'));
+// Payroll.jsx is no longer lazily imported here: /admin/payroll redirects and
+// Payouts.jsx imports it directly. Leaving the lazy() behind would have kept a
+// separate chunk in the build for a route that no longer renders it.
 const Rosters = lazy(() => import('./pages/admin/Rosters.jsx'));
 const ClassReports = lazy(() => import('./pages/admin/ClassReports.jsx'));
 const Finances = lazy(() => import('./pages/admin/Finances.jsx'));
@@ -155,6 +157,38 @@ function InstructorDocsRoute({ children }) {
   const { org } = useOutletContext();
   if (canManageInstructors(org)) return children;
   return <Navigate to="/admin/settings" replace />;
+}
+
+// THE REST OF THE INSTRUCTORS SECTION, which was bare while its Settings page was
+// wrapped — the exact shape the note above CommsTabRoute warns about ("wrapping
+// only the gated ones made the bare form look like the norm, so the next route
+// would copy a neighbour and quietly ship ungated").
+//
+// The nav fix on 2026-08-13 closed the ROLE hole (a staff or viewer typing
+// /admin/payouts). It did not close the ENTITLEMENT hole: shapeNavForOrg drops the
+// Instructors item out of navItems entirely for a lean org without the
+// entitlement, and an item that is not in the array can never trigger the block
+// card no matter what it matches. So Schedule, the roster, availability and class
+// reports were all reachable by URL for an org that is not entitled to them.
+//
+// WHERE IT SENDS THEM IS PER-ORG, and hardcoding /admin/programs was wrong for
+// exactly the orgs most likely to hit this. An org that brings its own
+// registration has "Scheduled programs" greyed out with
+// offReason: "You bring your own registration — use Class schedule instead."
+// (AdminLayout marks a tab not-applicable on `t.regOnly && !usesReg`). So the
+// redirect landed them on a page whose own tab tells them to go somewhere else —
+// a second dead end, which is the thing the first draft of this comment claimed
+// it was avoiding. Two of seven prod orgs match that shape today
+// (mrs-richelle, shoreview-chess: enrops_platform, uses_enrops_registration
+// false). /admin is not a fallback either — HIDE_TOP drops it for lean orgs and
+// AdminOverview redirects it back to Programs.
+//
+// Picks the same way the nav does, off the same column, so the two cannot
+// disagree. Same three-line shape as CommsTabRoute and InstructorDocsRoute.
+function InstructorRoute({ children }) {
+  const { org } = useOutletContext();
+  if (canManageInstructors(org)) return children;
+  return <Navigate to={org?.uses_enrops_registration ? "/admin/programs" : "/admin/class-schedule"} replace />;
 }
 
 export default function App() {
@@ -290,8 +324,8 @@ export default function App() {
         <Route path="family-comms/contacts" element={<CommsTabRoute tab="contacts"><ContactsTab /></CommsTabRoute>} />
         <Route path="family-comms/templates" element={<CommsTabRoute tab="templates"><TemplatesTab /></CommsTabRoute>} />
         <Route path="marketing-v2" element={<Navigate to="/admin/family-comms/marketing" replace />} />
-        <Route path="schedule" element={<Schedule />} />
-        <Route path="schedule/print" element={<SchedulePrint />} />
+        <Route path="schedule" element={<InstructorRoute><Schedule /></InstructorRoute>} />
+        <Route path="schedule/print" element={<InstructorRoute><SchedulePrint /></InstructorRoute>} />
         <Route path="class-schedule" element={<ClassSchedule />} />
         <Route path="curricula" element={<CurriculaList />} />
         <Route path="curricula/new" element={<CurriculumNew />} />
@@ -314,14 +348,36 @@ export default function App() {
             includes it). */}
         <Route path="calendars" element={<CalendarsList />} />
         <Route path="contacts" element={<Navigate to="/admin/schools" replace />} />
-        <Route path="instructors" element={<InstructorsPage />} />
-        <Route path="availability" element={<SurveyResponses />} />
+        <Route path="instructors" element={<InstructorRoute><InstructorsPage /></InstructorRoute>} />
+        <Route path="availability" element={<InstructorRoute><SurveyResponses /></InstructorRoute>} />
         <Route path="survey-responses" element={<Navigate to="/admin/availability" replace />} />
-        <Route path="payroll" element={<Payroll />} />
+        {/* Two addresses served the same screen, and this one served it WORSE:
+            Payroll.jsx has no heading of its own — it was written to render
+            inside the Payouts shell — so /admin/payroll rendered a bare table
+            with no title on the page. Nothing links here (checked: no nav item,
+            no email from any edge function), so this is old-bookmark insurance,
+            not a live route being retired out from under anyone. */}
+        <Route path="payroll" element={<Navigate to="/admin/payouts" replace />} />
         <Route path="rosters" element={<Rosters />} />
-        <Route path="class-reports" element={<ClassReports />} />
+        <Route path="class-reports" element={<InstructorRoute><ClassReports /></InstructorRoute>} />
         <Route path="finances" element={<Finances />} />
-        <Route path="payouts" element={<Payouts />} />
+        {/* WRAPPED as of 2026-08-17, and the trigger was a nav change in this same
+            branch. Giving the Money > Payroll calculator tab `instructorsOnly`
+            (AdminLayout NAV) made /admin/payouts an instructor-ENTITLEMENT surface
+            for the first time, and it was the only one still bare — schedule,
+            schedule/print, instructors, availability, class-reports, pay-rates and
+            instructor-documents are all wrapped. Hiding the tab does nothing for a
+            typed URL: the org passes the `viewMoney` ROLE gate, so blockedItem never
+            fires, and Payroll's own canManage is role-only — so Confirm, Approve,
+            Withhold and Pay via Stripe were all live for an org with no entitlement
+            to instructors at all. That is the nav-half-without-the-route-half shape
+            adminRouteGuards.test.mjs exists to catch.
+            Takes nothing away from anyone holding data: checked prod 17 Aug, only
+            j2s has instructors, pay lines or payouts (25 / 221 / 50) and it is
+            legacy_own_platform, for which canManageInstructors returns true. Every
+            enrops_platform org is 0 / 0 / 0, and Jeff is `founding` so he stays
+            entitled. */}
+        <Route path="payouts" element={<InstructorRoute><Payouts /></InstructorRoute>} />
         <Route path="discounts" element={<Discounts />} />
         <Route path="team" element={<TeamPage />} />
         <Route path="time-saved" element={<TimeSavedPage />} />
@@ -330,7 +386,7 @@ export default function App() {
         <Route path="registration-questions" element={<RegistrationQuestions />} />
         <Route path="waivers" element={<WaiverManager />} />
         <Route path="email-sender" element={<EmailSenderSettings />} />
-        <Route path="pay-rates" element={<PayRatesSettings />} />
+        <Route path="pay-rates" element={<InstructorRoute><PayRatesSettings /></InstructorRoute>} />
         <Route path="background-checks" element={<BackgroundCheckSettings />} />
         {/* Authoring the documents instructors read and sign.
             TWO independent gates, and an earlier version of this comment wrongly

@@ -24,7 +24,9 @@
 
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "../../../lib/supabase";
+import { groupingDistricts } from "../../../lib/districts.js";
 import PlacesAutocomplete, { PlacesLookupHint } from "../../../components/PlacesAutocomplete";
+import DistrictsWarning from "../../../components/DistrictsWarning.jsx";
 
 const BRIGHT = "#5847C9";
 const INK = "#1a1a1a";
@@ -54,7 +56,7 @@ function parseCity(address) {
   return m ? m[1].trim() : "";
 }
 
-export default function AddSchoolModal({ org, districts = [], partners = [], onClose, onCreated, onDistrictsChanged }) {
+export default function AddSchoolModal({ org, districts = [], partners = [], onClose, onCreated, onDistrictsChanged, districtsWarning = "" }) {
   const [name, setName] = useState("");
   const [type, setType] = useState("public_school");
   const [address, setAddress] = useState("");
@@ -247,10 +249,18 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
               <Lbl>District *</Lbl>
               <select value={districtId} onChange={(e) => setDistrictId(e.target.value)} style={inputStyle} disabled={busy}>
                 <option value="">Choose a district…</option>
-                {districts.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                {/* groupingDistricts: never offer an independent_school row as another
+                    school's district. `districts` stays unfiltered for the
+                    name-match-before-create in ensureDistrict above. */}
+                {groupingDistricts(districts).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
                 <option value={NEW_DISTRICT}>+ Create a new district…</option>
                 <option value={NO_DISTRICT}>No district (library, church, private site)</option>
               </select>
+              {/* INSIDE the modal, because this modal is position:fixed at zIndex 200
+                  and covers whatever banner the page behind it is showing. This field
+                  is required and its match-before-create reads the same list, so an
+                  operator who cannot see the warning creates a duplicate district. */}
+              <DistrictsWarning message={districtsWarning} />
             </label>
           </div>
 

@@ -58,6 +58,10 @@ export default function SchoolsList() {
   const [partners, setPartners] = useState(null);
   const [locations, setLocations] = useState([]);
   const [loadError, setLoadError] = useState("");
+  // SEPARATE from loadError on purpose. `load()` clears loadError at its start, and
+  // `onCreated` runs `await loadDistricts(); await load();` in that order - so a
+  // districts failure written into loadError would be wiped by the very next line.
+  const [districtLoadError, setDistrictLoadError] = useState("");
   const [districts, setDistricts] = useState([]);
   const [contactCounts, setContactCounts] = useState(new Map());     // partner_id -> n
   const [calendarDistrictIds, setCalendarDistrictIds] = useState(new Set());
@@ -74,7 +78,19 @@ export default function SchoolsList() {
 
   async function loadDistricts() {
     if (!org?.id) return [];
-    const { data } = await supabase.from("districts").select("id, name").eq("organization_id", org.id).order("name");
+    // district_type so VenueEditor's picker can exclude independent_school rows.
+    // UNFILTERED here: its match-before-create needs every row (lib/districts.js).
+    const { data, error: dErr } = await supabase.from("districts").select("id, name, district_type").eq("organization_id", org.id).order("name");
+    // Surfaced, not swallowed - same reasoning as LocationsList.fetchDistricts.
+    // An empty list here is indistinguishable from "this org has no districts", and
+    // selecting district_type means an environment missing 20260817a fails the whole
+    // statement (found by /code-review 2026-08-17).
+    if (dErr) {
+      console.error("Loading districts failed:", dErr);
+      setDistrictLoadError(`Couldn't load your districts: ${dErr.message ?? "unknown error"}. The district picker may be incomplete, so refresh before changing one.`);
+      return [];
+    }
+    setDistrictLoadError("");
     setDistricts(data ?? []);
     return data ?? [];
   }
@@ -330,9 +346,9 @@ export default function SchoolsList() {
         )}
       </div>
 
-      {loadError && (
+      {(loadError || districtLoadError) && (
         <div style={{ background: "#fbeaea", border: "1px solid #D9694F", borderRadius: 8, padding: "10px 14px", color: "#7a2a2a", fontSize: 13, marginBottom: 14 }}>
-          {loadError}
+          {loadError || districtLoadError}
         </div>
       )}
 
@@ -397,6 +413,7 @@ export default function SchoolsList() {
       {adding && (
         <AddSchoolModal
           org={org} districts={districts} partners={(partners ?? [])}
+          districtsWarning={districtLoadError}
           onClose={() => setAdding(false)}
           onDistrictsChanged={loadDistricts}
           onCreated={async ({ partnerId }) => {
@@ -434,6 +451,7 @@ export default function SchoolsList() {
       {selectedPartner && (
         <SchoolDetailDrawer
           org={org} partner={selectedPartner} districts={districts} partners={(partners ?? [])}
+          districtsWarning={districtLoadError}
           onClose={() => setSelectedPartner(null)}
           onDistrictsChanged={loadDistricts}
           onChanged={refresh}

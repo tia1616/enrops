@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useSearchParams, useOutletContext, useLocation } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 import { useCart } from '../../context/CartContext.jsx';
@@ -18,6 +18,7 @@ import { programScheduleSummary, formatDayLabel } from '../../lib/programSchedul
 import { audienceLabel } from '../../lib/grades.js';
 import { feeOnCents, totalWithFee } from '../../lib/platformFee.js';
 import { buildCatalogPicker, OTHER_DISTRICT } from '../../lib/regCatalogPicker.js';
+import { isGroupingDistrict } from '../../lib/districts.js';
 
 // Tenant resolution: `org` (id, slug, name, active_registration_term, ...) is
 // provided by PublicLayout via Outlet context (from the public_org_directory
@@ -31,6 +32,129 @@ import { buildCatalogPicker, OTHER_DISTRICT } from '../../lib/regCatalogPicker.j
 
 // Week order for the recurring class schedule (day_of_week stored Title-Case).
 const WEEKLY_DAY_ORDER = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thursday: 4, Friday: 5, Saturday: 6 };
+
+// The operator's own description on a lean program card: three lines, then More.
+//
+// ONE component for BOTH lean cards (external-registration and ours). Every
+// previous change to this description had to be made twice - the spacing fix and
+// the "show it at all" fix both did - so sharing it is how a change here cannot
+// miss its twin.
+//
+// Three lines is the card-list convention (Airbnb, Eventbrite, Amazon clamp
+// secondary text this way). The facts BELOW this - day, time, location, who it is
+// for, dates and PRICE - are deliberately never clamped; those are the things a
+// family must not miss.
+//
+// WHY THIS MEASURES INSTEAD OF COUNTING CHARACTERS. The first version offered
+// More whenever the text was over 150 characters, which is a PROXY for "text is
+// hidden", not the same thing as it. At 198px on a phone three lines holds about
+// 90 characters, so 150 was safe there - but at 628px on a desktop three lines
+// holds nearly 290, so a 200-character description showed a More button that
+// revealed nothing when clicked. A control may only claim what its condition
+// proves. scrollHeight > clientHeight IS the claim: it is true exactly when the
+// clamped box is hiding something, at every width and font size.
+function LeanDescription({ text }) {
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  const boxRef = useRef(null);
+
+  useEffect(() => {
+    // Only meaningful while CLAMPED. Expanded, scrollHeight === clientHeight, so
+    // measuring then would report "nothing hidden", drop the Less button, and
+    // strand the reader in the expanded state with no way back.
+    if (expanded) return undefined;
+    const el = boxRef.current;
+    if (!el) return undefined;
+    // The fonts.ready promise can settle after unmount; without this we setState on
+    // a dead component.
+    let alive = true;
+    const measure = () => {
+      const node = boxRef.current;
+      if (!alive || !node) return;
+      // 1px of slack: sub-pixel line heights make scrollHeight exceed
+      // clientHeight by a fraction on text that actually fits.
+      setOverflows(node.scrollHeight > node.clientHeight + 1);
+    };
+    measure();
+
+    // WIDTH changes, which is what actually decides how many lines this wraps to:
+    // the card flipping to its stacked phone layout, a sibling appearing, any
+    // container resize that never touches the window. A window `resize` listener
+    // alone (what this used to be) misses every one of those.
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+    if (ro) ro.observe(el);
+
+    // BOTH, not either/or. ResizeObserver is the more precise signal but it is
+    // delivered on the rendering lifecycle, so a document that is not compositing
+    // gets NO callbacks at all - not even the initial one the spec guarantees on
+    // observe(). Measured 2026-08-17: in a non-compositing embedded view,
+    // requestAnimationFrame ran 0 times and a control ResizeObserver fired 0 times,
+    // while `document.fonts.ready` (a microtask) still settled. A background tab,
+    // an offscreen iframe and the operator's own embedded catalog are all plausible
+    // versions of that. The window listener costs one comparison per resize and
+    // keeps the common case working where RO is silent.
+    window.addEventListener('resize', measure);
+
+    // THE FONT SWAP, and it needs its own hook because nothing above catches it.
+    // Poppins arrives from Google Fonts with `display=swap` (index.html), so the
+    // fallback paints first and the text REWRAPS when Poppins lands. The clamped box
+    // keeps its three-line height throughout, so its border box never changes and
+    // ResizeObserver stays silent - while scrollHeight, the thing we actually
+    // measure, changes underneath us.
+    //
+    // Measuring once against fallback metrics is how a description ends up clamped
+    // with NO More button: lines four and five exist in the DOM, are hidden by
+    // -webkit-line-clamp, and have no control to reveal them. On a public
+    // registration page that is silent content loss, on a cold cache, for a family
+    // deciding whether to sign up (found by /code-review 2026-08-17).
+    if (typeof document !== 'undefined' && document.fonts?.ready) {
+      document.fonts.ready.then(measure).catch(() => {});
+    }
+
+    return () => {
+      alive = false;
+      if (ro) ro.disconnect();
+      window.removeEventListener('resize', measure);
+    };
+  }, [text, expanded]);
+
+  if (!text) return null;
+  // Expanded always keeps its toggle, or there is no way back. Collapsed shows
+  // one only when something is genuinely hidden.
+  const showToggle = expanded || overflows;
+  return (
+    <>
+      <div
+        ref={boxRef}
+        style={{
+          fontSize: 13, color: '#6b6b6b', marginTop: 4,
+          marginBottom: showToggle ? 2 : 10,
+          lineHeight: 1.45, whiteSpace: 'pre-line',
+          ...(expanded ? null : {
+            display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical',
+            overflow: 'hidden',
+          }),
+        }}
+      >
+        {text}
+      </div>
+      {showToggle && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          style={{
+            background: 'none', border: 'none', padding: 0, marginBottom: 10,
+            color: '#5847C9', fontSize: 12.5, fontWeight: 600,
+            fontFamily: 'inherit', cursor: 'pointer', textDecoration: 'underline',
+          }}
+        >
+          {expanded ? 'Less' : 'More'}
+        </button>
+      )}
+    </>
+  );
+}
 
 export default function Home() {
   const { org } = useOutletContext();
@@ -48,7 +172,11 @@ export default function Home() {
   const [orgId, setOrgId] = useState(org?.id ?? null);
   const [branding, setBranding] = useState(null);
   const [schools, setSchools] = useState([]);
-  const [districtNames, setDistrictNames] = useState({}); // district id -> name, from districts_public
+  // district id -> { name, district_type }, from districts_public. Holds the ROW,
+  // not just the name: district_type is what decides whether a district earns its
+  // own heading in the picker or falls into the shared bucket (20260817a). Renamed
+  // from districtNames when it stopped being names.
+  const [districtsById, setDistrictsById] = useState({});
   const [programs, setPrograms] = useState([]);
   const [vipBundles, setVipBundles] = useState({}); // fallProgramId -> { winter, spring }
   const [selectedDistrict, setSelectedDistrict] = useState('');
@@ -58,6 +186,27 @@ export default function Home() {
   const [highlightProgram, setHighlightProgram] = useState('');
   const [weeklyClasses, setWeeklyClasses] = useState([]); // recurring class_schedule (outside-registration tenants), safe public view
   const [loading, setLoading] = useState(true);
+  // PHONE LAYOUT for the lean program cards. Mirrors QuickProgramBuilder's
+  // `narrow` pattern (the only responsive convention in this inline-styled
+  // codebase) rather than inventing a second one.
+  //
+  // Measured on Jeff's live page at 375px before this existed: the card is a
+  // flex ROW that never wrapped, and two siblings inside it refuse to shrink -
+  // the 56px photo and the ~94px Register button. Of 310px of card, 150px went
+  // to those two, leaving the class name AND a 726-character description sharing
+  // a 93px ribbon 1187px tall. The card's own min-content also blew past its
+  // grid track, so cards overhung their container.
+  //
+  // 560, not 480: the card holds photo + button + a description that needs a
+  // readable measure, so it runs out of room well before a phone's width. Above
+  // this the row layout is unchanged.
+  const [narrowCards, setNarrowCards] = useState(() =>
+    typeof window !== 'undefined' && window.innerWidth < 560);
+  useEffect(() => {
+    const onResize = () => setNarrowCards(window.innerWidth < 560);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
   // Lean catalog picker. Both start EMPTY: no school chosen means no classes
   // shown, so a family never lands on a price from someone else's district.
   const [locationDistrict, setLocationDistrict] = useState(''); // lean catalog: which district
@@ -232,9 +381,17 @@ export default function Home() {
       // an unknown relation, so without the view this read returns an error, not
       // a partial row - see the failure branch below for what that costs.
       // Measured 2026-08-14: the view is on STAGING, NOT on prod.
+      // district_type comes with the name because the grouping rule needs it:
+      // an `independent_school` row is a private/charter school that owns its own
+      // calendar and must fall into the shared bucket rather than become its own
+      // heading (20260817a). Selecting it is a deploy-order contract exactly like
+      // the view itself was - the column must exist on an environment before this
+      // frontend reaches it, or PostgREST fails the whole statement rather than
+      // returning a partial row. Measured 2026-08-17: 20260817a is on STAGING,
+      // NOT on prod.
       supabase
         .from('districts_public')
-        .select('id, name')
+        .select('id, name, district_type')
         .eq('organization_id', org.id),
     ]);
 
@@ -258,8 +415,15 @@ export default function Home() {
     if (dtRes.error) {
       console.warn('[registration] district names unavailable; catalog will group everything as "%s". Cause: %o', OTHER_DISTRICT, dtRes.error);
     }
+    // id -> the ROW, so district_type travels with the name. An
+    // `independent_school` row is a private/charter school that owns its own
+    // calendar: it stays IN this map (it is a real, readable district row) and the
+    // grouping rule in regCatalogPicker sends it to the bucket. Keeping it in the
+    // map rather than filtering it out here is what keeps "correctly-configured
+    // private school" distinguishable from "the read broke", which is the whole
+    // point of the paragraph above.
     const dn = {};
-    (dtRes.data || []).forEach((d) => { dn[d.id] = d.name; });
+    (dtRes.data || []).forEach((d) => { dn[d.id] = { name: d.name, district_type: d.district_type }; });
 
     // Look up Winter/Spring matches for each fall program to determine VIP
     // eligibility. A fall program is VIP-eligible only if that school year's
@@ -281,7 +445,7 @@ export default function Home() {
     }
 
     setBranding(br);
-    setDistrictNames(dn);
+    setDistrictsById(dn);
     setSchools(sc || []);
     setPrograms(pg || []);
     setVipBundles(bundles);
@@ -312,7 +476,23 @@ export default function Home() {
   // wording (Jeff's "PPS" would have rendered as "Portland Public Schools").
   // Uniformity is already guaranteed upstream: a location's district is PICKED
   // from the provider's own districts list, not typed per school.
-  const districtOf = (school) => (school?.district_id ? districtNames[school.district_id] : null) || null;
+  //
+  // Returns null for an `independent_school` row as well as for a missing one, so
+  // a private/charter school falls into the OTHER_DISTRICT bucket below instead of
+  // becoming its own heading (20260817a). THE LEAN PATH HAS THE SAME RULE, in
+  // regCatalogPicker.buildLocationOptions - this page drives two different pickers
+  // off the same map and they must agree, which is exactly the drift that put
+  // "Catlin Gabel School" up as a district heading in the first place.
+  //
+  // So the rule is CALLED, not restated. This line held its own copy of the
+  // literal 'independent_school' while regCatalogPicker (the other picker named
+  // two lines up) had been moved onto the shared helper - the two agreed only by
+  // coincidence, which is the precise shape of the drift this comment warns about.
+  const districtOf = (school) => {
+    const row = school?.district_id ? districtsById[school.district_id] : null;
+    if (!row?.name || !isGroupingDistrict(row)) return null;
+    return row.name;
+  };
 
   // Only districts that have at least one school with an open program. Schools
   // with no district collect under a single "Other schools & sites" bucket
@@ -330,7 +510,7 @@ export default function Home() {
     const sorted = [...districts].sort((a, b) => a.localeCompare(b));
     if (hasOther) sorted.push(OTHER_DISTRICT);
     return sorted;
-  }, [schools, programs, districtNames]);
+  }, [schools, programs, districtsById]);
 
   const schoolsInDistrict = useMemo(() => {
     if (!selectedDistrict) return [];
@@ -339,7 +519,7 @@ export default function Home() {
       .filter((s) => withPrograms.has(s.id)
         && (selectedDistrict === OTHER_DISTRICT ? !districtOf(s) : districtOf(s) === selectedDistrict))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [selectedDistrict, schools, programs, districtNames]);
+  }, [selectedDistrict, schools, programs, districtsById]);
 
   const programsAtSchool = useMemo(() => {
     if (!selectedSchool) return [];
@@ -370,11 +550,11 @@ export default function Home() {
     setLocationDistrict(districtOf(school) || OTHER_DISTRICT);
     setLocationFilter(school.id);
     setHighlightProgram(programId);
-    // districtNames is listed because this effect reads it through districtOf.
+    // districtsById is listed because this effect reads it through districtOf.
     // It is inert today - names, schools and programs are set in one batch from
     // the same Promise.all, so they arrive together - but leaving a read out of
     // the deps is how that stops being true silently.
-  }, [programs, schools, searchParams, selectedSchool, districtNames]);
+  }, [programs, schools, searchParams, selectedSchool, districtsById]);
 
   // Once the highlighted card is in the DOM, scroll to it and fade the ring.
   useEffect(() => {
@@ -447,7 +627,7 @@ export default function Home() {
     // THE RULES THEMSELVES LIVE IN lib/regCatalogPicker.js, with 40 tests and a
     // mutation check that proves those tests detect. Keep them there: inline was
     // how this shipped untested.
-    const picker = buildCatalogPicker(allOpen, districtNames, {
+    const picker = buildCatalogPicker(allOpen, districtsById, {
       district: locationDistrict,
       school: locationFilter,
     });
@@ -460,16 +640,31 @@ export default function Home() {
     // option list renders blank and disagrees with the list beneath it.
     const districtValue = picker.district;
     const schoolValue = picker.school;
+    // On a phone the card STACKS: content, then a full-width Register. Above 560
+    // it is the same side-by-side row it always was. alignItems flips to stretch
+    // so the stacked button spans the card instead of sitting centred and stubby.
     const leanCard = (hl) => ({
-      display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16,
+      display: 'flex',
+      flexDirection: narrowCards ? 'column' : 'row',
+      alignItems: narrowCards ? 'stretch' : 'center',
+      justifyContent: 'space-between',
+      gap: narrowCards ? 12 : 16,
       padding: '16px 18px', border: `1px solid ${hl ? '#5847C9' : '#e2dfd5'}`,
       borderRadius: 14, background: '#fff',
       boxShadow: hl ? '0 0 0 3px rgba(88,71,201,0.15)' : 'none',
+      // Without this the card's min-content width (photo + button + the longest
+      // unbreakable word) exceeded its grid track and cards overhung the page.
+      minWidth: 0,
     });
     const leanBtn = {
       flexShrink: 0, padding: '10px 18px', background: '#5847C9', color: '#fff',
       border: 'none', borderRadius: 10, fontSize: 14, fontWeight: 600,
-      fontFamily: 'inherit', cursor: 'pointer', textDecoration: 'none', display: 'inline-block',
+      fontFamily: 'inherit', cursor: 'pointer', textDecoration: 'none',
+      display: 'inline-block',
+      // Stacked, it is the card's primary action and gets the whole width as a
+      // tap target. In a row it must not stretch, so width stays auto.
+      width: narrowCards ? '100%' : undefined,
+      textAlign: 'center',
     };
     return (
       <div style={{
@@ -685,24 +880,15 @@ export default function Home() {
                     if (p.runs_own_registration) {
                       return (
                         <div key={p.id} id={`program-card-${p.id}`} style={leanCard(hl)}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+                          <div style={{ display: 'flex', alignItems: narrowCards ? 'flex-start' : 'center', gap: 12, minWidth: 0 }}>
                             {photo}
                             <div style={{ minWidth: 0 }}>
                               <div style={{ fontWeight: 600, fontSize: 16 }}>{p.curriculum}</div>
-                              {/* The operator's own description. The legacy layout
-                                  has always shown this; the lean cards never did,
-                                  so the builder's Description field saved copy
-                                  that reached no family. */}
-                              {/* marginBottom separates the provider's PROSE from the
-                                  facts beneath it (day, time, location, who it's for,
-                                  dates, price). Those facts are a tight group 2px
-                                  apart; with no gap here a three-paragraph description
-                                  ran straight into the schedule line and the card read
-                                  as one block. Only became visible once descriptions
-                                  got room to breathe earlier today. */}
-                              {p.short_description && (
-                                <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 4, marginBottom: 10, lineHeight: 1.45, whiteSpace: 'pre-line' }}>{p.short_description}</div>
-                              )}
+                              {/* Clamped to 3 lines with a More toggle. See
+                                  LeanDescription at the top of this file - shared
+                                  with the card below so a change here cannot miss
+                                  its twin. */}
+                              <LeanDescription text={p.short_description} />
                               <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>{meta}</div>
                               {scheduleStr && (
                                 <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>{scheduleStr}</div>
@@ -715,19 +901,13 @@ export default function Home() {
                     }
                     return (
                       <div key={p.id} id={`program-card-${p.id}`} style={leanCard(hl)}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+                        <div style={{ display: 'flex', alignItems: narrowCards ? 'flex-start' : 'center', gap: 12, minWidth: 0 }}>
                           {photo}
                           <div style={{ minWidth: 0 }}>
                             <div style={{ fontWeight: 600, fontSize: 16 }}>{p.curriculum}</div>
-                            {/* Same as the external-registration card above: the
-                                operator's description belongs in front of the
-                                family, right under the class name. */}
-                            {/* Same gap as the card above: the provider's prose needs
-                                separating from the facts block, or a multi-paragraph
-                                description runs into the schedule line. */}
-                            {p.short_description && (
-                              <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 4, marginBottom: 10, lineHeight: 1.45, whiteSpace: 'pre-line' }}>{p.short_description}</div>
-                            )}
+                            {/* Same shared component as the external-registration
+                                card above. This is the one Jeff's families see. */}
+                            <LeanDescription text={p.short_description} />
                             <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>
                               {meta}
                             </div>

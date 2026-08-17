@@ -85,11 +85,29 @@ const NAV = [
     ],
   },
   {
+    // ONE Money section for every tenant. The lean nav used to rename this
+    // "Payments" and promote Discounts to a top-level item of its own; both are
+    // gone (Jessica, 2026-08-14). "Payments" is now the FIRST TAB — the thing
+    // that really is a list of payments — and "Money" is the section that holds
+    // it, so the sidebar word and the tab word each name what they open.
     to: "/admin/finances", label: "Money",
     gate: "viewMoney",   // owner/admin only — staff + viewer are money-blind
     tabs: [
-      { to: "/admin/finances", label: "Receivables" },
-      { to: "/admin/payouts", label: "Payouts" },
+      // Was "Receivables": accounting language an operator does not use. Refunds
+      // live on this page too, so "Payments" covers money in AND money back out.
+      { to: "/admin/finances", label: "Payments" },
+      // "Payouts" promised Stripe payout history, which was two empty tabs and
+      // is now deleted (see Payouts.jsx). The page is the payroll calculator and
+      // the label says so — an operator looking for "what do I owe my teachers"
+      // was never going to guess "Payouts".
+      //
+      // instructorsOnly: an org with no instructor entitlement has nobody to pay,
+      // so the tab is hidden — but it stays IN this array, and that is what keeps
+      // /admin/payouts among the section's roots for navItemActive, hence behind
+      // `viewMoney`. shapeNavForOrg used to get the hiding by dropping the tabs
+      // wholesale, which then needed a hand-maintained `match` list to put the
+      // route back under the gate. One rule now does both jobs.
+      { to: "/admin/payouts", label: "Payroll calculator", instructorsOnly: true },
       { to: "/admin/discounts", label: "Discounts" },
     ],
   },
@@ -133,8 +151,12 @@ const NAV = [
 
 // Lean registration operators (instructor_pay_model === 'enrops_platform') run a
 // registration-only surface — no instructors, curriculum library, or comms yet.
-// Trim the sidebar to Home . Programs . Finances . Discounts . Settings and hide
-// the paid / curriculum surfaces. Locations (the /admin/schools surface) is a TAB
+// Trim the sidebar to Programs . Money . Comms . Settings and hide the paid /
+// curriculum surfaces. (This line used to read "Home . Programs . Finances .
+// Discounts . Settings" and was wrong on three counts by 14 Aug: Home is in
+// HIDE_TOP below, Comms is no longer hidden, and Discounts went back to being a
+// Money tab rather than a top-level item of its own.)
+// Locations (the /admin/schools surface) is a TAB
 // under Programs for lean ops — they pick a venue every time they build a class,
 // so it belongs beside the programs it serves and not in Settings, where it
 // briefly lived. Any legacy_own_platform tenant (J2S) keeps the
@@ -214,17 +236,26 @@ function shapeNavForOrg(nav, org) {
       });
       continue;
     }
-    if (item.to === "/admin/finances" && item.tabs) {
-      // "Money" reads as "Payments" for lean ops. Drop the whole
-      // Receivables/Payouts tab strip (Payouts is instructor payroll; a lean op
-      // has none, and Stripe payout history lives in their Stripe dashboard), so
-      // it's one clean page. Discounts is promoted to its own top-level item.
-      const { tabs: _drop, ...rest } = item;
-      void _drop;
-      out.push({ ...rest, label: "Payments" });
-      out.push({ to: "/admin/discounts", label: "Discounts", gate: "viewMoney" });
-      continue;
-    }
+    // MONEY IS NO LONGER RESHAPED HERE (Jessica, 2026-08-14). This function used
+    // to rename the section "Payments" for lean orgs, promote Discounts to its
+    // own top-level item, and — for a lean org with no instructor entitlement —
+    // drop the tabs wholesale and rebuild a `match` list so /admin/payouts stayed
+    // behind `viewMoney`. All three are gone: every tenant now gets one Money
+    // section with Payments / Payroll calculator / Discounts.
+    //
+    // The one thing that block did which still has to happen is HIDING the
+    // payroll tab from an org that cannot manage instructors — the same
+    // entitlement question as /admin/schedule above, not a nav-shape one. That
+    // now rides on the tab's own `instructorsOnly` flag through tabApplies, so
+    // the tab strip and the sidebar landing read it from one rule and the tab
+    // stays in `tabs` for navItemActive. Keeping it in `tabs` is the money-read
+    // guard, not cosmetics: navItemActive derives an item's roots from `tabs`
+    // when it has them, and the viewMoney block card only fires for a gated item
+    // that is ACTIVE. Nothing downstream would catch a staff or viewer member who
+    // typed /admin/payouts — the route is ungated, Payroll gates only its write
+    // controls, and v_effective_pay_lines is security_invoker over a table whose
+    // SELECT policy is org-scoped with no role filter, so they would read real
+    // per-instructor pay.
     // NOTE: Settings no longer claims /admin/schools in its `match` list. That
     // existed only to keep Settings lit while the venue surface was reached
     // from there; now it is a Programs tab, so Programs owns the highlight and
@@ -240,6 +271,12 @@ function shapeNavForOrg(nav, org) {
 // programs) OR they upload their own schedule (Class schedule). The tab that
 // cannot apply is hidden rather than greyed out.
 //
+// `instructorsOnly` is the third rule and the only one that asks an ENTITLEMENT
+// rather than a tenant type: a tab that only means something once you have
+// instructors to manage (Money > Payroll calculator). It lives here, with the
+// other two, so a hidden tab is hidden the same way everywhere — strip, sidebar
+// landing — and stays in `tabs` for navItemActive's route roots.
+//
 // SHARED so the tab strip and the sidebar landing below cannot disagree. They
 // did: the strip learned this rule and the sidebar never got told, so clicking
 // "Programs" at a bring-your-own-registration provider dropped them on
@@ -250,6 +287,7 @@ function tabApplies(tab, org) {
   const usesReg = org?.uses_enrops_registration !== false; // default true
   if (tab.regOnly && !usesReg) return false;
   if (tab.outsideRegOnly && usesReg) return false;
+  if (tab.instructorsOnly && !canManageInstructors(org)) return false;
   return true;
 }
 
@@ -419,7 +457,13 @@ export default function AdminLayout() {
           // tomorrow's date. Caught exactly that way on the instructor-documents
           // screen. Adding a column here is the cheap half; the expensive half is
           // noticing the read/select mismatch at all, because it does not throw.
-          .select("id, name, slug, email, timezone, active_registration_term, uses_enrops_registration, venue_model, background_check_config, instructor_pay_model, platform_plan, stripe_charges_enabled, fee_pass_through, venue_answer, program_cadence, default_age_min, default_age_max, onboarding_completed_at")
+          // instructor_pay_enabled is here because the Payroll page hides the
+        // "how you can pay your instructors" explainer for every provider who
+        // does NOT pay through us, and a column that is merely absent from this
+        // select arrives as undefined — which would have hidden it from the one
+        // org it is written for. Same flag the onboarding wizard uses to decide
+        // whether to show the Stripe step, so the two surfaces cannot disagree.
+        .select("id, name, slug, email, timezone, active_registration_term, uses_enrops_registration, venue_model, background_check_config, instructor_pay_model, instructor_pay_enabled, platform_plan, stripe_charges_enabled, fee_pass_through, venue_answer, program_cadence, default_age_min, default_age_max, onboarding_completed_at")
           .eq("id", memberRow.organization_id)
           .maybeSingle();
         if (!mounted) return;
@@ -583,6 +627,11 @@ export default function AdminLayout() {
   const activeTabSection = navItems.find(
     (it) => it.tabs && it.tabs.some((t) => location.pathname === t.to || location.pathname.startsWith(t.to + "/"))
   );
+  // DELIBERATELY NOT filtered by tabApplies. Landing on a page whose own tab is
+  // hidden (only reachable by typing the URL — navLandingTo stops every click
+  // from doing it) shows a strip with nothing lit, which reads oddly. Hiding the
+  // strip there is worse: it also removes the tabs that DO apply, which are the
+  // way back out. The odd-looking strip is the escape hatch.
   const showSectionTabs =
     activeTabSection && activeTabSection.tabs.some((t) => location.pathname === t.to);
 

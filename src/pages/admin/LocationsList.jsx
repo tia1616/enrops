@@ -9,6 +9,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useOutletContext, useSearchParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
+import { groupingDistricts, isGroupingDistrict } from "../../lib/districts.js";
+import DistrictsWarning from "../../components/DistrictsWarning.jsx";
 import PlacesAutocomplete, { PlacesLookupHint } from "../../components/PlacesAutocomplete";
 import FindMissingAddressesModal from "./FindMissingAddressesModal";
 
@@ -173,13 +175,41 @@ export default function LocationsList({ embedded = false }) {
   // the operator attach a school to "Portland Public Schools district" once
   // instead of retyping a code per school. Created inline from the picker.
   const [districts, setDistricts] = useState([]);
+  // SEPARATE from `error`, which startEdit/save clear and which the page banner hides
+  // whenever a card is open. A districts-load failure has to outlive both.
+  const [districtLoadError, setDistrictLoadError] = useState("");
   async function fetchDistricts() {
     if (!org?.id) return;
-    const { data } = await supabase
+    const { data, error: fErr } = await supabase
       .from("districts")
-      .select("id, name")
+      // district_type so the PICKER can exclude independent_school rows. Loaded
+      // unfiltered on purpose: the name-match-before-create below and the id -> name
+      // map both need every row (see lib/districts.js for why filtering here would
+      // create duplicate district rows).
+      .select("id, name, district_type")
       .eq("organization_id", org.id)
       .order("name", { ascending: true });
+    // DO NOT SWALLOW THIS. It was `const { data } = ...`, so any failure set
+    // districts to [] and the page rendered as though the org had NO districts:
+    // every picker empty, every row showing the amber "No district" nudge, and
+    // match-before-create finding nothing - so re-entering an existing district
+    // name died on the unique index. Selecting `district_type` makes that
+    // reachable rather than theoretical, because on an environment where 20260817a
+    // has not run PostgREST rejects the whole statement (found by /code-review
+    // 2026-08-17). Keep whatever we already had, and say so.
+    if (fErr) {
+      console.error("Loading districts failed:", fErr);
+      // ITS OWN STATE, not the shared `error`. Two reasons, both found by
+      // /code-review 2026-08-17: `startEdit` calls setError(null), so writing here
+      // meant the warning vanished the instant the operator opened the very editor it
+      // was warning them about; and the shared banner is gated on
+      // `editingId === null`, so with a card open the message could only surface
+      // INSIDE the card, where it reads as a save error rather than a load failure.
+      // SchoolsList already had a dedicated state for exactly this; this file didn't.
+      setDistrictLoadError(`Couldn't load your districts: ${fErr.message ?? "unknown error"}. The district picker may be incomplete, so refresh before changing one.`);
+      return;
+    }
+    setDistrictLoadError("");
     setDistricts(data ?? []);
   }
   useEffect(() => {
@@ -187,9 +217,14 @@ export default function LocationsList({ embedded = false }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [org?.id]);
 
-  const districtNameById = useMemo(() => {
+  // id -> the ROW, not just the name. The row's chip needs the TYPE as well: for an
+  // independent_school the name is the SCHOOL's own name, so printing it as the
+  // school's district renders "Ainsworth / AINSWORTH" and implies a district
+  // relationship that does not exist. Unfiltered, per lib/districts.js use 3 - a
+  // school legitimately linked to an independent row still has to resolve.
+  const districtById = useMemo(() => {
     const m = new Map();
-    for (const d of districts) m.set(d.id, d.name);
+    for (const d of districts) m.set(d.id, d);
     return m;
   }, [districts]);
 
@@ -400,6 +435,13 @@ export default function LocationsList({ embedded = false }) {
     </>
   );
 
+  // The SAVED district_id of the row being edited. EditCard's own-calendar option
+  // must anchor on something that cannot move while the form is open; the draft
+  // moves on every keystroke of that select.
+  const savedDistrictId = editingId && editingId !== "new"
+    ? (locations.find((l) => l.id === editingId)?.district_id ?? null)
+    : null;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       {embedded ? (
@@ -452,6 +494,13 @@ export default function LocationsList({ embedded = false }) {
         <div style={errorBanner}>{error}</div>
       )}
 
+      {/* NOT gated on `editingId === null`. The whole point of this warning is that
+          the District picker inside the open card may be missing rows, so hiding it
+          while that card is open would remove it exactly when it is needed. */}
+      {districtLoadError && (
+        <div role="alert" style={errorBanner}>{districtLoadError}</div>
+      )}
+
       {loading ? (
         <div style={{ color: MUTED, fontSize: 14, padding: 16 }}>Loading locations…</div>
       ) : locations.length === 0 ? (
@@ -469,7 +518,7 @@ export default function LocationsList({ embedded = false }) {
       ) : (
         locations.map((loc) => (
           <div key={loc.id} id={`location-row-${loc.id}`}>
-            <DisplayCard loc={loc} campCount={campCounts.get(loc.id) ?? 0} districtName={districtNameById.get(loc.district_id)} onEdit={() => startEdit(loc)} isLean={isLean} />
+            <DisplayCard loc={loc} campCount={campCounts.get(loc.id) ?? 0} district={districtById.get(loc.district_id)} onEdit={() => startEdit(loc)} isLean={isLean} />
           </div>
         ))
       )}
@@ -491,6 +540,8 @@ export default function LocationsList({ embedded = false }) {
               applyPlace={applyPlace}
               partners={partners}
               districts={districts}
+              savedDistrictId={savedDistrictId}
+              districtsWarning={districtLoadError}
               error={error}
               saving={saving}
               onSave={save}
@@ -506,7 +557,12 @@ export default function LocationsList({ embedded = false }) {
   );
 }
 
-function DisplayCard({ loc, campCount, districtName, onEdit, isLean = false }) {
+function DisplayCard({ loc, campCount, district, onEdit, isLean = false }) {
+  // An independent_school row is named after the school itself, so printing it as
+  // this school's district repeats the name back and claims a district it does not
+  // have. Say what the row actually means instead.
+  const ownsItsCalendar = !!district && !isGroupingDistrict(district);
+  const districtName = ownsItsCalendar ? null : district?.name;
   // A registration-only operator has no instructors to brief, so the fields
   // that exist to brief them aren't shown. Everything below the address is
   // written for someone teaching at a venue they don't control - staff
@@ -541,7 +597,16 @@ function DisplayCard({ loc, campCount, districtName, onEdit, isLean = false }) {
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
           <div style={{ fontSize: 18, fontWeight: 700, color: INK }}>{loc.name}</div>
-          {(districtName || loc.district) ? (
+          {ownsItsCalendar ? (
+            // Not a warning: this venue HAS a calendar, its own. The amber
+            // "no district" nudge below would be a lie here.
+            <div
+              title="This school doesn't follow a district calendar - it has its own, under School calendar"
+              style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}
+            >
+              Own calendar
+            </div>
+          ) : (districtName || loc.district) ? (
             <div style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>
               {districtName || loc.district}
             </div>
@@ -595,11 +660,37 @@ function DisplayCard({ loc, campCount, districtName, onEdit, isLean = false }) {
   );
 }
 
-function EditCard({ title, draft, bind, applyPlace, partners, districts, error, saving, onSave, onCancel, isNew, isLean = false, inDrawer }) {
+function EditCard({ title, draft, bind, applyPlace, partners, districts, savedDistrictId = null, districtsWarning = "", error, saving, onSave, onCancel, isNew, isLean = false, inDrawer }) {
   const placesEnabled = !!import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
   // Whether the Google lookup actually started. Without this the field degrades
   // to a plain box on failure and says nothing, which reads as broken.
   const [lookupDown, setLookupDown] = useState(false);
+  // The row this location is ACTUALLY linked to. Looked up in the UNFILTERED list
+  // on purpose: the district select below filters independent_school rows out, and
+  // this is how the currently-linked one stays selectable. `find` over an id, so a
+  // NEW_DISTRICT / NO_DISTRICT sentinel or "" simply matches nothing.
+  //
+  // ANCHORED ON `savedDistrictId`, THE STORED VALUE - NOT on draft.district_id.
+  // Anchoring on the draft made the option delete itself the moment the operator
+  // picked anything else: change the select to a real district and linkedRow
+  // re-resolved to THAT district, linkedOwnsCalendar went false, and the "its own
+  // calendar" entry vanished from the list - so the value they arrived with became
+  // unselectable again and the only route back was Cancel, losing every other edit
+  // in the card. Saving from that state silently relinked the school's calendar
+  // source, which is the exact damage this option exists to prevent
+  // (/code-review 2026-08-17). The stored value cannot change while the form is open.
+  const linkedRow = (districts ?? []).find((d) => d.id === savedDistrictId) ?? null;
+  const linkedOwnsCalendar = !!linkedRow && !isGroupingDistrict(linkedRow);
+  // TWO DIFFERENT QUESTIONS, so two booleans - never one reused for both:
+  //   linkedOwnsCalendar -> may the own-calendar OPTION be offered? (the SAVED value,
+  //                         because the option must not move while editing)
+  //   draftOwnsCalendar  -> is the own-calendar SENTENCE true right now? (the CURRENT
+  //                         selection, because copy describes what is selected)
+  // Collapsing these is how the hint ends up claiming "this school doesn't follow a
+  // district calendar" while the select visibly reads LOSD - a visibility condition
+  // deciding a factual statement, the exact mistake the refund-drawer hint made.
+  const draftRow = (districts ?? []).find((d) => d.id === draft.district_id) ?? null;
+  const draftOwnsCalendar = !!draftRow && !isGroupingDistrict(draftRow);
   return (
     <div style={{
       background: "#fff",
@@ -674,13 +765,36 @@ function EditCard({ title, draft, bind, applyPlace, partners, districts, error, 
           {/* Only offered on a NEW location: "" is the untouched state we refuse,
               so it must never be a resting value on an existing row. */}
           {isNew && <option value="">Choose a district…</option>}
-          {(districts ?? []).map((d) => (
+          {/* THE CURRENT VALUE MUST ALWAYS BE REPRESENTABLE. groupingDistricts drops
+              independent_school rows, which is right for the "which district is this
+              school in?" question - but this venue may BE the school that owns one,
+              because that is exactly what the Calendars page's "Give it its own
+              calendar" button creates. Without this option the select renders at
+              selectedIndex -1: blank, on a field that looks required, while the row
+              behind it says "Own calendar". An operator reads that as unset, picks a
+              real district to "fix" it, and silently relinks the school's calendar
+              source and moves it out of the public picker's "Other schools & sites"
+              bucket. Filtering a list must never make an existing value unselectable
+              (found by /code-review 2026-08-17). */}
+          {linkedOwnsCalendar && (
+            <option value={linkedRow.id}>{linkedRow.name} &mdash; its own calendar</option>
+          )}
+          {/* groupingDistricts: an independent_school row exists only so ONE private
+              school can have a calendar, so offering it here would let a second
+              school be filed under it - inheriting its calendar and dropping into
+              the public picker's "Other schools & sites" bucket. "No district" below
+              is the right answer for a venue that follows nobody's calendar. */}
+          {groupingDistricts(districts).map((d) => (
             <option key={d.id} value={d.id}>{d.name}</option>
           ))}
           <option value={NEW_DISTRICT}>+ Create a new district…</option>
           <option value={NO_DISTRICT}>No district (studio, library, private site)</option>
         </select>
-        {/* Three states, three sentences. The positive one is deliberately
+        {/* INSIDE the drawer that owns this select. Editing always happens in a
+            position:fixed zIndex 80 overlay, so the page banner is behind the scrim
+            while this field is on screen - un-gating it was not enough. */}
+        <DistrictsWarning message={districtsWarning} />
+        {/* FOUR states, four sentences. The positive one is deliberately
             conditional: a district you just created has no calendar on file yet,
             so promising dates "will skip" outright would be false right then. */}
         <div style={{ fontSize: 12, marginTop: 6, lineHeight: 1.5, color: draft.district_id === NO_DISTRICT ? "#8a6d1f" : "#6b6b6b" }}>
@@ -688,7 +802,12 @@ function EditCard({ title, draft, bind, applyPlace, partners, districts, error, 
             ? "No district means no school calendar here, so this location's class dates won't skip no-school days."
             : draft.district_id === ""
               ? "The district's calendar is what makes class dates skip no-school days. Pick the one this location follows."
-              : "Class dates here will skip this district's no-school days once its school calendar is on file."}
+              : draftOwnsCalendar
+                // draftOwnsCalendar, not linkedOwnsCalendar: this sentence describes
+                // what is SELECTED. Saying "this district's no-school days" would
+                // name a district that does not exist - the row IS this school.
+                ? "This school doesn't follow a district calendar. Its own no-school days are set under School calendar, and its class dates skip those."
+                : "Class dates here will skip this district's no-school days once its school calendar is on file."}
         </div>
         {draft.district_id === NEW_DISTRICT && (
           <input
