@@ -48,7 +48,11 @@ export default function Home() {
   const [orgId, setOrgId] = useState(org?.id ?? null);
   const [branding, setBranding] = useState(null);
   const [schools, setSchools] = useState([]);
-  const [districtNames, setDistrictNames] = useState({}); // district id -> name, from districts_public
+  // district id -> { name, district_type }, from districts_public. Holds the ROW,
+  // not just the name: district_type is what decides whether a district earns its
+  // own heading in the picker or falls into the shared bucket (20260817a). Renamed
+  // from districtNames when it stopped being names.
+  const [districtsById, setDistrictsById] = useState({});
   const [programs, setPrograms] = useState([]);
   const [vipBundles, setVipBundles] = useState({}); // fallProgramId -> { winter, spring }
   const [selectedDistrict, setSelectedDistrict] = useState('');
@@ -296,7 +300,7 @@ export default function Home() {
     }
 
     setBranding(br);
-    setDistrictNames(dn);
+    setDistrictsById(dn);
     setSchools(sc || []);
     setPrograms(pg || []);
     setVipBundles(bundles);
@@ -335,7 +339,7 @@ export default function Home() {
   // off the same map and they must agree, which is exactly the drift that put
   // "Catlin Gabel School" up as a district heading in the first place.
   const districtOf = (school) => {
-    const row = school?.district_id ? districtNames[school.district_id] : null;
+    const row = school?.district_id ? districtsById[school.district_id] : null;
     if (!row?.name || row.district_type === 'independent_school') return null;
     return row.name;
   };
@@ -356,7 +360,7 @@ export default function Home() {
     const sorted = [...districts].sort((a, b) => a.localeCompare(b));
     if (hasOther) sorted.push(OTHER_DISTRICT);
     return sorted;
-  }, [schools, programs, districtNames]);
+  }, [schools, programs, districtsById]);
 
   const schoolsInDistrict = useMemo(() => {
     if (!selectedDistrict) return [];
@@ -365,7 +369,7 @@ export default function Home() {
       .filter((s) => withPrograms.has(s.id)
         && (selectedDistrict === OTHER_DISTRICT ? !districtOf(s) : districtOf(s) === selectedDistrict))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [selectedDistrict, schools, programs, districtNames]);
+  }, [selectedDistrict, schools, programs, districtsById]);
 
   const programsAtSchool = useMemo(() => {
     if (!selectedSchool) return [];
@@ -396,11 +400,11 @@ export default function Home() {
     setLocationDistrict(districtOf(school) || OTHER_DISTRICT);
     setLocationFilter(school.id);
     setHighlightProgram(programId);
-    // districtNames is listed because this effect reads it through districtOf.
+    // districtsById is listed because this effect reads it through districtOf.
     // It is inert today - names, schools and programs are set in one batch from
     // the same Promise.all, so they arrive together - but leaving a read out of
     // the deps is how that stops being true silently.
-  }, [programs, schools, searchParams, selectedSchool, districtNames]);
+  }, [programs, schools, searchParams, selectedSchool, districtsById]);
 
   // Once the highlighted card is in the DOM, scroll to it and fade the ring.
   useEffect(() => {
@@ -473,7 +477,7 @@ export default function Home() {
     // THE RULES THEMSELVES LIVE IN lib/regCatalogPicker.js, with 40 tests and a
     // mutation check that proves those tests detect. Keep them there: inline was
     // how this shipped untested.
-    const picker = buildCatalogPicker(allOpen, districtNames, {
+    const picker = buildCatalogPicker(allOpen, districtsById, {
       district: locationDistrict,
       school: locationFilter,
     });
