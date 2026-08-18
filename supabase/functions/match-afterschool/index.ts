@@ -4,7 +4,9 @@
 //   HARD  instructor available the program's weekday, and their selected time
 //         buckets cover [class_start - ARRIVAL_BUFFER, class_end] (arrive 15 min
 //         early, stay to the end)
-//   HARD  one program per weekday (can't be at two schools after dismissal)
+//   HARD  no TIME-OVERLAPPING programs (can't be in two places at once). Two
+//         non-overlapping classes the same weekday are fine, even at different
+//         schools (20260818a) -- the operator judges the drive.
 //   HARD  respect the days/week cap (max_days)
 //   HARD  only `open` programs are auto-matched (drafts excluded)
 //   HARD  never auto-assign an instructor to an area they marked `unavailable`
