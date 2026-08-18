@@ -41,16 +41,20 @@ const STATUS_LABEL = {
 };
 
 // Why an instructor is already working that date (RPC working_reason).
+// These now fire only on a real TIME OVERLAP, not on "has anything that day"
+// (20260818b), so the wording says "at that time" -- saying "that day" would be
+// stating something untrue about a 12:15 class against a 3:25 slot.
 const WORKING_LABEL = {
-  teaching: 'already teaching an after-school class that day',
-  camp: 'already at a camp that day',
-  subbing: 'already subbing that day',
+  teaching: 'already teaching an after-school class at that time',
+  camp: 'already at a camp at that time',
+  subbing: 'already subbing at that time',
 };
 
 // Three display groups, best first:
 //   SUGGEST - availability matches this day & time and they're free (the picks)
 //   OTHER   - free, but not an exact match (no survey / wrong time / wrong day)
-//   OUT     - marked this day off, or already working
+//   OUT     - marked this day off, or booked at a time that OVERLAPS this class
+//             (not merely booked somewhere else that day -- see 20260818b)
 const SUGGEST = 0, OTHER = 1, OUT = 2;
 const GROUP_META = {
   [SUGGEST]: { label: 'Available — matches this day & time', color: '#3a7c3a' },
@@ -68,12 +72,24 @@ function classify(av) {
   if (av.is_date_off) {
     return { group: OUT, rank: 5, note: 'marked this day off' };
   }
-  switch (av.day_time_match) {
-    case 'match': return { group: SUGGEST, rank: 0, note: null };
-    case 'time':  return { group: OTHER, rank: 2, note: 'not available at this class time' };
-    case 'day':   return { group: OTHER, rank: 3, note: 'usually off that day' };
-    default:      return { group: OTHER, rank: 1, note: 'no availability on file' };   // 'none'
+  const base = (() => {
+    switch (av.day_time_match) {
+      case 'match': return { group: SUGGEST, rank: 0, note: null };
+      case 'time':  return { group: OTHER, rank: 2, note: 'not available at this class time' };
+      case 'day':   return { group: OTHER, rank: 3, note: 'usually off that day' };
+      default:      return { group: OTHER, rank: 1, note: 'no availability on file' };   // 'none'
+    }
+  })();
+  // tight_gap: they have another booking that day which does NOT overlap this
+  // class, but leaves under an hour to get between the two. They stay exactly
+  // where they ranked -- pickable, and in SUGGEST if they matched -- because this
+  // is a note about the drive, not a reason they can't do it. Only a real time
+  // OVERLAP sets is_working and moves someone out (20260818b).
+  if (av.tight_gap) {
+    const drive = 'under an hour to get here from another class that day';
+    return { ...base, note: base.note ? `${base.note} · ${drive}` : drive };
   }
+  return base;
 }
 
 export default function AssignSubModal({
