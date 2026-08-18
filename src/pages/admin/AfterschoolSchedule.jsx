@@ -834,20 +834,27 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     const wd = av?.weekday_availability || {};
     const code = DAY_TO_CODE[dayKey(program.day_of_week)];
     const dayLabel = DAYS.find((d) => d.code === code)?.label ?? "that day";
+    // Three of the blocks below are STATED PREFERENCE, not physics: the operator can
+    // legitimately know better than the survey ("she can leave her other job early
+    // some Tuesdays"). Those carry overridable:true so the picker can offer "Assign
+    // anyway". The physics blocks — a class with no time, a real time overlap, the
+    // max-days cap the instructor set — do NOT, and stay hard. (Jessica, 2026-08-18:
+    // override day/time mismatch and missing-survey; keep double-booking and max-days.)
     if (!av || !Object.values(wd).some((w) => w && w.from)) {
-      return { ok: false, reason: `${first} hasn't submitted availability for this term.`, warnings };
+      return { ok: false, overridable: true, blockKind: "no_survey", reason: `${first} hasn't submitted availability for this term.`, warnings };
     }
     const avail = wd[code];
     if (!avail || !avail.from) {
-      return { ok: false, reason: `${first} isn't available on ${dayLabel}.`, warnings };
+      return { ok: false, overridable: true, blockKind: "day_off", reason: `${first} isn't available on ${dayLabel}.`, warnings };
     }
     const start = parse12h(program.start_time), end = parse12h(program.end_time);
     if (start == null || end == null) {
-      return { ok: false, reason: `This class is missing a start/end time.`, warnings };
+      // Data integrity, not preference — there is nothing to override TO.
+      return { ok: false, overridable: false, blockKind: "no_time", reason: `This class is missing a start/end time.`, warnings };
     }
     const from = parseHHMM(avail.from), until = avail.until ? parseHHMM(avail.until) : null;
     if (from == null || start - ARRIVAL_BUFFER_MIN < from || (until != null && end > until)) {
-      return { ok: false, reason: `${first}'s ${dayLabel} hours don't cover this class time (needs to arrive ${ARRIVAL_BUFFER_MIN} min early).`, warnings };
+      return { ok: false, overridable: true, blockKind: "hours", reason: `${first}'s ${dayLabel} hours don't cover this class time (needs to arrive ${ARRIVAL_BUFFER_MIN} min early).`, warnings };
     }
     // Double-booking: already holds a (different) program that same weekday. HARD BLOCK
     // (Jessica, 2026-07-16 — reverses the 07-14 warning-only call; camp and after-school
@@ -908,6 +915,8 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         const allDraft = conflicts.every((o) => o.c.status === "proposed");
         return {
           ok: false,
+          overridable: false, // physics: one person, two places at once. Never override.
+          blockKind: "double_booked",
           reason: allDraft
             ? `${first} is already pencilled in for ${list} on ${dayLabel} — a draft, but they can't be in two places. Free that class first.`
             : `${first} would be double-booked: already has ${list} on ${dayLabel}.`,
@@ -943,7 +952,10 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       const days = new Set(daysUsed.get(instructorId) ?? []);
       days.add(code);
       if (days.size > av.max_days) {
-        return { ok: false, reason: `${first} is at their ${av.max_days}-day limit.`, warnings };
+        // A workload cap the instructor set — asking them to work more days than they
+        // agreed is a different conversation from "your hours are conservative".
+        // Jessica, 2026-08-18: keep this a hard block.
+        return { ok: false, overridable: false, blockKind: "max_days", reason: `${first} is at their ${av.max_days}-day limit.`, warnings };
       }
     }
     const area = program.program_location_id ? (locArea.get(program.program_location_id) ?? null) : null;
@@ -1066,7 +1078,16 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
 
   // Clears all offer state on reassign (mirrors camps) so the new instructor
   // starts fresh at 'proposed' and surfaces as needing a (re)send.
-  async function performAssign(program, instructorId, current) {
+  // opts: { override?: boolean, distanceBonusCents?: number|null }
+  //   override        -> operator is assigning past a stated preference (day/time/no
+  //                      survey). Recorded in flags as 'availability_override' so the
+  //                      grid shows it and it's auditable; raw status stays 'proposed'
+  //                      so the offer flow is unchanged.
+  //   distanceBonusCents -> gas/distance bonus for this assignment (pay-instructor and
+  //                      the portal already read distance_bonus_cents).
+  async function performAssign(program, instructorId, current, opts = {}) {
+    const overrideFlags = opts.override ? ["availability_override"] : [];
+    const bonusCents = opts.distanceBonusCents ?? null;
     let declineRecorded = null;
     try {
       if (current) {
@@ -1091,7 +1112,11 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
             published_at: null,
             deadline: null,
             reminder_sent_at: null,
-            flags: [],
+            // Reset per-assignment marks to THIS pick's: the displaced person's override
+            // and gas bonus must not carry to the new instructor. Empty/null unless this
+            // assign is itself an override with a bonus.
+            flags: overrideFlags,
+            distance_bonus_cents: bonusCents,
             // A reassign is a human pick too — sign it so the next Match can't undo it.
             assigned_by: user?.id ?? null,
           })
@@ -1115,6 +1140,9 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
             deadline: current.deadline ?? null,
             reminder_sent_at: current.reminder_sent_at ?? null,
             flags: current.flags ?? [],
+            // The update above overwrites the bonus with this pick's; undo must put the
+            // displaced person's bonus back, not leave them with the new value.
+            distance_bonus_cents: current.distance_bonus_cents ?? null,
             // Restore WHO chose it too. The reassign above stamps assigned_by with the
             // admin; without putting the old value back, undoing a reassign of a matcher
             // draft would leave the row looking hand-picked forever, and the matcher
@@ -1132,6 +1160,10 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
             instructor_id: instructorId,
             role: "lead",
             status: "proposed",
+            // An override marks the row (auditable + shows in the grid); a bonus is the
+            // gas money for this class. Both default to none for an ordinary assign.
+            flags: overrideFlags,
+            distance_bonus_cents: bonusCents,
             // Sign it. The matcher stamps assigned_by NULL on its own drafts and wipes
             // them on every re-run; without this a hand-pick looked identical to a
             // guess and got deleted the next time Match ran. Stamped = a person chose
@@ -1166,7 +1198,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     }
   }
 
-  async function handleAssign(program, instructorId) {
+  async function handleAssign(program, instructorId, opts = {}) {
     const e = enriched.get(program.id);
     const current = e?.lead ?? null;
     if (current && current.instructor_id === instructorId) { setPicker(null); return; }
@@ -1181,7 +1213,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         instructor: { id: displaced.instructor_id, first_name: displaced.instructor_first, preferred_name: displaced.instructor_preferred, email: displaced.instructor_email },
         remaining: remainingActiveFor(displaced.instructor_id, displaced.id),
         onProceed: async ({ emailSent } = {}) => {
-          await performAssign(program, instructorId, displaced);
+          await performAssign(program, instructorId, displaced, opts);
           // They've been told they're off. Undo stays available — it just has to warn
           // that putting them back contradicts that email.
           if (emailSent) {
@@ -1193,7 +1225,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       });
       return;
     }
-    await performAssign(program, instructorId, current);
+    await performAssign(program, instructorId, current, opts);
   }
 
   async function handleRemove(program) {
@@ -2123,7 +2155,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           current={enriched.get(picker.program.id)?.lead ?? null}
           instructors={state.instructors}
           evaluate={(id) => evaluate(id, picker.program)}
-          onAssign={(id) => handleAssign(picker.program, id)}
+          onAssign={(id, opts) => handleAssign(picker.program, id, opts)}
           onRemove={() => handleRemove(picker.program)}
           declinedInstructorIds={declinedByProgram.get(picker.program.id) ?? new Set()}
           onUndecline={(id) => handleUndecline(picker.program.id, id)}
@@ -2830,6 +2862,13 @@ function SubLineAS({ subs, onClick }) {
 }
 
 function PickerModal({ program, loc, current, instructors, evaluate, onAssign, onRemove, onClose, declinedInstructorIds = new Set(), onUndecline }) {
+  // When set, a confirm panel replaces the list: { inst, ev, isOverride }.
+  // isOverride true = forgiving a stated-availability BLOCK (writes the override
+  // flag); false = assigning an eligible person who marked this AREA unavailable,
+  // where the point is just to attach the gas bonus.
+  const [confirming, setConfirming] = useState(null);
+  const [bonus, setBonus] = useState(""); // dollars, as typed
+
   const rows = instructors.map((i) => {
     const ev = evaluate(i.id);
     return { inst: i, ev };
@@ -2840,25 +2879,81 @@ function PickerModal({ program, loc, current, instructors, evaluate, onAssign, o
   const declined = rows.filter((r) => declinedInstructorIds.has(r.inst.id));
   const notDeclined = rows.filter((r) => !declinedInstructorIds.has(r.inst.id));
   const eligible = notDeclined.filter((r) => r.ev.ok).sort((a, b) => (prefRank[a.ev.pref] ?? 1) - (prefRank[b.ev.pref] ?? 1));
-  const ineligible = notDeclined.filter((r) => !r.ev.ok);
+  // Blocked, but only by a stated PREFERENCE the operator may know better than —
+  // gets an "Assign anyway". Blocked by physics (overlap, missing time, max-days)
+  // does not.
+  const overridable = notDeclined.filter((r) => !r.ev.ok && r.ev.overridable);
+  const hardBlocked = notDeclined.filter((r) => !r.ev.ok && !r.ev.overridable);
+
+  const openConfirm = (inst, ev, isOverride) => { setBonus(""); setConfirming({ inst, ev, isOverride }); };
+  // An eligible person who marked this AREA unavailable gets the confirm panel so a
+  // gas bonus can be attached; everyone else eligible assigns in one click.
+  const clickEligible = (inst, ev) => {
+    if (ev.pref === "unavailable") openConfirm(inst, ev, false);
+    else onAssign(inst.id);
+  };
+  const doConfirm = () => {
+    const n = parseFloat(bonus);
+    const cents = bonus.trim() && !Number.isNaN(n) && n > 0 ? Math.round(n * 100) : null;
+    onAssign(confirming.inst.id, { override: confirming.isOverride, distanceBonusCents: cents });
+    setConfirming(null); setBonus("");
+  };
+
+  const name = (i) => `${i.preferred_name || i.first_name} ${i.last_name}`.trim();
+
   return (
     <Overlay onClose={onClose}>
       <div style={{ padding: "20px 22px", borderBottom: `1px solid ${RULE}` }}>
         <div style={{ fontSize: 16, fontWeight: 700, color: INK }}>{program.curriculum || "Class"}</div>
         <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>{loc} · {program.day_of_week}{program.start_time ? ` · ${fmtTimeRange(program.start_time, program.end_time)}` : ""}</div>
-        {current && (
+        {current && !confirming && (
           <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10 }}>
             <span style={{ fontSize: 13, color: INK }}>Currently: <strong>{(current.instructor_preferred || current.instructor_first) ?? "—"} {current.instructor_last ?? ""}</strong></span>
             <button onClick={onRemove} style={{ ...linkBtn, color: CORAL }}>Remove</button>
           </div>
         )}
       </div>
+      {confirming ? (
+        // DRAFT COPY — Jessica owns operator-facing wording; approve/reword before prod.
+        <div style={{ padding: "18px 22px" }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: INK, marginBottom: 6 }}>
+            {confirming.isOverride
+              ? `Assign ${name(confirming.inst)} anyway?`
+              : `Assign ${name(confirming.inst)}`}
+          </div>
+          <div style={{ fontSize: 13, color: MUTED, lineHeight: 1.45, marginBottom: 14 }}>
+            {confirming.isOverride
+              ? <>The survey says {confirming.ev.reason} You can still assign them — they'll get an offer to accept or decline, same as anyone.</>
+              : <>{name(confirming.inst)} marked this area as one they can't get to. You can offer a gas bonus to make the trip worth it.</>}
+          </div>
+          <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: INK, marginBottom: 6 }}>
+            Gas / distance bonus for this class (optional)
+          </label>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 18 }}>
+            <span style={{ fontSize: 15, color: MUTED }}>$</span>
+            <input
+              type="number" min="0" step="1" inputMode="decimal"
+              value={bonus}
+              onChange={(e) => setBonus(e.target.value)}
+              placeholder="0"
+              style={{ width: 120, fontSize: 15, padding: "8px 10px", border: `1px solid ${RULE}`, borderRadius: 8, fontFamily: "inherit" }}
+            />
+            <span style={{ fontSize: 12, color: MUTED }}>added to their pay for this class</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+            <button onClick={() => { setConfirming(null); setBonus(""); }} style={{ ...btnStyle, background: "#fff", color: MUTED, border: `1px solid ${RULE}` }}>Cancel</button>
+            <button onClick={doConfirm} style={{ ...btnStyle, background: BRIGHT, color: "#fff" }}>
+              {confirming.isOverride ? "Assign anyway" : "Assign"}
+            </button>
+          </div>
+        </div>
+      ) : (
       <div style={{ maxHeight: "55vh", overflowY: "auto", padding: "12px 14px" }}>
-        {eligible.length === 0 && <div style={{ color: MUTED, fontSize: 13, padding: "8px 6px" }}>No available instructors for this day.</div>}
+        {eligible.length === 0 && overridable.length === 0 && <div style={{ color: MUTED, fontSize: 13, padding: "8px 6px" }}>No available instructors for this day.</div>}
         {eligible.map(({ inst, ev }) => (
           <button
             key={inst.id}
-            onClick={() => onAssign(inst.id)}
+            onClick={() => clickEligible(inst, ev)}
             disabled={current?.instructor_id === inst.id}
             style={{ width: "100%", textAlign: "left", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, padding: "10px 12px", borderRadius: 8, border: `1px solid ${RULE}`, background: current?.instructor_id === inst.id ? "#f3f1ea" : "#fff", cursor: current?.instructor_id === inst.id ? "default" : "pointer", marginBottom: 6, fontFamily: "inherit" }}
           >
@@ -2875,10 +2970,24 @@ function PickerModal({ program, loc, current, instructors, evaluate, onAssign, o
             )}
           </button>
         ))}
-        {ineligible.length > 0 && (
+        {overridable.length > 0 && (
           <div style={{ marginTop: 12 }}>
-            <div style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 700, padding: "4px 6px" }}>Not available</div>
-            {ineligible.map(({ inst, ev }) => (
+            <div style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 700, padding: "4px 6px" }}>Not available — you can override</div>
+            {overridable.map(({ inst, ev }) => (
+              <div key={inst.id} style={{ padding: "8px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: INK }}>{inst.preferred_name || inst.first_name} {inst.last_name}</span>
+                  <span style={{ fontSize: 12, color: MUTED }}>{ev.reason}</span>
+                </span>
+                <button onClick={() => openConfirm(inst, ev, true)} style={{ ...linkBtn, color: BRIGHT, flexShrink: 0, fontWeight: 600 }}>Assign anyway</button>
+              </div>
+            ))}
+          </div>
+        )}
+        {hardBlocked.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <div style={{ fontSize: 11, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 700, padding: "4px 6px" }}>Can't assign</div>
+            {hardBlocked.map(({ inst, ev }) => (
               <div key={inst.id} style={{ padding: "8px 12px", fontSize: 13, color: MUTED, display: "flex", flexDirection: "column" }}>
                 <span style={{ fontWeight: 600 }}>{inst.preferred_name || inst.first_name} {inst.last_name}</span>
                 <span style={{ fontSize: 12 }}>{ev.reason}</span>
@@ -2900,9 +3009,12 @@ function PickerModal({ program, loc, current, instructors, evaluate, onAssign, o
           </div>
         )}
       </div>
-      <div style={{ padding: "12px 18px", borderTop: `1px solid ${RULE}`, textAlign: "right" }}>
-        <button onClick={onClose} style={{ ...btnStyle, background: "#fff", color: MUTED, border: `1px solid ${RULE}` }}>Close</button>
-      </div>
+      )}
+      {!confirming && (
+        <div style={{ padding: "12px 18px", borderTop: `1px solid ${RULE}`, textAlign: "right" }}>
+          <button onClick={onClose} style={{ ...btnStyle, background: "#fff", color: MUTED, border: `1px solid ${RULE}` }}>Close</button>
+        </div>
+      )}
     </Overlay>
   );
 }
