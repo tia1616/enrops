@@ -16,6 +16,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, renderSignatureBlock, formatFromAddress } from '../_shared/orgBrand.ts';
+import { AVAILABILITY_OVERRIDE_NOTE_HTML, AVAILABILITY_OVERRIDE_NOTE_TEXT, hasAvailabilityOverride } from '../_shared/offerCopy.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -135,7 +136,9 @@ serve(async (req: Request) => {
     // Load target program assignments.
     const { data: assignmentsRaw, error: assignErr } = await supabase
       .from('program_assignments')
-      .select('id, organization_id, program_id, instructor_id, role, status, distance_bonus_cents, deadline, email_sent_at')
+      // flags is needed for the availability-override note below. Without it the
+      // field is undefined here and the note silently never renders.
+      .select('id, organization_id, program_id, instructor_id, role, status, distance_bonus_cents, flags, deadline, email_sent_at')
       .in('id', assignmentIds);
     if (assignErr) return json({ error: `assignments query: ${assignErr.message}` }, 500);
     const assignments = assignmentsRaw ?? [];
@@ -354,6 +357,11 @@ function renderPatchHtml({ termDisplay, org, primary, instructor, classes, porta
     const venue = renderVenueDetailsHtml(loc);
     const bonus = a.distance_bonus_cents ? `
       <div style="margin-top:6px;font-size:13px;color:${primary};font-weight:600;">Includes a ${dollars(a.distance_bonus_cents as number)} distance bonus</div>` : '';
+    // Mirrors send-afterschool-offers and offer-reminders-cron: a resent offer
+    // still has to say why we asked against their stated availability.
+    const availNote = hasAvailabilityOverride(a.flags)
+      ? `<div style="margin-top:6px;font-size:12px;color:${MUTED};line-height:1.5;">${AVAILABILITY_OVERRIDE_NOTE_HTML}</div>`
+      : '';
     const role = a.role === 'developing' ? `<span style="font-size:11px;color:${MUTED};text-transform:uppercase;letter-spacing:0.5px;font-weight:600;margin-left:6px;">Developing</span>` : '';
     const when = [dayName(p.day_of_week as string) ? `${dayName(p.day_of_week as string)}s` : '', [fmtTime(p.start_time as string), fmtTime(p.end_time as string)].filter(Boolean).join('–')].filter(Boolean).join(' · ');
     return `
@@ -362,6 +370,7 @@ function renderPatchHtml({ termDisplay, org, primary, instructor, classes, porta
         <div style="font-size:13px;color:${MUTED};margin-top:4px;line-height:1.4;">${escape(when)} · all term${(loc && loc.name) ? `<br />${escape(loc.name as string)}` : ''}</div>
         ${venue}
         ${bonus}
+        ${availNote}
       </td></tr>`;
   }).join('');
 
@@ -419,6 +428,7 @@ function renderPatchText({ termDisplay, org, instructor, classes, portalUrl, dea
     if (loc && loc.name) lines.push(`  ${loc.name as string}`);
     for (const v of renderVenueDetailsText(loc)) lines.push(v);
     if (a.distance_bonus_cents) lines.push(`  Includes a ${dollars(a.distance_bonus_cents as number)} distance bonus`);
+    if (hasAvailabilityOverride(a.flags)) lines.push(`  ${AVAILABILITY_OVERRIDE_NOTE_TEXT}`);
     lines.push('');
   }
   lines.push(`Review and respond: ${portalUrl}`);

@@ -2387,6 +2387,24 @@ function AfterschoolAssignmentCard({ assignment, coInstructors = [], schedule = 
         </div>
       ) : null}
 
+      {/* The offer email explains that we asked against their stated availability;
+          this card is where they actually Accept or Request change, so it has to
+          say the same thing. Same sentence as send-afterschool-offers and its two
+          siblings — if you reword one, reword all four. flags is already in the
+          portal's select, so this needs no query change.
+
+          !readOnly is load-bearing, not tidiness. The read-only copy of this card
+          is the one under "Confirmed schedule" (see the acceptedAS list), and that
+          branch renders NO Accept / Request change buttons — only "View details".
+          Showing the note there tells an instructor to request a change with no
+          way to do it, on a class they already accepted. The note belongs to the
+          moment of deciding, which is when the email sends it. */}
+      {!readOnly && Array.isArray(assignment.flags) && assignment.flags.includes("availability_override") ? (
+        <div style={{ fontSize: 12, color: MUTED, lineHeight: 1.5 }}>
+          We know this falls outside the availability you gave us. No problem if it doesn&apos;t work, just request a change.
+        </div>
+      ) : null}
+
       {assignment.status === "change_requested" && messages.length > 0 && (
         <div style={{ marginTop: 4, padding: 10, background: `${VIOLET}10`, border: `1px solid ${VIOLET}`, borderRadius: 6 }}>
           <div style={{ fontSize: 11, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>

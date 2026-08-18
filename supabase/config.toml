@@ -4,6 +4,30 @@
 # (verified 2026-06-08). Functions not listed default to verify_jwt = true.
 project_id = "enrops"
 
+# ── verify_jwt = true (pinned rather than left to the default) ──
+# The four offer senders. PINNED 2026-08-18 after a parity sweep found all four
+# deployed as verify_jwt = FALSE on staging while PROD had them TRUE — the exact
+# drift that makes a staging test meaningless, since the platform gate a tester
+# exercises is not the one prod applies. Staging was tightened to match prod
+# (never the reverse: prod is correct here, and loosening it would put an
+# unauthenticated caller in front of a bulk email send).
+#
+# Each one takes an admin's JWT and re-checks org_members owner/admin itself, so
+# TRUE is right and costs nothing. They were absent from this file entirely,
+# which is why the drift went unnoticed; pinning them makes it a deploy-time fact
+# instead of something you have to remember.
+[functions.send-offers]
+verify_jwt = true
+
+[functions.send-patch-offer]
+verify_jwt = true
+
+[functions.send-afterschool-offers]
+verify_jwt = true
+
+[functions.send-afterschool-patch-offer]
+verify_jwt = true
+
 # ── verify_jwt = false (public / webhook / cron entrypoints) ──
 [functions.stripe-webhook]
 verify_jwt = false

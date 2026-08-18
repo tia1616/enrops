@@ -33,6 +33,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
+import { AVAILABILITY_OVERRIDE_NOTE_HTML, AVAILABILITY_OVERRIDE_NOTE_TEXT, hasAvailabilityOverride } from '../_shared/offerCopy.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -717,11 +718,17 @@ function buildProgramReminderHtml({ branding, firstName, classes, termDisplay, p
     const bonus = a.distance_bonus_cents
       ? `<div style="margin-top:6px;font-size:13px;color:${primary};font-weight:600;">Includes a ${dollars(a.distance_bonus_cents)} bonus${hardship ? `<div style="font-size:12px;color:${MUTED};font-weight:400;">Thanks for covering an area outside your preference.</div>` : ''}</div>`
       : '';
+    // Mirrors send-afterschool-offers: the reminder repeats the class detail, so it
+    // has to repeat WHY we asked, or the nudge reads as ignoring their survey.
+    const availNote = hasAvailabilityOverride(a.flags)
+      ? `<div style="margin-top:6px;font-size:12px;color:${MUTED};line-height:1.5;">${AVAILABILITY_OVERRIDE_NOTE_HTML}</div>`
+      : '';
     return `<tr><td style="padding:12px 0;border-bottom:1px solid ${BORDER};">
       <div style="font-size:14px;font-weight:600;color:${TEXT};line-height:1.3;">${escape(p.curriculum ?? 'Class')}</div>
       <div style="font-size:12px;color:${MUTED};margin-top:2px;line-height:1.4;">${escape(dayLabel(p.day_of_week))} ${escape(p.start_time ?? '')}–${escape(p.end_time ?? '')} · <strong>all term</strong><br/>${escape(loc?.name ?? '')}${area}${ab ? ` · please arrive by ${ab}` : ''}</div>
       ${venue}
       ${bonus}
+      ${availNote}
     </td></tr>`;
   }).join('');
 
@@ -744,6 +751,7 @@ function buildProgramReminderText({ firstName, classes, termDisplay, portalUrl, 
     lines.push(`  ${loc?.name ?? ''}${loc?.area ? ` · ${loc.area}` : ''}${ab ? ` · arrive by ${ab}` : ''}`);
     for (const v of renderVenueDetailsText(loc)) lines.push(v);
     if (a.distance_bonus_cents) lines.push(`  Includes a ${dollars(a.distance_bonus_cents)} bonus`);
+    if (hasAvailabilityOverride(a.flags)) lines.push(`  ${AVAILABILITY_OVERRIDE_NOTE_TEXT}`);
   }
   lines.push('');
   lines.push(`Review and respond: ${portalUrl}`);
