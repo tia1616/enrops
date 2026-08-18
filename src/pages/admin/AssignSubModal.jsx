@@ -81,12 +81,16 @@ function classify(av) {
     }
   })();
   // tight_gap: they have another booking that day which does NOT overlap this
-  // class, but leaves under an hour to get between the two. They stay exactly
+  // class, but leaves a tight turnaround to get between the two. They stay exactly
   // where they ranked -- pickable, and in SUGGEST if they matched -- because this
   // is a note about the drive, not a reason they can't do it. Only a real time
   // OVERLAP sets is_working and moves someone out (20260818b).
+  //
+  // No specific duration in this copy on purpose: the threshold lives in the RPC
+  // (and the board's TRAVEL_GAP_WARN_MIN), and stating "an hour" here would be a
+  // third copy to keep in sync. The RPC decides; this just surfaces its verdict.
   if (av.tight_gap) {
-    const drive = 'under an hour to get here from another class that day';
+    const drive = 'tight turnaround from another class that day';
     return { ...base, note: base.note ? `${base.note} · ${drive}` : drive };
   }
   return base;
@@ -201,6 +205,7 @@ export default function AssignSubModal({
           is_date_off: row.is_date_off,
           day_time_match: row.day_time_match,
           out_of_area: row.out_of_area,
+          tight_gap: row.tight_gap,
         };
       }
       setAvailability(map);

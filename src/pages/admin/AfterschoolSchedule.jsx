@@ -875,25 +875,33 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         const where = op?.program_location_id ? locName.get(op.program_location_id) : null;
         return where ? `${nm} at ${where}` : nm;
       };
-      // Only a real TIME OVERLAP is a conflict. A class at another school later
-      // the same day is not — 12:15 and 3:25 are two hours apart, and the old
-      // rule blocked that pairing purely because the locations differed
-      // (Jessica reported it 2026-08-18; J2S runs exactly that Wednesday pair).
-      // Unknown times still fail closed: parse12h requires an explicit AM/PM, so
-      // "2:30" returns null and we refuse to guess which half of the day it is.
-      // This mirrors check_program_assignment_conflict() — the two MUST agree, or
-      // the board offers an assignment the insert then rejects.
-      const conflicts = sameDayOthers.filter((c) => {
-        const op = state.programs.find((p) => p.id === c.program_id);
-        if (!op) return true; // can't see the other class -> fail closed, don't guess
-        const oStart = parse12h(op.start_time);
-        const oEnd = parse12h(op.end_time);
-        if (oStart == null || oEnd == null) return true; // unknown times -> fail closed
-        return start < oEnd && oStart < end;
+      // Resolve each same-day class ONCE — its program row, its parsed times, and
+      // whether it's the same school — then derive the three outcomes below from
+      // that. Doing the lookup/parse three times risked the passes drifting.
+      const others = sameDayOthers.map((c) => {
+        const op = state.programs.find((p) => p.id === c.program_id) || null;
+        const oStart = op ? parse12h(op.start_time) : null;
+        const oEnd = op ? parse12h(op.end_time) : null;
+        const sameSchool = !!op && (op.program_location_id ?? null) === (program.program_location_id ?? null);
+        // Fail closed: no visible program, or a time we can't read (parse12h needs an
+        // explicit AM/PM, so "2:30" is null and we won't guess which half of the day).
+        const unknown = !op || oStart == null || oEnd == null;
+        const overlaps = !unknown && start < oEnd && oStart < end;
+        // Minutes between the two classes, whichever runs first (>= 0 for non-overlap).
+        const gap = unknown ? null : (oStart >= end ? oStart - end : start - oEnd);
+        return { c, sameSchool, unknown, overlaps, gap };
       });
+
+      // A real time OVERLAP is the only hard conflict — a class at another school
+      // later the same day is fine (12:15 and 3:25 are two hours apart, and the old
+      // rule blocked that purely on the differing location; Jessica reported it
+      // 2026-08-18, J2S runs exactly that Wednesday pair). This MUST agree with
+      // check_program_assignment_conflict(), or the board offers an assignment the
+      // insert then rejects.
+      const conflicts = others.filter((o) => o.unknown || o.overlaps);
       if (conflicts.length) {
-        const list = conflicts.map(describe).join(", ");
-        const allDraft = conflicts.every((c) => c.status === "proposed");
+        const list = conflicts.map((o) => describe(o.c)).join(", ");
+        const allDraft = conflicts.every((o) => o.c.status === "proposed");
         return {
           ok: false,
           reason: allDraft
@@ -903,30 +911,24 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         };
       }
       // No overlap. Say what the pairing is, but don't stand in the way.
-      const sameSchool = sameDayOthers.filter((c) => {
-        const op = state.programs.find((p) => p.id === c.program_id);
-        return (op?.program_location_id ?? null) === (program.program_location_id ?? null);
-      });
+      // Same school: note it. "back-to-back" only when the gap is genuinely tight —
+      // two same-school classes hours apart are not back-to-back.
+      const sameSchool = others.filter((o) => o.sameSchool);
       if (sameSchool.length) {
-        const list = sameSchool.map(describe).join(", ");
-        warnings.push(`${first} also has ${list} on ${dayLabel}, back-to-back at the same school.`);
+        const list = sameSchool.map((o) => describe(o.c)).join(", ");
+        const adjacent = sameSchool.every((o) => o.gap != null && o.gap < TRAVEL_GAP_WARN_MIN);
+        warnings.push(
+          adjacent
+            ? `${first} also has ${list} on ${dayLabel}, back-to-back at the same school.`
+            : `${first} also has ${list} on ${dayLabel} at the same school.`
+        );
       }
-      // Another school with a tight turnaround: allowed, but flag the drive.
-      // Jessica's number — "with commuting, might not be possible unless they're
-      // close together". She knows the drive; the software doesn't, so this warns
-      // and never blocks.
-      const tight = sameDayOthers.filter((c) => {
-        const op = state.programs.find((p) => p.id === c.program_id);
-        if (!op) return false;
-        if ((op.program_location_id ?? null) === (program.program_location_id ?? null)) return false;
-        const oStart = parse12h(op.start_time);
-        const oEnd = parse12h(op.end_time);
-        if (oStart == null || oEnd == null) return false; // already a hard conflict above
-        const gap = oStart >= end ? oStart - end : start - oEnd;
-        return gap < TRAVEL_GAP_WARN_MIN;
-      });
+      // Another school with a tight turnaround: allowed, but flag the drive. Jessica's
+      // number — "might not be possible unless they're close together". She knows the
+      // drive; the software doesn't, so this warns and never blocks.
+      const tight = others.filter((o) => !o.sameSchool && o.gap != null && o.gap < TRAVEL_GAP_WARN_MIN);
       if (tight.length) {
-        const list = tight.map(describe).join(", ");
+        const list = tight.map((o) => describe(o.c)).join(", ");
         warnings.push(`${first} also has ${list} on ${dayLabel} — under ${TRAVEL_GAP_WARN_MIN} min to get between the two schools.`);
       }
     }
