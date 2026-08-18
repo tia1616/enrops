@@ -2954,11 +2954,19 @@ function PickerModal({ program, loc, current, instructors, evaluate, onAssign, o
           </label>
           <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: bonusErr ? 6 : 18 }}>
             <span style={{ fontSize: 15, color: MUTED }}>$</span>
+            {/* type=TEXT on purpose, not number. A number input reports "" for
+                anything it can't parse, so a pasted "3 5" reached the parser as
+                blank and assigned with NO bonus while the operator saw text in the
+                box — the exact silent-underpay this validation exists to stop
+                (caught on staging 2026-08-18). Text keeps the raw string, so
+                parseBonusDollars sees it and can say what's wrong. inputMode
+                decimal still gives phones a numeric keypad. */}
             <input
-              type="number" min="0" max={MAX_BONUS_DOLLARS} step="1" inputMode="decimal"
+              type="text" inputMode="decimal" autoComplete="off"
               value={bonus}
               onChange={(e) => { setBonus(e.target.value); if (bonusErr) setBonusErr(null); }}
               placeholder="0"
+              aria-invalid={bonusErr ? "true" : undefined}
               style={{ width: 120, fontSize: 15, padding: "8px 10px", border: `1px solid ${bonusErr ? CORAL : RULE}`, borderRadius: 8, fontFamily: "inherit" }}
             />
             <span style={{ fontSize: 12, color: MUTED }}>added to their pay for this class</span>
