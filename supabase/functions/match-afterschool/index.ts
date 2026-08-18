@@ -279,7 +279,8 @@ serve(async (req) => {
     // Architects 3:25-4:25 on the same Wednesday, and one instructor teaches both.
     // The old rule could never produce that, so it had to be redone by hand every term.
     // Same rule as evaluate() and check_program_assignment_conflict now: a conflict is
-    // a different location, or genuinely overlapping times.
+    // genuinely overlapping times (20260818a); a different school later the same day
+    // is fine.
     type Slot = { dc: string; start: number | null; end: number | null; locationId: string | null };
     const committedSlots = new Map<string, Slot[]>();
 
@@ -307,8 +308,19 @@ serve(async (req) => {
     }
 
     // Would giving `prog` to this instructor clash with something they already hold?
-    // Mirrors the picker + the DB trigger exactly, including the touching-times case:
-    // 2:00-3:25 then 3:25-4:25 do NOT overlap (start < otherEnd is false when equal).
+    // A conflict is a real time OVERLAP, on any day — not merely another class the
+    // same weekday (20260818a). That different-location clause used to block
+    // 12:15-at-one-school against 3:25-at-another and forced a hand redo every
+    // term; J2S runs exactly that OES Wednesday pair.
+    //
+    // Mirrors check_program_assignment_conflict AND the board's evaluate(): touching
+    // times don't overlap (2:00-3:25 then 3:25-4:25 -> start < otherEnd is false when
+    // equal), and an unreadable time on either side fails SAFE as a conflict, since
+    // the matcher writes without a human looking. parse12h returns null for a time
+    // with no AM/PM, so "2:30" lands in that fail-safe branch here just as the
+    // trigger's small-hours guard catches it in SQL -- the two stay in agreement,
+    // and the matcher is never LOOSER than the trigger (which would 500 the run when
+    // the insert is rejected).
     function wouldConflict(instructorId: string, prog: any): boolean {
       const dc = dayCode(prog.day_of_week);
       if (!dc) return false;
@@ -316,14 +328,9 @@ serve(async (req) => {
       if (!slots?.length) return false;
       const start = parse12h(prog.start_time);
       const end = parse12h(prog.end_time);
-      const locationId = prog.program_location_id ?? null;
       return slots.some((s) => {
         if (s.dc !== dc) return false;
-        // Different school that afternoon: impossible travel.
-        if (s.locationId !== locationId) return true;
-        // Same school: only a real time overlap is a conflict. If either time is
-        // unreadable we can't prove an overlap — fail SAFE and treat it as one,
-        // since the matcher writes without a human looking.
+        // Unreadable time on either side: can't prove no overlap -> fail safe.
         if (s.start == null || s.end == null || start == null || end == null) return true;
         return start < s.end && s.start < end;
       });
@@ -595,9 +602,9 @@ serve(async (req) => {
       // Only clearing refilled programs leaves a stale draft on any class it can no
       // longer staff, and that row is INVISIBLE to this run (the seed loop skips
       // own-drafts on purpose). The matcher would then put that instructor at another
-      // school the same day, the conflict trigger would reject the insert, and the whole
-      // run would 500. Clearing everything it reconsidered keeps the DB and the run's
-      // own view of the world identical, and a class it can't fill honestly reads
+      // school the same day AT AN OVERLAPPING TIME, the conflict trigger would reject
+      // that insert, and the whole run would 500. Clearing everything it reconsidered
+      // keeps the DB and the run's own view identical, and a class it can't fill reads
       // "needs instructor" instead of showing a suggestion that no longer holds.
       //
       // A hand-picked row (assigned_by set) is never touched — that's the whole point
