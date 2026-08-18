@@ -16,6 +16,7 @@ import NotifyRemovalModal from "./NotifyRemovalModal.jsx";
 import AssignSubModal from "./AssignSubModal";
 import HatGuide from "../../components/HatGuide";
 import NeedsCoverBanner from "../../components/NeedsCoverBanner.jsx";
+import { classifyOther } from "../../lib/scheduleConflicts.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -128,6 +129,11 @@ function fmtTimeRange(start, end) {
 }
 
 const ARRIVAL_BUFFER_MIN = 15;
+// Two classes at DIFFERENT schools the same day are allowed whenever the times
+// don't overlap, but a gap under this warns about the drive. Warning only —
+// never a block. Jessica, 2026-08-18: "warn if gap is under an hour - with
+// commuting, might not be possible unless they're close together."
+const TRAVEL_GAP_WARN_MIN = 60;
 
 // programs.start_time/end_time are 12-hour text ("2:05 PM"). -> minutes, or null.
 function parse12h(t) {
@@ -869,14 +875,19 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     // now enforce the SAME rule so an operator doesn't have to remember which board
     // they're on).
     //
-    // This mirrors camp's validateDrop, translated to after-school's weekday+time shape.
-    // Camp does NOT block every same-day pairing — it blocks a real conflict:
-    //   - the times overlap (physically impossible), OR
-    //   - it's a different location (can't be at two schools the same afternoon).
-    // Two back-to-back classes at the SAME school stay assignable, which is a real
-    // schedule people run. Camp also blocks against 'proposed' rows (it filters only
-    // withdrawn), so a matcher draft blocks here too — but the copy stays honest about
-    // it being a draft rather than claiming they "already teach" it.
+    // What counts as a real conflict, narrowed 2026-08-18: the times OVERLAP, or
+    // we can't read one of them. A different location on its own is NOT a conflict
+    // any more — that clause blocked 12:15-at-one-school against 3:25-at-another,
+    // which is a schedule J2S actually runs. Non-overlapping pairings are allowed
+    // and warned about instead (same school = back-to-back; another school with
+    // under TRAVEL_GAP_WARN_MIN to drive = flag the turnaround).
+    //
+    // Camp's validateDrop still compares morning/afternoon session_type buckets
+    // rather than clock times, so it has no gap to measure and is NOT the same
+    // shape as this any more. Don't read the two as mirrors without checking.
+    // Camp also blocks against 'proposed' rows (it filters only withdrawn), so a
+    // matcher draft blocks here too — but the copy stays honest about it being a
+    // draft rather than claiming they "already teach" it.
     const committed = committedDays.get(instructorId);
     const sameDayOthers = (committed?.get(code) ?? []).filter((c) => c.program_id !== program.id);
     if (sameDayOthers.length) {
@@ -886,18 +897,36 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         const where = op?.program_location_id ? locName.get(op.program_location_id) : null;
         return where ? `${nm} at ${where}` : nm;
       };
-      const conflicts = sameDayOthers.filter((c) => {
-        const op = state.programs.find((p) => p.id === c.program_id);
-        if (!op) return true; // can't see the other class -> fail closed, don't guess
-        const oStart = parse12h(op.start_time);
-        const oEnd = parse12h(op.end_time);
-        const timesOverlap = oStart != null && oEnd != null && start < oEnd && oStart < end;
-        const elsewhere = (op.program_location_id ?? null) !== (program.program_location_id ?? null);
-        return timesOverlap || elsewhere;
+      // Resolve each same-day class ONCE — its program row, its parsed times, and
+      // whether it's the same school — then derive the three outcomes below from
+      // that. Doing the lookup/parse three times risked the passes drifting. The
+      // per-class truth table lives in classifyOther() so it can be unit-tested and
+      // kept in step with the DB trigger. An unseeable program passes null times,
+      // which classifyOther reads as unknown -> fail-closed conflict.
+      const others = sameDayOthers.map((c) => {
+        const op = state.programs.find((p) => p.id === c.program_id) || null;
+        const cls = classifyOther(
+          { start, end, loc: program.program_location_id ?? null },
+          {
+            start: op ? parse12h(op.start_time) : null,
+            end: op ? parse12h(op.end_time) : null,
+            loc: op ? (op.program_location_id ?? null) : null,
+          },
+          TRAVEL_GAP_WARN_MIN,
+        );
+        return { c, ...cls };
       });
+
+      // A real time OVERLAP is the only hard conflict — a class at another school
+      // later the same day is fine (12:15 and 3:25 are two hours apart, and the old
+      // rule blocked that purely on the differing location; Jessica reported it
+      // 2026-08-18, J2S runs exactly that Wednesday pair). This MUST agree with
+      // check_program_assignment_conflict(), or the board offers an assignment the
+      // insert then rejects.
+      const conflicts = others.filter((o) => o.conflict);
       if (conflicts.length) {
-        const list = conflicts.map(describe).join(", ");
-        const allDraft = conflicts.every((c) => c.status === "proposed");
+        const list = conflicts.map((o) => describe(o.c)).join(", ");
+        const allDraft = conflicts.every((o) => o.c.status === "proposed");
         return {
           ok: false,
           reason: allDraft
@@ -906,9 +935,27 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           warnings,
         };
       }
-      // Same school, no overlap — a legitimate back-to-back. Allowed, but say it out loud.
-      const list = sameDayOthers.map(describe).join(", ");
-      warnings.push(`${first} also has ${list} on ${dayLabel}, back-to-back at the same school.`);
+      // No overlap. Say what the pairing is, but don't stand in the way.
+      // Same school: note it. "back-to-back" only when the gap is genuinely tight —
+      // two same-school classes hours apart are not back-to-back.
+      const sameSchool = others.filter((o) => o.sameSchool);
+      if (sameSchool.length) {
+        const list = sameSchool.map((o) => describe(o.c)).join(", ");
+        const adjacent = sameSchool.every((o) => o.tight);
+        warnings.push(
+          adjacent
+            ? `${first} also has ${list} on ${dayLabel}, back-to-back at the same school.`
+            : `${first} also has ${list} on ${dayLabel} at the same school.`
+        );
+      }
+      // Another school with a tight turnaround: allowed, but flag the drive. Jessica's
+      // number — "might not be possible unless they're close together". She knows the
+      // drive; the software doesn't, so this warns and never blocks.
+      const tight = others.filter((o) => !o.sameSchool && o.tight);
+      if (tight.length) {
+        const list = tight.map((o) => describe(o.c)).join(", ");
+        warnings.push(`${first} also has ${list} on ${dayLabel} — under ${TRAVEL_GAP_WARN_MIN} min to get between the two schools.`);
+      }
     }
     // Max-days cap. Counts DISTINCT WEEKDAYS including the day this class would add —
     // not assignments. A second class on a day they already work costs no extra day,
