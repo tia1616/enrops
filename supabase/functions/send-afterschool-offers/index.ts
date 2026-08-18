@@ -289,6 +289,15 @@ function renderHtml({ org, primary, firstName, termDisplay, classes, portalUrl, 
     const bonus = a.distance_bonus_cents
       ? `<div style="margin-top:6px;font-size:13px;color:${primary};font-weight:600;">Includes a ${dollars(a.distance_bonus_cents)} bonus${hardship ? `<div style="font-size:12px;color:${MUTED};font-weight:400;">Thanks for covering an area outside your preference.</div>` : ''}</div>`
       : '';
+    // The operator assigned this against the availability the instructor gave us
+    // (a day they marked off, hours that don't cover it, or no survey at all).
+    // Say so, or the ask looks like the survey was ignored. Deliberately NOT part
+    // of the bonus block above: an override is worth explaining even when no gas
+    // money is attached, and the area wording there is about geography, not time.
+    const availOverride = Array.isArray(a.flags) && a.flags.includes('availability_override');
+    const availNote = availOverride
+      ? `<div style="margin-top:6px;font-size:12px;color:${MUTED};line-height:1.5;">We know this falls outside the availability you gave us. No problem if it doesn't work, just request a change below.</div>`
+      : '';
     return `<tr><td style="padding:14px 0;border-bottom:1px solid ${BORDER};">
       <div style="font-size:15px;font-weight:700;color:${TEXT};line-height:1.3;">${escape(p.curriculum ?? 'Class')}</div>
       <div style="font-size:13px;color:${MUTED};margin-top:4px;line-height:1.4;">
@@ -297,6 +306,7 @@ function renderHtml({ org, primary, firstName, termDisplay, classes, portalUrl, 
       </div>
       ${venueHtml(loc)}
       ${bonus}
+      ${availNote}
     </td></tr>`;
   }).join('');
   const n = classes.length;
@@ -333,6 +343,10 @@ function renderText({ org, firstName, termDisplay, classes, portalUrl, deadline,
     lines.push(`  ${dayLabel(p.day_of_week)} ${p.start_time ?? ''}–${p.end_time ?? ''} · all term`);
     lines.push(`  ${loc?.name ?? ''}${loc?.area ? ` · ${loc.area}` : ''}${ab ? ` · arrive by ${ab}` : ''}`);
     if (a.distance_bonus_cents) lines.push(`  Includes a ${dollars(a.distance_bonus_cents)} bonus`);
+    // Same note as the HTML half. Plain-text readers get the same explanation.
+    if (Array.isArray(a.flags) && a.flags.includes('availability_override')) {
+      lines.push(`  We know this falls outside the availability you gave us. No problem if it doesn't work, just request a change.`);
+    }
     lines.push('');
   }
   lines.push(`Review and respond: ${portalUrl}`);

@@ -717,11 +717,18 @@ function buildProgramReminderHtml({ branding, firstName, classes, termDisplay, p
     const bonus = a.distance_bonus_cents
       ? `<div style="margin-top:6px;font-size:13px;color:${primary};font-weight:600;">Includes a ${dollars(a.distance_bonus_cents)} bonus${hardship ? `<div style="font-size:12px;color:${MUTED};font-weight:400;">Thanks for covering an area outside your preference.</div>` : ''}</div>`
       : '';
+    // Mirrors send-afterschool-offers: the reminder repeats the class detail, so it
+    // has to repeat WHY we asked, or the nudge reads as ignoring their survey.
+    const availOverride = Array.isArray(a.flags) && a.flags.includes('availability_override');
+    const availNote = availOverride
+      ? `<div style="margin-top:6px;font-size:12px;color:${MUTED};line-height:1.5;">We know this falls outside the availability you gave us. No problem if it doesn't work, just request a change below.</div>`
+      : '';
     return `<tr><td style="padding:12px 0;border-bottom:1px solid ${BORDER};">
       <div style="font-size:14px;font-weight:600;color:${TEXT};line-height:1.3;">${escape(p.curriculum ?? 'Class')}</div>
       <div style="font-size:12px;color:${MUTED};margin-top:2px;line-height:1.4;">${escape(dayLabel(p.day_of_week))} ${escape(p.start_time ?? '')}–${escape(p.end_time ?? '')} · <strong>all term</strong><br/>${escape(loc?.name ?? '')}${area}${ab ? ` · please arrive by ${ab}` : ''}</div>
       ${venue}
       ${bonus}
+      ${availNote}
     </td></tr>`;
   }).join('');
 
@@ -744,6 +751,9 @@ function buildProgramReminderText({ firstName, classes, termDisplay, portalUrl, 
     lines.push(`  ${loc?.name ?? ''}${loc?.area ? ` · ${loc.area}` : ''}${ab ? ` · arrive by ${ab}` : ''}`);
     for (const v of renderVenueDetailsText(loc)) lines.push(v);
     if (a.distance_bonus_cents) lines.push(`  Includes a ${dollars(a.distance_bonus_cents)} bonus`);
+    if (Array.isArray(a.flags) && a.flags.includes('availability_override')) {
+      lines.push(`  We know this falls outside the availability you gave us. No problem if it doesn't work, just request a change.`);
+    }
   }
   lines.push('');
   lines.push(`Review and respond: ${portalUrl}`);
