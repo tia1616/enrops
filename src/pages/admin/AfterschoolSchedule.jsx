@@ -142,6 +142,10 @@ const ARRIVAL_BUFFER_MIN = 15;
 // commuting, might not be possible unless they're close together."
 const TRAVEL_GAP_WARN_MIN = 60;
 
+// Upper bound on a per-class gas bonus. Generous for a drive; mainly it stops a
+// fat-fingered figure overflowing distance_bonus_cents, which is a 4-byte integer.
+const MAX_BONUS_DOLLARS = 10000;
+
 // cents -> "30" or "30.50" (drops a trailing .00) for the gas-bonus badge.
 function fmtBonus(cents) {
   const d = (cents ?? 0) / 100;
@@ -2879,6 +2883,7 @@ function PickerModal({ program, loc, current, instructors, evaluate, onAssign, o
   // where the point is just to attach the gas bonus.
   const [confirming, setConfirming] = useState(null);
   const [bonus, setBonus] = useState(""); // dollars, as typed
+  const [bonusErr, setBonusErr] = useState(null);
 
   const rows = instructors.map((i) => {
     const ev = evaluate(i.id);
@@ -2896,16 +2901,28 @@ function PickerModal({ program, loc, current, instructors, evaluate, onAssign, o
   const overridable = notDeclined.filter((r) => !r.ev.ok && r.ev.overridable);
   const hardBlocked = notDeclined.filter((r) => !r.ev.ok && !r.ev.overridable);
 
-  const openConfirm = (inst, ev, isOverride) => { setBonus(""); setConfirming({ inst, ev, isOverride }); };
+  const openConfirm = (inst, ev, isOverride) => { setBonus(""); setBonusErr(null); setConfirming({ inst, ev, isOverride }); };
   // An eligible person who marked this AREA unavailable gets the confirm panel so a
   // gas bonus can be attached; everyone else eligible assigns in one click.
   const clickEligible = (inst, ev) => {
     if (ev.pref === "unavailable") openConfirm(inst, ev, false);
     else onAssign(inst.id);
   };
+  // Blank = no bonus. Anything typed must be a real, sane amount: silently dropping
+  // a typo would tell the operator the bonus was set when payroll never sees it, and
+  // distance_bonus_cents is a 4-byte int, so an absurd figure fails in the database
+  // with raw Postgres text instead of something readable.
   const doConfirm = () => {
-    const n = parseFloat(bonus);
-    const cents = bonus.trim() && !Number.isNaN(n) && n > 0 ? Math.round(n * 100) : null;
+    let cents = null;
+    const raw = bonus.trim();
+    if (raw) {
+      const n = parseFloat(raw);
+      if (Number.isNaN(n) || n < 0) { setBonusErr("Enter a dollar amount, or leave it blank for no bonus."); return; }
+      if (n > MAX_BONUS_DOLLARS) { setBonusErr(`That's higher than we can record — enter $${MAX_BONUS_DOLLARS.toLocaleString()} or less.`); return; }
+      cents = Math.round(n * 100);
+      if (cents === 0) cents = null; // "0" means no bonus, not a $0 line
+    }
+    setBonusErr(null);
     onAssign(confirming.inst.id, { override: confirming.isOverride, distanceBonusCents: cents });
     setConfirming(null); setBonus("");
   };
@@ -2940,17 +2957,18 @@ function PickerModal({ program, loc, current, instructors, evaluate, onAssign, o
           <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: INK, marginBottom: 6 }}>
             Gas / distance bonus for this class (optional)
           </label>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 18 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: bonusErr ? 6 : 18 }}>
             <span style={{ fontSize: 15, color: MUTED }}>$</span>
             <input
-              type="number" min="0" step="1" inputMode="decimal"
+              type="number" min="0" max={MAX_BONUS_DOLLARS} step="1" inputMode="decimal"
               value={bonus}
-              onChange={(e) => setBonus(e.target.value)}
+              onChange={(e) => { setBonus(e.target.value); if (bonusErr) setBonusErr(null); }}
               placeholder="0"
-              style={{ width: 120, fontSize: 15, padding: "8px 10px", border: `1px solid ${RULE}`, borderRadius: 8, fontFamily: "inherit" }}
+              style={{ width: 120, fontSize: 15, padding: "8px 10px", border: `1px solid ${bonusErr ? CORAL : RULE}`, borderRadius: 8, fontFamily: "inherit" }}
             />
             <span style={{ fontSize: 12, color: MUTED }}>added to their pay for this class</span>
           </div>
+          {bonusErr && <div style={{ fontSize: 12, color: CORAL, fontWeight: 600, marginBottom: 14 }}>{bonusErr}</div>}
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
             <button onClick={() => { setConfirming(null); setBonus(""); }} style={{ ...btnStyle, background: "#fff", color: MUTED, border: `1px solid ${RULE}` }}>Cancel</button>
             <button onClick={doConfirm} style={{ ...btnStyle, background: BRIGHT, color: "#fff" }}>
@@ -2990,7 +3008,16 @@ function PickerModal({ program, loc, current, instructors, evaluate, onAssign, o
                   <span style={{ fontSize: 13, fontWeight: 600, color: INK }}>{inst.preferred_name || inst.first_name} {inst.last_name}</span>
                   <span style={{ fontSize: 12, color: MUTED }}>{ev.reason}</span>
                 </span>
-                <button onClick={() => openConfirm(inst, ev, true)} style={{ ...linkBtn, color: BRIGHT, flexShrink: 0, fontWeight: 600 }}>Assign anyway</button>
+                {/* The person already on this class can't be re-assigned to it —
+                    handleAssign early-returns on that, which would silently throw
+                    away a gas bonus typed in the confirm. Say so instead of
+                    offering a button that does nothing. Editing an existing
+                    assignment's bonus isn't wired yet; Remove and re-add. */}
+                {current?.instructor_id === inst.id ? (
+                  <span style={{ fontSize: 12, color: MUTED, flexShrink: 0, fontStyle: "italic" }}>Already on this class</span>
+                ) : (
+                  <button onClick={() => openConfirm(inst, ev, true)} style={{ ...linkBtn, color: BRIGHT, flexShrink: 0, fontWeight: 600 }}>Assign anyway</button>
+                )}
               </div>
             ))}
           </div>
