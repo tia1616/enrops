@@ -142,6 +142,12 @@ const ARRIVAL_BUFFER_MIN = 15;
 // commuting, might not be possible unless they're close together."
 const TRAVEL_GAP_WARN_MIN = 60;
 
+// cents -> "30" or "30.50" (drops a trailing .00) for the gas-bonus badge.
+function fmtBonus(cents) {
+  const d = (cents ?? 0) / 100;
+  return Number.isInteger(d) ? String(d) : d.toFixed(2);
+}
+
 // programs.start_time/end_time are 12-hour text ("2:05 PM"). -> minutes, or null.
 function parse12h(t) {
   if (!t) return null;
@@ -2810,10 +2816,15 @@ function ProgramCard({ program, loc, tint, status, lead, sub, subNeeded, weekDat
         {(program.start_time || program.end_time) && (
           <div style={{ fontSize: 11, color: MUTED }}>{fmtTimeRange(program.start_time, program.end_time)}</div>
         )}
-        <div style={{ marginTop: 2 }}>
+        <div style={{ marginTop: 2, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
           <span style={{ display: "inline-block", fontSize: 12, fontWeight: 600, padding: "3px 9px", borderRadius: 999, background: who ? `${PURPLE}10` : `${CORAL}14`, color: who ? PURPLE : CORAL, border: `1px solid ${who ? `${PURPLE}33` : `${CORAL}55`}` }}>
             {who || "+ Assign"}
           </span>
+          {lead?.distance_bonus_cents > 0 && (
+            <span style={{ display: "inline-block", fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: `${OK_GREEN}18`, color: OK_GREEN, border: `1px solid ${OK_GREEN}55` }}>
+              + ${fmtBonus(lead.distance_bonus_cents)} gas
+            </span>
+          )}
         </div>
         <div style={{ fontSize: 10, color: sc, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>{statusLabel(status)}</div>
         {conflictDates.length > 0 && (
@@ -2923,7 +2934,7 @@ function PickerModal({ program, loc, current, instructors, evaluate, onAssign, o
           </div>
           <div style={{ fontSize: 13, color: MUTED, lineHeight: 1.45, marginBottom: 14 }}>
             {confirming.isOverride
-              ? <>The survey says {confirming.ev.reason} You can still assign them — they'll get an offer to accept or decline, same as anyone.</>
+              ? <>{confirming.ev.reason} You can still assign them — they'll get an offer to accept or decline, same as anyone.</>
               : <>{name(confirming.inst)} marked this area as one they can't get to. You can offer a gas bonus to make the trip worth it.</>}
           </div>
           <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: INK, marginBottom: 6 }}>
