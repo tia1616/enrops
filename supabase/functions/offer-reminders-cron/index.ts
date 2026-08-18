@@ -33,6 +33,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
+import { AVAILABILITY_OVERRIDE_NOTE_HTML, AVAILABILITY_OVERRIDE_NOTE_TEXT, hasAvailabilityOverride } from '../_shared/offerCopy.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -719,9 +720,8 @@ function buildProgramReminderHtml({ branding, firstName, classes, termDisplay, p
       : '';
     // Mirrors send-afterschool-offers: the reminder repeats the class detail, so it
     // has to repeat WHY we asked, or the nudge reads as ignoring their survey.
-    const availOverride = Array.isArray(a.flags) && a.flags.includes('availability_override');
-    const availNote = availOverride
-      ? `<div style="margin-top:6px;font-size:12px;color:${MUTED};line-height:1.5;">We know this falls outside the availability you gave us. No problem if it doesn't work, just request a change below.</div>`
+    const availNote = hasAvailabilityOverride(a.flags)
+      ? `<div style="margin-top:6px;font-size:12px;color:${MUTED};line-height:1.5;">${AVAILABILITY_OVERRIDE_NOTE_HTML}</div>`
       : '';
     return `<tr><td style="padding:12px 0;border-bottom:1px solid ${BORDER};">
       <div style="font-size:14px;font-weight:600;color:${TEXT};line-height:1.3;">${escape(p.curriculum ?? 'Class')}</div>
@@ -751,9 +751,7 @@ function buildProgramReminderText({ firstName, classes, termDisplay, portalUrl, 
     lines.push(`  ${loc?.name ?? ''}${loc?.area ? ` · ${loc.area}` : ''}${ab ? ` · arrive by ${ab}` : ''}`);
     for (const v of renderVenueDetailsText(loc)) lines.push(v);
     if (a.distance_bonus_cents) lines.push(`  Includes a ${dollars(a.distance_bonus_cents)} bonus`);
-    if (Array.isArray(a.flags) && a.flags.includes('availability_override')) {
-      lines.push(`  We know this falls outside the availability you gave us. No problem if it doesn't work, just request a change.`);
-    }
+    if (hasAvailabilityOverride(a.flags)) lines.push(`  ${AVAILABILITY_OVERRIDE_NOTE_TEXT}`);
   }
   lines.push('');
   lines.push(`Review and respond: ${portalUrl}`);

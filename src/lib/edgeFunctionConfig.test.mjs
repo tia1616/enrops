@@ -98,8 +98,10 @@ const KNOWN_UNPINNED = new Set([
   'offer-message-reply', 'offer-reminders-cron', 'pay-instructor',
   'polish-skills', 'refund-registration', 'replay-digest',
   'request-resume-onboarding', 'respond-to-assignment', 'respond-to-sub-offer',
-  'send-afterschool-offers', 'send-afterschool-patch-offer', 'send-afterschool-survey',
-  'send-availability-survey', 'send-offers', 'send-patch-offer',
+  // The four offer senders came OFF this list on 2026-08-18: a parity sweep found
+  // them deployed verify_jwt=false on staging and true on prod, so they are now
+  // pinned true in config.toml. The ratchet tightens by four.
+  'send-afterschool-survey', 'send-availability-survey',
   'stripe-connect-onboard', 'stripe-oauth-disconnect', 'stripe-oauth-start',
   'submit-acknowledgments', 'submit-agreement', 'submit-feedback',
   'submit-onboarding-declined', 'submit-ors-certification', 'submit-training-quiz',

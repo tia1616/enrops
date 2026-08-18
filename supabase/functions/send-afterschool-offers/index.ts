@@ -15,6 +15,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
+import { AVAILABILITY_OVERRIDE_NOTE_HTML, AVAILABILITY_OVERRIDE_NOTE_TEXT, hasAvailabilityOverride } from '../_shared/offerCopy.ts';
 import { loadOrgBrand, renderSignatureBlock, formatFromAddress, resolveTestRecipient, NO_TENANT_INBOX_MESSAGE } from '../_shared/orgBrand.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
@@ -294,9 +295,8 @@ function renderHtml({ org, primary, firstName, termDisplay, classes, portalUrl, 
     // Say so, or the ask looks like the survey was ignored. Deliberately NOT part
     // of the bonus block above: an override is worth explaining even when no gas
     // money is attached, and the area wording there is about geography, not time.
-    const availOverride = Array.isArray(a.flags) && a.flags.includes('availability_override');
-    const availNote = availOverride
-      ? `<div style="margin-top:6px;font-size:12px;color:${MUTED};line-height:1.5;">We know this falls outside the availability you gave us. No problem if it doesn't work, just request a change below.</div>`
+    const availNote = hasAvailabilityOverride(a.flags)
+      ? `<div style="margin-top:6px;font-size:12px;color:${MUTED};line-height:1.5;">${AVAILABILITY_OVERRIDE_NOTE_HTML}</div>`
       : '';
     return `<tr><td style="padding:14px 0;border-bottom:1px solid ${BORDER};">
       <div style="font-size:15px;font-weight:700;color:${TEXT};line-height:1.3;">${escape(p.curriculum ?? 'Class')}</div>
@@ -344,9 +344,7 @@ function renderText({ org, firstName, termDisplay, classes, portalUrl, deadline,
     lines.push(`  ${loc?.name ?? ''}${loc?.area ? ` · ${loc.area}` : ''}${ab ? ` · arrive by ${ab}` : ''}`);
     if (a.distance_bonus_cents) lines.push(`  Includes a ${dollars(a.distance_bonus_cents)} bonus`);
     // Same note as the HTML half. Plain-text readers get the same explanation.
-    if (Array.isArray(a.flags) && a.flags.includes('availability_override')) {
-      lines.push(`  We know this falls outside the availability you gave us. No problem if it doesn't work, just request a change.`);
-    }
+    if (hasAvailabilityOverride(a.flags)) lines.push(`  ${AVAILABILITY_OVERRIDE_NOTE_TEXT}`);
     lines.push('');
   }
   lines.push(`Review and respond: ${portalUrl}`);
