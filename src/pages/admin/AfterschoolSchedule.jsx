@@ -19,6 +19,7 @@ import NeedsCoverBanner from "../../components/NeedsCoverBanner.jsx";
 import ScheduleStepBar from "../../components/ScheduleStepBar.jsx";
 import { resolveBoardSendIntro } from "../../lib/boardSendCopy.js";
 import { classifyOther } from "../../lib/scheduleConflicts.js";
+import { parseBonusDollars } from "../../lib/bonusAmount.js";
 // Replaces a local gradeLabel() that has been deleted with its last caller. It
 // rendered "?" for a missing grade - printing a question mark where the answer is
 // "they didn't say" - which is the exact behaviour the shared module was written
@@ -2908,20 +2909,13 @@ function PickerModal({ program, loc, current, instructors, evaluate, onAssign, o
     if (ev.pref === "unavailable") openConfirm(inst, ev, false);
     else onAssign(inst.id);
   };
-  // Blank = no bonus. Anything typed must be a real, sane amount: silently dropping
-  // a typo would tell the operator the bonus was set when payroll never sees it, and
-  // distance_bonus_cents is a 4-byte int, so an absurd figure fails in the database
-  // with raw Postgres text instead of something readable.
+  // Money path — the parsing lives in src/lib/bonusAmount.js so it can be unit
+  // tested (see bonusAmount.test.mjs). Never assign when it returns an error:
+  // silently dropping a typo would tell the operator the bonus was set while
+  // payroll never sees it.
   const doConfirm = () => {
-    let cents = null;
-    const raw = bonus.trim();
-    if (raw) {
-      const n = parseFloat(raw);
-      if (Number.isNaN(n) || n < 0) { setBonusErr("Enter a dollar amount, or leave it blank for no bonus."); return; }
-      if (n > MAX_BONUS_DOLLARS) { setBonusErr(`That's higher than we can record — enter $${MAX_BONUS_DOLLARS.toLocaleString()} or less.`); return; }
-      cents = Math.round(n * 100);
-      if (cents === 0) cents = null; // "0" means no bonus, not a $0 line
-    }
+    const { cents, error } = parseBonusDollars(bonus, MAX_BONUS_DOLLARS);
+    if (error) { setBonusErr(error); return; }
     setBonusErr(null);
     onAssign(confirming.inst.id, { override: confirming.isOverride, distanceBonusCents: cents });
     setConfirming(null); setBonus("");
@@ -2942,7 +2936,8 @@ function PickerModal({ program, loc, current, instructors, evaluate, onAssign, o
         )}
       </div>
       {confirming ? (
-        // DRAFT COPY — Jessica owns operator-facing wording; approve/reword before prod.
+        // Operator-facing copy below approved by Jessica 2026-08-18 (section headings,
+        // confirm title/body, the bonus field, and the two validation messages).
         <div style={{ padding: "18px 22px" }}>
           <div style={{ fontSize: 15, fontWeight: 700, color: INK, marginBottom: 6 }}>
             {confirming.isOverride
