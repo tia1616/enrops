@@ -125,8 +125,19 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
           .eq("instructor_id", instructorId)
           .eq("term", term)
           .maybeSingle(),
+        // THE VIEW, not the table. An instructor is authenticated but is NOT an
+        // org_member (is_org_member reads only org_members), so this read used to
+        // ride on public_read_program_locations - the cross-tenant policy being
+        // removed, which let any signed-in operator read every provider's sites.
+        //
+        // It must NOT be scoped to sites they are assigned to. The flow runs the
+        // other way: an instructor states which areas they can teach BEFORE the
+        // provider assigns them, so gating this on an assignment means no area
+        // list, therefore no preference, therefore no assignment (Jessica,
+        // 2026-08-17). `area` is a city/region label and sits in the public view
+        // beside the street address every registration page already shows.
         supabase
-          .from("program_locations")
+          .from("program_locations_public")
           .select("area")
           .eq("organization_id", orgId)
           .not("area", "is", null),
