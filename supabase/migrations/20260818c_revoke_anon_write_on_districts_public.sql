@@ -1,0 +1,44 @@
+-- Close the anon/authenticated WRITE hole on districts_public.
+--
+-- APPLIED TO PROD 2026-08-18 on Jessica's explicit go. Staging already had the
+-- equivalent revoke from 20260817e (which swept every public view there), so this
+-- file exists to bring PROD to the same state and to leave the reasoning in the
+-- repo rather than only in a chat.
+--
+-- Measured on prod before running: anon and authenticated held INSERT, UPDATE,
+-- DELETE and TRUNCATE on this view, and a no-op UPDATE executed as role anon was
+-- PERMITTED (the probe used WHERE false, so no row was touched -- Postgres still
+-- enforces the privilege at plan time). The anon key ships inside the frontend
+-- bundle by design, so this was reachable by anyone: rename, retype, insert or
+-- delete any provider's district rows, including district_type, which is what
+-- families see on a registration page. No evidence of exploitation; it was found
+-- by following the thread from the sites leak, not from a report.
+--
+-- Why it existed: nobody granted it. The schema's DEFAULT PRIVILEGES hand these
+-- out on a newly created view, and the view was created without taking them back.
+-- Re-audited prod the same day: districts_public was the ONLY view there that ever
+-- held write privileges. public_org_directory and v_effective_pay_lines hold only
+-- SELECT/REFERENCES/TRIGGER. v_effective_pay_lines looked alarming (a payroll view
+-- readable by anon) but is security_invoker = on, so it runs as the caller and RLS
+-- applies -- it is not a leak.
+--
+-- SELECT is deliberately untouched. Every browser path through this view is a read
+-- -- the district picker on the registration page, signed in and logged out alike
+-- -- and removing SELECT is exactly what blanked that picker on 14 Aug. Writes go
+-- to the base table under the members_write_* policies, not through here.
+--
+-- REFERENCES and TRIGGER are left alone: neither can modify data, and dropping them
+-- would widen the change beyond the thing being fixed.
+--
+-- Verified after applying, on prod:
+--   anon UPDATE / INSERT / DELETE  -> 42501 denied
+--   authenticated UPDATE           -> 42501 denied
+--   anon SELECT                    -> 23 district rows, unchanged
+--   enrops.com/the-ukulele-project, LOGGED OUT, real browser -> the district
+--   picker still lists Cascadia School, Evergreen Public Schools, LOSD, PPS and
+--   "Other schools & sites". That page is the one that broke on 14 Aug, so it was
+--   loaded rather than assumed.
+--
+-- Not a code change: no build, no deploy, no frontend half. Safe alone.
+
+REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.districts_public FROM anon, authenticated;
