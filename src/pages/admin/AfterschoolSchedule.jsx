@@ -18,6 +18,7 @@ import HatGuide from "../../components/HatGuide";
 import NeedsCoverBanner from "../../components/NeedsCoverBanner.jsx";
 import ScheduleStepBar from "../../components/ScheduleStepBar.jsx";
 import { resolveBoardSendIntro } from "../../lib/boardSendCopy.js";
+import { classifyOther } from "../../lib/scheduleConflicts.js";
 // Replaces a local gradeLabel() that has been deleted with its last caller. It
 // rendered "?" for a missing grade - printing a question mark where the answer is
 // "they didn't say" - which is the exact behaviour the shared module was written
@@ -877,19 +878,22 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       };
       // Resolve each same-day class ONCE — its program row, its parsed times, and
       // whether it's the same school — then derive the three outcomes below from
-      // that. Doing the lookup/parse three times risked the passes drifting.
+      // that. Doing the lookup/parse three times risked the passes drifting. The
+      // per-class truth table lives in classifyOther() so it can be unit-tested and
+      // kept in step with the DB trigger. An unseeable program passes null times,
+      // which classifyOther reads as unknown -> fail-closed conflict.
       const others = sameDayOthers.map((c) => {
         const op = state.programs.find((p) => p.id === c.program_id) || null;
-        const oStart = op ? parse12h(op.start_time) : null;
-        const oEnd = op ? parse12h(op.end_time) : null;
-        const sameSchool = !!op && (op.program_location_id ?? null) === (program.program_location_id ?? null);
-        // Fail closed: no visible program, or a time we can't read (parse12h needs an
-        // explicit AM/PM, so "2:30" is null and we won't guess which half of the day).
-        const unknown = !op || oStart == null || oEnd == null;
-        const overlaps = !unknown && start < oEnd && oStart < end;
-        // Minutes between the two classes, whichever runs first (>= 0 for non-overlap).
-        const gap = unknown ? null : (oStart >= end ? oStart - end : start - oEnd);
-        return { c, sameSchool, unknown, overlaps, gap };
+        const cls = classifyOther(
+          { start, end, loc: program.program_location_id ?? null },
+          {
+            start: op ? parse12h(op.start_time) : null,
+            end: op ? parse12h(op.end_time) : null,
+            loc: op ? (op.program_location_id ?? null) : null,
+          },
+          TRAVEL_GAP_WARN_MIN,
+        );
+        return { c, ...cls };
       });
 
       // A real time OVERLAP is the only hard conflict — a class at another school
@@ -898,7 +902,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       // 2026-08-18, J2S runs exactly that Wednesday pair). This MUST agree with
       // check_program_assignment_conflict(), or the board offers an assignment the
       // insert then rejects.
-      const conflicts = others.filter((o) => o.unknown || o.overlaps);
+      const conflicts = others.filter((o) => o.conflict);
       if (conflicts.length) {
         const list = conflicts.map((o) => describe(o.c)).join(", ");
         const allDraft = conflicts.every((o) => o.c.status === "proposed");
@@ -916,7 +920,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       const sameSchool = others.filter((o) => o.sameSchool);
       if (sameSchool.length) {
         const list = sameSchool.map((o) => describe(o.c)).join(", ");
-        const adjacent = sameSchool.every((o) => o.gap != null && o.gap < TRAVEL_GAP_WARN_MIN);
+        const adjacent = sameSchool.every((o) => o.tight);
         warnings.push(
           adjacent
             ? `${first} also has ${list} on ${dayLabel}, back-to-back at the same school.`
@@ -926,7 +930,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       // Another school with a tight turnaround: allowed, but flag the drive. Jessica's
       // number — "might not be possible unless they're close together". She knows the
       // drive; the software doesn't, so this warns and never blocks.
-      const tight = others.filter((o) => !o.sameSchool && o.gap != null && o.gap < TRAVEL_GAP_WARN_MIN);
+      const tight = others.filter((o) => !o.sameSchool && o.tight);
       if (tight.length) {
         const list = tight.map((o) => describe(o.c)).join(", ");
         warnings.push(`${first} also has ${list} on ${dayLabel} — under ${TRAVEL_GAP_WARN_MIN} min to get between the two schools.`);
