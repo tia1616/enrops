@@ -988,8 +988,11 @@ export default function Home() {
               PublicLayout, whose footer carries the single platform line. */}
         </div>
         {/* One modal, mounted in BOTH trees (see the J2S copy at the end of this file).
-            Joining clears the flag optimistically so the button does not still say
-            "Join the waitlist" for a family already on it. */}
+            onJoined is deliberately a no-op: the class is STILL FULL after someone joins
+            the list, so the button must keep saying "Join the waitlist". Clearing the
+            flag here would flip it to "Register" and walk the next family into the
+            capacity gate's 409. The modal's own confirmation state is what tells the
+            family who just joined that it worked. */}
         {waitlistFor && (
           <WaitlistModal
             program={waitlistFor}

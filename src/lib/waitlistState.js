@@ -15,11 +15,22 @@
 
 // The registrations.status value for a child waiting for a place.
 //
-// EVERY reader that means "enrolled" must exclude it. Seven admin queries filtered only on
-// `cancelled_at is null`, which was a correct definition of enrolled right up until this
-// status existed - then a waiting child silently became a roster child and an enrolled
-// count. That is the seam class: the bug is never in the line you wrote, it is in the code
-// that depends on it. Import this rather than typing the literal, so the next reader that
+// EVERY reader that means "enrolled" must exclude it. TWELVE did not, across eight files,
+// and they came in two shapes that have to be hunted separately:
+//
+//   `cancelled_at is null`                   Rosters x3, ProgramRoster, ProgramsCalendar x3
+//   a status DENY-LIST, which is worse       InstructorPortal, ClassReports,
+//     .neq(status,'cancelled') /             EditProgramCurriculumModal,
+//     .not(status,in,(cancelled,withdrawn))  notify-program-curriculum-change, invite-parents
+//
+// The deny-lists are worse because they LOOK exhaustive and are not: 'withdrawn' is not
+// even a legal value in registrations_status_check, so that list never enumerated
+// anything real. Grepping for `cancelled_at` finds the first shape and misses the second.
+// Readers built on an ALLOW-list (status = 'confirmed') were safe by construction - that
+// is why all eleven readers in lifecycle-automations-cron needed no change.
+//
+// That is the seam class: the bug is never in the line you wrote, it is in the code that
+// depends on it. Import this rather than typing the literal, so the next reader that
 // needs excluding is findable by its references.
 export const WAITLIST_STATUS = 'waitlist';
 
