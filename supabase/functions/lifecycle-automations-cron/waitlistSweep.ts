@@ -39,6 +39,8 @@ export interface WaitlistSweepResult {
   skipped_no_seat: number;
   skipped_quiet_hours: number;
   skipped_already_invited: number;
+  /** Offers withdrawn because the email did not go out. The next tick retries them. */
+  unsent_rolled_back: number;
   errors: Array<{ program_id?: string; error: string }>;
 }
 
@@ -58,6 +60,7 @@ export async function runWaitlistSweep(
   const out: WaitlistSweepResult = {
     expired: 0, offered: 0, emailed: 0,
     skipped_no_seat: 0, skipped_quiet_hours: 0, skipped_already_invited: 0,
+    unsent_rolled_back: 0,
     errors: [],
   };
 
@@ -149,10 +152,22 @@ export async function runWaitlistSweep(
       out.offered += 1;
 
       // ── The invite email ───────────────────────────────────────────────
-      // Wrapped: a send failure must NOT unwind the hold. The seat is theirs either
-      // way, and the next tick will not re-offer (already_invited), so the worst case
-      // is a held seat whose family was not told - which the expiry sweep releases in
-      // 24 hours. Losing the hold instead would resell a seat we just promised.
+      // A SEND FAILURE UNDOES THE OFFER, and that is the opposite of what this first
+      // did. The original reasoning was "the seat is theirs either way" - which is
+      // wrong once you follow it through:
+      //
+      //   send fails -> the hold stands -> next tick sees already_invited and skips,
+      //   so the email is never retried -> 24 hours later the expiry sweep lapses it
+      //   -> and per Jessica's decision the family COMES OFF THE LIST.
+      //
+      // A single bad minute at Resend would cost a family their place without one word
+      // ever reaching them. So on failure the invite columns are cleared, which puts
+      // the seat back and lets the very next tick offer it to the same family again.
+      //
+      // The trade: if the send actually got through and only the RESPONSE failed, they
+      // hold a link that now reads "no longer valid" and get a fresh one minutes later.
+      // Two emails and one dead link is a far smaller harm than a lost place.
+      let sent = false;
       try {
         const { data: prog } = await supabase
           .from('programs')
@@ -196,12 +211,42 @@ export async function runWaitlistSweep(
           console.error('[waitlist-sweep] invite send failed', resp.status, await resp.text());
           out.errors.push({ program_id: programId, error: `send ${resp.status}` });
         } else {
+          sent = true;
           out.emailed += 1;
           console.log('[waitlist-sweep] invited', { program_id: programId, to: row.parent_email });
         }
       } catch (mailErr) {
         console.error('[waitlist-sweep] invite send threw', (mailErr as Error).message);
         out.errors.push({ program_id: programId, error: `send: ${(mailErr as Error).message}` });
+      }
+
+      if (!sent) {
+        // Put the seat back. Targeted at the TOKEN this call just minted, not at the
+        // registration id: if anything else has touched the row since (an operator
+        // removing them, a consume racing in), the token no longer matches and this
+        // correctly does nothing rather than clearing someone else's live invite.
+        const { error: undoErr } = await supabase
+          .from('registrations')
+          .update({
+            waitlist_invited_at: null,
+            waitlist_invite_expires_at: null,
+            waitlist_invite_token: null,
+          })
+          .eq('waitlist_invite_token', row.invite_token);
+        if (undoErr) {
+          // Now the seat really is stuck until the hold lapses. Loud, because this is
+          // the path that ends with a family silently losing their place.
+          console.error('[waitlist-sweep] COULD NOT UNDO unsent invite', {
+            program_id: programId, registration_id: row.registration_id, error: undoErr.message,
+          });
+          out.errors.push({ program_id: programId, error: `undo failed: ${undoErr.message}` });
+        } else {
+          out.offered -= 1; // it did not really happen
+          out.unsent_rolled_back += 1;
+          console.warn('[waitlist-sweep] rolled back an unsent invite; next tick will retry', {
+            program_id: programId,
+          });
+        }
       }
     } catch (e) {
       out.errors.push({ program_id: programId, error: (e as Error).message });
