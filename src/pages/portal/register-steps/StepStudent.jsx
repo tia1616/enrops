@@ -6,6 +6,10 @@ import { needsAftercareProvider } from '../../../lib/dismissal.js';
 // in src/lib/referral.js so no tenant's channel can be written into this file
 // again - see the note there and src/lib/referral.test.mjs.
 import { referralOptions } from '../../../lib/referral.js';
+// Catches a parent's own birth date in the child's field. Shared with
+// Register.jsx's advance guard so the message and the block agree - see
+// src/lib/studentBirthdate.js for why the band is loose.
+import { birthdateProblem } from '../../../lib/studentBirthdate.js';
 
 // Was a local list that stopped at 6th grade while operators could set a class to
 // any grade, so a family whose child was in 7th could not pick a grade and could not
@@ -16,6 +20,7 @@ const GRADE_OPTIONS = GRADE_OPTIONS_LONG;
 export default function StepStudent({ student, onUpdate, childIndex, regFields = { std: {}, custom: [] }, child = {}, onUpdateChild = () => {}, lean = false, orgName = '' }) {
   const { std = {}, custom = [] } = regFields;
   const referrals = referralOptions(orgName);
+  const dobProblem = birthdateProblem(student.birthdate);
   return (
     <div>
       <h1 className="font-titan text-3xl text-j2s-ink sm:text-4xl">
@@ -85,14 +90,35 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
           </select>
         </div>
         <div>
-          <label className="label-field">Birth date *</label>
+          <label className="label-field" htmlFor={`student-birthdate-${childIndex}`}>Birth date *</label>
           <input
+            id={`student-birthdate-${childIndex}`}
             type="date"
             className="input-field"
             value={student.birthdate}
             onChange={(e) => onUpdate({ birthdate: e.target.value })}
             required
+            // The field a parent is most likely to fill with their OWN details,
+            // so it stays out of the browser's identity autofill the same way
+            // the name fields above do.
+            autoComplete="off"
+            name={`student-birthdate-${childIndex}`}
+            aria-invalid={dobProblem ? 'true' : undefined}
+            aria-describedby={dobProblem ? `student-birthdate-problem-${childIndex}` : undefined}
           />
+          {/* Shown inline rather than only disabling Continue: a greyed-out
+              button with no reason is the silent-wall pattern, and this is
+              precisely the mistake nobody notices until the confirmation email
+              greets the wrong person. */}
+          {dobProblem && (
+            <div
+              id={`student-birthdate-problem-${childIndex}`}
+              className="mt-2 rounded-lg border-2 border-j2s-orange-dark/30 bg-j2s-orange-dark/5 px-4 py-3 text-sm text-j2s-orange-dark"
+              role="alert"
+            >
+              {dobProblem.message}
+            </div>
+          )}
         </div>
         {!lean && (
           <div>

@@ -2,6 +2,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { useNavigate, useSearchParams, useOutletContext } from 'react-router-dom';
 import { supabase, API_BASE } from '../../lib/supabase.js';
 import { needsAuthorizedPickup, dismissalAnswerIncomplete } from '../../lib/dismissal.js';
+import { birthdateProblem } from '../../lib/studentBirthdate.js';
 import { VIP_PRICE_PER_TERM_CENTS } from '../../lib/pricing.js';
 import { schoolYearTermsForFall } from '../../lib/terms.js';
 import { useCart } from '../../context/CartContext.jsx';
@@ -357,6 +358,11 @@ export default function Register() {
           !!s.emergency_contact_name &&
           !!s.emergency_contact_phone;
         if (!base) return false;
+        // A date that is not plausibly a student's blocks the step. StepStudent
+        // renders the reason inline against the field, so this is not a silent
+        // wall. Same function both sides - the button and the message cannot
+        // disagree about what counts as wrong.
+        if (birthdateProblem(s.birthdate)) return false;
         const std = regFields.std;
         // dismissal method (if enabled + required)
         if (std.dismissal_method?.required && !s.dismissal_method) return false;
