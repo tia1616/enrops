@@ -246,8 +246,13 @@ serve(async (req) => {
     if (joinErr) {
       const code = (joinErr as { code?: string }).code;
       if (code === 'P0001') {
+        // The gate proves the class HAS ROOM RIGHT NOW. It does not prove a seat just
+        // opened: the same branch fires for a page left open while the operator raised
+        // the capacity, and for a stale back-button render of a class that was never
+        // full. Saying "a spot just opened" would invent an event in those cases. State
+        // the fact the check actually established, and give the same next step.
         return json({
-          error: 'Good news - a spot just opened in that class. Refresh the page and register.',
+          error: 'That class has room after all, so there is no need to wait. Refresh the page and register.',
           has_room: true,
         }, 409);
       }

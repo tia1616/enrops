@@ -23,7 +23,18 @@
 --   * reads program_seat_counts, so "full" means exactly what the capacity gate enforces
 --     and what the operator's screen shows. One rule, three consumers.
 
-create or replace function public.program_full_flags(p_program_ids uuid[] default null)
+-- CORRECTED 2026-08-19 (review of b5a0fad..HEAD). The argument was `default null`, and
+-- program_seat_counts treats NULL as "all programs". So `select * from
+-- program_full_flags()` - which anon may execute - returned every open class on the
+-- PLATFORM: proven on staging at 107 rows across 7 organisations. The reasoning above
+-- defends one class's full/not-full fact to a family already looking at that class. It
+-- does not defend handing an anonymous caller a census of every tenant's catalogue and
+-- how much of it is sold out, which is the shape of thing the June hotfix closed.
+--
+-- The fix is to make the argument required. The only caller (portal/Home.jsx) always
+-- passes the ids it is rendering and early-returns on an empty catalog, so nothing that
+-- exists today notices.
+create or replace function public.program_full_flags(p_program_ids uuid[])
 returns table (program_id uuid, is_full boolean)
 language sql
 stable
@@ -33,7 +44,11 @@ as $$
   select sc.program_id, sc.is_full
   from program_seat_counts(p_program_ids) sc
   join programs p on p.id = sc.program_id
-  where p.status = 'open';
+  where p.status = 'open'
+    -- Belt and braces: program_seat_counts already returns everything for a NULL array,
+    -- so refuse rather than rely on the signature alone to stop a bulk read.
+    and p_program_ids is not null
+    and cardinality(p_program_ids) > 0;
 $$;
 
 comment on function public.program_full_flags(uuid[]) is

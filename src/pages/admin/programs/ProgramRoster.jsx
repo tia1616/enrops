@@ -16,6 +16,7 @@ import { Link, useParams, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import { dismissalSummary } from "../../../lib/dismissal.js";
 import { WAITLIST_STATUS } from "../../../lib/waitlistState.js";
+import { usePermissions } from "../../../lib/permissions.js";
 import EmailRosterModal from "../EmailRosterModal.jsx";
 import InviteFamiliesModal from "../InviteFamiliesModal.jsx";
 
@@ -88,6 +89,7 @@ function Tel({ phone }) {
 
 export default function ProgramRoster() {
   const { org } = useOutletContext();
+  const perm = usePermissions();
   const { programId } = useParams();
 
   const [loading, setLoading] = useState(true);
@@ -275,6 +277,68 @@ export default function ProgramRoster() {
     URL.revokeObjectURL(url);
   }
 
+  // ---- Taking a family off the waiting list ----
+  //
+  // The confirmation email tells families "reply to this email and we will take care of
+  // it", and that reply lands in the PROVIDER's inbox. Until this existed the operator
+  // could read the request and do nothing about it. This is the control that makes the
+  // promise true.
+  //
+  // Not a soft "hide" - waitlist_remove sets status='cancelled' and renumbers the rest,
+  // because two DB objects key on status='waitlist' and a row left in that status with
+  // only cancelled_at set would block the family from ever rejoining (see 20260819h).
+  const [removingId, setRemovingId] = useState(null);
+  const [removeError, setRemoveError] = useState("");
+
+  async function removeFromWaitlist(row) {
+    const childName = `${row.student?.first_name ?? ""} ${row.student?.last_name ?? ""}`.trim() || "this child";
+    // Confirm by NAME. The rows are one line each and sit close together; an operator
+    // who misses by a row would silently drop the wrong family's place with no undo.
+    if (!window.confirm(
+      `Take ${childName} off the waiting list for this class?\n\n`
+      + `They will lose their place and everyone below them moves up. `
+      + `If they want back on, they can join again and go to the end of the list.`
+    )) return;
+
+    setRemovingId(row.id);
+    setRemoveError("");
+    const { data, error } = await supabase.rpc("waitlist_remove", {
+      p_registration_id: row.id,
+      p_org_id: org.id,
+    });
+    if (error) {
+      // Say so WHERE THEY ARE LOOKING. A silent failure here reads as "it worked" -
+      // the row would still be on screen and the operator would tell the family it
+      // was done.
+      setRemoveError(`Couldn't remove ${childName}: ${error.message}`);
+      setRemovingId(null);
+      return;
+    }
+    const result = Array.isArray(data) ? data[0] : data;
+    if (!result?.removed) {
+      setRemoveError(`${childName} was already off the list. Refresh to see the current list.`);
+      setRemovingId(null);
+      return;
+    }
+
+    // Re-read rather than splicing locally: the function RENUMBERS everyone behind them,
+    // so the positions held in state are stale the moment this succeeds. Showing the old
+    // numbers would contradict what the next email tells those families.
+    const { data: fresh, error: freshErr } = await supabase
+      .from("registrations")
+      .select(`
+        id, waitlist_position, registered_at,
+        student:students ( id, first_name, last_name, grade ),
+        parent:parents ( first_name, last_name, email, phone )
+      `)
+      .eq("program_id", programId)
+      .eq("status", WAITLIST_STATUS)
+      .is("cancelled_at", null)
+      .order("waitlist_position", { ascending: true });
+    if (!freshErr) setWaitlist(fresh ?? []);
+    setRemovingId(null);
+  }
+
   // Rosters go to the PARTNER (school/venue logistics) — never to families.
   const [emailing, setEmailing] = useState(false);
 
@@ -398,7 +462,20 @@ export default function ProgramRoster() {
           <p style={{ fontSize: 13, color: MUTED, margin: "0 0 12px", maxWidth: 620 }}>
             These families asked to be told if a place opens up. They are not enrolled,
             have not paid, and are not on the roster or the roster email.
+            {perm.canEdit && " If a family asks to come off the list, remove them here."}
           </p>
+
+          {/* Above the list, so it is on screen next to the row that failed rather than
+              below a list that can run past the fold. */}
+          {removeError && (
+            <div style={{
+              marginBottom: 12, padding: "10px 12px", borderRadius: 8,
+              border: `1.5px solid ${RED}`, background: "rgba(200,0,0,0.06)",
+              fontSize: 13, color: RED, maxWidth: 620,
+            }}>
+              {removeError}
+            </div>
+          )}
           <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, overflow: "hidden" }}>
             {waitlist.map((w, i) => {
               const s = w.student ?? {};
@@ -432,6 +509,27 @@ export default function ProgramRoster() {
                     {p.email ? <a href={`mailto:${p.email}`} style={{ color: BRIGHT }}>{p.email}</a> : "no email"}
                     {p.phone && <> · <Tel phone={p.phone} /></>}
                   </span>
+                  {/* Staff and up. A viewer reads the list but does not change who is on
+                      it. Hidden rather than disabled: a control a viewer can never use is
+                      noise on every row. The RPC re-checks with can_edit_org either way,
+                      so hiding it is presentation, not the guard. */}
+                  {perm.canEdit && (
+                    <button
+                      type="button"
+                      onClick={() => removeFromWaitlist(w)}
+                      disabled={removingId === w.id}
+                      title={`Take ${childName} off the waiting list`}
+                      style={{
+                        border: "none", background: "none", padding: "2px 4px",
+                        color: removingId === w.id ? MUTED : RED,
+                        fontSize: 13, fontWeight: 600,
+                        cursor: removingId === w.id ? "wait" : "pointer",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {removingId === w.id ? "Removing…" : "Remove"}
+                    </button>
+                  )}
                 </div>
               );
             })}
