@@ -25,7 +25,7 @@
 // Stripe flags per refund call — these have to be set explicitly, because
 // Stripe's defaults are wrong for both models:
 //
-//   DESTINATION org (J2S + every pre-existing org):
+//   DESTINATION charge (J2S + every pre-existing org):
 //     refund_application_fee: false      // see below — always, on both models
 //     reverse_transfer: true             // pull money back from the connected account
 //     ...created on the PLATFORM (no Stripe-Account header).
@@ -34,6 +34,16 @@
 //     created ON the connected account (Stripe-Account header).
 //     refund_application_fee: false      // see below — always, on both models
 //     reverse_transfer                   // OMITTED — no transfer exists to reverse
+//
+//   PRE-CONNECT PLATFORM charge (any charge taken before that org's connected
+//   account went live — J2S has these from before 2026-05-27):
+//     created on the PLATFORM, and it has NO transfer_data either.
+//     reverse_transfer                   // OMITTED — same reason as direct
+//   This third shape is why reverse_transfer is decided from the CHARGE (does
+//   latest_charge.transfer exist?) and not from stripe_charge_account_id: a
+//   pre-Connect charge and a destination charge both record account_id null.
+//   Sending it on one of these fails the refund with "Cannot reverse transfer
+//   on charge ... because it does not have an associated transfer."
 //
 // refund_application_fee is FALSE on both models and the fee refund is issued
 // explicitly via applicationFees.createRefund, because Arielle's v4 section 2
@@ -316,7 +326,18 @@ serve(async (req: Request) => {
     // Build PI list: each entry = (pi_id, amount_for_this_reg, sort_key).
     // chargeAccountId travels with the slot: each PaymentIntent is refunded on
     // the account it was actually created on.
-    type PiSlot = { pi: string; amount: number; sortKey: number; chargeAccountId: string | null };
+    // hasTransfer is NOT stored anywhere and cannot be inferred from
+    // chargeAccountId: a null account means "created on the platform", which
+    // covers BOTH a Connect destination charge (has a transfer) and a
+    // pre-Connect charge that predates the org's connected account (has none).
+    // It is read off the charge below. null = we could not read it.
+    type PiSlot = {
+      pi: string;
+      amount: number;
+      sortKey: number;
+      chargeAccountId: string | null;
+      hasTransfer: boolean | null;
+    };
     const piSlots: PiSlot[] = [];
 
     if (paidInstallments.length > 0) {
@@ -326,6 +347,7 @@ serve(async (req: Request) => {
           amount: inst.amount_cents,
           sortKey: inst.installment_number, // newest installment first
           chargeAccountId: inst.stripe_charge_account_id ?? null,
+          hasTransfer: null,
         });
       }
     } else if (reg.payment_status === 'paid' && reg.stripe_payment_intent_id) {
@@ -334,6 +356,7 @@ serve(async (req: Request) => {
         amount: reg.amount_cents ?? 0,
         sortKey: 1,
         chargeAccountId: reg.stripe_charge_account_id ?? null,
+        hasTransfer: null,
       });
     }
 
@@ -364,9 +387,24 @@ serve(async (req: Request) => {
       try {
         const pi = await stripe.paymentIntents.retrieve(
           slot.pi,
-          undefined,
+          { expand: ['latest_charge'] },
           slot.chargeAccountId ? { stripeAccount: slot.chargeAccountId } : undefined,
         );
+
+        // ── does this charge actually HAVE a transfer to reverse? ──────────
+        // Asked of the charge instead of inferred from the account, because a
+        // platform-scoped charge is not automatically a destination charge.
+        // Every charge taken before the org's connected account went live sits
+        // on the platform with no transfer_data at all, and reverse_transfer on
+        // one of those fails the whole refund outright ("Cannot reverse
+        // transfer on charge ... because it does not have an associated
+        // transfer"). Read once here; the retrieve already happens for the
+        // ceiling, so this costs an expand, not an API call.
+        const latest = (pi as unknown as { latest_charge?: { transfer?: unknown } | null }).latest_charge;
+        if (latest && typeof latest === 'object') {
+          slot.hasTransfer = Boolean((latest as { transfer?: unknown }).transfer);
+        }
+
         const chargedTotal = pi.amount ?? 0;
         if (chargedTotal <= 0) continue;
 
@@ -547,9 +585,24 @@ serve(async (req: Request) => {
             refund_application_fee: false,
             // Destination charges only: pull the refunded share back from the
             // operator's connected account, or the refund comes out of the
-            // platform balance alone. A DIRECT charge has no transfer to
-            // reverse — sending this would fail the call — so it is omitted.
-            ...(slot.chargeAccountId ? {} : { reverse_transfer: true }),
+            // platform balance alone.
+            //
+            // Sent only when the charge REALLY has a transfer (read above). Two
+            // kinds of charge have none and would fail the call outright:
+            //   - a DIRECT charge (funds never left the operator's account);
+            //   - a pre-Connect PLATFORM charge, taken before the org's
+            //     connected account existed. J2S has these from before
+            //     2026-05-27, and they are indistinguishable from a destination
+            //     charge by chargeAccountId alone — both are null.
+            //
+            // hasTransfer === null means the charge could not be read. Keep the
+            // old behaviour there rather than dropping the flag: a missing
+            // reverse_transfer on a real destination charge silently pays the
+            // family out of the PLATFORM balance and lets the operator keep the
+            // money, whereas an unnecessary one fails loudly and moves nothing.
+            ...(slot.chargeAccountId === null && slot.hasTransfer !== false
+              ? { reverse_transfer: true }
+              : {}),
             reason: 'requested_by_customer',
             metadata: {
               enrops_refund_id: refundRowId,
