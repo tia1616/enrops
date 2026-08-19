@@ -115,6 +115,11 @@ verify_jwt = false
 [functions.create-registration]
 verify_jwt = false
 
+# Public: a family joining a waitlist has no account yet, same as registration.
+# Takes no payment. Everything client-supplied is re-resolved server-side.
+[functions.join-waitlist]
+verify_jwt = false
+
 [functions.sync-operator-stripe-status]
 # CORRECTED 2026-07-28. The note below claimed PROD had this as verify_jwt =
 # false. It does not: prod is TRUE, staging is false, and the two have drifted.
