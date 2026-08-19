@@ -178,6 +178,67 @@ serve(async (req) => {
       return json({ error: 'A class in your cart is no longer open for registration. Please refresh and try again.' }, 400);
     }
 
+    // CAPACITY. This function has never counted seats, so a full class could be
+    // oversold from an anonymous POST - the screens show "spots left", but a screen
+    // is not a gate. Woodstock (Super Mario Game Makers, FA26) reached its 14-seat
+    // cap with nothing here to stop a 15th family paying.
+    //
+    // The count comes from program_seat_counts() rather than being re-derived here.
+    // Re-deriving it in TypeScript is the specific bug that produced an alert email
+    // whose number contradicted the screen it linked to: seats_taken = confirmed +
+    // pending, which is exactly what program_enrollment shows a privileged reader,
+    // and the two are pinned by an equivalence probe in the migration.
+    //
+    // Why an RPC and not a select on the view: program_enrollment is
+    // security_invoker=on, so RLS on registrations applies to the CALLER. Read as
+    // anon it reports enrolled=0 for every class on prod, and a gate reading that
+    // would never fire. The function is SECURITY DEFINER for that reason.
+    //
+    // A cart can name the SAME class twice (two siblings, one class), so the
+    // request's own demand is counted per program - one seat left must reject two
+    // siblings, not admit both.
+    //
+    // UNCAPPED IS NOT FULL: max_capacity NULL or <= 0 skips the check entirely. A
+    // missing or mis-typed cap is not a full class, and treating it as one would
+    // turn every family away on a data-entry slip.
+    const requestedPerProgram = new Map<string, number>();
+    for (const f of flat) {
+      requestedPerProgram.set(f.program_id, (requestedPerProgram.get(f.program_id) ?? 0) + 1);
+    }
+    const { data: seatRows, error: seatErr } = await admin.rpc('program_seat_counts', {
+      p_program_ids: allProgramIds,
+    });
+    if (seatErr) throw new Error(`capacity check: ${seatErr.message}`);
+    const seatsById = new Map(
+      ((seatRows || []) as Array<{ program_id: string; max_capacity: number | null; seats_taken: number }>)
+        .map((s) => [s.program_id, s]),
+    );
+    const atCapacity = allProgramIds.filter((id) => {
+      const s = seatsById.get(id);
+      // No row back for a program we asked about is a program we cannot prove has
+      // room. Same rule as the publish check above: refuse rather than quietly skip.
+      if (!s) return true;
+      if (s.max_capacity === null || Number(s.max_capacity) <= 0) return false;
+      return Number(s.seats_taken) + (requestedPerProgram.get(id) ?? 0) > Number(s.max_capacity);
+    });
+    if (atCapacity.length) {
+      console.warn(
+        '[create-registration] BLOCKED: at capacity',
+        atCapacity.map((id) => {
+          const s = seatsById.get(id);
+          return `${id} taken=${s?.seats_taken ?? '?'} cap=${s?.max_capacity ?? '?'} wanted=${requestedPerProgram.get(id) ?? 0}`;
+        }),
+      );
+      return json(
+        {
+          error: 'That class just filled up. Refresh the page to see what is still open.',
+          capacity_error: true,
+          full_program_ids: atCapacity,
+        },
+        409,
+      );
+    }
+
     // --- Upsert parent ---
     const emailClean = parent.email.toLowerCase().trim();
     const { data: existing } = await admin
@@ -582,6 +643,34 @@ serve(async (req) => {
         }
       }
     }
+
+    // RESIDUAL RACE - KNOWN, MEASURED, AND DELIBERATELY NOT PAPERED OVER.
+    //
+    // The capacity check above is a read followed by a write, so two families
+    // checking out in the same instant can both see 13 of 14 and both insert. This
+    // gate closes the real-world case (a family registering for a class that is
+    // already full) but not that millisecond window.
+    //
+    // A post-insert re-count-and-unwind was written here and then REMOVED, because
+    // it could not work and would have made things worse:
+    //   waiver_signatures_registration_id_fkey is ON DELETE NO ACTION, and this
+    //   function inserts a waiver signature for every registration a few lines
+    //   above. So `delete from registrations where id in (...)` is BLOCKED by the
+    //   foreign key on every real registration. The unwind would have thrown, turned
+    //   a 409 into a 500, and left the oversold rows in place.
+    // Doing it properly means deleting waiver_signatures, then registrations, then
+    // reconciling the student/student_contacts rows this request created - a real
+    // multi-table compensating transaction. That is the server-side atomic checkout
+    // already specced as a P0 (2026-07-12 code review), not this gate.
+    //
+    // Not closing it here is a deliberate call at current volume: 14-seat classes and
+    // a few registrations a day, so two families colliding on the same last seat
+    // inside the same few hundred milliseconds is negligible - and the failure mode
+    // is one seat over, which an operator can see and fix, versus a 500 mid-checkout
+    // for a family who did nothing wrong.
+    //
+    // DO NOT claim this function is atomic. When the atomic-checkout P0 is built,
+    // fold the capacity check into that single transaction and delete this note.
 
     return json({
       registration_ids: registrationIds,
