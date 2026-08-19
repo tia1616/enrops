@@ -63,16 +63,30 @@ $$;
 comment on function public.program_seat_counts(uuid[]) is
   'Canonical seat count per afterschool program, enforced by create-registration. seats_taken = confirmed + pending, matching what program_enrollment shows to a PRIVILEGED reader. is_full is false for an uncapped program (max_capacity NULL/0). SECURITY DEFINER on purpose: program_enrollment is security_invoker=on and reports enrolled=0 to anon, so the true count needs an RLS bypass. NOT granted to anon. Camps are NOT covered: camp_sessions has no capacity column and camp caps live on curricula.class_size_max.';
 
--- EXECUTE: service_role for the gate, authenticated for operator surfaces. NOT anon.
+-- EXECUTE: service_role ONLY. Not anon, not authenticated.
 --
 -- `revoke ... from public` is NOT sufficient on its own: Supabase sets DEFAULT
 -- PRIVILEGES granting EXECUTE on new public functions to anon/authenticated/
--- service_role explicitly, so anon holds its own grant rather than inheriting via
--- PUBLIC. It has to be revoked by name. Caught by a control probe that was supposed
--- to fail and came back with 124 rows.
+-- service_role explicitly, so those roles hold their own grants rather than
+-- inheriting via PUBLIC. They have to be revoked BY NAME. Caught by a control probe
+-- that was supposed to fail and came back with 124 rows.
+--
+-- `authenticated` was granted in the first version of this migration "for operator
+-- surfaces" that do not exist yet, and that was a CROSS-TENANT LEAK. This function is
+-- SECURITY DEFINER and, called with no argument, returns EVERY program in EVERY org.
+-- Proven as `authenticated` on staging: 124 rows, 53 seats, all tenants. And
+-- `authenticated` is any parent with a login on any tenant, so it made one tenant's
+-- fill rates readable by another tenant's families - the same class the 2026-06-06
+-- hotfix closed by switching program_enrollment to security_invoker (that migration
+-- names "fill rates" explicitly). Granting it here would have undone that fix by
+-- another route.
+--
+-- When chunk 2 needs an operator-facing count, add an ORG-SCOPED reader (org_id
+-- argument + membership check). Do not widen this one.
 revoke all on function public.program_seat_counts(uuid[]) from public;
 revoke execute on function public.program_seat_counts(uuid[]) from anon;
-grant execute on function public.program_seat_counts(uuid[]) to service_role, authenticated;
+revoke execute on function public.program_seat_counts(uuid[]) from authenticated;
+grant execute on function public.program_seat_counts(uuid[]) to service_role;
 
 -- ---------------------------------------------------------------------------
 -- program_enrollment IS DELIBERATELY LEFT ALONE.
@@ -102,12 +116,16 @@ grant execute on function public.program_seat_counts(uuid[]) to service_role, au
 --
 -- If you change one expression, change both and re-run that.
 --
--- SEPARATELY, AND PRE-EXISTING: program_enrollment does not do what its own comment
--- claims. The comment says "SECURITY DEFINER is intentional - bypasses RLS on
--- registrations to compute accurate counts", but the view is security_invoker=on,
--- so as anon it reports enrolled=0 / spots_remaining=max_capacity for ALL 116 open
--- prod classes. Nothing parent-facing reads it today (only the admin schedule,
--- which runs authenticated), so no wrong number is on screen - but chunk 1 must not
--- build the public "class is full" state on top of it. Not fixed here; not mine to
--- widen quietly.
+-- SEPARATELY: program_enrollment's own COMMENT is stale, but its BEHAVIOUR is correct
+-- and deliberate. The comment still says "SECURITY DEFINER is intentional - bypasses
+-- RLS on registrations to compute accurate counts". That was true once. Migration
+-- 20260606_security_invoker_leaky_views.sql then switched it to security_invoker=on
+-- as an ERROR-level security hotfix, because as a DEFINER view it "exposed every
+-- tenant's program names, locations, and fill rates to anon".
+--
+-- So anon reading enrolled=0 / spots_remaining=max_capacity for all 116 open prod
+-- classes is the INTENDED outcome of that hotfix, not a bug. Only the comment lies.
+-- Consequence for chunk 1: the public "class is full" state cannot be built on this
+-- view, because anon is supposed to see zeros. It needs its own safe-columns,
+-- org-scoped path. Comment not rewritten here - it is outside this change.
 -- ---------------------------------------------------------------------------
