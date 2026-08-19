@@ -30,7 +30,14 @@ export default function SenderSetupNotice({ orgId }) {
   // land nowhere useful" are different facts and the copy for them is different:
   // one is a suggestion, the other is a problem. Folding them together is what
   // made this notice tell providers something untrue about their own email.
-  const [repliesReachThem, setRepliesReachThem] = useState(true);
+  //
+  // THREE-VALUED, and null is not laziness. Both booleans assert a destination:
+  // true says "they reach your account email", false says "they reach a default
+  // address, not you". If the read that decides between them fails we know
+  // neither, and defaulting to either one prints a claim we cannot back - the
+  // exact mistake this whole change exists to correct. null gets copy that names
+  // no destination at all.
+  const [repliesReachThem, setRepliesReachThem] = useState(null);
   const perm = usePermissions();
 
   useEffect(() => {
@@ -49,12 +56,22 @@ export default function SenderSetupNotice({ orgId }) {
         supabase.from("org_branding").select("email_reply_to").eq("organization_id", orgId).maybeSingle(),
         supabase.from("organizations").select("email").eq("id", orgId).maybeSingle(),
       ]);
-      // On error, stay silent rather than show a banner we're unsure about.
-      if (!cancelled && !brandingRes.error && !orgRes.error) {
+      if (cancelled) return;
+      // WHETHER to show the notice depends on the branding read ONLY. The org read
+      // exists to pick the WORDING, so letting it gate the notice's existence would
+      // trade a correct signal for a cosmetic one: a transient failure of a query
+      // added for copy would silently hide a nudge the branding row alone had
+      // already earned. On error, stay silent rather than show a banner we're
+      // unsure about - but only for the read that actually decides.
+      if (!brandingRes.error) {
         const hasBranding = ((brandingRes.data?.email_reply_to ?? "").trim()).length > 0;
-        const hasOrgEmail = ((orgRes.data?.email ?? "").trim()).length > 0;
         setNeedsSetup(!hasBranding);
-        setRepliesReachThem(hasBranding || hasOrgEmail);
+        // Only refine the wording when we actually know. If this read failed,
+        // repliesReachThem stays null and the copy names no destination.
+        if (!orgRes.error) {
+          const hasOrgEmail = ((orgRes.data?.email ?? "").trim()).length > 0;
+          setRepliesReachThem(hasBranding || hasOrgEmail);
+        }
       }
     })();
     return () => { cancelled = true; };
@@ -83,9 +100,11 @@ export default function SenderSetupNotice({ orgId }) {
       <span style={{ fontSize: 13.5, color: INK, lineHeight: 1.5 }}>
         📨 <strong>Set your reply-to email.</strong>{" "}
         <span style={{ color: MUTED }}>
-          {repliesReachThem
+          {repliesReachThem === true
             ? "Family replies currently go to your account email. Choose where you'd like them instead."
-            : "Right now, when a family replies to your emails it goes to a default address — not your inbox."}
+            : repliesReachThem === false
+              ? "Right now, when a family replies to your emails it goes to a default address — not your inbox."
+              : "Choose where you'd like family replies to land."}
         </span>
       </span>
       <Link
