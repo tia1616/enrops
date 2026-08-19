@@ -1,13 +1,14 @@
 // Tests for encodeDisplayName / formatFromAddress (From-header RFC 5322 quoting).
 
 import { assertEquals } from 'https://deno.land/std@0.177.0/testing/asserts.ts';
-import { encodeDisplayName, formatFromAddress, resolveTestRecipient, NO_TENANT_INBOX_MESSAGE, OrgBrand } from '../orgBrand.ts';
+import { encodeDisplayName, formatFromAddress, resolveTestRecipient, resolveReplyTo, NO_TENANT_INBOX_MESSAGE, OrgBrand } from '../orgBrand.ts';
 
 // Minimal brand stub — only the two fields formatFromAddress reads matter.
 function brandWith(sender_name: string, sender_email = 'sender@mail.enrops.com'): OrgBrand {
   return {
     org_id: 'x', org_name: 'x', sender_name, sender_email,
-    reply_to: 'x@x.com', alert_email: 'x@x.com', logo_url: null,
+    reply_to: 'x@x.com', reply_to_source: 'branding', tenant_reply_to: 'x@x.com',
+    alert_email: 'x@x.com', logo_url: null,
     primary_color: '#000', secondary_color: '#000', accent_color: '#000', page_bg_color: '#fff',
     email_signature: null, email_signature_image_url: null, email_signature_image_mode: null,
     mailing_address: null, sender_source: 'platform_shared',
@@ -173,4 +174,113 @@ Deno.test('resolveTestRecipient: an explicit address still works with no tenant 
   // an operator testing against themselves.
   const brand = { ...brandWith('Acme'), tenant_alert_email: null };
   assertEquals(resolveTestRecipient(brand, 'admin@acme.com'), 'admin@acme.com');
+});
+
+// --- resolveReplyTo: who does a family's reply reach, and who chose it? -----
+// 2026-08-19: one Ukulele Project parent's reply reached the platform owner
+// instead of his provider, and that org had no org_branding.email_reply_to. It
+// DID have organizations.email, which this resolver returns for that shape, so
+// the routing was right and that one email is still unexplained. The reportable
+// defect was that nothing distinguished an address the operator chose from one
+// picked for them. These pin all three states.
+
+const PLATFORM = 'platform-fallback@example.com';
+
+Deno.test('resolveReplyTo: the tenant branding address wins', () => {
+  const r = resolveReplyTo({
+    tenantBrandingReplyTo: 'hi@provider.com',
+    tenantOrgEmail: 'admin@provider.com',
+    enropsOrgEmail: 'hello@enrops.example',
+    hardcodedFallback: PLATFORM,
+  });
+  assertEquals(r.reply_to, 'hi@provider.com');
+  assertEquals(r.reply_to_source, 'branding');
+  assertEquals(r.tenant_reply_to, 'hi@provider.com');
+});
+
+Deno.test("resolveReplyTo: the org email answers as 'org_email', NOT as configured", () => {
+  // The Ukulele Project's shape: org_branding row present, email_reply_to NULL,
+  // organizations.email set. Replies DO reach the provider, so this is not the
+  // platform case — but the operator never chose this address for families and it
+  // is not what the reply-to field on their settings screen shows them. An earlier
+  // version collapsed this into 'tenant', which meant the warning built for this
+  // incident could never fire for the org that caused it, while SenderSetupNotice
+  // was separately calling the same org unconfigured. If this ever reads
+  // 'branding' or 'platform' again, those two surfaces are lying to each other.
+  const r = resolveReplyTo({
+    tenantBrandingReplyTo: null,
+    tenantOrgEmail: 'admin@theukuleleproject.example',
+    enropsOrgEmail: 'hello@enrops.example',
+    hardcodedFallback: PLATFORM,
+  });
+  assertEquals(r.reply_to, 'admin@theukuleleproject.example');
+  assertEquals(r.reply_to_source, 'org_email');
+  assertEquals(r.tenant_reply_to, 'admin@theukuleleproject.example');
+});
+
+Deno.test('resolveReplyTo: a blank hardcodedFallback cannot produce an empty reply_to', () => {
+  // The docblock promises reply_to is ALWAYS non-empty and every consumer does
+  // `reply_to: brand.reply_to` on that promise. `??` only rejects null/undefined,
+  // so '' used to pass straight through and Resend would get an empty Reply-To.
+  const r = resolveReplyTo({ hardcodedFallback: '' });
+  assertEquals(r.reply_to.length > 0, true);
+  assertEquals(r.platform_reply_to.length > 0, true);
+  assertEquals(r.reply_to_source, 'platform');
+});
+
+Deno.test('resolveReplyTo: no tenant address at all is reported as PLATFORM, not hidden', () => {
+  const r = resolveReplyTo({
+    tenantBrandingReplyTo: null,
+    tenantOrgEmail: null,
+    enropsOrgEmail: 'hello@enrops.example',
+    hardcodedFallback: PLATFORM,
+  });
+  assertEquals(r.reply_to, 'hello@enrops.example');
+  assertEquals(r.reply_to_source, 'platform');
+  // The distinguishing signal: null here is what lets a caller or a screen say
+  // "this provider has no address" instead of printing a working-looking one.
+  assertEquals(r.tenant_reply_to, null);
+});
+
+Deno.test('resolveReplyTo: the hardcoded fallback is the last resort, and still resolves', () => {
+  // A family must never receive an email with no reply path, even when both the
+  // tenant and the platform org rows are empty.
+  const r = resolveReplyTo({ hardcodedFallback: PLATFORM });
+  assertEquals(r.reply_to, PLATFORM);
+  assertEquals(r.reply_to_source, 'platform');
+  assertEquals(r.tenant_reply_to, null);
+});
+
+Deno.test('resolveReplyTo: whitespace is not an address', () => {
+  // '   ' is falsy-adjacent but not falsy - the bug class this guards is a
+  // column "set" to blanks reading as configured.
+  const r = resolveReplyTo({
+    tenantBrandingReplyTo: '   ',
+    tenantOrgEmail: '\t\n',
+    enropsOrgEmail: 'hello@enrops.example',
+    hardcodedFallback: PLATFORM,
+  });
+  assertEquals(r.reply_to_source, 'platform');
+  assertEquals(r.tenant_reply_to, null);
+});
+
+Deno.test('resolveReplyTo: addresses are trimmed', () => {
+  const r = resolveReplyTo({ tenantBrandingReplyTo: '  hi@provider.com  ', hardcodedFallback: PLATFORM });
+  assertEquals(r.reply_to, 'hi@provider.com');
+});
+
+Deno.test('resolveReplyTo: alert_email is NOT a reply-to source', () => {
+  // Deliberate: alert_email is an INBOUND operator address. reply_to is printed
+  // in family email, so folding one into the other would publish an inbox the
+  // operator chose for alerts. If this test starts failing, that decision is
+  // being reversed - make it on purpose, not by autocomplete.
+  const r = resolveReplyTo({
+    tenantBrandingReplyTo: null,
+    tenantOrgEmail: null,
+    // Deliberately not a parameter this function accepts. Kept as a comment so
+    // the omission is visible in the test file, not just absent from it.
+    enropsOrgEmail: 'hello@enrops.example',
+    hardcodedFallback: PLATFORM,
+  });
+  assertEquals(r.reply_to_source, 'platform');
 });

@@ -123,7 +123,7 @@ export default function EmailSenderSettings() {
   // Snapshot of the last loaded/saved values so the Save button can grey out
   // when there's nothing to save, and light up when you change something.
   const [saved, setSaved] = useState({ fromName: "", replyTo: "", mailingAddress: "", alertEmail: "", sigHtml: "", sigImageUrl: "" });
-  const [preview, setPreview] = useState(null); // { from, reply_to }
+  const [preview, setPreview] = useState(null); // { from, reply_to, reply_to_source, sender_source, ... }
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testTo, setTestTo] = useState("");
@@ -500,6 +500,28 @@ export default function EmailSenderSettings() {
           <div style={{ fontSize: 12, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5 }}>Families will see</div>
           <div style={{ fontSize: 15, color: INK, marginTop: 6 }}><strong>From:</strong> {preview.from}</div>
           <div style={{ fontSize: 14, color: MUTED, marginTop: 2 }}><strong>Replies go to:</strong> {preview.reply_to}</div>
+          {/* The line above used to be the whole story, and it read as success in
+              two states where it is not. An address the operator did not choose
+              must not be shown in the same voice as one they did.
+
+              THREE states, because a two-way tenant/platform split reports the
+              middle one as fine and that is the one that actually bit us: The
+              Ukulele Project had no reply-to set but did have an account email, so
+              the resolved address was its own — nothing here would have warned —
+              while SenderSetupNotice on the Comms tabs was calling that same org
+              unconfigured. An operator following that nudge landed here, saw no
+              warning and a blank Reply-to field, and had every reason to think the
+              nudge was wrong. Both surfaces now tell the same story. */}
+          {preview.reply_to_source === "platform" && (
+            <div style={{ marginTop: 10, padding: "10px 12px", background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, color: "#7c2d12", fontSize: 13 }} role="alert">
+              <strong>That's an Enrops address, not yours.</strong> You haven't set a reply-to email, so a family who hits "reply" reaches us instead of you. Add yours below and save.
+            </div>
+          )}
+          {preview.reply_to_source === "org_email" && (
+            <div style={{ marginTop: 10, padding: "10px 12px", background: "#f5f3ff", border: `1px solid ${RULE}`, borderRadius: 8, color: INK, fontSize: 13 }}>
+              That's your account email, used because you haven't set a reply-to for families. Replies do reach you. Set one below if they should go somewhere else.
+            </div>
+          )}
         </div>
       )}
 

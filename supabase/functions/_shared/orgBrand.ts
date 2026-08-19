@@ -24,7 +24,30 @@ export interface OrgBrand {
   sender_name: string;
   sender_email: string;
   // Reply-to override (operator-facing email a parent should respond to).
+  // ALWAYS a usable address — cascades tenant -> Enrops -> hardcoded, so a family
+  // never gets a send with no reply path. Read reply_to_source before treating it
+  // as the tenant's own address.
   reply_to: string;
+  // WHICH row answered. Three values, not two, because the middle one is a real
+  // and common state that a tenant/platform split reports as fine:
+  //
+  //   'branding'  org_branding.email_reply_to — the operator typed this. Correct.
+  //   'org_email' organizations.email — nobody chose it for this purpose. It is
+  //               written from the signup JWT, so it usually IS the operator's
+  //               inbox and replies do reach them, but they never set it as a
+  //               reply-to and it is not shown in the reply-to field they look at.
+  //   'platform'  an Enrops address. The provider's families are replying to us.
+  //
+  // Collapsing the first two into 'tenant' is what made this field useless for the
+  // case that prompted it: The Ukulele Project had email_reply_to NULL and
+  // organizations.email set, which reads as 'tenant' and warns nobody, while
+  // SenderSetupNotice — reading email_reply_to directly — was flagging that same
+  // org as unconfigured. Two surfaces, opposite answers, same state.
+  reply_to_source: 'branding' | 'org_email' | 'platform';
+  // The tenant's OWN reply-to, or null. No platform step — same posture as
+  // tenant_alert_email. Use this when a caller must be able to tell "the provider
+  // has no address" apart from "the provider's address is this".
+  tenant_reply_to: string | null;
   // Where alerts to the operator go (e.g. card decline summaries). CASCADES TO
   // THE PLATFORM: tenant -> Enrops org -> a hardcoded Enrops address. Safe for
   // platform-owned notices; NOT safe for anything containing tenant data.
@@ -129,6 +152,68 @@ interface BrandingRow {
   email_signature_image_mode: string | null;
 }
 
+/** First non-empty trimmed string, or null. Shared by the resolvers below. */
+function firstNonEmpty(...vals: (string | null | undefined)[]): string | null {
+  for (const v of vals) {
+    if (typeof v === 'string' && v.trim().length > 0) return v.trim();
+  }
+  return null;
+}
+
+/**
+ * Where does a reply to this email land, and WHICH row decided that?
+ *
+ * Pure and exported so the rule has a runner - it had none. On 2026-08-19 a
+ * parent of a Ukulele Project student hit reply on his confirmation and reached
+ * the platform owner's inbox instead of his provider. What is established: that
+ * one reply went to a platform address, and that org had no
+ * org_branding.email_reply_to. What is NOT established, and was wrongly asserted
+ * in an earlier version of this comment: that its other confirmations did the
+ * same. Run against live data, this resolver returns that org's OWN address for
+ * its configuration ('org_email'), so the mechanism behind that one email is
+ * still unexplained - see the reply-to memory note before reasoning from it.
+ *
+ * reply_to is ALWAYS non-empty: a family must never get an email they cannot
+ * reply to. reply_to_source names which row supplied it, so a caller can tell
+ * "the operator chose this" from "we picked something for them".
+ */
+export function resolveReplyTo(args: {
+  tenantBrandingReplyTo?: string | null;
+  tenantOrgEmail?: string | null;
+  enropsBrandingReplyTo?: string | null;
+  enropsOrgEmail?: string | null;
+  /** Overridable so a test does not depend on the hardcoded constant's value. */
+  hardcodedFallback?: string;
+}): {
+  reply_to: string;
+  reply_to_source: 'branding' | 'org_email' | 'platform';
+  tenant_reply_to: string | null;
+  platform_reply_to: string;
+} {
+  // Resolved separately, not with one firstNonEmpty over both, because WHICH of
+  // the two answered is the whole point of reply_to_source.
+  const brandingReplyTo = firstNonEmpty(args.tenantBrandingReplyTo);
+  const orgEmail = firstNonEmpty(args.tenantOrgEmail);
+  const tenant_reply_to = brandingReplyTo ?? orgEmail;
+  // firstNonEmpty on the fallback too, NOT `??`. `??` only rejects null and
+  // undefined, so a caller passing hardcodedFallback: '' would get reply_to: ''
+  // and Resend would be handed an empty Reply-To header — breaking the invariant
+  // this function's docblock promises to every consumer that does
+  // `reply_to: brand.reply_to` without checking.
+  const platform_reply_to =
+    firstNonEmpty(
+      args.enropsBrandingReplyTo,
+      args.enropsOrgEmail,
+      args.hardcodedFallback,
+    ) ?? ENROPS_DEFAULTS.reply_to;
+  return {
+    reply_to: tenant_reply_to ?? platform_reply_to,
+    reply_to_source: brandingReplyTo ? 'branding' : orgEmail ? 'org_email' : 'platform',
+    tenant_reply_to,
+    platform_reply_to,
+  };
+}
+
 /** The domain part of an email address (after the @), trimmed, or null. */
 function domainOf(email: string | null | undefined): string | null {
   const at = (email ?? '').indexOf('@');
@@ -192,13 +277,11 @@ export async function loadOrgBrand(
   const tenantOrg      = orgId ? await fetchOrg(supabase, { id: orgId }) : null;
   const tenantBranding = tenantOrg ? await fetchBranding(supabase, tenantOrg.id) : null;
 
-  // Helper: first non-empty string in a list.
-  const pick = (...vals: (string | null | undefined)[]): string | null => {
-    for (const v of vals) {
-      if (typeof v === 'string' && v.trim().length > 0) return v.trim();
-    }
-    return null;
-  };
+  // Helper: first non-empty string in a list. Aliased rather than reimplemented —
+  // extracting resolveReplyTo() left a byte-identical copy of this closure at
+  // module scope, and two definitions of "is this field set" in one file is how
+  // they drift apart. Every call site below is unchanged.
+  const pick = firstNonEmpty;
 
   // Resolve the typeface BEFORE building the brand object. Tenant's choice wins,
   // then the Enrops org's, then the hardcoded Poppins stack.
@@ -264,6 +347,48 @@ export async function loadOrgBrand(
         ? 'platform'
         : 'hardcoded';
 
+  // Reply-to, resolved so that WHICH row answered is reportable.
+  //
+  // A family that hits reply on a TENANT's email must reach that tenant. When the
+  // tenant rows come up empty the address a parent gets is a platform one, and
+  // until 2026-08-19 nothing said so, in code or on screen. What happened that
+  // day, stated precisely: one Ukulele Project parent's reply reached the platform
+  // owner's inbox rather than his provider, and that org had no
+  // org_branding.email_reply_to. It did have organizations.email, which this
+  // resolver returns for that shape, so the single email is NOT explained by this
+  // cascade and no claim is made here about the org's other sends.
+  //
+  // alert_email is deliberately NOT in this chain, though tenant_alert_email
+  // below does trust it as an operator mailbox. That field feeds INBOUND operator
+  // notices; reply_to gets PRINTED IN FAMILY EMAIL, so folding one into the other
+  // would publish an address the operator chose for alerts to every parent they
+  // have. An operator who set alert_email to a personal inbox would find that out
+  // from a stranger. Silently repurposing an address for a second audience is the
+  // mistake being guarded against here, not a shortcut to reuse. The orgs this
+  // leaves on the platform address (shoreview-chess on prod: alert_email set,
+  // email and email_reply_to both null) are named by the log below and fixed by
+  // setting email_reply_to, with the operator's consent.
+  const { reply_to, reply_to_source, tenant_reply_to: tenantReplyTo, platform_reply_to: platformReplyTo } =
+    resolveReplyTo({
+      tenantBrandingReplyTo: tenantBranding?.email_reply_to,
+      tenantOrgEmail: tenantOrg?.email,
+      enropsBrandingReplyTo: enropsBranding?.email_reply_to,
+      enropsOrgEmail: enropsOrg?.email,
+    });
+
+  // Loud, not fatal. Refusing the send would punish the family for the
+  // provider's blank field, and the platform address does at least reach a human
+  // who can forward. But this must never again be invisible: every send that
+  // hands a tenant's family a platform reply-to now says so in the logs, with
+  // the org id needed to go fix it.
+  if (tenantOrg && !tenantReplyTo) {
+    console.error(
+      `[orgBrand] NO TENANT REPLY-TO for org ${tenantOrg.id} (${tenantOrg.slug ?? 'no slug'}): ` +
+        `families replying to this org's email will reach the platform address ${platformReplyTo}. ` +
+        `Set org_branding.email_reply_to (or organizations.email) for this org.`,
+    );
+  }
+
   return {
     org_id: tenantOrg?.id ?? enropsOrg?.id ?? '',
     org_name: pick(tenantOrg?.name, enropsOrg?.name) ?? ENROPS_DEFAULTS.name,
@@ -272,13 +397,9 @@ export async function loadOrgBrand(
     sender_email: senderEmail,
     sender_source: senderSource,
 
-    reply_to:
-      pick(
-        tenantBranding?.email_reply_to,
-        tenantOrg?.email,
-        enropsBranding?.email_reply_to,
-        enropsOrg?.email,
-      ) ?? ENROPS_DEFAULTS.reply_to,
+    reply_to,
+    reply_to_source,
+    tenant_reply_to: tenantReplyTo,
 
     alert_email:
       pick(tenantOrg?.alert_email, enropsOrg?.alert_email) ?? ENROPS_DEFAULTS.alert_email,

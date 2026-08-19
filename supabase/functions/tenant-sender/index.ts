@@ -74,6 +74,13 @@ serve(async (req) => {
         sender_email: brand.sender_email,
         reply_to: brand.reply_to,
         sender_source: brand.sender_source,
+        // The reply-to half of what sender_source already did for the FROM half.
+        // Without it this endpoint handed the screen a bare address, the screen
+        // printed it under "Replies go to", and an address the operator never
+        // chose was indistinguishable from one they did. Three values, not two:
+        // see the OrgBrand field comment for why 'org_email' has to be its own
+        // state rather than counting as configured.
+        reply_to_source: brand.reply_to_source,
         org_name: brand.org_name,
       });
     }
@@ -97,6 +104,8 @@ serve(async (req) => {
             ${brand.logo_url ? `<div style="text-align:center;padding:4px 0 18px;"><img src="${String(brand.logo_url).replace(/"/g, "&quot;")}" alt="${String(brand.org_name).replace(/[<>"]/g, "")}" style="max-height:56px;max-width:220px;height:auto;" /></div>` : ""}
             <p>This is a test email from <strong>${escHtml(brand.org_name)}</strong>, sent through Enrops.</p>
             <p>If it landed in your inbox, your sender is working. It was sent from <strong>${escHtml(brand.sender_name)}</strong> (${escHtml(brand.sender_email)}), and replies go to <strong>${escHtml(brand.reply_to)}</strong>.</p>
+            ${brand.reply_to_source === 'platform' ? `<p style="background:#fff7ed;border-left:3px solid #c2410c;padding:10px 12px;color:#7c2d12;"><strong>Replies are not reaching you.</strong> You haven't set a reply-to email, so a family who hits reply on any of your emails reaches Enrops instead of you. Add your own address under Settings &rarr; Email sender.</p>` : ''}
+            ${brand.reply_to_source === 'org_email' ? `<p style="background:#f5f3ff;border-left:3px solid #5847c9;padding:10px 12px;color:#1a1530;">That reply-to is your account email, because you haven't set one specifically for families. Replies do reach you. If you'd rather they went somewhere else, set it under Settings &rarr; Email sender.</p>` : ''}
             ${renderSignatureBlock(brand)}
           </div>`,
           tags: [{ name: 'type', value: 'sender_test' }],

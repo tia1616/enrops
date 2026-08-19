@@ -26,20 +26,35 @@ import { BRIGHT, INK, MUTED, RULE } from "../marketing/tokens.jsx";
 export default function SenderSetupNotice({ orgId }) {
   // Start false so the banner never flashes before we know the real state.
   const [needsSetup, setNeedsSetup] = useState(false);
+  // Separate from needsSetup on purpose. "hasn't chosen a reply-to" and "replies
+  // land nowhere useful" are different facts and the copy for them is different:
+  // one is a suggestion, the other is a problem. Folding them together is what
+  // made this notice tell providers something untrue about their own email.
+  const [repliesReachThem, setRepliesReachThem] = useState(true);
   const perm = usePermissions();
 
   useEffect(() => {
     if (!orgId) return;
     let cancelled = false;
     (async () => {
-      const { data, error } = await supabase
-        .from("org_branding")
-        .select("email_reply_to")
-        .eq("organization_id", orgId)
-        .maybeSingle();
+      // organizations.email is read too, NOT just org_branding.email_reply_to.
+      // Reading only the latter made this notice say "replies go to a default
+      // address — not your inbox" to every org that had never opened the Email
+      // sender page, including ones whose account email IS what replies resolve
+      // to and does reach them. That was flatly untrue for The Ukulele Project,
+      // and it contradicted /admin/email-sender, which showed that org its own
+      // address with no warning at all. Same cascade as _shared/orgBrand.ts
+      // resolveReplyTo(), so the nudge and the destination agree.
+      const [brandingRes, orgRes] = await Promise.all([
+        supabase.from("org_branding").select("email_reply_to").eq("organization_id", orgId).maybeSingle(),
+        supabase.from("organizations").select("email").eq("id", orgId).maybeSingle(),
+      ]);
       // On error, stay silent rather than show a banner we're unsure about.
-      if (!cancelled && !error) {
-        setNeedsSetup(((data?.email_reply_to ?? "").trim()).length === 0);
+      if (!cancelled && !brandingRes.error && !orgRes.error) {
+        const hasBranding = ((brandingRes.data?.email_reply_to ?? "").trim()).length > 0;
+        const hasOrgEmail = ((orgRes.data?.email ?? "").trim()).length > 0;
+        setNeedsSetup(!hasBranding);
+        setRepliesReachThem(hasBranding || hasOrgEmail);
       }
     })();
     return () => { cancelled = true; };
@@ -68,7 +83,9 @@ export default function SenderSetupNotice({ orgId }) {
       <span style={{ fontSize: 13.5, color: INK, lineHeight: 1.5 }}>
         📨 <strong>Set your reply-to email.</strong>{" "}
         <span style={{ color: MUTED }}>
-          Right now, when a family replies to your emails it goes to a default address — not your inbox.
+          {repliesReachThem
+            ? "Family replies currently go to your account email. Choose where you'd like them instead."
+            : "Right now, when a family replies to your emails it goes to a default address — not your inbox."}
         </span>
       </span>
       <Link
