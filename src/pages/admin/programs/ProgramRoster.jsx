@@ -94,6 +94,12 @@ export default function ProgramRoster() {
   const [error, setError] = useState("");
   const [program, setProgram] = useState(null);
   const [rows, setRows] = useState([]); // all un-cancelled regs (enrolled + pending)
+  // Waiting families, in line order. Loaded SEPARATELY from `rows` on purpose: rows is
+  // the roster, and the roster query now excludes waitlist rows precisely so a waiting
+  // child cannot be mistaken for an enrolled one. Keeping them in a different piece of
+  // state means no downstream consumer (the CSV, the roster email, the counts) can pick
+  // them up by accident.
+  const [waitlist, setWaitlist] = useState([]);
   const [contactsByStudent, setContactsByStudent] = useState({}); // { [student_id]: [student_contacts] }
 
   useEffect(() => {
@@ -166,6 +172,27 @@ export default function ProgramRoster() {
         if (mounted) {
           setProgram(prog);
           setRows(regRows ?? []);
+
+          // Waiting families, in line order. Only the light fields exist for these:
+          // a waitlist join collects child name + grade and parent contact, and NOT
+          // allergies, pickup or dismissal answers. So this select deliberately asks
+          // for nothing more - requesting the safety columns would render a row of
+          // reassuring blanks for data nobody has ever been asked for.
+          const { data: wlRows, error: wlErr } = await supabase
+            .from("registrations")
+            .select(`
+              id, waitlist_position, registered_at,
+              student:students ( id, first_name, last_name, grade ),
+              parent:parents ( first_name, last_name, email, phone )
+            `)
+            .eq("program_id", programId)
+            .eq("status", WAITLIST_STATUS)
+            .is("cancelled_at", null)
+            .order("waitlist_position", { ascending: true });
+          // A failed waitlist read must not blank the roster: the enrolled list is the
+          // load-bearing half of this page. Log it and show no waitlist section.
+          if (wlErr) console.warn("[ProgramRoster] waitlist unavailable:", wlErr.message);
+          if (mounted) setWaitlist(wlErr ? [] : (wlRows ?? []));
           setContactsByStudent(contactMap);
         }
       } catch (e) {
@@ -349,6 +376,67 @@ export default function ProgramRoster() {
           }}
           onClose={() => setEmailing(false)}
         />
+      )}
+
+      {/* WAITING FAMILIES.
+          Rendered only when there are some: an empty "Waitlist (0)" heading on every
+          roster in the platform is noise on a screen operators open constantly.
+
+          Deliberately BELOW the roster and visually quieter than it. These children do
+          not have a place, and the roster is what an operator prints, hands to an
+          instructor and counts heads against. A waiting child appearing with equal
+          weight is how one ends up on a sign-in sheet.
+
+          Read-only for now. Offering the top family a place is the invite flow, which
+          needs an expiring single-use link and its own email - not a button that quietly
+          creates an unpaid enrolment. */}
+      {waitlist.length > 0 && (
+        <div style={{ marginTop: 32 }}>
+          <h2 style={{ fontSize: 15, fontWeight: 700, color: INK, margin: "0 0 4px" }}>
+            Waiting list ({waitlist.length})
+          </h2>
+          <p style={{ fontSize: 13, color: MUTED, margin: "0 0 12px", maxWidth: 620 }}>
+            These families asked to be told if a place opens up. They are not enrolled,
+            have not paid, and are not on the roster or the roster email.
+          </p>
+          <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, overflow: "hidden" }}>
+            {waitlist.map((w, i) => {
+              const s = w.student ?? {};
+              const p = w.parent ?? {};
+              const childName = `${s.first_name ?? ""} ${s.last_name ?? ""}`.trim() || "(no name)";
+              const parentName = `${p.first_name ?? ""} ${p.last_name ?? ""}`.trim();
+              return (
+                <div
+                  key={w.id}
+                  style={{
+                    display: "flex", gap: 12, alignItems: "baseline",
+                    padding: "10px 14px", fontSize: 14, background: PANEL,
+                    borderTop: i === 0 ? "none" : `1px solid ${RULE}`,
+                  }}
+                >
+                  {/* The stored position, not the array index. If the two ever disagree
+                      the stored one is what every other surface and email uses, and a
+                      renumbered-looking list would make an operator distrust all of it. */}
+                  <span style={{ minWidth: 22, fontWeight: 700, color: MUTED }}>
+                    {w.waitlist_position ?? i + 1}
+                  </span>
+                  <span style={{ fontWeight: 600, color: INK }}>{childName}</span>
+                  {s.grade !== null && s.grade !== undefined && (
+                    <span style={{ color: MUTED, fontSize: 13 }}>
+                      {Number(s.grade) === 0 ? "Grade K" : `Grade ${s.grade}`}
+                    </span>
+                  )}
+                  <span style={{ flex: 1 }} />
+                  <span style={{ color: MUTED, fontSize: 13, textAlign: "right" }}>
+                    {parentName && <>{parentName} · </>}
+                    {p.email ? <a href={`mailto:${p.email}`} style={{ color: BRIGHT }}>{p.email}</a> : "no email"}
+                    {p.phone && <> · <Tel phone={p.phone} /></>}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
       )}
 
       {showInvite && program && (
