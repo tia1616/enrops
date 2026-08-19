@@ -6,6 +6,13 @@
 -- credential: whoever holds it gets exactly one registration's worth of prefill and
 -- nothing else.
 
+-- SUPERSEDED IN PART: the lookup below is NOT the current definition. 20260819q drops
+-- and recreates it with a `student_id` column, because create-registration has to be able
+-- to register the child who has actually been waiting instead of inserting a second copy
+-- of them. Read q for the live shape. Do not re-run this file on its own afterwards - the
+-- `create or replace` here cannot narrow the return type back and will fail loudly, which
+-- is the correct outcome, not something to work around.
+
 -- ---------------------------------------------------------------------------
 -- 1. LOOKUP. Read-only, and returns nothing at all unless the invite is live.
 --

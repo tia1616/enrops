@@ -92,15 +92,21 @@ const KNOWN_UNPINNED = new Set([
   'fetch-drive-document', 'get-instructor-curriculum-docs', 'get-legal-document',
   'get-training-video-url', 'google-oauth-callback', 'import-class-schedule',
   'import-contacts', 'import-partners-extract', 'import-partners-parse',
-  'import-partners-write', 'invite-parents', 'link-instructor',
+  'import-partners-write', 'link-instructor',
   'marketing-delete-draft', 'marketing-touchpoint-cron', 'match-afterschool',
-  'match-instructors', 'notify-instructor-removed', 'notify-program-curriculum-change',
+  'match-instructors', 'notify-instructor-removed',
   'offer-message-reply', 'offer-reminders-cron', 'pay-instructor',
   'polish-skills', 'refund-registration', 'replay-digest',
   'request-resume-onboarding', 'respond-to-assignment', 'respond-to-sub-offer',
   // The four offer senders came OFF this list on 2026-08-18: a parity sweep found
   // them deployed verify_jwt=false on staging and true on prod, so they are now
   // pinned true in config.toml. The ratchet tightens by four.
+  //
+  // invite-parents and notify-program-curriculum-change came OFF on 2026-08-19.
+  // The waitlist branch edits both, and an edited function with no entry is the
+  // 2026-08-13 shape exactly. Their live setting was read from the API on BOTH
+  // projects before pinning - true on staging and true on prod - so config.toml
+  // now records what is already deployed. The ratchet tightens by two more.
   'send-afterschool-survey', 'send-availability-survey',
   'stripe-connect-onboard', 'stripe-oauth-disconnect', 'stripe-oauth-start',
   'submit-acknowledgments', 'submit-agreement', 'submit-feedback',

@@ -242,14 +242,26 @@ serve(async (req) => {
     //   * it must belong to THIS org, checked against the org resolved from the slug
     //   * one seat, not the whole cart. A family invited for one child who adds a
     //     sibling still needs a genuinely free seat for the sibling.
+    //   * and it is credited to ONE CHILD - the child the invite names - never to
+    //     whoever the payload happens to describe. See the binding below.
     const waitlistToken = typeof body?.waitlist_token === 'string' ? body.waitlist_token.trim() : '';
     let invite: {
-      registration_id: string; program_id: string; organization_id: string;
+      registration_id: string; program_id: string; organization_id: string; student_id: string;
     } | null = null;
     if (waitlistToken) {
       const { data: inviteRows, error: inviteErr } = await admin
         .rpc('waitlist_invite_lookup', { p_token: waitlistToken });
-      if (inviteErr) throw new Error(`waitlist invite lookup: ${inviteErr.message}`);
+      if (inviteErr) {
+        // A LOOKUP OUTAGE IS NOT AN INVALID TOKEN, and it must not be a 500 either.
+        // Throwing here sent a family holding a perfectly good invite to the generic
+        // "Internal error" screen mid-checkout - which the comment above already said
+        // should degrade to the ordinary capacity message, while the code did the
+        // opposite. Left as null, the gate below sees the seat their own waitlist row
+        // is holding and says "that class is full": wrong in this instant, but honest,
+        // survivable, and it does not spend their invite. Their place is untouched and
+        // the next attempt works.
+        console.error('[create-registration] waitlist invite lookup failed, treating as no invite', inviteErr.message);
+      }
       const row = Array.isArray(inviteRows) ? inviteRows[0] : inviteRows;
       // Same-org or it does not count. A token from another provider must not buy a
       // seat here, and this is the only place that pairing is checked.
@@ -258,29 +270,84 @@ serve(async (req) => {
         console.log('[create-registration] waitlist invite accepted', {
           program_id: row.program_id, registration_id: row.registration_id,
         });
+        // DEPLOY-ORDER CONTRACT. student_id only exists on the lookup from 20260819q
+        // onwards. Deployed ahead of that migration, this reads undefined, the reuse
+        // below is skipped and a duplicate child is inserted - the old behaviour, so
+        // nothing breaks and no family is turned away. But it is silent, and the
+        // duplicate is the defect q exists to close, so it says so out loud.
+        if (!row.student_id) {
+          console.error('[create-registration] waitlist_invite_lookup returned no student_id - 20260819q is not applied here, so this accept will duplicate the child');
+        }
       } else if (row) {
         console.warn('[create-registration] waitlist token belongs to another org, ignoring');
-      } else {
+      } else if (!inviteErr) {
         console.warn('[create-registration] waitlist token not live, ignoring');
       }
+    }
+
+    // WHICH CHILD IN THIS CART IS THE INVITED ONE.
+    //
+    // The invite is for one named child - the one who has been on the list - and the
+    // whole point of the token is that the SERVER knows who that is. The payload does
+    // not get a say: `students` rows are written from client-supplied names, so trusting
+    // the payload to say "this is the invited child" would hand the held seat to whoever
+    // holds the link. A forwarded invite let a stranger type their own child and take the
+    // place, and the consume step then cancelled the invited family's row silently.
+    //
+    // So the binding is positional and server-decided: the first cart line for the
+    // invite's own program. That line registers `invite.student_id` - the child who
+    // waited - and it is the only line the held seat is credited to. A stranger with a
+    // forwarded link therefore cannot get THEIR child into the held seat; the most they
+    // can do is finish the registration the invited child was offered.
+    //
+    // No line for the invited program means the family is buying something else
+    // entirely, and the invite simply does not apply: no credit, no reuse, ordinary
+    // capacity rules. Deliberately NOT name-matching the payload against the invite's
+    // child - a family who typed "Ben" where the list says "Benjamin" would be told
+    // their class was full and would lose the place we had just promised them.
+    const inviteChildIndex = invite
+      ? (flat.find((f) => f.program_id === invite!.program_id)?.child_index ?? null)
+      : null;
+    if (invite && inviteChildIndex === null) {
+      console.warn('[create-registration] waitlist invite is for a program not in this cart, ignoring', {
+        program_id: invite.program_id,
+      });
     }
 
     const { data: seatRows, error: seatErr } = await admin.rpc('program_seat_counts', {
       p_program_ids: allProgramIds,
     });
-    if (seatErr) throw new Error(`capacity check: ${seatErr.message}`);
+    // THE GATE DEGRADES; IT DOES NOT TAKE CHECKOUT DOWN.
+    //
+    // This call is unconditional and sits above every other write, so throwing here
+    // 500s EVERY registration on the site - camps included, and families who have
+    // nothing to do with waiting lists - with raw Postgres text in the response body.
+    // The one certain way to trigger it is deploy order: ship this function before
+    // 20260819a lands and `program_seat_counts` does not exist yet.
+    //
+    // So a failure is treated the way the waitlist sweep treats its own: record it,
+    // skip the step, let the rest run. Skipping means no capacity enforcement for as
+    // long as the RPC is broken - which is exactly the behaviour this whole branch is
+    // replacing, so the fallback is the status quo rather than a new hazard, and one
+    // oversold seat an operator can see beats a checkout nobody can complete.
+    //
+    // Deploy order is still migration-first, always. This is the seatbelt, not the plan.
+    if (seatErr) {
+      console.error('[create-registration] CAPACITY GATE UNAVAILABLE, allowing checkout unchecked', seatErr.message);
+    }
     const seatsById = new Map(
       ((seatRows || []) as Array<{ program_id: string; max_capacity: number | null; seats_taken: number }>)
         .map((s) => [s.program_id, s]),
     );
-    const atCapacity = allProgramIds.filter((id) => {
+    const atCapacity = seatErr ? [] : allProgramIds.filter((id) => {
       const s = seatsById.get(id);
       // No row back for a program we asked about is a program we cannot prove has
       // room. Same rule as the publish check above: refuse rather than quietly skip.
       if (!s) return true;
       if (s.max_capacity === null || Number(s.max_capacity) <= 0) return false;
-      // The one held seat, credited only to its own program.
-      const heldByInvite = invite && invite.program_id === id ? 1 : 0;
+      // The one held seat, credited only to its own program AND only when a line in
+      // this cart is actually bound to the invited child.
+      const heldByInvite = invite && inviteChildIndex !== null && invite.program_id === id ? 1 : 0;
       return (Number(s.seats_taken) - heldByInvite) + (requestedPerProgram.get(id) ?? 0) > Number(s.max_capacity);
     });
     if (atCapacity.length) {
@@ -454,51 +521,97 @@ serve(async (req) => {
         if (isNaN(gradeVal)) gradeVal = null;
       }
 
-      const { data: newStudent, error: sErr } = await admin
-        .from('students')
-        .insert({
-          parent_id: parentId,
-          organization_id: orgId,
-          // NOTE: `students` has no `school_id` column (the location link would be
-          // `program_location_id`), and the client never sends `child.school_id`,
-          // so this key was always undefined and dropped before the insert — dead.
-          // The child's school/area is derived authoritatively from the program the
-          // family registered for (see auto_add_registrant_to_marketing_list). If a
-          // future feature needs a student-level location, wire program_location_id
-          // as its own scoped, tested change — not silently on the checkout path.
-          first_name: student.first_name,
-          last_name: student.last_name,
-          grade: gradeVal,
-          homeroom_teacher: student.homeroom_teacher || null,
-          birthdate: student.birthdate || null,
-          allergies: student.allergies || null,
-          medical_notes: student.medical_notes || null,
-          special_needs_accommodations: student.special_needs_accommodations || null,
-          emergency_contact_name: student.emergency_contact_name || null,
-          emergency_contact_phone: student.emergency_contact_phone || null,
-          // customizable-registration: how the child leaves (null when the org
-          // hasn't enabled that question)
-          dismissal_method: student.dismissal_method || null,
-          // WHO, when the answer is aftercare. Stored only for that answer:
-          // accepting it unconditionally would let a name typed and then
-          // reconsidered persist against an answer it no longer describes, and
-          // every staff surface reads the two together. The client clears it on
-          // change too - this is the server refusing to take its word for it,
-          // since the browser's payload is not trustworthy.
-          // String(...) before trim, NOT `?.trim()`. The body is client-supplied
-          // JSON: a number, boolean, object or array here passes the optional-chain
-          // null check, resolves `.trim` to undefined, and throws "is not a
-          // function" - a 500 in the middle of checkout from a malformed payload.
-          // Every sibling field in this insert uses the safe `x || null` shape;
-          // this was the only one calling a string method on untrusted input.
-          aftercare_provider: student.dismissal_method === 'aftercare'
-            ? (String(student.aftercare_provider ?? '').trim().slice(0, 120) || null)
-            : null,
-        })
-        .select('id')
-        .single();
-      if (sErr) throw new Error(`student insert: ${sErr.message}`);
-      const studentId = newStudent!.id;
+      // THE INVITED CHILD ALREADY EXISTS. Do not make a second one.
+      //
+      // They were written into `students` when the family joined the waiting list, and
+      // their waitlist registration points at that row. Inserting again here gave one
+      // human two student rows - two roster lines, split attendance, and
+      // `uniq_registrations_waitlist_student` blind to the fact that they were the same
+      // child, which is the one thing that index exists to catch.
+      //
+      // The care fields ARE updated from this payload: grade, allergies and emergency
+      // contacts may have changed in the weeks since they joined, and this form is the
+      // fresher answer. The NAME is deliberately not, and neither is `parent_id`: those
+      // come from the invite, so a forwarded link cannot rewrite the waiting child's
+      // identity into somebody else's.
+      const reuseStudentId = inviteChildIndex !== null && child.child_index === inviteChildIndex
+        ? invite!.student_id
+        : null;
+      // The details that describe how to look after the child on the day. Shared by
+      // both paths below, so an invited child and a walk-up child are recorded from
+      // this form identically - there is no second, drifting copy of this list.
+      const studentCareFields = {
+        grade: gradeVal,
+        homeroom_teacher: student.homeroom_teacher || null,
+        birthdate: student.birthdate || null,
+        allergies: student.allergies || null,
+        medical_notes: student.medical_notes || null,
+        special_needs_accommodations: student.special_needs_accommodations || null,
+        emergency_contact_name: student.emergency_contact_name || null,
+        emergency_contact_phone: student.emergency_contact_phone || null,
+        // customizable-registration: how the child leaves (null when the org
+        // hasn't enabled that question)
+        dismissal_method: student.dismissal_method || null,
+        // WHO, when the answer is aftercare. Stored only for that answer:
+        // accepting it unconditionally would let a name typed and then
+        // reconsidered persist against an answer it no longer describes, and
+        // every staff surface reads the two together. The client clears it on
+        // change too - this is the server refusing to take its word for it,
+        // since the browser's payload is not trustworthy.
+        // String(...) before trim, NOT `?.trim()`. The body is client-supplied
+        // JSON: a number, boolean, object or array here passes the optional-chain
+        // null check, resolves `.trim` to undefined, and throws "is not a
+        // function" - a 500 in the middle of checkout from a malformed payload.
+        // Every sibling field here uses the safe `x || null` shape; this was the
+        // only one calling a string method on untrusted input.
+        aftercare_provider: student.dismissal_method === 'aftercare'
+          ? (String(student.aftercare_provider ?? '').trim().slice(0, 120) || null)
+          : null,
+      };
+
+      let studentId: string;
+      if (reuseStudentId) {
+        // Scoped to the org as well as the id. The id came from a SECURITY DEFINER
+        // lookup that already proved the pairing, so this is belt and braces - but it
+        // is the one write in this function that touches a row it did not create.
+        const { data: reused, error: reuseErr } = await admin
+          .from('students')
+          .update(studentCareFields)
+          .eq('id', reuseStudentId)
+          .eq('organization_id', orgId)
+          .select('id')
+          .maybeSingle();
+        if (reuseErr) throw new Error(`student update: ${reuseErr.message}`);
+        // No row back means the invite pointed at a child this org cannot write, which
+        // should be impossible. Refuse rather than quietly insert a duplicate and
+        // re-open the defect this branch is closing.
+        if (!reused) throw new Error('student update: the invited child could not be found');
+        studentId = reused.id;
+        console.log('[create-registration] registering the child who was waiting, not a copy of them', {
+          student_id: studentId, child_index: child.child_index,
+        });
+      } else {
+        const { data: newStudent, error: sErr } = await admin
+          .from('students')
+          .insert({
+            parent_id: parentId,
+            organization_id: orgId,
+            // NOTE: `students` has no `school_id` column (the location link would be
+            // `program_location_id`), and the client never sends `child.school_id`,
+            // so this key was always undefined and dropped before the insert — dead.
+            // The child's school/area is derived authoritatively from the program the
+            // family registered for (see auto_add_registrant_to_marketing_list). If a
+            // future feature needs a student-level location, wire program_location_id
+            // as its own scoped, tested change — not silently on the checkout path.
+            first_name: student.first_name,
+            last_name: student.last_name,
+            ...studentCareFields,
+          })
+          .select('id')
+          .single();
+        if (sErr) throw new Error(`student insert: ${sErr.message}`);
+        studentId = newStudent!.id;
+      }
       studentIdByChildIndex.set(child.child_index, studentId);
 
       // --- Customizable registration: structured people → student_contacts ---
@@ -533,6 +646,24 @@ serve(async (req) => {
         }
       });
       if (contactRows.length) {
+        // A REUSED CHILD MAY ALREADY HAVE A PICKUP LIST. Insert-only would stack a
+        // second identical copy on the roster - a defect this reuse path would be
+        // introducing, since a freshly inserted student never had one. So for a reused
+        // child the list this form just collected REPLACES the stored one: same
+        // reasoning as the care fields above, this form is the fresher answer.
+        //
+        // Guarded on contactRows.length (above), which is what makes it safe: an org
+        // that has not enabled these questions sends nothing, and nothing means "no
+        // answer", never "delete the people we already knew about". Care data is only
+        // ever replaced by care data.
+        if (reuseStudentId) {
+          const { error: clearErr } = await admin
+            .from('student_contacts')
+            .delete()
+            .eq('student_id', studentId)
+            .eq('organization_id', orgId);
+          if (clearErr) throw new Error(`student_contacts replace: ${clearErr.message}`);
+        }
         const { error: cErr } = await admin.from('student_contacts').insert(contactRows);
         if (cErr) throw new Error(`student_contacts insert: ${cErr.message}`);
       }

@@ -81,6 +81,18 @@ verify_jwt = true
 [functions.send-afterschool-patch-offer]
 verify_jwt = true
 
+# PINNED 2026-08-19. Both are edited by the waitlist branch and had no entry here
+# at all, so a plain CLI redeploy would have taken whatever the default is rather
+# than a setting anyone had decided. Checked in the live API before pinning, not
+# assumed: invite-parents and notify-program-curriculum-change are BOTH
+# verify_jwt = true on staging AND prod today, so this records reality and the
+# risk was drift rather than an outage. Both take an operator's JWT.
+[functions.invite-parents]
+verify_jwt = true
+
+[functions.notify-program-curriculum-change]
+verify_jwt = true
+
 # ── verify_jwt = false (public / webhook / cron entrypoints) ──
 [functions.backup-storage-objects]
 # PINNED FIRST, because the header above singles this one out as the highest-risk
