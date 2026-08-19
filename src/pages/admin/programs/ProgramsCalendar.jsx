@@ -22,6 +22,7 @@ import ShareLink from "../../../components/ShareLink.jsx";
 import EnnieTip from "../../../components/EnnieTip.jsx";
 import EmbedSnippet from "../../../components/EmbedSnippet.jsx";
 import { buildCatalogUrl } from "../../../lib/regLinks.js";
+import { WAITLIST_STATUS } from "../../../lib/waitlistState.js";
 import { fetchOrgTerms, formatTermLabel } from "../../../lib/terms.js";
 import { getPermissions } from "../../../lib/permissions.js";
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
@@ -204,6 +205,8 @@ export default function ProgramsCalendar() {
       .from("registrations")
       .select("id", { count: "exact" })
       .eq("program_id", programId)
+      // Waiting children are not enrolled, so they must not inflate this count.
+      .neq("status", WAITLIST_STATUS)
       .is("cancelled_at", null);
     if (regErr) {
       alert(`Couldn't check registrations: ${regErr.message}`);
@@ -555,6 +558,7 @@ export default function ProgramsCalendar() {
             .from("registrations")
             .select("program_id, status, payment_status")
             .in("program_id", progIds)
+            .neq("status", WAITLIST_STATUS)
             .is("cancelled_at", null);
           if (regErr) throw regErr;
           for (const r of regRows ?? []) {
@@ -1922,6 +1926,10 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
           .from("registrations")
           .select("id", { count: "exact", head: true })
           .eq("program_id", program.id)
+          // This count drives the enrolled-families confirm before a schedule change.
+          // A waiting child has no class dates to move, so counting them would prompt
+          // about families who are not affected.
+          .neq("status", WAITLIST_STATUS)
           .is("cancelled_at", null);
         // FAIL CLOSED: if the enrollment check errors we can't prove the program is
         // empty, so warn anyway rather than silently move possibly-enrolled families'

@@ -15,6 +15,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import { dismissalSummary } from "../../../lib/dismissal.js";
+import { WAITLIST_STATUS } from "../../../lib/waitlistState.js";
 import EmailRosterModal from "../EmailRosterModal.jsx";
 import InviteFamiliesModal from "../InviteFamiliesModal.jsx";
 
@@ -142,6 +143,9 @@ export default function ProgramRoster() {
           `)
           .eq("program_id", programId)
           .is("cancelled_at", null)
+          // A waiting child is not on the roster. Without this they appear as an
+          // enrolled student, complete with allergy and pickup fields nobody collected.
+          .neq("status", WAITLIST_STATUS)
           .order("registered_at", { ascending: true });
         if (rErr) throw rErr;
 

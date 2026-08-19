@@ -13,6 +13,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { dismissalSummary } from "../../lib/dismissal.js";
+import { WAITLIST_STATUS } from "../../lib/waitlistState.js";
 import EmailRosterModal from "./EmailRosterModal";
 import InviteFamiliesModal from "./InviteFamiliesModal";
 import RefundDrawer from "../../components/RefundDrawer";
@@ -414,6 +415,10 @@ function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled
       `)
       .eq(target.column, target.id);
     if (excludeCancelled) q = q.is("cancelled_at", null);
+    // A waiting child is never a roster row, whatever excludeCancelled is set to. This
+    // loader feeds the roster list and the roster email, and neither should reach a
+    // family who does not have a place yet.
+    q = q.neq("status", WAITLIST_STATUS);
     const { data, error } = await q.order("registered_at", { ascending: true });
     if (error) {
       console.error("[RosterEditor] load failed", error);
@@ -1820,6 +1825,7 @@ function AfterschoolRostersSection({ org, canEdit }) {
             .from("registrations")
             .select("program_id, status, payment_status")
             .in("program_id", ids)
+            .neq("status", WAITLIST_STATUS)
             .is("cancelled_at", null);
           for (const r of regs ?? []) {
             if (r.payment_status === "paid" || r.status === "confirmed") {
@@ -1854,6 +1860,7 @@ function AfterschoolRostersSection({ org, canEdit }) {
       .from("registrations")
       .select("status, payment_status")
       .eq("program_id", programId)
+      .neq("status", WAITLIST_STATUS)
       .is("cancelled_at", null)
       .then(({ data }) => {
         const n = (data ?? []).filter((r) => r.payment_status === "paid" || r.status === "confirmed").length;

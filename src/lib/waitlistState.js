@@ -13,6 +13,16 @@
 // That is what makes it testable without a browser, and what stops a future caller
 // quietly introducing a second source for "is it full".
 
+// The registrations.status value for a child waiting for a place.
+//
+// EVERY reader that means "enrolled" must exclude it. Seven admin queries filtered only on
+// `cancelled_at is null`, which was a correct definition of enrolled right up until this
+// status existed - then a waiting child silently became a roster child and an enrolled
+// count. That is the seam class: the bug is never in the line you wrote, it is in the code
+// that depends on it. Import this rather than typing the literal, so the next reader that
+// needs excluding is findable by its references.
+export const WAITLIST_STATUS = 'waitlist';
+
 export const ACTION_REGISTER = 'register';
 export const ACTION_WAITLIST = 'waitlist';
 export const ACTION_EXTERNAL = 'external';
