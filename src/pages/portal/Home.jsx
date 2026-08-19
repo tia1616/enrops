@@ -223,10 +223,14 @@ export default function Home() {
   // There is nothing useful to tell a parent about a failed capacity lookup.
   const programIdKey = programs.map((p) => p.id).sort().join(',');
   useEffect(() => {
-    if (!programIdKey) { setFullFlags({}); return; }
+    if (!programIdKey || !org?.id) { setFullFlags({}); return; }
     let cancelled = false;
     (async () => {
       const { data, error } = await supabase.rpc('program_full_flags', {
+        // The org is REQUIRED and joined server-side. Passing ids alone let anon
+        // assemble a cross-tenant census by enumerating open programs across the public
+        // org directory and sending them as one array (see 20260819o).
+        p_org_id: org.id,
         p_program_ids: programIdKey.split(','),
       });
       if (cancelled) return;
@@ -238,7 +242,7 @@ export default function Home() {
       setFullFlags(fullFlagMap(data));
     })();
     return () => { cancelled = true; };
-  }, [programIdKey]);
+  }, [programIdKey, org?.id]);
 
   useEffect(() => {
     const onResize = () => setNarrowCards(window.innerWidth < 560);

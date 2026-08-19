@@ -112,6 +112,48 @@ serve(async (req) => {
       .single();
     if (orgErr || !org) return json({ error: `Unknown organization: ${organization_slug}` }, 400);
 
+    // ---------------------------------------------------------------------
+    // VALIDATE THE CLASS BEFORE ANY WRITE.
+    //
+    // This block sits above the parent upsert for the same reason the identical one in
+    // create-registration does, and that file says it in capitals: "a POST carrying a
+    // known family's email plus a cart we then reject would overwrite that family's name
+    // and phone, attach them to any tenant, and return a friendly 400 with nothing
+    // registered - no error for the operator to see, repeatable at will. Do not move it
+    // back down."
+    //
+    // This endpoint had exactly the ordering that comment forbids. parents.email is
+    // GLOBALLY unique, so the update below reaches any provider's family by email alone,
+    // and operator self-signup means an attacker can hold a real org slug. Validating the
+    // program first makes the whole write path unreachable for a request that has no
+    // business touching this org's classes.
+    //
+    // waitlist_join re-checks all of this again under its lock - that is the authority,
+    // and this is deliberately a duplicate. The check here exists to gate the WRITES, not
+    // to decide the outcome, so the two cannot drift into disagreeing about who gets a
+    // place: the worst case is this passes and the RPC then refuses.
+    // ---------------------------------------------------------------------
+    const { data: prog, error: progErr } = await admin
+      .from('programs')
+      .select('id, organization_id, status, runs_own_registration')
+      .eq('id', program_id)
+      .maybeSingle();
+    if (progErr) {
+      console.error('[join-waitlist] program lookup failed', progErr.message);
+      return json({ error: 'We could not check that class just now. Please try again.' }, 503);
+    }
+    if (!prog
+        || prog.organization_id !== org.id
+        || prog.status !== 'open'
+        || prog.runs_own_registration === true) {
+      // One message for all four, on purpose: a request that names another org's class
+      // must not learn whether it exists.
+      console.warn('[join-waitlist] BLOCKED: class is not this org\'s, not open, or not ours to sell', {
+        program_id, org: org.id,
+      });
+      return json({ error: 'That class is not open for registration.' }, 400);
+    }
+
     // --- Parent: reuse by email, else create ---
     // Matched on email alone, mirroring create-registration, because that is what the
     // global unique index on parents.email enforces. auth_id is left alone here: the
