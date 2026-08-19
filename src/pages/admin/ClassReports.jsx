@@ -17,6 +17,7 @@ import { supabase } from "../../lib/supabase";
 import { usePermissions } from "../../lib/permissions";
 import Chevron from "../../components/Chevron.jsx";
 import { isSelfRelease } from "../../lib/dismissal.js";
+import { WAITLIST_STATUS } from "../../lib/waitlistState.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -341,6 +342,13 @@ function ClassReportPanel({ org, kind, classId, title, campMeta }) {
           .from("registrations")
           .select("id, student_id, status, student:students ( id, first_name, last_name )")
           .eq(filterCol, classId)
+          // A waiting child has no place and no attendance. This is a SAFETY view -
+          // undismissed kids, do-not-release hits - so a name here that was never in
+          // the room reads as a compliance failure nobody can resolve.
+          // NOTE: the deny-list below cannot be trusted to cover this. 'withdrawn' is
+          // not even a legal value in registrations_status_check; the list was never a
+          // complete enumeration, so exclude the waitlist status explicitly.
+          .neq("status", WAITLIST_STATUS)
           .not("status", "in", "(cancelled,withdrawn)");
         if (rErr) throw rErr;
         // Dedupe by student_id — a child with two active registrations for the

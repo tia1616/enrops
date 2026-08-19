@@ -26,6 +26,7 @@ import { isDocumentEnabled } from "../../lib/instructorDocuments.js";
 import { loadTrainingConfig } from "../../lib/instructorTrainingConfig.js";
 import { earlyReleaseLine } from "../../lib/timeText.js";
 import { linkifyText } from "../../lib/linkifyText.jsx";
+import { WAITLIST_STATUS } from "../../lib/waitlistState.js";
 import PwaInstallButton from "../../components/pwa/PwaInstallButton.jsx";
 import {
   readAuthRedirectError,
@@ -3743,6 +3744,13 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
             )
           `)
           .eq(filterCol, filterId)
+          // A waiting child is not in this instructor's class. Without this they appear
+          // on the roster the instructor takes into the room, with every safety field
+          // (allergies, EpiPen, emergency contact) blank - because the light join form
+          // never asked. A blank allergy field on a roster reads as "no allergies".
+          // NOTE: the deny-list below does not cover it - 'withdrawn' is not even a
+          // legal status value, so that list was never a complete enumeration.
+          .neq("status", WAITLIST_STATUS)
           .not("status", "in", "(cancelled,withdrawn)")
           .order("registered_at", { ascending: true });
         if (cancelled) return;

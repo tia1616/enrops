@@ -62,7 +62,12 @@ export default function WaitlistModal({ program, orgSlug, onClose, onJoined }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const canSubmit = childFirst.trim() && parentFirst.trim() && email.trim() && !submitting;
+  // Last names are required because the DATABASE requires them - parents.last_name and
+  // students.last_name are both NOT NULL. They were marked optional here at first, which
+  // made the join 500 for anyone who took the label at its word, with a retry that could
+  // never succeed. Phone and grade stay genuinely optional; nothing downstream needs them.
+  const canSubmit = childFirst.trim() && childLast.trim()
+    && parentFirst.trim() && parentLast.trim() && email.trim() && !submitting;
 
   async function submit(e) {
     e?.preventDefault?.();
@@ -194,7 +199,7 @@ export default function WaitlistModal({ program, orgSlug, onClose, onJoined }) {
                   onChange={(e) => setChildFirst(e.target.value)} autoComplete="off" />
               </div>
               <div>
-                <label style={LABEL} htmlFor="wl-child-last">Child&rsquo;s last name</label>
+                <label style={LABEL} htmlFor="wl-child-last">Child&rsquo;s last name *</label>
                 <input id="wl-child-last" style={FIELD} value={childLast}
                   onChange={(e) => setChildLast(e.target.value)} autoComplete="off" />
               </div>
@@ -215,7 +220,7 @@ export default function WaitlistModal({ program, orgSlug, onClose, onJoined }) {
                   onChange={(e) => setParentFirst(e.target.value)} />
               </div>
               <div>
-                <label style={LABEL} htmlFor="wl-parent-last">Your last name</label>
+                <label style={LABEL} htmlFor="wl-parent-last">Your last name *</label>
                 <input id="wl-parent-last" style={FIELD} value={parentLast}
                   onChange={(e) => setParentLast(e.target.value)} />
               </div>

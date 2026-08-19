@@ -8,6 +8,11 @@
 -- allows 'waitlist' in its CHECK, registrations.waitlist_position already exists, and
 -- registration_holds_seat() already returns FALSE for 'waitlist' - so a waitlist row
 -- does not occupy a seat and the capacity gate ignores it. Nothing there needed changing.
+--
+-- SUPERSEDED, 20260819f (same day, later): registration_holds_seat() no longer returns
+-- false for every waitlist row. One carrying an unexpired invite DOES hold a seat, so an
+-- offered place cannot be sold out from under the family deciding on it. A row this
+-- function creates still holds nothing, because it sets no invite columns.
 
 -- ---------------------------------------------------------------------------
 -- 1. One waitlist row per child per class.

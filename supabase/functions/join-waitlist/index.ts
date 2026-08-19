@@ -4,10 +4,13 @@
 // waitlist has no account yet. Holds the service role, so EVERYTHING client-supplied is
 // re-resolved server-side and nothing is trusted.
 //
-// WHAT THIS IS NOT: it takes no payment and creates no checkout. A waitlist row is
-// status='waitlist', and registration_holds_seat() returns false for that, so it does not
-// occupy a seat and the capacity gate ignores it. Promotion (auto-inviting the top of the
-// list when a seat opens) is chunk 2 and lives elsewhere.
+// WHAT THIS IS NOT: it takes no payment and creates no checkout. A row created HERE holds
+// no seat - registration_holds_seat() returns false for a waitlist row with no invite - so
+// the capacity gate ignores it. (That rule changed under this comment on 2026-08-19: since
+// 20260819f a waitlist row DOES hold a seat while it carries an unexpired invite. Nothing
+// in this endpoint sets those columns, so every row it writes is seat-less on creation.)
+// Promotion (auto-inviting the top of the list when a seat opens) is chunk 2 and lives
+// elsewhere.
 //
 // THE LIGHT FORM (Jessica's call, 2026-08-19): child first/last/grade + parent
 // first/last/email/phone. No waivers, no custom questions, no dismissal answers. Those
@@ -82,8 +85,17 @@ serve(async (req) => {
     const childFirst = String(student?.first_name ?? '').trim();
     const childLast = String(student?.last_name ?? '').trim();
 
+    // LAST NAMES ARE REQUIRED, because the database has always required them:
+    // parents.last_name and students.last_name are both NOT NULL. The light form
+    // originally marked them optional, so leaving either blank threw 23502 and this
+    // endpoint returned a bare 500 - the family saw "we could not add you to the list,
+    // please try again" and retrying could never work. Validate here so the message is
+    // honest, and keep the form's required markers in step with this list.
     if (!parentEmail || !parentFirst || !childFirst) {
       return json({ error: 'We need the child\'s first name and your name and email.' }, 400);
+    }
+    if (!childLast || !parentLast) {
+      return json({ error: 'We need a last name for you and for your child.' }, 400);
     }
     // Grade is optional on the light form. Accept 0 (Kindergarten) - `|| null` would
     // turn K into null, which is the classic falsy-zero bug and K is a real grade here.
@@ -114,16 +126,32 @@ serve(async (req) => {
     let parentId: string;
     if (existingParent) {
       parentId = existingParent.id;
-      await admin
-        .from('parents')
-        .update({ first_name: parentFirst, last_name: parentLast || null, phone: parentPhone })
-        .eq('id', parentId);
+      // ONLY WRITE WHAT THEY ACTUALLY TYPED.
+      //
+      // Last name and phone are OPTIONAL on the light join form, and the parent here
+      // may already be a paying customer whose phone the provider relies on. Writing
+      // the form's blanks straight through would null the contact details on file for
+      // their ENROLLED child - a silent data loss the family and the operator would
+      // both discover at the worst moment. create-registration writes these three
+      // unconditionally, which is safe there only because its wizard requires them;
+      // this form does not, so blanks are the expected case rather than the odd one.
+      //
+      // A blank field means "I didn't fill this in", never "delete what you have".
+      const parentPatch: Record<string, string> = {};
+      if (parentFirst) parentPatch.first_name = parentFirst;
+      if (parentLast) parentPatch.last_name = parentLast;
+      if (parentPhone) parentPatch.phone = parentPhone;
+      if (Object.keys(parentPatch).length > 0) {
+        await admin.from('parents').update(parentPatch).eq('id', parentId);
+      }
     } else {
       const { data: newParent, error: pErr } = await admin
         .from('parents')
         .insert({
+          // Not `|| null` - the column is NOT NULL, and the validation above has
+          // already guaranteed this is a real value.
           first_name: parentFirst,
-          last_name: parentLast || null,
+          last_name: parentLast,
           email: parentEmail,
           phone: parentPhone,
         })
@@ -192,8 +220,9 @@ serve(async (req) => {
         .from('students')
         .insert({
           organization_id: org.id,
+          // students.last_name is NOT NULL too - same reason as the parent insert above.
           first_name: childFirst,
-          last_name: childLast || null,
+          last_name: childLast,
           grade,
         })
         .select('id')
