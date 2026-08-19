@@ -23,13 +23,28 @@
 --
 -- So the severity was never only capacity: it was free enrolment.
 --
--- AND TRUNCATE, WHICH IS WORSE IN KIND
--- anon and authenticated also held TRUNCATE on `registrations`. RLS does not apply to
--- TRUNCATE at all - it is gated purely by the privilege - so no policy was standing in
--- the way of that one. I did NOT execute a destructive probe to prove it (the fix is
--- identical either way and it is not worth wiping an environment to watch it happen);
--- the privilege was verified present with has_table_privilege. Same class as the
--- districts_public anon-write hole closed on 2026-08-18, which did not sweep this table.
+-- AND TRUNCATE - CORRECTED, IT IS NOT REACHABLE FROM THE API
+-- anon and authenticated also held TRUNCATE on `registrations`, and RLS genuinely does
+-- not apply to TRUNCATE (it is gated by the privilege alone). I first wrote that the
+-- only thing preventing it was that nobody had tried. That was WRONG, and the correction
+-- matters because it changes how urgent this looks: PostgREST exposes no TRUNCATE verb
+-- at all - only SELECT/INSERT/UPDATE/DELETE and /rpc - so holding the anon API key does
+-- not get you there. Reaching it needs a direct Postgres connection authenticating AS
+-- the anon role, i.e. database credentials, not the public key. So the grant is wrong
+-- and is removed here, but it was never a live data-destruction path.
+-- No destructive probe was run; the privilege was verified present with
+-- has_table_privilege.
+--
+-- THIS FIXES ONE TABLE OUT OF ROUGHLY 89 - DO NOT MISTAKE IT FOR THE CLASS FIX.
+-- A prod sweep found ~89 public tables granting INSERT/UPDATE/DELETE/TRUNCATE to anon
+-- and/or authenticated, including parents, students, waiver_signatures, installments,
+-- refunds, organizations, org_members and platform_admins. That is Supabase's default
+-- privileges applied platform-wide, not a mistake specific to this table, and RLS is the
+-- only thing gating the reachable verbs on every one of them. `registrations` is fixed
+-- first because its INSERT hole was PROVEN reachable and it is the money path. The class
+-- fix is a platform-wide grant audit, asking per table which of those verbs any browser
+-- role should hold at all - backlogged, not attempted here. Related: the districts_public
+-- anon-write hole closed 2026-08-18, which was the same class seen from one table.
 --
 -- WHY DROP THE POLICY RATHER THAN TIGHTEN IT
 -- Nothing uses it. All 21 client references to `registrations` under src/ are SELECT -
