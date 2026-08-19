@@ -65,6 +65,7 @@ import {
   welcomeVerdict,
   type WelcomeWindow,
 } from "./welcomeWindow.ts";
+import { runWaitlistSweep } from "./waitlistSweep.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -314,11 +315,37 @@ serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
-  const summary: { mode: string; automations: unknown[]; errors: unknown[] } = {
+  const summary: {
+    mode: string; automations: unknown[]; errors: unknown[]; waitlist?: unknown;
+  } = {
     mode: eventRegistrationId ? "event" : sweepWelcome ? "sweep" : "cron",
     automations: [],
     errors: [],
   };
+
+  // ── Waiting lists ────────────────────────────────────────────────────────
+  // Expire lapsed holds, then offer any genuinely free seat to the next family.
+  //
+  // Runs on the frequent sweep as well as the daily run, and that is the point: a
+  // 24-hour hold checked once a day could sit lapsed for another 24 hours before the
+  // seat moved, and a seat freed by a refund at 9am would wait until tomorrow to be
+  // offered. It is skipped only in EVENT mode, which exists to handle one named
+  // registration and should not do platform-wide work as a side effect.
+  //
+  // Deliberately NOT inside the automations loop below: that loop is per-org, driven by
+  // rows an operator can switch off. A waiting list that stops moving because someone
+  // disabled an automation would strand families holding places forever.
+  if (!eventRegistrationId) {
+    try {
+      const wl = await runWaitlistSweep(supabase, { baseUrl: PUBLIC_SITE_URL, now: new Date() });
+      summary.waitlist = wl;
+      if (wl.errors.length) console.error("[lifecycle-automations-cron] waitlist sweep errors", wl.errors);
+    } catch (e) {
+      // A waitlist failure must not stop the automations that follow it.
+      summary.errors.push({ waitlist_sweep: (e as Error).message });
+      console.error("[lifecycle-automations-cron] waitlist sweep threw:", e);
+    }
+  }
 
   // Load all enabled automations whose template is v1-enabled. In event mode
   // we filter again per-org inside the audience resolver, so loading globally
