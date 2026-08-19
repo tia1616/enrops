@@ -132,3 +132,138 @@ export function buildWaitlistConfirmation(args: WaitlistConfirmationArgs): Built
 
   return { subject, html, text: textLines.join('\n') };
 }
+
+// ---------------------------------------------------------------------------
+// THE INVITE. A place has opened and it is being offered to this family.
+// ---------------------------------------------------------------------------
+
+export interface WaitlistInviteArgs {
+  brand: OrgBrand;
+  childFirstName: string;
+  programName: string;
+  siteName?: string | null;
+  whenText?: string | null;
+  /** Fully-formed single-use registration link. Built by the caller, never here. */
+  inviteUrl: string;
+  /** When the offer lapses, as an ISO timestamp. */
+  expiresAtIso: string;
+  /** IANA zone from organizations.timezone. The deadline is meaningless without it. */
+  timezone: string;
+}
+
+/**
+ * THE DEADLINE IS THE WHOLE EMAIL, so it is written out in the family's own local time
+ * with the zone named, not as "24 hours" or a bare UTC stamp.
+ *
+ * "You have 24 hours" forces a parent to do arithmetic against a send time they cannot
+ * see, and it drifts the moment the email sits in a queue. An absolute local time does
+ * not: "Thursday 20 August at 4:12 PM (PDT)" means the same thing whenever it is read.
+ *
+ * Falls back to the raw ISO string rather than throwing. An invite that says something
+ * awkward still lets a family claim their place; an invite that fails to render does not.
+ */
+function formatDeadline(iso: string, timezone: string): string {
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone || 'UTC',
+      weekday: 'long', month: 'long', day: 'numeric',
+      hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+    }).format(d);
+  } catch {
+    return iso;
+  }
+}
+
+export function buildWaitlistInvite(args: WaitlistInviteArgs): BuiltEmail {
+  const { brand, childFirstName, programName, siteName, whenText, inviteUrl, expiresAtIso, timezone } = args;
+
+  const childFirst = (childFirstName || '').trim();
+  const who = childFirst || 'your child';
+  const where = (siteName || '').trim();
+  const when = (whenText || '').trim();
+  const classLine = where ? `${programName} at ${where}` : programName;
+  const deadline = formatDeadline(expiresAtIso, timezone);
+
+  // Says the ONE thing that has changed, so it survives a lock-screen preview.
+  const subject = `A place has opened up in ${programName}`;
+
+  // WHAT THIS EMAIL MUST NOT DO: imply the place is already theirs. It is held, not
+  // given, and it is given by completing registration. Every line below is written so
+  // that a family who reads only the first sentence still understands they must act.
+  const leadIn = `A place has opened up in ${classLine}, and because ${who} is at the top of the waiting list we are offering it to you first.`;
+  const holdLine = `The place is held for ${who} until ${deadline}. After that we offer it to the next family on the list.`;
+  const actionLine = `To take it, finish registering with the link below. That is when the place becomes yours.`;
+  const linkOnceLine = `This link works once and only for you, so please do not forward it.`;
+
+  const signature = renderSignatureBlock(brand);
+  const footerHtml = renderPlatformFooterHtml('waitlist');
+  const footerText = renderPlatformFooterText('waitlist');
+
+  const html = `<!doctype html>
+<html><body style="margin:0;padding:0;background:${esc(brand.page_bg_color)};">
+  <div style="max-width:560px;margin:0 auto;padding:24px 20px;font-family:${esc(brand.font_family)};color:#1a1a1a;">
+    ${brand.logo_url
+      ? `<img src="${esc(brand.logo_url)}" alt="${esc(brand.org_name)}" style="max-height:56px;margin-bottom:18px;" />`
+      : `<div style="font-size:18px;font-weight:700;margin-bottom:18px;">${esc(brand.org_name)}</div>`}
+
+    <h1 style="margin:0 0 12px;font-size:22px;line-height:1.3;color:${esc(brand.primary_color)};">
+      A place has opened up
+    </h1>
+
+    <p style="margin:0 0 14px;font-size:16px;line-height:1.55;">${esc(leadIn)}</p>
+
+    ${when ? `<p style="margin:0 0 14px;font-size:15px;line-height:1.5;color:#444;">The class runs ${esc(when)}.</p>` : ''}
+
+    <p style="margin:0 0 6px;font-size:16px;line-height:1.55;"><strong>${esc(holdLine)}</strong></p>
+    <p style="margin:0 0 18px;font-size:15px;line-height:1.55;">${esc(actionLine)}</p>
+
+    <p style="margin:0 0 18px;">
+      <a href="${esc(inviteUrl)}"
+         style="display:inline-block;padding:13px 22px;border-radius:10px;background:${esc(brand.primary_color)};color:#ffffff;text-decoration:none;font-weight:700;font-size:16px;">
+        Register ${esc(who)}
+      </a>
+    </p>
+
+    <p style="margin:0 0 18px;font-size:13px;line-height:1.5;color:#666;">
+      ${esc(linkOnceLine)} If the button does not work, copy this address into your browser:<br />
+      <span style="word-break:break-all;">${esc(inviteUrl)}</span>
+    </p>
+
+    <p style="margin:0 0 18px;font-size:15px;line-height:1.55;">
+      If you no longer need the place, just reply to this email and we will offer it to the
+      next family.
+    </p>
+
+    ${signature}
+    ${footerHtml}
+  </div>
+</body></html>`;
+
+  // Same things, same order, written as prose. The URL sits on its own line so no client
+  // wraps it into something unclickable.
+  const textLines = [
+    `A place has opened up`,
+    ``,
+    leadIn,
+  ];
+  if (when) textLines.push(``, `The class runs ${when}.`);
+  textLines.push(
+    ``,
+    holdLine,
+    ``,
+    actionLine,
+    ``,
+    inviteUrl,
+    ``,
+    linkOnceLine,
+    ``,
+    `If you no longer need the place, just reply to this email and we will offer it to the next family.`,
+    ``,
+    brand.org_name,
+  );
+  if (footerText) textLines.push(``, footerText);
+
+  return { subject, html, text: textLines.join('\n') };
+}

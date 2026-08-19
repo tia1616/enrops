@@ -14,6 +14,7 @@ import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { dismissalSummary } from "../../lib/dismissal.js";
 import { WAITLIST_STATUS } from "../../lib/waitlistState.js";
+import WaitingList from "../../components/WaitingList.jsx";
 import EmailRosterModal from "./EmailRosterModal";
 import InviteFamiliesModal from "./InviteFamiliesModal";
 import RefundDrawer from "../../components/RefundDrawer";
@@ -2030,15 +2031,65 @@ function ProgramRosterRow({ program: p, orgId, orgSlug, canEdit, expanded, onTog
       </div>
 
       {expanded && (
-        <RosterEditor
-          target={{ column: "program_id", id: p.id }}
-          orgId={orgId}
-          onChanged={onChanged}
-          refreshToken={p.refresh_token || 0}
-          excludeCancelled
-          canManage={canEdit}
-        />
+        <>
+          <RosterEditor
+            target={{ column: "program_id", id: p.id }}
+            orgId={orgId}
+            onChanged={onChanged}
+            refreshToken={p.refresh_token || 0}
+            excludeCancelled
+            canManage={canEdit}
+          />
+          {/* The waiting list belongs HERE, under the class an operator just expanded.
+              It also renders on the per-class roster page, but that page is behind a
+              "View / print" button and a list nobody opens is a list nobody acts on. */}
+          <WaitlistForProgram programId={p.id} orgId={orgId} canEdit={canEdit} />
+        </>
       )}
     </div>
+  );
+}
+
+// Loads this program's waiting families and hands them to the shared list.
+//
+// Its own fetch rather than a prop from the section above: the section's query is a
+// COUNT query (program_id/status/payment_status only) and widening it would pull parent
+// contact details for every class in the term to render a section most rows never open.
+// This runs only when a row is expanded.
+function WaitlistForProgram({ programId, orgId, canEdit }) {
+  const [rows, setRows] = useState([]);
+
+  useEffect(() => {
+    if (!programId) return;
+    let alive = true;
+    (async () => {
+      const { data, error } = await supabase
+        .from("registrations")
+        .select(`
+          id, waitlist_position, registered_at,
+          student:students ( id, first_name, last_name, grade ),
+          parent:parents ( first_name, last_name, email, phone )
+        `)
+        .eq("program_id", programId)
+        .eq("status", WAITLIST_STATUS)
+        .is("cancelled_at", null)
+        .order("waitlist_position", { ascending: true });
+      if (!alive) return;
+      // A failed waitlist read must not break the roster above it. Log and show nothing.
+      if (error) { console.warn("[Rosters] waitlist unavailable:", error.message); setRows([]); return; }
+      setRows(data ?? []);
+    })();
+    return () => { alive = false; };
+  }, [programId]);
+
+  return (
+    <WaitingList
+      programId={programId}
+      orgId={orgId}
+      rows={rows}
+      canEdit={canEdit}
+      onChanged={setRows}
+      compact
+    />
   );
 }
