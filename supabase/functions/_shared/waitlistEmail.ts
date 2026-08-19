@@ -134,6 +134,123 @@ export function buildWaitlistConfirmation(args: WaitlistConfirmationArgs): Built
 }
 
 // ---------------------------------------------------------------------------
+// THE LAPSE. The hold ran out, the place went to somebody else, and this family
+// is no longer on the list.
+//
+// EVERY COMPARABLE PLATFORM SENDS THIS (checked 2026-08-19: Jackrabbit, Sawyer,
+// iClassPro, and university registrars all notify on expiry, several with 12h and 6h
+// reminders before it). Not sending it was the outlier, not the restrained choice: a
+// family whose invite went to spam would otherwise lose their place and never learn
+// that anything had happened.
+//
+// THE HARD PART IS TONE. This message carries bad news the family may feel is unfair,
+// and it must not imply they did something wrong: the invite may never have reached
+// them. So it states what happened, never why, and it leads with the way back in
+// rather than burying it under an apology.
+// ---------------------------------------------------------------------------
+
+export interface WaitlistLapsedArgs {
+  brand: OrgBrand;
+  childFirstName: string;
+  programName: string;
+  siteName?: string | null;
+  /** Where to go to rejoin or find another class. */
+  catalogUrl: string;
+  /**
+   * Is there actually another family behind them?
+   *
+   * THIS EXISTS BECAUSE THE FIRST VERSION LIED. It said flatly "it has now gone to the
+   * next family on the list", which is false whenever the lapsed family was the LAST
+   * one waiting - and that is the common case on a short list. The place did not go to
+   * anybody; it went back on sale. Telling a family their spot was given away, when it
+   * is sitting there available, is the worst possible version of this message.
+   */
+  nextInLine: boolean;
+}
+
+export function buildWaitlistLapsed(args: WaitlistLapsedArgs): BuiltEmail {
+  const { brand, childFirstName, programName, siteName, catalogUrl, nextInLine } = args;
+
+  const childFirst = (childFirstName || '').trim();
+  const who = childFirst || 'your child';
+  const where = (siteName || '').trim();
+  const classLine = where ? `${programName} at ${where}` : programName;
+
+  // Names the class, so a family on several lists knows which one this is about.
+  const subject = nextInLine
+    ? `The place in ${programName} has been passed on`
+    : `Your held place in ${programName} has been released`;
+
+  // "We did not hear back" and NOT "you did not respond": we genuinely do not know
+  // that they saw it. Blaming a family for an email that may have gone to spam is
+  // both unkind and probably wrong.
+  const leadIn = nextInLine
+    ? `We held a place in ${classLine} for ${who}, and as we did not hear back by the deadline it has now gone to the next family on the list.`
+    // "may still be" and not "is": this is true at the moment of sending, and a class
+    // that is open now can be booked by anyone before they finish reading.
+    : `We held a place in ${classLine} for ${who}, and as we did not hear back by the deadline we have released it. Nobody else was waiting, so it has gone back into general registration and may still be available.`;
+  const statusLine = `${who} is no longer on the waiting list for this class.`;
+  const wayBack = nextInLine
+    ? `If you would still like a place, you can join the waiting list again or see what else has room.`
+    : `If you still want the place, you can register for it now.`;
+
+  const signature = renderSignatureBlock(brand);
+  const footerHtml = renderPlatformFooterHtml('waitlist');
+  const footerText = renderPlatformFooterText('waitlist');
+
+  const html = `<!doctype html>
+<html><body style="margin:0;padding:0;background:${esc(brand.page_bg_color)};">
+  <div style="max-width:560px;margin:0 auto;padding:24px 20px;font-family:${esc(brand.font_family)};color:#1a1a1a;">
+    ${brand.logo_url
+      ? `<img src="${esc(brand.logo_url)}" alt="${esc(brand.org_name)}" style="max-height:56px;margin-bottom:18px;" />`
+      : `<div style="font-size:18px;font-weight:700;margin-bottom:18px;">${esc(brand.org_name)}</div>`}
+
+    <h1 style="margin:0 0 12px;font-size:22px;line-height:1.3;color:${esc(brand.primary_color)};">
+      ${esc(nextInLine ? 'That place has been passed on' : 'That place has been released')}
+    </h1>
+
+    <p style="margin:0 0 14px;font-size:16px;line-height:1.55;">${esc(leadIn)}</p>
+    <p style="margin:0 0 18px;font-size:16px;line-height:1.55;">${esc(statusLine)}</p>
+    <p style="margin:0 0 18px;font-size:15px;line-height:1.55;">${esc(wayBack)}</p>
+
+    <p style="margin:0 0 18px;">
+      <a href="${esc(catalogUrl)}"
+         style="display:inline-block;padding:13px 22px;border-radius:10px;background:${esc(brand.primary_color)};color:#ffffff;text-decoration:none;font-weight:700;font-size:16px;">
+        ${esc(nextInLine ? 'See what is open' : 'Register now')}
+      </a>
+    </p>
+
+    <p style="margin:0 0 18px;font-size:15px;line-height:1.55;">
+      If you think this is a mistake, or the invitation never reached you, just reply to
+      this email and we will look into it.
+    </p>
+
+    ${signature}
+    ${footerHtml}
+  </div>
+</body></html>`;
+
+  const textLines = [
+    nextInLine ? `That place has been passed on` : `That place has been released`,
+    ``,
+    leadIn,
+    ``,
+    statusLine,
+    ``,
+    wayBack,
+    ``,
+    catalogUrl,
+    ``,
+    `If you think this is a mistake, or the invitation never reached you, just reply to this email and we will look into it.`,
+    ``,
+    brand.org_name,
+  ];
+  if (footerText) textLines.push(``, footerText);
+
+  return { subject, html, text: textLines.join('\n') };
+}
+
+// ---------------------------------------------------------------------------
 // THE INVITE. A place has opened and it is being offered to this family.
 // ---------------------------------------------------------------------------
 
