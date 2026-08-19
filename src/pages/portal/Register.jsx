@@ -534,6 +534,12 @@ export default function Register() {
           promo_code: cart.promo?.code || null,
           payment_plan: cart.payment_plan,
           pricing_snapshot: pricing,
+          // Set when the family arrived from a waitlist invite email. The server
+          // re-resolves it and credits the ONE seat their waitlist row is already
+          // holding; without it the capacity gate would refuse the seat they were
+          // invited to take. A missing, stale or other-org token is simply ignored
+          // server-side, and they get the ordinary "that class is full".
+          waitlist_token: searchParams.get('waitlist') || null,
         }),
       });
       const regData = await regResp.json();

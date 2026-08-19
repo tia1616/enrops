@@ -226,6 +226,45 @@ serve(async (req) => {
     for (const f of flat) {
       requestedPerProgram.set(f.program_id, (requestedPerProgram.get(f.program_id) ?? 0) + 1);
     }
+    // AN INVITED WAITLIST FAMILY IS ALREADY HOLDING ONE OF THESE SEATS.
+    //
+    // The class they were invited to is full BY DEFINITION - that is why there was a
+    // waiting list - and since 20260819f their waitlist row is itself counted in
+    // seats_taken, so it stops the seat being resold while they decide. Registering
+    // through the front door unchanged would therefore always 409: the gate sees the
+    // seat they hold and refuses to let them take it.
+    //
+    // So exactly ONE seat is credited back, and only on the program the token belongs
+    // to. Never a blanket bypass:
+    //   * the token is re-resolved SERVER-SIDE here; the client sends only the string
+    //   * it must still be live (waitlist_invite_lookup returns nothing once expired,
+    //     spent or cancelled), so a stale link gets the ordinary "class is full"
+    //   * it must belong to THIS org, checked against the org resolved from the slug
+    //   * one seat, not the whole cart. A family invited for one child who adds a
+    //     sibling still needs a genuinely free seat for the sibling.
+    const waitlistToken = typeof body?.waitlist_token === 'string' ? body.waitlist_token.trim() : '';
+    let invite: {
+      registration_id: string; program_id: string; organization_id: string;
+    } | null = null;
+    if (waitlistToken) {
+      const { data: inviteRows, error: inviteErr } = await admin
+        .rpc('waitlist_invite_lookup', { p_token: waitlistToken });
+      if (inviteErr) throw new Error(`waitlist invite lookup: ${inviteErr.message}`);
+      const row = Array.isArray(inviteRows) ? inviteRows[0] : inviteRows;
+      // Same-org or it does not count. A token from another provider must not buy a
+      // seat here, and this is the only place that pairing is checked.
+      if (row && row.organization_id === orgId) {
+        invite = row;
+        console.log('[create-registration] waitlist invite accepted', {
+          program_id: row.program_id, registration_id: row.registration_id,
+        });
+      } else if (row) {
+        console.warn('[create-registration] waitlist token belongs to another org, ignoring');
+      } else {
+        console.warn('[create-registration] waitlist token not live, ignoring');
+      }
+    }
+
     const { data: seatRows, error: seatErr } = await admin.rpc('program_seat_counts', {
       p_program_ids: allProgramIds,
     });
@@ -240,7 +279,9 @@ serve(async (req) => {
       // room. Same rule as the publish check above: refuse rather than quietly skip.
       if (!s) return true;
       if (s.max_capacity === null || Number(s.max_capacity) <= 0) return false;
-      return Number(s.seats_taken) + (requestedPerProgram.get(id) ?? 0) > Number(s.max_capacity);
+      // The one held seat, credited only to its own program.
+      const heldByInvite = invite && invite.program_id === id ? 1 : 0;
+      return (Number(s.seats_taken) - heldByInvite) + (requestedPerProgram.get(id) ?? 0) > Number(s.max_capacity);
     });
     if (atCapacity.length) {
       console.warn(
@@ -698,6 +739,40 @@ serve(async (req) => {
     //
     // DO NOT claim this function is atomic. When the atomic-checkout P0 is built,
     // fold the capacity check into that single transaction and delete this note.
+
+    // SPEND THE INVITE, now that the real registration rows exist.
+    //
+    // AFTER the writes, deliberately. If this ran first and the registration then failed,
+    // the family would have lost their place AND have no booking - the one outcome worse
+    // than a failed checkout. Running it here means the worst case is a spent-looking
+    // seat that is genuinely theirs.
+    //
+    // Wrapped: a failure here must not turn a completed registration into a 500. The
+    // family is registered either way. What is left behind is a cancelled-status waitlist
+    // row that still carries a token, which the expiry sweep will clear and which cannot
+    // be replayed to gain a second seat (the gate credits one seat, and their new
+    // registration now occupies it).
+    if (invite) {
+      try {
+        const { data: spent, error: spendErr } = await admin
+          .rpc('waitlist_invite_consume', { p_token: waitlistToken });
+        if (spendErr) {
+          console.error('[create-registration] waitlist_invite_consume failed', spendErr.message);
+        } else if (spent === false) {
+          // Two clicks on the same emailed link. The second registration is real and
+          // stays; this only records that the queue was already tidied.
+          console.warn('[create-registration] waitlist invite was already spent', {
+            registration_id: invite.registration_id,
+          });
+        } else {
+          console.log('[create-registration] waitlist invite consumed', {
+            registration_id: invite.registration_id,
+          });
+        }
+      } catch (e) {
+        console.error('[create-registration] waitlist_invite_consume threw', (e as Error).message);
+      }
+    }
 
     return json({
       registration_ids: registrationIds,

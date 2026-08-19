@@ -120,6 +120,11 @@ verify_jwt = false
 [functions.join-waitlist]
 verify_jwt = false
 
+# An invited family has no account - the token in the emailed link IS the credential,
+# so this cannot require a JWT.
+[functions.waitlist-accept]
+verify_jwt = false
+
 [functions.sync-operator-stripe-status]
 # CORRECTED 2026-07-28. The note below claimed PROD had this as verify_jwt =
 # false. It does not: prod is TRUE, staging is false, and the two have drifted.

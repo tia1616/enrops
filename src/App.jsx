@@ -24,6 +24,7 @@ import OperatorSignup from './pages/enrops/OperatorSignup.jsx';
 import Home from './pages/portal/Home.jsx';
 import Register from './pages/portal/Register.jsx';
 import RegisterSuccess from './pages/portal/RegisterSuccess.jsx';
+import WaitlistAccept from './pages/portal/WaitlistAccept.jsx';
 import Login from './pages/portal/Login.jsx';
 import Dashboard from './pages/portal/Dashboard.jsx';
 import PolicyPage from './pages/PolicyPage.jsx';
@@ -251,6 +252,9 @@ export default function App() {
         <Route path="embed" element={<Home />} />
         <Route path="register" element={<Register />} />
         <Route path="register/success" element={<RegisterSuccess />} />
+        {/* Where the waitlist invite email lands. Public by necessity: an invited
+            family has no account, and the token in the URL is the credential. */}
+        <Route path="waitlist/:token" element={<WaitlistAccept />} />
         <Route path="login" element={<Login />} />
         <Route path="dashboard" element={<Dashboard />} />
         {/* No orgSlug prop: PolicyPage resolves the provider from the `:slug`
