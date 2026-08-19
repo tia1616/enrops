@@ -252,7 +252,13 @@ serve(async (req) => {
       );
       return json(
         {
-          error: 'That class just filled up. Refresh the page to see what is still open.',
+          // "is full", NOT "just filled up". This branch fires for a class that has
+          // been full for weeks as well as for one that filled during checkout, and
+          // until chunk 1 lands nothing on the catalog marks a class as full, so the
+          // long-full case is the COMMON one. "Just filled up" told those families
+          // they were seconds late when the class was never available to them.
+          // Approved by Jessica 2026-08-19.
+          error: 'That class is full. Refresh the page to see what is still open.',
           capacity_error: true,
           full_program_ids: atCapacity,
         },
