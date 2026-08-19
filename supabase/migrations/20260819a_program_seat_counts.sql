@@ -52,6 +52,14 @@ as $$
   group by p.id, p.max_capacity;
 $$;
 
+-- NOTE ON is_full: the capacity gate does NOT read it. is_full answers "is this
+-- class full right now", which is the question a UI asks. The gate has to answer a
+-- different one - "does THIS cart still fit" - because a cart can want more than one
+-- seat in the same class (two siblings), so it compares seats_taken + requested
+-- against max_capacity itself. The two agree whenever requested = 1; for requested > 1
+-- the gate is correctly stricter. is_full is here for chunk 1's "Join the waitlist"
+-- state. If you change what full means, change both and re-run the equivalence probe.
+
 comment on function public.program_seat_counts(uuid[]) is
   'Canonical seat count per afterschool program, enforced by create-registration. seats_taken = confirmed + pending, matching what program_enrollment shows to a PRIVILEGED reader. is_full is false for an uncapped program (max_capacity NULL/0). SECURITY DEFINER on purpose: program_enrollment is security_invoker=on and reports enrolled=0 to anon, so the true count needs an RLS bypass. NOT granted to anon. Camps are NOT covered: camp_sessions has no capacity column and camp caps live on curricula.class_size_max.';
 

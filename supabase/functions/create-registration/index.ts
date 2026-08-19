@@ -201,6 +201,27 @@ serve(async (req) => {
     // UNCAPPED IS NOT FULL: max_capacity NULL or <= 0 skips the check entirely. A
     // missing or mis-typed cap is not a full class, and treating it as one would
     // turn every family away on a data-entry slip.
+    //
+    // THE OTHER PLACES THAT WRITE registrations, and why this gate is only here.
+    // Four functions insert into registrations. This is the only one that gets a
+    // capacity gate, deliberately:
+    //   apps-script-roster-sync   - camps only (camp_session_id). Out of scope, and
+    //                               it mirrors a sheet that reflects reality.
+    //   admin-import-camp-roster  - camps only. Out of scope.
+    //   admin-import-program-roster - afterschool, but verify_jwt is ON, so it is an
+    //                               authenticated admin. An operator importing a
+    //                               roster of 15 children who actually turned up MUST
+    //                               be able to exceed the cap. Blocking that would be
+    //                               the bug, not the fix.
+    // So the rule is: gate the PUBLIC self-serve path, never the operator's own
+    // record-what-happened paths. Do not "complete" this by adding the check to the
+    // importers.
+    //
+    // AND WHY CONFIRMATION CANNOT OVERSELL: seats_taken counts pending as well as
+    // confirmed, so when stripe-webhook flips a row pending -> confirmed the seat was
+    // already counted. That transition is seat-neutral and needs no gate of its own.
+    // Counting only 'confirmed' here would have left the webhook as a second,
+    // ungated way over the cap.
     const requestedPerProgram = new Map<string, number>();
     for (const f of flat) {
       requestedPerProgram.set(f.program_id, (requestedPerProgram.get(f.program_id) ?? 0) + 1);
