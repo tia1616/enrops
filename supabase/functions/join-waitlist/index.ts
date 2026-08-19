@@ -29,12 +29,18 @@
 // attach a parent) cannot work because the row needs parent_id and student_id up front.
 // The reverse mistake would be worse: a waitlist row pointing at nothing.
 
-// @deno-types="https://esm.sh/v135/@supabase/supabase-js@2.39.0/dist/module/index.d.ts"
+// NO @deno-types pragma here, deliberately. Pointing at the v135 pinned .d.ts gives the
+// client a DIFFERENT type identity from the one _shared/orgBrand.ts imports, and passing
+// it to loadOrgBrand then fails with a protected-member mismatch that reads like a
+// library bug. Every _shared consumer uses this bare specifier; match it.
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
+import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
+import { buildWaitlistConfirmation } from '../_shared/waitlistEmail.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -229,10 +235,79 @@ serve(async (req) => {
 
     console.log('[join-waitlist] joined', { program_id, position, org: org.id });
 
+    // --- Confirmation email ---
+    //
+    // AFTER the join, and it CANNOT fail the join. The family's place is already
+    // recorded; losing it because Resend was having a bad minute would be strictly
+    // worse than a missing email, and they would have no way to tell that had happened.
+    // So this is wrapped, logged loudly, and reported back as a flag rather than an
+    // error - the caller shows "you are on the list" either way.
+    //
+    // The screen already told them their position, so it is not a lie if this does not
+    // arrive. What WOULD be a lie is the screen's "we will email you if a place opens
+    // up", and that promise is kept by chunk 2's invite, not by this message.
+    let emailSent = false;
+    try {
+      const { data: prog } = await admin
+        .from('programs')
+        .select('curriculum, day_of_week, start_time, program_locations(name)')
+        .eq('id', program_id)
+        .maybeSingle();
+
+      const brand = await loadOrgBrand(admin, org.id);
+      const built = buildWaitlistConfirmation({
+        brand,
+        childFirstName: childFirst,
+        programName: prog?.curriculum || 'the class',
+        // PostgREST types an embedded relation as an array even when it is
+        // many-to-one, so normalise rather than trusting either shape.
+        siteName: (() => {
+          const pl = (prog as { program_locations?: unknown } | null)?.program_locations;
+          if (Array.isArray(pl)) return (pl[0] as { name?: string } | undefined)?.name ?? null;
+          return (pl as { name?: string } | null)?.name ?? null;
+        })(),
+        whenText: [prog?.day_of_week, prog?.start_time].filter(Boolean).join(' '),
+        position: Number(position),
+      });
+
+      const resp = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${RESEND_API_KEY}`,
+        },
+        body: JSON.stringify({
+          from: formatFromAddress(brand),
+          to: parentEmail,
+          subject: built.subject,
+          html: built.html,
+          // BOTH halves. text is written as prose in waitlistEmail.ts, not stripped from
+          // the HTML - a generated text half is how a family on a plain-text client gets
+          // run-together fragments while the preview looks perfect.
+          text: built.text,
+          // A reply about coming off the list has to reach the PROVIDER, never the
+          // platform. tenant_alert_email is the tenant's own inbox; reply_to is the
+          // tenant-scoped fallback. Deliberately NOT brand.alert_email, which cascades
+          // to Enrops and would send a parent's reply about their own child to us.
+          reply_to: [brand.tenant_alert_email ?? brand.reply_to],
+          tags: [{ name: 'type', value: 'waitlist_confirmation' }],
+        }),
+      });
+
+      if (!resp.ok) {
+        console.error('[join-waitlist] confirmation send failed', resp.status, await resp.text());
+      } else {
+        emailSent = true;
+      }
+    } catch (mailErr) {
+      console.error('[join-waitlist] confirmation send threw', (mailErr as Error).message);
+    }
+
     return json({
       waitlist_position: position,
       registration_id: row?.registration_id ?? null,
       parent_id: parentId,
+      confirmation_email_sent: emailSent,
     });
   } catch (err) {
     console.error('join-waitlist error:', err);
