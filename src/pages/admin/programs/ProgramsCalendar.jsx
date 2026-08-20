@@ -277,9 +277,16 @@ export default function ProgramsCalendar() {
     const total = totalRes.count ?? 0;
 
     if (active > 0) {
+      // CHILDREN, NOT FAMILIES. `active` counts REGISTRATIONS, and a registration
+      // is one child's place — one family can hold several. Saying "families"
+      // would have reported Happy Valley Saturday, which has 6 active
+      // registrations across 3 families, as "6 families still have a place".
+      // Caught by running the count against real per-tenant data rather than by
+      // reading the sentence: the branch I first tested happened to land on a
+      // one-child class, where the wrong word is accidentally true.
       alert(
-        `${active} ${active === 1 ? "family still has" : "families still have"} a place in this class. `
-        + "Refund or cancel them first, or unpublish the class instead of removing it.",
+        `${active} ${active === 1 ? "child still has" : "children still have"} a place in this class. `
+        + "Refund or cancel those places first, or unpublish the class instead of removing it.",
       );
       return;
     }
