@@ -196,33 +196,107 @@ export default function ProgramsCalendar() {
     setPrograms((prev) => prev.map((p) => (p.id === programId ? { ...p, status: "draft" } : p)));
   }
 
-  // Delete a program. Hard-blocked when there are active (non-cancelled)
-  // registrations — those families would lose the link to their enrollment.
-  // Operator must either cancel the registrations first or just unpublish.
+  // Cancel a class: it stops being offered, drops off the instructor schedule
+  // board (which already excludes 'cancelled'), and every registration, refund
+  // and payment record stays attached to it.
+  //
+  // NEW ACTION. Nothing in the product could cancel a class before this — the two
+  // cancelled classes on production were set by hand in SQL. 'cancelled' is an
+  // existing allowed value of programs_status_check, so this needs no migration
+  // and no new status for the rest of the system to learn.
+  async function cancelProgram(programId) {
+    const { error: cancelErr } = await supabase
+      .from("programs")
+      .update({ status: "cancelled" })
+      .eq("id", programId);
+    if (cancelErr) {
+      alert(`Couldn't cancel: ${cancelErr.message}`);
+      return;
+    }
+    setPrograms((prev) => prev.map((p) => (p.id === programId ? { ...p, status: "cancelled" } : p)));
+  }
+
+  // Remove a class from the schedule — by deleting it when the database will
+  // genuinely allow that, and by cancelling it when it will not.
+  //
+  // THE GATE AND THE DATABASE USED TO DISAGREE, and Jessica hit it on Forest Park
+  // Monday. This check excluded cancelled registrations; the FOREIGN KEY on
+  // registrations.program_id does not. Her one blocker was a registration she had
+  // already cancelled and refunded herself — so the check passed, the DELETE was
+  // attempted, Postgres refused it, and she was shown the raw constraint text.
+  // She did everything right and the screen told her about a table.
+  //
+  // Deleting is not the answer even where it looks possible: that row holds a
+  // $240 refund. Erasing it to tidy a board is the wrong trade, and it is why the
+  // "only history left" case CANCELS rather than force-deletes.
+  //
+  // Three states, three sentences, none claiming another's:
+  //   families still hold a place -> refuse; refund or cancel them first
+  //   only history attached       -> delete is impossible; offer to cancel
+  //   nothing attached at all     -> delete, as before
   async function deleteProgram(programId) {
     // Real-time registration check, not a stale enrollment count from page load.
-    const { data: regRows, error: regErr } = await supabase
-      .from("registrations")
-      .select("id", { count: "exact" })
-      .eq("program_id", programId)
-      // Waiting children are not enrolled, so they must not inflate this count.
-      .neq("status", WAITLIST_STATUS)
-      .is("cancelled_at", null);
-    if (regErr) {
-      alert(`Couldn't check registrations: ${regErr.message}`);
+    // TWO counts, because they answer different questions. `active` is what an
+    // operator means by "anyone in this class"; `total` is what the foreign key
+    // sees, and it alone decides whether a DELETE can succeed.
+    const [activeRes, totalRes] = await Promise.all([
+      supabase
+        .from("registrations")
+        .select("id", { count: "exact", head: true })
+        .eq("program_id", programId)
+        // Waiting children are not enrolled, so they must not inflate this count.
+        .neq("status", WAITLIST_STATUS)
+        .is("cancelled_at", null),
+      supabase
+        .from("registrations")
+        .select("id", { count: "exact", head: true })
+        .eq("program_id", programId),
+    ]);
+    if (activeRes.error || totalRes.error) {
+      // FAIL CLOSED. Not being able to count is not the same as counting zero,
+      // and the destructive branch is the one that runs on a wrong zero.
+      alert(`Couldn't check registrations: ${(activeRes.error ?? totalRes.error).message}`);
       return;
     }
-    if ((regRows?.length ?? 0) > 0) {
-      alert(`This program has ${regRows.length} active registration${regRows.length === 1 ? "" : "s"}. Cancel them first, or unpublish the program instead of deleting.`);
+    const active = activeRes.count ?? 0;
+    const total = totalRes.count ?? 0;
+
+    if (active > 0) {
+      alert(
+        `${active} ${active === 1 ? "family still has" : "families still have"} a place in this class. `
+        + "Refund or cancel them first, or unpublish the class instead of removing it.",
+      );
       return;
     }
-    if (!confirm("Delete this program permanently? This can't be undone.")) return;
+
+    if (total > 0) {
+      const ok = confirm(
+        `Nobody holds a place in this class, but it still has ${total} past `
+        + `registration${total === 1 ? "" : "s"} on file — cancellations and refunds. `
+        + "Deleting the class would erase that record, so it can't be deleted.\n\n"
+        + "Cancel it instead? It stops being offered to families and drops off your "
+        + "instructor schedule, and the records stay.",
+      );
+      if (!ok) return;
+      await cancelProgram(programId);
+      return;
+    }
+
+    if (!confirm("Delete this class permanently? This can't be undone.")) return;
     const { error: delErr } = await supabase
       .from("programs")
       .delete()
       .eq("id", programId);
     if (delErr) {
-      alert(`Couldn't delete: ${delErr.message}`);
+      // Should now be unreachable for the registrations FK, but nine other tables
+      // reference programs (attendance, payouts, assignments, roster sends...).
+      // If one of them refuses, say so in words rather than handing over
+      // Postgres's sentence about a constraint.
+      alert(
+        "Couldn't delete this class — something else in the system still refers to it. "
+        + "You can cancel it instead, which hides it and keeps the records.\n\n"
+        + `Details: ${delErr.message}`,
+      );
       return;
     }
     setPrograms((prev) => prev.filter((p) => p.id !== programId));
@@ -1229,6 +1303,12 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
   const isFull = capacity > 0 && enrolled >= capacity;
   const fillColor = isFull ? BRIGHT : pct >= 0.7 ? VIOLET : "#a8c47f";
   const isDraft = p.status === "draft";
+  // A cancelled class matched NEITHER isDraft nor isOpen, so it rendered with no
+  // badge and full-strength styling — indistinguishable from a live class on the
+  // one screen an operator uses to see what they are running. Nothing in the
+  // product could reach that state until cancelling a class became possible,
+  // which is exactly why it has to be legible now rather than later.
+  const isCancelled = p.status === "cancelled";
   // A paid class can't go live before the money has somewhere to land. The
   // control is REPLACED rather than disabled: a greyed-out button still reads as
   // a feature you have, and this one has a next step worth offering.
@@ -1264,7 +1344,7 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
       padding: "10px 16px",
       borderBottom: isDatesExpanded ? "none" : `1px solid ${RULE}`,
       fontSize: 13,
-      opacity: isDraft ? 0.55 : 1,
+      opacity: isDraft || isCancelled ? 0.55 : 1,
       background: isDraft ? "#fafaf5" : "transparent",
     }}>
       {/* Start date + time. By-school view also shows day-of-week. */}
@@ -1305,6 +1385,21 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
               }}
             >
               Not linked
+            </span>
+          )}
+          {isCancelled && (
+            <span style={{
+              fontSize: 10,
+              color: "#b0413e",
+              background: "#b0413e1F",
+              padding: "2px 8px",
+              borderRadius: 999,
+              fontWeight: 700,
+              textTransform: "uppercase",
+              letterSpacing: 0.5,
+              flexShrink: 0,
+            }}>
+              Cancelled
             </span>
           )}
           {isDraft && (
@@ -2077,6 +2172,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
   }
 
   const isDraft = program.status === "draft";
+  const isCancelled = program.status === "cancelled";
   const isOpen = program.status === "open";
 
   // Unsaved SCHEDULE edits? The SESSION DATES list at the bottom shows the SAVED
@@ -2653,6 +2749,26 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
               title="Publish — show in catalog + marketing"
             >Publish →</button>
           )
+        )}
+        {/* A cancelled class matches neither Publish (draft-only) nor Unpublish
+            (open-only), so it correctly offers neither — but without this it
+            offered no way BACK either, and a state you can enter and not leave is
+            the trap this codebase keeps re-learning.
+            REUSES onUnpublish rather than threading a new prop through six
+            components: unpublishProgram's whole job is "set this class back to
+            draft", which is exactly what reopening is. One action, one place, and
+            it lands in draft rather than open on purpose — bringing a class back
+            should not put it in front of families before it has been looked at. */}
+        {isCancelled && onUnpublish && (
+          <button
+            type="button"
+            onClick={() => onUnpublish(program.id)}
+            style={{
+              background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, padding: "7px 14px",
+              borderRadius: 6, fontSize: 12.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer",
+            }}
+            title="Reopen — bring this class back as a draft"
+          >Reopen as draft</button>
         )}
         {isOpen && (
           <button
