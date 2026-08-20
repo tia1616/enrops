@@ -253,25 +253,44 @@ export default function ProgramsCalendar() {
     // to prevent. The end time rides along so a pair set together is one refetch.
     const SCHEDULE_KEYS = ["first_session_date", "session_count", "end_date", "schedule_mode", "program_location_id", "day_of_week", "early_release_start_time", "early_release_end_time"];
     if (SCHEDULE_KEYS.some((k) => k in patch)) {
-      // A schedule save re-materializes session_count from the CURRENT calendars,
-      // so this program is drift-free by construction now — clear any stale flag
-      // (chunk 4) so the "Schedule out of date" badge disappears immediately.
-      setDriftByProgram((prev) => {
-        if (!(programId in prev)) return prev;
-        const next = { ...prev };
-        delete next[programId];
-        return next;
-      });
       // Same re-derive + merge the in-context skip uses — one helper, so a
       // future change to how dates refresh can't drift between the two paths.
-      await refreshProgramSchedule(programId);
+      const fresh = await refreshProgramSchedule(programId);
+      // ORDER MATTERS, AND IT USED TO BE WRONG. The drift flag was cleared BEFORE
+      // this refetch, on the reasoning that a schedule save re-materializes
+      // session_count and is therefore drift-free by construction. True of the
+      // DATABASE — but the badge describes the SCREEN, and if the refetch then
+      // failed, the badge was gone and the dates under it were stale. The failure
+      // removed the one warning that would have said so. Clear it only once the
+      // dates on screen are actually current.
+      if (fresh) {
+        setDriftByProgram((prev) => {
+          if (!(programId in prev)) return prev;
+          const next = { ...prev };
+          delete next[programId];
+          return next;
+        });
+      }
+      return { datesStale: !fresh };
     }
+    return { datesStale: false };
   }
 
   // Re-derive ONE program's schedule and merge it into state, so a change made
   // outside the field-save path (an in-context "mark no-school day") updates the
   // dates the row + expanded panel show, without a full reload. Same read the
   // field-save refetch uses; single source of truth is the SQL derivation.
+  // Returns TRUE if the dates on screen are now current, FALSE if the re-read
+  // failed and they are stale.
+  //
+  // THIS USED TO SWALLOW. Every failure went to console.warn and the caller
+  // carried on, so a save that could not refresh looked identical to one that
+  // did: the row said "✓ Saved" over dates that had not moved, with the only
+  // evidence in a console nobody has open. That is the exact symptom Jessica
+  // reported on 2026-08-20 and could not reproduce afterwards — which is the
+  // signature of an intermittent failure with its error thrown away. The dates
+  // themselves were never wrong; every derived list on prod matches its stored
+  // session_count. What was wrong was the screen, silently.
   async function refreshProgramSchedule(programId) {
     try {
       const { data: sched, error: schErr } = await supabase.rpc(
@@ -288,8 +307,13 @@ export default function ProgramsCalendar() {
         session_time: r.session_time, session_end_time: r.session_end_time,
       }));
       setSessionDatesByProgram((prev) => ({ ...prev, [programId]: arr }));
+      return true;
     } catch (e) {
-      console.warn("Couldn't refresh derived dates after skip:", e?.message ?? e);
+      // Still logged, because a trace is useful when someone does go looking —
+      // but console is no longer the ONLY place this lands. The boolean is what
+      // the caller acts on.
+      console.error("[ProgramsCalendar] couldn't refresh derived dates:", e?.message ?? e);
+      return false;
     }
   }
 
@@ -2014,7 +2038,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         setTimeout(() => setSavedFlash(false), 1500);
         return; // finally{} resets saving
       }
-      await onUpdate(program.id, changed);
+      const saveResult = await onUpdate(program.id, changed);
       // Sync the draft to what was actually STORED for every field the
       // "unsaved schedule changes" banner compares, so a good save always clears
       // it. Two fields the save rewrites out from under the draft:
@@ -2030,8 +2054,21 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
       // silently reverted by an edit aimed at something else entirely. It also left
       // the row-resync deaf for the rest of the session.
       reconcileDraftToStored();
-      setSavedFlash(true);
-      setTimeout(() => setSavedFlash(false), 1500);
+      // THE SAVE SUCCEEDED EITHER WAY — the row was written before the dates were
+      // re-read, so the bookkeeping above runs regardless and the "unsaved
+      // changes" banner clears. What differs is whether the dates BELOW this
+      // panel are the new ones. Saying nothing here is what produced a "✓ Saved"
+      // sitting over a stale list, so the two outcomes get two different messages
+      // and neither claims the other's state.
+      if (saveResult?.datesStale) {
+        setSaveError(
+          "Saved — but the class dates below couldn't be refreshed just now, "
+          + "so they may still show the old schedule. Reload the page to see them.",
+        );
+      } else {
+        setSavedFlash(true);
+        setTimeout(() => setSavedFlash(false), 1500);
+      }
     } catch (err) {
       setSaveError(err.message ?? String(err));
     } finally {
@@ -2775,12 +2812,23 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, onScheduleChan
       if (error) throw error;
       // Re-derive so the list below reflects the real, shifted schedule rather
       // than a guess computed here (single source of truth is the SQL derivation).
-      if (onScheduleChanged) await onScheduleChanged(program.id);
-      setSkipDone(skipDate);
+      // The SECOND caller of that refresh, and it had the same silence as the
+      // first: the no-school date was genuinely written, then this declared
+      // "Marked" over a list that had not moved. The write and the redraw are
+      // separate outcomes and each gets its own sentence.
+      const fresh = onScheduleChanged ? await onScheduleChanged(program.id) : true;
       setSkipOpen(false);
       setSkipDate("");
       setSkipReason("");
-      setTimeout(() => setSkipDone(null), 5000);
+      if (fresh === false) {
+        setSkipErr(
+          "That date was marked, but the list below couldn't be refreshed just now. "
+          + "Reload the page to see the new dates.",
+        );
+      } else {
+        setSkipDone(skipDate);
+        setTimeout(() => setSkipDone(null), 5000);
+      }
     } catch (e) {
       setSkipErr(e?.message || "Couldn't mark that date. Please try again.");
     } finally {
