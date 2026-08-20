@@ -247,14 +247,20 @@ export default function ProgramsCalendar() {
   //
   // Three states, three sentences, none claiming another's:
   //   families still hold a place -> refuse; refund or cancel them first
-  //   only history attached       -> delete is impossible; offer to cancel
-  //   nothing attached at all     -> delete, as before
+  //   families still waiting     -> refuse; take them off the list first
+  //   only history attached      -> delete is impossible; offer to cancel
+  //   nothing attached at all    -> delete, as before
   async function deleteProgram(programId) {
     // Real-time registration check, not a stale enrollment count from page load.
-    // TWO counts, because they answer different questions. `active` is what an
-    // operator means by "anyone in this class"; `total` is what the foreign key
-    // sees, and it alone decides whether a DELETE can succeed.
-    const [activeRes, totalRes] = await Promise.all([
+    // THREE counts, because there are three different reasons a class cannot just
+    // be deleted, and each needs its own sentence. A single "total" was a proxy
+    // broader than the claim built on it: it counted WAITLIST rows too, so a class
+    // with three families queued and nobody enrolled would have been described as
+    // having "3 past registrations on file — cancellations and refunds", and the
+    // offered Cancel would have left those three still holding queue positions and
+    // live invite links on a class no longer being offered, with nothing telling
+    // them. Reachable the moment the waitlist ships.
+    const [activeRes, waitingRes, historyRes] = await Promise.all([
       supabase
         .from("registrations")
         .select("id", { count: "exact", head: true })
@@ -265,16 +271,25 @@ export default function ProgramsCalendar() {
       supabase
         .from("registrations")
         .select("id", { count: "exact", head: true })
-        .eq("program_id", programId),
+        .eq("program_id", programId)
+        .eq("status", WAITLIST_STATUS),
+      supabase
+        .from("registrations")
+        .select("id", { count: "exact", head: true })
+        .eq("program_id", programId)
+        .neq("status", WAITLIST_STATUS)
+        .not("cancelled_at", "is", null),
     ]);
-    if (activeRes.error || totalRes.error) {
+    if (activeRes.error || waitingRes.error || historyRes.error) {
       // FAIL CLOSED. Not being able to count is not the same as counting zero,
       // and the destructive branch is the one that runs on a wrong zero.
-      alert(`Couldn't check registrations: ${(activeRes.error ?? totalRes.error).message}`);
+      const firstErr = activeRes.error ?? waitingRes.error ?? historyRes.error;
+      alert(`Couldn't check registrations: ${firstErr.message}`);
       return;
     }
     const active = activeRes.count ?? 0;
-    const total = totalRes.count ?? 0;
+    const waiting = waitingRes.count ?? 0;
+    const history = historyRes.count ?? 0;
 
     if (active > 0) {
       // CHILDREN, NOT FAMILIES. `active` counts REGISTRATIONS, and a registration
@@ -291,10 +306,23 @@ export default function ProgramsCalendar() {
       return;
     }
 
-    if (total > 0) {
+    // WAITING FAMILIES ARE NOT HISTORY. They are live people expecting a place,
+    // and nothing on this screen can tell them the class has gone — so this
+    // refuses rather than offering a Cancel that would strand them silently,
+    // still holding a queue position and possibly a live invite link.
+    if (waiting > 0) {
+      alert(
+        `${waiting} ${waiting === 1 ? "family is" : "families are"} on the waiting list for this class. `
+        + "Take them off the waiting list first — they're expecting a place, and removing "
+        + "the class won't tell them.",
+      );
+      return;
+    }
+
+    if (history > 0) {
       const ok = confirm(
-        `Nobody holds a place in this class, but it still has ${total} past `
-        + `registration${total === 1 ? "" : "s"} on file — cancellations and refunds. `
+        `Nobody holds a place in this class, but it still has ${history} past `
+        + `registration${history === 1 ? "" : "s"} on file — cancellations and refunds. `
         + "Deleting the class would erase that record, so it can't be deleted.\n\n"
         + "Cancel it instead? It stops being offered to families and drops off your "
         + "instructor schedule, and the records stay.",
@@ -314,10 +342,20 @@ export default function ProgramsCalendar() {
       // reference programs (attendance, payouts, assignments, roster sends...).
       // If one of them refuses, say so in words rather than handing over
       // Postgres's sentence about a constraint.
+      // ONLY 23503 PROVES A DEPENDENCY. Asserting "something else refers to it"
+      // for every error sends an operator whose session simply lapsed hunting for
+      // a dependency that does not exist — the same untrue-sentence class this
+      // whole function was rewritten to remove. Nine tables reference programs
+      // (attendance, payouts, assignments, roster sends...), so the FK case is
+      // real and worth naming; every other case gets an honest "couldn't".
+      const isDependency = delErr.code === "23503";
       alert(
-        "Couldn't delete this class — something else in the system still refers to it. "
-        + "You can cancel it instead, which hides it and keeps the records.\n\n"
-        + `Details: ${delErr.message}`,
+        isDependency
+          ? "Couldn't delete this class — something else in the system still refers to it. "
+            + "You can cancel it instead, which hides it and keeps the records.\n\n"
+            + `Details: ${delErr.message}`
+          : "Couldn't delete this class. Nothing has been changed — reload and try again.\n\n"
+            + `Details: ${delErr.message}`,
       );
       return;
     }

@@ -276,6 +276,27 @@ export default function EditProgramCurriculumModal({
         ]);
         if (!mounted) return;
 
+        // A FAILED LOOKUP MUST NOT READ AS "NOBODY NEEDS TELLING".
+        //
+        // supabase.rpc() RESOLVES with { data: null, error } — it does not throw —
+        // so the try/catch around this block never fires on a PostgREST error and
+        // `data ?? []` turned every failure into an empty recipient list. The
+        // preview then said "0 families will get a note", the operator reasonably
+        // skipped the notes, and the send went out to everybody anyway.
+        //
+        // That is not hypothetical: this modal now depends on
+        // program_note_recipients, and a migration always reaches one environment
+        // before the other. Code arriving before the function exists would have
+        // silently told every operator that no class change needs announcing.
+        // Fail loudly instead — an error the operator can see beats a zero they
+        // cannot question.
+        if (regsRes.error) {
+          console.error("[EditProgramCurriculumModal] recipient lookup failed", regsRes.error);
+          setRecipientsError("Couldn't work out who would be notified. Reload and try again.");
+          setRecipientsLoading(false);
+          return;
+        }
+
         // One note per family even if they've got two kids in the same program —
         // and that note names BOTH of them. This used to be an inline dedupe that
         // kept the first child and dropped the rest, byte-for-byte the same bug
