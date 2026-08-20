@@ -56,7 +56,7 @@ function stageOf(r) {
   // fell through to the "all cancelled" label below and read as failure on the one screen
   // used to decide who needs help. Tested before "all_cancelled" because it is the
   // hopeful reading of the same active=0 row. Copy approved by Jessica 2026-08-20.
-  if ((r.waitlist_registration_count ?? 0) > 0) return { key: "waitlist_only", label: "Waiting list only", color: AMBER };
+  if ((r.waitlist_registration_count ?? 0) > 0) return { key: "waitlist_only", label: "Waitlist only", color: AMBER };
   if ((r.registration_count ?? 0) > 0) return { key: "all_cancelled", label: "Registrations all cancelled", color: AMBER };
   return { key: "no_regs", label: "Published, no registrations", color: AMBER };
 }

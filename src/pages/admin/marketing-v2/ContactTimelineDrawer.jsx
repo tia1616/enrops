@@ -152,7 +152,7 @@ async function fetchFamily(contact, orgId) {
         at: r.registered_at,
         icon: waitlisted ? "⏳" : (past ? "🎓" : "📝"),
         title: waitlisted
-          ? `Joined the waiting list: ${name}`
+          ? `Joined the waitlist: ${name}`
           : `${past ? "Attended" : "Registered"}: ${name}`,
         detail: [child, cancelled ? "later cancelled" : (!waitlisted && r.status && r.status !== "confirmed" ? cap(r.status) : "")].filter(Boolean).join(" · "),
         tone: cancelled ? "neutral" : (waitlisted ? "neutral" : "positive"),

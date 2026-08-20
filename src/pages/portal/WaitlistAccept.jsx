@@ -1,4 +1,4 @@
-// /:orgSlug/waitlist/:token — where the invite email's link lands.
+// /:slug/waitlist/:token — where the invite email's link lands.
 //
 // This page does ONE job: prove the invite is still good, tell the family whose place it
 // is and how long they have, and hand them into normal registration with the token
@@ -33,7 +33,11 @@ function formatDeadline(iso) {
 }
 
 export default function WaitlistAccept() {
-  const { orgSlug, token } = useParams();
+  // The route is `/:slug/waitlist/:token` (App.jsx), so the param is `slug`, NOT
+  // `orgSlug`. Destructuring `orgSlug` here read undefined, and every link/redirect built
+  // from it pointed at `/undefined/...` - which PublicLayout renders as "We couldn't find
+  // that page." That is what a family saw the moment they clicked Register on a good invite.
+  const { slug, token } = useParams();
   const navigate = useNavigate();
   const [state, setState] = useState({ phase: 'loading' });
 
@@ -71,7 +75,11 @@ export default function WaitlistAccept() {
       program: state.invite.program_id,
       waitlist: token,
     });
-    navigate(`/${orgSlug}/register?${params.toString()}`);
+    // The org_slug the ENDPOINT returned is authoritative - the accept function resolves it
+    // from the invite server-side and returns it for exactly this. Fall back to the URL
+    // slug only if it is somehow absent.
+    const targetSlug = state.invite?.org_slug || slug;
+    navigate(`/${targetSlug}/register?${params.toString()}`);
   }
 
   if (state.phase === 'loading') {
@@ -111,7 +119,7 @@ export default function WaitlistAccept() {
           If you have already registered, you are all set and nothing more is needed.
         </p>
         <p style={{ margin: 0 }}>
-          <a href={`/${orgSlug}`} style={{ color: '#5847C9', fontWeight: 700 }}>
+          <a href={`/${slug}`} style={{ color: '#6857E1', fontWeight: 700 }}>
             See what else is open
           </a>
         </p>
@@ -133,7 +141,7 @@ export default function WaitlistAccept() {
       </h1>
       <p style={{ margin: '0 0 14px' }}>
         A place has opened up in <strong>{classLine}</strong>, and it is being held for{' '}
-        {childName} because they were next on the waiting list.
+        {childName} because they were next on the waitlist.
       </p>
       {deadline && (
         <p style={{ margin: '0 0 18px' }}>
@@ -146,9 +154,9 @@ export default function WaitlistAccept() {
       <button
         type="button"
         onClick={continueToRegistration}
+        className="btn-enrops-primary"
         style={{
-          width: '100%', padding: '14px 18px', borderRadius: 10, border: 'none',
-          background: '#111', color: '#fff', fontWeight: 800, fontSize: 16, cursor: 'pointer',
+          width: '100%', padding: '14px 18px', borderRadius: 10, fontWeight: 800, fontSize: 16,
         }}
       >
         Register {childName}

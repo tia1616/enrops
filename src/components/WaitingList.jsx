@@ -46,7 +46,7 @@ export default function WaitingList({ programId, orgId, rows, canEdit, onChanged
   async function remove(row) {
     const childName = `${row.student?.first_name ?? ""} ${row.student?.last_name ?? ""}`.trim() || "this child";
     if (!window.confirm(
-      `Take ${childName} off the waiting list for this class?\n\n`
+      `Take ${childName} off the waitlist for this class?\n\n`
       + `They will lose their place and everyone below them moves up. `
       + `If they want back on, they can join again and go to the end of the list.`
     )) return;
@@ -92,12 +92,11 @@ export default function WaitingList({ programId, orgId, rows, canEdit, onChanged
   return (
     <div style={{ marginTop: compact ? 14 : 32 }}>
       <h2 style={{ fontSize: compact ? 13 : 15, fontWeight: 700, color: INK, margin: "0 0 4px" }}>
-        Waiting list ({rows.length})
+        Waitlist ({rows.length})
       </h2>
       <p style={{ fontSize: 13, color: MUTED, margin: "0 0 12px", maxWidth: 620 }}>
-        These families asked to be told if a place opens up. They are not enrolled,
-        have not paid, and are not on the roster or the roster email.
-        {canEdit && " If a family asks to come off the list, remove them here."}
+        These families will be automatically notified when a place opens up.
+        {canEdit && " If a family asks to come off the waitlist, remove them here."}
       </p>
 
       {/* Above the rows, so it is next to the one that failed rather than below a list
@@ -151,7 +150,7 @@ export default function WaitingList({ programId, orgId, rows, canEdit, onChanged
                   type="button"
                   onClick={() => remove(w)}
                   disabled={removingId === w.id}
-                  title={`Take ${childName} off the waiting list`}
+                  title={`Take ${childName} off the waitlist`}
                   style={{
                     border: "none", background: "none", padding: "2px 4px",
                     color: removingId === w.id ? MUTED : RED,

@@ -189,9 +189,9 @@ export function buildWaitlistLapsed(args: WaitlistLapsedArgs): BuiltEmail {
     // "may still be" and not "is": this is true at the moment of sending, and a class
     // that is open now can be booked by anyone before they finish reading.
     : `We held a place in ${classLine} for ${who}, and as we did not hear back by the deadline we have released it. Nobody else was waiting, so it has gone back into general registration and may still be available.`;
-  const statusLine = `${who} is no longer on the waiting list for this class.`;
+  const statusLine = `${who} is no longer on the waitlist for this class.`;
   const wayBack = nextInLine
-    ? `If you would still like a place, you can join the waiting list again or see what else has room.`
+    ? `If you would still like a place, you can join the waitlist again or see what else has room.`
     : `If you still want the place, you can register for it now.`;
 
   const signature = renderSignatureBlock(brand);
@@ -309,7 +309,7 @@ export function buildWaitlistInvite(args: WaitlistInviteArgs): BuiltEmail {
   // WHAT THIS EMAIL MUST NOT DO: imply the place is already theirs. It is held, not
   // given, and it is given by completing registration. Every line below is written so
   // that a family who reads only the first sentence still understands they must act.
-  const leadIn = `A place has opened up in ${classLine}, and because ${who} is at the top of the waiting list we are offering it to you first.`;
+  const leadIn = `A place has opened up in ${classLine}, and because ${who} is at the top of the waitlist we are offering it to you first.`;
   const holdLine = `The place is held for ${who} until ${deadline}. After that we offer it to the next family on the list.`;
   const actionLine = `To take it, finish registering with the link below. That is when the place becomes yours.`;
   const linkOnceLine = `This link works once and only for you, so please do not forward it.`;

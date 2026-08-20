@@ -169,9 +169,8 @@ export default function WaitlistModal({ program, orgSlug, onClose, onJoined }) {
               If a place opens up we will email you at {email.trim()} with a link to register.
               You do not need to do anything else, and nothing has been charged.
             </p>
-            <button type="button" onClick={onClose} style={{
-              width: '100%', padding: '12px 16px', borderRadius: 10, border: 'none',
-              background: '#111', color: '#fff', fontWeight: 800, fontSize: 15, cursor: 'pointer',
+            <button type="button" onClick={onClose} className="btn-enrops-primary" style={{
+              width: '100%', padding: '12px 16px', borderRadius: 10, fontWeight: 800, fontSize: 15,
             }}>Done</button>
           </>
         ) : (
@@ -242,11 +241,8 @@ export default function WaitlistModal({ program, orgSlug, onClose, onJoined }) {
                 border: '1.5px solid rgba(0,0,0,0.2)', background: '#fff',
                 fontWeight: 700, fontSize: 15, cursor: 'pointer',
               }}>Not now</button>
-              <button type="submit" disabled={!canSubmit} style={{
-                flex: 1, padding: '12px 16px', borderRadius: 10, border: 'none',
-                background: canSubmit ? '#111' : 'rgba(0,0,0,0.25)',
-                color: '#fff', fontWeight: 800, fontSize: 15,
-                cursor: canSubmit ? 'pointer' : 'not-allowed',
+              <button type="submit" disabled={!canSubmit} className="btn-enrops-primary" style={{
+                flex: 1, padding: '12px 16px', borderRadius: 10, fontWeight: 800, fontSize: 15,
               }}>
                 {submitting ? 'Adding you…' : 'Join the waitlist'}
               </button>
