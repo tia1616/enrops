@@ -43,6 +43,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
+import { groupFamilyRecipients } from '../_shared/familyRecipients.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -227,14 +228,11 @@ serve(async (req: Request) => {
 
     // ── Load registrations + parents (for family fan-out). ───────────────
     // Per the prompt: every non-cancelled registration on this program.
-    // We send one email per parent (deduped by parent_id — a family with
-    // two students on the same program gets one note, not two).
-    let familyRecipients: Array<{
-      parent_id: string;
-      name: string;
-      email: string;
-      student_first_name: string;
-    }> = [];
+    // ONE email per parent — a family with two children in this class gets one
+    // note, not two — and that note NAMES BOTH CHILDREN. The grouping lives in
+    // _shared/familyRecipients.ts because the modal's preview needs exactly the
+    // same rule and had its own copy of it; see the twin note in that file.
+    let familyRecipients: ReturnType<typeof groupFamilyRecipients> = [];
     if (family.send) {
       // Explicit organization_id filter even though we already verified
       // the program belongs to orgId — service-role client bypasses RLS,
@@ -261,20 +259,7 @@ serve(async (req: Request) => {
         console.error('registrations lookup failed:', regErr);
         return json({ error: 'lookup_failed' }, 500);
       }
-      const seenParents = new Set<string>();
-      for (const r of regs ?? []) {
-        const p: any = (r as any).parent;
-        const s: any = (r as any).student;
-        if (!p?.id || !p.email) continue;
-        if (seenParents.has(p.id)) continue;
-        seenParents.add(p.id);
-        familyRecipients.push({
-          parent_id: p.id,
-          name: `${p.first_name ?? ''} ${p.last_name ?? ''}`.trim() || '(no name)',
-          email: String(p.email).trim().toLowerCase(),
-          student_first_name: s?.first_name ?? 'your child',
-        });
-      }
+      familyRecipients = groupFamilyRecipients(regs ?? []);
     }
 
     // ── Load instructor (for instructor send). ───────────────────────────

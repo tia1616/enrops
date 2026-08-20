@@ -23,6 +23,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../../lib/supabase.js";
 import { WAITLIST_STATUS } from "../../../lib/waitlistState.js";
+import { groupFamilyRecipients } from "../../../lib/familyRecipients.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -271,20 +272,13 @@ export default function EditProgramCurriculumModal({
         ]);
         if (!mounted) return;
 
-        // Dedupe families by parent_id; one note per family even if
-        // they've got two kids in the same program.
-        const seen = new Set();
-        const familyList = [];
-        for (const r of regsRes.data ?? []) {
-          const p = r.parent;
-          if (!p?.id || !p.email) continue;
-          if (seen.has(p.id)) continue;
-          seen.add(p.id);
-          familyList.push({
-            parent_first_name: (p.first_name ?? "").trim() || "there",
-            student_first_name: (r.student?.first_name ?? "").trim() || "your child",
-          });
-        }
+        // One note per family even if they've got two kids in the same program —
+        // and that note names BOTH of them. This used to be an inline dedupe that
+        // kept the first child and dropped the rest, byte-for-byte the same bug
+        // the edge function had, so the preview and the send agreed with each
+        // other while both were wrong. Shared rule now; see the twin note in
+        // src/lib/familyRecipients.js.
+        const familyList = groupFamilyRecipients(regsRes.data ?? []);
         setFamilyRecipientPreview({
           count: familyList.length,
           first: familyList[0] ?? null,
