@@ -39,6 +39,8 @@ export interface WaitlistSweepResult {
   skipped_no_seat: number;
   skipped_quiet_hours: number;
   skipped_already_invited: number;
+  /** Top of the queue holds a lapsed invite the expiry step has not cleared yet (P0002). */
+  skipped_lapsed_awaiting_expiry: number;
   /** Offers withdrawn because the email did not go out. The next tick retries them. */
   unsent_rolled_back: number;
   /** "Your hold ran out and the place has gone" notes actually delivered to Resend. */
@@ -62,6 +64,7 @@ export async function runWaitlistSweep(
   const out: WaitlistSweepResult = {
     expired: 0, offered: 0, emailed: 0,
     skipped_no_seat: 0, skipped_quiet_hours: 0, skipped_already_invited: 0,
+    skipped_lapsed_awaiting_expiry: 0,
     unsent_rolled_back: 0, lapse_notices_sent: 0,
     errors: [],
   };
@@ -101,19 +104,28 @@ export async function runWaitlistSweep(
   // The DATA change runs at ANY hour: a seat held by a lapsed offer helps nobody, and
   // freeing it sends nothing.
   const { data: lapsed, error: expErr } = await supabase.rpc('waitlist_expire_invites');
-  const lapsedRows = expErr
-    ? []
-    : ((lapsed ?? []) as Array<{
-        registration_id: string; program_id: string; organization_id: string;
-        parent_email: string; child_first_name: string;
-      }>);
   if (expErr) {
+    // STOP THE TICK. Carrying on to the offer step with expiry broken is what turned one
+    // failed call into a loop: the lapsed rows are still status=waitlist and still at the
+    // top of their queues, so waitlist_offer_next used to mint them a FRESH 24 hours and
+    // email it - again on the next tick, and the next, to a family whose window had
+    // already closed. The candidates query below already returns for the same reason.
+    //
+    // Nothing is lost by returning: the sweep is self-healing by design, so the next tick
+    // does the whole job. 20260819s also refuses (P0002) to re-offer a lapsed row, so this
+    // is now belt AND braces - two independent stops on the same loop, because the cost of
+    // it running is a family being promised a place they cannot have.
+    console.error('[waitlist-sweep] expire failed, skipping this tick entirely', expErr.message);
     out.errors.push({ error: `expire: ${expErr.message}` });
-  } else {
-    out.expired = lapsedRows.length;
-    if (lapsedRows.length) {
-      console.log('[waitlist-sweep] expired holds', lapsedRows.map((r) => r.parent_email));
-    }
+    return out;
+  }
+  const lapsedRows = ((lapsed ?? []) as Array<{
+    registration_id: string; program_id: string; organization_id: string;
+    parent_email: string; child_first_name: string;
+  }>);
+  out.expired = lapsedRows.length;
+  if (lapsedRows.length) {
+    console.log('[waitlist-sweep] expired holds', lapsedRows.map((r) => r.parent_email));
   }
 
   // ── 1b. Tell the families whose hold ran out ─────────────────────────────
@@ -244,6 +256,18 @@ export async function runWaitlistSweep(
         // P0001 = no free seat. That is the COMMON case on a healthy full class and
         // is not an error worth recording as one.
         if ((offErr as { code?: string }).code === 'P0001') { out.skipped_no_seat += 1; continue; }
+        // P0002 = the top of this queue holds an invite that has lapsed and expiry has not
+        // cleared it yet (20260819s). Skip the program, do NOT re-offer: the row belongs to
+        // the expiry step, and the positions behind it have not been renumbered, so there
+        // is no correct "next family" to move on to yet. Counted rather than logged as an
+        // error, because the next tick resolves it - but it should be RARE, since expiry
+        // runs first in this same function and a failure there now returns above. Seeing
+        // this climb means expiry is failing silently somewhere else.
+        if ((offErr as { code?: string }).code === 'P0002') {
+          console.warn('[waitlist-sweep] top of queue holds a lapsed invite, leaving it for expiry', { program_id: programId });
+          out.skipped_lapsed_awaiting_expiry += 1;
+          continue;
+        }
         out.errors.push({ program_id: programId, error: offErr.message });
         continue;
       }
