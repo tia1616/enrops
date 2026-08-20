@@ -513,46 +513,36 @@ export default function ProgramWizardNew() {
       return;
     }
     const touched = touchedFields.current;
-    // The audience is prefilled as ONE UNIT. Filling grades while leaving a typed
-    // age range (or vice versa) would produce a row asserting both, and the house
-    // rule is grades OR ages, never both — enforced by age_format, which these
-    // five fields share. So if the operator has touched ANY of them, the whole
-    // audience is theirs and the curriculum does not get a say in it.
-    const audienceKeys = ["age_format", "grade_min", "grade_max", "age_min", "age_max"];
-    const audienceIsTheirs = audienceKeys.some((k) => touched.has(k));
-    // Prefer grade range if either field is set; fall back to age range. Hoisted
-    // out of the updater because the banner below has to report what was filled,
-    // and a figure shown to the operator must be computed once, not re-derived.
-    const hasGrade = cur.grade_min != null || cur.grade_max != null;
-    const hasAge = cur.age_range_min != null || cur.age_range_max != null;
-    // Only count a field as filled if it BOTH was allowed to change and had a
-    // value to change to — a curriculum with no grades and no ages fills nothing,
-    // and saying otherwise is the same untrue-sentence class as the old copy.
+    // GRADES AND AGES ARE NO LONGER PREFILLED FROM A CURRICULUM EITHER — Jessica,
+    // 2026-08-20, after setting every J2S class's grades by hand in Scheduled
+    // programs: "shouldn't be tied to curricula probably since it's not on anyone
+    // else's releases - founders or lean nav." Same reasoning as session count.
+    // Curricula are a J2S-only surface (0 of Jeff's 23 classes carry one, and the
+    // lean nav has no curricula tab at all), so a curriculum-sourced audience is
+    // a rule that exists for exactly one tenant while quietly overwriting the one
+    // place every tenant sets it. Who a class is for is a property of the class.
+    //
+    // CLASS SIZE STAYS, because it is genuinely a property of the material: a kit
+    // supports N children, and the finite kit pool is what decides whether a class
+    // runs at all. It is still guarded by `touched` so it can only ever fill a box
+    // the operator has not set.
+    //
+    // NOTHING HERE TOUCHES AN EXISTING CLASS. This runs only in the new-class
+    // wizard. Changing the curriculum on a class that already exists goes through
+    // EditProgramCurriculumModal, which writes neither grades, ages, capacity nor
+    // session count — verified, along with the six triggers on `programs`, none of
+    // which stamps a value. J2S's hand-set grades cannot be reached from here.
     const filled = [];
-    if (!audienceIsTheirs && (hasGrade || hasAge)) filled.push("age or grade range");
     if (!touched.has("max_capacity") && cur.class_size_max != null) filled.push("class size");
-    setFormData((f) => {
-      const ageFormat = hasGrade ? "grade" : hasAge ? "age" : f.age_format;
-      const audience = audienceIsTheirs
-        ? {}
-        : {
-            age_format: ageFormat,
-            grade_min: hasGrade ? (cur.grade_min ?? f.grade_min) : f.grade_min,
-            grade_max: hasGrade ? (cur.grade_max ?? f.grade_max) : f.grade_max,
-            age_min: hasAge ? cur.age_range_min : f.age_min,
-            age_max: hasAge ? cur.age_range_max : f.age_max,
-          };
-      return {
-        ...f,
-        curriculum_id: cur.id,
-        curriculum: cur.name,
-        short_description: f.short_description || cur.short_description || "",
-        ...audience,
-        max_capacity: touched.has("max_capacity")
-          ? f.max_capacity
-          : (cur.class_size_max ?? f.max_capacity),
-      };
-    });
+    setFormData((f) => ({
+      ...f,
+      curriculum_id: cur.id,
+      curriculum: cur.name,
+      short_description: f.short_description || cur.short_description || "",
+      max_capacity: touched.has("max_capacity")
+        ? f.max_capacity
+        : (cur.class_size_max ?? f.max_capacity),
+    }));
     setPrefilledFields(filled);
   }
 
@@ -650,9 +640,11 @@ export default function ProgramWizardNew() {
   // A migration that hardens the data must not turn a silent bug into an
   // unreadable error; the guard belongs here, in front of it.
   //
-  // Also catches the prefill's own invention: picking a curriculum with grade_min 8
-  // and no grade_max leaves the form holding 8 to 5, because grade_max falls back
-  // to this wizard's seed default of 5.
+  // It USED to also catch the prefill's own invention: picking a curriculum with
+  // grade_min 8 and no grade_max left the form holding 8 to 5, because grade_max
+  // fell back to this wizard's seed default of 5. That cause is gone — the
+  // curriculum no longer supplies grades or ages at all — so this guard now only
+  // has to catch what the operator types. Kept, because that was always its job.
   const wizardRangeBackwards = formData.age_format === "grade"
     ? rangeBackwards(formData.grade_min, formData.grade_max)
     : rangeBackwards(formData.age_min, formData.age_max);
@@ -1140,8 +1132,8 @@ function Step1WhatAndWhere({
         }}>
           I pre-filled {prefilledFields.join(" and ")} from this offering. You can
           edit {prefilledFields.length === 1 ? "it" : "them"} in the next step.
-          {" "}Number of sessions is yours to set — it varies by school, so it
-          never comes from an offering.
+          {" "}Number of sessions and who the class is for stay yours to set —
+          both vary by school, so neither comes from an offering.
         </div>
       )}
     </div>
