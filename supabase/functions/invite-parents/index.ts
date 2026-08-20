@@ -101,7 +101,13 @@ serve(async (req) => {
       .select('student_id')
       .eq('organization_id', organizationId)
       .eq('program_id', programId)
-      .neq('status', 'cancelled');
+      .neq('status', 'cancelled')
+      // A waitlisted family has no place, so "Invite families to portal" must not
+      // reach them: the portal would sign them in and show them nothing, because
+      // the parent Dashboard only lists status='confirmed' registrations. The
+      // roster screen that hosts this button states in writing that waiting
+      // families "are not on the roster or the roster email" - this keeps that true.
+      .neq('status', 'waitlist');
     if (regErr) return json({ error: `Load roster: ${regErr.message}` }, 500);
     const studentIds = [...new Set((regs ?? []).map((r: any) => r.student_id).filter(Boolean))];
     if (studentIds.length === 0) {

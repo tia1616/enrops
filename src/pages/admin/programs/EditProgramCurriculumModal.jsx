@@ -22,6 +22,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../../lib/supabase.js";
+import { WAITLIST_STATUS } from "../../../lib/waitlistState.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -243,7 +244,12 @@ export default function EditProgramCurriculumModal({
             `)
             .eq("program_id", program.id)
             .eq("organization_id", org.id)
-            .neq("status", "cancelled"),
+            .neq("status", "cancelled")
+            // Must match notify-program-curriculum-change's recipient query exactly.
+            // This list is what the operator APPROVES before sending; if it shows a
+            // family the server then does not mail (or worse, hides one it does), the
+            // preview is a lie about who is being contacted.
+            .neq("status", WAITLIST_STATUS),
           supabase
             .from("program_assignments")
             .select(`

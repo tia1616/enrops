@@ -178,6 +178,220 @@ serve(async (req) => {
       return json({ error: 'A class in your cart is no longer open for registration. Please refresh and try again.' }, 400);
     }
 
+    // CAPACITY. This function has never counted seats, so a full class could be
+    // oversold from an anonymous POST - the screens show "spots left", but a screen
+    // is not a gate. Woodstock (Super Mario Game Makers, FA26) reached its 14-seat
+    // cap with nothing here to stop a 15th family paying.
+    //
+    // The count comes from program_seat_counts() rather than being re-derived here.
+    // Re-deriving it in TypeScript is the specific bug that produced an alert email
+    // whose number contradicted the screen it linked to: seats_taken = confirmed +
+    // pending, which is exactly what program_enrollment shows a privileged reader,
+    // and the two are pinned by an equivalence probe in the migration.
+    //
+    // Why an RPC and not a select on the view: program_enrollment is
+    // security_invoker=on, so RLS on registrations applies to the CALLER. Read as
+    // anon it reports enrolled=0 for every class on prod, and a gate reading that
+    // would never fire. The function is SECURITY DEFINER for that reason.
+    //
+    // A cart can name the SAME class twice (two siblings, one class), so the
+    // request's own demand is counted per program - one seat left must reject two
+    // siblings, not admit both.
+    //
+    // UNCAPPED IS NOT FULL: max_capacity NULL or <= 0 skips the check entirely. A
+    // missing or mis-typed cap is not a full class, and treating it as one would
+    // turn every family away on a data-entry slip.
+    //
+    // THE OTHER PLACES THAT WRITE registrations, and why this gate is only here.
+    // Four functions insert into registrations. This is the only one that gets a
+    // capacity gate, deliberately:
+    //   apps-script-roster-sync   - camps only (camp_session_id). Out of scope, and
+    //                               it mirrors a sheet that reflects reality.
+    //   admin-import-camp-roster  - camps only. Out of scope.
+    //   admin-import-program-roster - afterschool, but verify_jwt is ON, so it is an
+    //                               authenticated admin. An operator importing a
+    //                               roster of 15 children who actually turned up MUST
+    //                               be able to exceed the cap. Blocking that would be
+    //                               the bug, not the fix.
+    // So the rule is: gate the PUBLIC self-serve path, never the operator's own
+    // record-what-happened paths. Do not "complete" this by adding the check to the
+    // importers.
+    //
+    // AND WHY CONFIRMATION CANNOT OVERSELL: seats_taken counts pending as well as
+    // confirmed, so when stripe-webhook flips a row pending -> confirmed the seat was
+    // already counted. That transition is seat-neutral and needs no gate of its own.
+    // Counting only 'confirmed' here would have left the webhook as a second,
+    // ungated way over the cap.
+    const requestedPerProgram = new Map<string, number>();
+    for (const f of flat) {
+      requestedPerProgram.set(f.program_id, (requestedPerProgram.get(f.program_id) ?? 0) + 1);
+    }
+    // AN INVITED WAITLIST FAMILY IS ALREADY HOLDING ONE OF THESE SEATS.
+    //
+    // The class they were invited to is full BY DEFINITION - that is why there was a
+    // waiting list - and since 20260819f their waitlist row is itself counted in
+    // seats_taken, so it stops the seat being resold while they decide. Registering
+    // through the front door unchanged would therefore always 409: the gate sees the
+    // seat they hold and refuses to let them take it.
+    //
+    // So exactly ONE seat is credited back, and only on the program the token belongs
+    // to. Never a blanket bypass:
+    //   * the token is re-resolved SERVER-SIDE here; the client sends only the string
+    //   * it must still be live (waitlist_invite_lookup returns nothing once expired,
+    //     spent or cancelled), so a stale link gets the ordinary "class is full"
+    //   * it must belong to THIS org, checked against the org resolved from the slug
+    //   * one seat, not the whole cart. A family invited for one child who adds a
+    //     sibling still needs a genuinely free seat for the sibling.
+    //   * and it is credited to ONE CHILD - the child the invite names - never to
+    //     whoever the payload happens to describe. See the binding below.
+    const waitlistToken = typeof body?.waitlist_token === 'string' ? body.waitlist_token.trim() : '';
+    let invite: {
+      registration_id: string; program_id: string; organization_id: string; student_id: string;
+    } | null = null;
+    if (waitlistToken) {
+      const { data: inviteRows, error: inviteErr } = await admin
+        .rpc('waitlist_invite_lookup', { p_token: waitlistToken });
+      if (inviteErr) {
+        // A LOOKUP OUTAGE IS NOT AN INVALID TOKEN, and it must not be a 500 either.
+        // Throwing here sent a family holding a perfectly good invite to the generic
+        // "Internal error" screen mid-checkout - which the comment above already said
+        // should degrade to the ordinary capacity message, while the code did the
+        // opposite. Left as null, the gate below sees the seat their own waitlist row
+        // is holding and says "that class is full": wrong in this instant, but honest,
+        // survivable, and it does not spend their invite. Their place is untouched and
+        // the next attempt works.
+        console.error('[create-registration] waitlist invite lookup failed, treating as no invite', inviteErr.message);
+      }
+      const row = Array.isArray(inviteRows) ? inviteRows[0] : inviteRows;
+      // Same-org or it does not count. A token from another provider must not buy a
+      // seat here, and this is the only place that pairing is checked.
+      if (row && row.organization_id === orgId) {
+        invite = row;
+        console.log('[create-registration] waitlist invite accepted', {
+          program_id: row.program_id, registration_id: row.registration_id,
+        });
+        // DEPLOY-ORDER CONTRACT. student_id only exists on the lookup from 20260819q
+        // onwards. Deployed ahead of that migration, this reads undefined, the reuse
+        // below is skipped and a duplicate child is inserted - the old behaviour, so
+        // nothing breaks and no family is turned away. But it is silent, and the
+        // duplicate is the defect q exists to close, so it says so out loud.
+        if (!row.student_id) {
+          console.error('[create-registration] waitlist_invite_lookup returned no student_id - 20260819q is not applied here, so this accept will duplicate the child');
+        }
+      } else if (row) {
+        console.warn('[create-registration] waitlist token belongs to another org, ignoring');
+      } else if (!inviteErr) {
+        console.warn('[create-registration] waitlist token not live, ignoring');
+      }
+    }
+
+    // WHICH CHILD IN THIS CART IS THE INVITED ONE - and ONLY when that is unambiguous.
+    //
+    // The invite is for one named child on one program, and everything the invite unlocks
+    // (attaching to the existing child, crediting the held seat, spending the token) keys
+    // off knowing which cart line is theirs. The payload cannot be trusted to say so:
+    // child_index is client-supplied and unvalidated, and a forwarded link would otherwise
+    // let a stranger point the credit at their own child.
+    //
+    // So the binding is deliberately CONSERVATIVE - it resolves only when there is exactly
+    // ONE cart line for the invited program. That is the ordinary case (a family clicking
+    // their own invite registers the one child for the one class). Any other shape leaves
+    // `invitedChildIndex` null and the invite simply does not apply - no reuse, no seat
+    // credit, no consume - which is always safe:
+    //   * zero lines for the invited program -> the family is buying something else; the
+    //     invite is irrelevant and their waitlist row is left untouched for next time.
+    //   * two lines for the invited program (two siblings into the same class) -> we cannot
+    //     tell which sibling the one held seat belongs to, so we credit neither and both go
+    //     through ordinary capacity. Worst case a duplicate child row, which is the ORIGINAL
+    //     pre-invite behaviour - never the wrong child corrupted, and never the token spent
+    //     against a registration it does not describe.
+    //
+    // Not name-matched against the invite's child on purpose: a family who typed "Ben"
+    // where the list says "Benjamin" must not be turned away from a place we promised them.
+    let invitedChildIndex: number | null = null;
+    if (invite) {
+      const linesForInviteProgram = flat.filter((f) => f.program_id === invite!.program_id);
+      const distinctChildren = new Set(linesForInviteProgram.map((f) => f.child_index));
+      if (distinctChildren.size === 1) {
+        invitedChildIndex = linesForInviteProgram[0].child_index;
+      } else {
+        // Either not in the cart, or two children on the same invited class. Both mean the
+        // invite cannot be applied safely; fall back to ordinary registration.
+        console.warn('[create-registration] waitlist invite does not resolve to a single cart child, ignoring the invite', {
+          program_id: invite.program_id, lines: linesForInviteProgram.length, children: distinctChildren.size,
+        });
+        invite = null;
+      }
+    }
+
+    const { data: seatRows, error: seatErr } = await admin.rpc('program_seat_counts', {
+      p_program_ids: allProgramIds,
+    });
+    // THE GATE FAILS CLOSED. If we cannot count seats, we do NOT let checkout through.
+    //
+    // This changed from fail-open after the 2026-08-20 review. The earlier version skipped
+    // the check on an RPC error, reasoning it was "the status quo". It is not, any more: a
+    // waitlist row now HOLDS a seat (registration_holds_seat), so a checkout that proceeds
+    // uncounted can hand a walk-up the exact place we have promised a waiting family and
+    // emailed them a link to claim - the single harm this whole branch exists to prevent.
+    //
+    // Every registration and ticketing platform refuses rather than oversells when it
+    // cannot verify availability, and the standing rule here is to ship the side that fails
+    // safe. So on a seat-count failure we return the ordinary try-again message - NOT a raw
+    // 500, and NOT "the class is full" (it may not be). This sits ABOVE every parent and
+    // student write, so returning here leaves nothing to unwind and charges nobody.
+    //
+    // The failure this guards against is a transient RPC error or a deploy that shipped this
+    // function before its migration. Deploy order is still migration-first; this is the
+    // seatbelt for the moment it is not, and the cost of the seatbelt is a family seeing
+    // "try again in a moment" for a few seconds, which is recoverable. An oversold promised
+    // seat is not.
+    if (seatErr) {
+      console.error('[create-registration] capacity count unavailable, refusing checkout (fail-closed)', seatErr.message);
+      return json({
+        error: 'We could not confirm a spot just now. Please try again in a moment.',
+      }, 503);
+    }
+    const seatsById = new Map(
+      ((seatRows || []) as Array<{ program_id: string; max_capacity: number | null; seats_taken: number }>)
+        .map((s) => [s.program_id, s]),
+    );
+    const atCapacity = allProgramIds.filter((id) => {
+      const s = seatsById.get(id);
+      // No row back for a program we asked about is a program we cannot prove has
+      // room - refuse rather than quietly admit. Consistent with the fail-closed rule
+      // above: an unverifiable seat is treated as unavailable, never as free.
+      if (!s) return true;
+      if (s.max_capacity === null || Number(s.max_capacity) <= 0) return false;
+      // The one held seat, credited only to its own program. `invite` is non-null only
+      // after it resolved to exactly one cart child above, so this needs no second guard.
+      const heldByInvite = invite && invite.program_id === id ? 1 : 0;
+      return (Number(s.seats_taken) - heldByInvite) + (requestedPerProgram.get(id) ?? 0) > Number(s.max_capacity);
+    });
+    if (atCapacity.length) {
+      console.warn(
+        '[create-registration] BLOCKED: at capacity',
+        atCapacity.map((id) => {
+          const s = seatsById.get(id);
+          return `${id} taken=${s?.seats_taken ?? '?'} cap=${s?.max_capacity ?? '?'} wanted=${requestedPerProgram.get(id) ?? 0}`;
+        }),
+      );
+      return json(
+        {
+          // "is full", NOT "just filled up". This branch fires for a class that has
+          // been full for weeks as well as for one that filled during checkout, and
+          // until chunk 1 lands nothing on the catalog marks a class as full, so the
+          // long-full case is the COMMON one. "Just filled up" told those families
+          // they were seconds late when the class was never available to them.
+          // Approved by Jessica 2026-08-19.
+          error: 'That class is full. Refresh the page to see what is still open.',
+          capacity_error: true,
+          full_program_ids: atCapacity,
+        },
+        409,
+      );
+    }
+
     // --- Upsert parent ---
     const emailClean = parent.email.toLowerCase().trim();
     const { data: existing } = await admin
@@ -325,56 +539,96 @@ serve(async (req) => {
         if (isNaN(gradeVal)) gradeVal = null;
       }
 
-      const { data: newStudent, error: sErr } = await admin
-        .from('students')
-        .insert({
-          parent_id: parentId,
-          organization_id: orgId,
-          // NOTE: `students` has no `school_id` column (the location link would be
-          // `program_location_id`), and the client never sends `child.school_id`,
-          // so this key was always undefined and dropped before the insert — dead.
-          // The child's school/area is derived authoritatively from the program the
-          // family registered for (see auto_add_registrant_to_marketing_list). If a
-          // future feature needs a student-level location, wire program_location_id
-          // as its own scoped, tested change — not silently on the checkout path.
-          first_name: student.first_name,
-          last_name: student.last_name,
-          grade: gradeVal,
-          homeroom_teacher: student.homeroom_teacher || null,
-          birthdate: student.birthdate || null,
-          allergies: student.allergies || null,
-          medical_notes: student.medical_notes || null,
-          special_needs_accommodations: student.special_needs_accommodations || null,
-          emergency_contact_name: student.emergency_contact_name || null,
-          emergency_contact_phone: student.emergency_contact_phone || null,
-          // customizable-registration: how the child leaves (null when the org
-          // hasn't enabled that question)
-          dismissal_method: student.dismissal_method || null,
-          // WHO, when the answer is aftercare. Stored only for that answer:
-          // accepting it unconditionally would let a name typed and then
-          // reconsidered persist against an answer it no longer describes, and
-          // every staff surface reads the two together. The client clears it on
-          // change too - this is the server refusing to take its word for it,
-          // since the browser's payload is not trustworthy.
-          // String(...) before trim, NOT `?.trim()`. The body is client-supplied
-          // JSON: a number, boolean, object or array here passes the optional-chain
-          // null check, resolves `.trim` to undefined, and throws "is not a
-          // function" - a 500 in the middle of checkout from a malformed payload.
-          // Every sibling field in this insert uses the safe `x || null` shape;
-          // this was the only one calling a string method on untrusted input.
-          aftercare_provider: student.dismissal_method === 'aftercare'
-            ? (String(student.aftercare_provider ?? '').trim().slice(0, 120) || null)
-            : null,
-        })
-        .select('id')
-        .single();
-      if (sErr) throw new Error(`student insert: ${sErr.message}`);
-      const studentId = newStudent!.id;
+      // THE INVITED CHILD ALREADY EXISTS. Attach the registration to them, and touch
+      // NOTHING ELSE on their record.
+      //
+      // They were written into `students` when the family joined the waiting list, and
+      // their waitlist registration points at that row. Inserting again here gave one human
+      // two student rows - two roster lines, split attendance, and
+      // uniq_registrations_waitlist_student blind to the fact that they are the same child.
+      // So for the invited child we REUSE that row rather than making a second one.
+      //
+      // WHAT THE REUSE PATH DELIBERATELY DOES NOT DO: update the student, or replace their
+      // contacts. This endpoint is public (verify_jwt = false) and anonymous, and an
+      // accepted invite can point at a child who is already enrolled elsewhere -
+      // join-waitlist reuses a family's same-named child, so that students row may carry a
+      // live allergy, medical notes and a do-not-release list. An UPDATE built from this
+      // checkout form would set every field the form did not collect to null, and the guest
+      // wizard collects almost none of them (there is no field for
+      // special_needs_accommodations at all), so it would silently ERASE child-safety data.
+      // A blind delete-and-reinsert of student_contacts would wipe a custody
+      // do-not-release row the instant a family filled in only a second guardian. On an
+      // anonymous write the safe rule is: attach the registration and leave the child's
+      // record exactly as it stands. Ignoring a newly typed allergy is recoverable; erasing
+      // a stored one is not. Care-data edits belong on an authenticated operator or parent
+      // surface, never on this path. (`invite` is non-null only after resolving to exactly
+      // one cart child above, so this cannot fire for a sibling or a stranger's child.)
+      const reuseStudentId = invite && child.child_index === invitedChildIndex
+        ? invite.student_id
+        : null;
+
+      let studentId: string;
+      if (reuseStudentId) {
+        // Confirm the row exists; do NOT write to it. Matched on id alone: the pairing was
+        // established by waitlist_invite_lookup, which is SECURITY DEFINER and (since
+        // 20260819v) joins the student on r.organization_id, and `invite` was checked
+        // against orgId above. An `.eq('organization_id', orgId)` here would only add a 500
+        // on the money path, because students.organization_id is nullable.
+        const { data: existing, error: exErr } = await admin
+          .from('students')
+          .select('id')
+          .eq('id', reuseStudentId)
+          .maybeSingle();
+        if (exErr) throw new Error(`invited student lookup: ${exErr.message}`);
+        if (!existing) throw new Error('the invited child could not be found');
+        studentId = existing.id;
+        console.log('[create-registration] attaching the registration to the child who was waiting', {
+          student_id: studentId, child_index: child.child_index,
+        });
+      } else {
+        const { data: newStudent, error: sErr } = await admin
+          .from('students')
+          .insert({
+            parent_id: parentId,
+            organization_id: orgId,
+            // NOTE: `students` has no `school_id` column (the location link would be
+            // `program_location_id`), and the client never sends `child.school_id`,
+            // so this key was always undefined and dropped before the insert — dead.
+            // The child's school/area is derived authoritatively from the program the
+            // family registered for (see auto_add_registrant_to_marketing_list).
+            first_name: student.first_name,
+            last_name: student.last_name,
+            grade: gradeVal,
+            homeroom_teacher: student.homeroom_teacher || null,
+            birthdate: student.birthdate || null,
+            allergies: student.allergies || null,
+            medical_notes: student.medical_notes || null,
+            special_needs_accommodations: student.special_needs_accommodations || null,
+            emergency_contact_name: student.emergency_contact_name || null,
+            emergency_contact_phone: student.emergency_contact_phone || null,
+            // customizable-registration: how the child leaves (null when the org
+            // hasn't enabled that question)
+            dismissal_method: student.dismissal_method || null,
+            // WHO, when the answer is aftercare. String(...) before trim, NOT `?.trim()`:
+            // the body is client-supplied JSON, and a number/boolean/object here would
+            // resolve `.trim` to undefined and throw mid-checkout. `x || null` everywhere
+            // else keeps the same shape.
+            aftercare_provider: student.dismissal_method === 'aftercare'
+              ? (String(student.aftercare_provider ?? '').trim().slice(0, 120) || null)
+              : null,
+          })
+          .select('id')
+          .single();
+        if (sErr) throw new Error(`student insert: ${sErr.message}`);
+        studentId = newStudent!.id;
+      }
       studentIdByChildIndex.set(child.child_index, studentId);
 
       // --- Customizable registration: structured people → student_contacts ---
-      // Written BEFORE checkout, so a failure here fails the registration with no
-      // charge (never a paid enrollment missing its pickup/release data).
+      // Written BEFORE checkout, so a failure here fails the registration with no charge
+      // (never a paid enrollment missing its pickup/release data).
+      //
+      // The pickup, do-not-release and guardian2 people the family entered on THIS form.
       const contactRows: any[] = [];
       const g2 = parent?.guardian2;
       if (g2 && (g2.first_name || '').trim()) {
@@ -404,8 +658,35 @@ serve(async (req) => {
         }
       });
       if (contactRows.length) {
-        const { error: cErr } = await admin.from('student_contacts').insert(contactRows);
-        if (cErr) throw new Error(`student_contacts insert: ${cErr.message}`);
+        // A REUSED (invited) child needs these written too - the earlier version skipped
+        // the write entirely for reused children to avoid wiping a stored list, but a
+        // waitlist-origin child has NO stored list: join-waitlist writes zero
+        // student_contacts. So skipping discarded the custody/pickup people the family
+        // entered on the accept form - the mirror image of the wipe it was avoiding, and
+        // worse, because a dropped do-not-release person is a safety fact.
+        //
+        // So: for a fresh student the list is purely additive (they have none yet). For a
+        // reused student we insert ONLY when they currently have none, which covers the
+        // waitlist case and still refuses to clobber a list some future reuse path might
+        // have populated. Never a blind delete-then-insert on a public endpoint.
+        let writeContacts = true;
+        if (reuseStudentId) {
+          const { count, error: cntErr } = await admin
+            .from('student_contacts')
+            .select('id', { count: 'exact', head: true })
+            .eq('student_id', studentId);
+          if (cntErr) throw new Error(`student_contacts precheck: ${cntErr.message}`);
+          writeContacts = (count ?? 0) === 0;
+          if (!writeContacts) {
+            console.warn('[create-registration] reused child already has contacts, leaving them untouched', {
+              student_id: studentId,
+            });
+          }
+        }
+        if (writeContacts) {
+          const { error: cErr } = await admin.from('student_contacts').insert(contactRows);
+          if (cErr) throw new Error(`student_contacts insert: ${cErr.message}`);
+        }
       }
 
       // --- Registrations: one per line item for this child ---
@@ -580,6 +861,75 @@ serve(async (req) => {
             .update(updatePatch)
             .in('id', childRegIds);
         }
+      }
+    }
+
+    // RESIDUAL RACE - KNOWN, MEASURED, AND DELIBERATELY NOT PAPERED OVER.
+    //
+    // The capacity check above is a read followed by a write, so two families
+    // checking out in the same instant can both see 13 of 14 and both insert. This
+    // gate closes the real-world case (a family registering for a class that is
+    // already full) but not that millisecond window.
+    //
+    // A post-insert re-count-and-unwind was written here and then REMOVED, because
+    // it could not work and would have made things worse:
+    //   waiver_signatures_registration_id_fkey is ON DELETE NO ACTION, and this
+    //   function inserts a waiver signature for every registration a few lines
+    //   above. So `delete from registrations where id in (...)` is BLOCKED by the
+    //   foreign key on every real registration. The unwind would have thrown, turned
+    //   a 409 into a 500, and left the oversold rows in place.
+    // Doing it properly means deleting waiver_signatures, then registrations, then
+    // reconciling the student/student_contacts rows this request created - a real
+    // multi-table compensating transaction. That is the server-side atomic checkout
+    // already specced as a P0 (2026-07-12 code review), not this gate.
+    //
+    // Not closing it here is a deliberate call at current volume: 14-seat classes and
+    // a few registrations a day, so two families colliding on the same last seat
+    // inside the same few hundred milliseconds is negligible - and the failure mode
+    // is one seat over, which an operator can see and fix, versus a 500 mid-checkout
+    // for a family who did nothing wrong.
+    //
+    // DO NOT claim this function is atomic. When the atomic-checkout P0 is built,
+    // fold the capacity check into that single transaction and delete this note.
+
+    // SPEND THE INVITE, now that the real registration rows exist.
+    //
+    // AFTER the writes, deliberately. If this ran first and the registration then failed,
+    // the family would have lost their place AND have no booking - the one outcome worse
+    // than a failed checkout. Running it here means the worst case is a spent-looking
+    // seat that is genuinely theirs.
+    //
+    // Wrapped: a failure here must not turn a completed registration into a 500. The
+    // family is registered either way. What is left behind is a cancelled-status waitlist
+    // row that still carries a token, which the expiry sweep will clear and which cannot
+    // be replayed to gain a second seat (the gate credits one seat, and their new
+    // registration now occupies it).
+    //
+    // GATED ON `invite`, which is now non-null ONLY when the token resolved to exactly one
+    // child in THIS cart (see the binding above). A family who clicked their invite but
+    // then checked out for a different class had `invite` set to null there, so their
+    // waitlist row is NOT cancelled here - they keep their place. This is the fix for the
+    // consume-fires-when-the-invite-does-not-apply defect; it is structural, not a second
+    // condition to remember.
+    if (invite) {
+      try {
+        const { data: spent, error: spendErr } = await admin
+          .rpc('waitlist_invite_consume', { p_token: waitlistToken });
+        if (spendErr) {
+          console.error('[create-registration] waitlist_invite_consume failed', spendErr.message);
+        } else if (spent === false) {
+          // Two clicks on the same emailed link. The second registration is real and
+          // stays; this only records that the queue was already tidied.
+          console.warn('[create-registration] waitlist invite was already spent', {
+            registration_id: invite.registration_id,
+          });
+        } else {
+          console.log('[create-registration] waitlist invite consumed', {
+            registration_id: invite.registration_id,
+          });
+        }
+      } catch (e) {
+        console.error('[create-registration] waitlist_invite_consume threw', (e as Error).message);
       }
     }
 

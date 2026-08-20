@@ -18,6 +18,8 @@ import { programScheduleSummary, formatDayLabel } from '../../lib/programSchedul
 import { audienceLabel } from '../../lib/grades.js';
 import { feeOnCents, totalWithFee } from '../../lib/platformFee.js';
 import { buildCatalogPicker, OTHER_DISTRICT } from '../../lib/regCatalogPicker.js';
+import { programAction, fullFlagMap, ACTION_WAITLIST, ACTION_EXTERNAL } from '../../lib/waitlistState.js';
+import WaitlistModal from '../../components/WaitlistModal.jsx';
 import { isGroupingDistrict } from '../../lib/districts.js';
 
 // Tenant resolution: `org` (id, slug, name, active_registration_term, ...) is
@@ -178,6 +180,17 @@ export default function Home() {
   // from districtNames when it stopped being names.
   const [districtsById, setDistrictsById] = useState({});
   const [programs, setPrograms] = useState([]);
+  // WHICH CLASSES ARE FULL. Fetched separately from the catalog, because the catalog
+  // cannot tell: program_enrollment is security_invoker=on, so an anonymous visitor reads
+  // enrolled=0 for every class by design (2026-06-06 hotfix). program_full_flags() is the
+  // anon-safe reader - one boolean per open class, no counts, no capacity, no names.
+  //
+  // Starts EMPTY, and an empty map means "not full" everywhere (see waitlistState.js).
+  // That is the deliberate direction: while this is loading, or if it fails, families are
+  // offered Register. Offering a waitlist for a class with room is the worse mistake.
+  const [fullFlags, setFullFlags] = useState({});
+  // The program whose waitlist form is open, or null. Shared by both catalog trees.
+  const [waitlistFor, setWaitlistFor] = useState(null);
   const [vipBundles, setVipBundles] = useState({}); // fallProgramId -> { winter, spring }
   const [selectedDistrict, setSelectedDistrict] = useState('');
   const [selectedSchool, setSelectedSchool] = useState('');
@@ -202,6 +215,35 @@ export default function Home() {
   // this the row layout is unchanged.
   const [narrowCards, setNarrowCards] = useState(() =>
     typeof window !== 'undefined' && window.innerWidth < 560);
+  // Load the full/not-full flags for whatever the catalog is showing.
+  //
+  // Keyed on the program ids rather than the array, so re-renders that do not change the
+  // catalog do not re-fetch. A failure is swallowed on purpose: fullFlagMap(null) is {},
+  // every class reads "not full", and families get Register - the fail-open direction.
+  // There is nothing useful to tell a parent about a failed capacity lookup.
+  const programIdKey = programs.map((p) => p.id).sort().join(',');
+  useEffect(() => {
+    if (!programIdKey || !org?.id) { setFullFlags({}); return; }
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase.rpc('program_full_flags', {
+        // The org is REQUIRED and joined server-side. Passing ids alone let anon
+        // assemble a cross-tenant census by enumerating open programs across the public
+        // org directory and sending them as one array (see 20260819o).
+        p_org_id: org.id,
+        p_program_ids: programIdKey.split(','),
+      });
+      if (cancelled) return;
+      if (error) {
+        console.warn('[Home] full flags unavailable, treating every class as open', error.message);
+        setFullFlags({});
+        return;
+      }
+      setFullFlags(fullFlagMap(data));
+    })();
+    return () => { cancelled = true; };
+  }, [programIdKey, org?.id]);
+
   useEffect(() => {
     const onResize = () => setNarrowCards(window.innerWidth < 560);
     window.addEventListener('resize', onResize);
@@ -926,7 +968,19 @@ export default function Home() {
                             </div>
                           </div>
                         </div>
-                        <button onClick={() => startRegistration(p.id, false)} style={leanBtn}>Register</button>
+                        {/* Full class offers the list instead of checkout. The RULE is
+                            programAction() in lib/waitlistState.js, shared with the J2S
+                            tree below - only the styling differs here. */}
+                        {programAction(p, fullFlags[p.id]) === ACTION_WAITLIST ? (
+                          <button
+                            onClick={() => setWaitlistFor(p)}
+                            style={{ ...leanBtn, background: 'transparent', color: leanBtn.background, border: `2px solid ${leanBtn.background}` }}
+                          >
+                            Join the waitlist
+                          </button>
+                        ) : (
+                          <button onClick={() => startRegistration(p.id, false)} style={leanBtn}>Register</button>
+                        )}
                       </div>
                     );
                   })}
@@ -937,6 +991,20 @@ export default function Home() {
           {/* Attribution deliberately omitted: this route renders inside
               PublicLayout, whose footer carries the single platform line. */}
         </div>
+        {/* One modal, mounted in BOTH trees (see the J2S copy at the end of this file).
+            onJoined is deliberately a no-op: the class is STILL FULL after someone joins
+            the list, so the button must keep saying "Join the waitlist". Clearing the
+            flag here would flip it to "Register" and walk the next family into the
+            capacity gate's 409. The modal's own confirmation state is what tells the
+            family who just joined that it worked. */}
+        {waitlistFor && (
+          <WaitlistModal
+            program={waitlistFor}
+            orgSlug={ORG_SLUG}
+            onClose={() => setWaitlistFor(null)}
+            onJoined={() => {}}
+          />
+        )}
       </div>
     );
   }
@@ -1261,13 +1329,37 @@ export default function Home() {
                                   <span className="font-bold">Spring:</span> {bundle.spring.curriculum}
                                 </p>
                               </div>
-                              {/* #9: VIP = filled primary button */}
-                              <button
-                                onClick={() => startRegistration(p.id, true)}
-                                className="btn-j2s-primary mt-4 w-full text-sm"
-                              >
-                                Lock in VIP spot →
-                              </button>
+                              {/* #9: VIP = filled primary button.
+                                  A full fall class cannot be sold as a bundle either -
+                                  the bundle INCLUDES that seat, so checkout would reject
+                                  it at the capacity gate. Rather than let a family reach
+                                  a 409 from here, the year option is disabled and the
+                                  single-term column below carries the one live action
+                                  (join the list). Two identical waitlist buttons side by
+                                  side would just be a choice that is not a choice. */}
+                              {programAction(p, fullFlags[p.id]) === ACTION_WAITLIST ? (
+                                <>
+                                  <button
+                                    disabled
+                                    className="btn-j2s-primary mt-4 w-full text-sm opacity-50"
+                                    style={{ cursor: 'not-allowed' }}
+                                  >
+                                    Lock in VIP spot →
+                                  </button>
+                                  <p className="mt-2 text-xs text-j2s-ink/60">
+                                    This class is full, so the full-year option is not
+                                    available right now. Join the waitlist and we will email
+                                    you if a place opens up.
+                                  </p>
+                                </>
+                              ) : (
+                                <button
+                                  onClick={() => startRegistration(p.id, true)}
+                                  className="btn-j2s-primary mt-4 w-full text-sm"
+                                >
+                                  Lock in VIP spot →
+                                </button>
+                              )}
                             </div>
                           )}
 
@@ -1305,15 +1397,26 @@ export default function Home() {
                                 Early-bird pricing ends {fallEarlyBirdLabel}
                               </p>
                             )}
-                            {/* #9: Fall = outline/secondary button */}
-                            <button
-                              onClick={() => startRegistration(p.id, false)}
-                              className="btn-j2s-secondary mt-4 w-full text-sm"
-                            >
-                              {seasonName
-                                ? (vipEligible ? `Register for ${seasonName.toLowerCase()} only` : `Register for ${seasonName.toLowerCase()}`)
-                                : (vipEligible ? 'Register for this term only' : 'Register')}
-                            </button>
+                            {/* #9: Fall = outline/secondary button, unless the class is
+                                full - then it offers the list. Same programAction() rule
+                                as the lean tree above; only the styling differs. */}
+                            {programAction(p, fullFlags[p.id]) === ACTION_WAITLIST ? (
+                              <button
+                                onClick={() => setWaitlistFor(p)}
+                                className="btn-j2s-secondary mt-4 w-full text-sm"
+                              >
+                                Join the waitlist
+                              </button>
+                            ) : (
+                              <button
+                                onClick={() => startRegistration(p.id, false)}
+                                className="btn-j2s-secondary mt-4 w-full text-sm"
+                              >
+                                {seasonName
+                                  ? (vipEligible ? `Register for ${seasonName.toLowerCase()} only` : `Register for ${seasonName.toLowerCase()}`)
+                                  : (vipEligible ? 'Register for this term only' : 'Register')}
+                              </button>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -1342,6 +1445,18 @@ export default function Home() {
       {/* Programs teaser — removed. Registration page stays focused on the task:
           pick district → school → class. Providers will be able to add banner/welcome
           copy via org_branding in v1.1 if desired. */}
+
+      {/* Same modal as the lean tree mounts above. The two catalogs draw their own
+          buttons but share this form and the programAction() rule behind it, so the
+          fields collected and the confirmation wording cannot drift between tenants. */}
+      {waitlistFor && (
+        <WaitlistModal
+          program={waitlistFor}
+          orgSlug={ORG_SLUG}
+          onClose={() => setWaitlistFor(null)}
+          onJoined={() => {}}
+        />
+      )}
     </div>
   );
 }

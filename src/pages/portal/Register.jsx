@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams, useOutletContext } from 'react-router-dom';
 import { supabase, API_BASE } from '../../lib/supabase.js';
 import { needsAuthorizedPickup, dismissalAnswerIncomplete } from '../../lib/dismissal.js';
@@ -67,6 +67,8 @@ export default function Register() {
   const [cancellationPolicy, setCancellationPolicy] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  // The error banner, so a failure can be scrolled to the family. See the effect below.
+  const errorRef = useRef(null);
   const [submitting, setSubmitting] = useState(false);
 
   // Compute installment schedule for cart total split 3 ways.
@@ -204,6 +206,34 @@ export default function Register() {
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'instant' });
   }, [step]);
+
+  // BRING THE ERROR BANNER TO THE FAMILY.
+  //
+  // The banner renders at the TOP of the page container, but every action that
+  // can fail — above all "Continue to secure payment" — sits at the BOTTOM of a
+  // long step. Measured on staging: the message landed 705px ABOVE the viewport
+  // while the button the family had just pressed was still on screen. So the
+  // button looked simply dead: no charge, no message, no reason.
+  //
+  // Found by walking the flow after the capacity gate started rejecting. The gate
+  // itself was right and its 409 body was right; the family just never saw it.
+  //
+  // Keyed on `error` rather than done inside the catch, so EVERY path that sets an
+  // error gets this and not only the newest one. The banner is unmounted while
+  // error is empty, hence the effect (a ref would be null at throw time).
+  //
+  // behavior:'instant', NOT 'smooth'. The first version of this used 'smooth' -
+  // copied from the scrollIntoView calls elsewhere in the repo - and it silently did
+  // NOTHING: measured on the running page, a smooth scrollIntoView left scrollY
+  // unchanged at 963 after two seconds, while the same call with 'instant' moved it
+  // to 0. So the effect was firing correctly the whole time and the scroll was the
+  // no-op, which looked identical to the bug it was meant to fix. 'instant' is also
+  // what the step-change scroll above already relies on, so it is proven in this app.
+  // (The 'smooth' calls in EmailSenderSettings / CurriculumReview / LocationsList may
+  // have the same problem - not touched here, but worth a look.)
+  useEffect(() => {
+    if (error) errorRef.current?.scrollIntoView({ behavior: 'instant', block: 'center' });
+  }, [error]);
 
   // Pre-select program + school + VIP from URL params (Home.jsx passes
   // ?program=X&vip=1). This is the only entry point into the wizard.
@@ -504,6 +534,12 @@ export default function Register() {
           promo_code: cart.promo?.code || null,
           payment_plan: cart.payment_plan,
           pricing_snapshot: pricing,
+          // Set when the family arrived from a waitlist invite email. The server
+          // re-resolves it and credits the ONE seat their waitlist row is already
+          // holding; without it the capacity gate would refuse the seat they were
+          // invited to take. A missing, stale or other-org token is simply ignored
+          // server-side, and they get the ordinary "that class is full".
+          waitlist_token: searchParams.get('waitlist') || null,
         }),
       });
       const regData = await regResp.json();
@@ -639,7 +675,7 @@ export default function Register() {
       <StepIndicator current={step} />
       <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 sm:py-12">
         {error && (
-          <div className="mb-6 animate-fade-in rounded-xl border-2 border-j2s-orange-dark bg-j2s-orange/10 p-4">
+          <div ref={errorRef} className="mb-6 animate-fade-in rounded-xl border-2 border-j2s-orange-dark bg-j2s-orange/10 p-4">
             <p className="font-bold text-j2s-orange-dark">Heads up</p>
             <p className="mt-1 text-sm text-j2s-ink">{error}</p>
           </div>

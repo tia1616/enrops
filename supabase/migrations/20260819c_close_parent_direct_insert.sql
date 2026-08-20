@@ -1,0 +1,106 @@
+-- SECURITY: a signed-in parent could create their own confirmed, paid, $0 registration.
+--
+-- Found by an independent review of the capacity-gate branch (finding 1), then
+-- reproduced from scratch before changing anything.
+--
+-- THE HOLE
+-- `registrations` grants INSERT to both anon and authenticated at the table level, and
+-- the ONLY INSERT policy was:
+--     parents_create_own_regs  INSERT  TO PUBLIC  WITH CHECK (parent_id = current_parent_id())
+-- That constrains exactly one column. Nothing checked program ownership, org, status,
+-- payment_status, amount_cents, or capacity. Parents hold portal logins, so this was
+-- reachable by the exact population the new capacity gate was written to constrain -
+-- and it never consulted the gate, because no edge function was involved.
+--
+-- REPRODUCED on staging inside a rolled-back transaction, as the QA fixture parent
+-- (parent1__staging_enrops_test, never Jessica's row): 25 rows inserted into an
+-- 18-seat class, every one status='confirmed', payment_status='paid', amount_cents=0.
+-- The organization_id was set to a DIFFERENT org than the program's owner and nothing
+-- objected, so a family could also have landed on another tenant's roster and revenue.
+-- Control probe (same insert claiming a different parent's id) was correctly refused
+-- with 42501, which is what makes the impersonation trustworthy rather than a
+-- misconfigured session. Both probes left zero rows behind, verified.
+--
+-- So the severity was never only capacity: it was free enrolment.
+--
+-- AND TRUNCATE - CORRECTED, IT IS NOT REACHABLE FROM THE API
+-- anon and authenticated also held TRUNCATE on `registrations`, and RLS genuinely does
+-- not apply to TRUNCATE (it is gated by the privilege alone). I first wrote that the
+-- only thing preventing it was that nobody had tried. That was WRONG, and the correction
+-- matters because it changes how urgent this looks: PostgREST exposes no TRUNCATE verb
+-- at all - only SELECT/INSERT/UPDATE/DELETE and /rpc - so holding the anon API key does
+-- not get you there. Reaching it needs a direct Postgres connection authenticating AS
+-- the anon role, i.e. database credentials, not the public key. So the grant is wrong
+-- and is removed here, but it was never a live data-destruction path.
+-- No destructive probe was run; the privilege was verified present with
+-- has_table_privilege.
+--
+-- THIS FIXES ONE TABLE OUT OF ROUGHLY 89 - DO NOT MISTAKE IT FOR THE CLASS FIX.
+-- A prod sweep found ~89 public tables granting INSERT/UPDATE/DELETE/TRUNCATE to anon
+-- and/or authenticated, including parents, students, waiver_signatures, installments,
+-- refunds, organizations, org_members and platform_admins. That is Supabase's default
+-- privileges applied platform-wide, not a mistake specific to this table, and RLS is the
+-- only thing gating the reachable verbs on every one of them. `registrations` is fixed
+-- first because its INSERT hole was PROVEN reachable and it is the money path. The class
+-- fix is a platform-wide grant audit, asking per table which of those verbs any browser
+-- role should hold at all - backlogged, not attempted here. Related: the districts_public
+-- anon-write hole closed 2026-08-18, which was the same class seen from one table.
+--
+-- WHY DROP THE POLICY RATHER THAN TIGHTEN IT
+-- Nothing uses it. All 21 client references to `registrations` under src/ are SELECT -
+-- verified by reading each one, not by grepping for a verb. Every writer is an edge
+-- function holding the service role, which bypasses RLS entirely. Tightening the WITH
+-- CHECK would have left a narrower version of an unused door; removing it deletes the
+-- surface. If a future parent-facing self-serve write is ever wanted, add it back
+-- deliberately with status/payment/amount/org all pinned.
+--
+-- NOT FIXED WITH A BEFORE INSERT TRIGGER (the review's option 3). A capacity trigger
+-- would cover every path at once, but it would also block admin-import-program-roster,
+-- where an operator recording 15 children who actually turned up MUST be able to exceed
+-- the cap. And a capacity trigger would not have stopped the confirmed/paid/$0 fraud,
+-- which is the larger half of this finding.
+
+-- ---------------------------------------------------------------------------
+-- 1. Remove the unused parent INSERT policy.
+--
+-- After this there is NO INSERT policy on registrations, so the only inserters are
+-- service-role edge functions: create-registration (now capacity-gated),
+-- admin-import-program-roster and admin-import-camp-roster (authenticated admins,
+-- deliberately ungated), and apps-script-roster-sync (camps).
+-- ---------------------------------------------------------------------------
+drop policy if exists parents_create_own_regs on public.registrations;
+
+-- ---------------------------------------------------------------------------
+-- 2. Narrow the table grants. THIS IS A NARROWING - before / after / lost:
+--
+-- anon
+--   BEFORE: SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
+--   AFTER : SELECT
+--   LOST  : INSERT   - no policy permitted it anyway (current_parent_id() is NULL for
+--                      anon, so the WITH CHECK could never pass), and the policy is gone.
+--           UPDATE   - members_update_org_regs needs can_edit_org(), false for anon.
+--           DELETE   - there has never been a DELETE policy, so RLS already refused it.
+--           TRUNCATE - NOT gated by RLS. This is the one that was actually reachable.
+--           REFERENCES, TRIGGER - inert on a table you do not own.
+--   KEPT  : SELECT, and it is load-bearing. program_enrollment is security_invoker=on,
+--           so an anonymous visitor evaluates it as itself and needs the grant or the
+--           whole view 42501s. RLS still yields anon zero rows, which is why anon sees
+--           enrolled=0 by design (2026-06-06 hotfix).
+--
+-- authenticated
+--   BEFORE: SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER
+--   AFTER : SELECT, UPDATE
+--   LOST  : INSERT   - THE HOLE.
+--           DELETE   - no DELETE policy exists, so this was already refused by RLS.
+--           TRUNCATE - not gated by RLS.
+--           REFERENCES, TRIGGER - inert.
+--   KEPT  : SELECT - the parent portal Dashboard and every admin read need it.
+--           UPDATE - members_update_org_regs (can_edit_org) is the operator edit path.
+--                    No client code uses it today, but it is the legitimate admin verb
+--                    and removing it is a separate decision from closing this hole.
+--
+-- service_role is untouched: every edge function keeps working unchanged.
+-- ---------------------------------------------------------------------------
+revoke insert, delete, truncate, references, trigger on public.registrations from anon;
+revoke update on public.registrations from anon;
+revoke insert, delete, truncate, references, trigger on public.registrations from authenticated;

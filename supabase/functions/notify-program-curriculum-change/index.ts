@@ -249,7 +249,14 @@ serve(async (req: Request) => {
         `)
         .eq('program_id', programId)
         .eq('organization_id', orgId)
-        .neq('status', 'cancelled');
+        .neq('status', 'cancelled')
+        // A waitlisted family is NOT in this class, so they must never be told its
+        // curriculum changed. 'not cancelled' was a correct definition of "enrolled"
+        // until status='waitlist' existed; this is a SEND path, so the miss is an
+        // email to a real parent about a class their child does not have a place in.
+        // Literal, not the src/lib/waitlistState.js constant: edge functions run in
+        // Deno and cannot import from the Vite app.
+        .neq('status', 'waitlist');
       if (regErr) {
         console.error('registrations lookup failed:', regErr);
         return json({ error: 'lookup_failed' }, 500);
