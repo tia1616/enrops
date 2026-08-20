@@ -177,8 +177,25 @@ const INITIAL_FORM_DATA = {
   session_count: 8,
   max_capacity: 18,
   age_format: "grade",
-  grade_min: 0,
-  grade_max: 5,
+  // NOT 0 and 5. A new class states no grade range until somebody sets one -
+  // Jessica's call, 2026-08-20. The seeds used to be Kindergarten-to-5, which is
+  // a real, selectable range, so every class an operator never touched TOLD
+  // FAMILIES it was K-5 whether or not that was true. It was mostly invisible
+  // while picking a curriculum overwrote it; once grades stopped coming from
+  // curricula that default became the only thing writing them, which is what
+  // forced the decision rather than deferring it again.
+  //
+  // The database has agreed with this since grades shipped - grade_min, grade_max,
+  // age_min, age_max and age_format all default to NULL there - so this is the
+  // wizard catching up to its own schema, not a new rule.
+  //
+  // null, not 0: `"" IS NOT ZERO` (see grades.js) - "" / null mean "not stated",
+  // and `Number("")` is 0, so anything comparing loosely reads an empty box as
+  // Kindergarten. The inputs render `?? ""`, so null shows as an empty box, and
+  // the insert coerces it back to NULL. age_format stays "grade" because it is
+  // the editor's MODE, not a claim about the class.
+  grade_min: null,
+  grade_max: null,
   age_min: null,
   age_max: null,
   price_cents: null,
@@ -229,20 +246,26 @@ export default function ProgramWizardNew() {
   const [formData, setFormData] = useState(() => ({ ...INITIAL_FORM_DATA }));
   // What the curriculum pick ACTUALLY filled, as display labels — not a boolean.
   // It was a boolean behind copy that named three specific things ("number of
-  // sessions, age or grade range, and class size"); sessions are no longer taken
-  // from a curriculum at all and the other two are skipped once the operator has
-  // typed their own, so a boolean could only produce a sentence that was
+  // sessions, age or grade range, and class size"). Sessions and the audience no
+  // longer come from a curriculum at all, and class size is skipped once the
+  // operator has set it, so a boolean could only produce a sentence that was
   // sometimes false. An array cannot: the banner lists what happened, and renders
   // nothing when nothing did. NOTE for anyone editing this: `[]` is TRUTHY in JS,
   // so the render guard must test `.length`, never the value.
   const [prefilledFields, setPrefilledFields] = useState([]);
   // Fields the operator has actually edited. handleCurriculumChange consults this
-  // so re-picking a curriculum cannot overwrite a value they typed - which is
-  // what the comment above handleCurriculumChange has always PROMISED ("never
-  // overwrite something they've already typed") and what the code did not do:
-  // grades, ages and capacity were re-asserted from the curriculum on every pick.
-  // A ref, not state, because nothing renders from it and a stale closure inside
-  // the setFormData updater would silently re-enable the overwrite.
+  // so re-picking a curriculum cannot overwrite a value they set - which is what
+  // the comment above handleCurriculumChange has always PROMISED ("never overwrite
+  // something they've already typed") and what the code did not do: grades, ages
+  // and capacity were re-asserted from the curriculum on every pick.
+  //
+  // Only class size is left on that prefill now, so this guards one field. It
+  // stays a Set rather than a boolean because the reason it exists is structural:
+  // max_capacity seeds to 18, a real and plausible number, so the VALUE cannot
+  // tell you whether an operator chose it. Grades no longer need it — they seed
+  // to null, where absence is self-evident — and that is the better fix where it
+  // is available. A ref, not state, because nothing renders from it and a stale
+  // closure inside the setFormData updater would silently re-enable the overwrite.
   const touchedFields = useRef(new Set());
 
   // Step 2 derived state — live preview of session dates, district-calendar
@@ -495,8 +518,11 @@ export default function ProgramWizardNew() {
   // and capacity were re-asserted from the curriculum on EVERY pick, so an
   // operator who typed their own values and then changed their mind about the
   // curriculum silently lost them. `touchedFields` is now the signal, because a
-  // default is indistinguishable from a deliberate choice by value alone:
-  // grade_min/grade_max default to 0/5, which is a real, selectable range.
+  // default is indistinguishable from a deliberate choice by value alone —
+  // max_capacity seeds to 18, a real and plausible class size, so nothing about
+  // the value itself says whether an operator chose it. (Grades used to seed to
+  // 0/5 and had the same problem; they now seed to null, so absence is legible
+  // without any tracking. Where a null seed is possible it is the better fix.)
   //
   // SESSION COUNT IS NO LONGER PREFILLED AT ALL — Jessica, 2026-08-20: "we should
   // not tie the actual program session number to curriculum. it varies across
