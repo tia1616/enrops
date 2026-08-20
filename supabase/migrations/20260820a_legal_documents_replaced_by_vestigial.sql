@@ -1,0 +1,34 @@
+-- 20260820a_legal_documents_replaced_by_vestigial.sql
+--
+-- Comment-only. No DDL, no data change, no grant change.
+--
+-- legal_documents.replaced_by is a self-reference from the era when instructor
+-- documents were seeded by migration and a new version was meant to retire the
+-- old one explicitly. That chain was never wired: as of today NOTHING in the repo
+-- reads or writes the column, and every row in both environments has it NULL.
+--
+-- The live version is decided instead by "most recently created row for
+-- (organization_id, document_key)", which is what get-legal-document does and what
+-- the authoring screen (src/pages/admin/InstructorDocuments.jsx) is built around.
+-- That design is deliberate and append-only: publishing INSERTs a new row and the
+-- org-admin policy grants INSERT only, so a published version can never change
+-- under an instructor who already signed it. Two people who both signed "v1" are
+-- guaranteed to have read the same words.
+--
+-- WHY THIS COMMENT EXISTS. The column reads like the source of truth and is not.
+-- On staging the demo tenant now holds FOUR versions of its contractor agreement,
+-- every one with replaced_by NULL - so anything that "helpfully" starts filtering
+-- on `replaced_by is null` would treat all four as current and pick arbitrarily.
+-- Wiring it is a real piece of work (the publish path has to set it, inside one
+-- transaction with the INSERT, and it needs a backfill); half-wiring it is worse
+-- than leaving it alone, because a half-maintained chain still looks authoritative.
+--
+-- Same shape and same reasoning as programs.sessions
+-- (20260717_deprecate_programs_sessions_legacy_column.sql): say plainly in the
+-- database that a column is not the answer, rather than trusting the next person
+-- to grep for its readers and find none.
+--
+-- NOT dropped. A DROP is irreversible and buys nothing here; the column is inert.
+
+COMMENT ON COLUMN public.legal_documents.replaced_by IS
+  'VESTIGIAL as of 2026-08-20 - do not read, do not filter on it. Nothing writes it and every row is NULL on both environments. The LIVE version of a document is the most recently created row for (organization_id, document_key); see get-legal-document and InstructorDocuments.jsx, which are append-only by design so a published version never changes under someone who already signed it. Filtering on `replaced_by is null` would mark EVERY version current. If a real supersede chain is ever wanted, wire the publish path and backfill first, in that order.';
