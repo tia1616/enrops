@@ -67,12 +67,19 @@ export function groupFamilyRecipients(regs: unknown[]) {
     const child = String(s?.first_name ?? '').trim();
     if (child) entry.children.push(child);
   }
+  // SORTED, because neither caller's query has an ORDER BY. Postgres may return
+  // a parent's two registrations in either order, so without this the same family
+  // could be greeted "Ryan and Evan" in one send and "Evan and Ryan" in the next,
+  // and the behaviour test below would have been passing on the order its own
+  // fixture happened to be written in. Sorting HERE rather than adding ORDER BY to
+  // two queries means a third caller cannot forget it. Plain .sort() and not
+  // localeCompare: this runs in Deno and in a browser, and the twins must agree.
   return Array.from(byParent.values()).map((e) => ({
     parent_id: e.parent_id,
     parent_first_name: e.parent_first_name,
     name: e.name,
     email: e.email,
-    children: e.children,
-    student_first_name: joinChildNames(e.children),
+    children: [...e.children].sort(),
+    student_first_name: joinChildNames([...e.children].sort()),
   }));
 }

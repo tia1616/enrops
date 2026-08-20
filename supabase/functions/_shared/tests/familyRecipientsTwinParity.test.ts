@@ -70,17 +70,28 @@ Deno.test('familyRecipients twins have identical bodies', async () => {
 
 // Behaviour, not just parity — the parity test alone would pass on two copies of
 // the SAME bug, which is precisely the state this pair was found in.
+const ZHOU = (sid: string, name: string) => ({
+  parent: { id: 'p1', first_name: 'Yu', last_name: 'Zhou', email: 'YU@Example.com ' },
+  student: { id: sid, first_name: name },
+});
+
 Deno.test('a parent with two children in one class is named for both', () => {
-  const out = groupFamilyRecipients([
-    { parent: { id: 'p1', first_name: 'Yu', last_name: 'Zhou', email: 'YU@Example.com ' },
-      student: { id: 's1', first_name: 'Ryan' } },
-    { parent: { id: 'p1', first_name: 'Yu', last_name: 'Zhou', email: 'YU@Example.com ' },
-      student: { id: 's2', first_name: 'Evan' } },
-  ]);
+  const out = groupFamilyRecipients([ZHOU('s1', 'Ryan'), ZHOU('s2', 'Evan')]);
   assertEquals(out.length, 1, 'still ONE email per family');
-  assertEquals(out[0].student_first_name, 'Ryan and Evan');
-  assertEquals(out[0].children, ['Ryan', 'Evan']);
+  assertEquals(out[0].student_first_name, 'Evan and Ryan');
+  assertEquals(out[0].children, ['Evan', 'Ryan']);
   assertEquals(out[0].email, 'yu@example.com', 'email is trimmed and lowercased');
+});
+
+// Neither caller's query has an ORDER BY, so the row order is Postgres's choice
+// and can differ between two identical sends. Without sorting, the test above
+// would pass purely because its fixture is written Ryan-then-Evan — which is a
+// test agreeing with the code rather than checking it.
+Deno.test('the greeting does not change when the database returns rows the other way round', () => {
+  const forwards = groupFamilyRecipients([ZHOU('s1', 'Ryan'), ZHOU('s2', 'Evan')]);
+  const backwards = groupFamilyRecipients([ZHOU('s2', 'Evan'), ZHOU('s1', 'Ryan')]);
+  assertEquals(forwards[0].student_first_name, backwards[0].student_first_name);
+  assertEquals(forwards[0].children, backwards[0].children);
 });
 
 Deno.test('one child is unchanged, and three read as a list', () => {

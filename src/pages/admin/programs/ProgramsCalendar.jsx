@@ -181,16 +181,31 @@ export default function ProgramsCalendar() {
     // afterwards when the Publish control has turned into "Connect Stripe".
     const target = programs.find((p) => p.id === programId);
     const oneWay = publishBlockedByStripe(org, target);
-    const question = oneWay
-      ? "Unpublish this program? It'll be hidden from the public catalog and stop appearing in marketing campaigns. Existing registrations are unaffected.\n\nHeads up: because Stripe isn't connected, you won't be able to publish it again until it is."
-      : "Unpublish this program? It'll be hidden from the public catalog and stop appearing in marketing campaigns. Existing registrations are unaffected.";
+    // TWO WAYS IN, TWO SETS OF WORDS. This writes status='draft', which is both
+    // "unpublish a live class" and "reopen a cancelled one" — so the Reopen
+    // control on a cancelled class reuses it rather than threading a second
+    // action through six components. Reusing the FUNCTION is right; inheriting
+    // its COPY was not. Caught by clicking Reopen on staging and reading the
+    // dialog: a cancelled class was asked "Unpublish this program? It'll be
+    // hidden from the public catalog" — it is not published, it is already
+    // hidden, and the sentence describes the opposite of what the button does.
+    const fromCancelled = target?.status === "cancelled";
+    const stripeNote = oneWay
+      ? "\n\nHeads up: because Stripe isn't connected, you won't be able to publish it until it is."
+      : "";
+    const question = fromCancelled
+      // Draft is NOT excluded from the instructor schedule board (it filters only
+      // cancelled and archived), so this genuinely does come back there — which is
+      // the half an operator cares about after cancelling one by mistake.
+      ? `Reopen this class as a draft? It won't be offered to families until you publish it, and it'll come back on your instructor schedule.${stripeNote}`
+      : `Unpublish this program? It'll be hidden from the public catalog and stop appearing in marketing campaigns. Existing registrations are unaffected.${stripeNote}`;
     if (!confirm(question)) return;
     const { error: unpubErr } = await supabase
       .from("programs")
       .update({ status: "draft" })
       .eq("id", programId);
     if (unpubErr) {
-      alert(`Couldn't unpublish: ${unpubErr.message}`);
+      alert(`Couldn't ${fromCancelled ? "reopen" : "unpublish"}: ${unpubErr.message}`);
       return;
     }
     setPrograms((prev) => prev.map((p) => (p.id === programId ? { ...p, status: "draft" } : p)));
