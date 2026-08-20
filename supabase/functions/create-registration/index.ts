@@ -571,14 +571,23 @@ serve(async (req) => {
 
       let studentId: string;
       if (reuseStudentId) {
-        // Scoped to the org as well as the id. The id came from a SECURITY DEFINER
-        // lookup that already proved the pairing, so this is belt and braces - but it
-        // is the one write in this function that touches a row it did not create.
+        // MATCHED ON ID ALONE, and the tenancy proof comes from above rather than from a
+        // second filter here. waitlist_invite_lookup is SECURITY DEFINER and returns this
+        // student_id only as the student of that one registration, whose organization_id
+        // was checked against orgId before `invite` was accepted - so the pairing is
+        // already established by something stronger than a column comparison.
+        //
+        // An `.eq('organization_id', orgId)` looks like free insurance and is not:
+        // students.organization_id is NULLABLE (checked in the live schema, unlike
+        // student_contacts.organization_id which is NOT NULL). A student row with a null
+        // org would match nothing, the guard below would throw, and a family with a
+        // perfectly good invite would get "Internal error" in the middle of paying. A
+        // tenancy check whose failure mode is a 500 on the money path has to be worth
+        // more than the one above it, and this one is not.
         const { data: reused, error: reuseErr } = await admin
           .from('students')
           .update(studentCareFields)
           .eq('id', reuseStudentId)
-          .eq('organization_id', orgId)
           .select('id')
           .maybeSingle();
         if (reuseErr) throw new Error(`student update: ${reuseErr.message}`);
