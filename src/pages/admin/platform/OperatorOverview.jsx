@@ -50,6 +50,13 @@ function stageOf(r) {
   if ((r.signed_in_member_count ?? 0) === 0) return { key: "no_signin", label: "Never signed in", color: FLAG };
   if (!r.first_published_at) return { key: "no_publish", label: "Nothing published", color: AMBER };
   if ((r.active_registration_count ?? 0) > 0) return { key: "selling", label: "Taking registrations", color: OK };
+  // A waiting-list-only tenant (full class, families queued, none paid yet) has
+  // active=0 but is NOT "all cancelled" - those families are waiting, not gone. Since
+  // 20260819v a waitlist row counts in neither active nor cancelled, so without this it
+  // fell through to the "all cancelled" label below and read as failure on the one screen
+  // used to decide who needs help. Tested before "all_cancelled" because it is the
+  // hopeful reading of the same active=0 row. COPY NOT YET APPROVED BY JESSICA.
+  if ((r.waitlist_registration_count ?? 0) > 0) return { key: "waitlist_only", label: "Waiting list only", color: AMBER };
   if ((r.registration_count ?? 0) > 0) return { key: "all_cancelled", label: "Registrations all cancelled", color: AMBER };
   return { key: "no_regs", label: "Published, no registrations", color: AMBER };
 }
@@ -217,10 +224,20 @@ export default function OperatorOverview() {
             <div style={{ fontSize: 11.5, color: MUTED }}>or later</div>
           )}
         </td>
+        {/* "N not cancelled" was misleading once waitlist rows stopped counting as active:
+            a tenant with 5 waiting and 0 paid showed "0 not cancelled" beside a count of 5,
+            reading as "all 5 cancelled" when none were. Break the breakdown out by the three
+            real states, and only show the parts that are non-zero.
+            COPY NOT YET APPROVED BY JESSICA. */}
         <td style={num}>
           {r.registration_count}
           {r.registration_count !== r.active_registration_count && (
-            <div style={{ fontSize: 11.5, color: MUTED }}>{r.active_registration_count} not cancelled</div>
+            <div style={{ fontSize: 11.5, color: MUTED }}>
+              {[
+                r.active_registration_count ? `${r.active_registration_count} active` : null,
+                r.waitlist_registration_count ? `${r.waitlist_registration_count} waiting` : null,
+              ].filter(Boolean).join(" · ") || "none active"}
+            </div>
           )}
         </td>
         <td style={num}>{fmtDate(r.first_registration_at)}</td>

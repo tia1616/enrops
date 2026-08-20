@@ -133,14 +133,29 @@ async function fetchFamily(contact, orgId) {
       const name = r.program_name || "a program";
       const child = r.child_name || "";
       const cancelled = !!r.cancelled_at;
-      const past = !cancelled && r.starts_at && new Date(r.starts_at) < now;
+      // A WAITLIST ROW IS NOT A REGISTRATION, and this timeline was calling it one.
+      //
+      // 20260819f added status='waitlist' to a table this screen already read. A waiting
+      // family has cancelled_at null, so `past` went true as soon as the class had
+      // started, and the event rendered as "🎓 Attended: Game Design Studio", tone
+      // positive - a graduation cap for a child who never got a place. The status was in
+      // the detail line, so the truth was on screen underneath a title contradicting it.
+      //
+      // Kept in the timeline rather than filtered out, deliberately: that this family
+      // wanted a place and did not get one is exactly the kind of thing the person reading
+      // a contact timeline needs to know.
+      // COPY NOT YET APPROVED BY JESSICA.
+      const waitlisted = r.status === "waitlist";
+      const past = !cancelled && !waitlisted && r.starts_at && new Date(r.starts_at) < now;
       events.push({
         id: "reg" + r.registration_id,
         at: r.registered_at,
-        icon: past ? "🎓" : "📝",
-        title: `${past ? "Attended" : "Registered"}: ${name}`,
-        detail: [child, cancelled ? "later cancelled" : (r.status && r.status !== "confirmed" ? cap(r.status) : "")].filter(Boolean).join(" · "),
-        tone: cancelled ? "neutral" : "positive",
+        icon: waitlisted ? "⏳" : (past ? "🎓" : "📝"),
+        title: waitlisted
+          ? `Joined the waiting list: ${name}`
+          : `${past ? "Attended" : "Registered"}: ${name}`,
+        detail: [child, cancelled ? "later cancelled" : (!waitlisted && r.status && r.status !== "confirmed" ? cap(r.status) : "")].filter(Boolean).join(" · "),
+        tone: cancelled ? "neutral" : (waitlisted ? "neutral" : "positive"),
       });
       if (cancelled) {
         events.push({ id: "regc" + r.registration_id, at: r.cancelled_at, icon: "✖️", title: `Cancelled: ${name}`, detail: child, tone: "negative" });

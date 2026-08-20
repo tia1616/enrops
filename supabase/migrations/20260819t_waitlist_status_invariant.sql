@@ -7,12 +7,22 @@
 -- match the SELECT. Two reviewers agreed, so this deviation needs its reasons stated.
 --
 -- FIRST, WHAT IS ACTUALLY TRUE TODAY. Checked before writing anything: zero rows on staging
--- and zero on prod are status='waitlist' with cancelled_at set, and there is no writer that
--- could make one. Every path that cancels - waitlist_remove (20260819h), invite consume
--- (20260819m), the expiry sweep (20260819r) and refund-registration - sets status and
--- cancelled_at in the SAME statement. Everything else in the repo only READS cancelled_at.
--- So the 23505-into-a-bare-500 the review describes is not reachable on either database
--- right now, and 20260819h's argument for moving the status is correct rather than sloppy.
+-- and zero on prod are status='waitlist' with cancelled_at set. Every path that cancels a
+-- WAITLIST row - waitlist_remove (20260819h), invite consume (20260819m), the expiry sweep
+-- (20260819r/v) and refund-registration - sets status and cancelled_at in the same
+-- statement, so none of them can produce the forbidden pair. So the 23505-into-a-bare-500
+-- the review describes is not reachable on either database right now, and 20260819h's
+-- argument for moving the status is correct rather than sloppy.
+--
+-- ONE CLAIM CORRECTED (2026-08-20 review): an earlier draft of this note said "everything
+-- else only READS cancelled_at". That was false - apps-script-roster-sync writes
+-- `status='cancelled'` WITHOUT cancelled_at (a status='cancelled', cancelled_at=NULL row).
+-- That is a DIFFERENT half-state, and this constraint deliberately does NOT forbid it: the
+-- constraint is scoped to the waitlist pair only (status='waitlist' AND cancelled_at set),
+-- which is the one that strands a waiting family. The apps-script half-state is about camp
+-- rosters and is real but out of scope here; broadening the constraint to
+-- `cancelled_at is null or status='cancelled'` is noted for the re-review, because it needs
+-- a data check first (a status='refunded'-with-cancelled_at row would violate it).
 --
 -- SECOND, WHY WIDENING THE INDEX IS THE WEAKER FIX. It would make that one INSERT survive
 -- the bad row, and leave every other reader still broken by it. Such a row would keep its

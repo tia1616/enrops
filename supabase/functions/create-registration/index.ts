@@ -285,33 +285,43 @@ serve(async (req) => {
       }
     }
 
-    // WHICH CHILD IN THIS CART IS THE INVITED ONE.
+    // WHICH CHILD IN THIS CART IS THE INVITED ONE - and ONLY when that is unambiguous.
     //
-    // The invite is for one named child - the one who has been on the list - and the
-    // whole point of the token is that the SERVER knows who that is. The payload does
-    // not get a say: `students` rows are written from client-supplied names, so trusting
-    // the payload to say "this is the invited child" would hand the held seat to whoever
-    // holds the link. A forwarded invite let a stranger type their own child and take the
-    // place, and the consume step then cancelled the invited family's row silently.
+    // The invite is for one named child on one program, and everything the invite unlocks
+    // (attaching to the existing child, crediting the held seat, spending the token) keys
+    // off knowing which cart line is theirs. The payload cannot be trusted to say so:
+    // child_index is client-supplied and unvalidated, and a forwarded link would otherwise
+    // let a stranger point the credit at their own child.
     //
-    // So the binding is positional and server-decided: the first cart line for the
-    // invite's own program. That line registers `invite.student_id` - the child who
-    // waited - and it is the only line the held seat is credited to. A stranger with a
-    // forwarded link therefore cannot get THEIR child into the held seat; the most they
-    // can do is finish the registration the invited child was offered.
+    // So the binding is deliberately CONSERVATIVE - it resolves only when there is exactly
+    // ONE cart line for the invited program. That is the ordinary case (a family clicking
+    // their own invite registers the one child for the one class). Any other shape leaves
+    // `invitedChildIndex` null and the invite simply does not apply - no reuse, no seat
+    // credit, no consume - which is always safe:
+    //   * zero lines for the invited program -> the family is buying something else; the
+    //     invite is irrelevant and their waitlist row is left untouched for next time.
+    //   * two lines for the invited program (two siblings into the same class) -> we cannot
+    //     tell which sibling the one held seat belongs to, so we credit neither and both go
+    //     through ordinary capacity. Worst case a duplicate child row, which is the ORIGINAL
+    //     pre-invite behaviour - never the wrong child corrupted, and never the token spent
+    //     against a registration it does not describe.
     //
-    // No line for the invited program means the family is buying something else
-    // entirely, and the invite simply does not apply: no credit, no reuse, ordinary
-    // capacity rules. Deliberately NOT name-matching the payload against the invite's
-    // child - a family who typed "Ben" where the list says "Benjamin" would be told
-    // their class was full and would lose the place we had just promised them.
-    const inviteChildIndex = invite
-      ? (flat.find((f) => f.program_id === invite!.program_id)?.child_index ?? null)
-      : null;
-    if (invite && inviteChildIndex === null) {
-      console.warn('[create-registration] waitlist invite is for a program not in this cart, ignoring', {
-        program_id: invite.program_id,
-      });
+    // Not name-matched against the invite's child on purpose: a family who typed "Ben"
+    // where the list says "Benjamin" must not be turned away from a place we promised them.
+    let invitedChildIndex: number | null = null;
+    if (invite) {
+      const linesForInviteProgram = flat.filter((f) => f.program_id === invite!.program_id);
+      const distinctChildren = new Set(linesForInviteProgram.map((f) => f.child_index));
+      if (distinctChildren.size === 1) {
+        invitedChildIndex = linesForInviteProgram[0].child_index;
+      } else {
+        // Either not in the cart, or two children on the same invited class. Both mean the
+        // invite cannot be applied safely; fall back to ordinary registration.
+        console.warn('[create-registration] waitlist invite does not resolve to a single cart child, ignoring the invite', {
+          program_id: invite.program_id, lines: linesForInviteProgram.length, children: distinctChildren.size,
+        });
+        invite = null;
+      }
     }
 
     const { data: seatRows, error: seatErr } = await admin.rpc('program_seat_counts', {
@@ -345,9 +355,9 @@ serve(async (req) => {
       // room. Same rule as the publish check above: refuse rather than quietly skip.
       if (!s) return true;
       if (s.max_capacity === null || Number(s.max_capacity) <= 0) return false;
-      // The one held seat, credited only to its own program AND only when a line in
-      // this cart is actually bound to the invited child.
-      const heldByInvite = invite && inviteChildIndex !== null && invite.program_id === id ? 1 : 0;
+      // The one held seat, credited only to its own program. `invite` is non-null only
+      // after it resolved to exactly one cart child above, so this needs no second guard.
+      const heldByInvite = invite && invite.program_id === id ? 1 : 0;
       return (Number(s.seats_taken) - heldByInvite) + (requestedPerProgram.get(id) ?? 0) > Number(s.max_capacity);
     });
     if (atCapacity.length) {
@@ -521,82 +531,50 @@ serve(async (req) => {
         if (isNaN(gradeVal)) gradeVal = null;
       }
 
-      // THE INVITED CHILD ALREADY EXISTS. Do not make a second one.
+      // THE INVITED CHILD ALREADY EXISTS. Attach the registration to them, and touch
+      // NOTHING ELSE on their record.
       //
       // They were written into `students` when the family joined the waiting list, and
-      // their waitlist registration points at that row. Inserting again here gave one
-      // human two student rows - two roster lines, split attendance, and
-      // `uniq_registrations_waitlist_student` blind to the fact that they were the same
-      // child, which is the one thing that index exists to catch.
+      // their waitlist registration points at that row. Inserting again here gave one human
+      // two student rows - two roster lines, split attendance, and
+      // uniq_registrations_waitlist_student blind to the fact that they are the same child.
+      // So for the invited child we REUSE that row rather than making a second one.
       //
-      // The care fields ARE updated from this payload: grade, allergies and emergency
-      // contacts may have changed in the weeks since they joined, and this form is the
-      // fresher answer. The NAME is deliberately not, and neither is `parent_id`: those
-      // come from the invite, so a forwarded link cannot rewrite the waiting child's
-      // identity into somebody else's.
-      const reuseStudentId = inviteChildIndex !== null && child.child_index === inviteChildIndex
-        ? invite!.student_id
+      // WHAT THE REUSE PATH DELIBERATELY DOES NOT DO: update the student, or replace their
+      // contacts. This endpoint is public (verify_jwt = false) and anonymous, and an
+      // accepted invite can point at a child who is already enrolled elsewhere -
+      // join-waitlist reuses a family's same-named child, so that students row may carry a
+      // live allergy, medical notes and a do-not-release list. An UPDATE built from this
+      // checkout form would set every field the form did not collect to null, and the guest
+      // wizard collects almost none of them (there is no field for
+      // special_needs_accommodations at all), so it would silently ERASE child-safety data.
+      // A blind delete-and-reinsert of student_contacts would wipe a custody
+      // do-not-release row the instant a family filled in only a second guardian. On an
+      // anonymous write the safe rule is: attach the registration and leave the child's
+      // record exactly as it stands. Ignoring a newly typed allergy is recoverable; erasing
+      // a stored one is not. Care-data edits belong on an authenticated operator or parent
+      // surface, never on this path. (`invite` is non-null only after resolving to exactly
+      // one cart child above, so this cannot fire for a sibling or a stranger's child.)
+      const reuseStudentId = invite && child.child_index === invitedChildIndex
+        ? invite.student_id
         : null;
-      // The details that describe how to look after the child on the day. Shared by
-      // both paths below, so an invited child and a walk-up child are recorded from
-      // this form identically - there is no second, drifting copy of this list.
-      const studentCareFields = {
-        grade: gradeVal,
-        homeroom_teacher: student.homeroom_teacher || null,
-        birthdate: student.birthdate || null,
-        allergies: student.allergies || null,
-        medical_notes: student.medical_notes || null,
-        special_needs_accommodations: student.special_needs_accommodations || null,
-        emergency_contact_name: student.emergency_contact_name || null,
-        emergency_contact_phone: student.emergency_contact_phone || null,
-        // customizable-registration: how the child leaves (null when the org
-        // hasn't enabled that question)
-        dismissal_method: student.dismissal_method || null,
-        // WHO, when the answer is aftercare. Stored only for that answer:
-        // accepting it unconditionally would let a name typed and then
-        // reconsidered persist against an answer it no longer describes, and
-        // every staff surface reads the two together. The client clears it on
-        // change too - this is the server refusing to take its word for it,
-        // since the browser's payload is not trustworthy.
-        // String(...) before trim, NOT `?.trim()`. The body is client-supplied
-        // JSON: a number, boolean, object or array here passes the optional-chain
-        // null check, resolves `.trim` to undefined, and throws "is not a
-        // function" - a 500 in the middle of checkout from a malformed payload.
-        // Every sibling field here uses the safe `x || null` shape; this was the
-        // only one calling a string method on untrusted input.
-        aftercare_provider: student.dismissal_method === 'aftercare'
-          ? (String(student.aftercare_provider ?? '').trim().slice(0, 120) || null)
-          : null,
-      };
 
       let studentId: string;
       if (reuseStudentId) {
-        // MATCHED ON ID ALONE, and the tenancy proof comes from above rather than from a
-        // second filter here. waitlist_invite_lookup is SECURITY DEFINER and returns this
-        // student_id only as the student of that one registration, whose organization_id
-        // was checked against orgId before `invite` was accepted - so the pairing is
-        // already established by something stronger than a column comparison.
-        //
-        // An `.eq('organization_id', orgId)` looks like free insurance and is not:
-        // students.organization_id is NULLABLE (checked in the live schema, unlike
-        // student_contacts.organization_id which is NOT NULL). A student row with a null
-        // org would match nothing, the guard below would throw, and a family with a
-        // perfectly good invite would get "Internal error" in the middle of paying. A
-        // tenancy check whose failure mode is a 500 on the money path has to be worth
-        // more than the one above it, and this one is not.
-        const { data: reused, error: reuseErr } = await admin
+        // Confirm the row exists; do NOT write to it. Matched on id alone: the pairing was
+        // established by waitlist_invite_lookup, which is SECURITY DEFINER and (since
+        // 20260819v) joins the student on r.organization_id, and `invite` was checked
+        // against orgId above. An `.eq('organization_id', orgId)` here would only add a 500
+        // on the money path, because students.organization_id is nullable.
+        const { data: existing, error: exErr } = await admin
           .from('students')
-          .update(studentCareFields)
-          .eq('id', reuseStudentId)
           .select('id')
+          .eq('id', reuseStudentId)
           .maybeSingle();
-        if (reuseErr) throw new Error(`student update: ${reuseErr.message}`);
-        // No row back means the invite pointed at a child this org cannot write, which
-        // should be impossible. Refuse rather than quietly insert a duplicate and
-        // re-open the defect this branch is closing.
-        if (!reused) throw new Error('student update: the invited child could not be found');
-        studentId = reused.id;
-        console.log('[create-registration] registering the child who was waiting, not a copy of them', {
+        if (exErr) throw new Error(`invited student lookup: ${exErr.message}`);
+        if (!existing) throw new Error('the invited child could not be found');
+        studentId = existing.id;
+        console.log('[create-registration] attaching the registration to the child who was waiting', {
           student_id: studentId, child_index: child.child_index,
         });
       } else {
@@ -609,12 +587,27 @@ serve(async (req) => {
             // `program_location_id`), and the client never sends `child.school_id`,
             // so this key was always undefined and dropped before the insert — dead.
             // The child's school/area is derived authoritatively from the program the
-            // family registered for (see auto_add_registrant_to_marketing_list). If a
-            // future feature needs a student-level location, wire program_location_id
-            // as its own scoped, tested change — not silently on the checkout path.
+            // family registered for (see auto_add_registrant_to_marketing_list).
             first_name: student.first_name,
             last_name: student.last_name,
-            ...studentCareFields,
+            grade: gradeVal,
+            homeroom_teacher: student.homeroom_teacher || null,
+            birthdate: student.birthdate || null,
+            allergies: student.allergies || null,
+            medical_notes: student.medical_notes || null,
+            special_needs_accommodations: student.special_needs_accommodations || null,
+            emergency_contact_name: student.emergency_contact_name || null,
+            emergency_contact_phone: student.emergency_contact_phone || null,
+            // customizable-registration: how the child leaves (null when the org
+            // hasn't enabled that question)
+            dismissal_method: student.dismissal_method || null,
+            // WHO, when the answer is aftercare. String(...) before trim, NOT `?.trim()`:
+            // the body is client-supplied JSON, and a number/boolean/object here would
+            // resolve `.trim` to undefined and throw mid-checkout. `x || null` everywhere
+            // else keeps the same shape.
+            aftercare_provider: student.dismissal_method === 'aftercare'
+              ? (String(student.aftercare_provider ?? '').trim().slice(0, 120) || null)
+              : null,
           })
           .select('id')
           .single();
@@ -624,57 +617,44 @@ serve(async (req) => {
       studentIdByChildIndex.set(child.child_index, studentId);
 
       // --- Customizable registration: structured people → student_contacts ---
-      // Written BEFORE checkout, so a failure here fails the registration with no
-      // charge (never a paid enrollment missing its pickup/release data).
-      const contactRows: any[] = [];
-      const g2 = parent?.guardian2;
-      if (g2 && (g2.first_name || '').trim()) {
-        contactRows.push({
-          student_id: studentId, organization_id: orgId, role: 'guardian',
-          first_name: g2.first_name.trim(), last_name: (g2.last_name || '').trim() || null,
-          phone: (g2.phone || '').trim() || null, email: (g2.email || '').trim() || null,
-          sort_order: 0,
+      // ONLY for a freshly-inserted student. A reused (invited) child keeps the contacts
+      // they already have - see the reuse note above: replacing them on this public path
+      // would wipe a stored do-not-release list. A brand-new student has none yet, so this
+      // insert is purely additive. Written BEFORE checkout, so a failure here fails the
+      // registration with no charge (never a paid enrollment missing its pickup data).
+      if (!reuseStudentId) {
+        const contactRows: any[] = [];
+        const g2 = parent?.guardian2;
+        if (g2 && (g2.first_name || '').trim()) {
+          contactRows.push({
+            student_id: studentId, organization_id: orgId, role: 'guardian',
+            first_name: g2.first_name.trim(), last_name: (g2.last_name || '').trim() || null,
+            phone: (g2.phone || '').trim() || null, email: (g2.email || '').trim() || null,
+            sort_order: 0,
+          });
+        }
+        (child.authorized_pickup || []).forEach((p: any, i: number) => {
+          if ((p?.first_name || '').trim()) {
+            contactRows.push({
+              student_id: studentId, organization_id: orgId, role: 'authorized_pickup',
+              first_name: p.first_name.trim(), last_name: (p.last_name || '').trim() || null,
+              phone: (p.phone || '').trim() || null, sort_order: i,
+            });
+          }
         });
-      }
-      (child.authorized_pickup || []).forEach((p: any, i: number) => {
-        if ((p?.first_name || '').trim()) {
-          contactRows.push({
-            student_id: studentId, organization_id: orgId, role: 'authorized_pickup',
-            first_name: p.first_name.trim(), last_name: (p.last_name || '').trim() || null,
-            phone: (p.phone || '').trim() || null, sort_order: i,
-          });
+        (child.do_not_release || []).forEach((p: any, i: number) => {
+          if ((p?.first_name || '').trim()) {
+            contactRows.push({
+              student_id: studentId, organization_id: orgId, role: 'do_not_release',
+              first_name: p.first_name.trim(), last_name: (p.last_name || '').trim() || null,
+              sort_order: i,
+            });
+          }
+        });
+        if (contactRows.length) {
+          const { error: cErr } = await admin.from('student_contacts').insert(contactRows);
+          if (cErr) throw new Error(`student_contacts insert: ${cErr.message}`);
         }
-      });
-      (child.do_not_release || []).forEach((p: any, i: number) => {
-        if ((p?.first_name || '').trim()) {
-          contactRows.push({
-            student_id: studentId, organization_id: orgId, role: 'do_not_release',
-            first_name: p.first_name.trim(), last_name: (p.last_name || '').trim() || null,
-            sort_order: i,
-          });
-        }
-      });
-      if (contactRows.length) {
-        // A REUSED CHILD MAY ALREADY HAVE A PICKUP LIST. Insert-only would stack a
-        // second identical copy on the roster - a defect this reuse path would be
-        // introducing, since a freshly inserted student never had one. So for a reused
-        // child the list this form just collected REPLACES the stored one: same
-        // reasoning as the care fields above, this form is the fresher answer.
-        //
-        // Guarded on contactRows.length (above), which is what makes it safe: an org
-        // that has not enabled these questions sends nothing, and nothing means "no
-        // answer", never "delete the people we already knew about". Care data is only
-        // ever replaced by care data.
-        if (reuseStudentId) {
-          const { error: clearErr } = await admin
-            .from('student_contacts')
-            .delete()
-            .eq('student_id', studentId)
-            .eq('organization_id', orgId);
-          if (clearErr) throw new Error(`student_contacts replace: ${clearErr.message}`);
-        }
-        const { error: cErr } = await admin.from('student_contacts').insert(contactRows);
-        if (cErr) throw new Error(`student_contacts insert: ${cErr.message}`);
       }
 
       // --- Registrations: one per line item for this child ---
@@ -892,6 +872,13 @@ serve(async (req) => {
     // row that still carries a token, which the expiry sweep will clear and which cannot
     // be replayed to gain a second seat (the gate credits one seat, and their new
     // registration now occupies it).
+    //
+    // GATED ON `invite`, which is now non-null ONLY when the token resolved to exactly one
+    // child in THIS cart (see the binding above). A family who clicked their invite but
+    // then checked out for a different class had `invite` set to null there, so their
+    // waitlist row is NOT cancelled here - they keep their place. This is the fix for the
+    // consume-fires-when-the-invite-does-not-apply defect; it is structural, not a second
+    // condition to remember.
     if (invite) {
       try {
         const { data: spent, error: spendErr } = await admin

@@ -412,11 +412,36 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         : { data: [], error: null };
       if (assignRes.error) throw assignRes.error;
 
+      // seats_taken AS WELL AS enrolled, because since 20260819j they are two different
+      // numbers and this screen was showing only one of them.
+      //
+      //   enrolled    = children actually in the class (paid or confirmed)
+      //   seats_taken = chairs that cannot be sold - also a checkout in flight, an ACH
+      //                 transfer clearing, and a waitlisted family holding a live invite
+      //
+      // Showing enrolled alone meant this column could read "3 / 14" while the capacity
+      // gate 409'd every family and the catalog said the class was full. The operator had
+      // no way to see the eleven held seats, so the screen and the product disagreed with
+      // nothing on screen to explain it. Both are shown now; see the cell below.
       const enrollRes = programIds.length
-        ? await supabase.from("program_enrollment").select("program_id, enrolled, max_capacity").in("program_id", programIds)
+        ? await supabase.from("program_enrollment").select("program_id, enrolled, seats_taken, max_capacity").in("program_id", programIds)
         : { data: [], error: null };
+      // THE ERROR WAS BEING DISCARDED. `data ?? []` on a failed read leaves `enrollment`
+      // empty and every class silently shows a dash - which looks like "no data yet"
+      // rather than "this query failed". That matters now more than it did: seats_taken
+      // only exists from 20260819j, so shipping this screen to an environment without
+      // that migration fails the WHOLE select, and the old code would have hidden it.
+      if (enrollRes.error) {
+        console.error("[AfterschoolSchedule] enrollment read failed", enrollRes.error.message);
+      }
       const enrollment = {};
-      for (const r of enrollRes.data ?? []) enrollment[r.program_id] = { enrolled: Number(r.enrolled ?? 0), max: r.max_capacity ?? null };
+      for (const r of enrollRes.data ?? []) {
+        enrollment[r.program_id] = {
+          enrolled: Number(r.enrolled ?? 0),
+          seatsTaken: Number(r.seats_taken ?? 0),
+          max: r.max_capacity ?? null,
+        };
+      }
 
       const assignments = (assignRes.data ?? []).map((a) => ({
         id: a.id,
@@ -2730,7 +2755,22 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
                         <span style={{ fontWeight: 600, color: INK }}>{fmtTimeRange(p.start_time, p.end_time)}</span>
                         <div style={{ fontSize: 11.5, color: PURPLE, fontWeight: 600 }}>all term</div>
                       </td>
-                      <td style={td}>{enr ? <><span style={{ fontWeight: 600, color: INK }}>{enr.enrolled}</span><span style={{ color: MUTED }}> / {enr.max ?? "—"}</span></> : <span style={{ color: MUTED }}>—</span>}</td>
+                      {/* Enrolled stays the headline number, because that is what the
+                          column says and it is the honest count of children in the class.
+                          The held seats go underneath, and ONLY when there are some, so a
+                          class with nothing pending looks exactly as it did before. This
+                          is what explains a full class whose enrolled count is lower than
+                          its cap - the difference between the two numbers is the feature
+                          (20260819j), and it needed somewhere to be visible.
+                          COPY NOT YET APPROVED BY JESSICA. */}
+                      <td style={td}>{enr ? <>
+                        <span style={{ fontWeight: 600, color: INK }}>{enr.enrolled}</span><span style={{ color: MUTED }}> / {enr.max ?? "—"}</span>
+                        {enr.seatsTaken > enr.enrolled && (
+                          <div style={{ fontSize: 11.5, color: MUTED }}>
+                            +{enr.seatsTaken - enr.enrolled} holding a place
+                          </div>
+                        )}
+                      </> : <span style={{ color: MUTED }}>—</span>}</td>
                       <td style={td}>
                         {who ? <span style={{ fontWeight: 600, color: INK }}>{who}</span> : <span style={{ color: PURPLE, fontWeight: 600 }}>+ Assign</span>}
                         {e?.subNeeded?.length > 0 && (

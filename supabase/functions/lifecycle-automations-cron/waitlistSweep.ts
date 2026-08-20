@@ -104,28 +104,28 @@ export async function runWaitlistSweep(
   // The DATA change runs at ANY hour: a seat held by a lapsed offer helps nobody, and
   // freeing it sends nothing.
   const { data: lapsed, error: expErr } = await supabase.rpc('waitlist_expire_invites');
+  // A FAILED EXPIRE DOES NOT FREEZE THE WHOLE PLATFORM. An earlier version returned here,
+  // which meant one deterministic expire failure (a bad row, a statement timeout) stopped
+  // EVERY org's offers on every tick, indefinitely, looking identical to a platform with no
+  // lists. The loop this early-return was guarding against - re-offering a lapsed row - is
+  // already stopped independently: waitlist_offer_next raises WL002 for a top-of-queue whose
+  // invite has lapsed but not yet been cancelled, and the offer step below skips it. So on
+  // an expire failure we log, record it, and carry on: healthy programs still get offers,
+  // and the lapsed ones wait for the next tick rather than dragging everyone down with them.
+  const lapsedRows = expErr
+    ? []
+    : ((lapsed ?? []) as Array<{
+        registration_id: string; program_id: string; organization_id: string;
+        parent_email: string | null; child_first_name: string | null;
+      }>);
   if (expErr) {
-    // STOP THE TICK. Carrying on to the offer step with expiry broken is what turned one
-    // failed call into a loop: the lapsed rows are still status=waitlist and still at the
-    // top of their queues, so waitlist_offer_next used to mint them a FRESH 24 hours and
-    // email it - again on the next tick, and the next, to a family whose window had
-    // already closed. The candidates query below already returns for the same reason.
-    //
-    // Nothing is lost by returning: the sweep is self-healing by design, so the next tick
-    // does the whole job. 20260819s also refuses (P0002) to re-offer a lapsed row, so this
-    // is now belt AND braces - two independent stops on the same loop, because the cost of
-    // it running is a family being promised a place they cannot have.
-    console.error('[waitlist-sweep] expire failed, skipping this tick entirely', expErr.message);
+    console.error('[waitlist-sweep] expire failed; offers for healthy programs continue', expErr.message);
     out.errors.push({ error: `expire: ${expErr.message}` });
-    return out;
-  }
-  const lapsedRows = ((lapsed ?? []) as Array<{
-    registration_id: string; program_id: string; organization_id: string;
-    parent_email: string; child_first_name: string;
-  }>);
-  out.expired = lapsedRows.length;
-  if (lapsedRows.length) {
-    console.log('[waitlist-sweep] expired holds', lapsedRows.map((r) => r.parent_email));
+  } else {
+    out.expired = lapsedRows.length;
+    if (lapsedRows.length) {
+      console.log('[waitlist-sweep] expired holds', lapsedRows.map((r) => r.parent_email));
+    }
   }
 
   // ── 1b. Tell the families whose hold ran out ─────────────────────────────
@@ -144,6 +144,10 @@ export async function runWaitlistSweep(
   // smallest harm in this file.
   for (const r of lapsedRows) {
     try {
+      // The expire RPC LEFT-joins parent/student, so a lapsed row whose family was removed
+      // comes back with a null email. It was still correctly cancelled and counted; there
+      // is simply nobody to write to, so skip the note rather than hand Resend a null `to`.
+      if (!r.parent_email) continue;
       const org = await getOrg(r.organization_id);
       if (!org?.slug) continue;
       const prog = await getProgram(r.program_id);
@@ -172,7 +176,9 @@ export async function runWaitlistSweep(
 
       const built = buildWaitlistLapsed({
         brand,
-        childFirstName: r.child_first_name,
+        // Coalesced: the expire RPC LEFT-joins the student now, so a removed student comes
+        // back null even when the parent email survives. The email template needs a string.
+        childFirstName: r.child_first_name || 'your child',
         programName: prog.name,
         siteName: prog.siteName,
         catalogUrl: `${opts.baseUrl.replace(/\/+$/, '')}/${org.slug}`,
@@ -253,17 +259,15 @@ export async function runWaitlistSweep(
       });
 
       if (offErr) {
-        // P0001 = no free seat. That is the COMMON case on a healthy full class and
-        // is not an error worth recording as one.
-        if ((offErr as { code?: string }).code === 'P0001') { out.skipped_no_seat += 1; continue; }
-        // P0002 = the top of this queue holds an invite that has lapsed and expiry has not
-        // cleared it yet (20260819s). Skip the program, do NOT re-offer: the row belongs to
-        // the expiry step, and the positions behind it have not been renumbered, so there
-        // is no correct "next family" to move on to yet. Counted rather than logged as an
-        // error, because the next tick resolves it - but it should be RARE, since expiry
-        // runs first in this same function and a failure there now returns above. Seeing
-        // this climb means expiry is failing silently somewhere else.
-        if ((offErr as { code?: string }).code === 'P0002') {
+        // WL001 = no free seat. The COMMON case on a healthy full class, not an error.
+        // (Private class code, not P0001 - see 20260819v; P0001 is plpgsql's generic raise.)
+        if ((offErr as { code?: string }).code === 'WL001') { out.skipped_no_seat += 1; continue; }
+        // WL002 = the top of this queue holds a lapsed invite expiry has not cleared yet.
+        // Skip the program, do NOT re-offer: that row belongs to the expiry step, and the
+        // positions behind it are not renumbered yet, so there is no correct "next family".
+        // The next tick resolves it. Rare in the normal case (expiry runs first), so a
+        // climbing count is the signal that expiry is failing.
+        if ((offErr as { code?: string }).code === 'WL002') {
           console.warn('[waitlist-sweep] top of queue holds a lapsed invite, leaving it for expiry', { program_id: programId });
           out.skipped_lapsed_awaiting_expiry += 1;
           continue;
@@ -338,6 +342,20 @@ export async function runWaitlistSweep(
           sent = true;
           out.emailed += 1;
           console.log('[waitlist-sweep] invited', { program_id: programId, to: row.parent_email });
+          // STAMP THE HISTORY ONLY NOW, after the email actually left Resend - NOT inside
+          // waitlist_offer_next. An offer whose send fails is rolled back below, and it must
+          // not read as "this family was offered a place" afterwards. Targeted at the token
+          // this call minted, so a concurrent consume/remove that already moved the row
+          // leaves this a no-op rather than stamping someone else's registration. A failure
+          // here is logged, not fatal: the invite is real and sent; only the history stamp
+          // is best-effort.
+          const { error: stampErr } = await supabase
+            .from('registrations')
+            .update({ waitlist_last_offered_at: new Date().toISOString() })
+            .eq('waitlist_invite_token', row.invite_token);
+          if (stampErr) {
+            console.error('[waitlist-sweep] could not stamp waitlist_last_offered_at', stampErr.message);
+          }
         }
       } catch (mailErr) {
         console.error('[waitlist-sweep] invite send threw', (mailErr as Error).message);
