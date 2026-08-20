@@ -43,7 +43,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
-import { groupFamilyRecipients } from '../_shared/familyRecipients.ts';
+import { groupFamilyRecipients, rowsToRegistrationShape } from '../_shared/familyRecipients.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -234,32 +234,37 @@ serve(async (req: Request) => {
     // same rule and had its own copy of it; see the twin note in that file.
     let familyRecipients: ReturnType<typeof groupFamilyRecipients> = [];
     if (family.send) {
-      // Explicit organization_id filter even though we already verified
-      // the program belongs to orgId — service-role client bypasses RLS,
-      // so a defense-in-depth filter catches any future schema drift
-      // where a registration could be linked to a program in another org.
+      // THE SAME SOURCE THE OPERATOR'S PREVIEW READS. This used to be its own
+      // select here and another one in EditProgramCurriculumModal, kept in step by
+      // a comment. They could not be: this runs service-role and the preview runs
+      // as the operator under RLS, where `members_see_org_parents` hides any parent
+      // with no parent_org_relationships row — 240 of J2S's 325 registered parents
+      // on prod, 2026-08-20. The preview said "1 family will get a note" for a
+      // class with three, and this function would have mailed all three. An
+      // operator approving a smaller list than the one that goes out is the worst
+      // direction for that bug to point.
+      //
+      // program_note_recipients is SECURITY DEFINER and holds the org check, the
+      // program-belongs-to-org check and the status filters, so both callers get
+      // identical rows by construction. It still takes orgId explicitly: the
+      // function re-proves the program belongs to it rather than trusting either
+      // caller, which is also the defense-in-depth the old filter here provided.
       const { data: regs, error: regErr } = await supabase
-        .from('registrations')
-        .select(`
-          id, status,
-          student:students ( id, first_name ),
-          parent:parents ( id, first_name, last_name, email )
-        `)
-        .eq('program_id', programId)
-        .eq('organization_id', orgId)
-        .neq('status', 'cancelled')
-        // A waitlisted family is NOT in this class, so they must never be told its
-        // curriculum changed. 'not cancelled' was a correct definition of "enrolled"
-        // until status='waitlist' existed; this is a SEND path, so the miss is an
-        // email to a real parent about a class their child does not have a place in.
-        // Literal, not the src/lib/waitlistState.js constant: edge functions run in
-        // Deno and cannot import from the Vite app.
-        .neq('status', 'waitlist');
+        .rpc('program_note_recipients', {
+          p_program_id: programId,
+          p_org_id: orgId,
+        });
+      // The cancelled/waitlist filters MOVED INTO the function and were not
+      // dropped. A waitlisted family is not in this class and must never be told
+      // its curriculum changed — this is a send path, so the miss would be an email
+      // to a real parent about a class their child has not got a place in. Leaving
+      // a `.neq('status', ...)` here would now filter on a column the RPC does not
+      // return, which reads as harmless and would have quietly matched nothing.
       if (regErr) {
-        console.error('registrations lookup failed:', regErr);
+        console.error('recipient lookup failed:', regErr);
         return json({ error: 'lookup_failed' }, 500);
       }
-      familyRecipients = groupFamilyRecipients(regs ?? []);
+      familyRecipients = groupFamilyRecipients(rowsToRegistrationShape(regs ?? []));
     }
 
     // ── Load instructor (for instructor send). ───────────────────────────

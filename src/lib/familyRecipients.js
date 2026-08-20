@@ -29,6 +29,21 @@
 // plus a parity test: _shared/tests/familyRecipientsTwinParity.test.ts fails when
 // they drift. If you change one, change the other.
 
+// program_note_recipients returns FLAT rows; groupFamilyRecipients takes the
+// nested registration shape both callers used to select directly. Mapping lives
+// here, beside the grouping, so the preview and the send cannot map it two ways.
+export function rowsToRegistrationShape(rows) {
+  return ((rows ?? [])).map((r) => ({
+    parent: {
+      id: r?.parent_id,
+      first_name: r?.parent_first_name,
+      last_name: r?.parent_last_name,
+      email: r?.parent_email,
+    },
+    student: { id: r?.student_id, first_name: r?.student_first_name },
+  }));
+}
+
 export function joinChildNames(names) {
   const list = (names ?? []).filter((n) => typeof n === 'string' && n.trim());
   if (list.length === 0) return 'your child';
@@ -72,7 +87,12 @@ export function groupFamilyRecipients(regs) {
   // fixture happened to be written in. Sorting HERE rather than adding ORDER BY to
   // two queries means a third caller cannot forget it. Plain .sort() and not
   // localeCompare: this runs in Deno and in a browser, and the twins must agree.
-  return Array.from(byParent.values()).map((e) => ({
+  // FAMILIES SORTED TOO, for the same reason the children are: the source query
+  // has no ORDER BY. The operator's preview renders "previewing as <first family>",
+  // so an unordered list meant reopening the same modal could preview as a
+  // different family each time, and the audit row's recipient order wandered with
+  // it. By email because it is the one field every recipient has and it is unique.
+  return Array.from(byParent.values()).sort((a, b) => (a.email < b.email ? -1 : a.email > b.email ? 1 : 0)).map((e) => ({
     parent_id: e.parent_id,
     parent_first_name: e.parent_first_name,
     name: e.name,

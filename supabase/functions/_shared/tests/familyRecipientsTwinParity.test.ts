@@ -18,7 +18,11 @@
 // comparison.
 
 import { assertEquals, assert } from 'https://deno.land/std@0.177.0/testing/asserts.ts';
-import { groupFamilyRecipients, joinChildNames } from '../familyRecipients.ts';
+import {
+  groupFamilyRecipients,
+  joinChildNames,
+  rowsToRegistrationShape,
+} from '../familyRecipients.ts';
 
 const EDGE = new URL('../familyRecipients.ts', import.meta.url);
 const WEB = new URL('../../../../src/lib/familyRecipients.js', import.meta.url);
@@ -59,7 +63,7 @@ function bodyLines(source: string, fnName: string): string[] {
 Deno.test('familyRecipients twins have identical bodies', async () => {
   const edge = await Deno.readTextFile(EDGE);
   const web = await Deno.readTextFile(WEB);
-  for (const fn of ['joinChildNames', 'groupFamilyRecipients']) {
+  for (const fn of ['rowsToRegistrationShape', 'joinChildNames', 'groupFamilyRecipients']) {
     assertEquals(
       bodyLines(edge, fn),
       bodyLines(web, fn),
@@ -120,6 +124,23 @@ Deno.test('the same child twice counts once; two children sharing a name count t
   ]);
   assertEquals(twoAlexes[0].children, ['Alex', 'Alex'],
     'deduping by NAME would have hidden a real second child');
+});
+
+// The preview and the send both feed program_note_recipients' FLAT rows through
+// this mapper. If it ever disagreed with the nested shape the two surfaces would
+// silently diverge again, which is the whole reason the RPC exists.
+Deno.test('flat RPC rows group identically to the nested registration shape', () => {
+  const flat = rowsToRegistrationShape([
+    { parent_id: 'p1', parent_first_name: 'Yu', parent_last_name: 'Zhou',
+      parent_email: 'YU@Example.com ', student_id: 's1', student_first_name: 'Ryan' },
+    { parent_id: 'p1', parent_first_name: 'Yu', parent_last_name: 'Zhou',
+      parent_email: 'YU@Example.com ', student_id: 's2', student_first_name: 'Evan' },
+  ]);
+  const fromFlat = groupFamilyRecipients(flat);
+  const fromNested = groupFamilyRecipients([ZHOU('s1', 'Ryan'), ZHOU('s2', 'Evan')]);
+  assertEquals(fromFlat, fromNested);
+  assertEquals(fromFlat.length, 1);
+  assertEquals(fromFlat[0].student_first_name, 'Evan and Ryan');
 });
 
 Deno.test('a parent with no email is skipped, and a missing child name falls back', () => {
