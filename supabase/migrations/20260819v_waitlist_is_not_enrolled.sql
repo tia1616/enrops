@@ -76,7 +76,17 @@ revoke execute on function public.waitlist_invite_lookup(text) from anon;
 revoke execute on function public.waitlist_invite_lookup(text) from authenticated;
 grant execute on function public.waitlist_invite_lookup(text) to service_role;
 
--- ── 1. Campaigns: a waiting family is not enrolled ───────────────────────────
+-- ── 1. Campaigns: a WAITING family stays SKIPPED by skip_enrolled ────────────
+-- REVERSED from this migration's first draft after the review (#10). The draft excluded
+-- 'waitlist' from the skip so waiting families would receive skip_enrolled campaigns. That
+-- is wrong: skip_enrolled campaigns say "register for X now", and a family waitlisted on X
+-- either cannot (still full - that is why they are waiting) or, if a seat just opened,
+-- would jump the auto-invite queue by clicking the campaign's public link first. Neither is
+-- something to email them. So a waitlisted family is treated like an enrolled one HERE -
+-- already engaged with this class, skip the register-now blast - which is exactly what the
+-- original `<> 'cancelled'` did. This is the OPPOSITE call from the platform overview below,
+-- and deliberately so: "should we send this person register-now?" (no for waitlist) is a
+-- different question from "is this an active registration?" (also no for waitlist).
 create or replace function public.get_campaign_recipients(p_campaign_id uuid)
  returns table(id uuid, email text, parent_name text, child_first_name text, child_last_name text, school_name text, city text, zip text, geo_segment text, segments text[])
  language sql
@@ -98,9 +108,11 @@ as $function$
         from registrations rg
         join parents pa on pa.id = rg.parent_id
         where rg.organization_id = mc.organization_id
-          -- 'waitlist' is NOT enrolled. coalesce-to-'' keeps an UNKNOWN status counting as
-          -- enrolled (the safe side: never mail "register now" to someone who paid).
-          and coalesce(rg.status, '') not in ('cancelled', 'waitlist')
+          -- Everyone except a cancelled family counts as "engaged with this class" and is
+          -- skipped: enrolled AND waitlisted alike (see the header - a waiting family must
+          -- not get a register-now blast). coalesce-to-'' keeps an UNKNOWN status on the
+          -- skip side too, which is safe here.
+          and coalesce(rg.status, '') <> 'cancelled'
           and lower(btrim(pa.email)) = lower(btrim(mr.email))
           and (
             rg.program_id::text in (

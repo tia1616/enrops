@@ -327,32 +327,40 @@ serve(async (req) => {
     const { data: seatRows, error: seatErr } = await admin.rpc('program_seat_counts', {
       p_program_ids: allProgramIds,
     });
-    // THE GATE DEGRADES; IT DOES NOT TAKE CHECKOUT DOWN.
+    // THE GATE FAILS CLOSED. If we cannot count seats, we do NOT let checkout through.
     //
-    // This call is unconditional and sits above every other write, so throwing here
-    // 500s EVERY registration on the site - camps included, and families who have
-    // nothing to do with waiting lists - with raw Postgres text in the response body.
-    // The one certain way to trigger it is deploy order: ship this function before
-    // 20260819a lands and `program_seat_counts` does not exist yet.
+    // This changed from fail-open after the 2026-08-20 review. The earlier version skipped
+    // the check on an RPC error, reasoning it was "the status quo". It is not, any more: a
+    // waitlist row now HOLDS a seat (registration_holds_seat), so a checkout that proceeds
+    // uncounted can hand a walk-up the exact place we have promised a waiting family and
+    // emailed them a link to claim - the single harm this whole branch exists to prevent.
     //
-    // So a failure is treated the way the waitlist sweep treats its own: record it,
-    // skip the step, let the rest run. Skipping means no capacity enforcement for as
-    // long as the RPC is broken - which is exactly the behaviour this whole branch is
-    // replacing, so the fallback is the status quo rather than a new hazard, and one
-    // oversold seat an operator can see beats a checkout nobody can complete.
+    // Every registration and ticketing platform refuses rather than oversells when it
+    // cannot verify availability, and the standing rule here is to ship the side that fails
+    // safe. So on a seat-count failure we return the ordinary try-again message - NOT a raw
+    // 500, and NOT "the class is full" (it may not be). This sits ABOVE every parent and
+    // student write, so returning here leaves nothing to unwind and charges nobody.
     //
-    // Deploy order is still migration-first, always. This is the seatbelt, not the plan.
+    // The failure this guards against is a transient RPC error or a deploy that shipped this
+    // function before its migration. Deploy order is still migration-first; this is the
+    // seatbelt for the moment it is not, and the cost of the seatbelt is a family seeing
+    // "try again in a moment" for a few seconds, which is recoverable. An oversold promised
+    // seat is not.
     if (seatErr) {
-      console.error('[create-registration] CAPACITY GATE UNAVAILABLE, allowing checkout unchecked', seatErr.message);
+      console.error('[create-registration] capacity count unavailable, refusing checkout (fail-closed)', seatErr.message);
+      return json({
+        error: 'We could not confirm a spot just now. Please try again in a moment.',
+      }, 503);
     }
     const seatsById = new Map(
       ((seatRows || []) as Array<{ program_id: string; max_capacity: number | null; seats_taken: number }>)
         .map((s) => [s.program_id, s]),
     );
-    const atCapacity = seatErr ? [] : allProgramIds.filter((id) => {
+    const atCapacity = allProgramIds.filter((id) => {
       const s = seatsById.get(id);
       // No row back for a program we asked about is a program we cannot prove has
-      // room. Same rule as the publish check above: refuse rather than quietly skip.
+      // room - refuse rather than quietly admit. Consistent with the fail-closed rule
+      // above: an unverifiable seat is treated as unavailable, never as free.
       if (!s) return true;
       if (s.max_capacity === null || Number(s.max_capacity) <= 0) return false;
       // The one held seat, credited only to its own program. `invite` is non-null only

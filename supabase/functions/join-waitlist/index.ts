@@ -262,6 +262,14 @@ serve(async (req) => {
         .from('students')
         .insert({
           organization_id: org.id,
+          // parent_id, so the child is actually TIED to the family. Every other student
+          // writer sets this (create-registration does), and leaving it null is why a
+          // waitlisted child was invisible in the family portal after the family accepted a
+          // spot: parents_see_own_students keys on students.parent_id, and invite-parents /
+          // the pickup-authorization RPC both resolve the child through it. A waitlist join
+          // is a real registration action by a known parent, so the child belongs to them
+          // from the moment they join, not only once they pay.
+          parent_id: parentId,
           // students.last_name is NOT NULL too - same reason as the parent insert above.
           first_name: childFirst,
           last_name: childLast,
