@@ -284,8 +284,11 @@ serve(async (req) => {
     // --- The atomic bit ---
     // waitlist_join re-validates org / open / ours-to-sell / actually-full and assigns
     // the position under a per-program lock. Its errors are meaningful, so they are
-    // translated rather than leaked: P0001 = the class has room (register instead),
-    // 42501 = not a class we sell publicly.
+    // translated rather than leaked: WL003 = the class has room (register instead),
+    // 42501 = not a class we sell publicly. WL003 is a PRIVATE code (20260819w), NOT the
+    // default P0001: any OTHER bare exception from the RPC or a trigger it fires now falls
+    // through to the generic throw below and the family sees "try again", never the
+    // confident-and-wrong "that class has room after all".
     const { data: joined, error: joinErr } = await admin.rpc('waitlist_join', {
       p_program_id: program_id,
       p_parent_id: parentId,
@@ -295,7 +298,7 @@ serve(async (req) => {
 
     if (joinErr) {
       const code = (joinErr as { code?: string }).code;
-      if (code === 'P0001') {
+      if (code === 'WL003') {
         // The gate proves the class HAS ROOM RIGHT NOW. It does not prove a seat just
         // opened: the same branch fires for a page left open while the operator raised
         // the capacity, and for a stale back-button render of a class that was never

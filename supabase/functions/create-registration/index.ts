@@ -625,41 +625,65 @@ serve(async (req) => {
       studentIdByChildIndex.set(child.child_index, studentId);
 
       // --- Customizable registration: structured people → student_contacts ---
-      // ONLY for a freshly-inserted student. A reused (invited) child keeps the contacts
-      // they already have - see the reuse note above: replacing them on this public path
-      // would wipe a stored do-not-release list. A brand-new student has none yet, so this
-      // insert is purely additive. Written BEFORE checkout, so a failure here fails the
-      // registration with no charge (never a paid enrollment missing its pickup data).
-      if (!reuseStudentId) {
-        const contactRows: any[] = [];
-        const g2 = parent?.guardian2;
-        if (g2 && (g2.first_name || '').trim()) {
+      // Written BEFORE checkout, so a failure here fails the registration with no charge
+      // (never a paid enrollment missing its pickup/release data).
+      //
+      // The pickup, do-not-release and guardian2 people the family entered on THIS form.
+      const contactRows: any[] = [];
+      const g2 = parent?.guardian2;
+      if (g2 && (g2.first_name || '').trim()) {
+        contactRows.push({
+          student_id: studentId, organization_id: orgId, role: 'guardian',
+          first_name: g2.first_name.trim(), last_name: (g2.last_name || '').trim() || null,
+          phone: (g2.phone || '').trim() || null, email: (g2.email || '').trim() || null,
+          sort_order: 0,
+        });
+      }
+      (child.authorized_pickup || []).forEach((p: any, i: number) => {
+        if ((p?.first_name || '').trim()) {
           contactRows.push({
-            student_id: studentId, organization_id: orgId, role: 'guardian',
-            first_name: g2.first_name.trim(), last_name: (g2.last_name || '').trim() || null,
-            phone: (g2.phone || '').trim() || null, email: (g2.email || '').trim() || null,
-            sort_order: 0,
+            student_id: studentId, organization_id: orgId, role: 'authorized_pickup',
+            first_name: p.first_name.trim(), last_name: (p.last_name || '').trim() || null,
+            phone: (p.phone || '').trim() || null, sort_order: i,
           });
         }
-        (child.authorized_pickup || []).forEach((p: any, i: number) => {
-          if ((p?.first_name || '').trim()) {
-            contactRows.push({
-              student_id: studentId, organization_id: orgId, role: 'authorized_pickup',
-              first_name: p.first_name.trim(), last_name: (p.last_name || '').trim() || null,
-              phone: (p.phone || '').trim() || null, sort_order: i,
+      });
+      (child.do_not_release || []).forEach((p: any, i: number) => {
+        if ((p?.first_name || '').trim()) {
+          contactRows.push({
+            student_id: studentId, organization_id: orgId, role: 'do_not_release',
+            first_name: p.first_name.trim(), last_name: (p.last_name || '').trim() || null,
+            sort_order: i,
+          });
+        }
+      });
+      if (contactRows.length) {
+        // A REUSED (invited) child needs these written too - the earlier version skipped
+        // the write entirely for reused children to avoid wiping a stored list, but a
+        // waitlist-origin child has NO stored list: join-waitlist writes zero
+        // student_contacts. So skipping discarded the custody/pickup people the family
+        // entered on the accept form - the mirror image of the wipe it was avoiding, and
+        // worse, because a dropped do-not-release person is a safety fact.
+        //
+        // So: for a fresh student the list is purely additive (they have none yet). For a
+        // reused student we insert ONLY when they currently have none, which covers the
+        // waitlist case and still refuses to clobber a list some future reuse path might
+        // have populated. Never a blind delete-then-insert on a public endpoint.
+        let writeContacts = true;
+        if (reuseStudentId) {
+          const { count, error: cntErr } = await admin
+            .from('student_contacts')
+            .select('id', { count: 'exact', head: true })
+            .eq('student_id', studentId);
+          if (cntErr) throw new Error(`student_contacts precheck: ${cntErr.message}`);
+          writeContacts = (count ?? 0) === 0;
+          if (!writeContacts) {
+            console.warn('[create-registration] reused child already has contacts, leaving them untouched', {
+              student_id: studentId,
             });
           }
-        });
-        (child.do_not_release || []).forEach((p: any, i: number) => {
-          if ((p?.first_name || '').trim()) {
-            contactRows.push({
-              student_id: studentId, organization_id: orgId, role: 'do_not_release',
-              first_name: p.first_name.trim(), last_name: (p.last_name || '').trim() || null,
-              sort_order: i,
-            });
-          }
-        });
-        if (contactRows.length) {
+        }
+        if (writeContacts) {
           const { error: cErr } = await admin.from('student_contacts').insert(contactRows);
           if (cErr) throw new Error(`student_contacts insert: ${cErr.message}`);
         }

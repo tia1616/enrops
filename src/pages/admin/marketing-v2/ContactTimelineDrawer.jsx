@@ -144,7 +144,7 @@ async function fetchFamily(contact, orgId) {
       // Kept in the timeline rather than filtered out, deliberately: that this family
       // wanted a place and did not get one is exactly the kind of thing the person reading
       // a contact timeline needs to know.
-      // COPY NOT YET APPROVED BY JESSICA.
+      // Copy approved by Jessica 2026-08-20.
       const waitlisted = r.status === "waitlist";
       const past = !cancelled && !waitlisted && r.starts_at && new Date(r.starts_at) < now;
       events.push({

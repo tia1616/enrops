@@ -2762,7 +2762,7 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
                           is what explains a full class whose enrolled count is lower than
                           its cap - the difference between the two numbers is the feature
                           (20260819j), and it needed somewhere to be visible.
-                          COPY NOT YET APPROVED BY JESSICA. */}
+                          Copy approved by Jessica 2026-08-20. */}
                       <td style={td}>{enr ? <>
                         <span style={{ fontWeight: 600, color: INK }}>{enr.enrolled}</span><span style={{ color: MUTED }}> / {enr.max ?? "—"}</span>
                         {enr.seatsTaken > enr.enrolled && (

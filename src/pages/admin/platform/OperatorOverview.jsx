@@ -55,7 +55,7 @@ function stageOf(r) {
   // 20260819v a waitlist row counts in neither active nor cancelled, so without this it
   // fell through to the "all cancelled" label below and read as failure on the one screen
   // used to decide who needs help. Tested before "all_cancelled" because it is the
-  // hopeful reading of the same active=0 row. COPY NOT YET APPROVED BY JESSICA.
+  // hopeful reading of the same active=0 row. Copy approved by Jessica 2026-08-20.
   if ((r.waitlist_registration_count ?? 0) > 0) return { key: "waitlist_only", label: "Waiting list only", color: AMBER };
   if ((r.registration_count ?? 0) > 0) return { key: "all_cancelled", label: "Registrations all cancelled", color: AMBER };
   return { key: "no_regs", label: "Published, no registrations", color: AMBER };
@@ -228,7 +228,7 @@ export default function OperatorOverview() {
             a tenant with 5 waiting and 0 paid showed "0 not cancelled" beside a count of 5,
             reading as "all 5 cancelled" when none were. Break the breakdown out by the three
             real states, and only show the parts that are non-zero.
-            COPY NOT YET APPROVED BY JESSICA. */}
+            Copy approved by Jessica 2026-08-20. */}
         <td style={num}>
           {r.registration_count}
           {r.registration_count !== r.active_registration_count && (
