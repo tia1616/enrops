@@ -11,7 +11,7 @@
 // STAGE 2026-06-02: scaffold + Step 1 (pickers, curriculum-based pre-fills,
 // Next-button validation). Steps 2 + 3 land next.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import ProgramPrereqEmptyState from "./ProgramPrereqEmptyState.jsx";
@@ -227,7 +227,23 @@ export default function ProgramWizardNew() {
   // happen in the curriculum-change handler.
   const [currentStep, setCurrentStep] = useState(1);
   const [formData, setFormData] = useState(() => ({ ...INITIAL_FORM_DATA }));
-  const [prefilledFromCurriculum, setPrefilledFromCurriculum] = useState(false);
+  // What the curriculum pick ACTUALLY filled, as display labels — not a boolean.
+  // It was a boolean behind copy that named three specific things ("number of
+  // sessions, age or grade range, and class size"); sessions are no longer taken
+  // from a curriculum at all and the other two are skipped once the operator has
+  // typed their own, so a boolean could only produce a sentence that was
+  // sometimes false. An array cannot: the banner lists what happened, and renders
+  // nothing when nothing did. NOTE for anyone editing this: `[]` is TRUTHY in JS,
+  // so the render guard must test `.length`, never the value.
+  const [prefilledFields, setPrefilledFields] = useState([]);
+  // Fields the operator has actually edited. handleCurriculumChange consults this
+  // so re-picking a curriculum cannot overwrite a value they typed - which is
+  // what the comment above handleCurriculumChange has always PROMISED ("never
+  // overwrite something they've already typed") and what the code did not do:
+  // grades, ages and capacity were re-asserted from the curriculum on every pick.
+  // A ref, not state, because nothing renders from it and a stale closure inside
+  // the setFormData updater would silently re-enable the overwrite.
+  const touchedFields = useRef(new Set());
 
   // Step 2 derived state — live preview of session dates, district-calendar
   // soft warning, and same-loc/day/time conflict soft warning.
@@ -471,35 +487,73 @@ export default function ProgramWizardNew() {
   ]);
 
   // When provider picks a curriculum: pre-fill defaults from that curriculum.
-  // Provider can edit anything in Step 2. We only auto-fill if the field is
-  // still at its default — never overwrite something they've already typed.
+  // Provider can edit anything in Step 2. We only auto-fill a field the operator
+  // has not edited — never overwrite something they've already typed.
+  //
+  // THE COMMENT ABOVE USED TO BE FALSE, for six of the seven fields. Only
+  // short_description honoured it (`f.short_description || ...`); grades, ages
+  // and capacity were re-asserted from the curriculum on EVERY pick, so an
+  // operator who typed their own values and then changed their mind about the
+  // curriculum silently lost them. `touchedFields` is now the signal, because a
+  // default is indistinguishable from a deliberate choice by value alone:
+  // grade_min/grade_max default to 0/5, which is a real, selectable range.
+  //
+  // SESSION COUNT IS NO LONGER PREFILLED AT ALL — Jessica, 2026-08-20: "we should
+  // not tie the actual program session number to curriculum. it varies across
+  // schools." A curriculum is a set of lessons; how many of them a given school
+  // actually runs is a property of that school's term, not of the material. Prod
+  // already proved they diverge: a J2S class carrying a 10-lesson curriculum runs
+  // 8 dates. The operator's typed count (or the derived count in range mode) is
+  // the only authority, and `derive_program_session_dates` reads session_count.
   function handleCurriculumChange(curriculumId) {
     const cur = curricula.find((c) => c.id === curriculumId);
     if (!cur) {
       setFormData((f) => ({ ...f, curriculum_id: null, curriculum: "" }));
-      setPrefilledFromCurriculum(false);
+      setPrefilledFields([]);
       return;
     }
+    const touched = touchedFields.current;
+    // The audience is prefilled as ONE UNIT. Filling grades while leaving a typed
+    // age range (or vice versa) would produce a row asserting both, and the house
+    // rule is grades OR ages, never both — enforced by age_format, which these
+    // five fields share. So if the operator has touched ANY of them, the whole
+    // audience is theirs and the curriculum does not get a say in it.
+    const audienceKeys = ["age_format", "grade_min", "grade_max", "age_min", "age_max"];
+    const audienceIsTheirs = audienceKeys.some((k) => touched.has(k));
+    // Prefer grade range if either field is set; fall back to age range. Hoisted
+    // out of the updater because the banner below has to report what was filled,
+    // and a figure shown to the operator must be computed once, not re-derived.
+    const hasGrade = cur.grade_min != null || cur.grade_max != null;
+    const hasAge = cur.age_range_min != null || cur.age_range_max != null;
+    // Only count a field as filled if it BOTH was allowed to change and had a
+    // value to change to — a curriculum with no grades and no ages fills nothing,
+    // and saying otherwise is the same untrue-sentence class as the old copy.
+    const filled = [];
+    if (!audienceIsTheirs && (hasGrade || hasAge)) filled.push("age or grade range");
+    if (!touched.has("max_capacity") && cur.class_size_max != null) filled.push("class size");
     setFormData((f) => {
-      // Prefer grade range if either field is set; fall back to age range.
-      const hasGrade = cur.grade_min != null || cur.grade_max != null;
-      const hasAge = cur.age_range_min != null || cur.age_range_max != null;
       const ageFormat = hasGrade ? "grade" : hasAge ? "age" : f.age_format;
+      const audience = audienceIsTheirs
+        ? {}
+        : {
+            age_format: ageFormat,
+            grade_min: hasGrade ? (cur.grade_min ?? f.grade_min) : f.grade_min,
+            grade_max: hasGrade ? (cur.grade_max ?? f.grade_max) : f.grade_max,
+            age_min: hasAge ? cur.age_range_min : f.age_min,
+            age_max: hasAge ? cur.age_range_max : f.age_max,
+          };
       return {
         ...f,
         curriculum_id: cur.id,
         curriculum: cur.name,
         short_description: f.short_description || cur.short_description || "",
-        session_count: cur.session_count ?? f.session_count,
-        age_format: ageFormat,
-        grade_min: hasGrade ? (cur.grade_min ?? f.grade_min) : f.grade_min,
-        grade_max: hasGrade ? (cur.grade_max ?? f.grade_max) : f.grade_max,
-        age_min: hasAge ? cur.age_range_min : f.age_min,
-        age_max: hasAge ? cur.age_range_max : f.age_max,
-        max_capacity: cur.class_size_max ?? f.max_capacity,
+        ...audience,
+        max_capacity: touched.has("max_capacity")
+          ? f.max_capacity
+          : (cur.class_size_max ?? f.max_capacity),
       };
     });
-    setPrefilledFromCurriculum(true);
+    setPrefilledFields(filled);
   }
 
   function handleLocationChange(locationId) {
@@ -553,6 +607,10 @@ export default function ProgramWizardNew() {
   // Generic field setter for Step 2 inputs. Coerces empty strings → null for
   // optional numeric fields.
   function handleField(field, value) {
+    // Record the edit BEFORE the state write: this is the only signal that a
+    // value is the operator's rather than a default, and the curriculum prefill
+    // reads it to decide what it may not touch.
+    touchedFields.current.add(field);
     setFormData((f) => ({ ...f, [field]: value }));
   }
 
@@ -796,7 +854,7 @@ export default function ProgramWizardNew() {
             formData={formData}
             curricula={curricula}
             locations={locations}
-            prefilledFromCurriculum={prefilledFromCurriculum}
+            prefilledFields={prefilledFields}
             onField={handleField}
             onCurriculumChange={handleCurriculumChange}
             onLocationChange={handleLocationChange}
@@ -969,7 +1027,7 @@ function Step1WhatAndWhere({
   formData,
   curricula,
   locations,
-  prefilledFromCurriculum,
+  prefilledFields = [],
   onField,
   onCurriculumChange,
   onLocationChange,
@@ -1072,14 +1130,18 @@ function Step1WhatAndWhere({
         </div>
       )}
 
-      {prefilledFromCurriculum && (
+      {/* `.length`, not truthiness — an empty array is truthy, and the whole point
+          of this banner is that it must not appear when nothing was filled. */}
+      {prefilledFields.length > 0 && (
         <div style={{
           marginTop: 4, padding: "10px 12px",
           background: SOFT_GREEN_BG, borderRadius: 8,
           color: SOFT_GREEN_INK, fontSize: 13, lineHeight: 1.5,
         }}>
-          I pre-filled some defaults from this offering — number of sessions,
-          age or grade range, and class size. You can edit them in the next step.
+          I pre-filled {prefilledFields.join(" and ")} from this offering. You can
+          edit {prefilledFields.length === 1 ? "it" : "them"} in the next step.
+          {" "}Number of sessions is yours to set — it varies by school, so it
+          never comes from an offering.
         </div>
       )}
     </div>
