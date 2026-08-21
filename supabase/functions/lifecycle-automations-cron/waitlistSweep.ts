@@ -55,12 +55,18 @@ export interface WaitlistSweepResult {
   skipped_no_seat: number;
   skipped_quiet_hours: number;
   /**
-   * There was a seat, but every waiting family already holds a live offer or is
-   * mid-checkout. Successor to skipped_already_invited: an offer is no longer blocked by
-   * the family at the HEAD of the queue being mid-decision (waitlist_offer_next skips
-   * them and looks further down), so this now means the whole queue is busy.
+   * waitlist_offer_next had nobody to offer to. Successor to skipped_already_invited: an
+   * offer is no longer blocked by the family at the HEAD of the queue being mid-decision
+   * (waitlist_offer_next skips them and looks further down), so reaching this means the
+   * whole queue was unofferable.
+   *
+   * NAMED FOR WHAT IT PROVES, NOT WHAT IT USUALLY MEANS. It is normally "everyone waiting
+   * already holds an offer or is mid-checkout" - but the program list is snapshotted
+   * before the expiry step, so a program whose entire queue expiry has just cancelled is
+   * still visited and lands here with nobody waiting at all. Both are "nobody offerable";
+   * only one is "all offered", and a counter must not assert the difference it cannot see.
    */
-  skipped_all_offered: number;
+  skipped_nobody_offerable: number;
   /** Nobody offerable AND a lapsed invite that expiry has not cleared yet (WL002). */
   skipped_lapsed_awaiting_expiry: number;
   /**
@@ -93,7 +99,7 @@ export async function runWaitlistSweep(
   const now = opts.now ?? new Date();
   const out: WaitlistSweepResult = {
     expired: 0, offered: 0, emailed: 0, claims_released: 0,
-    skipped_no_seat: 0, skipped_quiet_hours: 0, skipped_all_offered: 0,
+    skipped_no_seat: 0, skipped_quiet_hours: 0, skipped_nobody_offerable: 0,
     skipped_lapsed_awaiting_expiry: 0, skipped_release_failed: 0, hit_offer_cap: 0,
     unsent_rolled_back: 0, lapse_notices_sent: 0,
     errors: [],
@@ -347,8 +353,10 @@ export async function runWaitlistSweep(
       }
 
       const row = Array.isArray(offer) ? offer[0] : offer;
-      // No row means nobody in this queue is offerable: everyone waiting is already
-      // holding an offer or is mid-checkout. Not an error, and nothing more to do here.
+      // No row means nobody in this queue is offerable - usually because everyone waiting
+      // already holds an offer or is mid-checkout, but also when expiry has just cancelled
+      // the whole queue (the program list predates that step). Not an error either way,
+      // and nothing more to do here.
       if (!row) return 'nobody_offerable';
 
       out.offered += 1;
@@ -505,7 +513,7 @@ export async function runWaitlistSweep(
         // the ordinary way the loop ends - the seats ran out because we just filled them -
         // and counting that as "skipped, no seat" would read as a class we never served.
         if (outcome === 'no_seat' && offeredHere === 0) out.skipped_no_seat += 1;
-        if (outcome === 'nobody_offerable' && offeredHere === 0) out.skipped_all_offered += 1;
+        if (outcome === 'nobody_offerable' && offeredHere === 0) out.skipped_nobody_offerable += 1;
         // Always counted: expiry being behind is worth seeing whether or not we offered.
         if (outcome === 'lapsed_awaiting_expiry') out.skipped_lapsed_awaiting_expiry += 1;
         stopped = true;
