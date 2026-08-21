@@ -892,44 +892,80 @@ serve(async (req) => {
     // DO NOT claim this function is atomic. When the atomic-checkout P0 is built,
     // fold the capacity check into that single transaction and delete this note.
 
-    // SPEND THE INVITE, now that the real registration rows exist.
+    // CLAIM THE INVITE - do NOT spend it. This is the fix for "abandoning Stripe must
+    // not cost the family their place" (Jessica, 2026-08-21).
     //
-    // AFTER the writes, deliberately. If this ran first and the registration then failed,
-    // the family would have lost their place AND have no booking - the one outcome worse
-    // than a failed checkout. Running it here means the worst case is a spent-looking
-    // seat that is genuinely theirs.
+    // THIS USED TO CALL waitlist_invite_consume, which cancelled the waitlist row, cleared
+    // the token and nulled waitlist_position - all of that HERE, before payment. So the
+    // moment a family clicked their invite they were off the list, and if they then closed
+    // the Stripe tab their pending row aged out after 24h and they had no place, no
+    // position and a dead link. The window is what should expire, never the place.
     //
-    // Wrapped: a failure here must not turn a completed registration into a 500. The
-    // family is registered either way. What is left behind is a cancelled-status waitlist
-    // row that still carries a token, which the expiry sweep will clear and which cannot
-    // be replayed to gain a second seat (the gate credits one seat, and their new
-    // registration now occupies it).
+    // Claiming instead marks the waitlist row as "a real registration is holding this seat
+    // for us": the row stops holding a seat (so the family never holds two at once - see
+    // registration_holds_seat, which is per-row and cannot work this out for itself) while
+    // keeping its token, its invited_at and its POSITION. Consuming now happens on payment,
+    // in stripe-webhook. If they abandon, the sweep releases the claim once the pending row
+    // stops holding, and the row goes back to holding its own seat at its own position.
     //
-    // GATED ON `invite`, which is now non-null ONLY when the token resolved to exactly one
+    // STILL AFTER THE WRITES, for the same reason as before: if this ran first and the
+    // registration then failed, the family would have a claim pointing at nothing.
+    //
+    // GATED ON `invite`, which is non-null ONLY when the token resolved to exactly one
     // child in THIS cart (see the binding above). A family who clicked their invite but
-    // then checked out for a different class had `invite` set to null there, so their
-    // waitlist row is NOT cancelled here - they keep their place. This is the fix for the
-    // consume-fires-when-the-invite-does-not-apply defect; it is structural, not a second
-    // condition to remember.
+    // then checked out for a different class had `invite` set to null there, so nothing is
+    // claimed and they keep their place untouched.
     if (invite) {
       try {
-        const { data: spent, error: spendErr } = await admin
-          .rpc('waitlist_invite_consume', { p_token: waitlistToken });
-        if (spendErr) {
-          console.error('[create-registration] waitlist_invite_consume failed', spendErr.message);
-        } else if (spent === false) {
-          // Two clicks on the same emailed link. The second registration is real and
-          // stays; this only records that the queue was already tidied.
-          console.warn('[create-registration] waitlist invite was already spent', {
+        // THE CLAIM MUST NAME THE REGISTRATION THAT IS ACTUALLY HOLDING THE SEAT, which is
+        // the row for the invite's program AND the invite's child - not just "one of the
+        // rows we made". A cart can hold several children and several programs, and
+        // pointing the claim at a sibling's row would release the seat the moment THAT
+        // registration resolved, while this child's checkout was still live. Scoped to the
+        // ids created by this request so it cannot pick up an older row.
+        const { data: claimed, error: findErr } = await admin
+          .from('registrations')
+          .select('id')
+          .in('id', registrationIds)
+          .eq('program_id', invite.program_id)
+          .eq('student_id', invite.student_id)
+          .limit(1)
+          .maybeSingle();
+
+        if (findErr || !claimed?.id) {
+          // Should be unreachable given the binding above. Leaving the invite unclaimed is
+          // the SAFE failure: the waitlist row keeps holding its seat while the pending row
+          // holds one too, so the class reads one fuller than it is. That under-sells by a
+          // seat, which an operator can see - the opposite mistake would over-sell one.
+          console.error('[create-registration] could not find the registration to claim; invite left unclaimed', {
             registration_id: invite.registration_id,
+            program_id: invite.program_id,
+            error: findErr?.message ?? 'no matching row',
           });
         } else {
-          console.log('[create-registration] waitlist invite consumed', {
-            registration_id: invite.registration_id,
-          });
+          const { data: didClaim, error: claimErr } = await admin
+            .rpc('waitlist_invite_claim', {
+              p_token: waitlistToken,
+              p_registration_id: claimed.id,
+            });
+          if (claimErr) {
+            console.error('[create-registration] waitlist_invite_claim failed', claimErr.message);
+          } else if (didClaim === false) {
+            // The token stopped being a live offer between the lookup and here - expired,
+            // or already consumed by a payment. The registration is real and stays; the
+            // family simply has no claim to record.
+            console.warn('[create-registration] waitlist invite was no longer claimable', {
+              registration_id: invite.registration_id,
+            });
+          } else {
+            console.log('[create-registration] waitlist invite claimed, place preserved', {
+              waitlist_registration_id: invite.registration_id,
+              held_by_registration_id: claimed.id,
+            });
+          }
         }
       } catch (e) {
-        console.error('[create-registration] waitlist_invite_consume threw', (e as Error).message);
+        console.error('[create-registration] waitlist_invite_claim threw', (e as Error).message);
       }
     }
 
