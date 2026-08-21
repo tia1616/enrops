@@ -11,7 +11,7 @@
 // a fix applied only to the markup would ship a lie to every plaintext client.
 
 import { assertEquals, assertStringIncludes } from 'https://deno.land/std@0.177.0/testing/asserts.ts';
-import { buildWaitlistInvite } from '../waitlistEmail.ts';
+import { buildWaitlistConfirmation, buildWaitlistInvite } from '../waitlistEmail.ts';
 
 const brand = {
   org_id: 'x',
@@ -83,5 +83,41 @@ Deno.test('waitlist invite says what happens after the deadline without naming a
   for (const [half, body] of [['html', built.html], ['text', built.text]] as Array<[string, string]>) {
     assertStringIncludes(body, 'released', `${half} does not say the place is released after the deadline`);
     assertStringIncludes(body, 'general registration', `${half} does not say where the place goes`);
+  }
+});
+
+// ── The JOIN confirmation, which is a different email and had the same defect ──
+//
+// Position 1 used to be told "we will offer it to you before anyone else". That is an
+// ORDERING promise, and two seats offered on one tick break it: the top family is offered
+// a place at the same moment as position 2, not before them.
+
+function confirmation(position: number) {
+  return buildWaitlistConfirmation({
+    brand,
+    childFirstName: 'Wanda',
+    programName: 'Game Design Studio',
+    siteName: 'Maplewood Elementary',
+    whenText: 'Wednesdays 3:45 PM',
+    position,
+  });
+}
+
+Deno.test('waitlist confirmation promises no ordering it cannot keep', () => {
+  const built = confirmation(1);
+  for (const [half, body] of [['html', built.html], ['text', built.text]] as Array<[string, string]>) {
+    const lower = body.toLowerCase();
+    assertEquals(lower.includes('before anyone else'), false, `${half} promises they are offered a place before anyone else`);
+    // The reassurance itself must survive - dropping the promise must not leave the
+    // family at the top of a list with nothing said about what that gets them.
+    assertStringIncludes(lower, 'first in line', `${half} no longer tells position 1 they are first in line`);
+  }
+});
+
+Deno.test('waitlist confirmation still gives a family further down their real number', () => {
+  const built = confirmation(3);
+  for (const [half, body] of [['html', built.html], ['text', built.text]] as Array<[string, string]>) {
+    assertStringIncludes(body, 'number 3', `${half} lost the queue number`);
+    assertEquals(body.toLowerCase().includes('first in line'), false, `${half} tells position 3 they are first`);
   }
 });

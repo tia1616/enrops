@@ -44,7 +44,13 @@ export interface BuiltEmail {
 function positionSentence(childFirst: string, position: number): string {
   const who = childFirst || 'Your child';
   if (position === 1) {
-    return `${who} is first in line, so if a place opens up we will offer it to you before anyone else.`;
+    // "BEFORE ANYONE ELSE" HAD TO GO. Being first in line is still true and is still
+    // worth saying - but that phrase promised an ORDERING we no longer guarantee: a
+    // class that frees two seats now offers them to positions 1 and 2 on the same tick,
+    // so the family at the top is offered a place at the same moment as somebody else,
+    // not before them. What survives is the part that is actually true and is the whole
+    // reassurance anyway: the next place that opens is theirs.
+    return `${who} is first in line, so we will offer you the next place that opens up.`;
   }
   return `${who} is number ${position} on the list.`;
 }
