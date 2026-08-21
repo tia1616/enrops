@@ -48,11 +48,29 @@ serve(async (req: Request) => {
     }
 
     const supabase = adminClient();
-    // If document_version is provided, fetch that exact version. If not,
-    // fetch the most recent row for the (org, document_key) pair. Today the
-    // table has exactly one version per key so this trivially returns it;
-    // when we add a v2 alongside a v1, the latest-created wins. (We can
-    // swap to an explicit "active" flag if/when versioned drafts are needed.)
+    // If document_version is provided, fetch that exact version. If not, fetch
+    // the most recent row for the (org, document_key) pair — latest-created wins.
+    //
+    // THIS COMMENT USED TO SAY "today the table has exactly one version per key
+    // so this trivially returns it". That stopped being true on 2026-08-12, when
+    // providers began authoring their own documents: staging's demo tenant now
+    // holds FOUR versions of its contractor agreement. The behaviour is still
+    // correct — latest-created is the live one, exactly as InstructorDocuments
+    // documents on the writing side — but a comment describing data that has
+    // moved on is how a future reader talks themselves out of checking.
+    //
+    // `legal_documents.replaced_by` EXISTS AND IS VESTIGIAL. Nothing in the repo
+    // reads or writes it; it survives from the era when documents were seeded by
+    // migration. Do not "fix" this query to use it without wiring the publish path
+    // first — a half-maintained chain is worse than an honest ordering, because
+    // every row would look current.
+    //
+    // No secondary sort on purpose. The obvious tiebreak is id, but ids are random
+    // uuids, so it would turn a vanishingly rare non-deterministic answer into a
+    // stable WRONG one — and document_version cannot be ordered as a string
+    // ("v10" sorts below "v2", and older orgs carry "v2.0_2026-06-15" instead).
+    // Publishing is guarded against double-submit on the writing side, which is
+    // where the same-timestamp case would have come from.
     let query = supabase
       .from('legal_documents')
       .select('title, body_text, document_version')

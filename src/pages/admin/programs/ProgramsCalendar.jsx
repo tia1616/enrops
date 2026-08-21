@@ -181,48 +181,182 @@ export default function ProgramsCalendar() {
     // afterwards when the Publish control has turned into "Connect Stripe".
     const target = programs.find((p) => p.id === programId);
     const oneWay = publishBlockedByStripe(org, target);
-    const question = oneWay
-      ? "Unpublish this program? It'll be hidden from the public catalog and stop appearing in marketing campaigns. Existing registrations are unaffected.\n\nHeads up: because Stripe isn't connected, you won't be able to publish it again until it is."
-      : "Unpublish this program? It'll be hidden from the public catalog and stop appearing in marketing campaigns. Existing registrations are unaffected.";
+    // TWO WAYS IN, TWO SETS OF WORDS. This writes status='draft', which is both
+    // "unpublish a live class" and "reopen a cancelled one" — so the Reopen
+    // control on a cancelled class reuses it rather than threading a second
+    // action through six components. Reusing the FUNCTION is right; inheriting
+    // its COPY was not. Caught by clicking Reopen on staging and reading the
+    // dialog: a cancelled class was asked "Unpublish this program? It'll be
+    // hidden from the public catalog" — it is not published, it is already
+    // hidden, and the sentence describes the opposite of what the button does.
+    const fromCancelled = target?.status === "cancelled";
+    const stripeNote = oneWay
+      ? "\n\nHeads up: because Stripe isn't connected, you won't be able to publish it until it is."
+      : "";
+    const question = fromCancelled
+      // Draft is NOT excluded from the instructor schedule board (it filters only
+      // cancelled and archived), so this genuinely does come back there — which is
+      // the half an operator cares about after cancelling one by mistake.
+      ? `Reopen this class as a draft? It won't be offered to families until you publish it, and it'll come back on your instructor schedule.${stripeNote}`
+      : `Unpublish this program? It'll be hidden from the public catalog and stop appearing in marketing campaigns. Existing registrations are unaffected.${stripeNote}`;
     if (!confirm(question)) return;
     const { error: unpubErr } = await supabase
       .from("programs")
       .update({ status: "draft" })
       .eq("id", programId);
     if (unpubErr) {
-      alert(`Couldn't unpublish: ${unpubErr.message}`);
+      alert(`Couldn't ${fromCancelled ? "reopen" : "unpublish"}: ${unpubErr.message}`);
       return;
     }
     setPrograms((prev) => prev.map((p) => (p.id === programId ? { ...p, status: "draft" } : p)));
   }
 
-  // Delete a program. Hard-blocked when there are active (non-cancelled)
-  // registrations — those families would lose the link to their enrollment.
-  // Operator must either cancel the registrations first or just unpublish.
+  // Cancel a class: it stops being offered, drops off the instructor schedule
+  // board (which already excludes 'cancelled'), and every registration, refund
+  // and payment record stays attached to it.
+  //
+  // NEW ACTION. Nothing in the product could cancel a class before this — the two
+  // cancelled classes on production were set by hand in SQL. 'cancelled' is an
+  // existing allowed value of programs_status_check, so this needs no migration
+  // and no new status for the rest of the system to learn.
+  async function cancelProgram(programId) {
+    const { error: cancelErr } = await supabase
+      .from("programs")
+      .update({ status: "cancelled" })
+      .eq("id", programId);
+    if (cancelErr) {
+      alert(`Couldn't cancel: ${cancelErr.message}`);
+      return;
+    }
+    setPrograms((prev) => prev.map((p) => (p.id === programId ? { ...p, status: "cancelled" } : p)));
+  }
+
+  // Remove a class from the schedule — by deleting it when the database will
+  // genuinely allow that, and by cancelling it when it will not.
+  //
+  // THE GATE AND THE DATABASE USED TO DISAGREE, and Jessica hit it on Forest Park
+  // Monday. This check excluded cancelled registrations; the FOREIGN KEY on
+  // registrations.program_id does not. Her one blocker was a registration she had
+  // already cancelled and refunded herself — so the check passed, the DELETE was
+  // attempted, Postgres refused it, and she was shown the raw constraint text.
+  // She did everything right and the screen told her about a table.
+  //
+  // Deleting is not the answer even where it looks possible: that row holds a
+  // $240 refund. Erasing it to tidy a board is the wrong trade, and it is why the
+  // "only history left" case CANCELS rather than force-deletes.
+  //
+  // Three states, three sentences, none claiming another's:
+  //   families still hold a place -> refuse; refund or cancel them first
+  //   families still waiting     -> refuse; take them off the list first
+  //   only history attached      -> delete is impossible; offer to cancel
+  //   nothing attached at all    -> delete, as before
   async function deleteProgram(programId) {
     // Real-time registration check, not a stale enrollment count from page load.
-    const { data: regRows, error: regErr } = await supabase
-      .from("registrations")
-      .select("id", { count: "exact" })
-      .eq("program_id", programId)
-      // Waiting children are not enrolled, so they must not inflate this count.
-      .neq("status", WAITLIST_STATUS)
-      .is("cancelled_at", null);
-    if (regErr) {
-      alert(`Couldn't check registrations: ${regErr.message}`);
+    // THREE counts, because there are three different reasons a class cannot just
+    // be deleted, and each needs its own sentence. A single "total" was a proxy
+    // broader than the claim built on it: it counted WAITLIST rows too, so a class
+    // with three families queued and nobody enrolled would have been described as
+    // having "3 past registrations on file — cancellations and refunds", and the
+    // offered Cancel would have left those three still holding queue positions and
+    // live invite links on a class no longer being offered, with nothing telling
+    // them. Reachable the moment the waitlist ships.
+    const [activeRes, waitingRes, historyRes] = await Promise.all([
+      supabase
+        .from("registrations")
+        .select("id", { count: "exact", head: true })
+        .eq("program_id", programId)
+        // Waiting children are not enrolled, so they must not inflate this count.
+        .neq("status", WAITLIST_STATUS)
+        .is("cancelled_at", null),
+      supabase
+        .from("registrations")
+        .select("id", { count: "exact", head: true })
+        .eq("program_id", programId)
+        .eq("status", WAITLIST_STATUS),
+      supabase
+        .from("registrations")
+        .select("id", { count: "exact", head: true })
+        .eq("program_id", programId)
+        .neq("status", WAITLIST_STATUS)
+        .not("cancelled_at", "is", null),
+    ]);
+    if (activeRes.error || waitingRes.error || historyRes.error) {
+      // FAIL CLOSED. Not being able to count is not the same as counting zero,
+      // and the destructive branch is the one that runs on a wrong zero.
+      const firstErr = activeRes.error ?? waitingRes.error ?? historyRes.error;
+      alert(`Couldn't check registrations: ${firstErr.message}`);
       return;
     }
-    if ((regRows?.length ?? 0) > 0) {
-      alert(`This program has ${regRows.length} active registration${regRows.length === 1 ? "" : "s"}. Cancel them first, or unpublish the program instead of deleting.`);
+    const active = activeRes.count ?? 0;
+    const waiting = waitingRes.count ?? 0;
+    const history = historyRes.count ?? 0;
+
+    if (active > 0) {
+      // CHILDREN, NOT FAMILIES. `active` counts REGISTRATIONS, and a registration
+      // is one child's place — one family can hold several. Saying "families"
+      // would have reported Happy Valley Saturday, which has 6 active
+      // registrations across 3 families, as "6 families still have a place".
+      // Caught by running the count against real per-tenant data rather than by
+      // reading the sentence: the branch I first tested happened to land on a
+      // one-child class, where the wrong word is accidentally true.
+      alert(
+        `${active} ${active === 1 ? "child still has" : "children still have"} a place in this class. `
+        + "Refund or cancel those places first, or unpublish the class instead of removing it.",
+      );
       return;
     }
-    if (!confirm("Delete this program permanently? This can't be undone.")) return;
+
+    // WAITING FAMILIES ARE NOT HISTORY. They are live people expecting a place,
+    // and nothing on this screen can tell them the class has gone — so this
+    // refuses rather than offering a Cancel that would strand them silently,
+    // still holding a queue position and possibly a live invite link.
+    if (waiting > 0) {
+      alert(
+        `${waiting} ${waiting === 1 ? "family is" : "families are"} on the waiting list for this class. `
+        + "Take them off the waiting list first — they're expecting a place, and removing "
+        + "the class won't tell them.",
+      );
+      return;
+    }
+
+    if (history > 0) {
+      const ok = confirm(
+        `Nobody holds a place in this class, but it still has ${history} past `
+        + `registration${history === 1 ? "" : "s"} on file — cancellations and refunds. `
+        + "Deleting the class would erase that record, so it can't be deleted.\n\n"
+        + "Cancel it instead? It stops being offered to families and drops off your "
+        + "instructor schedule, and the records stay.",
+      );
+      if (!ok) return;
+      await cancelProgram(programId);
+      return;
+    }
+
+    if (!confirm("Delete this class permanently? This can't be undone.")) return;
     const { error: delErr } = await supabase
       .from("programs")
       .delete()
       .eq("id", programId);
     if (delErr) {
-      alert(`Couldn't delete: ${delErr.message}`);
+      // Should now be unreachable for the registrations FK, but nine other tables
+      // reference programs (attendance, payouts, assignments, roster sends...).
+      // If one of them refuses, say so in words rather than handing over
+      // Postgres's sentence about a constraint.
+      // ONLY 23503 PROVES A DEPENDENCY. Asserting "something else refers to it"
+      // for every error sends an operator whose session simply lapsed hunting for
+      // a dependency that does not exist — the same untrue-sentence class this
+      // whole function was rewritten to remove. Nine tables reference programs
+      // (attendance, payouts, assignments, roster sends...), so the FK case is
+      // real and worth naming; every other case gets an honest "couldn't".
+      const isDependency = delErr.code === "23503";
+      alert(
+        isDependency
+          ? "Couldn't delete this class — something else in the system still refers to it. "
+            + "You can cancel it instead, which hides it and keeps the records.\n\n"
+            + `Details: ${delErr.message}`
+          : "Couldn't delete this class. Nothing has been changed — reload and try again.\n\n"
+            + `Details: ${delErr.message}`,
+      );
       return;
     }
     setPrograms((prev) => prev.filter((p) => p.id !== programId));
@@ -253,25 +387,44 @@ export default function ProgramsCalendar() {
     // to prevent. The end time rides along so a pair set together is one refetch.
     const SCHEDULE_KEYS = ["first_session_date", "session_count", "end_date", "schedule_mode", "program_location_id", "day_of_week", "early_release_start_time", "early_release_end_time"];
     if (SCHEDULE_KEYS.some((k) => k in patch)) {
-      // A schedule save re-materializes session_count from the CURRENT calendars,
-      // so this program is drift-free by construction now — clear any stale flag
-      // (chunk 4) so the "Schedule out of date" badge disappears immediately.
-      setDriftByProgram((prev) => {
-        if (!(programId in prev)) return prev;
-        const next = { ...prev };
-        delete next[programId];
-        return next;
-      });
       // Same re-derive + merge the in-context skip uses — one helper, so a
       // future change to how dates refresh can't drift between the two paths.
-      await refreshProgramSchedule(programId);
+      const fresh = await refreshProgramSchedule(programId);
+      // ORDER MATTERS, AND IT USED TO BE WRONG. The drift flag was cleared BEFORE
+      // this refetch, on the reasoning that a schedule save re-materializes
+      // session_count and is therefore drift-free by construction. True of the
+      // DATABASE — but the badge describes the SCREEN, and if the refetch then
+      // failed, the badge was gone and the dates under it were stale. The failure
+      // removed the one warning that would have said so. Clear it only once the
+      // dates on screen are actually current.
+      if (fresh) {
+        setDriftByProgram((prev) => {
+          if (!(programId in prev)) return prev;
+          const next = { ...prev };
+          delete next[programId];
+          return next;
+        });
+      }
+      return { datesStale: !fresh };
     }
+    return { datesStale: false };
   }
 
   // Re-derive ONE program's schedule and merge it into state, so a change made
   // outside the field-save path (an in-context "mark no-school day") updates the
   // dates the row + expanded panel show, without a full reload. Same read the
   // field-save refetch uses; single source of truth is the SQL derivation.
+  // Returns TRUE if the dates on screen are now current, FALSE if the re-read
+  // failed and they are stale.
+  //
+  // THIS USED TO SWALLOW. Every failure went to console.warn and the caller
+  // carried on, so a save that could not refresh looked identical to one that
+  // did: the row said "✓ Saved" over dates that had not moved, with the only
+  // evidence in a console nobody has open. That is the exact symptom Jessica
+  // reported on 2026-08-20 and could not reproduce afterwards — which is the
+  // signature of an intermittent failure with its error thrown away. The dates
+  // themselves were never wrong; every derived list on prod matches its stored
+  // session_count. What was wrong was the screen, silently.
   async function refreshProgramSchedule(programId) {
     try {
       const { data: sched, error: schErr } = await supabase.rpc(
@@ -288,8 +441,13 @@ export default function ProgramsCalendar() {
         session_time: r.session_time, session_end_time: r.session_end_time,
       }));
       setSessionDatesByProgram((prev) => ({ ...prev, [programId]: arr }));
+      return true;
     } catch (e) {
-      console.warn("Couldn't refresh derived dates after skip:", e?.message ?? e);
+      // Still logged, because a trace is useful when someone does go looking —
+      // but console is no longer the ONLY place this lands. The boolean is what
+      // the caller acts on.
+      console.error("[ProgramsCalendar] couldn't refresh derived dates:", e?.message ?? e);
+      return false;
     }
   }
 
@@ -1205,6 +1363,12 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
   const isFull = capacity > 0 && enrolled >= capacity;
   const fillColor = isFull ? BRIGHT : pct >= 0.7 ? VIOLET : "#a8c47f";
   const isDraft = p.status === "draft";
+  // A cancelled class matched NEITHER isDraft nor isOpen, so it rendered with no
+  // badge and full-strength styling — indistinguishable from a live class on the
+  // one screen an operator uses to see what they are running. Nothing in the
+  // product could reach that state until cancelling a class became possible,
+  // which is exactly why it has to be legible now rather than later.
+  const isCancelled = p.status === "cancelled";
   // A paid class can't go live before the money has somewhere to land. The
   // control is REPLACED rather than disabled: a greyed-out button still reads as
   // a feature you have, and this one has a next step worth offering.
@@ -1240,7 +1404,7 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
       padding: "10px 16px",
       borderBottom: isDatesExpanded ? "none" : `1px solid ${RULE}`,
       fontSize: 13,
-      opacity: isDraft ? 0.55 : 1,
+      opacity: isDraft || isCancelled ? 0.55 : 1,
       background: isDraft ? "#fafaf5" : "transparent",
     }}>
       {/* Start date + time. By-school view also shows day-of-week. */}
@@ -1281,6 +1445,21 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
               }}
             >
               Not linked
+            </span>
+          )}
+          {isCancelled && (
+            <span style={{
+              fontSize: 10,
+              color: "#b0413e",
+              background: "#b0413e1F",
+              padding: "2px 8px",
+              borderRadius: 999,
+              fontWeight: 700,
+              textTransform: "uppercase",
+              letterSpacing: 0.5,
+              flexShrink: 0,
+            }}>
+              Cancelled
             </span>
           )}
           {isDraft && (
@@ -2014,7 +2193,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         setTimeout(() => setSavedFlash(false), 1500);
         return; // finally{} resets saving
       }
-      await onUpdate(program.id, changed);
+      const saveResult = await onUpdate(program.id, changed);
       // Sync the draft to what was actually STORED for every field the
       // "unsaved schedule changes" banner compares, so a good save always clears
       // it. Two fields the save rewrites out from under the draft:
@@ -2030,8 +2209,21 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
       // silently reverted by an edit aimed at something else entirely. It also left
       // the row-resync deaf for the rest of the session.
       reconcileDraftToStored();
-      setSavedFlash(true);
-      setTimeout(() => setSavedFlash(false), 1500);
+      // THE SAVE SUCCEEDED EITHER WAY — the row was written before the dates were
+      // re-read, so the bookkeeping above runs regardless and the "unsaved
+      // changes" banner clears. What differs is whether the dates BELOW this
+      // panel are the new ones. Saying nothing here is what produced a "✓ Saved"
+      // sitting over a stale list, so the two outcomes get two different messages
+      // and neither claims the other's state.
+      if (saveResult?.datesStale) {
+        setSaveError(
+          "Saved — but the class dates below couldn't be refreshed just now, "
+          + "so they may still show the old schedule. Reload the page to see them.",
+        );
+      } else {
+        setSavedFlash(true);
+        setTimeout(() => setSavedFlash(false), 1500);
+      }
     } catch (err) {
       setSaveError(err.message ?? String(err));
     } finally {
@@ -2040,6 +2232,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
   }
 
   const isDraft = program.status === "draft";
+  const isCancelled = program.status === "cancelled";
   const isOpen = program.status === "open";
 
   // Unsaved SCHEDULE edits? The SESSION DATES list at the bottom shows the SAVED
@@ -2617,6 +2810,26 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
             >Publish →</button>
           )
         )}
+        {/* A cancelled class matches neither Publish (draft-only) nor Unpublish
+            (open-only), so it correctly offers neither — but without this it
+            offered no way BACK either, and a state you can enter and not leave is
+            the trap this codebase keeps re-learning.
+            REUSES onUnpublish rather than threading a new prop through six
+            components: unpublishProgram's whole job is "set this class back to
+            draft", which is exactly what reopening is. One action, one place, and
+            it lands in draft rather than open on purpose — bringing a class back
+            should not put it in front of families before it has been looked at. */}
+        {isCancelled && onUnpublish && (
+          <button
+            type="button"
+            onClick={() => onUnpublish(program.id)}
+            style={{
+              background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, padding: "7px 14px",
+              borderRadius: 6, fontSize: 12.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer",
+            }}
+            title="Reopen — bring this class back as a draft"
+          >Reopen as draft</button>
+        )}
         {isOpen && (
           <button
             type="button"
@@ -2775,12 +2988,23 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, onScheduleChan
       if (error) throw error;
       // Re-derive so the list below reflects the real, shifted schedule rather
       // than a guess computed here (single source of truth is the SQL derivation).
-      if (onScheduleChanged) await onScheduleChanged(program.id);
-      setSkipDone(skipDate);
+      // The SECOND caller of that refresh, and it had the same silence as the
+      // first: the no-school date was genuinely written, then this declared
+      // "Marked" over a list that had not moved. The write and the redraw are
+      // separate outcomes and each gets its own sentence.
+      const fresh = onScheduleChanged ? await onScheduleChanged(program.id) : true;
       setSkipOpen(false);
       setSkipDate("");
       setSkipReason("");
-      setTimeout(() => setSkipDone(null), 5000);
+      if (fresh === false) {
+        setSkipErr(
+          "That date was marked, but the list below couldn't be refreshed just now. "
+          + "Reload the page to see the new dates.",
+        );
+      } else {
+        setSkipDone(skipDate);
+        setTimeout(() => setSkipDone(null), 5000);
+      }
     } catch (e) {
       setSkipErr(e?.message || "Couldn't mark that date. Please try again.");
     } finally {

@@ -22,7 +22,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../../lib/supabase.js";
-import { WAITLIST_STATUS } from "../../../lib/waitlistState.js";
+import { groupFamilyRecipients, rowsToRegistrationShape } from "../../../lib/familyRecipients.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -235,21 +235,26 @@ export default function EditProgramCurriculumModal({
     (async () => {
       try {
         const [regsRes, asgsRes, brandRes] = await Promise.all([
-          supabase
-            .from("registrations")
-            .select(`
-              id, status,
-              student:students ( id, first_name ),
-              parent:parents ( id, first_name, last_name, email )
-            `)
-            .eq("program_id", program.id)
-            .eq("organization_id", org.id)
-            .neq("status", "cancelled")
-            // Must match notify-program-curriculum-change's recipient query exactly.
-            // This list is what the operator APPROVES before sending; if it shows a
-            // family the server then does not mail (or worse, hides one it does), the
-            // preview is a lie about who is being contacted.
-            .neq("status", WAITLIST_STATUS),
+          // THE SAME SOURCE THE SEND USES, not a matching query. This used to
+          // select registrations -> parents directly, with a comment requiring it
+          // to "match notify-program-curriculum-change's recipient query exactly"
+          // — and it could not, because this runs as the OPERATOR under RLS while
+          // the send runs service-role. `members_see_org_parents` hides any parent
+          // with no parent_org_relationships row, which on prod 2026-08-20 was 240
+          // of J2S's 325 registered parents. Reproduced on staging: three families
+          // on the class, preview said "1 family will get a note", and the send
+          // would have mailed three. The operator approved the smaller number.
+          //
+          // program_note_recipients is SECURITY DEFINER and both sides now call it,
+          // so the list shown and the list mailed are the same rows by construction
+          // rather than by two queries agreeing. The cancelled and waitlist filters
+          // moved INTO the function, which orphaned this file's WAITLIST_STATUS
+          // import — removed rather than left, since an unused import of a
+          // status constant is exactly what someone later re-filters on by hand.
+          supabase.rpc("program_note_recipients", {
+            p_program_id: program.id,
+            p_org_id: org.id,
+          }),
           supabase
             .from("program_assignments")
             .select(`
@@ -271,20 +276,34 @@ export default function EditProgramCurriculumModal({
         ]);
         if (!mounted) return;
 
-        // Dedupe families by parent_id; one note per family even if
-        // they've got two kids in the same program.
-        const seen = new Set();
-        const familyList = [];
-        for (const r of regsRes.data ?? []) {
-          const p = r.parent;
-          if (!p?.id || !p.email) continue;
-          if (seen.has(p.id)) continue;
-          seen.add(p.id);
-          familyList.push({
-            parent_first_name: (p.first_name ?? "").trim() || "there",
-            student_first_name: (r.student?.first_name ?? "").trim() || "your child",
-          });
+        // A FAILED LOOKUP MUST NOT READ AS "NOBODY NEEDS TELLING".
+        //
+        // supabase.rpc() RESOLVES with { data: null, error } — it does not throw —
+        // so the try/catch around this block never fires on a PostgREST error and
+        // `data ?? []` turned every failure into an empty recipient list. The
+        // preview then said "0 families will get a note", the operator reasonably
+        // skipped the notes, and the send went out to everybody anyway.
+        //
+        // That is not hypothetical: this modal now depends on
+        // program_note_recipients, and a migration always reaches one environment
+        // before the other. Code arriving before the function exists would have
+        // silently told every operator that no class change needs announcing.
+        // Fail loudly instead — an error the operator can see beats a zero they
+        // cannot question.
+        if (regsRes.error) {
+          console.error("[EditProgramCurriculumModal] recipient lookup failed", regsRes.error);
+          setRecipientsError("Couldn't work out who would be notified. Reload and try again.");
+          setRecipientsLoading(false);
+          return;
         }
+
+        // One note per family even if they've got two kids in the same program —
+        // and that note names BOTH of them. This used to be an inline dedupe that
+        // kept the first child and dropped the rest, byte-for-byte the same bug
+        // the edge function had, so the preview and the send agreed with each
+        // other while both were wrong. Shared rule now; see the twin note in
+        // src/lib/familyRecipients.js.
+        const familyList = groupFamilyRecipients(rowsToRegistrationShape(regsRes.data ?? []));
         setFamilyRecipientPreview({
           count: familyList.length,
           first: familyList[0] ?? null,

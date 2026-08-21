@@ -829,10 +829,20 @@ export default function QuickProgramBuilder() {
         session_count: isOneOff ? 1 : (sessionsNum >= 1 ? sessionsNum : 1),
         max_capacity: spotsNum,
         // Grades OR ages, never both, and all five columns written EXPLICITLY from
-        // ONE helper. programs.grade_min/grade_max default to 0 and 5 in the
-        // database, so an insert that merely omits them stamps the row "Grades K-5"
-        // - a school-year assumption inherited from J2S that nobody chose. Omitting
-        // the unused pair is not the same as nulling it.
+        // ONE helper.
+        //
+        // CORRECTED 2026-08-20: this used to say "programs.grade_min/grade_max
+        // default to 0 and 5 in the database, so an insert that merely omits them
+        // stamps the row Grades K-5". That was the original reason and it is no
+        // longer true — verified on BOTH environments, grade_min, grade_max and
+        // age_format all default to NULL now. Left as prose it would have argued
+        // the next person into re-adding a K-5 default "to match the database",
+        // which is the exact stamp the classic wizard was just relieved of.
+        //
+        // Writing all five explicitly is STILL right, for a different and better
+        // reason: age_format decides which pair is read, so a row that sets one
+        // pair without clearing the other reads back as whichever the reader
+        // happens to prefer. Omitting the unused pair is not the same as nulling it.
         //
         // The rule used to be written out here AND again in the Scheduled Programs
         // panel, in prose-matched but separately-maintained ternaries. Two copies of
