@@ -6,8 +6,8 @@
 //   contractor_agreement                      -> Screen4Agreement (signed, snapshotted)
 //   pay_schedule / attendance_policy /
 //   code_of_conduct                           -> Screen5Policies (one ack each)
-//   contractor_status / mandatory_reporter_ack /
-//   photo_video_release / vehicle_driving_ack -> Screen6Additional
+//   mandatory_reporter_ack / photo_video_release /
+//   vehicle_driving_ack                       -> Screen6Additional
 // Adding a key here that no screen reads would produce a document an operator
 // writes and no instructor ever sees. Verified against those three files.
 //
@@ -153,43 +153,28 @@ Photos and social media
 If something goes wrong
 [Say who to tell, how fast, and make clear that reporting a concern is always the right call.]`,
   },
-  {
-    key: 'contractor_status',
-    step: 'additional',
-    // DEFAULT OFF — the only document that is, and the exception is deliberate.
-    // See defaultOff in isDocumentEnabled for why the usual "absent means ON"
-    // rule had to be broken for exactly this key.
-    //
-    // WHAT IT REPLACES. Screen 4's tick box used to read "...independent
-    // contractor under ORS 670.600" — an Oregon statute, on every provider's
-    // screen, in every state. The recorded plan was a per-state step. Jessica
-    // killed that on 2026-08-13: "we're not going to track all state policies."
-    // Fifty states' classification tests, each amendable, is a compliance
-    // product we are not building and could not keep correct — and a stale
-    // citation is worse than none, because it reads authoritative.
-    //
-    // So the provider writes it. They know their state, their staffing model
-    // and their own counsel's advice; we know none of the three. The starter
-    // asks for a link to their state's own page rather than restating the test,
-    // so what an instructor reads is maintained by the body that wrote it.
-    defaultOff: true,
-    label: 'Independent contractor status',
-    // No "off unless you turn it on" here, though it was the first draft: this
-    // help line is only rendered for a document that is ON, so it would have
-    // read "...Off unless you turn it on" underneath a card saying On.
-    help: "Only if you want instructors to confirm they meet your state's test for independent contractor status. Most providers link to their state's own page rather than restating the rules.",
-    starter: `Working as an independent contractor
-[State plainly that instructors work as independent contractors and not employees, and what that means day to day — they set their own methods, use their own equipment, and may work for others.]
-
-Your state's rules
-[Link to your own state's page on independent contractor classification, and say that the instructor is responsible for meeting it. Search for your state's labour or revenue department page on worker classification; do not paraphrase the test here, because it changes.]
-
-Taxes and insurance
-[Say that you do not withhold taxes, what tax form you issue and when, and whether you require them to carry any insurance.]
-
-If your situation changes
-[Say who to tell if their working arrangement changes in a way that affects this.]`,
-  },
+  // REMOVED 2026-08-21: `contractor_status`, "Independent contractor status".
+  //
+  // Jessica: "we don't need contractor doc and independent contractor status doc.
+  // they are redundant." She is right, and the reason it existed had already been
+  // withdrawn. It was built as the replacement for Screen 4's ORS 670.600 citation
+  // under a planned per-state step — and she cancelled that step on 2026-08-13
+  // ("we're not going to track all state policies"). With no per-state plan, this
+  // document had no job: contractor status is already asserted twice, by the tick
+  // box an instructor ticks and by the contractor agreement they sign, which for
+  // J2S carries the statute in its own text.
+  //
+  // Nothing was lost. Checked on both databases before deleting: PROD had ZERO of
+  // these documents written, ZERO orgs with the setting and ZERO acknowledgements
+  // — no provider was ever asked for one. Staging had exactly one, a demo fixture
+  // I had written myself.
+  //
+  // WHAT ITS REMOVAL BUYS, and this is the real reason to delete rather than hide:
+  // it was the ONLY document that defaulted OFF, so the whole `defaultOff` /
+  // DEFAULT_OFF exception existed for this one key. The rule is now one sentence
+  // again — ABSENT MEANS ON — with no asymmetry for a future reader to trip over
+  // or "helpfully" restore. Do not add it back without a per-state plan to hang
+  // it on.
   {
     key: 'mandatory_reporter_ack',
     step: 'additional',
@@ -332,15 +317,19 @@ export const DOCUMENT_KEYS = INSTRUCTOR_DOCUMENTS.map((d) => d.key);
  * has already been wrong:
  *
  *   - "the N you've turned on" attributed a choice nobody made. It was correct
- *     while the untouched state was all-on; the day contractor_status shipped
- *     default-off the untouched state became N-1, which selects this branch, so
- *     the sentence every provider saw on first visit claimed they had turned on
- *     seven documents they had never touched.
- *   - "the 1 that are switched on" — reachable (six toggleable documents off,
- *     contractor_status already off) and ungrammatical. The dedicated
- *     "Just the agreement" banner does NOT preempt it: that one requires
- *     writtenCount === enabledCount, and this branch only renders when
- *     writtenCount is LOWER, so they are mutually exclusive.
+ *     while the untouched state was all-on, then broke the day a default-OFF
+ *     document shipped and made the untouched state N-1, which selects this
+ *     branch — so the sentence every provider saw on first visit claimed they
+ *     had turned on documents they had never touched. That document has since
+ *     been deleted and nothing defaults off any more, so the untouched state is
+ *     all-on again and this branch is unreachable from a fresh org. Kept anyway:
+ *     it is reachable the moment a provider switches one off, which is the
+ *     normal case, and it was the ORIGINAL bug here.
+ *   - "the 1 that are switched on" — reachable (all but one toggleable document
+ *     switched off) and ungrammatical. The dedicated "Just the agreement" banner
+ *     does NOT preempt it: that one requires writtenCount === enabledCount, and
+ *     this branch only renders when writtenCount is LOWER, so they are mutually
+ *     exclusive.
  *
  * A phrase with three branches inside JSX is a phrase nobody can test. Returned
  * as a value so the test asserts the sentence rather than grepping the file for
@@ -372,27 +361,12 @@ export function documentByKey(key) {
  * Absence is not a decision. Only an explicit `false` turns a document off, so
  * an unwritten document keeps blocking onboarding exactly as it does today.
  *
- * ONE DOCUMENT DEFAULTS OFF, AND THE EXCEPTION PROVES THE RULE RATHER THAN
- * BENDING IT. contractor_status carries `defaultOff`, so it needs an explicit
- * `true`. The reason the safety argument above does not apply to it:
- *
- *   - The rule protects a document a provider MEANT to have. Nobody has ever
- *     been asked for this one, so there is no provider intent to preserve — an
- *     absent value here means "never offered", not "not yet written".
- *   - Defaulting it on would take every existing provider, and every one of
- *     their instructors mid-onboarding, and block them on a document that does
- *     not exist and that nobody has been told to write. That is not a safer
- *     failure; it is an outage with a safety-shaped justification.
- *   - Nothing is lost by it being off. The contractor agreement is signed
- *     either way and is never toggleable, and it already covers contractor
- *     status in its own body. This document adds a SEPARATE, per-state
- *     acknowledgment on top; a provider who does not opt in is where they are
- *     today, not somewhere worse.
- *
- * The general rule is "absence is not a decision". For a brand-new optional
- * document, shipping it off IS the decision, and it was Jessica's (2026-08-13).
- * A future default-off document needs its own version of this argument; this
- * flag is not a convenience.
+ * NO DOCUMENT DEFAULTS OFF ANY MORE, and the rule is one sentence again.
+ * `contractor_status` was the only exception and it was deleted on 2026-08-21 as
+ * redundant (see the note where its entry used to be). The `defaultOff` flag went
+ * with it, because a flag with no holder is an invitation: the next person needing
+ * an optional document would reach for it instead of arguing for it. If one is ever
+ * genuinely needed, re-derive the argument then — it is not a convenience.
  *
  * These read the SAME shape from two places, which is deliberate:
  *   - the admin screen reads organizations.instructor_document_config directly;
@@ -411,10 +385,10 @@ export function isDocumentEnabled(config, key) {
   // The agreement is signed, not acknowledged, and onboarding cannot complete
   // without it. No stored value can switch it off.
   if (meta?.alwaysOn) return true;
-  // Opt-in: needs an explicit true, not merely "not false". Strict === true, so
-  // a stray truthy value someone hand-writes into the JSONB (1, "yes") does not
-  // quietly switch on a legal acknowledgment nobody chose in the UI.
-  if (meta?.defaultOff) return config?.[key] === true;
+  // Absent means ON. Only an explicit false turns a document off, so a document a
+  // provider intends to have but has not written yet keeps blocking onboarding
+  // rather than being silently treated as unused. There is no longer any opt-in
+  // branch here — see the note above.
   return config?.[key] !== false;
 }
 

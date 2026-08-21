@@ -57,7 +57,6 @@ const REQUIRED_KEYS = [
   'pay_schedule',
   'attendance_policy',
   'code_of_conduct',
-  'contractor_status',
   'mandatory_reporter_ack',
   'photo_video_release',
   'vehicle_driving_ack',
@@ -85,7 +84,7 @@ eq('the full order matches the order instructors meet them in',
   [
     'contractor_agreement',
     'pay_schedule', 'attendance_policy', 'code_of_conduct',
-    'contractor_status', 'mandatory_reporter_ack', 'photo_video_release', 'vehicle_driving_ack',
+    'mandatory_reporter_ack', 'photo_video_release', 'vehicle_driving_ack',
   ].join(','));
 // ...and that the grouping is contiguous, which is the property the order is FOR.
 // Asserted structurally so adding a document to an existing step cannot pass by
@@ -269,37 +268,39 @@ ok('the agreement is marked alwaysOn', documentByKey('contractor_agreement').alw
 ok('nothing else is alwaysOn',
   INSTRUCTOR_DOCUMENTS.filter((d) => d.alwaysOn).length === 1);
 
-// --- the one opt-in document ----------------------------------------------
+// --- no document defaults off, and that is now pinned ----------------------
 //
-// contractor_status inverts the rule above, and these pin the inversion in both
-// directions. It is the ONLY exception; if a second document ever wants to
-// default off it needs its own argument, so the count is asserted too.
-const DEFAULT_OFF_KEYS = INSTRUCTOR_DOCUMENTS.filter((d) => d.defaultOff).map((d) => d.key);
-eq('exactly one document defaults off', DEFAULT_OFF_KEYS.join(), 'contractor_status');
-ok('contractor_status is OFF when absent', !isDocumentEnabled({}, 'contractor_status'));
-ok('contractor_status is OFF for undefined config', !isDocumentEnabled(undefined, 'contractor_status'));
-ok('contractor_status is OFF for an explicit false',
-  !isDocumentEnabled({ contractor_status: false }, 'contractor_status'));
-ok('contractor_status is ON only for an explicit true',
-  isDocumentEnabled({ contractor_status: true }, 'contractor_status'));
-// Strict === true. A hand-written truthy value in the JSONB must not switch on a
-// legal acknowledgment nobody chose in the UI — the inverse of the "0 is still
-// ON" case above, and deliberately so.
-for (const truthy of ['true', 1, 'yes', {}]) {
-  ok(`contractor_status stays OFF for ${JSON.stringify(truthy)}`,
-    !isDocumentEnabled({ contractor_status: truthy }, 'contractor_status'));
-}
-// The whole point of shipping it off: nobody's onboarding changes today.
-ok('turning contractor_status on does not disturb the others',
-  isDocumentEnabled({ contractor_status: true }, 'code_of_conduct'));
-
-eq('empty config enables all but the opt-in one',
-  enabledDocumentKeys({}).length, DOCUMENT_KEYS.length - 1);
-eq('opting in enables all eight',
+// `contractor_status` used to be the one opt-in document and had five tests
+// pinning the inversion. It was deleted on 2026-08-21 as redundant with the
+// contractor agreement, and the `defaultOff` flag went with it. What replaces
+// those tests is the assertion that the exception is GONE: a flag with no holder
+// is an invitation, and the next person who wants an optional document should have
+// to argue for it rather than find the mechanism lying around.
+ok('no document defaults off any more',
+  INSTRUCTOR_DOCUMENTS.every((d) => d.defaultOff === undefined));
+ok('the deleted document is not offered anywhere',
+  !DOCUMENT_KEYS.includes('contractor_status'));
+// And the rule it used to bend still holds for everything else: absent means ON.
+ok('an absent value leaves a document ON', isDocumentEnabled({}, 'photo_video_release'));
+ok('an undefined config leaves a document ON', isDocumentEnabled(undefined, 'photo_video_release'));
+// A LEFTOVER KEY IN A PROVIDER'S CONFIG MUST BE INERT. The migration deliberately
+// does NOT strip contractor_status out of instructor_document_config — rewriting a
+// provider's config column to remove a dead key is a bigger write than the problem
+// deserves — so a stale `true` or `false` can still arrive here from the database.
+// It must neither resurrect a document that no longer exists nor perturb the ones
+// that do. This is the whole safety case for deleting rather than hiding.
+ok('a stale contractor_status:true resurrects nothing',
+  !enabledDocumentKeys({ contractor_status: true }).includes('contractor_status'));
+eq('a stale contractor_status:true changes no count',
   enabledDocumentKeys({ contractor_status: true }).length, DOCUMENT_KEYS.length);
+ok('a stale contractor_status:false disturbs no other document',
+  isDocumentEnabled({ contractor_status: false }, 'code_of_conduct'));
+
+eq('empty config enables every document',
+  enabledDocumentKeys({}).length, DOCUMENT_KEYS.length);
 eq('two off leaves the rest',
   enabledDocumentKeys({ photo_video_release: false, vehicle_driving_ack: false }).length,
-  DOCUMENT_KEYS.length - 3);
+  DOCUMENT_KEYS.length - 2);
 eq('everything off still leaves the agreement',
   enabledDocumentKeys(Object.fromEntries(DOCUMENT_KEYS.map((k) => [k, false]))).length, 1);
 
@@ -322,15 +323,35 @@ eq('everything off still leaves the agreement',
   // three times in two days, so a fourth migration dropping or mis-resolving a key
   // would have left this green against a file that was no longer the live
   // definition. Sorted by filename, which is how the migration runner orders them.
+// CASE-INSENSITIVE, and this is not a hypothetical hardening. The first version
+  // matched the literal lowercase `as instructor_documents_public`; the migration
+  // that deleted contractor_status writes `AS` in capitals, because that is how
+  // Postgres prints a view definition and the file was built from one. So the
+  // NEWEST definition was invisible to this filter, the block silently pinned the
+  // superseded 20260813a file instead, and it would have stayed green while
+  // asserting against a view that no longer exists — precisely the failure the
+  // paragraph above describes, arrived at through keyword case rather than through
+  // a missing test. It only surfaced because the key count moved at the same time.
+  const aliasRe = () => /\bas\s+instructor_documents_public/gi;
   const migrationsDir = new URL('../../supabase/migrations/', import.meta.url);
-  const defining = readdirSync(migrationsDir)
-    .filter((f) => f.endsWith('.sql'))
-    .sort()
-    .filter((f) => readFileSync(new URL(f, migrationsDir), 'utf8')
-      .includes('as instructor_documents_public'));
+  const sqlFiles = readdirSync(migrationsDir).filter((f) => f.endsWith('.sql')).sort();
+  const defining = sqlFiles
+    .filter((f) => aliasRe().test(readFileSync(new URL(f, migrationsDir), 'utf8')));
   ok('at least one migration defines instructor_documents_public', defining.length > 0);
   const newest = defining[defining.length - 1];
   const migrationSrc = readFileSync(new URL(newest, migrationsDir), 'utf8');
+
+  // AND NOTHING LATER TOUCHES THE VIEW WITHOUT PUBLISHING THE DOCUMENTS OBJECT.
+  // The check above finds the last migration that BUILDS instructor_documents_public;
+  // it cannot see a later one that redefines public_org_directory and drops the
+  // column altogether. That is the dangerous direction — the wizard then reads
+  // undefined for every key, `!== false` calls all of them ON, and every instructor
+  // is asked for documents with no published body.
+  const touching = sqlFiles
+    .filter((f) => readFileSync(new URL(f, migrationsDir), 'utf8')
+      .includes('public_org_directory'));
+  eq('the newest migration touching the view is the one that defines the documents',
+    touching[touching.length - 1], newest);
 
   // ANCHOR ON THE ALIAS AND SCAN BACK, rather than matching
   // /jsonb_build_object\(...\) as instructor_documents_public/ — the view builds
@@ -338,7 +359,8 @@ eq('everything off still leaves the agreement',
   // a non-greedy match starts at THAT opening paren and swallows its four keys.
   // The first run of this test failed with `enabled, provider_name, provider_url,
   // instructions` in the list, which is the test being wrong, not the view.
-  const aliasAt = migrationSrc.lastIndexOf('as instructor_documents_public');
+  let aliasAt = -1;
+  for (const m of migrationSrc.matchAll(aliasRe())) aliasAt = m.index;
   ok(`instructor_documents_public found in ${newest}`, aliasAt > 0);
   if (aliasAt > 0) {
     const before = migrationSrc.slice(0, aliasAt);
@@ -389,11 +411,19 @@ eq('everything off still leaves the agreement',
 
 // --- the banner may not attribute a choice nobody made --------------------
 //
-// A default-off document means the UNTOUCHED state is no longer "all of them",
-// so any copy that reaches for the not-all branch is now the DEFAULT sentence
-// rather than an edge case. The admin banner said "the 7 you've turned on" to a
-// provider who had turned on nothing — true the day it was written, false the
-// day contractor_status shipped, and shown to every provider on first visit.
+// The admin banner said "the 7 you've turned on" to a provider who had turned on
+// nothing. That copy was true the day it was written — the untouched state was
+// all-on — and became false the day a default-off document shipped, because the
+// untouched state stopped being "all of them" and the not-all branch turned into
+// the DEFAULT sentence shown to every provider on first visit.
+//
+// DELETING THAT DOCUMENT RESTORES THE ORIGINAL CONDITION. Untouched is all-on
+// again, so the first thing a provider reads is "all 7", which attributes nothing.
+// The not-all branch is once more a genuine edge case, reached only by an operator
+// who switched something off — so it stays pinned below, because copy that is
+// currently right for the wrong reason breaks the next time the default moves.
+// The invariant that survives both worlds: NO branch may tell an operator they
+// turned these on.
 //
 // Asserted against the source because it is JSX copy with no seam to call. The
 // invariant is the reason, not the wording: the untouched config must not equal
@@ -408,18 +438,23 @@ eq('everything off still leaves the agreement',
 //
 // The phrase is now a function, so these assert the sentence itself. All the
 // scaffolding is gone.
-eq('untouched: names the enabled set, claims no choice',
-  documentsBannerPhrase(enabledDocumentKeys({}).length), 'the 7 that are switched on');
-ok('untouched does NOT hit the all-N branch (this is what broke the old copy)',
-  enabledDocumentKeys({}).length !== DOCUMENT_KEYS.length);
-eq('fully opted in: all N',
-  documentsBannerPhrase(DOCUMENT_KEYS.length), `all ${DOCUMENT_KEYS.length}`);
-// Reachable — six toggleable documents off with contractor_status already off —
-// and "the 1 that are switched on" is what the previous wording produced.
+eq('untouched: names the whole set, claims no choice',
+  documentsBannerPhrase(enabledDocumentKeys({}).length), `all ${DOCUMENT_KEYS.length}`);
+eq('untouched IS the all-N state again, now that nothing defaults off',
+  enabledDocumentKeys({}).length, DOCUMENT_KEYS.length);
+// The not-all branch is now reached only by an operator who actually switched
+// something off. Still reachable, so still pinned — and derived from a real config
+// rather than a bare number, so it moves with the document list.
+eq('one switched off: names the enabled set, claims no choice',
+  documentsBannerPhrase(enabledDocumentKeys({ photo_video_release: false }).length),
+  `the ${DOCUMENT_KEYS.length - 1} that are switched on`);
+// Reachable — every toggleable document off — and "the 1 that are switched on" is
+// what the previous wording produced.
 eq('exactly one left is grammatical', documentsBannerPhrase(1), 'the one that is switched on');
 eq('two left', documentsBannerPhrase(2), 'the 2 that are switched on');
 ok('no branch tells an operator they turned these on',
-  [0, 1, 2, 7, DOCUMENT_KEYS.length].every((n) => !/turned on/.test(documentsBannerPhrase(n))));
+  [0, 1, 2, DOCUMENT_KEYS.length - 1, DOCUMENT_KEYS.length]
+    .every((n) => !/turned on/.test(documentsBannerPhrase(n))));
 // The sentence reads "They read and sign <phrase> during onboarding", so every
 // branch has to survive that frame.
 //
@@ -429,7 +464,7 @@ ok('no branch tells an operator they turned these on',
 // the singular branch, returning "" from every branch, or appending "!" all
 // passed it while failing the eq()s. Only inputs with no eq() of their own can
 // tell you anything.
-for (const n of [3, 4, 5, 6]) {
+for (const n of [3, 4, 5]) {
   const p = documentsBannerPhrase(n);
   ok(`phrase for ${n} is non-empty, lowercase-initial and unterminated`,
     p.length > 0 && !/^[A-Z]/.test(p) && !/[.!?]$/.test(p));
@@ -466,15 +501,89 @@ eq('the three groups cover every key',
   ['agreement', 'policies', 'additional'].reduce((n, s) => n + documentKeysForStep(s).length, 0),
   DOCUMENT_KEYS.length);
 eq('screen 5 reads three', documentKeysForStep('policies').length, 3);
-eq('screen 6 offers four', documentKeysForStep('additional').length, 4);
-// ...but shows three unless the provider opts in. documentKeysForStep is what
-// EXISTS; enabledDocumentKeysForStep is what an instructor is asked for, and the
-// gap between them is the default-off document.
-eq('screen 6 shows three by default',
+eq('screen 6 offers three', documentKeysForStep('additional').length, 3);
+// ...and shows all three, because nothing on it defaults off any more.
+// documentKeysForStep is what EXISTS; enabledDocumentKeysForStep is what an
+// instructor is actually asked for, and there is no longer a gap between them for
+// an untouched provider. The gap was the default-off document.
+eq('screen 6 shows all three by default',
   enabledDocumentKeysForStep({}, 'additional').join(),
   'mandatory_reporter_ack,photo_video_release,vehicle_driving_ack');
-eq('screen 6 shows four once opted in',
-  enabledDocumentKeysForStep({ contractor_status: true }, 'additional').length, 4);
+eq('no step has a hidden document for an untouched provider',
+  ['agreement', 'policies', 'additional']
+    .filter((s) => enabledDocumentKeysForStep({}, s).length !== documentKeysForStep(s).length)
+    .length, 0);
+// A stale key cannot put a fourth document back on the screen.
+eq('a stale contractor_status:true adds nothing to screen 6',
+  enabledDocumentKeysForStep({ contractor_status: true }, 'additional').length, 3);
+
+// --- THE FIFTH AND SIXTH COPIES: the wizard screens themselves ---------------
+//
+// Screen5Policies and Screen6Additional EACH HARDCODE their own list of the keys
+// they render, rather than calling documentKeysForStep. That is two more copies of
+// this file's step grouping, and until now nothing pinned either of them.
+//
+// THIS IS NOT A HYPOTHETICAL. Deleting contractor_status from this file and from
+// the server mirror left Screen6Additional still listing it in ALL_DOC_KEYS, and
+// the whole suite plus the production build stayed green. The consequence was NOT
+// a dead reference: the screen asks isDocumentEnabled about the key, the answer
+// for a key nothing knows is "absent means ON", so the section would have rendered
+// for EVERY provider; the fetch would 404 because no such document was ever
+// published; and loadAll's 404 branch sets a screen-wide error and returns BEFORE
+// setDocs — so every instructor reaching Screen 6 would get the red "your program
+// hasn't published these documents yet" box instead of the form, with the three
+// real documents hidden and no way to finish onboarding. Found by grep, not by a
+// test, which is why this block exists.
+//
+// EACH SCREEN'S OWN DECLARED LIST IS PARSED, not filtered against DOCUMENT_KEYS.
+// The first version of this block scanned for quoted literals and kept only those
+// the library still knows — which silently skips a key the library has DROPPED and
+// the screen still lists, i.e. exactly the bug above. A check that cannot fail on
+// the case that motivated it is worse than no check, because it reads as coverage.
+// Parsed structurally instead, so the screen's list stands on its own and any
+// unknown key it holds shows up as a difference.
+{
+  const screens = [
+    // Screen 5 declares objects: `{ key: 'pay_schedule', ack: '...' }`.
+    ['Screen5Policies.jsx', 'policies', (src) => {
+      const m = /const ALL_DOCS\s*=\s*\[([\s\S]*?)\];/.exec(src);
+      return m ? [...m[1].matchAll(/key:\s*'([a-z_]+)'/g)].map((x) => x[1]) : null;
+    }],
+    // Screen 6 declares an array of CONSTS: `[MANDATORY_KEY, PHOTO_KEY, ...]`,
+    // each defined as `const MANDATORY_KEY = 'mandatory_reporter_ack'`, so the
+    // identifiers are resolved through that map before comparing.
+    ['Screen6Additional.jsx', 'additional', (src) => {
+      const m = /const ALL_DOC_KEYS\s*=\s*\[([^\]]*)\]/.exec(src);
+      if (!m) return null;
+      const consts = Object.fromEntries(
+        [...src.matchAll(/const\s+([A-Z0-9_]+)\s*=\s*'([a-z_]+)'/g)].map((x) => [x[1], x[2]]),
+      );
+      return m[1].split(',').map((s) => s.trim()).filter(Boolean)
+        .map((tok) => (/^'/.test(tok) ? tok.replace(/'/g, '') : consts[tok] ?? `UNRESOLVED:${tok}`));
+    }],
+  ];
+  for (const [file, step, parse] of screens) {
+    const raw = readFileSync(
+      new URL(`../pages/onboarding/screens/${file}`, import.meta.url), 'utf8',
+    );
+    // COMMENTS STRIPPED FIRST. Both screens now carry a paragraph naming the
+    // deleted key, and Screen 6's sits directly above the declaration this parses.
+    const src = raw
+      .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, ' ')
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .replace(/\/\/.*$/gm, ' ');
+    ok(`${file}: the comment stripper ran and left the code intact`,
+      src.length < raw.length && /export default function/.test(src));
+    const declared = parse(src);
+    // A REFACTOR THAT RENAMES THE LIST MUST FAIL LOUDLY, not quietly stop checking.
+    ok(`${file}: its document list was found and parsed`,
+      Array.isArray(declared) && declared.length > 0);
+    if (Array.isArray(declared)) {
+      eq(`${file} renders exactly the '${step}' group, in order`,
+        declared.join(','), documentKeysForStep(step).join(','));
+    }
+  }
+}
 
 // The wizard/gate contract: a screen with nothing left must be DROPPED, not
 // rendered empty — and dropped server-side too, or the step key is never written

@@ -110,10 +110,9 @@ export default function InstructorDocuments() {
   const [loadFailed, setLoadFailed] = useState(false);
   const [openKey, setOpenKey] = useState(null);
   const [toast, setToast] = useState("");
-  // Which documents this provider actually uses. ABSENT KEY MEANS ON — with one
-  // deliberate exception, so `{}` (every existing org) is every document EXCEPT
-  // contractor_status, which is opt-in and needs an explicit true. Nobody's
-  // onboarding changed when it shipped. isDocumentEnabled owns both rules; never
+  // Which documents this provider actually uses. ABSENT KEY MEANS ON, with no
+  // exceptions as of 2026-08-21, so `{}` (every existing org) is every document.
+  // isDocumentEnabled owns that rule and the agreement's pinned-on rule; never
   // re-derive either from this object by hand.
   const [docConfig, setDocConfig] = useState({});
   const [savingKey, setSavingKey] = useState(null);
@@ -217,57 +216,34 @@ export default function InstructorDocuments() {
   async function setDocEnabled(key, next) {
     if (savingKey) return;
 
-    // TURNING ON A DOCUMENT THAT DOES NOT EXIST YET STOPS EVERY INSTRUCTOR DEAD.
+    // A "WRITE IT FIRST" GUARD STOOD HERE, and it is deliberately gone rather
+    // than generalised. Removed 2026-08-21 with contractor_status, the only
+    // document it could ever fire for.
     //
-    // The wizard fetches each enabled document by key and a 404 is a hard stop —
-    // Screen6Additional sets a screen-wide error and returns before rendering
-    // anything, so the three documents that ARE published disappear too, and
-    // gateCheck still requires the step, so onboarding cannot complete. That is
-    // the precise outage instructorDocuments.js cites as the reason
-    // contractor_status defaults off — and until this guard, the toggle was a
-    // one-click path straight back into it, under a message promising the
-    // opposite ("Instructors will be asked for it from now on").
+    // What it protected against is real: turning on a document nobody has written
+    // stops every instructor dead, because the wizard fetches each enabled
+    // document by key, a 404 makes Screen6Additional set a screen-wide error and
+    // return before rendering anything — so the documents that ARE published
+    // disappear too — and gateCheck still requires the step, so onboarding cannot
+    // complete.
     //
-    // ONLY FOR THE OPT-IN DOCUMENT, and the first version of this guard got that
-    // wrong in a way that trapped providers. It refused to switch ON any document
-    // with no published row — but SEVEN OF THE EIGHT ship on and unwritten, which
-    // is the deliberate "absent is not a decision" rule. So: a provider switches
-    // photo_video_release off (allowed, nothing checks), changes their mind, and
-    // is refused — permanently, because this is the only write to
-    // instructor_document_config anywhere in the app. Three separate lines of copy
-    // on this same screen promise the opposite ("Turn any of them back on whenever
-    // you want", "click to turn on", "Switch off any you don't use"), and the
-    // comment justifying the guard claimed it left those keys "unaffected". It did
-    // not. A guard that makes a documented, reversible action irreversible is
-    // worse than the bug it prevents.
+    // WHY THERE IS NO GUARD NOW. It was scoped to defaultOff, and an earlier
+    // version scoped to published-ness instead trapped providers badly: it
+    // refused to switch ON any document with no published row, but the remaining
+    // seven all ship on and unwritten by design ("absent is not a decision"). So
+    // a provider who switched photo_video_release off and changed their mind was
+    // refused permanently, because this is the only write to
+    // instructor_document_config in the app — while three lines of copy on this
+    // same screen promise "turn any of them back on whenever you want". A guard
+    // that makes a documented, reversible action irreversible is worse than the
+    // bug it prevents.
     //
-    // The real asymmetry is defaultOff, not published-ness. A default-ON document
-    // being on and unwritten is a state every provider is already in and the
-    // wizard already handles by blocking with an actionable message; switching it
-    // back on returns them to where they started. contractor_status is different:
-    // it has never been on for anyone, so switching it on is a NEW state the
-    // provider is choosing, and choosing it before writing the document is
-    // guaranteed to strand their instructors on a screen that also hides the three
-    // documents that ARE published.
-    //
-    // PUBLISHED MEANS READABLE, via publishedByKey — the same test the wizard
-    // applies. Keyed off liveByKey (any row at all), an empty-body row passed here
-    // and dead-ended the instructor anyway.
-    //
-    // Refuse rather than warn-and-confirm: there is nothing to weigh. Writing it
-    // first costs one click ("Write it" opens the editor while the document is
-    // off, deliberately), and the alternative is a provider discovering the block
-    // through an instructor who cannot finish.
-    const meta = documentByKey(key);
-    if (next && meta?.defaultOff && !publishedByKey[key]) {
-      // Jessica's exact words, 2026-08-14. "Write it" is the literal label on the
-      // button in this same row, so the instruction points at something on screen.
-      setToggleError({
-        key,
-        message: "Before publishing, you must write the document. Click 'Write it'",
-      });
-      return;
-    }
+    // With the opt-in document deleted, every remaining document is already ON for
+    // every provider whether or not it is written, so switching one back on
+    // returns them to a state they were already in — never a new one. There is
+    // nothing left for the guard to catch, and re-adding it in the published-ness
+    // form would restore the trap. If a default-OFF document is ever introduced
+    // again, bring this back scoped to THAT key and nothing else.
 
     setSavingKey(key);
     setToggleError(null);

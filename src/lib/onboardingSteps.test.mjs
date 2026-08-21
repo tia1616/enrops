@@ -211,31 +211,43 @@ if (byStepMatch) {
   ok('the server mirror pins the agreement as always-on',
     /ALWAYS_ON[\s\S]{0,120}contractor_agreement/.test(serverSrc));
 
-  // THE OPT-IN DOCUMENT, ON BOTH SIDES. contractor_status is the one key that
-  // needs an explicit true, and the drift here is silent and bad in both
-  // directions: if only the browser knew, the wizard would skip a screen the
-  // gate still required and onboarding would stall at 100% forever; if only the
-  // server knew, every instructor would be shown a document their provider never
-  // opted into and never wrote, and the fetch would 404 them into a dead end.
-  ok('the server mirror knows contractor_status defaults off',
-    /DEFAULT_OFF[\s\S]{0,120}contractor_status/.test(serverSrc));
-  // ...and tests the SAME way. `!== false` here instead of `=== true` would make
-  // it default ON while the browser defaults it off — the stall above, from a
-  // one-operator typo that reads correct.
-  ok('the server mirror requires a strict true, not merely not-false',
-    /DEFAULT_OFF\.has\(key\)\)\s*return\s+config\?\.\[key\]\s*===\s*true/.test(serverSrc));
+  // THE OPT-IN MECHANISM IS GONE FROM BOTH SIDES, as of 2026-08-21.
+  // contractor_status was the only key that ever needed an explicit true, so the
+  // DEFAULT_OFF set existed for it alone; the document was deleted as redundant
+  // with the contractor agreement, and the set went with it.
+  //
+  // These pin the ABSENCE ON BOTH SIDES, not the removal on one, because the drift
+  // this block has always guarded is bad in both directions and a HALF-REMOVAL is
+  // the same defect as a half-addition: if only the browser dropped the mechanism,
+  // the gate would keep requiring a screen the wizard now skips and onboarding
+  // would stall at 100% forever; if only the server dropped it, every instructor
+  // would be shown a document their provider never wrote, and the fetch would 404
+  // them into a dead end.
+  //
+  // COMMENTS STRIPPED FIRST. This repo has already shipped a raw grep that matched
+  // the comment explaining the very thing it was meant to catch, and the server
+  // mirror now carries a paragraph naming contractor_status as deleted — so an
+  // unstripped absence check would be held green by the obituary itself.
+  const serverCode = serverSrc
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\/\/.*$/gm, ' ');
+  ok('the comment stripper ran and left the code intact',
+    serverCode.length < serverSrc.length
+      && /export function isDocumentEnabled/.test(serverCode));
 
-  // Both sides must agree on WHICH keys are opt-in, not just that the mechanism
-  // exists. Parsed rather than pattern-matched so an added key fails loudly.
-  const defaultOffMatch = /DEFAULT_OFF\s*=\s*new Set\(\[([^\]]*)\]\)/.exec(serverSrc);
-  ok('DEFAULT_OFF was found in the server mirror', Boolean(defaultOffMatch));
-  if (defaultOffMatch) {
-    const serverDefaultOff = defaultOffMatch[1]
-      .split(',').map((s) => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
-    eq('the two sides agree on which documents are opt-in',
-      serverDefaultOff.sort().join(','),
-      INSTRUCTOR_DOCUMENTS.filter((d) => d.defaultOff).map((d) => d.key).sort().join(','));
-  }
+  ok('no server code references the deleted key',
+    !/contractor_status/.test(serverCode));
+  ok('the server mirror has no opt-in set left', !/DEFAULT_OFF/.test(serverCode));
+  ok('the browser half has no opt-in flag left',
+    INSTRUCTOR_DOCUMENTS.every((d) => d.defaultOff === undefined));
+
+  // ...and neither side kept a strict-true branch, which is now the only place the
+  // two rules could still diverge. Both must read plain `!== false`: absent means
+  // ON, with nothing to remember.
+  ok('the server mirror tests only for an explicit false',
+    /return\s+config\?\.\[key\]\s*!==\s*false/.test(serverCode));
+  ok('the server mirror has no strict-true branch left',
+    !/===\s*true/.test(serverCode));
 }
 
 // --- the agreement tick boxes and the server gate must name the SAME keys ---

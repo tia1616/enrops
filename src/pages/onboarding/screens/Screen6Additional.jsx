@@ -10,10 +10,10 @@ import { useOnboardingConfig } from '../OnboardingConfigContext.jsx';
 import Chevron from '../../../components/Chevron.jsx';
 import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardLayout.jsx';
 
-// Screen 6 — Additional Acknowledgments. Up to four documents. contractor_status
-// and mandatory_reporter_ack are short enough to render inline (not in an
-// accordion) above a single checkbox each; photo_video_release and
-// vehicle_driving_ack are accordions with multiple per-section acks.
+// Screen 6 — Additional Acknowledgments. Up to three documents.
+// mandatory_reporter_ack is short enough to render inline (not in an accordion)
+// above a single checkbox; photo_video_release and vehicle_driving_ack are
+// accordions with multiple per-section acks.
 //
 // All required checkboxes must be checked before submit. The edge-function
 // payload only needs document_id + document_version per doc — the granular
@@ -29,27 +29,27 @@ import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardL
 // Its checkbox group cannot be checked because it is not on the page, so
 // including it would leave Continue permanently disabled.
 //
-// With all four off the screen is dropped from the wizard entirely
+// With all three off the screen is dropped from the wizard entirely
 // (WizardHost/effectiveStepOrder) and from the completion gate (gateCheck).
-// contractor_status defaults OFF rather than on, so for every provider today
-// this screen is exactly what it was — three documents, unchanged — until
-// somebody turns it on.
+//
+// THIS LIST IS A SECOND COPY of the 'additional' group in
+// src/lib/instructorDocuments.js, and keeping it in sync is not optional. A
+// fourth document, `contractor_status`, was deleted on 2026-08-21; removing it
+// from the shared lib alone would have left this file listing a key the lib no
+// longer knows, and isDocumentEnabled answers an unknown key with "absent means
+// ON". So the section below would have rendered for EVERY provider, its document
+// would have 404'd (nobody ever published one), the 404 branch in loadAll sets
+// loadError and returns early — and every instructor reaching Screen 6 would get
+// the red "your program hasn't published these documents" box instead of the
+// form, with no way to continue onboarding. The build and the whole test suite
+// were green with that bug in place. If you remove a document, remove it HERE
+// too, and grep the wizard screens before believing you are done.
 
-const CONTRACTOR_STATUS_KEY = 'contractor_status';
 const MANDATORY_KEY = 'mandatory_reporter_ack';
 const PHOTO_KEY = 'photo_video_release';
 const VEHICLE_KEY = 'vehicle_driving_ack';
 
-const ALL_DOC_KEYS = [CONTRACTOR_STATUS_KEY, MANDATORY_KEY, PHOTO_KEY, VEHICLE_KEY];
-
-// OFF unless the provider opts in — the only document that defaults off, and the
-// reason it exists at all is that Screen 4's tick box used to cite an Oregon
-// statute to instructors in every state. The rules are the provider's to state
-// (and to link to), because they are the ones who know which state's test
-// applies. The wording here stays deliberately general: what the instructor is
-// confirming is described in THEIR provider's document, rendered right above it.
-const CONTRACTOR_STATUS_ACK =
-  'I have read this and I confirm I meet the requirements for working as an independent contractor';
+const ALL_DOC_KEYS = [MANDATORY_KEY, PHOTO_KEY, VEHICLE_KEY];
 
 const MANDATORY_ACK =
   'I have completed or will complete the mandatory reporting training and will comply with reporting requirements';
@@ -98,13 +98,11 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
     [documentConfig],
   );
   const PHOTO_ACKS = useMemo(() => photoAcks(orgName), [orgName]);
-  const showContractorStatus = DOC_KEYS.includes(CONTRACTOR_STATUS_KEY);
   const showMandatory = DOC_KEYS.includes(MANDATORY_KEY);
   const showPhoto = DOC_KEYS.includes(PHOTO_KEY);
   const showVehicle = DOC_KEYS.includes(VEHICLE_KEY);
   const [docs, setDocs] = useState({});
   const [loadError, setLoadError] = useState('');
-  const [contractorStatusAck, setContractorStatusAck] = useState(false);
   const [mandatoryAck, setMandatoryAck] = useState(false);
   const [photoExpanded, setPhotoExpanded] = useState(false);
   const [vehicleExpanded, setVehicleExpanded] = useState(false);
@@ -182,7 +180,6 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
   const allPhotoChecked = !showPhoto || PHOTO_ACKS.every((a) => photoChecked[a.key]);
   const allVehicleChecked = !showVehicle || VEHICLE_ACKS.every((a) => vehicleChecked[a.key]);
   const allAcksChecked =
-    (!showContractorStatus || contractorStatusAck) &&
     (!showMandatory || mandatoryAck) &&
     allPhotoChecked &&
     allVehicleChecked;
@@ -244,39 +241,11 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
         <div className="rounded-md bg-red-50 p-3 text-sm text-red-900">{loadError}</div>
       ) : (
         <form onSubmit={handleSubmit} noValidate>
-          {/* Independent contractor status — inline body like the mandatory
-              reporter one, and for the same reason: it is short, it is the
-              provider's own words about their own state's rules, and folding it
-              into an accordion would let someone tick "I confirm I meet the
-              requirements" without the requirements ever being on screen. */}
-          {showContractorStatus && (
-          <section className="mb-3 rounded-md border border-neutral-200 p-4">
-            <h2 className="text-sm font-semibold text-neutral-900">
-              {docs[CONTRACTOR_STATUS_KEY]?.title || 'Independent contractor status'}
-            </h2>
-            {docs[CONTRACTOR_STATUS_KEY] ? (
-              <div className="mt-2 text-sm leading-relaxed text-neutral-800">
-                {(docs[CONTRACTOR_STATUS_KEY].body_text || '').split(/\n\s*\n/).map((para, i) => (
-                  <p key={i} className="mb-2 whitespace-pre-wrap">
-                    {linkifyText(para)}
-                  </p>
-                ))}
-              </div>
-            ) : (
-              <p className="mt-2 text-sm text-neutral-500">Loading…</p>
-            )}
-            <label className="mt-3 flex items-start gap-3 text-sm text-neutral-800">
-              <input
-                type="checkbox"
-                checked={contractorStatusAck}
-                onChange={(e) => setContractorStatusAck(e.target.checked)}
-                disabled={!docs[CONTRACTOR_STATUS_KEY]}
-                className="mt-0.5 h-4 w-4 flex-shrink-0 rounded border-neutral-400 disabled:opacity-50"
-              />
-              <span>{CONTRACTOR_STATUS_ACK}</span>
-            </label>
-          </section>
-          )}
+          {/* The "Independent contractor status" section stood here. Deleted
+              2026-08-21 with the document itself; the mandatory reporter section
+              below carries no top margin because it has always been the first
+              thing on this screen in practice — that document defaulted off, so
+              no provider ever had this section rendered. */}
 
           {/* Mandatory reporter — inline body, no accordion */}
           {showMandatory && (
