@@ -309,8 +309,16 @@ export function buildWaitlistInvite(args: WaitlistInviteArgs): BuiltEmail {
   // WHAT THIS EMAIL MUST NOT DO: imply the place is already theirs. It is held, not
   // given, and it is given by completing registration. Every line below is written so
   // that a family who reads only the first sentence still understands they must act.
-  const leadIn = `A place has opened up in ${classLine}, and because ${who} is at the top of the waitlist we are offering it to you first.`;
-  const holdLine = `The place is held for ${who} until ${deadline}. After that we offer it to the next family on the list.`;
+  //
+  // AND IT MUST NOT CLAIM A POSITION IT CANNOT KNOW. Two of these sentences used to:
+  // "because ${who} is at the top of the waitlist we are offering it to you first" and
+  // "after that we offer it to the next family on the list". A class that frees two seats
+  // now invites two families on the same tick, so the second one is NOT at the top and is
+  // NOT being offered it first - and on a one-family list there is no next family to pass
+  // it to, so the place simply goes back on sale. Both are now written to be true for
+  // every family who receives this, which needs no extra query to work out.
+  const leadIn = `A place has opened up in ${classLine}. ${who} is on the waitlist for it, so we are offering it to you before it goes back into general registration.`;
+  const holdLine = `The place is held for ${who} until ${deadline}. After that it is released - to another family waiting, or back into general registration.`;
   const actionLine = `To take it, finish registering with the link below. That is when the place becomes yours.`;
   const linkOnceLine = `This link works once and only for you, so please do not forward it.`;
 
@@ -349,8 +357,8 @@ export function buildWaitlistInvite(args: WaitlistInviteArgs): BuiltEmail {
     </p>
 
     <p style="margin:0 0 18px;font-size:15px;line-height:1.55;">
-      If you no longer need the place, just reply to this email and we will offer it to the
-      next family.
+      If you no longer need the place, just reply to this email and we will release it
+      straight away.
     </p>
 
     ${signature}
@@ -376,7 +384,7 @@ export function buildWaitlistInvite(args: WaitlistInviteArgs): BuiltEmail {
     ``,
     linkOnceLine,
     ``,
-    `If you no longer need the place, just reply to this email and we will offer it to the next family.`,
+    `If you no longer need the place, just reply to this email and we will release it straight away.`,
     ``,
     brand.org_name,
   );
