@@ -32,15 +32,51 @@ const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 /** How long an offered place is held. Matches the pending-registration window. */
 export const INVITE_HOLD_HOURS = 24;
 
+/**
+ * Most offers a single class may be handed out in one tick.
+ *
+ * Two free seats must reach two families, so the offer step loops - and a loop that talks
+ * to Resend needs a bound. Ten is far above anything real (a class shedding ten seats
+ * between two ticks is a cancelled class, not a waiting list doing its job) and far below
+ * anything that could mail a whole queue by mistake. Hitting it is logged and counted
+ * rather than swallowed: a silent cap reads as "everyone who could be offered was".
+ */
+export const MAX_OFFERS_PER_PROGRAM_PER_TICK = 10;
+
 export interface WaitlistSweepResult {
   expired: number;
   offered: number;
   emailed: number;
+  /**
+   * Claims released because the family's checkout died. Their waiting-list row goes back
+   * to holding its own seat at its own position - abandoning Stripe costs them nothing.
+   */
+  claims_released: number;
   skipped_no_seat: number;
   skipped_quiet_hours: number;
-  skipped_already_invited: number;
-  /** Top of the queue holds a lapsed invite the expiry step has not cleared yet (P0002). */
+  /**
+   * waitlist_offer_next had nobody to offer to. Successor to skipped_already_invited: an
+   * offer is no longer blocked by the family at the HEAD of the queue being mid-decision
+   * (waitlist_offer_next skips them and looks further down), so reaching this means the
+   * whole queue was unofferable.
+   *
+   * NAMED FOR WHAT IT PROVES, NOT WHAT IT USUALLY MEANS. It is normally "everyone waiting
+   * already holds an offer or is mid-checkout" - but the program list is snapshotted
+   * before the expiry step, so a program whose entire queue expiry has just cancelled is
+   * still visited and lands here with nobody waiting at all. Both are "nobody offerable";
+   * only one is "all offered", and a counter must not assert the difference it cannot see.
+   */
+  skipped_nobody_offerable: number;
+  /** Nobody offerable AND a lapsed invite that expiry has not cleared yet (WL002). */
   skipped_lapsed_awaiting_expiry: number;
+  /**
+   * Programs whose stale-claim release failed, so the offer step was skipped: a seat can
+   * read free purely because of a claim whose checkout already died, and offering against
+   * that would hand out a seat somebody else is still paying for.
+   */
+  skipped_release_failed: number;
+  /** Programs that hit the per-tick offer cap. The rest of their queue waits a tick. */
+  hit_offer_cap: number;
   /** Offers withdrawn because the email did not go out. The next tick retries them. */
   unsent_rolled_back: number;
   /** "Your hold ran out and the place has gone" notes actually delivered to Resend. */
@@ -62,9 +98,9 @@ export async function runWaitlistSweep(
 ): Promise<WaitlistSweepResult> {
   const now = opts.now ?? new Date();
   const out: WaitlistSweepResult = {
-    expired: 0, offered: 0, emailed: 0,
-    skipped_no_seat: 0, skipped_quiet_hours: 0, skipped_already_invited: 0,
-    skipped_lapsed_awaiting_expiry: 0,
+    expired: 0, offered: 0, emailed: 0, claims_released: 0,
+    skipped_no_seat: 0, skipped_quiet_hours: 0, skipped_nobody_offerable: 0,
+    skipped_lapsed_awaiting_expiry: 0, skipped_release_failed: 0, hit_offer_cap: 0,
     unsent_rolled_back: 0, lapse_notices_sent: 0,
     errors: [],
   };
@@ -100,6 +136,64 @@ export async function runWaitlistSweep(
     };
   }
 
+  // ── 0. Every program with somebody waiting ───────────────────────────────
+  // Read ONCE, up front, because the release step below needs it and it used to be
+  // fetched further down for the offer step alone. A program whose only waiting rows are
+  // about to be expired stays in this map, which is what we want: those rows can be
+  // holding claims, and release has to run for them too.
+  const { data: waiting, error: wErr } = await supabase
+    .from('registrations')
+    .select('program_id, organization_id')
+    .eq('status', 'waitlist')
+    .is('cancelled_at', null);
+  if (wErr) {
+    out.errors.push({ error: `candidates: ${wErr.message}` });
+    return out;
+  }
+
+  const byProgram = new Map<string, string>();
+  for (const r of (waiting ?? []) as Array<{ program_id: string; organization_id: string }>) {
+    if (r.program_id && r.organization_id) byProgram.set(r.program_id, r.organization_id);
+  }
+
+  // ── 0b. Release claims whose checkout has died ───────────────────────────
+  //
+  // FIRST, before expiring and before offering, and the ORDER IS THE WHOLE POINT.
+  //
+  // A claim means "this family clicked their invite and a real pending registration is
+  // holding the seat for them". While it is set, the waiting-list row stops holding a seat
+  // of its own (registration_holds_seat), so if the family then abandons Stripe and their
+  // pending row ages out, the seat reads FREE while their row sits there holding nothing.
+  // Releasing first closes that window inside the tick: by the time the offer step asks
+  // "is there a free seat?", every claim still standing belongs to a live checkout.
+  //
+  // It also has to precede EXPIRE. waitlist_expire_invites deliberately skips a claimed
+  // row (cancelling one both violates registrations_waitlist_claim_shape and would tell a
+  // family mid-payment that their place has gone), so a dead claim must be cleared before
+  // expiry can lapse that row on the same tick rather than a tick later.
+  //
+  // A FAILURE HERE SKIPS THAT PROGRAM'S OFFER, and only that program's. Offering against
+  // unreleased claims is exactly the blind state described above; skipping costs one tick.
+  const releaseFailed = new Set<string>();
+  for (const [programId] of byProgram) {
+    const { data: released, error: relErr } = await supabase
+      .rpc('waitlist_release_stale_claims', { p_program_id: programId });
+    if (relErr) {
+      console.error('[waitlist-sweep] release failed; skipping this program\'s offer', {
+        program_id: programId, error: relErr.message,
+      });
+      out.errors.push({ program_id: programId, error: `release: ${relErr.message}` });
+      releaseFailed.add(programId);
+      continue;
+    }
+    if ((released ?? 0) > 0) {
+      out.claims_released += released as number;
+      console.log('[waitlist-sweep] released stale claims; those places are intact', {
+        program_id: programId, released,
+      });
+    }
+  }
+
   // ── 1. Expire ────────────────────────────────────────────────────────────
   // The DATA change runs at ANY hour: a seat held by a lapsed offer helps nobody, and
   // freeing it sends nothing.
@@ -108,10 +202,14 @@ export async function runWaitlistSweep(
   // which meant one deterministic expire failure (a bad row, a statement timeout) stopped
   // EVERY org's offers on every tick, indefinitely, looking identical to a platform with no
   // lists. The loop this early-return was guarding against - re-offering a lapsed row - is
-  // already stopped independently: waitlist_offer_next raises WL002 for a top-of-queue whose
-  // invite has lapsed but not yet been cancelled, and the offer step below skips it. So on
-  // an expire failure we log, record it, and carry on: healthy programs still get offers,
-  // and the lapsed ones wait for the next tick rather than dragging everyone down with them.
+  // stopped independently and now STRUCTURALLY: waitlist_offer_next only ever selects a row
+  // with no invite window at all, so a row whose invite has lapsed but has not been
+  // cancelled yet cannot be handed a fresh one no matter how often this is called. (It used
+  // to rely on WL002, which only fired while the lapsed row was at the HEAD of the queue.
+  // WL002 still exists, demoted to a diagnostic: nobody offerable AND a lapsed row waiting
+  // on expiry - a climbing skipped_lapsed_awaiting_expiry means expiry is failing.)
+  // So on an expire failure we log, record it, and carry on: healthy programs still get
+  // offers, and the lapsed ones wait for the next tick rather than dragging everyone down.
   const lapsedRows = expErr
     ? []
     : ((lapsed ?? []) as Array<{
@@ -213,45 +311,24 @@ export async function runWaitlistSweep(
   }
 
   // ── 2. Offer ─────────────────────────────────────────────────────────────
-  // Every program with at least one live waiting family is a candidate. The RPC does
-  // the deciding: it refuses when there is no free seat, and returns the STANDING
-  // invite (already_invited) rather than minting a second one.
-  const { data: waiting, error: wErr } = await supabase
-    .from('registrations')
-    .select('program_id, organization_id')
-    .eq('status', 'waitlist')
-    .is('cancelled_at', null);
-  if (wErr) {
-    out.errors.push({ error: `candidates: ${wErr.message}` });
-    return out;
-  }
+  // Every program with at least one live waiting family is a candidate. The RPC does the
+  // deciding: it refuses when there is no free seat, and it now picks the top family who
+  // is FREE TO BE OFFERED rather than simply the top of the queue - skipping anyone
+  // already holding a live invite and anyone mid-checkout.
 
-  const byProgram = new Map<string, string>();
-  for (const r of (waiting ?? []) as Array<{ program_id: string; organization_id: string }>) {
-    if (r.program_id && r.organization_id) byProgram.set(r.program_id, r.organization_id);
-  }
+  /** Why one attempt at offering a seat stopped. Anything but 'offered' ends the program. */
+  type OfferOutcome = 'offered' | 'no_seat' | 'nobody_offerable' | 'lapsed_awaiting_expiry' | 'failed';
 
-  for (const [programId, orgId] of byProgram) {
-    try {
-      const org = await getOrg(orgId);
-      if (!org?.slug) { out.errors.push({ program_id: programId, error: 'org not resolvable' }); continue; }
-
-      // QUIET HOURS GATE THE OFFER, NOT JUST THE SEND.
-      //
-      // Stamping the hold at 3am and mailing at 7am would start a family's 24 hours
-      // while they slept, so the deadline in the email would already be four hours
-      // spent. Holding the whole step keeps the email's promise exact: the countdown
-      // begins when the message goes out.
-      //
-      // The trade is that between the seat opening and the next in-hours tick, the
-      // class is genuinely open and a passing visitor could take it. Accepted: at 3am
-      // that is close to nobody, and the alternative lies to the family about how long
-      // they have.
-      if (!withinSendingHours(orgHour(org.timezone, now))) {
-        out.skipped_quiet_hours += 1;
-        continue;
-      }
-
+  /**
+   * Offer ONE seat in one program: mint the hold, email the family, and undo the hold if
+   * the email did not leave. Kept as its own step so the offer step can ask for a second
+   * seat without duplicating any of it.
+   */
+  async function offerOneSeat(
+    programId: string,
+    orgId: string,
+    org: { slug: string; timezone: string | null },
+  ): Promise<OfferOutcome> {
       const { data: offer, error: offErr } = await supabase.rpc('waitlist_offer_next', {
         p_program_id: programId,
         p_org_id: orgId,
@@ -261,29 +338,26 @@ export async function runWaitlistSweep(
       if (offErr) {
         // WL001 = no free seat. The COMMON case on a healthy full class, not an error.
         // (Private class code, not P0001 - see 20260819v; P0001 is plpgsql's generic raise.)
-        if ((offErr as { code?: string }).code === 'WL001') { out.skipped_no_seat += 1; continue; }
-        // WL002 = the top of this queue holds a lapsed invite expiry has not cleared yet.
-        // Skip the program, do NOT re-offer: that row belongs to the expiry step, and the
-        // positions behind it are not renumbered yet, so there is no correct "next family".
-        // The next tick resolves it. Rare in the normal case (expiry runs first), so a
-        // climbing count is the signal that expiry is failing.
+        if ((offErr as { code?: string }).code === 'WL001') return 'no_seat';
+        // WL002 = nobody offerable AND a lapsed invite expiry has not cleared yet. A
+        // DIAGNOSTIC now, not a guard: the lapsed row can no longer be re-offered by
+        // construction (waitlist_offer_next only selects rows with no invite window at
+        // all), so this says "expiry is behind" rather than "do not touch this program".
+        // Expiry runs before this, so a climbing count means expiry is failing.
         if ((offErr as { code?: string }).code === 'WL002') {
-          console.warn('[waitlist-sweep] top of queue holds a lapsed invite, leaving it for expiry', { program_id: programId });
-          out.skipped_lapsed_awaiting_expiry += 1;
-          continue;
+          console.warn('[waitlist-sweep] nobody offerable and a lapsed invite is still awaiting expiry', { program_id: programId });
+          return 'lapsed_awaiting_expiry';
         }
         out.errors.push({ program_id: programId, error: offErr.message });
-        continue;
+        return 'failed';
       }
 
       const row = Array.isArray(offer) ? offer[0] : offer;
-      if (!row) continue; // nobody waiting any more
-
-      if (row.already_invited) {
-        // Someone is mid-decision. Re-sending would reset nothing and read as nagging.
-        out.skipped_already_invited += 1;
-        continue;
-      }
+      // No row means nobody in this queue is offerable - usually because everyone waiting
+      // already holds an offer or is mid-checkout, but also when expiry has just cancelled
+      // the whole queue (the program list predates that step). Not an error either way,
+      // and nothing more to do here.
+      if (!row) return 'nobody_offerable';
 
       out.offered += 1;
 
@@ -292,9 +366,9 @@ export async function runWaitlistSweep(
       // did. The original reasoning was "the seat is theirs either way" - which is
       // wrong once you follow it through:
       //
-      //   send fails -> the hold stands -> next tick sees already_invited and skips,
-      //   so the email is never retried -> 24 hours later the expiry sweep lapses it
-      //   -> and per Jessica's decision the family COMES OFF THE LIST.
+      //   send fails -> the hold stands -> the next tick's selection skips them (they now
+      //   hold an invite window), so the email is never retried -> 24 hours later the
+      //   expiry sweep lapses it -> and per Jessica's decision they COME OFF THE LIST.
       //
       // A single bad minute at Resend would cost a family their place without one word
       // ever reaching them. So on failure the invite columns are cleared, which puts
@@ -389,6 +463,69 @@ export async function runWaitlistSweep(
             program_id: programId,
           });
         }
+        // Either way this program is done for the tick. Asking again would re-offer the
+        // very same family through the very same Resend problem, and on the undo-failed
+        // path the seat is not free to give anyway.
+        return 'failed';
+      }
+
+      return 'offered';
+  }
+
+  for (const [programId, orgId] of byProgram) {
+    try {
+      const org = await getOrg(orgId);
+      if (!org?.slug) { out.errors.push({ program_id: programId, error: 'org not resolvable' }); continue; }
+
+      // A program whose stale claims could not be released is not safe to offer from:
+      // a seat can read free purely because of a claim whose checkout already died.
+      if (releaseFailed.has(programId)) { out.skipped_release_failed += 1; continue; }
+
+      // QUIET HOURS GATE THE OFFER, NOT JUST THE SEND.
+      //
+      // Stamping the hold at 3am and mailing at 7am would start a family's 24 hours
+      // while they slept, so the deadline in the email would already be four hours
+      // spent. Holding the whole step keeps the email's promise exact: the countdown
+      // begins when the message goes out.
+      //
+      // The trade is that between the seat opening and the next in-hours tick, the
+      // class is genuinely open and a passing visitor could take it. Accepted: at 3am
+      // that is close to nobody, and the alternative lies to the family about how long
+      // they have.
+      if (!withinSendingHours(orgHour(org.timezone, now))) {
+        out.skipped_quiet_hours += 1;
+        continue;
+      }
+
+      // TWO SEATS OPEN -> TWO FAMILIES INVITED, first come first served (Jessica,
+      // 2026-08-21). So keep asking until the class says it has no seat left, nobody is
+      // offerable, or something went wrong - each answered by waitlist_offer_next, which
+      // re-counts the seats every call and now skips the families already holding an
+      // offer, so each pass reaches a DIFFERENT family. Bounded, because this loop sends
+      // email; see MAX_OFFERS_PER_PROGRAM_PER_TICK.
+      let offeredHere = 0;
+      let stopped = false;
+      for (let i = 0; i < MAX_OFFERS_PER_PROGRAM_PER_TICK; i += 1) {
+        const outcome = await offerOneSeat(programId, orgId, org);
+        if (outcome === 'offered') { offeredHere += 1; continue; }
+
+        // Counted only when NOTHING was offered here. After a successful offer these are
+        // the ordinary way the loop ends - the seats ran out because we just filled them -
+        // and counting that as "skipped, no seat" would read as a class we never served.
+        if (outcome === 'no_seat' && offeredHere === 0) out.skipped_no_seat += 1;
+        if (outcome === 'nobody_offerable' && offeredHere === 0) out.skipped_nobody_offerable += 1;
+        // Always counted: expiry being behind is worth seeing whether or not we offered.
+        if (outcome === 'lapsed_awaiting_expiry') out.skipped_lapsed_awaiting_expiry += 1;
+        stopped = true;
+        break;
+      }
+      if (!stopped) {
+        // Ran the cap out with every pass succeeding, so there may be more to give. NOT
+        // silent: a quiet cap reads as "everyone who could be offered was".
+        out.hit_offer_cap += 1;
+        console.warn('[waitlist-sweep] hit the per-tick offer cap; the rest of this queue waits for the next tick', {
+          program_id: programId, offered: offeredHere, cap: MAX_OFFERS_PER_PROGRAM_PER_TICK,
+        });
       }
     } catch (e) {
       out.errors.push({ program_id: programId, error: (e as Error).message });

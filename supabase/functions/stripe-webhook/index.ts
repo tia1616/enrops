@@ -241,6 +241,82 @@ serve(async (req) => {
         });
       }
 
+      // SPEND THE WAITING-LIST INVITE, now that the family has actually paid.
+      //
+      // This used to happen in create-registration, the moment they clicked the emailed
+      // link - so closing the Stripe tab cost them their place (Jessica, 2026-08-21:
+      // "abandoning stripe must not cost the family their place"). Now create-registration
+      // only CLAIMS the invite, and this is where the place is finally spent.
+      //
+      // BY CLAIM, NOT BY TOKEN, because this handler has no token: it is handed
+      // registration ids in the session metadata, and by now the 24h window may well have
+      // lapsed and taken the token with it. A family who PAID keeps the place whatever the
+      // clock says, so the RPC deliberately does not require an unexpired invite.
+      //
+      // ONLY IF THE CONFIRM WROTE. If we could not record the enrolment, the waiting-list
+      // row is the only remaining evidence that this family is owed a place - cancelling it
+      // would destroy that while the operator alert above is still unread.
+      //
+      // NON-FATAL, like everything else past this point: the family has paid and the seat
+      // is theirs either way. The cost of a failure here is a stale waitlist row that still
+      // shows them queuing for a class they are now enrolled in - visible and fixable -
+      // whereas throwing would abandon the installments, promo and email work below.
+      // ACH arrives here too (settlementForCheckoutCompleted returns confirmed +
+      // ach_payment_state='processing'), and consuming then is correct: they have the place.
+      if (!confirmErr) {
+        try {
+          const { data: spent, error: spendErr } = await admin
+            .rpc('waitlist_invite_consume_claim', { p_registration_ids: regIds });
+          if (spendErr) {
+            console.error('[stripe-webhook] waitlist_invite_consume_claim failed; a paid family may still show as waiting', {
+              registration_ids: regIds, error: spendErr.message,
+            });
+          } else if ((spent ?? 0) > 0) {
+            console.log('[stripe-webhook] waiting-list invite spent on payment', {
+              registration_ids: regIds, rows_spent: spent,
+            });
+          }
+          // spent === 0 is the ordinary case: almost no cart comes off a waiting list.
+          // It is also what a webhook RETRY returns, the row having been spent already.
+        } catch (e) {
+          console.error('[stripe-webhook] waitlist_invite_consume_claim threw', (e as Error).message);
+        }
+
+        // ONE CHILD, ONE SEAT. Clear up the registration a family abandoned before
+        // coming back and paying.
+        //
+        // Found on Jessica's staging walk (2026-08-21): click the invite, abandon Stripe,
+        // return through the same link, pay. That leaves TWO pending rows for one child
+        // and registration_holds_seat counts both, so the class read 7 of 6 until the
+        // older one aged out 24 hours later.
+        //
+        // Reads FULLER, never emptier, so it can never oversell - the cost is that a
+        // genuinely freed seat stays invisible to the waiting-list sweep for a day.
+        //
+        // AFTER the payment rather than at creation, deliberately: at creation nobody has
+        // paid and both checkout sessions are live, so cancelling one means cancelling a
+        // session the family might still be completing. Here the paid cart is known.
+        //
+        // Order against the consume above does not matter - the RPC only ever cancels
+        // rows NOT in regIds, and the claim points at a row that IS in regIds - but it
+        // runs second so that a failure here can never stop a family's place being spent.
+        try {
+          const { data: tidied, error: tidyErr } = await admin
+            .rpc('cancel_superseded_pending_registrations', { p_registration_ids: regIds });
+          if (tidyErr) {
+            console.error('[stripe-webhook] could not cancel superseded pending registrations; a class may read one seat fuller than it is for 24h', {
+              registration_ids: regIds, error: tidyErr.message,
+            });
+          } else if ((tidied ?? 0) > 0) {
+            console.log('[stripe-webhook] cancelled an abandoned registration this family superseded', {
+              registration_ids: regIds, rows_cancelled: tidied,
+            });
+          }
+        } catch (e) {
+          console.error('[stripe-webhook] cancel_superseded_pending_registrations threw', (e as Error).message);
+        }
+      }
+
       // Count a promo redemption once, when funds actually settle (chunk 6).
       // The redemption ledger is the source of truth for usage limits; the
       // unique (promo_code_id, redemption_key=payment_intent) makes a webhook

@@ -139,14 +139,22 @@ export default function WaitlistAccept() {
       <h1 style={{ fontSize: 24, fontWeight: 800, margin: '0 0 12px' }}>
         A place is held for {childName}
       </h1>
+      {/* NEITHER SENTENCE MAY CLAIM A QUEUE POSITION, and both used to.
+          "because they were next on the waitlist" and "after that it goes to the next
+          family on the list" were true only while one seat was offered to one family at
+          a time. A class that frees two seats now invites two families on the same tick,
+          so the second one is not "next"; and on a one-family list there is no next
+          family to pass a lapsed place to - it goes back on general sale. Same wording
+          as the invite email this page is opened from (_shared/waitlistEmail.ts), because
+          a family reads the two back to back and they must not disagree. */}
       <p style={{ margin: '0 0 14px' }}>
         A place has opened up in <strong>{classLine}</strong>, and it is being held for{' '}
-        {childName} because they were next on the waitlist.
+        {childName}.
       </p>
       {deadline && (
         <p style={{ margin: '0 0 18px' }}>
-          <strong>The place is held until {deadline}.</strong> After that it goes to the
-          next family on the list.
+          <strong>The place is held until {deadline}.</strong> After that it is released,
+          either to another family waiting or back into general registration.
         </p>
       )}
       {/* Says what the button DOES. "Continue" or "Accept" would imply the place is
