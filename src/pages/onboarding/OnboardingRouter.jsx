@@ -8,7 +8,11 @@ import { loadTrainingConfig } from '../../lib/instructorTrainingConfig.js';
 // Top-level resolver for /:slug/onboarding. Runs on every visit and decides:
 //
 //   - magic link expired      → /error?reason=link_expired
-//   - no session              → /j2s/instructor (existing instructor login)
+//   - no session              → the inline sign-in panel, on this same URL
+//     (it used to say "/j2s/instructor" here, which is what the code did before
+//     the sign-in panel landed AND named one tenant. Nothing sends anyone to a
+//     hardcoded slug any more: every branch below builds /${org.slug}/… and the
+//     senders all emit ${PUBLIC_SITE_URL}/${org.slug}/instructor.)
 //   - no instructor row       → / (landing — not an instructor)
 //   - is_active=false         → /error?reason=deactivated
 //   - org.slug missing        → /error?reason=org_misconfigured
@@ -198,11 +202,8 @@ export default function OnboardingRouter() {
 
       // Training videos: the step is live only when the org enabled training AND
       // has at least one active required video (enabled-but-empty drops the step,
-      // matching the server gate). Instructors can read active videos of their
-      // own org via RLS. Answers are never selected here — the player fetches a
-      // signed URL + answer-stripped quiz per video from get-training-video-url.
-      // Shared with the portal-embedded wizard — see instructorTrainingConfig.js
-      // for why this is not inline in each door.
+      // matching the server gate). Shared with the portal-embedded wizard — see
+      // instructorTrainingConfig.js for why this is not inline in each door.
       const { trainingEnabled, trainingVideos, error: trainingErr } =
         await loadTrainingConfig(supabase, instructor.organization_id, org.training_enabled);
       // Same reasoning as the directory read above: a failed read here would drop

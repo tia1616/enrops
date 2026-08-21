@@ -5,13 +5,14 @@ import { fetchLegalDocument } from '../../../lib/legalDoc.js';
 import { STEP_KEYS } from '../../../lib/onboardingSteps.js';
 import { linkifyText } from '../../../lib/linkifyText.jsx';
 import { isDocumentEnabled } from '../../../lib/instructorDocuments.js';
+import { renderWaiverText } from '../../../lib/waiverText.js';
 import { useOnboardingConfig } from '../OnboardingConfigContext.jsx';
 import Chevron from '../../../components/Chevron.jsx';
 import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardLayout.jsx';
 
-// Screen 6 — Additional Acknowledgments. Up to three documents, but the
-// mandatory_reporter_ack body is short enough that we render it inline
-// (not in an accordion) above its checkbox. photo_video_release and
+// Screen 6 — Additional Acknowledgments. Up to four documents. contractor_status
+// and mandatory_reporter_ack are short enough to render inline (not in an
+// accordion) above a single checkbox each; photo_video_release and
 // vehicle_driving_ack are accordions with multiple per-section acks.
 //
 // All required checkboxes must be checked before submit. The edge-function
@@ -22,20 +23,33 @@ import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardL
 //
 // PER-PROVIDER. This is the screen the toggle work exists for: a provider whose
 // instructors never drive should not have to write a driving acknowledgment
-// before anybody can finish onboarding. Each of the three is independently on or
+// before anybody can finish onboarding. Each of the four is independently on or
 // off, so a section that is off is not fetched, not rendered, and — the part
 // that actually bites — not counted in `allLoaded` or `allAcksChecked` either.
 // Its checkbox group cannot be checked because it is not on the page, so
 // including it would leave Continue permanently disabled.
 //
-// With all three off the screen is dropped from the wizard entirely
+// With all four off the screen is dropped from the wizard entirely
 // (WizardHost/effectiveStepOrder) and from the completion gate (gateCheck).
+// contractor_status defaults OFF rather than on, so for every provider today
+// this screen is exactly what it was — three documents, unchanged — until
+// somebody turns it on.
 
+const CONTRACTOR_STATUS_KEY = 'contractor_status';
 const MANDATORY_KEY = 'mandatory_reporter_ack';
 const PHOTO_KEY = 'photo_video_release';
 const VEHICLE_KEY = 'vehicle_driving_ack';
 
-const ALL_DOC_KEYS = [MANDATORY_KEY, PHOTO_KEY, VEHICLE_KEY];
+const ALL_DOC_KEYS = [CONTRACTOR_STATUS_KEY, MANDATORY_KEY, PHOTO_KEY, VEHICLE_KEY];
+
+// OFF unless the provider opts in — the only document that defaults off, and the
+// reason it exists at all is that Screen 4's tick box used to cite an Oregon
+// statute to instructors in every state. The rules are the provider's to state
+// (and to link to), because they are the ones who know which state's test
+// applies. The wording here stays deliberately general: what the instructor is
+// confirming is described in THEIR provider's document, rendered right above it.
+const CONTRACTOR_STATUS_ACK =
+  'I have read this and I confirm I meet the requirements for working as an independent contractor';
 
 const MANDATORY_ACK =
   'I have completed or will complete the mandatory reporting training and will comply with reporting requirements';
@@ -44,8 +58,28 @@ const MANDATORY_ACK =
 // fourth checkbox here. Removed 2026-05-25 per Arielle — compensation
 // terms belong in the agreement / pay schedule, not buried in a photo
 // release ack.
-const PHOTO_ACKS = [
-  { key: 'photo_consent_record', label: 'I consent to J2S photographing/recording me at program sites' },
+//
+// TAKES THE PROVIDER'S NAME. It said "I consent to J2S photographing/recording
+// me" — one company's name, in a consent every OTHER provider's instructors were
+// asked to give, about photographs that provider would never take. Same class as
+// the four tenant names removed from this wizard on 2026-08-12; this one survived
+// because it is a label rather than body text.
+//
+// THROUGH renderWaiverText RATHER THAN A TERNARY, because the first version was a
+// hand-rolled truthiness check and orgName is operator-supplied free text threaded
+// here untrimmed. A name of "   " is truthy, so a consent checkbox rendered
+// "I consent to     photographing/recording me at program sites" — on a legal
+// attestation. renderWaiverText already trims, already falls back to wording that
+// is true rather than to a placeholder or another tenant's name, and is already
+// the convention every other org-name interpolation in this repo uses.
+const photoAcks = (orgName) => [
+  {
+    key: 'photo_consent_record',
+    label: renderWaiverText(
+      'I consent to {{org}} photographing/recording me at program sites',
+      orgName,
+    ),
+  },
   { key: 'photo_consent_marketing', label: 'I consent to use of my likeness in marketing materials' },
   { key: 'photo_consent_revocable', label: 'I understand consent is ongoing and revocable in writing' },
 ];
@@ -58,16 +92,19 @@ const VEHICLE_ACKS = [
 
 export default function Screen6Additional({ slug, instructor, onboarding, onAdvance, onBack }) {
   const navigate = useNavigate();
-  const { documentConfig } = useOnboardingConfig();
+  const { documentConfig, orgName } = useOnboardingConfig();
   const DOC_KEYS = useMemo(
     () => ALL_DOC_KEYS.filter((k) => isDocumentEnabled(documentConfig, k)),
     [documentConfig],
   );
+  const PHOTO_ACKS = useMemo(() => photoAcks(orgName), [orgName]);
+  const showContractorStatus = DOC_KEYS.includes(CONTRACTOR_STATUS_KEY);
   const showMandatory = DOC_KEYS.includes(MANDATORY_KEY);
   const showPhoto = DOC_KEYS.includes(PHOTO_KEY);
   const showVehicle = DOC_KEYS.includes(VEHICLE_KEY);
   const [docs, setDocs] = useState({});
   const [loadError, setLoadError] = useState('');
+  const [contractorStatusAck, setContractorStatusAck] = useState(false);
   const [mandatoryAck, setMandatoryAck] = useState(false);
   const [photoExpanded, setPhotoExpanded] = useState(false);
   const [vehicleExpanded, setVehicleExpanded] = useState(false);
@@ -93,12 +130,28 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
         if (cancelled) return;
         const map = {};
         for (const r of results) {
-          if (r.error) {
+          // AN EMPTY BODY IS TREATED AS UNPUBLISHED, and it is handled HERE rather
+          // than at the checkbox. The first attempt at this disabled the checkbox
+          // when the body was blank, which was strictly worse than the bug it
+          // fixed: get-legal-document returns 200 for an empty body, so the
+          // document loaded, the form rendered, the checkbox could never be
+          // ticked, and Continue was disabled forever — a title, one blank
+          // paragraph, and no explanation anywhere on the page. The comment ten
+          // lines below has warned about exactly that shape the whole time
+          // ("would disable Continue with nothing on screen to explain why").
+          //
+          // A document with no text is not something an instructor can
+          // acknowledge, so it is not a weak checkbox — it is an unpublished
+          // document, and the screen already has an actionable message for that,
+          // naming the person who can fix it. Same branch, same words.
+          if (r.error || !r.data?.body_text?.trim()) {
             // 404 = the provider hasn't published it, which retrying cannot fix
             // and which leaves this step permanently uncompletable. Distinguished
-            // from a genuine transient failure, matching Screens 4 and 5.
+            // from a genuine transient failure, matching Screens 4 and 5. An empty
+            // body is the same situation as a 404 from the instructor's side.
+            const unpublished = !r.error || r.status === 404;
             setLoadError(
-              r.status === 404
+              unpublished
                 ? "Your program hasn't published these documents yet. Your Program Manager needs to add them before you can continue — please reach out to them."
                 : "We can't load this document right now. Please try again, or reach out to your Program Manager."
             );
@@ -128,7 +181,11 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
   const allLoaded = DOC_KEYS.every((k) => docs[k]);
   const allPhotoChecked = !showPhoto || PHOTO_ACKS.every((a) => photoChecked[a.key]);
   const allVehicleChecked = !showVehicle || VEHICLE_ACKS.every((a) => vehicleChecked[a.key]);
-  const allAcksChecked = (!showMandatory || mandatoryAck) && allPhotoChecked && allVehicleChecked;
+  const allAcksChecked =
+    (!showContractorStatus || contractorStatusAck) &&
+    (!showMandatory || mandatoryAck) &&
+    allPhotoChecked &&
+    allVehicleChecked;
   // Not gated on DOC_KEYS.length — see the empty-set guard in handleSubmit.
   const canSubmit = allLoaded && allAcksChecked;
 
@@ -187,6 +244,40 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
         <div className="rounded-md bg-red-50 p-3 text-sm text-red-900">{loadError}</div>
       ) : (
         <form onSubmit={handleSubmit} noValidate>
+          {/* Independent contractor status — inline body like the mandatory
+              reporter one, and for the same reason: it is short, it is the
+              provider's own words about their own state's rules, and folding it
+              into an accordion would let someone tick "I confirm I meet the
+              requirements" without the requirements ever being on screen. */}
+          {showContractorStatus && (
+          <section className="mb-3 rounded-md border border-neutral-200 p-4">
+            <h2 className="text-sm font-semibold text-neutral-900">
+              {docs[CONTRACTOR_STATUS_KEY]?.title || 'Independent contractor status'}
+            </h2>
+            {docs[CONTRACTOR_STATUS_KEY] ? (
+              <div className="mt-2 text-sm leading-relaxed text-neutral-800">
+                {(docs[CONTRACTOR_STATUS_KEY].body_text || '').split(/\n\s*\n/).map((para, i) => (
+                  <p key={i} className="mb-2 whitespace-pre-wrap">
+                    {linkifyText(para)}
+                  </p>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-2 text-sm text-neutral-500">Loading…</p>
+            )}
+            <label className="mt-3 flex items-start gap-3 text-sm text-neutral-800">
+              <input
+                type="checkbox"
+                checked={contractorStatusAck}
+                onChange={(e) => setContractorStatusAck(e.target.checked)}
+                disabled={!docs[CONTRACTOR_STATUS_KEY]}
+                className="mt-0.5 h-4 w-4 flex-shrink-0 rounded border-neutral-400 disabled:opacity-50"
+              />
+              <span>{CONTRACTOR_STATUS_ACK}</span>
+            </label>
+          </section>
+          )}
+
           {/* Mandatory reporter — inline body, no accordion */}
           {showMandatory && (
           <section className="rounded-md border border-neutral-200 p-4">
