@@ -56,14 +56,37 @@ stable
 security definer
 set search_path = public, pg_temp
 as $$
+declare
+  v_role text;
 begin
-  -- AUTHORISE THE AUTHENTICATED PATH. service_role has no auth.uid(); it is the
-  -- edge function, which has already verified its caller is an owner/admin of the
-  -- program's org before reaching here. For a real signed-in user this check is
-  -- the only gate, so it must run whenever there IS a user.
-  if auth.uid() is not null
-     and not (can_edit_org(p_org_id) or is_platform_admin()) then
-    raise exception 'not_authorised_for_org' using errcode = 'PN001';
+  -- CORRECTED SAME DAY, AFTER A PROVEN LEAK ON PROD. The first version of this
+  -- function guarded with `if auth.uid() is not null and not can_edit_org(...)`
+  -- and revoked EXECUTE from PUBLIC. Both halves were insufficient, and together
+  -- they were an anonymous read of parent names and email addresses:
+  --   1. Supabase grants EXECUTE on a new function to `anon` DIRECTLY, not via
+  --      PUBLIC, so `revoke all ... from public` left anon able to call it.
+  --   2. For an anon caller auth.uid() IS NULL, so the authorisation branch was
+  --      skipped entirely rather than failing.
+  -- Proven on prod before fixing, as anon: 2 rows including a real parent's
+  -- address. Closed within minutes; both environments corrected in the same pass.
+  --
+  -- IT NOW FAILS CLOSED. The only caller allowed without a user is an explicit
+  -- service_role JWT (the edge function, which verifies its own caller first).
+  -- Anything else must be a signed-in user who can edit the org. The lesson is
+  -- gate 0b: "auth.uid() is not null AND ..." is a fail-OPEN guard, because the
+  -- absence of a user is the case you most need to refuse.
+  begin
+    v_role := coalesce(nullif(current_setting('request.jwt.claims', true), '')::json ->> 'role', '');
+  exception when others then
+    -- A setting that is absent or not valid JSON must not become authorisation.
+    v_role := '';
+  end;
+
+  if v_role <> 'service_role' then
+    if auth.uid() is null
+       or not (can_edit_org(p_org_id) or is_platform_admin()) then
+      raise exception 'not_authorised_for_org' using errcode = 'PN001';
+    end if;
   end if;
 
   -- Never trust the caller's org id: prove the program belongs to it. Without
@@ -101,5 +124,10 @@ $$;
 comment on function public.program_note_recipients(uuid, uuid) is
   'The single source of truth for who receives a note about a program. Read by BOTH EditProgramCurriculumModal (the operator preview) and notify-program-curriculum-change (the send), so the list an operator approves is the list that goes out. Exists because the preview ran under RLS and the send runs service-role: members_see_org_parents hides any parent with no parent_org_relationships row, which on prod 2026-08-20 was 240 of J2S''s 325 registered parents, so the preview could under-count a send. SECURITY DEFINER so the preview sees the send''s rows without widening parent visibility anywhere else. Authorises with can_edit_org whenever there is an auth.uid(); service_role callers are the edge function, which verifies its caller first. Returns nothing if the program does not belong to p_org_id. Grouping into one-entry-per-parent lives in familyRecipients.ts / familyRecipients.js, not here.';
 
+-- BOTH revokes are required. Supabase's default privileges hand EXECUTE to `anon`
+-- on every new function as a DIRECT grant, so revoking from PUBLIC does not remove
+-- it - which is exactly how the anon read above happened. Check the result with
+-- `select proacl from pg_proc ...` and expect NO anon entry; do not assume.
 revoke all on function public.program_note_recipients(uuid, uuid) from public;
+revoke all on function public.program_note_recipients(uuid, uuid) from anon;
 grant execute on function public.program_note_recipients(uuid, uuid) to authenticated, service_role;
