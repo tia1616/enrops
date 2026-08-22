@@ -684,6 +684,22 @@ eq('...and it is screen 3 that empties',
     /doc\.phase === 'ready'[\s\S]{0,400}type="checkbox"/.test(screen3));
   ok('Continue is blocked until the document is ready',
     /disabled=\{[^}]*doc\.phase !== 'ready'/.test(screen3));
+
+  // AND THE PROVIDER'S NAME COMES FROM THE CONTEXT, NOT FROM A PROP. WizardHost
+  // renders every screen with one fixed bundle — slug, instructor, onboarding,
+  // onAdvance, onBack — so ANY other value a screen declares as a prop silently
+  // resolves to its default forever. This screen shipped with `orgName = ''` as a
+  // prop, which meant the "not published yet" message could never name the
+  // provider: the single thing that message exists to do, dead on arrival, with no
+  // error and nothing in the UI to notice. Found in review, not by a test.
+  //
+  // Both halves asserted, because fixing this by passing the prop from WizardHost
+  // instead would work today and diverge from Screens 4 and 6 tomorrow. One way to
+  // read org config in this wizard.
+  ok('Screen3ORS reads orgName from the onboarding config',
+    /const\s*\{[^}]*\borgName\b[^}]*\}\s*=\s*useOnboardingConfig\(\)/.test(screen3));
+  ok('...and does not take it as a prop, which WizardHost never passes',
+    !/function Screen3ORS\([^)]*\borgName\b/.test(screen3));
 }
 
 // The wizard/gate contract: a screen with nothing left must be DROPPED, not

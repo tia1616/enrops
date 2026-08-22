@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { invokeOnboardingFn, isHandledRedirect } from '../../../lib/onboardingFetch.js';
 import { fetchLegalDocument } from '../../../lib/legalDoc.js';
 import { STEP_KEYS } from '../../../lib/onboardingSteps.js';
+import { useOnboardingConfig } from '../OnboardingConfigContext.jsx';
 import WizardLayout, { PrimaryButton, ScreenError } from '../WizardLayout.jsx';
 
 // Screen 3 — Business Eligibility (FYI).
@@ -44,8 +45,16 @@ const IRS_CONTRACTOR_URL =
 
 const DOC_KEY = 'contractor_status';
 
-export default function Screen3ORS({ slug, instructor, onboarding, onAdvance, onBack, orgName = '' }) {
+export default function Screen3ORS({ slug, instructor, onboarding, onAdvance, onBack }) {
   const navigate = useNavigate();
+  // FROM CONTEXT, NOT FROM PROPS, and this is the whole of a real bug. WizardHost
+  // renders every screen with a fixed `common` bundle — slug, instructor,
+  // onboarding, onAdvance, onBack — and nothing else. This screen originally took
+  // `orgName` as a prop with a default of '', so it silently resolved to '' on
+  // every render and the "not published yet" message below could never name the
+  // provider, which is the one thing that message exists to do. Screens 4 and 6
+  // read it off the context; so does this one now.
+  const { orgName } = useOnboardingConfig();
   const [acknowledged, setAcknowledged] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [busy, setBusy] = useState(false);

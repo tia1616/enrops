@@ -530,8 +530,10 @@ export default function InstructorDocuments() {
 //
 // LOCKED for the contractor agreement. It is signed rather than acknowledged and
 // onboarding cannot complete without it, so it has no off state to offer. Shown
-// rather than hidden, with the reason on hover: a missing switch on one row of
-// seven reads as a rendering bug.
+// rather than hidden, with the reason on hover: a missing switch on one row of a
+// list where every other row has one reads as a rendering bug. (Deliberately not
+// a count — the document list has moved twice and every hardcoded count in this
+// file rotted with it.)
 function DocToggle({ on, locked, busy, label, onClick }) {
   const title = locked
     ? "Always on — this is the one your instructors sign"

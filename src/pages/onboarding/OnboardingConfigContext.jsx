@@ -15,7 +15,8 @@ const DEFAULTS = {
   // organizations.instructor_document_config, via
   // public_org_directory.instructor_documents_public. Read through
   // isDocumentEnabled, never directly. An ABSENT key means ON, with no
-  // exceptions as of 2026-08-21 — the one opt-in document was deleted. So this
+  // exceptions as of 2026-08-21 — the one opt-in document became an ordinary
+  // default-ON one and the `defaultOff` mechanism went away with it. So this
   // empty default means "every document is required", which is the safe reading:
   // a document the provider has not written yet still blocks rather than being
   // silently skipped. Still read through isDocumentEnabled rather than directly,
