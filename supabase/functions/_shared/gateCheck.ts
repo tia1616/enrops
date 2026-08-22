@@ -61,12 +61,18 @@ export async function runGateCheck(
   // - Training on            → ADD 'training_completed' to the required set, but
   //   only when the org also has at least one active REQUIRED video — an
   //   enabled-but-empty library must not block onboarding. Default off.
-  // - Policies / additional  → each screen renders a fixed set of documents. A
-  //   provider can now switch individual documents off, and a screen with none
-  //   left is skipped by the wizard, so its step key can never be written. It
-  //   must come out of the required set too or onboarding stalls forever one
-  //   step short. Absent config = every document on = both steps required,
-  //   which is exactly today's behaviour for every existing org.
+  // - Contractor status / policies / additional → each of these screens renders
+  //   documents from instructor_document_config. A provider can switch individual
+  //   documents off, and a screen with none left is skipped by the wizard, so its
+  //   step key can never be written. It must come out of the required set too or
+  //   onboarding stalls forever one step short. Absent config = every document on
+  //   = all three steps required, which is exactly today's behaviour for every
+  //   existing org.
+  //   'contractor_status' joined this group on 2026-08-21, when Screen3ORS stopped
+  //   being hardcoded and became a provider-owned document. It is ONE document on
+  //   its OWN screen, so switching that single document off drops the whole
+  //   'ors_certification' step — the one case in this group where a single toggle
+  //   removes a step outright.
   // - Stripe pay off        → drop 'stripe_submitted' from the required set AND
   //   treat "payouts must be live" as satisfied. BOTH halves, for the same reason
   //   the background check needs both: dropping only the step leaves stripeReady
@@ -75,6 +81,7 @@ export async function runGateCheck(
   //   the wizard no longer shows them. Default true = today's behaviour.
   let bgcEnabled = true;
   let trainingRequired = false;
+  let contractorStatusRequired = true;
   let policiesRequired = true;
   let additionalRequired = true;
   let stripePayRequired = true;
@@ -118,6 +125,7 @@ export async function runGateCheck(
       trainingRequired = (count ?? 0) > 0;
     }
     const docCfg = (org?.instructor_document_config as Record<string, unknown> | null) ?? null;
+    contractorStatusRequired = stepHasEnabledDocuments(docCfg, 'contractor_status');
     policiesRequired = stepHasEnabledDocuments(docCfg, 'policies');
     additionalRequired = stepHasEnabledDocuments(docCfg, 'additional');
     // Strictly true, not truthy: the column is NOT NULL DEFAULT false, so only an
@@ -129,6 +137,7 @@ export async function runGateCheck(
   let requiredSteps: StepKey[] = bgcEnabled
     ? ALL_STEPS
     : ALL_STEPS.filter((k) => k !== 'checkr_submitted');
+  if (!contractorStatusRequired) requiredSteps = requiredSteps.filter((k) => k !== 'ors_certification');
   if (!policiesRequired) requiredSteps = requiredSteps.filter((k) => k !== 'policies_acknowledged');
   if (!additionalRequired) requiredSteps = requiredSteps.filter((k) => k !== 'additional_acks');
   if (!stripePayRequired) requiredSteps = requiredSteps.filter((k) => k !== 'stripe_submitted');

@@ -18,13 +18,19 @@
 // silently treated as "not used". Absence is not a decision.
 //
 // NO EXCEPTIONS, as of 2026-08-21. `contractor_status` used to be opt-in and was
-// the only key that needed an explicit `true`; it was deleted as redundant with the
-// contractor agreement, and its DEFAULT_OFF set went with it. The rule here is now
-// exactly the sentence above, with nothing to remember. Mirrors the browser half.
+// the only key that needed an explicit `true`. It is now an ordinary DEFAULT-ON
+// document backing its own screen (Screen3ORS), and the DEFAULT_OFF set that existed
+// for it alone is gone and is not coming back. The rule here is exactly the sentence
+// above, with nothing to remember. Mirrors the browser half.
 
-export type DocumentStep = 'agreement' | 'policies' | 'additional';
+export type DocumentStep = 'contractor_status' | 'agreement' | 'policies' | 'additional';
 
 export const DOCUMENTS_BY_STEP: Record<DocumentStep, string[]> = {
+  // ONE DOCUMENT, ONE SCREEN. Screen3ORS renders this document plus fixed platform
+  // guidance (an IRS link, and who is responsible for classifying a worker). Switch
+  // the document off and the whole step goes, which is why gateCheck must stop
+  // requiring 'ors_certification' — see the comment there.
+  contractor_status: ['contractor_status'],
   // Signed, not acknowledged. submit-agreement requires it and onboarding cannot
   // complete without it, so it is never toggleable — see ALWAYS_ON below.
   agreement: ['contractor_agreement'],

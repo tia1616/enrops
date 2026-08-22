@@ -217,8 +217,10 @@ export default function InstructorDocuments() {
     if (savingKey) return;
 
     // A "WRITE IT FIRST" GUARD STOOD HERE, and it is deliberately gone rather
-    // than generalised. Removed 2026-08-21 with contractor_status, the only
-    // document it could ever fire for.
+    // than generalised. Removed 2026-08-21, when the last default-OFF document
+    // stopped defaulting off — it was the only document the guard could ever fire
+    // for. (`contractor_status` still exists; it is default-ON now, which is
+    // exactly why the guard has nothing to catch. See below.)
     //
     // What it protected against is real: turning on a document nobody has written
     // stops every instructor dead, because the wizard fetches each enabled
@@ -229,8 +231,8 @@ export default function InstructorDocuments() {
     //
     // WHY THERE IS NO GUARD NOW. It was scoped to defaultOff, and an earlier
     // version scoped to published-ness instead trapped providers badly: it
-    // refused to switch ON any document with no published row, but the remaining
-    // seven all ship on and unwritten by design ("absent is not a decision"). So
+    // refused to switch ON any document with no published row, but every other
+    // document ships on and unwritten by design ("absent is not a decision"). So
     // a provider who switched photo_video_release off and changed their mind was
     // refused permanently, because this is the only write to
     // instructor_document_config in the app — while three lines of copy on this
@@ -238,7 +240,7 @@ export default function InstructorDocuments() {
     // that makes a documented, reversible action irreversible is worse than the
     // bug it prevents.
     //
-    // With the opt-in document deleted, every remaining document is already ON for
+    // With no document defaulting off, every document is already ON for
     // every provider whether or not it is written, so switching one back on
     // returns them to a state they were already in — never a new one. There is
     // nothing left for the guard to catch, and re-adding it in the published-ness
@@ -366,9 +368,17 @@ export default function InstructorDocuments() {
       {/* ALL of them block onboarding, not just the agreement. This banner used
           to say "start with the contractor agreement… onboarding cannot be
           completed until it exists", which reads as "that one is the blocker".
-          It is not: Screens 5 and 6 fetch the other seven by key and refuse to
+          It is not: Screens 3, 5 and 6 fetch the other seven by key and refuse to
           advance when any is missing. An operator who followed the old wording
-          would publish one document, invite an instructor, and strand them. */}
+          would publish one document, invite an instructor, and strand them.
+
+          IT ALSO USED TO SAY "start with the contractor agreement… then work down
+          the list", which stopped being true on 2026-08-21: the agreement is no
+          longer first. contractor_status is, because the list is now kept in the
+          order instructors meet the documents (Jessica: "can't you just put the
+          settings in the order they appear in the onboarding?"). Naming ONE
+          document to start with is what made this sentence fragile twice, so it
+          now points at the ordering rather than at a particular row. */}
       {writtenCount < enabledCount && (
         <div style={{ background: "#fbfaf6", border: `1px solid ${RULE}`, borderRadius: 10, padding: "12px 14px", fontSize: 13.5, color: INK, lineHeight: 1.55, marginBottom: 16 }}>
           <strong>
@@ -381,20 +391,22 @@ export default function InstructorDocuments() {
               sentence is built in instructorDocuments.js where a test can assert
               it, rather than inline where it could only be grepped for. */}
           <strong>{documentsBannerPhrase(enabledCount)}</strong>{" "}
-          during onboarding, and it stops at the first one that isn&apos;t published. Start with
-          the contractor agreement &mdash; it&apos;s the one they actually sign &mdash; then work
-          down the list.{" "}
-          {/* The way OUT of the banner that isn't "write seven documents". Without
-              this a provider reads "you can't finish onboarding yet" and assumes
-              the only fix is more writing — which is the exact complaint that
-              started this build. */}
+          during onboarding, and it stops at the first one that isn&apos;t published. The list
+          below is in the order your instructors meet them, so you can work straight down
+          it.{" "}
+          {/* The way OUT of the banner that isn't "write every one of them".
+              Without this a provider reads "you can't finish onboarding yet" and
+              assumes the only fix is more writing — which is the exact complaint
+              that started this build. Deliberately not a number: the document
+              count has moved twice and every hardcoded count in this file rotted
+              with it. */}
           Anything you don&apos;t use, switch off.
         </div>
       )}
 
       {/* Everything is switched off except the agreement. Not an error — a
           perfectly reasonable setup — but worth saying plainly, because from the
-          list alone five "Off" rows look like something went wrong. */}
+          list alone a column of "Off" rows looks like something went wrong. */}
       {enabledCount === 1 && writtenCount === enabledCount && (
         <div style={{ background: "#fbfaf6", border: `1px solid ${RULE}`, borderRadius: 10, padding: "12px 14px", fontSize: 13.5, color: INK, lineHeight: 1.55, marginBottom: 16 }}>
           <strong>Just the agreement.</strong> Everything else is switched off, so your

@@ -32,7 +32,10 @@ export const STEP_ORDER = [
 export const STEP_LABELS = {
   [STEP_KEYS.WELCOME]: 'Welcome',
   [STEP_KEYS.CHECKR_SUBMITTED]: 'Background check',
-  [STEP_KEYS.ORS_CERTIFICATION]: 'Business eligibility',
+  // Named for the document that now backs it, not for the per-state eligibility
+  // step that was cancelled. One name for one thing: an instructor sees this in
+  // the wizard progress and the provider sees the same words in Settings.
+  [STEP_KEYS.ORS_CERTIFICATION]: 'Independent contractor status',
   [STEP_KEYS.AGREEMENT_SIGNED]: 'Contractor agreement',
   [STEP_KEYS.POLICIES_ACKNOWLEDGED]: 'Policies',
   [STEP_KEYS.ADDITIONAL_ACKS]: 'Additional acknowledgments',
@@ -77,9 +80,19 @@ export const STEP_LABELS = {
 // did before this change. The real value always arrives (public_org_directory),
 // and gateCheck reads organizations directly, so the default is a
 // belt-and-braces for isolated renders rather than a live path.
+// CONTRACTOR STATUS is the fifth optional step, and it became optional by
+// becoming a DOCUMENT (2026-08-21). Until then Screen3ORS was hardcoded into
+// every provider's flow: always shown, backed by nothing a provider could see,
+// edit or switch off. It is now the `contractor_status` document on its own
+// screen, so it drops out by the same rule as policies and additional acks —
+// nothing published and switched off means nothing to render.
+//
+// DEFAULTS TO TRUE, like the other document steps, so a caller that knows
+// nothing about the config keeps the behaviour every instructor has had so far.
 export function effectiveStepOrder({
   bgcEnabled = true,
   trainingEnabled = false,
+  contractorStatusEnabled = true,
   policiesEnabled = true,
   additionalEnabled = true,
   stripePayEnabled = true,
@@ -87,6 +100,7 @@ export function effectiveStepOrder({
   return STEP_ORDER.filter((key) => {
     if (key === STEP_KEYS.CHECKR_SUBMITTED) return bgcEnabled;
     if (key === STEP_KEYS.TRAINING_COMPLETED) return trainingEnabled;
+    if (key === STEP_KEYS.ORS_CERTIFICATION) return contractorStatusEnabled;
     if (key === STEP_KEYS.POLICIES_ACKNOWLEDGED) return policiesEnabled;
     if (key === STEP_KEYS.ADDITIONAL_ACKS) return additionalEnabled;
     if (key === STEP_KEYS.STRIPE_SUBMITTED) return stripePayEnabled;

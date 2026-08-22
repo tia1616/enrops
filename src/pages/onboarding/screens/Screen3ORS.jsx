@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { invokeOnboardingFn, isHandledRedirect } from '../../../lib/onboardingFetch.js';
+import { fetchLegalDocument } from '../../../lib/legalDoc.js';
 import { STEP_KEYS } from '../../../lib/onboardingSteps.js';
 import WizardLayout, { PrimaryButton, ScreenError } from '../WizardLayout.jsx';
 
@@ -41,11 +42,48 @@ const IRS_CONTRACTOR_URL =
 // Do NOT reintroduce one: any value posted here would be stored under the
 // contractor's name against criteria this screen does not ask about.
 
-export default function Screen3ORS({ slug, instructor, onboarding, onAdvance, onBack }) {
+const DOC_KEY = 'contractor_status';
+
+export default function Screen3ORS({ slug, instructor, onboarding, onAdvance, onBack, orgName = '' }) {
   const navigate = useNavigate();
   const [acknowledged, setAcknowledged] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [busy, setBusy] = useState(false);
+  // THE PROVIDER'S HALF OF THIS SCREEN. Until 2026-08-21 the whole page was
+  // hardcoded, so no provider could see it in Settings or change a word of it.
+  // It is now backed by the `contractor_status` document, fetched exactly the way
+  // Screens 4, 5 and 6 fetch theirs.
+  const [doc, setDoc] = useState({ phase: 'loading', title: '', body: '', retryable: false });
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchLegalDocument(DOC_KEY, { navigate })
+      .then(({ data, error, status }) => {
+        if (cancelled) return;
+        // AN EMPTY BODY IS UNPUBLISHED, and it is handled here rather than at the
+        // checkbox — the same call the sibling screens make, for the same reason.
+        // get-legal-document returns 200 for a blank body, so disabling the
+        // checkbox instead would leave an instructor on a page with a heading, no
+        // text, and a Continue that can never enable.
+        if (error || !data?.body_text?.trim()) {
+          setDoc({
+            phase: 'unavailable',
+            title: '',
+            body: '',
+            // 404 or blank means the provider has not written it; retrying cannot
+            // fix that. Anything else may be transient.
+            retryable: !!error && status !== 404,
+          });
+          return;
+        }
+        setDoc({ phase: 'ready', title: data.title || '', body: data.body_text, retryable: false });
+      })
+      .catch((err) => {
+        if (isHandledRedirect(err)) return;
+        if (!cancelled) setDoc({ phase: 'unavailable', title: '', body: '', retryable: true });
+      });
+    return () => { cancelled = true; };
+  }, [navigate]);
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -82,38 +120,35 @@ export default function Screen3ORS({ slug, instructor, onboarding, onAdvance, on
       subtitle="A quick note about how this works."
     >
       <form onSubmit={handleSubmit} noValidate>
+        {/* THE PROVIDER'S TEXT. Whitespace preserved because the document is
+            authored as plain prose in Settings, exactly as Screens 5 and 6
+            render theirs. */}
         <div className="rounded-md border border-neutral-200 bg-neutral-50 p-4 text-sm leading-relaxed text-neutral-800">
-          <p>
-            Your engagement with this organization is as an{' '}
-            <strong>independent contractor</strong> — not as an employee. That
-            means:
-          </p>
-          <ul className="mt-3 list-disc space-y-1.5 pl-5">
-            <li>You're responsible for your own taxes (no withholding).</li>
-            <li>
-              You use your own transportation and carry your own car insurance.
-            </li>
-            <li>
-              You may work with other clients alongside this engagement.
-            </li>
-          </ul>
-          {/* Points at where the specifics actually live, now that this screen
-              stores nothing.
+          {doc.phase === 'loading' && (
+            <p className="text-neutral-500">Loading…</p>
+          )}
+          {doc.phase === 'unavailable' && (
+            // NAMES SOMEONE WHO CAN FIX IT, matching the sibling screens. An
+            // instructor cannot publish a document, so "try again" alone would be
+            // a dead end — this is the state Jeff's own instructors would hit
+            // while his document is unwritten.
+            <p>
+              {doc.retryable
+                ? 'We could not load this right now. Please refresh the page.'
+                : `${orgName || 'Your business operator'} has not published this note yet. You can carry on once they do — contact them if you are waiting.`}
+            </p>
+          )}
+          {doc.phase === 'ready' && (
+            <div className="whitespace-pre-wrap">{doc.body}</div>
+          )}
+
+          {/* FIXED PLATFORM GUIDANCE, below the provider's text and deliberately
+              NOT part of the editable document. A provider should not have to
+              write an IRS reference, and must not be able to reword or delete a
+              statement about their own responsibility for classifying the people
+              who work for them.
               STATE-NEUTRAL: naming a statute here is what got the old version
-              removed on 2026-05-25 and would not generalise past one state.
-              SECTION-NEUTRAL too, which is less obvious. The draft of this line
-              said "Section 3 — please read it before you sign", and Section 3 is
-              a section of ONE provider's agreement. Every other provider writes
-              their own from a starter whose parts are headed "The work",
-              "Independent contractor status", "Pay" and so on — no numbers at
-              all — so a section reference would point at nothing for everyone
-              except the tenant it was written for. Same bug as every other
-              hardcode removed from this path. */}
-          <p className="mt-3">
-            Your contractor agreement, on the next screen, sets out the specific
-            criteria for independent-business status — please read it before you
-            sign.
-          </p>
+              removed on 2026-05-25 and would not generalise past one state. */}
           <p className="mt-3">
             The federal and state rules around contractor classification vary
             by jurisdiction. If you want the official IRS overview, here it is:
@@ -136,21 +171,27 @@ export default function Screen3ORS({ slug, instructor, onboarding, onAdvance, on
           </p>
         </div>
 
-        <label className="mt-5 flex items-start gap-3 text-sm text-neutral-800">
-          <input
-            type="checkbox"
-            checked={acknowledged}
-            onChange={(e) => setAcknowledged(e.target.checked)}
-            className="mt-0.5 h-4 w-4 flex-shrink-0 rounded border-neutral-400"
-          />
-          <span>
-            I understand I'm working as an independent contractor.
-          </span>
-        </label>
+        {/* THE BOX STAYS — Jessica, 2026-08-21: "the ideas in this and the box
+            agreeing that they're independent contractors must remain."
+            Only shown once there is something to agree TO. Offering a tick over
+            an unpublished document asks an instructor to acknowledge nothing. */}
+        {doc.phase === 'ready' && (
+          <label className="mt-5 flex items-start gap-3 text-sm text-neutral-800">
+            <input
+              type="checkbox"
+              checked={acknowledged}
+              onChange={(e) => setAcknowledged(e.target.checked)}
+              className="mt-0.5 h-4 w-4 flex-shrink-0 rounded border-neutral-400"
+            />
+            <span>
+              I understand I'm working as an independent contractor.
+            </span>
+          </label>
+        )}
 
         <ScreenError>{submitError}</ScreenError>
 
-        <PrimaryButton disabled={busy || !acknowledged}>
+        <PrimaryButton disabled={busy || !acknowledged || doc.phase !== 'ready'}>
           {busy ? 'Saving…' : 'Got it — continue →'}
         </PrimaryButton>
       </form>

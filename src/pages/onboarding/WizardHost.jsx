@@ -69,11 +69,14 @@ export default function WizardHost({ slug, instructor, onboarding: initialOnboar
   // this half existed the wizard would skip the screen and the gate would wait
   // forever for a step key nobody can write.
   const bgcEnabled = backgroundCheck?.enabled !== false;
+  // Its own step now, resolved the same way the two multi-document screens are.
+  // Before 2026-08-21 this screen was unconditional and backed by no document.
+  const contractorStatusEnabled = stepHasEnabledDocuments(documentConfig, 'contractor_status');
   const policiesEnabled = stepHasEnabledDocuments(documentConfig, 'policies');
   const additionalEnabled = stepHasEnabledDocuments(documentConfig, 'additional');
   const stepOrder = useMemo(
-    () => effectiveStepOrder({ bgcEnabled, trainingEnabled, policiesEnabled, additionalEnabled, stripePayEnabled }),
-    [bgcEnabled, trainingEnabled, policiesEnabled, additionalEnabled, stripePayEnabled],
+    () => effectiveStepOrder({ bgcEnabled, trainingEnabled, contractorStatusEnabled, policiesEnabled, additionalEnabled, stripePayEnabled }),
+    [bgcEnabled, trainingEnabled, contractorStatusEnabled, policiesEnabled, additionalEnabled, stripePayEnabled],
   );
 
   const [currentStep, setCurrentStep] = useState(() =>

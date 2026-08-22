@@ -34,9 +34,12 @@ import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardL
 //
 // THIS LIST IS A SECOND COPY of the 'additional' group in
 // src/lib/instructorDocuments.js, and keeping it in sync is not optional. A
-// fourth document, `contractor_status`, was deleted on 2026-08-21; removing it
-// from the shared lib alone would have left this file listing a key the lib no
-// longer knows, and isDocumentEnabled answers an unknown key with "absent means
+// fourth document, `contractor_status`, was grouped here until 2026-08-21, when it
+// was briefly deleted and then MOVED TO ITS OWN SCREEN (Screen3ORS) — so it is
+// correctly absent from the list below, and the list below is the only place that
+// says so. Removing it from the shared lib alone would have left this file listing
+// a key the lib no longer knows, and isDocumentEnabled answers an unknown key with
+// "absent means
 // ON". So the section below would have rendered for EVERY provider, its document
 // would have 404'd (nobody ever published one), the 404 branch in loadAll sets
 // loadError and returns early — and every instructor reaching Screen 6 would get
