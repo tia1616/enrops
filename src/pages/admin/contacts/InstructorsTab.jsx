@@ -659,8 +659,12 @@ function useInstructorRecord(instructorId) {
             .eq('instructor_id', instructorId)
             .order('acknowledged_at', { ascending: true }),
           supabase
+            // `agreement_version`, NOT document_version — this table predates the
+            // generic acknowledgments one and keeps its own column name. Guessed
+            // wrong first time and PostgREST returned 42703; the error branch
+            // below is what surfaced it instead of rendering an empty list.
             .from('contractor_agreements')
-            .select('document_version, signed_at')
+            .select('agreement_version, signed_at')
             .eq('instructor_id', instructorId)
             .order('signed_at', { ascending: false }),
         ]);
@@ -826,7 +830,7 @@ function InstructorDetail({ row, age, onUploadBg, onRemove, onReactivate, isEdit
             {record.agreements.map((a, i) => (
               <div key={`ag-${i}`}>
                 Contractor agreement
-                {a.document_version ? ` · ${a.document_version}` : ''}
+                {a.agreement_version ? ` · ${a.agreement_version}` : ''}
                 {a.signed_at ? ` · ${fmtDate(a.signed_at)}` : ''}
                 <strong style={{ marginLeft: 6, color: OK }}>signed</strong>
               </div>
