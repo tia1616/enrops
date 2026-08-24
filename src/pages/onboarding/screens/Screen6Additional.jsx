@@ -148,8 +148,24 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
   const [mandatoryAck, setMandatoryAck] = useState(false);
   const [photoExpanded, setPhotoExpanded] = useState(false);
   const [vehicleExpanded, setVehicleExpanded] = useState(false);
+  // SEEDED FROM WHAT THEY ALREADY ANSWERED, unlike every other group on this
+  // screen. The others are acknowledgements: re-ticking one you have already
+  // ticked costs nothing, because the answer can only ever be yes. This one is a
+  // consent with a real no, and it is the ONLY box here whose blank state is a
+  // meaningful answer that gets written.
+  //
+  // Starting it unticked meant a resubmission silently overwrote an agreement
+  // with a refusal: press Back from Screen 7, re-tick the mandatory-reporter and
+  // driving boxes to re-enable Continue, miss the optional photo box, and the
+  // consent you gave is now recorded as declined with today's date. One
+  // direction only, and invisible to everyone.
+  //
+  // Strictly `=== true`: null means never asked, and an instructor who has not
+  // answered must see an empty box, not a ticked one.
   const [photoChecked, setPhotoChecked] = useState(() =>
-    Object.fromEntries(PHOTO_ACKS.map((a) => [a.key, false]))
+    Object.fromEntries(
+      PHOTO_ACKS.map((a) => [a.key, instructor?.photo_release_consent === true]),
+    )
   );
   const [vehicleChecked, setVehicleChecked] = useState(() =>
     Object.fromEntries(VEHICLE_ACKS.map((a) => [a.key, false]))

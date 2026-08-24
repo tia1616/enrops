@@ -203,7 +203,28 @@ serve(async (req: Request) => {
       }
     }
 
-    // Advance step
+    // Advance step.
+    //
+    // A FAILED ADVANCE IS THE FAILURE, and it is surfaced rather than swallowed.
+    // This used to log and return success on the reasoning "don't fail — acks are
+    // written", which gets the fail direction backwards: the acknowledgement rows
+    // are not what lets an instructor finish, the step key is. Swallow it and the
+    // wizard calls onAdvance(), the instructor sails through every remaining
+    // screen, and runGateCheck never sees the step — so overall_status sits at
+    // in_progress forever, with nothing left to click and no error anywhere. That
+    // is silent and permanent; an error the instructor can retry is neither.
+    //
+    // submit-ors-certification already knew this and said so in as many words:
+    // "a failed advance IS the failure ... rather than moving someone on from a
+    // step that was never recorded, which would strand them at the completion
+    // gate." Screen 3 now posts here instead of there, so that guard had to come
+    // with it — and it applies identically to policies and additional, which were
+    // exposed to the same stall the whole time.
+    //
+    // Safe to retry: the ack upsert is idempotent on
+    // (instructor_id, document_id, document_version) and the consent write above
+    // is a plain update to the same values, so a second attempt repeats the same
+    // writes and then advances.
     const stepInfo = STEP_ADVANCE[step];
     const { error: stepErr } = await advanceOnboardingStep(supabase, {
       instructorId: me.id,
@@ -213,8 +234,11 @@ serve(async (req: Request) => {
       ip,
     });
     if (stepErr) {
-      console.error('onboarding step advance failed:', stepErr);
-      // Don't fail — acks are written.
+      console.error('onboarding step advance failed:', stepErr, {
+        instructor_id: me.id,
+        step: stepInfo.key,
+      });
+      return json({ error: 'step_advance_failed' }, 500);
     }
 
     return json({ success: true, inserted: rows.length });

@@ -93,7 +93,11 @@ export default function OnboardingRouter() {
       // 3. Instructor record.
       const { data: instructor, error: instErr } = await supabase
         .from('instructors')
-        .select('id, organization_id, is_active, date_of_birth, first_name, last_name, preferred_name, email, phone, photo_url, site_preferences, availability, first_aid_cpr_url, first_aid_cpr_expires_at, shirt_size')
+        // photo_release_consent IS LOAD-BEARING, not display. Screen 6 seeds its
+        // consent box from it so that revisiting the screen cannot silently
+        // overwrite an agreement with a refusal — the box always renders
+        // unticked otherwise, and the submit posts whatever is on screen.
+        .select('id, organization_id, is_active, date_of_birth, first_name, last_name, preferred_name, email, phone, photo_url, site_preferences, availability, first_aid_cpr_url, first_aid_cpr_expires_at, shirt_size, photo_release_consent')
         .eq('auth_user_id', session.user.id)
         .maybeSingle();
 

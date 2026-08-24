@@ -842,9 +842,18 @@ function InstructorDetail({ row, age, onUploadBg, onRemove, onReactivate, isEdit
           <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
             {record.agreements.map((a, i) => (
               <div key={`ag-${i}`}>
-                Contractor agreement
+                {/* Through documentByKey like the rows below it, not a second
+                    spelling of the same label. Renaming a document in
+                    INSTRUCTOR_DOCUMENTS otherwise updated the acknowledgement
+                    rows and left the agreement above them reading the old name,
+                    in one list. */}
+                {documentByKey('contractor_agreement')?.label ?? 'Contractor agreement'}
                 {a.agreement_version ? ` · ${a.agreement_version}` : ''}
-                {a.signed_at ? ` · ${fmtTimestamp(a.signed_at)}` : ''}
+                {/* The FORMATTED value is what gets tested, not the raw column.
+                    fmtTimestamp returns null for anything Date cannot parse, and
+                    checking the raw field instead rendered the literal "null"
+                    beside the document name. */}
+                {fmtTimestamp(a.signed_at) ? ` · ${fmtTimestamp(a.signed_at)}` : ''}
                 <strong style={{ marginLeft: 6, color: OK }}>signed</strong>
               </div>
             ))}
@@ -852,7 +861,7 @@ function InstructorDetail({ row, age, onUploadBg, onRemove, onReactivate, isEdit
               <div key={`ack-${i}`}>
                 {documentByKey(a.document_id)?.label ?? a.document_id}
                 {a.document_version ? ` · ${a.document_version}` : ''}
-                {a.acknowledged_at ? ` · ${fmtTimestamp(a.acknowledged_at)}` : ''}
+                {fmtTimestamp(a.acknowledged_at) ? ` · ${fmtTimestamp(a.acknowledged_at)}` : ''}
               </div>
             ))}
           </div>
@@ -867,12 +876,12 @@ function InstructorDetail({ row, age, onUploadBg, onRemove, onReactivate, isEdit
         {row.photo_release_consent === true ? (
           <>
             Agreed
-            {row.photo_release_consent_at ? ` · ${fmtTimestamp(row.photo_release_consent_at)}` : ''}
+            {fmtTimestamp(row.photo_release_consent_at) ? ` · ${fmtTimestamp(row.photo_release_consent_at)}` : ''}
           </>
         ) : row.photo_release_consent === false ? (
           <>
             <strong style={{ color: RED }}>Declined</strong>
-            {row.photo_release_consent_at ? ` · ${fmtTimestamp(row.photo_release_consent_at)}` : ''}
+            {fmtTimestamp(row.photo_release_consent_at) ? ` · ${fmtTimestamp(row.photo_release_consent_at)}` : ''}
             <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>
               Don&apos;t use their photo or video in anything.
             </div>

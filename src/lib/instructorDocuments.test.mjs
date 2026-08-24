@@ -722,6 +722,46 @@ eq('...and it is screen 3 that empties',
     // verify — the wording that prompted this, and the reason it read wrong.
     ok('the mandatory-reporter tick claims only what it can evidence',
       !/will complete the mandatory reporting training/i.test(s6));
+
+    // THE BOX MUST START FROM WHAT THEY ALREADY ANSWERED. Found in review: it
+    // initialised to false unconditionally, so pressing Back from Screen 7 and
+    // resubmitting overwrote a recorded agreement with a refusal — one
+    // direction, silently, on a consent record. Every other group on this screen
+    // may start blank; this one may not, because its blank state is an answer
+    // that gets written.
+    ok('the photo consent starts from the stored answer, not from false',
+      /useState\([\s\S]{0,220}instructor\?\.photo_release_consent === true/.test(s6));
+    // ...and strictly against true, so "never asked" (null) still renders empty.
+    ok('...and null is not treated as agreed',
+      !/photo_release_consent\s*\)\s*\)/.test(s6)
+        && /photo_release_consent === true/.test(s6));
+  }
+
+  // --- A STEP THAT WAS NEVER RECORDED MUST FAIL LOUDLY ------------------------
+  //
+  // submit-acknowledgments used to log a failed step advance and return success
+  // on the reasoning "don't fail — acks are written". That is the fail direction
+  // backwards: the ack rows are not what lets an instructor finish, the step key
+  // is. Swallowing it moves them past a step nothing recorded, and the completion
+  // gate then waits forever for a key nobody can write — silent and permanent.
+  // Screen 3 was moved onto this function, so the guard submit-ors-certification
+  // carried had to come with it.
+  {
+    const fn = readFileSync(
+      new URL('../../supabase/functions/submit-acknowledgments/index.ts', import.meta.url), 'utf8',
+    ).replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/.*$/gm, ' ');
+    // ANCHORED ON THE ERROR CODE, not on "a return appears nearby". The first
+    // version of this matched /stepErr\)\s*\{[\s\S]{0,320}return json\(/, which
+    // the OLD broken code satisfied too — the success return sits ~150 characters
+    // below the if block, well inside that window. A guard that passes against
+    // the bug it was written for is worse than none, and this file has caught
+    // itself doing that twice now.
+    ok('a failed step advance returns an error rather than success',
+      /return json\(\{\s*error:\s*'step_advance_failed'\s*\},\s*500\)/.test(fn));
+    ok('...and success is not also returned for that path',
+      !/Don't fail\s*[-—]\s*acks are written/i.test(fn));
+    ok('...and the contractor-status step is one this function knows',
+      /contractor_status:\s*\{\s*key:\s*'ors_certification'/.test(fn));
   }
   ok('Continue is still blocked until the document is ready',
     /disabled=\{[^}]*doc\.phase !== 'ready'/.test(screen3));
