@@ -67,6 +67,19 @@ function fmtDate(d) {
   });
 }
 
+// SEPARATE FROM fmtDate, which is correct for what it does and must not change.
+// That one takes a DATE column ('2026-08-24') and pins it to local midnight so a
+// bare date is not shifted a day by the timezone. Signature and acknowledgement
+// times are timestamptz ('2026-08-24 19:22:33.118+00'), and appending T00:00:00
+// to one of those produces an unparseable string - the panel rendered
+// "Invalid Date" against every real document until this existed.
+function fmtTimestamp(ts) {
+  if (!ts) return null;
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
 export default function InstructorsTab({ org }) {
   const [rows, setRows] = useState(null); // null = loading
   const [search, setSearch] = useState('');
@@ -831,7 +844,7 @@ function InstructorDetail({ row, age, onUploadBg, onRemove, onReactivate, isEdit
               <div key={`ag-${i}`}>
                 Contractor agreement
                 {a.agreement_version ? ` · ${a.agreement_version}` : ''}
-                {a.signed_at ? ` · ${fmtDate(a.signed_at)}` : ''}
+                {a.signed_at ? ` · ${fmtTimestamp(a.signed_at)}` : ''}
                 <strong style={{ marginLeft: 6, color: OK }}>signed</strong>
               </div>
             ))}
@@ -839,7 +852,7 @@ function InstructorDetail({ row, age, onUploadBg, onRemove, onReactivate, isEdit
               <div key={`ack-${i}`}>
                 {documentByKey(a.document_id)?.label ?? a.document_id}
                 {a.document_version ? ` · ${a.document_version}` : ''}
-                {a.acknowledged_at ? ` · ${fmtDate(a.acknowledged_at)}` : ''}
+                {a.acknowledged_at ? ` · ${fmtTimestamp(a.acknowledged_at)}` : ''}
               </div>
             ))}
           </div>
@@ -854,12 +867,12 @@ function InstructorDetail({ row, age, onUploadBg, onRemove, onReactivate, isEdit
         {row.photo_release_consent === true ? (
           <>
             Agreed
-            {row.photo_release_consent_at ? ` · ${fmtDate(row.photo_release_consent_at)}` : ''}
+            {row.photo_release_consent_at ? ` · ${fmtTimestamp(row.photo_release_consent_at)}` : ''}
           </>
         ) : row.photo_release_consent === false ? (
           <>
             <strong style={{ color: RED }}>Declined</strong>
-            {row.photo_release_consent_at ? ` · ${fmtDate(row.photo_release_consent_at)}` : ''}
+            {row.photo_release_consent_at ? ` · ${fmtTimestamp(row.photo_release_consent_at)}` : ''}
             <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>
               Don&apos;t use their photo or video in anything.
             </div>
