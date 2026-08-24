@@ -667,23 +667,26 @@ eq('...and it is screen 3 that empties',
     .replace(/\/\/.*$/gm, ' ');
   ok('Screen3ORS fetches its document rather than just naming it',
     /fetchLegalDocument\(\s*DOC_KEY\b/.test(screen3));
-  // ...and NOBODY IS ASKED TO ACKNOWLEDGE AN UNPUBLISHED DOCUMENT. The tick box is
-  // the legal-shaped half of this screen, and it must only exist once there is text
-  // to agree to — Jessica kept the box, and a box over a "not published yet"
-  // message records agreement to nothing. Both the box and the Continue button are
-  // gated on the document being `ready`, which is greppable; asserted as the pair,
-  // because gating only the button leaves a tickable box that does nothing and
-  // gating only the box leaves a Continue that can never enable.
+  // EXACTLY ONE CONTRACTOR-STATUS CONFIRMATION IN THE WHOLE WIZARD, and it is the
+  // one that gets recorded. Removed from Screen 3 on 2026-08-24 (Jessica, walking
+  // the flow: "they shouldn't confirm their status as an independent contractor
+  // twice"). The asymmetry is why THIS one went: Screen 3's box stored nothing,
+  // Screen 4's is a NOT NULL column beside the signature, timestamp and IP.
   //
-  // A previous version of this assertion claimed the screen had "no hardcoded
-  // fallback body" and tested for the absence of the string `contractor_status` —
-  // a condition broader than the claim and unrelated to it, since fallback prose
-  // would not contain the key name. That is the proxy-predicate bug this repo keeps
-  // finding, so it is replaced rather than kept.
-  ok('the tick box only appears once the document is ready',
-    /doc\.phase === 'ready'[\s\S]{0,400}type="checkbox"/.test(screen3));
-  ok('Continue is blocked until the document is ready',
+  // Pinned as a PAIR, in both directions, because either half alone is a defect:
+  // a box back on Screen 3 restores the double ask, and losing Screen 4's box
+  // silently drops the only attestation there is.
+  ok('Screen 3 asks for no acknowledgement of its own',
+    !/type="checkbox"/.test(screen3));
+  ok('Continue is still blocked until the document is ready',
     /disabled=\{[^}]*doc\.phase !== 'ready'/.test(screen3));
+  {
+    const s4 = readFileSync(
+      new URL('../pages/onboarding/screens/Screen4Agreement.jsx', import.meta.url), 'utf8',
+    ).replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/.*$/gm, ' ');
+    ok('...and the agreement still carries the one that is recorded',
+      /key:\s*'confirm_contractor_status'/.test(s4));
+  }
 
   // AND THE PROVIDER'S NAME COMES FROM THE CONTEXT, NOT FROM A PROP. WizardHost
   // renders every screen with one fixed bundle — slug, instructor, onboarding,

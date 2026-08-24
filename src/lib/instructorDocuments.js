@@ -78,6 +78,16 @@ export const INSTRUCTOR_DOCUMENTS = [
     // to add this as editable on one of the screens... but he has to know it's
     // there, seen in settings."
     //
+    // AND IT IS AN EXPLAINER, NOT AN ATTESTATION. On 2026-08-24 Jessica walked the
+    // flow and caught the consequence: "they shouldn't confirm their status as an
+    // independent contractor twice." Screen 3's tick box is gone. It recorded
+    // nothing — submit-ors-certification stores no part of its payload — while
+    // Screen 4 records `confirm_contractor_status` beside the signature, timestamp,
+    // IP and a snapshot of the signed text. So the instructor was asked twice and
+    // answered once; now they are asked once, on the screen where the answer is
+    // kept. The document here is the plain-English half; the binding half lives in
+    // the agreement, and the two must not both claim to be the confirmation.
+    //
     // DEFAULTS ON, unlike the version that was deleted. That one carried
     // `defaultOff` because nobody had ever been asked for it and it was one of two
     // overlapping documents. Neither is true now: it backs a screen every
@@ -86,7 +96,7 @@ export const INSTRUCTOR_DOCUMENTS = [
     // remains one sentence with no exceptions.
     step: 'contractor_status',
     label: 'Independent contractor status',
-    help: 'A plain-English note telling instructors they are contractors rather than employees, and what that means for their taxes and their own insurance. They tick to confirm they understand.',
+    help: 'A plain-English note telling instructors they are contractors rather than employees, and what that means for their taxes and their own insurance. They read it before they reach your agreement, where they confirm their status and sign.',
     // OUR WORDING, kept as the starter at Jessica's request, converted to the same
     // shape as every other starter: prose we are confident about, plus a bracketed
     // prompt where only the provider can know the answer. `[your business name]`
@@ -229,7 +239,14 @@ If something goes wrong
     help: 'A short acknowledgment that they understand their duty to report suspected abuse or neglect. Shown in full on screen, not folded away.',
     // Short on purpose: this one renders inline above its checkbox rather than
     // in an accordion (Screen6Additional), so a wall of text would bury it.
+    // ASKS FOR THE TRAINING LINK, because the tick box beside this document says
+    // the instructor "has completed or will complete the mandatory reporting
+    // training" and nothing on the screen told them where to do it. A bare
+    // http(s) URL typed here renders as a clickable link (linkifyText, applied to
+    // this body on Screen 6) — which is what that helper was written for.
     starter: `[State that anyone working with children in your programs is expected to report suspected abuse or neglect, and that this duty applies whether or not the law where you operate names them a mandatory reporter.]
+
+[Paste the link to the reporting training you want them to take, and say whether it must be done before their first class or within a set time after. A web address on its own line becomes a clickable link.]
 
 [Say exactly who they contact, how quickly, and that they should report a concern even if they are unsure.]
 

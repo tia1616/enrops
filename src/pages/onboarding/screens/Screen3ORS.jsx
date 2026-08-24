@@ -55,7 +55,6 @@ export default function Screen3ORS({ slug, instructor, onboarding, onAdvance, on
   // provider, which is the one thing that message exists to do. Screens 4 and 6
   // read it off the context; so does this one now.
   const { orgName } = useOnboardingConfig();
-  const [acknowledged, setAcknowledged] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [busy, setBusy] = useState(false);
   // THE PROVIDER'S HALF OF THIS SCREEN. Until 2026-08-21 the whole page was
@@ -96,7 +95,11 @@ export default function Screen3ORS({ slug, instructor, onboarding, onAdvance, on
 
   async function handleSubmit(e) {
     e.preventDefault();
-    if (busy || !acknowledged) return;
+    // Mirrors the button's own condition rather than restating a subset of it.
+    // The button is disabled in this state, but the form can still be submitted
+    // by other routes, and advancing the step for someone who was never shown
+    // the provider's note is the one outcome this screen must not allow.
+    if (busy || doc.phase !== 'ready') return;
     setBusy(true);
     setSubmitError('');
     try {
@@ -180,27 +183,31 @@ export default function Screen3ORS({ slug, instructor, onboarding, onAdvance, on
           </p>
         </div>
 
-        {/* THE BOX STAYS — Jessica, 2026-08-21: "the ideas in this and the box
-            agreeing that they're independent contractors must remain."
-            Only shown once there is something to agree TO. Offering a tick over
-            an unpublished document asks an instructor to acknowledge nothing. */}
-        {doc.phase === 'ready' && (
-          <label className="mt-5 flex items-start gap-3 text-sm text-neutral-800">
-            <input
-              type="checkbox"
-              checked={acknowledged}
-              onChange={(e) => setAcknowledged(e.target.checked)}
-              className="mt-0.5 h-4 w-4 flex-shrink-0 rounded border-neutral-400"
-            />
-            <span>
-              I understand I'm working as an independent contractor.
-            </span>
-          </label>
-        )}
+        {/* NO TICK BOX HERE, DELIBERATELY — removed 2026-08-24 after Jessica
+            walked the flow: "they shouldn't confirm their status as an
+            independent contractor twice."
+            She was right, and the asymmetry is what made it safe to remove THIS
+            one rather than the other. This screen's box recorded NOTHING:
+            submit-ors-certification ignores its body entirely ("whatever
+            arrives, nothing is stored") and exists only to advance the step. The
+            real attestation is on Screen 4 — `confirm_contractor_status`, a NOT
+            NULL boolean stored beside the typed signature, timestamp, IP and a
+            snapshot of the exact text signed. So an instructor was ASKED twice
+            and only ever ANSWERED once.
+            Her 2026-08-21 rule that "the box agreeing that they're independent
+            contractors must remain" is still honoured — it remains on the screen
+            where it is actually recorded.
+            This screen is now what it always really was: a plain-English
+            heads-up the provider owns and can edit. */}
 
         <ScreenError>{submitError}</ScreenError>
 
-        <PrimaryButton disabled={busy || !acknowledged || doc.phase !== 'ready'}>
+        {/* STILL GATED ON A PUBLISHED DOCUMENT. Dropping the tick must not turn
+            this into a screen an instructor can click past while the provider's
+            note is missing — the point is that they READ it. An unpublished
+            document keeps the actionable message above and a disabled button,
+            exactly as before. */}
+        <PrimaryButton disabled={busy || doc.phase !== 'ready'}>
           {busy ? 'Saving…' : 'Got it — continue →'}
         </PrimaryButton>
       </form>
