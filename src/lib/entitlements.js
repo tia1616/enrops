@@ -99,6 +99,29 @@ export function canManageInstructors(org) {
 }
 
 /**
+ * Does this org have the Offerings (curriculum) library?
+ *
+ * A TIER DIFFERENCE, NOT A PERMISSION ONE — AdminLayout already strips
+ * `/admin/curricula` from the lean nav and says so in as many words: "the
+ * curriculum library stays out: that is a genuine tier difference". This
+ * function is that same rule, named, so anything ELSE that depends on the
+ * library can ask instead of re-deriving it from instructor_pay_model.
+ *
+ * The reason it exists: Survey Settings offered a "What subjects they like to
+ * teach" question whose answer options come from Offerings, with a link to
+ * /admin/curricula. For a lean operator that is a question they cannot configure
+ * pointing at a page that is not in their nav. Jessica hit it on 2026-08-24.
+ *
+ * Deliberately NOT "does the org have any curricula rows" — a lean org can have
+ * curricula (Jeff has two, seeded) and still have no way to reach or manage them.
+ * The question is whether the SURFACE exists for them, which is what the nav
+ * decides.
+ */
+export function hasOfferingsLibrary(org) {
+  return org?.instructor_pay_model !== "enrops_platform";
+}
+
+/**
  * Which Comms audience pills this org should see.
  *
  * Two independent reasons an audience is hidden, and they must not be confused:

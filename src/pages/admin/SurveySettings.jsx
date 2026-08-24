@@ -15,6 +15,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
+import { hasOfferingsLibrary } from "../../lib/entitlements.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -68,6 +69,27 @@ export default function SurveySettings() {
 
   // Owner/admin can save; everyone else sees a read-only view.
   const canEdit = useMemo(() => ["owner", "admin"].includes(orgMember?.role), [orgMember]);
+
+  // THE SUBJECTS QUESTION IS NOT OFFERED TO AN ORG WITHOUT THE OFFERINGS LIBRARY.
+  //
+  // Its answer options come from Offerings, and the row links there, but
+  // /admin/curricula is deliberately stripped from the lean nav as a tier
+  // difference. So a lean operator was shown a question they cannot put any
+  // answers into, pointing at a page that is not in their menu. Jeff found it and
+  // switched it off himself, which is the tell that it should not have been there.
+  //
+  // NOT DELETED OUTRIGHT, deliberately: J2S runs on it. 17 of their 18 instructors
+  // have answered it and it feeds who gets matched to which class. Removing the
+  // question would throw that away to tidy a page it does not belong on.
+  //
+  // Hiding it here also cannot strand an answer, because the instructor-facing
+  // forms already skip the question when there are no category options, and the
+  // stored `disabled_questions` value is untouched either way.
+  const offerings = hasOfferingsLibrary(org);
+  const questionsFor = useMemo(
+    () => (ctxKey) => QUESTIONS[ctxKey].filter((q) => q.key !== "subjects" || offerings),
+    [offerings],
+  );
 
   useEffect(() => {
     if (!org?.id) return;
@@ -153,8 +175,13 @@ export default function SurveySettings() {
       <h1 style={{ margin: 0, color: PURPLE, fontSize: 26, fontWeight: 700 }}>Availability survey</h1>
       <p style={{ color: MUTED, fontSize: 14, margin: "6px 0 22px", lineHeight: 1.5, maxWidth: 620 }}>
         Choose which questions your availability survey asks and set a default intro. Turn off anything you don't need.
-        The scheduling questions are always asked. Answer options for areas and subjects come from your Programs and
-        Offerings — manage those there.
+        The scheduling questions are always asked.{" "}
+        {/* Named the two sources unconditionally, including Offerings, which a lean
+            operator has no menu item for. Pointing someone at a page that is not in
+            their nav is the same defect as listing the question itself. */}
+        {offerings
+          ? "Answer options for areas and subjects come from your Programs and Offerings — manage those there."
+          : "Answer options for areas come from your Programs and Partners — manage them there."}
       </p>
 
       {toast && (
@@ -184,6 +211,7 @@ export default function SurveySettings() {
             <ContextPanel
               key={ctx.key}
               ctx={ctx}
+              questions={questionsFor(ctx.key)}
               state={config[ctx.key]}
               canEdit={canEdit}
               saving={savingCtx === ctx.key}
@@ -200,8 +228,7 @@ export default function SurveySettings() {
   );
 }
 
-function ContextPanel({ ctx, state, canEdit, saving, saved, error, onToggle, onIntro, onSave }) {
-  const questions = QUESTIONS[ctx.key];
+function ContextPanel({ ctx, questions, state, canEdit, saving, saved, error, onToggle, onIntro, onSave }) {
   return (
     <section style={{ background: PANEL, border: `1px solid ${RULE}`, borderRadius: 12, padding: "20px 22px" }}>
       <div style={{ marginBottom: 14 }}>
