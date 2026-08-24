@@ -122,8 +122,21 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
         </div>
         {!lean && (
           <div>
-            <label className="label-field">Homeroom teacher</label>
+            {/* Required as of 2026-08-24. Jessica, on FA26: 42 of 118 confirmed
+                registrations had no homeroom teacher, so instructors collecting a
+                class from classrooms had nothing to go on for a third of the
+                roster. Optional-but-asked produced exactly the gap the question
+                exists to close.
+
+                Starred and enforced in Register.jsx, the same pair as Grade above -
+                a label that promises "required" while the button lets an empty
+                answer through is the mistake this mirrors away from. Only rendered
+                for full-nav orgs, so no lean tenant's checkout gains a field. */}
+            <label className="label-field" htmlFor={`student-homeroom-${childIndex}`}>
+              Homeroom teacher *
+            </label>
             <input
+              id={`student-homeroom-${childIndex}`}
               className="input-field"
               value={student.homeroom_teacher}
               onChange={(e) => onUpdate({ homeroom_teacher: e.target.value })}
