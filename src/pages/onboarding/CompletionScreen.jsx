@@ -205,10 +205,20 @@ function pickVariant(status) {
     };
   }
   // 'complete' (or unknown — render the success variant as a safe fallback)
+  //
+  // SAYS "assignments", NOT "summer camp assignments". This is the last screen of
+  // onboarding and every provider's instructors see it, so one tenant's programme
+  // shape cannot be baked into it: it told an after-school ukulele instructor that
+  // their summer camp assignments were waiting. Spotted by Jessica walking the
+  // flow on 2026-08-24 as a Ukulele Project instructor.
+  //
+  // The neutral word is also the true one — an instructor may have camps, weekly
+  // classes, or neither yet — and it needs no tenant config to be correct, which
+  // is why it is a flat string rather than something threaded through orgName.
   return {
     emoji: '🎉',
     title: "You're fully onboarded ✓",
-    body: 'Your summer camp assignments are waiting for you in enrops.',
+    body: 'Your assignments are waiting for you in enrops.',
     borderClass: 'border-green-300',
     cta: 'Go to my portal →',
   };

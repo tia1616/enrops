@@ -3,13 +3,18 @@
 //
 // THE KEYS ARE A CONTRACT, NOT A PREFERENCE. Each one is fetched by name by a
 // specific wizard screen, so this list may not invent a key or rename one:
+//   contractor_status                         -> Screen3ORS (one ack, its own screen)
 //   contractor_agreement                      -> Screen4Agreement (signed, snapshotted)
 //   pay_schedule / attendance_policy /
 //   code_of_conduct                           -> Screen5Policies (one ack each)
-//   contractor_status / mandatory_reporter_ack /
-//   photo_video_release / vehicle_driving_ack -> Screen6Additional
+//   mandatory_reporter_ack / photo_video_release /
+//   vehicle_driving_ack                       -> Screen6Additional
 // Adding a key here that no screen reads would produce a document an operator
-// writes and no instructor ever sees. Verified against those three files.
+// writes and no instructor ever sees. Verified against those four files.
+//
+// contractor_status is the only one whose screen is ALSO carrying fixed platform
+// guidance (an IRS link, and who is responsible for classifying a worker). The
+// document is the provider's half of that screen, not the whole of it.
 //
 // A FOURTH PLACE HAS TO AGREE: public_org_directory.instructor_documents_public
 // enumerates these keys by hand in SQL, and it is what the WIZARD reads —
@@ -19,10 +24,14 @@
 // and dead-ends on a 404. The JS/TS pair is pinned by a drift guard in
 // onboardingSteps.test.mjs and the view by one in instructorDocuments.test.mjs.
 //
-// ARRAY ORDER IS THE ADMIN SCREEN'S ORDER — InstructorDocuments maps this list
-// raw, under a banner reading "start with the contractor agreement, then work
-// down the list". Keep each entry beside the others its screen reads, or the
-// list stops matching the order an instructor meets them in.
+// ARRAY ORDER IS THE ADMIN SCREEN'S ORDER, AND IT IS ONBOARDING ORDER —
+// InstructorDocuments maps this list raw, under a banner that now says the list is
+// in the order instructors meet them. Jessica, 2026-08-21: "can't you just put the
+// settings in the order they appear in the onboarding?" So the array runs
+// contractor_status (Screen 3), contractor_agreement (Screen 4), the three policies
+// (Screen 5), the three additional acks (Screen 6). Keep each entry beside the
+// others its screen reads, or the list stops matching the order an instructor meets
+// them in — and the banner stops being true.
 //
 // `step` records WHICH screen reads each key, and it is load-bearing rather than
 // documentation: turning documents off can empty a whole screen, and a screen
@@ -43,6 +52,76 @@
 // safe failure — far better than one that reads finished and is wrong.
 
 export const INSTRUCTOR_DOCUMENTS = [
+  {
+    key: 'contractor_status',
+    // FIRST IN THE LIST, because Settings order IS onboarding order. Jessica,
+    // 2026-08-21: "can't you just put the settings in the order they appear in the
+    // onboarding?" An instructor meets this on Screen 3, before the agreement on
+    // Screen 4, so it goes above the agreement here and the banner no longer tells
+    // operators to start with the agreement. One order, learned once.
+    //
+    // ITS OWN STEP, not folded onto Screen 6, and that is the point of this entry.
+    //
+    // THE HISTORY, because this key has been round the houses and the next reader
+    // deserves the short version. It was built as the replacement for Screen 4's
+    // ORS 670.600 citation under a planned per-state step; that step was cancelled
+    // on 2026-08-13, so on 2026-08-21 the key was deleted as redundant — the
+    // reasoning being that contractor status is already asserted by the tick box
+    // and by the agreement. Correct on the law, wrong about the product: there was
+    // a whole SCREEN explaining independent-contractor status to instructors
+    // (Screen3ORS), hardcoded, that no provider could see or edit. Jeff walked his
+    // own onboarding on 2026-08-21, liked that screen, and could not find it in
+    // Settings because it was not a document at all.
+    //
+    // So the screen stays and becomes provider-owned. Jessica: "the ideas in this
+    // and the box agreeing that they're independent contractors must remain. Need
+    // to add this as editable on one of the screens... but he has to know it's
+    // there, seen in settings."
+    //
+    // AND IT IS AN EXPLAINER, NOT AN ATTESTATION. On 2026-08-24 Jessica walked the
+    // flow and caught the consequence: "they shouldn't confirm their status as an
+    // independent contractor twice." Screen 3's tick box is gone. It recorded
+    // nothing — submit-ors-certification stores no part of its payload — while
+    // Screen 4 records `confirm_contractor_status` beside the signature, timestamp,
+    // IP and a snapshot of the signed text. So the instructor was asked twice and
+    // answered once; now they are asked once, on the screen where the answer is
+    // kept. The document here is the plain-English half; the binding half lives in
+    // the agreement, and the two must not both claim to be the confirmation.
+    //
+    // DEFAULTS ON, unlike the version that was deleted. That one carried
+    // `defaultOff` because nobody had ever been asked for it and it was one of two
+    // overlapping documents. Neither is true now: it backs a screen every
+    // instructor already sees today, so ON is the state that matches what is
+    // already happening. The `defaultOff` flag stays gone and ABSENT MEANS ON
+    // remains one sentence with no exceptions.
+    step: 'contractor_status',
+    label: 'Independent contractor status',
+    help: 'A plain-English note telling instructors they are contractors rather than employees, and what that means for their taxes and their own insurance. They read it before they reach your agreement, where they confirm their status and sign.',
+    // OUR WORDING, kept as the starter at Jessica's request, converted to the same
+    // shape as every other starter: prose we are confident about, plus a bracketed
+    // prompt where only the provider can know the answer. `[your business name]`
+    // matches the agreement starter's convention rather than inventing a
+    // substitution token — the only `{{...}}` tokens in this file are the four the
+    // agreement signature pipeline actually renders.
+    //
+    // What is NOT here, deliberately: the IRS link and the line about who is
+    // responsible for confirming classification. Those stay as fixed platform
+    // guidance on the screen. A provider should not have to write an IRS reference,
+    // and should not be able to delete or reword a statement about their own legal
+    // responsibility for classifying the people who work for them.
+    starter: `Working as an independent contractor
+
+Your engagement with [your business name] is as an independent contractor, not as an employee. That means:
+
+- You are responsible for your own taxes. Nothing is withheld from what we pay you.
+- You use your own transportation and carry your own car insurance.
+- You may work with other clients alongside this engagement.
+
+[Add anything else specific to how you engage contractors — equipment they bring, whether they set their own teaching methods, or how they invoice you.]
+
+Where the detail lives
+Your contractor agreement sets out the specific criteria for independent-business status. Please read it before you sign.`,
+  },
   {
     key: 'contractor_agreement',
     step: 'agreement',
@@ -154,50 +233,20 @@ If something goes wrong
 [Say who to tell, how fast, and make clear that reporting a concern is always the right call.]`,
   },
   {
-    key: 'contractor_status',
-    step: 'additional',
-    // DEFAULT OFF — the only document that is, and the exception is deliberate.
-    // See defaultOff in isDocumentEnabled for why the usual "absent means ON"
-    // rule had to be broken for exactly this key.
-    //
-    // WHAT IT REPLACES. Screen 4's tick box used to read "...independent
-    // contractor under ORS 670.600" — an Oregon statute, on every provider's
-    // screen, in every state. The recorded plan was a per-state step. Jessica
-    // killed that on 2026-08-13: "we're not going to track all state policies."
-    // Fifty states' classification tests, each amendable, is a compliance
-    // product we are not building and could not keep correct — and a stale
-    // citation is worse than none, because it reads authoritative.
-    //
-    // So the provider writes it. They know their state, their staffing model
-    // and their own counsel's advice; we know none of the three. The starter
-    // asks for a link to their state's own page rather than restating the test,
-    // so what an instructor reads is maintained by the body that wrote it.
-    defaultOff: true,
-    label: 'Independent contractor status',
-    // No "off unless you turn it on" here, though it was the first draft: this
-    // help line is only rendered for a document that is ON, so it would have
-    // read "...Off unless you turn it on" underneath a card saying On.
-    help: "Only if you want instructors to confirm they meet your state's test for independent contractor status. Most providers link to their state's own page rather than restating the rules.",
-    starter: `Working as an independent contractor
-[State plainly that instructors work as independent contractors and not employees, and what that means day to day — they set their own methods, use their own equipment, and may work for others.]
-
-Your state's rules
-[Link to your own state's page on independent contractor classification, and say that the instructor is responsible for meeting it. Search for your state's labour or revenue department page on worker classification; do not paraphrase the test here, because it changes.]
-
-Taxes and insurance
-[Say that you do not withhold taxes, what tax form you issue and when, and whether you require them to carry any insurance.]
-
-If your situation changes
-[Say who to tell if their working arrangement changes in a way that affects this.]`,
-  },
-  {
     key: 'mandatory_reporter_ack',
     step: 'additional',
     label: 'Mandatory reporting acknowledgment',
     help: 'A short acknowledgment that they understand their duty to report suspected abuse or neglect. Shown in full on screen, not folded away.',
     // Short on purpose: this one renders inline above its checkbox rather than
     // in an accordion (Screen6Additional), so a wall of text would bury it.
+    // ASKS FOR THE TRAINING LINK, because the tick box beside this document says
+    // the instructor "has completed or will complete the mandatory reporting
+    // training" and nothing on the screen told them where to do it. A bare
+    // http(s) URL typed here renders as a clickable link (linkifyText, applied to
+    // this body on Screen 6) — which is what that helper was written for.
     starter: `[State that anyone working with children in your programs is expected to report suspected abuse or neglect, and that this duty applies whether or not the law where you operate names them a mandatory reporter.]
+
+[Paste the link to the reporting training you want them to take, and say whether it must be done before their first class or within a set time after. A web address on its own line becomes a clickable link.]
 
 [Say exactly who they contact, how quickly, and that they should report a concern even if they are unsure.]
 
@@ -332,15 +381,19 @@ export const DOCUMENT_KEYS = INSTRUCTOR_DOCUMENTS.map((d) => d.key);
  * has already been wrong:
  *
  *   - "the N you've turned on" attributed a choice nobody made. It was correct
- *     while the untouched state was all-on; the day contractor_status shipped
- *     default-off the untouched state became N-1, which selects this branch, so
- *     the sentence every provider saw on first visit claimed they had turned on
- *     seven documents they had never touched.
- *   - "the 1 that are switched on" — reachable (six toggleable documents off,
- *     contractor_status already off) and ungrammatical. The dedicated
- *     "Just the agreement" banner does NOT preempt it: that one requires
- *     writtenCount === enabledCount, and this branch only renders when
- *     writtenCount is LOWER, so they are mutually exclusive.
+ *     while the untouched state was all-on, then broke the day a default-OFF
+ *     document shipped and made the untouched state N-1, which selects this
+ *     branch — so the sentence every provider saw on first visit claimed they
+ *     had turned on documents they had never touched. That document is now an
+ *     ordinary default-ON one and nothing defaults off any more, so the untouched
+ *     state is all-on again and this branch is unreachable from a fresh org. Kept anyway:
+ *     it is reachable the moment a provider switches one off, which is the
+ *     normal case, and it was the ORIGINAL bug here.
+ *   - "the 1 that are switched on" — reachable (all but one toggleable document
+ *     switched off) and ungrammatical. The dedicated "Just the agreement" banner
+ *     does NOT preempt it: that one requires writtenCount === enabledCount, and
+ *     this branch only renders when writtenCount is LOWER, so they are mutually
+ *     exclusive.
  *
  * A phrase with three branches inside JSX is a phrase nobody can test. Returned
  * as a value so the test asserts the sentence rather than grepping the file for
@@ -372,27 +425,13 @@ export function documentByKey(key) {
  * Absence is not a decision. Only an explicit `false` turns a document off, so
  * an unwritten document keeps blocking onboarding exactly as it does today.
  *
- * ONE DOCUMENT DEFAULTS OFF, AND THE EXCEPTION PROVES THE RULE RATHER THAN
- * BENDING IT. contractor_status carries `defaultOff`, so it needs an explicit
- * `true`. The reason the safety argument above does not apply to it:
- *
- *   - The rule protects a document a provider MEANT to have. Nobody has ever
- *     been asked for this one, so there is no provider intent to preserve — an
- *     absent value here means "never offered", not "not yet written".
- *   - Defaulting it on would take every existing provider, and every one of
- *     their instructors mid-onboarding, and block them on a document that does
- *     not exist and that nobody has been told to write. That is not a safer
- *     failure; it is an outage with a safety-shaped justification.
- *   - Nothing is lost by it being off. The contractor agreement is signed
- *     either way and is never toggleable, and it already covers contractor
- *     status in its own body. This document adds a SEPARATE, per-state
- *     acknowledgment on top; a provider who does not opt in is where they are
- *     today, not somewhere worse.
- *
- * The general rule is "absence is not a decision". For a brand-new optional
- * document, shipping it off IS the decision, and it was Jessica's (2026-08-13).
- * A future default-off document needs its own version of this argument; this
- * flag is not a convenience.
+ * NO DOCUMENT DEFAULTS OFF, and the rule is one sentence with no exceptions.
+ * `contractor_status` was the only one that ever did. It was deleted on
+ * 2026-08-21 and brought back the same day as an ordinary, default-ON document
+ * backing its own screen (see its entry) — so the `defaultOff` flag stayed gone
+ * rather than returning with it. A flag with no holder is an invitation: the next
+ * person needing an optional document would reach for it instead of arguing for
+ * it. If one is ever genuinely needed, re-derive the argument then.
  *
  * These read the SAME shape from two places, which is deliberate:
  *   - the admin screen reads organizations.instructor_document_config directly;
@@ -411,10 +450,10 @@ export function isDocumentEnabled(config, key) {
   // The agreement is signed, not acknowledged, and onboarding cannot complete
   // without it. No stored value can switch it off.
   if (meta?.alwaysOn) return true;
-  // Opt-in: needs an explicit true, not merely "not false". Strict === true, so
-  // a stray truthy value someone hand-writes into the JSONB (1, "yes") does not
-  // quietly switch on a legal acknowledgment nobody chose in the UI.
-  if (meta?.defaultOff) return config?.[key] === true;
+  // Absent means ON. Only an explicit false turns a document off, so a document a
+  // provider intends to have but has not written yet keeps blocking onboarding
+  // rather than being silently treated as unused. There is no longer any opt-in
+  // branch here — see the note above.
   return config?.[key] !== false;
 }
 

@@ -10,10 +10,10 @@ import { useOnboardingConfig } from '../OnboardingConfigContext.jsx';
 import Chevron from '../../../components/Chevron.jsx';
 import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardLayout.jsx';
 
-// Screen 6 — Additional Acknowledgments. Up to four documents. contractor_status
-// and mandatory_reporter_ack are short enough to render inline (not in an
-// accordion) above a single checkbox each; photo_video_release and
-// vehicle_driving_ack are accordions with multiple per-section acks.
+// Screen 6 — Additional Acknowledgments. Up to three documents.
+// mandatory_reporter_ack is short enough to render inline (not in an accordion)
+// above a single checkbox; photo_video_release and vehicle_driving_ack are
+// accordions with multiple per-section acks.
 //
 // All required checkboxes must be checked before submit. The edge-function
 // payload only needs document_id + document_version per doc — the granular
@@ -29,30 +29,44 @@ import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardL
 // Its checkbox group cannot be checked because it is not on the page, so
 // including it would leave Continue permanently disabled.
 //
-// With all four off the screen is dropped from the wizard entirely
+// With all three off the screen is dropped from the wizard entirely
 // (WizardHost/effectiveStepOrder) and from the completion gate (gateCheck).
-// contractor_status defaults OFF rather than on, so for every provider today
-// this screen is exactly what it was — three documents, unchanged — until
-// somebody turns it on.
+//
+// THIS LIST IS A SECOND COPY of the 'additional' group in
+// src/lib/instructorDocuments.js, and keeping it in sync is not optional. A
+// fourth document, `contractor_status`, was grouped here until 2026-08-21, when it
+// was briefly deleted and then MOVED TO ITS OWN SCREEN (Screen3ORS) — so it is
+// correctly absent from the list below, and the list below is the only place that
+// says so. Removing it from the shared lib alone would have left this file listing
+// a key the lib no longer knows, and isDocumentEnabled answers an unknown key with
+// "absent means
+// ON". So the section below would have rendered for EVERY provider, its document
+// would have 404'd (nobody ever published one), the 404 branch in loadAll sets
+// loadError and returns early — and every instructor reaching Screen 6 would get
+// the red "your program hasn't published these documents" box instead of the
+// form, with no way to continue onboarding. The build and the whole test suite
+// were green with that bug in place. If you remove a document, remove it HERE
+// too, and grep the wizard screens before believing you are done.
 
-const CONTRACTOR_STATUS_KEY = 'contractor_status';
 const MANDATORY_KEY = 'mandatory_reporter_ack';
 const PHOTO_KEY = 'photo_video_release';
 const VEHICLE_KEY = 'vehicle_driving_ack';
 
-const ALL_DOC_KEYS = [CONTRACTOR_STATUS_KEY, MANDATORY_KEY, PHOTO_KEY, VEHICLE_KEY];
+const ALL_DOC_KEYS = [MANDATORY_KEY, PHOTO_KEY, VEHICLE_KEY];
 
-// OFF unless the provider opts in — the only document that defaults off, and the
-// reason it exists at all is that Screen 4's tick box used to cite an Oregon
-// statute to instructors in every state. The rules are the provider's to state
-// (and to link to), because they are the ones who know which state's test
-// applies. The wording here stays deliberately general: what the instructor is
-// confirming is described in THEIR provider's document, rendered right above it.
-const CONTRACTOR_STATUS_ACK =
-  'I have read this and I confirm I meet the requirements for working as an independent contractor';
-
+// SAYS WHAT THE TICK CAN ACTUALLY EVIDENCE, which the previous wording did not.
+// It read "I have completed or will complete the mandatory reporting training and
+// will comply with reporting requirements" — an assertion about training the
+// platform cannot verify, has no record of, and never linked to anywhere on the
+// screen. Jessica, 2026-08-24: "there's no link in it to a course."
+//
+// Now the same shape as every other acknowledgement in the wizard: they confirm
+// they have READ the provider's policy. Where the training itself lives is the
+// provider's to state inside that document — a bare URL in the body renders as a
+// clickable link (linkifyText, applied below), and the starter draft now asks
+// them for it.
 const MANDATORY_ACK =
-  'I have completed or will complete the mandatory reporting training and will comply with reporting requirements';
+  'I acknowledge I have read the mandatory reporting policy and will comply with it';
 
 // "I understand I won't receive additional compensation" used to be the
 // fourth checkbox here. Removed 2026-05-25 per Arielle — compensation
@@ -72,17 +86,45 @@ const MANDATORY_ACK =
 // attestation. renderWaiverText already trims, already falls back to wording that
 // is true rather than to a placeholder or another tenant's name, and is already
 // the convention every other org-name interpolation in this repo uses.
+// ONE OPTIONAL BOX, AND IT IS THE ONLY OPTIONAL BOX IN THE WIZARD.
+//
+// This was three REQUIRED boxes until 2026-08-24 — consent to being recorded,
+// consent to marketing use, and an understanding that consent is revocable — all
+// three of which had to be ticked before an instructor could finish onboarding.
+// So agreeing to appear in a provider's marketing was a condition of being
+// allowed to work. Jessica: "they have to be able to not accept it and deny that
+// and still be able to continue. shouldn't be mandatory to work for a provider."
+//
+// EVERY OTHER TICK IN THIS WIZARD IS AN ACKNOWLEDGEMENT — "I have read it", "I
+// will comply" — where no is not an available answer and the acknowledgement row
+// is the whole record. This one is a CONSENT: it has a real no, and the answer is
+// now stored on instructors.photo_release_consent, the same pair of column names
+// families already answer this question into on registrations.
+//
+// UNTICKED MEANS DECLINED, and it is written as an explicit false rather than
+// left null — null is reserved for "never asked". Jessica chose a single optional
+// tick over a two-option choice; the cost is that someone who does not notice the
+// box is recorded as declining, and that is the fail-safe direction. The failure
+// mode is not using a photo we could have used.
+//
+// The revocable/optional wording moved OUT of a tick box and into the footnote
+// below: it is information, not a decision, and asking someone to tick that they
+// understand something is not evidence that they do.
+const PHOTO_CONSENT_KEY = 'photo_consent';
+
 const photoAcks = (orgName) => [
   {
-    key: 'photo_consent_record',
+    key: PHOTO_CONSENT_KEY,
     label: renderWaiverText(
-      'I consent to {{org}} photographing/recording me at program sites',
+      'I agree to {{org}} photographing or recording me at program sites, and to my likeness being used in their marketing',
       orgName,
     ),
   },
-  { key: 'photo_consent_marketing', label: 'I consent to use of my likeness in marketing materials' },
-  { key: 'photo_consent_revocable', label: 'I understand consent is ongoing and revocable in writing' },
 ];
+
+const PHOTO_FOOTNOTE =
+  'This one is optional. Leave it unticked and carry on — it does not affect the work you are offered, '
+  + 'and you can change your mind later by telling your program manager in writing.';
 
 const VEHICLE_ACKS = [
   { key: 'vehicle_own_transport', label: 'I am responsible for my own transportation' },
@@ -98,18 +140,32 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
     [documentConfig],
   );
   const PHOTO_ACKS = useMemo(() => photoAcks(orgName), [orgName]);
-  const showContractorStatus = DOC_KEYS.includes(CONTRACTOR_STATUS_KEY);
   const showMandatory = DOC_KEYS.includes(MANDATORY_KEY);
   const showPhoto = DOC_KEYS.includes(PHOTO_KEY);
   const showVehicle = DOC_KEYS.includes(VEHICLE_KEY);
   const [docs, setDocs] = useState({});
   const [loadError, setLoadError] = useState('');
-  const [contractorStatusAck, setContractorStatusAck] = useState(false);
   const [mandatoryAck, setMandatoryAck] = useState(false);
   const [photoExpanded, setPhotoExpanded] = useState(false);
   const [vehicleExpanded, setVehicleExpanded] = useState(false);
+  // SEEDED FROM WHAT THEY ALREADY ANSWERED, unlike every other group on this
+  // screen. The others are acknowledgements: re-ticking one you have already
+  // ticked costs nothing, because the answer can only ever be yes. This one is a
+  // consent with a real no, and it is the ONLY box here whose blank state is a
+  // meaningful answer that gets written.
+  //
+  // Starting it unticked meant a resubmission silently overwrote an agreement
+  // with a refusal: press Back from Screen 7, re-tick the mandatory-reporter and
+  // driving boxes to re-enable Continue, miss the optional photo box, and the
+  // consent you gave is now recorded as declined with today's date. One
+  // direction only, and invisible to everyone.
+  //
+  // Strictly `=== true`: null means never asked, and an instructor who has not
+  // answered must see an empty box, not a ticked one.
   const [photoChecked, setPhotoChecked] = useState(() =>
-    Object.fromEntries(PHOTO_ACKS.map((a) => [a.key, false]))
+    Object.fromEntries(
+      PHOTO_ACKS.map((a) => [a.key, instructor?.photo_release_consent === true]),
+    )
   );
   const [vehicleChecked, setVehicleChecked] = useState(() =>
     Object.fromEntries(VEHICLE_ACKS.map((a) => [a.key, false]))
@@ -179,12 +235,12 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
   // group's checkboxes can never be ticked, so requiring them would disable
   // Continue with nothing on screen to explain why.
   const allLoaded = DOC_KEYS.every((k) => docs[k]);
-  const allPhotoChecked = !showPhoto || PHOTO_ACKS.every((a) => photoChecked[a.key]);
   const allVehicleChecked = !showVehicle || VEHICLE_ACKS.every((a) => vehicleChecked[a.key]);
+  // THE PHOTO CONSENT IS DELIBERATELY ABSENT FROM THIS EXPRESSION. It is the one
+  // box on this screen an instructor may decline, so it can never gate Continue —
+  // that was the bug. Its answer is carried in the payload instead of the gate.
   const allAcksChecked =
-    (!showContractorStatus || contractorStatusAck) &&
     (!showMandatory || mandatoryAck) &&
-    allPhotoChecked &&
     allVehicleChecked;
   // Not gated on DOC_KEYS.length — see the empty-set guard in handleSubmit.
   const canSubmit = allLoaded && allAcksChecked;
@@ -215,6 +271,12 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
             document_id: k,
             document_version: docs[k].version,
           })),
+          // Sent ONLY when the release is actually on this provider's screen. If
+          // they have switched the document off, the instructor was never asked,
+          // and posting `false` would record a refusal nobody made — the server
+          // leaves the column untouched when the key is absent, which is what
+          // "never asked" has to look like.
+          ...(showPhoto ? { photo_release_consent: !!photoChecked[PHOTO_CONSENT_KEY] } : {}),
         },
         { navigate }
       );
@@ -244,39 +306,11 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
         <div className="rounded-md bg-red-50 p-3 text-sm text-red-900">{loadError}</div>
       ) : (
         <form onSubmit={handleSubmit} noValidate>
-          {/* Independent contractor status — inline body like the mandatory
-              reporter one, and for the same reason: it is short, it is the
-              provider's own words about their own state's rules, and folding it
-              into an accordion would let someone tick "I confirm I meet the
-              requirements" without the requirements ever being on screen. */}
-          {showContractorStatus && (
-          <section className="mb-3 rounded-md border border-neutral-200 p-4">
-            <h2 className="text-sm font-semibold text-neutral-900">
-              {docs[CONTRACTOR_STATUS_KEY]?.title || 'Independent contractor status'}
-            </h2>
-            {docs[CONTRACTOR_STATUS_KEY] ? (
-              <div className="mt-2 text-sm leading-relaxed text-neutral-800">
-                {(docs[CONTRACTOR_STATUS_KEY].body_text || '').split(/\n\s*\n/).map((para, i) => (
-                  <p key={i} className="mb-2 whitespace-pre-wrap">
-                    {linkifyText(para)}
-                  </p>
-                ))}
-              </div>
-            ) : (
-              <p className="mt-2 text-sm text-neutral-500">Loading…</p>
-            )}
-            <label className="mt-3 flex items-start gap-3 text-sm text-neutral-800">
-              <input
-                type="checkbox"
-                checked={contractorStatusAck}
-                onChange={(e) => setContractorStatusAck(e.target.checked)}
-                disabled={!docs[CONTRACTOR_STATUS_KEY]}
-                className="mt-0.5 h-4 w-4 flex-shrink-0 rounded border-neutral-400 disabled:opacity-50"
-              />
-              <span>{CONTRACTOR_STATUS_ACK}</span>
-            </label>
-          </section>
-          )}
+          {/* The "Independent contractor status" section stood here. Deleted
+              2026-08-21 with the document itself; the mandatory reporter section
+              below carries no top margin because it has always been the first
+              thing on this screen in practice — that document defaulted off, so
+              no provider ever had this section rendered. */}
 
           {/* Mandatory reporter — inline body, no accordion */}
           {showMandatory && (
@@ -319,6 +353,7 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
             acks={PHOTO_ACKS}
             checked={photoChecked}
             onCheck={(k, v) => setPhotoChecked((s) => ({ ...s, [k]: v }))}
+            footnote={PHOTO_FOOTNOTE}
             className="mt-3"
           />
           )}
@@ -362,6 +397,7 @@ function MultiAckAccordion({
   acks,
   checked,
   onCheck,
+  footnote,
   className = '',
 }) {
   return (
@@ -398,6 +434,13 @@ function MultiAckAccordion({
             <span>{a.label}</span>
           </label>
         ))}
+        {/* Sits WITH the box, not at the bottom of the screen. An instructor
+            deciding whether to tick needs to know it is optional at the moment
+            they are deciding — guidance they have to scroll to find is guidance
+            they do not read. */}
+        {footnote && (
+          <p className="pl-7 text-xs leading-relaxed text-neutral-500">{footnote}</p>
+        )}
       </div>
     </div>
   );

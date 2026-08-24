@@ -50,14 +50,20 @@ ok('never collides with an existing version',
   cases.every((existing) => !existing.includes(nextVersionFor(existing))));
 
 // --- the key contract -----------------------------------------------------
-// These eight are fetched BY NAME by Screen4Agreement, Screen5Policies and
-// Screen6Additional. Changing one silently orphans a document.
+// These eight are fetched BY NAME by Screen3ORS, Screen4Agreement,
+// Screen5Policies and Screen6Additional. Changing one silently orphans a document.
+//
+// Screen3ORS joined this list on 2026-08-21. It fetches `contractor_status` — the
+// screen used to be hardcoded platform text with no document behind it, which is
+// why no provider could find it in Settings. Its actual fetch is pinned
+// structurally further down, in the block that parses each screen's own declared
+// keys; this list is the flat contract.
 const REQUIRED_KEYS = [
+  'contractor_status',
   'contractor_agreement',
   'pay_schedule',
   'attendance_policy',
   'code_of_conduct',
-  'contractor_status',
   'mandatory_reporter_ack',
   'photo_video_release',
   'vehicle_driving_ack',
@@ -70,28 +76,36 @@ eq('no duplicate keys', new Set(DOCUMENT_KEYS).size, DOCUMENT_KEYS.length);
 
 // --- ARRAY ORDER IS THE ADMIN SCREEN'S ORDER, and it was pinned by nothing ---
 //
-// InstructorDocuments maps this array raw, under a banner reading "Start with the
-// contractor agreement — it's the one they actually sign — then work down the
-// list." The header comment declares the order load-bearing and the commit that
-// wrote it also REORDERED the array; neither added an assertion. Mutation: move
-// contractor_agreement to the end and every test still passed, while the screen
-// rendered it last under that banner.
-eq('the agreement is first, because the banner tells operators to start there',
-  DOCUMENT_KEYS[0], 'contractor_agreement');
+// InstructorDocuments maps this array raw. The header comment declares the order
+// load-bearing and the commit that wrote it also REORDERED the array; neither added
+// an assertion. Mutation: move contractor_agreement to the end and every test still
+// passed, while the screen rendered it last under a banner naming it first.
+//
+// SETTINGS ORDER IS ONBOARDING ORDER, decided 2026-08-21. Jessica: "can't you just
+// put the settings in the order they appear in the onboarding?" So the first entry
+// is contractor_status (Screen 3), NOT the agreement (Screen 4) — and the banner
+// that used to say "start with the contractor agreement… then work down the list"
+// was reworded in the same pass, because it became false. The two have to move
+// together, which is what the pair of assertions below is for: the first pins the
+// order, and the banner test further down pins that no copy names a starting
+// document. Twice now, this sentence has been broken by a reorder nothing caught.
+eq('the document an instructor meets first is first in the list',
+  DOCUMENT_KEYS[0], 'contractor_status');
 // Full order, so a document cannot drift away from the screen that reads it —
 // an instructor meets them in step order, and the admin list should match.
 eq('the full order matches the order instructors meet them in',
   DOCUMENT_KEYS.join(','),
   [
+    'contractor_status',
     'contractor_agreement',
     'pay_schedule', 'attendance_policy', 'code_of_conduct',
-    'contractor_status', 'mandatory_reporter_ack', 'photo_video_release', 'vehicle_driving_ack',
+    'mandatory_reporter_ack', 'photo_video_release', 'vehicle_driving_ack',
   ].join(','));
 // ...and that the grouping is contiguous, which is the property the order is FOR.
 // Asserted structurally so adding a document to an existing step cannot pass by
 // being appended to the end of the array.
 ok('each step\'s documents sit together in the array',
-  ['agreement', 'policies', 'additional'].every((step) => {
+  ['contractor_status', 'agreement', 'policies', 'additional'].every((step) => {
     const idx = DOCUMENT_KEYS.map((k, i) => [k, i])
       .filter(([k]) => documentByKey(k).step === step).map(([, i]) => i);
     return idx.every((v, i) => i === 0 || v === idx[i - 1] + 1);
@@ -269,37 +283,60 @@ ok('the agreement is marked alwaysOn', documentByKey('contractor_agreement').alw
 ok('nothing else is alwaysOn',
   INSTRUCTOR_DOCUMENTS.filter((d) => d.alwaysOn).length === 1);
 
-// --- the one opt-in document ----------------------------------------------
+// --- no document defaults off, and that is now pinned ----------------------
 //
-// contractor_status inverts the rule above, and these pin the inversion in both
-// directions. It is the ONLY exception; if a second document ever wants to
-// default off it needs its own argument, so the count is asserted too.
-const DEFAULT_OFF_KEYS = INSTRUCTOR_DOCUMENTS.filter((d) => d.defaultOff).map((d) => d.key);
-eq('exactly one document defaults off', DEFAULT_OFF_KEYS.join(), 'contractor_status');
-ok('contractor_status is OFF when absent', !isDocumentEnabled({}, 'contractor_status'));
-ok('contractor_status is OFF for undefined config', !isDocumentEnabled(undefined, 'contractor_status'));
-ok('contractor_status is OFF for an explicit false',
-  !isDocumentEnabled({ contractor_status: false }, 'contractor_status'));
-ok('contractor_status is ON only for an explicit true',
-  isDocumentEnabled({ contractor_status: true }, 'contractor_status'));
-// Strict === true. A hand-written truthy value in the JSONB must not switch on a
-// legal acknowledgment nobody chose in the UI — the inverse of the "0 is still
-// ON" case above, and deliberately so.
-for (const truthy of ['true', 1, 'yes', {}]) {
-  ok(`contractor_status stays OFF for ${JSON.stringify(truthy)}`,
-    !isDocumentEnabled({ contractor_status: truthy }, 'contractor_status'));
-}
-// The whole point of shipping it off: nobody's onboarding changes today.
-ok('turning contractor_status on does not disturb the others',
-  isDocumentEnabled({ contractor_status: true }, 'code_of_conduct'));
+// `contractor_status` used to be the one opt-in document and had five tests pinning
+// the inversion. It was deleted on 2026-08-21 as redundant with the contractor
+// agreement, and RESTORED the same day as an ordinary document backing its own
+// screen — because deleting the key left Screen3ORS exactly as hardcoded and
+// invisible as it had always been, which was the actual complaint. The `defaultOff`
+// flag did NOT come back with it. That is the assertion below: a flag with no holder
+// is an invitation, and the next person who wants an optional document should have
+// to argue for it rather than find the mechanism lying around.
+ok('no document defaults off any more',
+  INSTRUCTOR_DOCUMENTS.every((d) => d.defaultOff === undefined));
+ok('the restored document IS offered again',
+  DOCUMENT_KEYS.includes('contractor_status'));
+// And the rule it used to bend now applies to IT: absent means ON.
+ok('an absent value leaves a document ON', isDocumentEnabled({}, 'photo_video_release'));
+ok('an undefined config leaves a document ON', isDocumentEnabled(undefined, 'photo_video_release'));
 
-eq('empty config enables all but the opt-in one',
-  enabledDocumentKeys({}).length, DOCUMENT_KEYS.length - 1);
-eq('opting in enables all eight',
-  enabledDocumentKeys({ contractor_status: true }).length, DOCUMENT_KEYS.length);
+// THE KEY THAT MUST NOT SILENTLY GO BACK TO OPT-IN. This is the one assertion in
+// this file whose failure is invisible and total: resolve contractor_status with
+// `= 'true'` again and every provider's Screen 3 vanishes from the wizard, because
+// no provider has the key set. Nobody would see an error. The screen would simply
+// stop existing, which is the state this whole build exists to undo.
+ok('contractor_status follows absent-means-ON like everything else',
+  isDocumentEnabled({}, 'contractor_status')
+    && isDocumentEnabled(null, 'contractor_status')
+    && isDocumentEnabled(undefined, 'contractor_status'));
+eq('an untouched provider is asked for it', enabledDocumentKeys({}).includes('contractor_status'), true);
+// ...and it is a REAL toggle, not alwaysOn. A provider who does not want the screen
+// must be able to switch it off — that half is what gateCheck.ts has to mirror, or
+// onboarding never reaches 'complete' for them.
+ok('an explicit false switches it off',
+  !isDocumentEnabled({ contractor_status: false }, 'contractor_status'));
+ok('it is not pinned alwaysOn', documentByKey('contractor_status').alwaysOn === undefined);
+
+// A LEFTOVER `false` FROM THE OPT-IN ERA WOULD NOW MEAN "OFF", and that inversion
+// is the one migration hazard here: under 20260813a a stored `false` meant
+// "untouched, same as absent"; under 20260821e it means "the provider switched this
+// off". Counted live on both databases on 2026-08-21 before restoring the key: ZERO
+// organizations hold `contractor_status` in instructor_document_config on prod or on
+// staging, so no provider inherits an OFF they never chose. If that count is ever
+// non-zero on an environment this ships to, those rows need reading before the
+// frontend lands, not after.
+ok('turning it off disturbs no other document',
+  isDocumentEnabled({ contractor_status: false }, 'code_of_conduct')
+    && isDocumentEnabled({ contractor_status: false }, 'contractor_agreement'));
+eq('turning it off removes exactly one document',
+  enabledDocumentKeys({ contractor_status: false }).length, DOCUMENT_KEYS.length - 1);
+
+eq('empty config enables every document',
+  enabledDocumentKeys({}).length, DOCUMENT_KEYS.length);
 eq('two off leaves the rest',
   enabledDocumentKeys({ photo_video_release: false, vehicle_driving_ack: false }).length,
-  DOCUMENT_KEYS.length - 3);
+  DOCUMENT_KEYS.length - 2);
 eq('everything off still leaves the agreement',
   enabledDocumentKeys(Object.fromEntries(DOCUMENT_KEYS.map((k) => [k, false]))).length, 1);
 
@@ -322,15 +359,35 @@ eq('everything off still leaves the agreement',
   // three times in two days, so a fourth migration dropping or mis-resolving a key
   // would have left this green against a file that was no longer the live
   // definition. Sorted by filename, which is how the migration runner orders them.
+// CASE-INSENSITIVE, and this is not a hypothetical hardening. The first version
+  // matched the literal lowercase `as instructor_documents_public`; the migration
+  // that deleted contractor_status writes `AS` in capitals, because that is how
+  // Postgres prints a view definition and the file was built from one. So the
+  // NEWEST definition was invisible to this filter, the block silently pinned the
+  // superseded 20260813a file instead, and it would have stayed green while
+  // asserting against a view that no longer exists — precisely the failure the
+  // paragraph above describes, arrived at through keyword case rather than through
+  // a missing test. It only surfaced because the key count moved at the same time.
+  const aliasRe = () => /\bas\s+instructor_documents_public/gi;
   const migrationsDir = new URL('../../supabase/migrations/', import.meta.url);
-  const defining = readdirSync(migrationsDir)
-    .filter((f) => f.endsWith('.sql'))
-    .sort()
-    .filter((f) => readFileSync(new URL(f, migrationsDir), 'utf8')
-      .includes('as instructor_documents_public'));
+  const sqlFiles = readdirSync(migrationsDir).filter((f) => f.endsWith('.sql')).sort();
+  const defining = sqlFiles
+    .filter((f) => aliasRe().test(readFileSync(new URL(f, migrationsDir), 'utf8')));
   ok('at least one migration defines instructor_documents_public', defining.length > 0);
   const newest = defining[defining.length - 1];
   const migrationSrc = readFileSync(new URL(newest, migrationsDir), 'utf8');
+
+  // AND NOTHING LATER TOUCHES THE VIEW WITHOUT PUBLISHING THE DOCUMENTS OBJECT.
+  // The check above finds the last migration that BUILDS instructor_documents_public;
+  // it cannot see a later one that redefines public_org_directory and drops the
+  // column altogether. That is the dangerous direction — the wizard then reads
+  // undefined for every key, `!== false` calls all of them ON, and every instructor
+  // is asked for documents with no published body.
+  const touching = sqlFiles
+    .filter((f) => readFileSync(new URL(f, migrationsDir), 'utf8')
+      .includes('public_org_directory'));
+  eq('the newest migration touching the view is the one that defines the documents',
+    touching[touching.length - 1], newest);
 
   // ANCHOR ON THE ALIAS AND SCAN BACK, rather than matching
   // /jsonb_build_object\(...\) as instructor_documents_public/ — the view builds
@@ -338,7 +395,8 @@ eq('everything off still leaves the agreement',
   // a non-greedy match starts at THAT opening paren and swallows its four keys.
   // The first run of this test failed with `enabled, provider_name, provider_url,
   // instructions` in the list, which is the test being wrong, not the view.
-  const aliasAt = migrationSrc.lastIndexOf('as instructor_documents_public');
+  let aliasAt = -1;
+  for (const m of migrationSrc.matchAll(aliasRe())) aliasAt = m.index;
   ok(`instructor_documents_public found in ${newest}`, aliasAt > 0);
   if (aliasAt > 0) {
     const before = migrationSrc.slice(0, aliasAt);
@@ -389,11 +447,19 @@ eq('everything off still leaves the agreement',
 
 // --- the banner may not attribute a choice nobody made --------------------
 //
-// A default-off document means the UNTOUCHED state is no longer "all of them",
-// so any copy that reaches for the not-all branch is now the DEFAULT sentence
-// rather than an edge case. The admin banner said "the 7 you've turned on" to a
-// provider who had turned on nothing — true the day it was written, false the
-// day contractor_status shipped, and shown to every provider on first visit.
+// The admin banner said "the 7 you've turned on" to a provider who had turned on
+// nothing. That copy was true the day it was written — the untouched state was
+// all-on — and became false the day a default-off document shipped, because the
+// untouched state stopped being "all of them" and the not-all branch turned into
+// the DEFAULT sentence shown to every provider on first visit.
+//
+// DELETING THAT DOCUMENT RESTORES THE ORIGINAL CONDITION. Untouched is all-on
+// again, so the first thing a provider reads is "all 7", which attributes nothing.
+// The not-all branch is once more a genuine edge case, reached only by an operator
+// who switched something off — so it stays pinned below, because copy that is
+// currently right for the wrong reason breaks the next time the default moves.
+// The invariant that survives both worlds: NO branch may tell an operator they
+// turned these on.
 //
 // Asserted against the source because it is JSX copy with no seam to call. The
 // invariant is the reason, not the wording: the untouched config must not equal
@@ -408,18 +474,23 @@ eq('everything off still leaves the agreement',
 //
 // The phrase is now a function, so these assert the sentence itself. All the
 // scaffolding is gone.
-eq('untouched: names the enabled set, claims no choice',
-  documentsBannerPhrase(enabledDocumentKeys({}).length), 'the 7 that are switched on');
-ok('untouched does NOT hit the all-N branch (this is what broke the old copy)',
-  enabledDocumentKeys({}).length !== DOCUMENT_KEYS.length);
-eq('fully opted in: all N',
-  documentsBannerPhrase(DOCUMENT_KEYS.length), `all ${DOCUMENT_KEYS.length}`);
-// Reachable — six toggleable documents off with contractor_status already off —
-// and "the 1 that are switched on" is what the previous wording produced.
+eq('untouched: names the whole set, claims no choice',
+  documentsBannerPhrase(enabledDocumentKeys({}).length), `all ${DOCUMENT_KEYS.length}`);
+eq('untouched IS the all-N state again, now that nothing defaults off',
+  enabledDocumentKeys({}).length, DOCUMENT_KEYS.length);
+// The not-all branch is now reached only by an operator who actually switched
+// something off. Still reachable, so still pinned — and derived from a real config
+// rather than a bare number, so it moves with the document list.
+eq('one switched off: names the enabled set, claims no choice',
+  documentsBannerPhrase(enabledDocumentKeys({ photo_video_release: false }).length),
+  `the ${DOCUMENT_KEYS.length - 1} that are switched on`);
+// Reachable — every toggleable document off — and "the 1 that are switched on" is
+// what the previous wording produced.
 eq('exactly one left is grammatical', documentsBannerPhrase(1), 'the one that is switched on');
 eq('two left', documentsBannerPhrase(2), 'the 2 that are switched on');
 ok('no branch tells an operator they turned these on',
-  [0, 1, 2, 7, DOCUMENT_KEYS.length].every((n) => !/turned on/.test(documentsBannerPhrase(n))));
+  [0, 1, 2, DOCUMENT_KEYS.length - 1, DOCUMENT_KEYS.length]
+    .every((n) => !/turned on/.test(documentsBannerPhrase(n))));
 // The sentence reads "They read and sign <phrase> during onboarding", so every
 // branch has to survive that frame.
 //
@@ -429,7 +500,7 @@ ok('no branch tells an operator they turned these on',
 // the singular branch, returning "" from every branch, or appending "!" all
 // passed it while failing the eq()s. Only inputs with no eq() of their own can
 // tell you anything.
-for (const n of [3, 4, 5, 6]) {
+for (const n of [3, 4, 5]) {
   const p = documentsBannerPhrase(n);
   ok(`phrase for ${n} is non-empty, lowercase-initial and unterminated`,
     p.length > 0 && !/^[A-Z]/.test(p) && !/[.!?]$/.test(p));
@@ -462,25 +533,299 @@ for (const n of [3, 4, 5, 6]) {
 // by an operator and fetched by nobody; a key in two would be acknowledged twice.
 eq('every key has a step',
   INSTRUCTOR_DOCUMENTS.filter((d) => !d.step).length, 0);
-eq('the three groups cover every key',
-  ['agreement', 'policies', 'additional'].reduce((n, s) => n + documentKeysForStep(s).length, 0),
+
+// THE STEP LIST, WRITTEN DOWN ONCE. It was spelled out inline in four separate
+// assertions, which is how `contractor_status` becoming its OWN step on 2026-08-21
+// managed to leave three of them silently checking only three of the four groups —
+// a coverage assertion that no longer covers everything still reads as coverage.
+// Hardcoded on purpose rather than derived from INSTRUCTOR_DOCUMENTS: a list built
+// from the module would shrink with it and could never notice a step going missing.
+// The next assertion is what keeps this honest.
+const ALL_STEPS = ['contractor_status', 'agreement', 'policies', 'additional'];
+eq('this test knows about every step the module declares',
+  [...new Set(INSTRUCTOR_DOCUMENTS.map((d) => d.step))].sort().join(','),
+  [...ALL_STEPS].sort().join(','));
+
+eq('the four groups cover every key',
+  ALL_STEPS.reduce((n, s) => n + documentKeysForStep(s).length, 0),
   DOCUMENT_KEYS.length);
+// Screen 3 is ONE document on its own screen, which is what makes switching that
+// single document off drop a whole step — the case gateCheck.ts has to mirror.
+eq('screen 3 reads one', documentKeysForStep('contractor_status').length, 1);
 eq('screen 5 reads three', documentKeysForStep('policies').length, 3);
-eq('screen 6 offers four', documentKeysForStep('additional').length, 4);
-// ...but shows three unless the provider opts in. documentKeysForStep is what
-// EXISTS; enabledDocumentKeysForStep is what an instructor is asked for, and the
-// gap between them is the default-off document.
-eq('screen 6 shows three by default',
+eq('screen 6 offers three', documentKeysForStep('additional').length, 3);
+// ...and shows all three, because nothing on it defaults off any more.
+// documentKeysForStep is what EXISTS; enabledDocumentKeysForStep is what an
+// instructor is actually asked for, and there is no longer a gap between them for
+// an untouched provider. The gap was the default-off document.
+eq('screen 6 shows all three by default',
   enabledDocumentKeysForStep({}, 'additional').join(),
   'mandatory_reporter_ack,photo_video_release,vehicle_driving_ack');
-eq('screen 6 shows four once opted in',
-  enabledDocumentKeysForStep({ contractor_status: true }, 'additional').length, 4);
+eq('no step has a hidden document for an untouched provider',
+  ALL_STEPS
+    .filter((s) => enabledDocumentKeysForStep({}, s).length !== documentKeysForStep(s).length)
+    .length, 0);
+// EACH SCREEN'S DOCUMENTS STAY ON THAT SCREEN. contractor_status was grouped onto
+// Screen 6 in its first incarnation (20260813a) and has its own step now, so a
+// config value for it must not move a document onto or off any other screen.
+eq('switching contractor_status off leaves screen 6 alone',
+  enabledDocumentKeysForStep({ contractor_status: false }, 'additional').length, 3);
+eq('switching contractor_status off leaves screen 5 alone',
+  enabledDocumentKeysForStep({ contractor_status: false }, 'policies').length, 3);
+eq('...and it is screen 3 that empties',
+  enabledDocumentKeysForStep({ contractor_status: false }, 'contractor_status').length, 0);
+
+// --- THE FIFTH, SIXTH AND SEVENTH COPIES: the wizard screens themselves ------
+//
+// Screen3ORS, Screen5Policies and Screen6Additional EACH HARDCODE their own list of
+// the keys they render, rather than calling documentKeysForStep. That is three more
+// copies of this file's step grouping, and until now nothing pinned any of them.
+//
+// THIS IS NOT A HYPOTHETICAL. Deleting contractor_status from this file and from
+// the server mirror left Screen6Additional still listing it in ALL_DOC_KEYS, and
+// the whole suite plus the production build stayed green. The consequence was NOT
+// a dead reference: the screen asks isDocumentEnabled about the key, the answer
+// for a key nothing knows is "absent means ON", so the section would have rendered
+// for EVERY provider; the fetch would 404 because no such document was ever
+// published; and loadAll's 404 branch sets a screen-wide error and returns BEFORE
+// setDocs — so every instructor reaching Screen 6 would get the red "your program
+// hasn't published these documents yet" box instead of the form, with the three
+// real documents hidden and no way to finish onboarding. Found by grep, not by a
+// test, which is why this block exists.
+//
+// EACH SCREEN'S OWN DECLARED LIST IS PARSED, not filtered against DOCUMENT_KEYS.
+// The first version of this block scanned for quoted literals and kept only those
+// the library still knows — which silently skips a key the library has DROPPED and
+// the screen still lists, i.e. exactly the bug above. A check that cannot fail on
+// the case that motivated it is worse than no check, because it reads as coverage.
+// Parsed structurally instead, so the screen's list stands on its own and any
+// unknown key it holds shows up as a difference.
+{
+  const screens = [
+    // Screen 3 renders ONE document and names it in a single const:
+    // `const DOC_KEY = 'contractor_status'`. Pinned for the same reason as the
+    // other two, and with a sharper edge: this screen spent its whole life
+    // rendering hardcoded platform text with no document behind it, so "the key
+    // this file defines" and "the key the screen fetches" have been out of step
+    // here before by construction rather than by accident.
+    ['Screen3ORS.jsx', 'contractor_status', (src) => {
+      const m = /const DOC_KEY\s*=\s*'([a-z_]+)'/.exec(src);
+      return m ? [m[1]] : null;
+    }],
+    // Screen 5 declares objects: `{ key: 'pay_schedule', ack: '...' }`.
+    ['Screen5Policies.jsx', 'policies', (src) => {
+      const m = /const ALL_DOCS\s*=\s*\[([\s\S]*?)\];/.exec(src);
+      return m ? [...m[1].matchAll(/key:\s*'([a-z_]+)'/g)].map((x) => x[1]) : null;
+    }],
+    // Screen 6 declares an array of CONSTS: `[MANDATORY_KEY, PHOTO_KEY, ...]`,
+    // each defined as `const MANDATORY_KEY = 'mandatory_reporter_ack'`, so the
+    // identifiers are resolved through that map before comparing.
+    ['Screen6Additional.jsx', 'additional', (src) => {
+      const m = /const ALL_DOC_KEYS\s*=\s*\[([^\]]*)\]/.exec(src);
+      if (!m) return null;
+      const consts = Object.fromEntries(
+        [...src.matchAll(/const\s+([A-Z0-9_]+)\s*=\s*'([a-z_]+)'/g)].map((x) => [x[1], x[2]]),
+      );
+      return m[1].split(',').map((s) => s.trim()).filter(Boolean)
+        .map((tok) => (/^'/.test(tok) ? tok.replace(/'/g, '') : consts[tok] ?? `UNRESOLVED:${tok}`));
+    }],
+  ];
+  for (const [file, step, parse] of screens) {
+    const raw = readFileSync(
+      new URL(`../pages/onboarding/screens/${file}`, import.meta.url), 'utf8',
+    );
+    // COMMENTS STRIPPED FIRST. Both screens now carry a paragraph naming the
+    // deleted key, and Screen 6's sits directly above the declaration this parses.
+    const src = raw
+      .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, ' ')
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .replace(/\/\/.*$/gm, ' ');
+    ok(`${file}: the comment stripper ran and left the code intact`,
+      src.length < raw.length && /export default function/.test(src));
+    const declared = parse(src);
+    // A REFACTOR THAT RENAMES THE LIST MUST FAIL LOUDLY, not quietly stop checking.
+    ok(`${file}: its document list was found and parsed`,
+      Array.isArray(declared) && declared.length > 0);
+    if (Array.isArray(declared)) {
+      eq(`${file} renders exactly the '${step}' group, in order`,
+        declared.join(','), documentKeysForStep(step).join(','));
+    }
+  }
+
+  // AND THE KEY IS ACTUALLY FETCHED WITH, not merely declared beside. A `const
+  // DOC_KEY` nothing passes to fetchLegalDocument satisfies the parse above and
+  // renders a screen that asks the database for nothing — which is precisely the
+  // state Screen3ORS was in until 2026-08-21: correct-looking constants, no fetch,
+  // hardcoded prose. The other two screens map over their lists to build the fetch,
+  // so their declaration IS their fetch; this one names its key separately and
+  // therefore needs saying out loud.
+  const screen3 = readFileSync(
+    new URL('../pages/onboarding/screens/Screen3ORS.jsx', import.meta.url), 'utf8',
+  )
+    .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\/\/.*$/gm, ' ');
+  ok('Screen3ORS fetches its document rather than just naming it',
+    /fetchLegalDocument\(\s*DOC_KEY\b/.test(screen3));
+  // EXACTLY ONE CONTRACTOR-STATUS CONFIRMATION IN THE WHOLE WIZARD, and it is the
+  // one that gets recorded. Removed from Screen 3 on 2026-08-24 (Jessica, walking
+  // the flow: "they shouldn't confirm their status as an independent contractor
+  // twice"). The asymmetry is why THIS one went: Screen 3's box stored nothing,
+  // Screen 4's is a NOT NULL column beside the signature, timestamp and IP.
+  //
+  // Pinned as a PAIR, in both directions, because either half alone is a defect:
+  // a box back on Screen 3 restores the double ask, and losing Screen 4's box
+  // silently drops the only attestation there is.
+  ok('Screen 3 asks for no acknowledgement of its own',
+    !/type="checkbox"/.test(screen3));
+
+  // --- THE PHOTO RELEASE IS THE ONE BOX THAT MAY BE REFUSED -------------------
+  //
+  // It had THREE required boxes, so consenting to appear in a provider's
+  // marketing was a condition of finishing onboarding, and the answer was stored
+  // nowhere. Both halves are pinned, because either one alone is the bug:
+  // requiring it again re-creates the coercion, and dropping the write makes a
+  // refusal invisible to the provider who needs to honour it.
+  {
+    const s6 = readFileSync(
+      new URL('../pages/onboarding/screens/Screen6Additional.jsx', import.meta.url), 'utf8',
+    ).replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/.*$/gm, ' ');
+
+    // THE GATE. Parsed rather than grepped loosely: allAcksChecked is the
+    // expression that decides whether Continue works, and the photo consent must
+    // not appear anywhere inside it.
+    const gate = /const allAcksChecked\s*=([\s\S]*?);/.exec(s6);
+    ok('the Continue gate was found', Boolean(gate));
+    ok('the photo consent does not gate Continue',
+      Boolean(gate) && !/photo/i.test(gate[1]));
+    // ...while the ones that ARE conditions of the work still do.
+    ok('the driving and mandatory-reporter acks still gate Continue',
+      Boolean(gate) && /Vehicle/i.test(gate[1]) && /mandatory/i.test(gate[1]));
+
+    // ONE box, not three.
+    const photoBlock = /const photoAcks\s*=[\s\S]*?\n\];/.exec(s6);
+    ok('the photo ack list was found', Boolean(photoBlock));
+    eq('the photo release asks exactly one thing',
+      (photoBlock?.[1] ?? photoBlock?.[0] ?? '').match(/key:/g)?.length ?? 0, 1);
+
+    // AND THE ANSWER IS SENT. Without this the box is merely decorative and a
+    // refusal dies in the browser.
+    ok('the answer is posted to the server',
+      /photo_release_consent:\s*!!photoChecked\[/.test(s6));
+    // Only when the release is actually on this provider's screen — otherwise a
+    // provider who switched it off would have every instructor recorded as
+    // refusing a document they were never shown.
+    ok('...and only when the provider has the release switched on',
+      /showPhoto\s*\?\s*\{\s*photo_release_consent/.test(s6));
+
+    // The mandatory-reporter tick may not assert training the platform cannot
+    // verify — the wording that prompted this, and the reason it read wrong.
+    ok('the mandatory-reporter tick claims only what it can evidence',
+      !/will complete the mandatory reporting training/i.test(s6));
+
+    // THE BOX MUST START FROM WHAT THEY ALREADY ANSWERED. Found in review: it
+    // initialised to false unconditionally, so pressing Back from Screen 7 and
+    // resubmitting overwrote a recorded agreement with a refusal — one
+    // direction, silently, on a consent record. Every other group on this screen
+    // may start blank; this one may not, because its blank state is an answer
+    // that gets written.
+    ok('the photo consent starts from the stored answer, not from false',
+      /useState\([\s\S]{0,220}instructor\?\.photo_release_consent === true/.test(s6));
+    // ...and strictly against true, so "never asked" (null) still renders empty.
+    ok('...and null is not treated as agreed',
+      !/photo_release_consent\s*\)\s*\)/.test(s6)
+        && /photo_release_consent === true/.test(s6));
+  }
+
+  // --- A STEP THAT WAS NEVER RECORDED MUST FAIL LOUDLY ------------------------
+  //
+  // submit-acknowledgments used to log a failed step advance and return success
+  // on the reasoning "don't fail — acks are written". That is the fail direction
+  // backwards: the ack rows are not what lets an instructor finish, the step key
+  // is. Swallowing it moves them past a step nothing recorded, and the completion
+  // gate then waits forever for a key nobody can write — silent and permanent.
+  // Screen 3 was moved onto this function, so the guard submit-ors-certification
+  // carried had to come with it.
+  {
+    const fn = readFileSync(
+      new URL('../../supabase/functions/submit-acknowledgments/index.ts', import.meta.url), 'utf8',
+    ).replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/.*$/gm, ' ');
+    // ANCHORED ON THE ERROR CODE, not on "a return appears nearby". The first
+    // version of this matched /stepErr\)\s*\{[\s\S]{0,320}return json\(/, which
+    // the OLD broken code satisfied too — the success return sits ~150 characters
+    // below the if block, well inside that window. A guard that passes against
+    // the bug it was written for is worse than none, and this file has caught
+    // itself doing that twice now.
+    ok('a failed step advance returns an error rather than success',
+      /return json\(\{\s*error:\s*'step_advance_failed'\s*\},\s*500\)/.test(fn));
+
+    // --- NO ONE TENANT'S PROGRAMME SHAPE IN A SHARED WIZARD SCREEN -----------
+    //
+    // The last screen of onboarding told EVERY provider's instructors that their
+    // "summer camp assignments" were waiting. Only J2S runs camps; Jessica hit it
+    // walking the flow as an after-school ukulele instructor on 2026-08-24. The
+    // screens are shared, so a word that is only true for one tenant is wrong for
+    // all the others, and nothing here can be tenant-configured because these
+    // strings take no org.
+    //
+    // Scanned WITH comments stripped: the fix's own comment names the old wording,
+    // and this file has twice shipped a grep that matched the explanation of the
+    // very thing it guarded.
+    const completion = readFileSync(
+      new URL('../pages/onboarding/CompletionScreen.jsx', import.meta.url), 'utf8',
+    ).replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/.*$/gm, ' ');
+    for (const word of ['summer camp', 'journey to steam', 'j2s', 'ukulele', 'steam vip']) {
+      ok(`the completion screen does not say "${word}"`,
+        !new RegExp(word.replace(/ /g, '\\s+'), 'i').test(completion));
+    }
+    ok('...and success is not also returned for that path',
+      !/Don't fail\s*[-—]\s*acks are written/i.test(fn));
+    ok('...and the contractor-status step is one this function knows',
+      /contractor_status:\s*\{\s*key:\s*'ors_certification'/.test(fn));
+  }
+  ok('Continue is still blocked until the document is ready',
+    /disabled=\{[^}]*doc\.phase !== 'ready'/.test(screen3));
+  {
+    const s4 = readFileSync(
+      new URL('../pages/onboarding/screens/Screen4Agreement.jsx', import.meta.url), 'utf8',
+    ).replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/.*$/gm, ' ');
+    ok('...and the agreement still carries the one that is recorded',
+      /key:\s*'confirm_contractor_status'/.test(s4));
+  }
+
+  // AND THE PROVIDER'S NAME COMES FROM THE CONTEXT, NOT FROM A PROP. WizardHost
+  // renders every screen with one fixed bundle — slug, instructor, onboarding,
+  // onAdvance, onBack — so ANY other value a screen declares as a prop silently
+  // resolves to its default forever. This screen shipped with `orgName = ''` as a
+  // prop, which meant the "not published yet" message could never name the
+  // provider: the single thing that message exists to do, dead on arrival, with no
+  // error and nothing in the UI to notice. Found in review, not by a test.
+  //
+  // Both halves asserted, because fixing this by passing the prop from WizardHost
+  // instead would work today and diverge from Screens 4 and 6 tomorrow. One way to
+  // read org config in this wizard.
+  ok('Screen3ORS reads orgName from the onboarding config',
+    /const\s*\{[^}]*\borgName\b[^}]*\}\s*=\s*useOnboardingConfig\(\)/.test(screen3));
+  ok('...and does not take it as a prop, which WizardHost never passes',
+    !/function Screen3ORS\([^)]*\borgName\b/.test(screen3));
+}
 
 // The wizard/gate contract: a screen with nothing left must be DROPPED, not
 // rendered empty — and dropped server-side too, or the step key is never written
 // and onboarding can never reach 'complete'.
+ok('contractor status required by default', stepHasEnabledDocuments({}, 'contractor_status'));
 ok('policies required by default', stepHasEnabledDocuments({}, 'policies'));
 ok('additional required by default', stepHasEnabledDocuments({}, 'additional'));
+// THE ONE-DOCUMENT SCREEN. Screens 5 and 6 need every document off before they
+// empty; this one empties on a single toggle, so it is the cheapest way for a
+// provider to reach a state where gateCheck must stop requiring a step. If
+// gateCheck.ts does not mirror this exact predicate, that provider's instructors
+// finish every screen and never reach 'complete'.
+ok('switching the one document off drops screen 3',
+  !stepHasEnabledDocuments({ contractor_status: false }, 'contractor_status'));
+ok('...and leaves screens 5 and 6 standing',
+  stepHasEnabledDocuments({ contractor_status: false }, 'policies')
+    && stepHasEnabledDocuments({ contractor_status: false }, 'additional'));
 ok('one document left still keeps the screen',
   stepHasEnabledDocuments({ photo_video_release: false, vehicle_driving_ack: false }, 'additional'));
 eq('...and it is the remaining one',

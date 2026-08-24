@@ -45,6 +45,37 @@ ok('additionalEnabled:false drops the additional screen',
 ok('...and leaves the policies screen alone',
   noAdditional.includes(STEP_KEYS.POLICIES_ACKNOWLEDGED));
 
+// --- the contractor-status step --------------------------------------------
+//
+// Screen 3 became a document screen on 2026-08-21. Until then it was
+// UNCONDITIONAL: every instructor at every provider saw hardcoded platform text
+// backed by nothing, which is exactly why no provider could find it in Settings.
+// It is now one document on its own step, so a single toggle removes it.
+//
+// THE DEFAULT IS THE IMPORTANT HALF. Every existing org has no value for this key,
+// so `true` here is what keeps today's behaviour for every provider on both
+// environments. If this ever defaults false, Screen 3 silently disappears for
+// everyone and nothing errors.
+ok('contractor status is present by default', dflt.includes(STEP_KEYS.ORS_CERTIFICATION));
+
+const noContractorStatus = effectiveStepOrder({ contractorStatusEnabled: false });
+ok('contractorStatusEnabled:false drops the contractor status screen',
+  !noContractorStatus.includes(STEP_KEYS.ORS_CERTIFICATION));
+eq('...and removes exactly one step', noContractorStatus.length, dflt.length - 1);
+ok('...and still signs the agreement',
+  noContractorStatus.includes(STEP_KEYS.AGREEMENT_SIGNED));
+ok('...and leaves the other document screens alone',
+  noContractorStatus.includes(STEP_KEYS.POLICIES_ACKNOWLEDGED)
+    && noContractorStatus.includes(STEP_KEYS.ADDITIONAL_ACKS));
+ok('...and welcome is still first', noContractorStatus[0] === STEP_KEYS.WELCOME);
+// Composes with the others rather than fighting them: all three document steps off
+// leaves the agreement, which is never toggleable.
+const noDocs = effectiveStepOrder({
+  contractorStatusEnabled: false, policiesEnabled: false, additionalEnabled: false,
+});
+eq('all three document steps off removes exactly three', noDocs.length, dflt.length - 3);
+ok('...and the agreement survives all three', noDocs.includes(STEP_KEYS.AGREEMENT_SIGNED));
+
 const neither = effectiveStepOrder({ policiesEnabled: false, additionalEnabled: false });
 eq('both off removes exactly two steps', neither.length, dflt.length - 2);
 ok('both off still signs the agreement', neither.includes(STEP_KEYS.AGREEMENT_SIGNED));
@@ -89,8 +120,10 @@ ok('a fully pared-down org drops the background check', !lean.includes(STEP_KEYS
 ok('...drops both document screens',
   !lean.includes(STEP_KEYS.POLICIES_ACKNOWLEDGED) && !lean.includes(STEP_KEYS.ADDITIONAL_ACKS));
 // STEP_ORDER is 9; training is opt-in so the default is 8. Dropping the
-// background check and both document screens leaves 5: welcome, business
-// eligibility, the agreement, payment setup, emergency contact.
+// background check and the policies/additional screens leaves 5: welcome,
+// independent contractor status, the agreement, payment setup, emergency contact.
+// (`lean` passes nothing for contractorStatusEnabled, so that step stays — which is
+// the default this file pins above.)
 eq('...and still leaves a real wizard', lean.length, 5);
 eq('...welcome first', lean[0], STEP_KEYS.WELCOME);
 eq('...emergency last', lean[lean.length - 1], STEP_KEYS.EMERGENCY_AND_PREFS);
@@ -143,6 +176,18 @@ ok('gateCheck still knows the policies step key',
   gate.includes(`'${STEP_KEYS.POLICIES_ACKNOWLEDGED}'`));
 ok('gateCheck still knows the additional step key',
   gate.includes(`'${STEP_KEYS.ADDITIONAL_ACKS}'`));
+// THE HALF THAT STRANDS PEOPLE SILENTLY. The wizard dropping Screen 3 is the easy
+// half; if gateCheck keeps 'ors_certification' in requiredSteps, a provider who
+// switches this document off has every instructor finish every screen they are shown
+// and never reach 'complete' — no error, no email, nothing to click, and the only
+// visible symptom is a status that never moves. Pinned as three separate facts
+// because each can be edited away on its own.
+ok('gateCheck still knows the contractor status step key',
+  gate.includes(`'${STEP_KEYS.ORS_CERTIFICATION}'`));
+ok('gateCheck resolves the contractor status document group',
+  /contractorStatusRequired\s*=\s*stepHasEnabledDocuments\(\s*docCfg\s*,\s*'contractor_status'\s*\)/.test(gate));
+ok('gateCheck drops the contractor status step when its document is off',
+  /!contractorStatusRequired[\s\S]{0,120}ors_certification/.test(gate));
 ok('gateCheck drops the policies step when its documents are all off',
   /policiesRequired[\s\S]{0,200}policies_acknowledged/.test(gate));
 ok('gateCheck drops the additional step when its documents are all off',
@@ -182,7 +227,7 @@ ok('...and still requires payouts live when the provider DOES use Stripe pay',
 // Parsed off disk rather than imported: the .ts is Deno source with type
 // annotations node will not run. The regex match is asserted, so a rename fails
 // loudly instead of quietly testing nothing.
-import { documentKeysForStep, INSTRUCTOR_DOCUMENTS } from './instructorDocuments.js';
+import { DOCUMENT_KEYS, documentKeysForStep, INSTRUCTOR_DOCUMENTS } from './instructorDocuments.js';
 
 const serverSrc = readFileSync(
   new URL('../../supabase/functions/_shared/instructorDocumentConfig.ts', import.meta.url),
@@ -197,45 +242,87 @@ if (byStepMatch) {
     if (!m) return null;
     return m[1].split(',').map((s) => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
   };
-  for (const step of ['agreement', 'policies', 'additional']) {
+  // EVERY STEP, and the list is written down once. Spelled inline three times, this
+  // block quietly stopped covering the whole contract the moment a FOURTH step
+  // existed: `contractor_status` became its own step on 2026-08-21, both sides
+  // omitted it from these three lists, and "the two sides cover exactly the same key
+  // set" went on passing because it compared two equally incomplete sets. A coverage
+  // assertion that silently narrows is worse than none — it reads as proof.
+  //
+  // Cross-checked against the browser module below, so adding a fifth step to
+  // instructorDocuments.js and not to this list fails here instead of going unnoticed.
+  const ALL_STEPS = ['contractor_status', 'agreement', 'policies', 'additional'];
+  eq('this test knows about every step the browser module declares',
+    [...new Set(INSTRUCTOR_DOCUMENTS.map((d) => d.step))].sort().join(','),
+    [...ALL_STEPS].sort().join(','));
+
+  for (const step of ALL_STEPS) {
     const server = parseGroup(step);
     ok(`server mirror declares the '${step}' group`, Array.isArray(server) && server.length > 0);
     eq(`'${step}' group matches the browser definition exactly`,
       (server ?? []).join(','), documentKeysForStep(step).join(','));
   }
   // Nothing extra, nothing missing, across the whole file.
-  const allServer = ['agreement', 'policies', 'additional'].flatMap((s) => parseGroup(s) ?? []);
-  const allBrowser = ['agreement', 'policies', 'additional'].flatMap((s) => documentKeysForStep(s));
+  const allServer = ALL_STEPS.flatMap((s) => parseGroup(s) ?? []);
+  const allBrowser = ALL_STEPS.flatMap((s) => documentKeysForStep(s));
   eq('the two sides cover exactly the same key set',
     [...allServer].sort().join(','), [...allBrowser].sort().join(','));
+  // ...and that set is the WHOLE document list, not a subset both happen to share.
+  eq('and that set is every document the browser defines',
+    [...allBrowser].sort().join(','), [...DOCUMENT_KEYS].sort().join(','));
+  // The step union must also match the TYPE the server declares, or a group can be
+  // present in DOCUMENTS_BY_STEP while DocumentStep refuses to accept its name and
+  // gateCheck cannot ask about it. deno check catches this one; pinned here too
+  // because CI runs deno with --no-check.
+  ok('the server DocumentStep type names every step',
+    ALL_STEPS.every((s) => new RegExp(`DocumentStep\\s*=[^;]*'${s}'`).test(serverSrc)));
   ok('the server mirror pins the agreement as always-on',
     /ALWAYS_ON[\s\S]{0,120}contractor_agreement/.test(serverSrc));
 
-  // THE OPT-IN DOCUMENT, ON BOTH SIDES. contractor_status is the one key that
-  // needs an explicit true, and the drift here is silent and bad in both
-  // directions: if only the browser knew, the wizard would skip a screen the
-  // gate still required and onboarding would stall at 100% forever; if only the
-  // server knew, every instructor would be shown a document their provider never
-  // opted into and never wrote, and the fetch would 404 them into a dead end.
-  ok('the server mirror knows contractor_status defaults off',
-    /DEFAULT_OFF[\s\S]{0,120}contractor_status/.test(serverSrc));
-  // ...and tests the SAME way. `!== false` here instead of `=== true` would make
-  // it default ON while the browser defaults it off — the stall above, from a
-  // one-operator typo that reads correct.
-  ok('the server mirror requires a strict true, not merely not-false',
-    /DEFAULT_OFF\.has\(key\)\)\s*return\s+config\?\.\[key\]\s*===\s*true/.test(serverSrc));
+  // THE OPT-IN MECHANISM IS GONE FROM BOTH SIDES, as of 2026-08-21.
+  // contractor_status was the only key that ever needed an explicit true, so the
+  // DEFAULT_OFF set existed for it alone. The document was deleted as redundant with
+  // the contractor agreement and then RESTORED the same day as an ordinary default-ON
+  // document backing its own screen — the DEFAULT_OFF set did not come back with it,
+  // and this block is what keeps it from creeping back on one side only.
+  //
+  // These pin the ABSENCE ON BOTH SIDES, not the removal on one, because the drift
+  // this block has always guarded is bad in both directions and a HALF-REMOVAL is
+  // the same defect as a half-addition: if only the browser dropped the mechanism,
+  // the gate would keep requiring a screen the wizard now skips and onboarding
+  // would stall at 100% forever; if only the server dropped it, every instructor
+  // would be shown a document their provider never wrote, and the fetch would 404
+  // them into a dead end.
+  //
+  // COMMENTS STRIPPED FIRST. This repo has already shipped a raw grep that matched
+  // the comment explaining the very thing it was meant to catch, and the server
+  // mirror now carries a paragraph naming contractor_status as deleted — so an
+  // unstripped absence check would be held green by the obituary itself.
+  const serverCode = serverSrc
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/\/\/.*$/gm, ' ');
+  ok('the comment stripper ran and left the code intact',
+    serverCode.length < serverSrc.length
+      && /export function isDocumentEnabled/.test(serverCode));
 
-  // Both sides must agree on WHICH keys are opt-in, not just that the mechanism
-  // exists. Parsed rather than pattern-matched so an added key fails loudly.
-  const defaultOffMatch = /DEFAULT_OFF\s*=\s*new Set\(\[([^\]]*)\]\)/.exec(serverSrc);
-  ok('DEFAULT_OFF was found in the server mirror', Boolean(defaultOffMatch));
-  if (defaultOffMatch) {
-    const serverDefaultOff = defaultOffMatch[1]
-      .split(',').map((s) => s.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean);
-    eq('the two sides agree on which documents are opt-in',
-      serverDefaultOff.sort().join(','),
-      INSTRUCTOR_DOCUMENTS.filter((d) => d.defaultOff).map((d) => d.key).sort().join(','));
-  }
+  // The server mirror MUST name the restored key in code, not only in its comment
+  // history. If it does not, gateCheck asks stepHasEnabledDocuments about a step
+  // whose group is undefined, `.some()` on undefined throws, and runGateCheck dies
+  // for every instructor at every org — so this is asserted against comment-stripped
+  // source, the same way its "is it absent" predecessor was.
+  ok('the server mirror knows the restored key',
+    /contractor_status/.test(serverCode));
+  ok('the server mirror has no opt-in set left', !/DEFAULT_OFF/.test(serverCode));
+  ok('the browser half has no opt-in flag left',
+    INSTRUCTOR_DOCUMENTS.every((d) => d.defaultOff === undefined));
+
+  // ...and neither side kept a strict-true branch, which is now the only place the
+  // two rules could still diverge. Both must read plain `!== false`: absent means
+  // ON, with nothing to remember.
+  ok('the server mirror tests only for an explicit false',
+    /return\s+config\?\.\[key\]\s*!==\s*false/.test(serverCode));
+  ok('the server mirror has no strict-true branch left',
+    !/===\s*true/.test(serverCode));
 }
 
 // --- the agreement tick boxes and the server gate must name the SAME keys ---

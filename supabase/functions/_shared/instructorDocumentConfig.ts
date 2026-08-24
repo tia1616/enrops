@@ -17,22 +17,25 @@
 // a provider has not written yet still blocks onboarding rather than being
 // silently treated as "not used". Absence is not a decision.
 //
-// WITH ONE EXCEPTION: contractor_status is opt-in and needs an explicit `true`.
-// It is new and optional, so an absent value means "never offered" rather than
-// "not yet written" — and defaulting it on would block every existing provider's
-// instructors on a document nobody has been asked to write. The full argument is
-// in the browser half; this comment exists so a reader of only this file does not
-// "fix" the asymmetry back out.
+// NO EXCEPTIONS, as of 2026-08-21. `contractor_status` used to be opt-in and was
+// the only key that needed an explicit `true`. It is now an ordinary DEFAULT-ON
+// document backing its own screen (Screen3ORS), and the DEFAULT_OFF set that existed
+// for it alone is gone and is not coming back. The rule here is exactly the sentence
+// above, with nothing to remember. Mirrors the browser half.
 
-export type DocumentStep = 'agreement' | 'policies' | 'additional';
+export type DocumentStep = 'contractor_status' | 'agreement' | 'policies' | 'additional';
 
 export const DOCUMENTS_BY_STEP: Record<DocumentStep, string[]> = {
+  // ONE DOCUMENT, ONE SCREEN. Screen3ORS renders this document plus fixed platform
+  // guidance (an IRS link, and who is responsible for classifying a worker). Switch
+  // the document off and the whole step goes, which is why gateCheck must stop
+  // requiring 'ors_certification' — see the comment there.
+  contractor_status: ['contractor_status'],
   // Signed, not acknowledged. submit-agreement requires it and onboarding cannot
   // complete without it, so it is never toggleable — see ALWAYS_ON below.
   agreement: ['contractor_agreement'],
   policies: ['pay_schedule', 'attendance_policy', 'code_of_conduct'],
   additional: [
-    'contractor_status',
     'mandatory_reporter_ack',
     'photo_video_release',
     'vehicle_driving_ack',
@@ -41,15 +44,10 @@ export const DOCUMENTS_BY_STEP: Record<DocumentStep, string[]> = {
 
 const ALWAYS_ON = new Set(['contractor_agreement']);
 
-const DEFAULT_OFF = new Set(['contractor_status']);
-
 export type DocumentConfig = Record<string, unknown> | null | undefined;
 
 export function isDocumentEnabled(config: DocumentConfig, key: string): boolean {
   if (ALWAYS_ON.has(key)) return true;
-  // Strict === true, matching the browser half: a stray truthy value in the
-  // JSONB must not switch on a legal acknowledgment nobody chose.
-  if (DEFAULT_OFF.has(key)) return config?.[key] === true;
   return config?.[key] !== false;
 }
 
