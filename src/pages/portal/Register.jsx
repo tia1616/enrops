@@ -384,6 +384,11 @@ export default function Register() {
           !!s.first_name &&
           !!s.last_name &&
           (isLean || s.grade !== '') &&
+          // Homeroom teacher, required for the same orgs that render it (full-nav
+          // only - see StepStudent). Whitespace does not count: a single space
+          // would satisfy a truthiness check and land a blank on the roster,
+          // which is the state this requirement exists to eliminate.
+          (isLean || !!(s.homeroom_teacher || '').trim()) &&
           !!s.birthdate &&
           !!s.emergency_contact_name &&
           !!s.emergency_contact_phone;
