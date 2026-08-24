@@ -678,6 +678,51 @@ eq('...and it is screen 3 that empties',
   // silently drops the only attestation there is.
   ok('Screen 3 asks for no acknowledgement of its own',
     !/type="checkbox"/.test(screen3));
+
+  // --- THE PHOTO RELEASE IS THE ONE BOX THAT MAY BE REFUSED -------------------
+  //
+  // It had THREE required boxes, so consenting to appear in a provider's
+  // marketing was a condition of finishing onboarding, and the answer was stored
+  // nowhere. Both halves are pinned, because either one alone is the bug:
+  // requiring it again re-creates the coercion, and dropping the write makes a
+  // refusal invisible to the provider who needs to honour it.
+  {
+    const s6 = readFileSync(
+      new URL('../pages/onboarding/screens/Screen6Additional.jsx', import.meta.url), 'utf8',
+    ).replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/.*$/gm, ' ');
+
+    // THE GATE. Parsed rather than grepped loosely: allAcksChecked is the
+    // expression that decides whether Continue works, and the photo consent must
+    // not appear anywhere inside it.
+    const gate = /const allAcksChecked\s*=([\s\S]*?);/.exec(s6);
+    ok('the Continue gate was found', Boolean(gate));
+    ok('the photo consent does not gate Continue',
+      Boolean(gate) && !/photo/i.test(gate[1]));
+    // ...while the ones that ARE conditions of the work still do.
+    ok('the driving and mandatory-reporter acks still gate Continue',
+      Boolean(gate) && /Vehicle/i.test(gate[1]) && /mandatory/i.test(gate[1]));
+
+    // ONE box, not three.
+    const photoBlock = /const photoAcks\s*=[\s\S]*?\n\];/.exec(s6);
+    ok('the photo ack list was found', Boolean(photoBlock));
+    eq('the photo release asks exactly one thing',
+      (photoBlock?.[1] ?? photoBlock?.[0] ?? '').match(/key:/g)?.length ?? 0, 1);
+
+    // AND THE ANSWER IS SENT. Without this the box is merely decorative and a
+    // refusal dies in the browser.
+    ok('the answer is posted to the server',
+      /photo_release_consent:\s*!!photoChecked\[/.test(s6));
+    // Only when the release is actually on this provider's screen — otherwise a
+    // provider who switched it off would have every instructor recorded as
+    // refusing a document they were never shown.
+    ok('...and only when the provider has the release switched on',
+      /showPhoto\s*\?\s*\{\s*photo_release_consent/.test(s6));
+
+    // The mandatory-reporter tick may not assert training the platform cannot
+    // verify — the wording that prompted this, and the reason it read wrong.
+    ok('the mandatory-reporter tick claims only what it can evidence',
+      !/will complete the mandatory reporting training/i.test(s6));
+  }
   ok('Continue is still blocked until the document is ready',
     /disabled=\{[^}]*doc\.phase !== 'ready'/.test(screen3));
   {

@@ -84,7 +84,18 @@ export default function Screen3ORS({ slug, instructor, onboarding, onAdvance, on
           });
           return;
         }
-        setDoc({ phase: 'ready', title: data.title || '', body: data.body_text, retryable: false });
+        // VERSION CARRIED THROUGH, because what gets recorded is that this
+        // instructor read THIS version — the same (key, version) pair Screens 5
+        // and 6 acknowledge. Without it the record could not say which wording
+        // they were shown, which is the only thing that makes the record worth
+        // keeping.
+        setDoc({
+          phase: 'ready',
+          title: data.title || '',
+          body: data.body_text,
+          version: data.document_version,
+          retryable: false,
+        });
       })
       .catch((err) => {
         if (isHandledRedirect(err)) return;
@@ -103,9 +114,26 @@ export default function Screen3ORS({ slug, instructor, onboarding, onAdvance, on
     setBusy(true);
     setSubmitError('');
     try {
+      // POSTS TO submit-acknowledgments, NOT submit-ors-certification.
+      //
+      // That function only ever advanced the step — it stored nothing, by design,
+      // after the fabricated ORS attestation was stripped out of it. The
+      // consequence nobody noticed until 2026-08-24: there was no record anywhere
+      // that an instructor had ever been shown the provider's contractor note.
+      // Every other document in this wizard leaves a row saying who read which
+      // version, when, and from where; this one left nothing.
+      //
+      // Rather than copy that insert into a second function, Screen 3 now uses the
+      // one that already does it properly: it validates the (key, version) against
+      // this org's own legal_documents, upserts idempotently against the unique
+      // constraint, and advances the step. One write path for every document an
+      // instructor reads.
       const { error } = await invokeOnboardingFn(
-        'submit-ors-certification',
-        {},
+        'submit-acknowledgments',
+        {
+          step: 'contractor_status',
+          documents: [{ document_id: DOC_KEY, document_version: doc.version }],
+        },
         { navigate }
       );
       if (error) {

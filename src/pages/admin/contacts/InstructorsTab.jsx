@@ -11,6 +11,9 @@ import { supabase } from '../../../lib/supabase';
 import { avatarUrl, isValidAvatarKey } from '../../../lib/avatars';
 import { phoneIsValid, looksLikeName, emailIsValid } from '../../../lib/validation';
 import Chevron from '../../../components/Chevron.jsx';
+// Document LABELS come from the one list that defines them, so this panel cannot
+// drift from Settings > Instructor documents or from the wizard.
+import { documentByKey } from '../../../lib/instructorDocuments.js';
 
 const PURPLE = '#1C004F';
 const BRIGHT = '#5847C9';   // indigo - primary actions (Figma)
@@ -89,7 +92,8 @@ export default function InstructorsTab({ org }) {
             `id, first_name, last_name, preferred_name, email, phone, is_active,
              contractor_tier, date_of_birth, shirt_size, photo_url,
              site_preferences, availability,
-             first_aid_cpr_url, first_aid_cpr_expires_at`
+             first_aid_cpr_url, first_aid_cpr_expires_at,
+             photo_release_consent, photo_release_consent_at`
           )
           .eq('organization_id', org.id)
           .order('last_name', { ascending: true, nullsFirst: false });
@@ -633,7 +637,55 @@ function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, invi
   );
 }
 
+// WHAT THEY SIGNED, ON THEIR OWN RECORD. Every hiring platform we looked at puts
+// it in exactly this place — Gusto, Rippling and BambooHR all list signed
+// documents on the person, with the version and the date, rather than on a
+// separate compliance screen; DocuSign shows the same per recipient. So this is a
+// panel on the instructor, not a new page or a new tab in the nav.
+//
+// Loaded lazily, only when a row is expanded, because it is one query per
+// instructor and the list view shows dozens.
+function useInstructorRecord(instructorId) {
+  const [record, setRecord] = useState(null); // null = loading
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [acks, agreements] = await Promise.all([
+          supabase
+            .from('contractor_acknowledgments')
+            .select('document_id, document_version, acknowledged_at')
+            .eq('instructor_id', instructorId)
+            .order('acknowledged_at', { ascending: true }),
+          supabase
+            .from('contractor_agreements')
+            .select('document_version, signed_at')
+            .eq('instructor_id', instructorId)
+            .order('signed_at', { ascending: false }),
+        ]);
+        if (cancelled) return;
+        // SURFACED, NOT SWALLOWED. An empty list and a failed read look identical
+        // on screen, and "this instructor signed nothing" is exactly the wrong
+        // thing to show an operator deciding whether someone is cleared to teach.
+        if (acks.error || agreements.error) {
+          console.error('[InstructorsTab] record load failed', acks.error || agreements.error);
+          setFailed(true);
+          return;
+        }
+        setRecord({ acks: acks.data ?? [], agreements: agreements.data ?? [] });
+      } catch (err) {
+        if (!cancelled) setFailed(true);
+        console.error('[InstructorsTab] record load threw', err);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [instructorId]);
+  return { record, failed };
+}
+
 function InstructorDetail({ row, age, onUploadBg, onRemove, onReactivate, isEditingName, onStartEditName, onCancelEditName, onSaveName }) {
+  const { record, failed: recordFailed } = useInstructorRecord(row.id);
   const sitePrefs = row.site_preferences?.districts ?? [];
   const dayDefaults = row.availability?.day_defaults ?? {};
   const activeDays = DAY_INITIALS.filter(([k]) => dayDefaults[k]).map(([, label]) => label);
@@ -758,6 +810,61 @@ function InstructorDetail({ row, age, onUploadBg, onRemove, onReactivate, isEdit
           <Em>not uploaded</Em>
         )}
       </DetailItem>
+      {/* DOCUMENTS AND CONSENT. Labels come from documentByKey so this panel
+          cannot drift from the document list itself; a key the library no longer
+          knows falls back to the raw key rather than rendering blank, because a
+          row that exists and shows nothing is worse than an ugly one. */}
+      <DetailItem label="Documents">
+        {recordFailed ? (
+          <Em>Couldn&apos;t load this — refresh the page.</Em>
+        ) : !record ? (
+          <Em>Loading…</Em>
+        ) : record.acks.length === 0 && record.agreements.length === 0 ? (
+          <Em>Nothing signed yet</Em>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+            {record.agreements.map((a, i) => (
+              <div key={`ag-${i}`}>
+                Contractor agreement
+                {a.document_version ? ` · ${a.document_version}` : ''}
+                {a.signed_at ? ` · ${fmtDate(a.signed_at)}` : ''}
+                <strong style={{ marginLeft: 6, color: OK }}>signed</strong>
+              </div>
+            ))}
+            {record.acks.map((a, i) => (
+              <div key={`ack-${i}`}>
+                {documentByKey(a.document_id)?.label ?? a.document_id}
+                {a.document_version ? ` · ${a.document_version}` : ''}
+                {a.acknowledged_at ? ` · ${fmtDate(a.acknowledged_at)}` : ''}
+              </div>
+            ))}
+          </div>
+        )}
+      </DetailItem>
+
+      {/* THREE STATES, NOT TWO. null means the question was never put to them —
+          everyone who onboarded before 2026-08-24, and anyone whose provider has
+          the release switched off. Showing those people as "Declined" would
+          invent a refusal nobody made, and an operator would act on it. */}
+      <DetailItem label="Photo &amp; video">
+        {row.photo_release_consent === true ? (
+          <>
+            Agreed
+            {row.photo_release_consent_at ? ` · ${fmtDate(row.photo_release_consent_at)}` : ''}
+          </>
+        ) : row.photo_release_consent === false ? (
+          <>
+            <strong style={{ color: RED }}>Declined</strong>
+            {row.photo_release_consent_at ? ` · ${fmtDate(row.photo_release_consent_at)}` : ''}
+            <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>
+              Don&apos;t use their photo or video in anything.
+            </div>
+          </>
+        ) : (
+          <Em>Not asked</Em>
+        )}
+      </DetailItem>
+
       <DetailItem label="Onboarding step">
         {row.status?.current_step ? `Step ${row.status.current_step}` : <Em>not started</Em>}
       </DetailItem>
@@ -1380,7 +1487,11 @@ function AddInstructorModal({ org, onClose, onAdded, onSendInvite }) {
           contractor_tier: tier || null,
           is_active: true,
         })
-        .select('id, first_name, last_name, preferred_name, email, phone, is_active, contractor_tier, date_of_birth, shirt_size, photo_url, site_preferences, availability, first_aid_cpr_url, first_aid_cpr_expires_at')
+        // SAME COLUMN LIST AS THE PAGE LOAD ABOVE. A newly added instructor is
+        // pushed straight into `rows`, so any column missing here is undefined on
+        // that row only — the detail panel would render differently for someone
+        // added this session than for everyone else, until a refresh hid it.
+        .select('id, first_name, last_name, preferred_name, email, phone, is_active, contractor_tier, date_of_birth, shirt_size, photo_url, site_preferences, availability, first_aid_cpr_url, first_aid_cpr_expires_at, photo_release_consent, photo_release_consent_at')
         .single();
 
       if (insErr) {

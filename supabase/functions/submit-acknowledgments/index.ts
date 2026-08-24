@@ -23,19 +23,40 @@ import {
 } from '../_shared/instructor.ts';
 import { advanceOnboardingStep, StepKey } from '../_shared/onboardingStep.ts';
 
+// The document key the photo consent belongs to. Named here rather than inlined
+// so the binding check below and the wizard cannot drift apart silently; the
+// browser half is PHOTO_KEY in Screen6Additional.jsx.
+const PHOTO_DOC_KEY = 'photo_video_release';
+
 interface AckDoc {
   document_id?: string;
   document_version?: string;
 }
 
+type AckStep = 'contractor_status' | 'policies' | 'additional';
+
 interface SubmitAcksBody {
-  step?: 'policies' | 'additional';
+  step?: AckStep;
   documents?: AckDoc[];
+  // Screen 6 only. A real yes/no, unlike every other box in the wizard — see
+  // the photo block further down.
+  photo_release_consent?: boolean;
 }
 
 // Step name → step number mapping. After acknowledging policies the wizard
 // moves to step 6 (additional); after additional acks → step 7 (Stripe).
-const STEP_ADVANCE: Record<'policies' | 'additional', { key: StepKey; next: number }> = {
+//
+// 'contractor_status' JOINED THIS FUNCTION ON 2026-08-24, replacing
+// submit-ors-certification. That function existed only to advance a step: it
+// stored nothing, so there was no record an instructor had ever been shown the
+// provider's independent-contractor note. Screen 3 now posts here instead and
+// gets the whole contract for free — the (document_id, document_version) pair is
+// validated against the org's own legal_documents, the acknowledgement is
+// upserted idempotently, and the step advances. One write path for every document
+// an instructor reads, rather than a second spelling of the same insert.
+// submit-ors-certification is left deployed but is no longer called by anything.
+const STEP_ADVANCE: Record<AckStep, { key: StepKey; next: number }> = {
+  contractor_status: { key: 'ors_certification', next: 4 },
   policies: { key: 'policies_acknowledged', next: 6 },
   additional: { key: 'additional_acks', next: 7 },
 };
@@ -56,9 +77,11 @@ serve(async (req: Request) => {
       return json({ error: 'invalid_json' }, 400);
     }
 
-    const step = body.step;
-    if (step !== 'policies' && step !== 'additional') {
-      return json({ error: 'invalid_step', expected: ['policies', 'additional'] }, 400);
+    const step = body.step as AckStep | undefined;
+    if (!step || !Object.prototype.hasOwnProperty.call(STEP_ADVANCE, step)) {
+      // Derived from STEP_ADVANCE rather than restated, so adding a step cannot
+      // leave this guard rejecting a step the function otherwise supports.
+      return json({ error: 'invalid_step', expected: Object.keys(STEP_ADVANCE) }, 400);
     }
 
     const docs = Array.isArray(body.documents) ? body.documents : [];
@@ -134,6 +157,50 @@ serve(async (req: Request) => {
     if (upsertErr) {
       console.error('acknowledgments upsert failed:', upsertErr);
       return json({ error: 'upsert_failed' }, 500);
+    }
+
+    // THE ONE ANSWER IN THIS WIZARD THAT CAN LEGITIMATELY BE "NO".
+    //
+    // Every other tick box is an acknowledgement — "I have read it", "I will
+    // comply" — where no is not an available answer and the ack row above IS the
+    // record. The photo/video release is a CONSENT: an instructor may refuse it
+    // and must still be able to finish onboarding. Until 2026-08-24 all three of
+    // its boxes were required, so agreeing to appear in a provider's marketing
+    // was a condition of working, and the answer was stored nowhere at all.
+    //
+    // BOUND TO THE DOCUMENT THAT WAS ACTUALLY ACKNOWLEDGED, not taken on the
+    // client's word. A caller could otherwise post a consent for a release it was
+    // never shown. The pair must arrive together: the photo document in
+    // `documents` (already validated above against this org's legal_documents)
+    // and the boolean in the body.
+    //
+    // ABSENT IS NOT FALSE. If the key is missing entirely the column is left
+    // exactly as it was — that is a caller which did not ask the question (an
+    // older cached bundle, or the policies step), and overwriting a real answer
+    // with a default would destroy consent evidence. Only an explicit boolean
+    // writes.
+    const askedAboutPhoto = normalized.some((d) => d.document_id === PHOTO_DOC_KEY);
+    if (step === 'additional' && askedAboutPhoto && typeof body.photo_release_consent === 'boolean') {
+      const consent = body.photo_release_consent;
+      const { error: consentErr } = await supabase
+        .from('instructors')
+        .update({
+          photo_release_consent: consent,
+          photo_release_consent_at: nowIso,
+        })
+        .eq('id', me.id)
+        .eq('organization_id', me.organization_id);
+      if (consentErr) {
+        // FAILS THE REQUEST. The acks are written, but returning success here
+        // would tell an instructor their refusal was recorded when it was not,
+        // and the provider would go on using their likeness. A retry re-upserts
+        // the same ack rows harmlessly (unique constraint) and re-attempts this.
+        console.error('photo release consent write failed:', consentErr, {
+          instructor_id: me.id,
+          organization_id: me.organization_id,
+        });
+        return json({ error: 'consent_write_failed' }, 500);
+      }
     }
 
     // Advance step

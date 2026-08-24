@@ -54,8 +54,19 @@ const VEHICLE_KEY = 'vehicle_driving_ack';
 
 const ALL_DOC_KEYS = [MANDATORY_KEY, PHOTO_KEY, VEHICLE_KEY];
 
+// SAYS WHAT THE TICK CAN ACTUALLY EVIDENCE, which the previous wording did not.
+// It read "I have completed or will complete the mandatory reporting training and
+// will comply with reporting requirements" — an assertion about training the
+// platform cannot verify, has no record of, and never linked to anywhere on the
+// screen. Jessica, 2026-08-24: "there's no link in it to a course."
+//
+// Now the same shape as every other acknowledgement in the wizard: they confirm
+// they have READ the provider's policy. Where the training itself lives is the
+// provider's to state inside that document — a bare URL in the body renders as a
+// clickable link (linkifyText, applied below), and the starter draft now asks
+// them for it.
 const MANDATORY_ACK =
-  'I have completed or will complete the mandatory reporting training and will comply with reporting requirements';
+  'I acknowledge I have read the mandatory reporting policy and will comply with it';
 
 // "I understand I won't receive additional compensation" used to be the
 // fourth checkbox here. Removed 2026-05-25 per Arielle — compensation
@@ -75,17 +86,45 @@ const MANDATORY_ACK =
 // attestation. renderWaiverText already trims, already falls back to wording that
 // is true rather than to a placeholder or another tenant's name, and is already
 // the convention every other org-name interpolation in this repo uses.
+// ONE OPTIONAL BOX, AND IT IS THE ONLY OPTIONAL BOX IN THE WIZARD.
+//
+// This was three REQUIRED boxes until 2026-08-24 — consent to being recorded,
+// consent to marketing use, and an understanding that consent is revocable — all
+// three of which had to be ticked before an instructor could finish onboarding.
+// So agreeing to appear in a provider's marketing was a condition of being
+// allowed to work. Jessica: "they have to be able to not accept it and deny that
+// and still be able to continue. shouldn't be mandatory to work for a provider."
+//
+// EVERY OTHER TICK IN THIS WIZARD IS AN ACKNOWLEDGEMENT — "I have read it", "I
+// will comply" — where no is not an available answer and the acknowledgement row
+// is the whole record. This one is a CONSENT: it has a real no, and the answer is
+// now stored on instructors.photo_release_consent, the same pair of column names
+// families already answer this question into on registrations.
+//
+// UNTICKED MEANS DECLINED, and it is written as an explicit false rather than
+// left null — null is reserved for "never asked". Jessica chose a single optional
+// tick over a two-option choice; the cost is that someone who does not notice the
+// box is recorded as declining, and that is the fail-safe direction. The failure
+// mode is not using a photo we could have used.
+//
+// The revocable/optional wording moved OUT of a tick box and into the footnote
+// below: it is information, not a decision, and asking someone to tick that they
+// understand something is not evidence that they do.
+const PHOTO_CONSENT_KEY = 'photo_consent';
+
 const photoAcks = (orgName) => [
   {
-    key: 'photo_consent_record',
+    key: PHOTO_CONSENT_KEY,
     label: renderWaiverText(
-      'I consent to {{org}} photographing/recording me at program sites',
+      'I agree to {{org}} photographing or recording me at program sites, and to my likeness being used in their marketing',
       orgName,
     ),
   },
-  { key: 'photo_consent_marketing', label: 'I consent to use of my likeness in marketing materials' },
-  { key: 'photo_consent_revocable', label: 'I understand consent is ongoing and revocable in writing' },
 ];
+
+const PHOTO_FOOTNOTE =
+  'This one is optional. Leave it unticked and carry on — it does not affect the work you are offered, '
+  + 'and you can change your mind later by telling your program manager in writing.';
 
 const VEHICLE_ACKS = [
   { key: 'vehicle_own_transport', label: 'I am responsible for my own transportation' },
@@ -180,11 +219,12 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
   // group's checkboxes can never be ticked, so requiring them would disable
   // Continue with nothing on screen to explain why.
   const allLoaded = DOC_KEYS.every((k) => docs[k]);
-  const allPhotoChecked = !showPhoto || PHOTO_ACKS.every((a) => photoChecked[a.key]);
   const allVehicleChecked = !showVehicle || VEHICLE_ACKS.every((a) => vehicleChecked[a.key]);
+  // THE PHOTO CONSENT IS DELIBERATELY ABSENT FROM THIS EXPRESSION. It is the one
+  // box on this screen an instructor may decline, so it can never gate Continue —
+  // that was the bug. Its answer is carried in the payload instead of the gate.
   const allAcksChecked =
     (!showMandatory || mandatoryAck) &&
-    allPhotoChecked &&
     allVehicleChecked;
   // Not gated on DOC_KEYS.length — see the empty-set guard in handleSubmit.
   const canSubmit = allLoaded && allAcksChecked;
@@ -215,6 +255,12 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
             document_id: k,
             document_version: docs[k].version,
           })),
+          // Sent ONLY when the release is actually on this provider's screen. If
+          // they have switched the document off, the instructor was never asked,
+          // and posting `false` would record a refusal nobody made — the server
+          // leaves the column untouched when the key is absent, which is what
+          // "never asked" has to look like.
+          ...(showPhoto ? { photo_release_consent: !!photoChecked[PHOTO_CONSENT_KEY] } : {}),
         },
         { navigate }
       );
@@ -291,6 +337,7 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
             acks={PHOTO_ACKS}
             checked={photoChecked}
             onCheck={(k, v) => setPhotoChecked((s) => ({ ...s, [k]: v }))}
+            footnote={PHOTO_FOOTNOTE}
             className="mt-3"
           />
           )}
@@ -334,6 +381,7 @@ function MultiAckAccordion({
   acks,
   checked,
   onCheck,
+  footnote,
   className = '',
 }) {
   return (
@@ -370,6 +418,13 @@ function MultiAckAccordion({
             <span>{a.label}</span>
           </label>
         ))}
+        {/* Sits WITH the box, not at the bottom of the screen. An instructor
+            deciding whether to tick needs to know it is optional at the moment
+            they are deciding — guidance they have to scroll to find is guidance
+            they do not read. */}
+        {footnote && (
+          <p className="pl-7 text-xs leading-relaxed text-neutral-500">{footnote}</p>
+        )}
       </div>
     </div>
   );
