@@ -758,6 +758,26 @@ eq('...and it is screen 3 that empties',
     // itself doing that twice now.
     ok('a failed step advance returns an error rather than success',
       /return json\(\{\s*error:\s*'step_advance_failed'\s*\},\s*500\)/.test(fn));
+
+    // --- NO ONE TENANT'S PROGRAMME SHAPE IN A SHARED WIZARD SCREEN -----------
+    //
+    // The last screen of onboarding told EVERY provider's instructors that their
+    // "summer camp assignments" were waiting. Only J2S runs camps; Jessica hit it
+    // walking the flow as an after-school ukulele instructor on 2026-08-24. The
+    // screens are shared, so a word that is only true for one tenant is wrong for
+    // all the others, and nothing here can be tenant-configured because these
+    // strings take no org.
+    //
+    // Scanned WITH comments stripped: the fix's own comment names the old wording,
+    // and this file has twice shipped a grep that matched the explanation of the
+    // very thing it guarded.
+    const completion = readFileSync(
+      new URL('../pages/onboarding/CompletionScreen.jsx', import.meta.url), 'utf8',
+    ).replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\/\/.*$/gm, ' ');
+    for (const word of ['summer camp', 'journey to steam', 'j2s', 'ukulele', 'steam vip']) {
+      ok(`the completion screen does not say "${word}"`,
+        !new RegExp(word.replace(/ /g, '\\s+'), 'i').test(completion));
+    }
     ok('...and success is not also returned for that path',
       !/Don't fail\s*[-—]\s*acks are written/i.test(fn));
     ok('...and the contractor-status step is one this function knows',
