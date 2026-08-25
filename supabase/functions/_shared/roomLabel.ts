@@ -10,7 +10,9 @@
 //      names a place ("Makerspace", "Room 111") is printed as typed. Callers
 //      must NOT add the word themselves.
 //
-// Camps are not routed through here yet, by decision, 2026-08-25.
+// Camps keep the site-room PRECEDENCE (they have no class room), but the camp
+// surfaces that call through here do take this WORDING - see the "CAMPS" note in
+// the .js twin, which lists which camp surfaces moved and which did not.
 
 export function roomDisplay(
   classRoom: string | null | undefined,

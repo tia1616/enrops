@@ -27,9 +27,22 @@
 // as the operator typed it. Callers must never add the word back - that is the
 // whole point of returning a finished label.
 //
-// CAMPS ARE DELIBERATELY NOT ROUTED THROUGH HERE YET (Jessica, 2026-08-25:
-// "don't worry about camps they're over and we'll fix later"). camp_sessions has
-// no room column, so a camp surface passes null as classRoom when it does move.
+// KNOWN LIMIT of that heuristic, so nobody reads more into it than it does: a
+// value that starts with a digit AND already names a place - "2nd floor lounge",
+// "3rd grade classroom" - comes back as "Room 2nd floor lounge". No prod value
+// looks like that today (checked 2026-08-25, all 32 open FA26 classes), and the
+// only honest fix is an explicit per-value choice rather than a cleverer regex.
+//
+// CAMPS: their PRECEDENCE is untouched - camp_sessions has no room column, so a
+// camp caller passes null as classRoom and still shows the site room (Jessica,
+// 2026-08-25: "don't worry about camps they're over and we'll fix later"). But
+// the camp surfaces that DO go through here now get this WORDING, which is not
+// the same as untouched: the instructor portal's camp detail, the camp sub email
+// and the camp branch of offer-reminders-cron lost their hardcoded "Room "
+// prefix, while email-camp-roster, send-offers, send-patch-offer and
+// Schedule.jsx still write it themselves. So camp surfaces currently disagree
+// with each other on wording. Deliberate and low-stakes while camps are dormant;
+// finish it when camps come back, with the locations/programs unification.
 
 export function roomDisplay(classRoom, siteRoom) {
   const room = String(classRoom ?? "").trim() || String(siteRoom ?? "").trim();

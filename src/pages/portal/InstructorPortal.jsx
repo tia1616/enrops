@@ -2319,7 +2319,8 @@ function AssignmentCard({ assignment, coInstructors = [], messages = [], busy, o
 // rooms in programs, not locations" - which was the correct instinct.)
 //
 // The site value stays as the fallback so the 4 classes carrying only a site
-// room keep working, and camps are untouched (camp_sessions has no room column).
+// room keep working. Camps keep the site room (no class room exists for them),
+// though the camp detail view does pick up the new WORDING - see roomLabel.js.
 //
 // This does NOT fix the underlying two-boxes-one-fact problem - that is the
 // locations/programs unification on the backlog. It stops instructors being the
