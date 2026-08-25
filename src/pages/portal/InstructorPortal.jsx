@@ -15,6 +15,7 @@ import {
 } from "../../lib/dismissal.js";
 import PortalSwitcher from "../../components/PortalSwitcher.jsx";
 import { displayFirstName } from "../../lib/instructorName";
+import { roomDisplay } from "../../lib/roomLabel.js";
 import { avatarUrl } from "../../lib/avatars";
 import InstructorAvailabilityForm from "./InstructorAvailabilityForm.jsx";
 import AfterschoolAvailabilityForm from "./AfterschoolAvailabilityForm.jsx";
@@ -592,7 +593,7 @@ export default function InstructorPortal() {
   async function loadAfterschoolAssignments(instructorId) {
     const { data, error: aErr } = await supabase
       .from("program_assignments")
-      .select("id, status, role, distance_bonus_cents, flags, change_request_message, instructor_response_at, deadline, published_at, program_id, programs(id, curriculum, curriculum_id, day_of_week, start_time, end_time, session_count, term, program_location_id, program_locations:program_location_id(id, name, address, contact_phone, room_number, arrival_instructions, dismissal_instructions)), instructor_offer_messages(id, sender_role, sender_instructor_id, message, created_at)")
+      .select("id, status, role, distance_bonus_cents, flags, change_request_message, instructor_response_at, deadline, published_at, program_id, programs(id, curriculum, curriculum_id, day_of_week, start_time, end_time, session_count, term, room, program_location_id, program_locations:program_location_id(id, name, address, contact_phone, room_number, arrival_instructions, dismissal_instructions)), instructor_offer_messages(id, sender_role, sender_instructor_id, message, created_at)")
       .eq("instructor_id", instructorId)
       .not("published_at", "is", null)
       .in("status", ["published", "change_requested", "confirmed"]);
@@ -2062,12 +2063,32 @@ function SubOfferCard({ sub, busy, busyAction, onAccept, onDecline, readOnly, on
   );
 }
 
+// TWO time formats reach this function and it only ever handled one.
+// camp_sessions.start_time is a Postgres `time` ("14:35:00"), which the 24-hour
+// maths below parses. programs.start_time is 12-HOUR TEXT ("2:35 PM"), where
+// Number("35 PM") is NaN - so every PROGRAM sub card and sub detail printed
+// "2:NaNam-3:NaNam" and a sub covering a class could not see what time to turn
+// up. Found on staging 2026-08-25 with a real sub assignment; it is on prod too.
+//
+// The 12-hour branch mirrors fmtTime in admin/AfterschoolSchedule.jsx, which has
+// always handled both because it is the screen that displays programs. Same rule,
+// second spelling - the class of bug this whole pass keeps finding.
 function fmtTimePretty(t) {
   if (!t) return "";
+  const twelve = /^\s*(\d{1,2}):(\d{2})\s*([AaPp])[Mm]\s*$/.exec(t);
+  if (twelve) {
+    const hr = parseInt(twelve[1], 10);
+    const min = twelve[2];
+    const ampm = twelve[3].toLowerCase() === "p" ? "pm" : "am";
+    return min === "00" ? `${hr}${ampm}` : `${hr}:${min}${ampm}`;
+  }
   const [h, m] = t.split(":").map(Number);
+  // Anything that is neither format is returned as typed rather than as NaN:
+  // an unreadable time is bad, an invented one is worse.
+  if (Number.isNaN(h)) return t;
   const hr12 = ((h + 11) % 12) + 1;
   const ampm = h >= 12 ? "pm" : "am";
-  return m === 0 ? `${hr12}${ampm}` : `${hr12}:${String(m).padStart(2, "0")}${ampm}`;
+  return !m ? `${hr12}${ampm}` : `${hr12}:${String(m).padStart(2, "0")}${ampm}`;
 }
 
 function roleLabel(r) {
@@ -2281,6 +2302,38 @@ function AssignmentCard({ assignment, coInstructors = [], messages = [], busy, o
   );
 }
 
+// Which room to show an instructor. TWO columns hold a room and this is the one
+// place that decides between them: `programs.room` is per CLASS (typed in the
+// program editor), `program_locations.room_number` is per SITE (typed in the
+// location editor). This portal only ever read the site one, so on 2026-08-25,
+// of 32 open FA26 classes, 15 had a room on the class that no instructor could
+// see and 2 showed the instructor a DIFFERENT room from the one on their class.
+//
+// The class wins because it is the more specific fact, and Happy Valley Library
+// is the proof rather than a data error: ONE site row serves 6 summer camp
+// sessions AND 3 after-school classes. Its room_number is "Community Room B"
+// because that is the SUMMER room; the after-school class carries "Community
+// Room A". Neither is wrong and neither can be deleted - the site column cannot
+// hold both, and camps read only the site row. Preferring the class here is what
+// lets each audience see its own room. (Jessica, 2026-08-25: "i've been updating
+// rooms in programs, not locations" - which was the correct instinct.)
+//
+// The site value stays as the fallback so the 4 classes carrying only a site
+// room keep working. Camps keep the site room (no class room exists for them),
+// though the camp detail view does pick up the new WORDING - see roomLabel.js.
+//
+// This does NOT fix the underlying two-boxes-one-fact problem - that is the
+// locations/programs unification on the backlog. It stops instructors being the
+// ones who pay for it.
+// The rule itself now lives in src/lib/roomLabel.js, with 18 assertions and a
+// mutation check behind it, because the roster email, the offer emails, the sub
+// email and the admin roster all had to agree with this screen. This wrapper
+// only adapts the (program, location) shape the components here already pass.
+// It returns a FINISHED label - never add the word "Room" at a call site.
+function roomForInstructor(program, location) {
+  return roomDisplay(program?.room, location?.room_number);
+}
+
 function AfterschoolAssignmentCard({ assignment, coInstructors = [], schedule = [], messages = [], busy, onAccept, onRequestChange, readOnly, onOpen }) {
   const p = assignment.programs;
   const [showDates, setShowDates] = useState(false);
@@ -2325,7 +2378,7 @@ function AfterschoolAssignmentCard({ assignment, coInstructors = [], schedule = 
           </div>
           <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.4 }}>
             {when} · <strong style={{ color: PURPLE, fontWeight: 600 }}>all term</strong><br />
-            {loc?.name || ""}{loc?.room_number ? ` · Room ${loc.room_number}` : ""}
+            {loc?.name || ""}{roomForInstructor(p, loc) ? ` · ${roomForInstructor(p, loc)}` : ""}
           </div>
         </div>
         <span style={{ fontSize: 11, color: statusColor, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right", maxWidth: 130, flexShrink: 0, lineHeight: 1.35 }}>
@@ -2491,7 +2544,7 @@ function AfterschoolDetailView({ assignment, instructor, coInstructors = [], sch
               {p?.curriculum || "Class"} <span style={{ fontWeight: 400, color: PURPLE, fontSize: 13 }}>· after-school</span>
             </div>
             <div style={{ fontSize: 13, color: MUTED, marginTop: 6, lineHeight: 1.5 }}>
-              {when}{loc?.name ? ` · ${loc.name}` : ""}{loc?.room_number ? ` · Room ${loc.room_number}` : ""}
+              {when}{loc?.name ? ` · ${loc.name}` : ""}{roomForInstructor(p, loc) ? ` · ${roomForInstructor(p, loc)}` : ""}
               {assignment.role ? ` · ${titleCase(assignment.role)} instructor` : ""}
             </div>
           </div>
@@ -2503,7 +2556,7 @@ function AfterschoolDetailView({ assignment, instructor, coInstructors = [], sch
           pay), Roster, and Lesson materials are the shared camp components fed the
           program's own location / session dates / curriculum. */}
       {p.program_locations && (
-        <LocationSection location={p.program_locations} fallbackName={p.program_locations?.name} />
+        <LocationSection location={p.program_locations} fallbackName={p.program_locations?.name} program={p} />
       )}
       <DailyCheckInSection
         assignmentId={assignment.id}
@@ -3090,7 +3143,12 @@ function SubDetailView({ sub, instructor, onBack, onMarkTaught, markBusy, error,
         )}
       </div>
 
-      <LocationSection location={loc} fallbackName={venueName} />
+      {/* program={prog} for a PROGRAM sub: a sub has most likely never been in
+          this room, so they are the last person who should be shown the site's
+          room instead of their class's. Camps pass null - camp_sessions has no
+          room of its own. `prog` reaches here from get_my_sub_details, whose
+          whitelist had to gain 'room' for this to be non-null. */}
+      <LocationSection location={loc} fallbackName={venueName} program={isCamp ? null : prog} />
       <SubCheckInSection sub={sub} onMarkTaught={onMarkTaught} markBusy={markBusy} />
       {/* Roster + lessons for BOTH camp and after-school subs — the sub offer
           emails promise "the roster and lesson plan are in your portal", so a
@@ -3158,11 +3216,13 @@ function SubCheckInSection({ sub, onMarkTaught, markBusy }) {
 // room number, and separately-labeled arrival + dismissal procedures.
 // Graceful fallback when address/phone/procedures are still null (TBD
 // camp partners or sites where the partner hasn't sent procedures yet).
-function LocationSection({ location, fallbackName }) {
+// `program` is optional: camps pass none, because camp_sessions carries no room
+// of its own. When it is passed, its room wins over the site's (roomForInstructor).
+function LocationSection({ location, fallbackName, program = null }) {
   const name = location?.name || fallbackName;
   const address = location?.address || null;
   const phone = location?.contact_phone || null;
-  const room = location?.room_number || null;
+  const room = roomForInstructor(program, location);
   const arrival = location?.arrival_instructions || null;
   const dismissal = location?.dismissal_instructions || null;
   const hasAnyDetails = address || phone || room || arrival || dismissal;
@@ -3733,7 +3793,7 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
             id, status, payment_status, registered_at, notes,
             authorized_pickup_contacts, photo_release_consent, custom_field_values,
             student:students (
-              id, first_name, last_name, grade, birthdate, pronouns,
+              id, first_name, last_name, grade, birthdate, pronouns, homeroom_teacher,
               allergies, dietary_restrictions, medical_notes, medical_conditions,
               epipen_required, medications_at_program,
               emergency_contact_name, emergency_contact_phone,
@@ -3933,6 +3993,19 @@ function CamperRow({ registration, contacts = [], canRecord = false, orgAsksDism
           <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>
             {age !== null && <>age {age}</>}
             {s.grade != null && <>{age !== null ? " · " : ""}grade {s.grade}</>}
+            {/* Homeroom teacher. This roster is the screen an instructor is
+                holding when they go to collect a class, and at most of these
+                schools the youngest kids are fetched FROM their classroom -
+                Ainsworth's own arrival instructions say "the instructor will
+                pick up kindergarten and first graders from their classrooms".
+                The column has been collected since the beginning and no
+                instructor-facing surface has ever selected it, so the answer
+                to "which room is Nicolas in" lived only in the admin roster.
+                Rendered only when set: "homeroom" followed by nothing reads as
+                a system that lost the name. */}
+            {(s.homeroom_teacher ?? "").trim() && (
+              <>{age !== null || s.grade != null ? " · " : ""}homeroom {s.homeroom_teacher.trim()}</>
+            )}
           </div>
         </div>
       </div>
