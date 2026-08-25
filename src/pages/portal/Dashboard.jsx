@@ -414,6 +414,31 @@ export default function Dashboard() {
         .from('automation_run_recipients')
         .select('id, status, sent_at, automations(automation_templates(display_name))')
         .eq('parent_id', p.id)
+        // Scoped to THIS provider, like the two registration queries above. The
+        // RLS policy is `parent_id = current_parent_id()` with no org term, so
+        // it returns the family's rows at EVERY provider they use — and the feed
+        // is headed "From {org.name}", which would then name one provider above
+        // another one's emails. Latent rather than live when this was written:
+        // four families on prod use more than one provider, but none of them has
+        // an automation row at more than one yet, so nobody could have seen it.
+        // Filtering here is what keeps it that way as those two sets converge.
+        // It also never got the chance to show, because the feed's own header
+        // threw before it could render; it renders for the first time now.
+        .eq('organization_id', org.id)
+        // Only emails that actually went out. This table is a SEND LOG, not a
+        // list of messages: it also holds rows for sends that were deliberately
+        // suppressed and rows for sends that failed. All 34 suppressed rows on
+        // prod are duplicate-suppressions, by two different mechanisms — 33
+        // automatic (a child in a continuous multi-week camp would have
+        // triggered the same "Welcome — camp" once per week, so one was sent and
+        // the rest were logged) and 1 manual, written by hand in June so the
+        // cron would not follow a corrected welcome with a duplicate. Either way
+        // the family got the email once; listing the log rows repeats it. A
+        // failed row is wrong in the other direction — it would claim we sent
+        // something that never arrived. DeliveryIssuesPanel already states this
+        // rule for the operator side ("intentional skips never appear here");
+        // the family feed was the only reader of this table missing it.
+        .eq('status', 'sent')
         .order('sent_at', { ascending: false })
         .limit(10);
 
@@ -582,7 +607,7 @@ export default function Dashboard() {
       </div>
 
       <div className="mt-6">
-        {tab === 'today' && <TodayTab todayClasses={todayClasses} enrollments={enrollments} notifications={notifications} slug={org.slug} />}
+        {tab === 'today' && <TodayTab todayClasses={todayClasses} enrollments={enrollments} notifications={notifications} slug={org.slug} org={org} />}
         {tab === 'schedule' && <ScheduleTab enrollments={enrollments} />}
         {tab === 'classes' && <ClassesTab enrollments={enrollments} expandedCards={expandedCards} toggleCard={toggleCard} slug={org.slug} />}
         {tab === 'settings' && <SettingsTab prefs={prefs} savingPrefs={savingPrefs} prefsSaved={prefsSaved} onToggle={(key) => savePrefs({ ...prefs, [key]: !prefs[key] })} supportEmail={supportEmail} />}
@@ -594,7 +619,16 @@ export default function Dashboard() {
 /* ==================================================================== */
 /*  TODAY TAB                                                            */
 /* ==================================================================== */
-function TodayTab({ todayClasses, enrollments, notifications, slug }) {
+// `org` is a PROP, not a closure read. TodayTab is a module-level sibling of
+// Dashboard, so the `org` from Dashboard's useOutletContext() is not in scope
+// here — and `org?.name` does NOT guard an undeclared identifier, only a missing
+// property. Without the prop this threw `ReferenceError: org is not defined` the
+// moment a family had one notification to show, and ChunkErrorBoundary rethrows
+// anything that isn't a chunk-load failure, so the whole dashboard went blank.
+// Live on prod from 2026-07-24 until this commit; a paying parent reported it
+// as "this link doesn't work" because it fires right after the first automation
+// email lands. There is no ESLint in this repo, so no-undef never ran on it.
+function TodayTab({ todayClasses, enrollments, notifications, slug, org }) {
   if (enrollments.length === 0) {
     return <EmptyState title="No enrollments yet" body="Once you register for a class, you'll see what your child is learning each day." cta="Browse programs" to={`/${slug}`} />;
   }
