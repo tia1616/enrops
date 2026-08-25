@@ -309,6 +309,18 @@ export default function LocationsList({ embedded = false }) {
     }));
   }
 
+  // Fills Area from the city in the address. EditCard renders the button that
+  // calls this, and it CANNOT touch setDraft itself: it is a module-level
+  // sibling of this component, not a closure over it, so `setDraft` there was a
+  // free identifier and the button threw ReferenceError on click. It has done
+  // that since 7b35b9f4 (2026-06-06) — see freeIdentifiers.test.mjs, which now
+  // fails the build on this whole class rather than waiting for a report.
+  // Passed down as a named callback for the same reason applyPlace is: the
+  // parent owns every write to `draft`, the card only asks for them.
+  function applyAddressCity() {
+    setDraft((d) => ({ ...d, area: parseCity(d.address) }));
+  }
+
   async function save() {
     if (!draft.name?.trim()) {
       setError("Name is required.");
@@ -538,6 +550,7 @@ export default function LocationsList({ embedded = false }) {
               draft={draft}
               bind={bind}
               applyPlace={applyPlace}
+              applyAddressCity={applyAddressCity}
               partners={partners}
               districts={districts}
               savedDistrictId={savedDistrictId}
@@ -660,7 +673,7 @@ function DisplayCard({ loc, campCount, district, onEdit, isLean = false }) {
   );
 }
 
-function EditCard({ title, draft, bind, applyPlace, partners, districts, savedDistrictId = null, districtsWarning = "", error, saving, onSave, onCancel, isNew, isLean = false, inDrawer }) {
+function EditCard({ title, draft, bind, applyPlace, applyAddressCity, partners, districts, savedDistrictId = null, districtsWarning = "", error, saving, onSave, onCancel, isNew, isLean = false, inDrawer }) {
   const placesEnabled = !!import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
   // Whether the Google lookup actually started. Without this the field degrades
   // to a plain box on failure and says nothing, which reads as broken.
@@ -747,7 +760,7 @@ function EditCard({ title, draft, bind, applyPlace, partners, districts, savedDi
         {!draft.area?.trim() && parseCity(draft.address) && (
           <button
             type="button"
-            onClick={() => setDraft((d) => ({ ...d, area: parseCity(d.address) }))}
+            onClick={applyAddressCity}
             style={{ marginTop: 6, background: "transparent", border: "none", color: BRIGHT, fontSize: 12, fontWeight: 600, cursor: "pointer", padding: 0 }}
           >
             Use &quot;{parseCity(draft.address)}&quot;
