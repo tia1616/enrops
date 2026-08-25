@@ -17,6 +17,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, renderSignatureBlock, formatFromAddress } from '../_shared/orgBrand.ts';
 import { AVAILABILITY_OVERRIDE_NOTE_HTML, AVAILABILITY_OVERRIDE_NOTE_TEXT, hasAvailabilityOverride } from '../_shared/offerCopy.ts';
+import { roomDisplay } from '../_shared/roomLabel.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -168,7 +169,9 @@ serve(async (req: Request) => {
     const programIds = Array.from(new Set(targets.map((a) => a.program_id)));
     const { data: programs, error: progErr } = await supabase
       .from('programs')
-      .select('id, curriculum, day_of_week, start_time, end_time, term, program_location_id')
+      // `room` added 2026-08-25: this email showed only the SITE room, so the
+      // class's own room never reached the instructor being patched in.
+      .select('id, curriculum, day_of_week, start_time, end_time, term, program_location_id, room')
       .in('id', programIds);
     if (progErr) return json({ error: `programs query: ${progErr.message}` }, 500);
     const programById = new Map((programs ?? []).map((p) => [p.id, p]));
@@ -313,12 +316,15 @@ serve(async (req: Request) => {
   }
 });
 
-function renderVenueDetailsHtml(loc: Record<string, unknown> | undefined): string {
+// classRoom (programs.room) beats the site's room_number, and the shared rule
+// supplies the wording - do not write the word "Room" at these call sites.
+function renderVenueDetailsHtml(loc: Record<string, unknown> | undefined, classRoom?: string | null): string {
   if (!loc) return '';
   const g = (k: string) => loc[k] as string | undefined;
   const lines: string[] = [];
-  if (g('address')) lines.push(`<div>${escape(g('address'))}${g('room_number') ? ` · Room ${escape(g('room_number'))}` : ''}</div>`);
-  else if (g('room_number')) lines.push(`<div>Room ${escape(g('room_number'))}</div>`);
+  const room = roomDisplay(classRoom, g('room_number'));
+  if (g('address')) lines.push(`<div>${escape(g('address'))}${room ? ` · ${escape(room)}` : ''}</div>`);
+  else if (room) lines.push(`<div>${escape(room)}</div>`);
   if (g('arrival_instructions')) lines.push(`<div><strong>Arrival:</strong> ${escape(g('arrival_instructions'))}</div>`);
   if (g('dismissal_instructions')) lines.push(`<div><strong>Dismissal:</strong> ${escape(g('dismissal_instructions'))}</div>`);
   const contactParts: string[] = [];
@@ -330,12 +336,13 @@ function renderVenueDetailsHtml(loc: Record<string, unknown> | undefined): strin
   return `<div style="margin-top:6px;font-size:12px;color:${MUTED};line-height:1.5;">${lines.join('')}</div>`;
 }
 
-function renderVenueDetailsText(loc: Record<string, unknown> | undefined): string[] {
+function renderVenueDetailsText(loc: Record<string, unknown> | undefined, classRoom?: string | null): string[] {
   if (!loc) return [];
   const g = (k: string) => loc[k] as string | undefined;
   const out: string[] = [];
-  if (g('address')) out.push(`  ${g('address')}${g('room_number') ? ` · Room ${g('room_number')}` : ''}`);
-  else if (g('room_number')) out.push(`  Room ${g('room_number')}`);
+  const room = roomDisplay(classRoom, g('room_number'));
+  if (g('address')) out.push(`  ${g('address')}${room ? ` · ${room}` : ''}`);
+  else if (room) out.push(`  ${room}`);
   if (g('arrival_instructions')) out.push(`  Arrival: ${g('arrival_instructions')}`);
   if (g('dismissal_instructions')) out.push(`  Dismissal: ${g('dismissal_instructions')}`);
   return out;
@@ -354,7 +361,7 @@ function renderPatchHtml({ termDisplay, org, primary, instructor, classes, porta
   const rows = classes.map(({ a, p }) => {
     if (!p) return '';
     const loc = p.program_location_id ? locationById.get(p.program_location_id as string) : undefined;
-    const venue = renderVenueDetailsHtml(loc);
+    const venue = renderVenueDetailsHtml(loc, p.room as string | null);
     const bonus = a.distance_bonus_cents ? `
       <div style="margin-top:6px;font-size:13px;color:${primary};font-weight:600;">Includes a ${dollars(a.distance_bonus_cents as number)} distance bonus</div>` : '';
     // Mirrors send-afterschool-offers and offer-reminders-cron: a resent offer
@@ -426,7 +433,7 @@ function renderPatchText({ termDisplay, org, instructor, classes, portalUrl, dea
     lines.push(`• ${(p.curriculum as string) || 'Class'}${role}`);
     lines.push(`  ${when} · all term`);
     if (loc && loc.name) lines.push(`  ${loc.name as string}`);
-    for (const v of renderVenueDetailsText(loc)) lines.push(v);
+    for (const v of renderVenueDetailsText(loc, p.room as string | null)) lines.push(v);
     if (a.distance_bonus_cents) lines.push(`  Includes a ${dollars(a.distance_bonus_cents as number)} distance bonus`);
     if (hasAvailabilityOverride(a.flags)) lines.push(`  ${AVAILABILITY_OVERRIDE_NOTE_TEXT}`);
     lines.push('');
