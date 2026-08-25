@@ -443,14 +443,17 @@ export default function Dashboard() {
         .eq('organization_id', org.id)
         // Only emails that actually went out. This table is a SEND LOG, not a
         // list of messages: it also holds rows for sends that were deliberately
-        // suppressed and rows for sends that failed. Prod's 34 suppressed rows
-        // are all one case — a child in a continuous multi-week camp would have
+        // suppressed and rows for sends that failed. All 34 suppressed rows on
+        // prod are duplicate-suppressions, by two different mechanisms — 33
+        // automatic (a child in a continuous multi-week camp would have
         // triggered the same "Welcome — camp" once per week, so one was sent and
-        // the rest were logged as suppressed. Listing those to the family repeats
-        // one welcome four times, and a failed row would claim we sent something
-        // that never arrived. DeliveryIssuesPanel already states this rule for
-        // the operator side ("intentional skips never appear here"); the family
-        // feed was the only reader of this table missing it.
+        // the rest were logged) and 1 manual, written by hand in June so the
+        // cron would not follow a corrected welcome with a duplicate. Either way
+        // the family got the email once; listing the log rows repeats it. A
+        // failed row is wrong in the other direction — it would claim we sent
+        // something that never arrived. DeliveryIssuesPanel already states this
+        // rule for the operator side ("intentional skips never appear here");
+        // the family feed was the only reader of this table missing it.
         .eq('status', 'sent')
         .order('sent_at', { ascending: false })
         .limit(10);
