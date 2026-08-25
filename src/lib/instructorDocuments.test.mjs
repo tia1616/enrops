@@ -398,7 +398,21 @@ eq('everything off still leaves the agreement',
   // verbs and nothing else. Kept deliberately loose on whitespace and the
   // optional schema qualifier, and case-insensitive for the same reason
   // aliasRe() is: these files are often pasted from what Postgres prints.
-  const redefinesRe = /(create\s+(or\s+replace\s+)?view|drop\s+view(\s+if\s+exists)?|alter\s+view)\s+(public\.)?public_org_directory\b/i;
+  //
+  // DOUBLE QUOTES ARE TOLERATED even though all 11 current definitions write
+  // `public.public_org_directory` bare. Narrowing this filter traded one failure
+  // mode for another: a mention-match over-fires LOUDLY (which is how it was
+  // caught), but a DDL-match that misses a spelling under-fires SILENTLY - the
+  // newest redefinition drops out of `touching`, the documents file is once again
+  // last, and the test goes green while the column it guards is gone. That is
+  // strictly the worse direction, so the pattern accepts "public"."x" and "x"
+  // as well as the bare forms.
+  const q = (n) => `"?${n}"?`;
+  const redefinesRe = new RegExp(
+    `(create\\s+(or\\s+replace\\s+)?view|drop\\s+view(\\s+if\\s+exists)?|alter\\s+view)`
+    + `\\s+(${q('public')}\\s*\\.\\s*)?${q('public_org_directory')}(\\s|$|;|\\()`,
+    'i',
+  );
   const touching = sqlFiles
     .filter((f) => redefinesRe.test(readFileSync(new URL(f, migrationsDir), 'utf8')));
   eq('the newest migration touching the view is the one that defines the documents',
