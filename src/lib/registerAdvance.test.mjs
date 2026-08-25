@@ -144,37 +144,34 @@ clear('optional pickup list, nobody named', step0({
   activeChild: { student: releasedToAdult },
 }));
 
-// --- step 0: a half-filled row, required or not -----------------------------
-// "Grandma" with no surname is not an answer anywhere, and it used to be
-// silently ignored and then saved - a one-word contact on a dismissal list.
-// Now it is said out loud, and it fires even though pickup is optional.
+// --- step 0: a one-name row must NOT block checkout -------------------------
+// A draft of this demanded both names on every row. Prod says that is wrong:
+// its three single-name pickup entries read "Club K Teachers", "Casey Negrieff"
+// and "AINSWORTH AFTERCARE - MOST DAYS". Families use the box as free text, so
+// asking for a surname would tell a parent to add a last name for a club and
+// leave deleting a real instruction as the only way past. These pin that the
+// blocker is gone and stays gone.
 
-blocked('an optional pickup list still blocks on a half-filled row', step0({
-  regFields: { std: { authorized_pickup: { required: false } }, custom: [] },
-  activeChild: { student: { ...goodStudent }, authorized_pickup: [{ first_name: 'Grandma', last_name: '' }] },
-}), 'Add a last name for Grandma');
-blocked('a last-name-only row asks for the FIRST name', step0({
+for (const real of ['Club K Teachers', 'Casey Negrieff', 'AINSWORTH AFTERCARE - MOST DAYS']) {
+  clear(`a real prod entry "${real}" does not block checkout`, step0({
+    activeChild: { student: { ...goodStudent }, authorized_pickup: [{ first_name: real, last_name: '' }] },
+  }));
+}
+clear('a surname-only row does not block', step0({
   activeChild: { student: { ...goodStudent }, authorized_pickup: [{ first_name: '', last_name: 'Byron' }] },
-}), 'Add a first name for Byron');
-blocked('a half-filled do-not-release row blocks too', step0({
+}));
+clear('a one-name do-not-release row does not block', step0({
   activeChild: { student: { ...goodStudent }, do_not_release: [{ first_name: 'Uncle' }] },
-}), 'Add a last name for Uncle');
-focusOf('a half-filled pickup row points at the pickup list', step0({
-  activeChild: { student: { ...goodStudent }, authorized_pickup: [{ first_name: 'Grandma' }] },
-}), 'authorized_pickup');
-// The pickup section renders one empty placeholder row for every family. If that
-// counted as half-filled, every registration on the platform would be blocked.
-clear('the untouched placeholder row does not nag', step0({
+}));
+clear('the untouched placeholder row does not block', step0({
   activeChild: { student: { ...goodStudent }, authorized_pickup: [{ first_name: '', last_name: '', phone: '' }] },
 }));
-clear('a complete row is fine', step0({
-  activeChild: { student: { ...goodStudent }, authorized_pickup: [{ first_name: 'Pat', last_name: 'Byron' }] },
-}));
-// Clearing the row is as good as finishing it - the message says so, so it has
-// to be true.
-clear('clearing a half-filled row unblocks', step0({
-  activeChild: { student: { ...goodStudent }, authorized_pickup: [] },
-}));
+// It still does not COUNT, though - that is the half the strict rule keeps. With
+// pickup mandatory, a one-name row is not an answer.
+blocked('a one-name row does not satisfy a MANDATORY pickup question', step0({
+  regFields: pickupReq,
+  activeChild: { student: releasedToAdult, authorized_pickup: [{ first_name: 'Club K Teachers', last_name: '' }] },
+}), 'first and last name');
 
 // --- step 0: required do-not-release ---------------------------------------
 

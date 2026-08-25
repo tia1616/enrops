@@ -8,8 +8,7 @@
 // refactor dropping the standardQuestionRequired() call would have left every
 // test green and put the 24 Aug wall back on the live form.
 import {
-  parseRegFields, contactFullyNamed, contactHalfNamed,
-  namedContacts, firstHalfNamedContact, contactDisplayName,
+  parseRegFields, contactFullyNamed, namedContacts, contactsWithAnyName,
 } from './registrationFields.js';
 
 let pass = 0, fail = 0;
@@ -64,29 +63,34 @@ eq('whitespace is not a name', contactFullyNamed({ first_name: 'Pat', last_name:
 eq('an empty row is not a named person', contactFullyNamed({}), false);
 eq('null is not a named person', contactFullyNamed(null), false);
 
-// --- half-filled rows, the state that looks answered and is not -------------
-
-eq('first name only is half named', contactHalfNamed({ first_name: 'Grandma' }), true);
-eq('last name only is half named', contactHalfNamed({ last_name: 'Byron' }), true);
-eq('both names is not half named', contactHalfNamed({ first_name: 'Pat', last_name: 'Byron' }), false);
-// An untouched placeholder row must NOT nag - the pickup list renders one by
-// default, so treating empty as half-filled would block every family that never
-// went near the question.
-eq('a wholly empty row is not half named', contactHalfNamed({ first_name: '', last_name: '', phone: '' }), false);
-eq('a phone with no names is not half named', contactHalfNamed({ phone: '555-0100' }), false);
-
 eq('namedContacts keeps only the complete ones',
   namedContacts([{ first_name: 'Pat', last_name: 'Byron' }, { first_name: 'Grandma' }, {}]).length, 1);
 eq('namedContacts on a non-array is empty', namedContacts(null), []);
-eq('firstHalfNamedContact finds the first offender',
-  firstHalfNamedContact([{ first_name: 'Pat', last_name: 'Byron' }, { first_name: 'Grandma' }])?.first_name, 'Grandma');
-eq('firstHalfNamedContact is null when all are complete',
-  firstHalfNamedContact([{ first_name: 'Pat', last_name: 'Byron' }]), null);
-eq('firstHalfNamedContact is null on an empty list', firstHalfNamedContact([]), null);
 
-eq('display name uses whichever half was typed', contactDisplayName({ first_name: 'Grandma' }), 'Grandma');
-eq('display name joins both', contactDisplayName({ first_name: 'Pat', last_name: 'Byron' }), 'Pat Byron');
-eq('display name trims', contactDisplayName({ first_name: ' Pat ', last_name: ' Byron ' }), 'Pat Byron');
+// --- what we SAVE is a different question from what COUNTS ------------------
+// These three are verbatim from prod's authorized_pickup table. An earlier draft
+// made the strict rule universal and would have told a parent to add a last name
+// for an after-school club, with deleting the row as the only way past.
+
+for (const real of ['Club K Teachers', 'Casey Negrieff', 'AINSWORTH AFTERCARE - MOST DAYS']) {
+  const row = { first_name: real, last_name: '' };
+  eq(`"${real}" is KEPT for saving`, contactsWithAnyName([row]).length, 1);
+  eq(`"${real}" does not satisfy a mandatory question`, namedContacts([row]).length, 0);
+}
+
+// A row carrying only a surname is kept too - the old first_name-only test threw
+// it away, losing what the parent typed.
+eq('a surname-only row is kept', contactsWithAnyName([{ first_name: '', last_name: 'Byron' }]).length, 1);
+// The pickup list renders one empty placeholder row for every family; it must
+// never be saved and must never count.
+eq('the empty placeholder row is not saved',
+  contactsWithAnyName([{ first_name: '', last_name: '', phone: '' }]).length, 0);
+eq('a phone with no name is not saved', contactsWithAnyName([{ phone: '555-0100' }]).length, 0);
+eq('whitespace is not a name for saving', contactsWithAnyName([{ first_name: '   ' }]).length, 0);
+eq('contactsWithAnyName on a non-array is empty', contactsWithAnyName(null), []);
+eq('a complete row is both saved and counted',
+  [contactsWithAnyName([{ first_name: 'Pat', last_name: 'Byron' }]).length,
+   namedContacts([{ first_name: 'Pat', last_name: 'Byron' }]).length], [1, 1]);
 
 console.log(`\nregistrationFields: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

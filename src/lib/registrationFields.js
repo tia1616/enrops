@@ -25,29 +25,32 @@ export function contactFullyNamed(c) {
   return !!(c?.first_name || '').trim() && !!(c?.last_name || '').trim();
 }
 
-// Started but not finished: exactly one of the two names. This is the state
-// worth telling a parent about, because it looks answered and is not - and if
-// nothing catches it, a one-word contact reaches a dismissal list.
-export function contactHalfNamed(c) {
-  const first = !!(c?.first_name || '').trim();
-  const last = !!(c?.last_name || '').trim();
-  return first !== last;
-}
-
 // Every fully-named person in a list, in order.
 export function namedContacts(list) {
   return (Array.isArray(list) ? list : []).filter(contactFullyNamed);
 }
 
-// The first half-filled row in a list, or null. Returns the ROW so callers can
-// name the person the parent already typed rather than saying "a row".
-export function firstHalfNamedContact(list) {
-  return (Array.isArray(list) ? list : []).find(contactHalfNamed) || null;
-}
-
-// Whichever name they did type, for use in a sentence.
-export function contactDisplayName(c) {
-  return `${(c?.first_name || '').trim()} ${(c?.last_name || '').trim()}`.trim();
+// TWO DIFFERENT QUESTIONS, AND THEY MUST NOT SHARE AN ANSWER.
+//
+// "Does this count as an answer to a mandatory question?" wants both names -
+// that is namedContacts above. "What did the parent type, that we must not
+// throw away?" is a different question, and answering it with the strict rule
+// deletes real data.
+//
+// A first attempt at this made the strict rule universal and blocked checkout
+// until every row had both names. Prod says that is wrong. All three
+// single-name authorized_pickup rows on prod read "Club K Teachers",
+// "Casey Negrieff" and "AINSWORTH AFTERCARE - MOST DAYS" - an after-school
+// club, a full name typed into one box, and a standing instruction. Families
+// use this field as free text, and demanding a surname would have told a parent
+// to add a last name for a club, with deleting the row as the only way past.
+//
+// So anything with a name in either box is kept and saved as-is. It simply does
+// not, on its own, satisfy a question marked mandatory.
+export function contactsWithAnyName(list) {
+  return (Array.isArray(list) ? list : []).filter(
+    (c) => (c?.first_name || '').trim() || (c?.last_name || '').trim(),
+  );
 }
 
 // Turn the get_active_registration_fields() rows into a convenient shape.
