@@ -2297,8 +2297,20 @@ function AssignmentCard({ assignment, coInstructors = [], messages = [], busy, o
 // This does NOT fix the underlying two-boxes-one-fact problem - that is the
 // locations/programs unification on the backlog. It stops instructors being the
 // ones who pay for it.
+// Returns the LABEL, already worded, because the callers used to write
+// `Room ${value}` themselves and these values are not all numbers. Real J2S
+// values today: "9", "203", "Room 111", "C102", "Makerspace", "Stage",
+// "Kindy Tables", "Community Room A", "Kindergarten room", "Computer Lab".
+// Prefixing all of those produced "Room Room 111" and "Room Stage" - caught on
+// staging, and it was already latent for the site-room values before the class
+// room ever reached this screen. So: a value that STARTS WITH A DIGIT is a bare
+// room number and gets the word; anything that already names a place is printed
+// as the operator typed it. One place decides, so no caller can re-introduce
+// the double word.
 function roomForInstructor(program, location) {
-  return (program?.room ?? "").trim() || (location?.room_number ?? "").trim() || null;
+  const room = (program?.room ?? "").trim() || (location?.room_number ?? "").trim();
+  if (!room) return null;
+  return /^\d/.test(room) ? `Room ${room}` : room;
 }
 
 function AfterschoolAssignmentCard({ assignment, coInstructors = [], schedule = [], messages = [], busy, onAccept, onRequestChange, readOnly, onOpen }) {
@@ -2345,7 +2357,7 @@ function AfterschoolAssignmentCard({ assignment, coInstructors = [], schedule = 
           </div>
           <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.4 }}>
             {when} · <strong style={{ color: PURPLE, fontWeight: 600 }}>all term</strong><br />
-            {loc?.name || ""}{roomForInstructor(p, loc) ? ` · Room ${roomForInstructor(p, loc)}` : ""}
+            {loc?.name || ""}{roomForInstructor(p, loc) ? ` · ${roomForInstructor(p, loc)}` : ""}
           </div>
         </div>
         <span style={{ fontSize: 11, color: statusColor, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right", maxWidth: 130, flexShrink: 0, lineHeight: 1.35 }}>
@@ -2511,7 +2523,7 @@ function AfterschoolDetailView({ assignment, instructor, coInstructors = [], sch
               {p?.curriculum || "Class"} <span style={{ fontWeight: 400, color: PURPLE, fontSize: 13 }}>· after-school</span>
             </div>
             <div style={{ fontSize: 13, color: MUTED, marginTop: 6, lineHeight: 1.5 }}>
-              {when}{loc?.name ? ` · ${loc.name}` : ""}{roomForInstructor(p, loc) ? ` · Room ${roomForInstructor(p, loc)}` : ""}
+              {when}{loc?.name ? ` · ${loc.name}` : ""}{roomForInstructor(p, loc) ? ` · ${roomForInstructor(p, loc)}` : ""}
               {assignment.role ? ` · ${titleCase(assignment.role)} instructor` : ""}
             </div>
           </div>
