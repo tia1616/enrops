@@ -601,7 +601,7 @@ export default function Dashboard() {
       </div>
 
       <div className="mt-6">
-        {tab === 'today' && <TodayTab todayClasses={todayClasses} enrollments={enrollments} notifications={notifications} slug={org.slug} />}
+        {tab === 'today' && <TodayTab todayClasses={todayClasses} enrollments={enrollments} notifications={notifications} slug={org.slug} org={org} />}
         {tab === 'schedule' && <ScheduleTab enrollments={enrollments} />}
         {tab === 'classes' && <ClassesTab enrollments={enrollments} expandedCards={expandedCards} toggleCard={toggleCard} slug={org.slug} />}
         {tab === 'settings' && <SettingsTab prefs={prefs} savingPrefs={savingPrefs} prefsSaved={prefsSaved} onToggle={(key) => savePrefs({ ...prefs, [key]: !prefs[key] })} supportEmail={supportEmail} />}
@@ -613,7 +613,16 @@ export default function Dashboard() {
 /* ==================================================================== */
 /*  TODAY TAB                                                            */
 /* ==================================================================== */
-function TodayTab({ todayClasses, enrollments, notifications, slug }) {
+// `org` is a PROP, not a closure read. TodayTab is a module-level sibling of
+// Dashboard, so the `org` from Dashboard's useOutletContext() is not in scope
+// here — and `org?.name` does NOT guard an undeclared identifier, only a missing
+// property. Without the prop this threw `ReferenceError: org is not defined` the
+// moment a family had one notification to show, and ChunkErrorBoundary rethrows
+// anything that isn't a chunk-load failure, so the whole dashboard went blank.
+// Live on prod from 2026-07-24 to 2026-08-25; a paying parent reported it as
+// "this link doesn't work" because it fires right after the first automation
+// email lands. There is no ESLint in this repo, so no-undef never ran on it.
+function TodayTab({ todayClasses, enrollments, notifications, slug, org }) {
   if (enrollments.length === 0) {
     return <EmptyState title="No enrollments yet" body="Once you register for a class, you'll see what your child is learning each day." cta="Browse programs" to={`/${slug}`} />;
   }
