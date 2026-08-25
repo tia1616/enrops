@@ -122,7 +122,7 @@ export default function ProgramRoster() {
             id, curriculum, term, day_of_week, start_time, end_time, room,
             instructor_name, max_capacity, status, program_location_id,
             first_session_date, session_count,
-            program_locations ( name, district )
+            program_locations ( name, district, room_number )
           `)
           .eq("id", programId)
           .eq("organization_id", org.id)
