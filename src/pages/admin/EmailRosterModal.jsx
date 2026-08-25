@@ -54,7 +54,10 @@ export default function EmailRosterModal({ camp, target: targetProp, orgId, onCl
   const [ccText, setCcText] = useState("");
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
-  const [emailFacts, setEmailFacts] = useState({ camperCount: 0, instructors: [] });
+  const [emailFacts, setEmailFacts] = useState({ enrolledCount: 0, instructors: [] });
+  // The enrolled child is a "camper" at camp and a "student" after school. One
+  // place decides it for this whole modal.
+  const enrolledNoun = target.kind === "camp" ? "camper" : "student";
   const [previewLoading, setPreviewLoading] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState(null);
@@ -180,7 +183,9 @@ export default function EmailRosterModal({ camp, target: targetProp, orgId, onCl
         // Only pre-fill if the user hasn't started editing yet.
         setSubject((cur) => cur || json.default_subject || "");
         setBody((cur) => cur || json.default_body || "");
-        setEmailFacts({ camperCount: json.camper_count ?? 0, instructors: json.instructors ?? [] });
+        // camper_count is the edge function's field name, kept for wire
+        // compatibility; the noun the operator READS is decided above.
+        setEmailFacts({ enrolledCount: json.camper_count ?? 0, instructors: json.instructors ?? [] });
       }
     } catch (e) {
       console.error("[EmailRosterModal] preview failed", e);
@@ -320,6 +325,7 @@ export default function EmailRosterModal({ camp, target: targetProp, orgId, onCl
 
         {phase === "compose" && (
           <ComposeStep
+            enrolledNoun={enrolledNoun}
             partner={partner}
             location={location}
             operational={operational}
@@ -350,7 +356,7 @@ export default function EmailRosterModal({ camp, target: targetProp, orgId, onCl
         )}
 
         {phase === "done" && result && (
-          <DoneStep result={result} onClose={onClose} />
+          <DoneStep result={result} onClose={onClose} enrolledNoun={enrolledNoun} />
         )}
       </div>
     </div>
@@ -470,7 +476,7 @@ function PickPartnerStep({ location, orgId, onLinked, onCancel }) {
   );
 }
 
-function ComposeStep({ partner, location, operational, otherContacts, selected, toggle, includeLocationContact, setIncludeLocationContact, ccText, setCcText, subject, setSubject, body, setBody, emailFacts, previewLoading, selectedCount, onSend, onClose, onChangePartner }) {
+function ComposeStep({ enrolledNoun = "student", partner, location, operational, otherContacts, selected, toggle, includeLocationContact, setIncludeLocationContact, ccText, setCcText, subject, setSubject, body, setBody, emailFacts, previewLoading, selectedCount, onSend, onClose, onChangePartner }) {
   const [showOthers, setShowOthers] = useState(false);
   return (
     <div>
@@ -550,7 +556,12 @@ function ComposeStep({ partner, location, operational, otherContacts, selected, 
 
         <div style={{ background: CREAM, border: `1px solid ${RULE}`, borderRadius: 6, padding: 10, marginBottom: 10, fontSize: 12, color: INK, lineHeight: 1.5 }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 4 }}>Email facts (for your reference)</div>
-          <div><strong>{emailFacts.camperCount}</strong> camper{emailFacts.camperCount === 1 ? "" : "s"} on the attached PDF</div>
+          {/* "camper" is a CAMP word and this modal serves after-school too, where
+              it read "0 campers on the attached PDF" on a Wednesday class roster.
+              Jessica, 2026-08-25: "campers should not be hardcoded in afterschool
+              stuff." Branches on target.kind, the same way the instructor portal
+              already picks its noun - config, never a tenant or a guess. */}
+          <div><strong>{emailFacts.enrolledCount}</strong> {enrolledNoun}{emailFacts.enrolledCount === 1 ? "" : "s"} on the attached PDF</div>
           {emailFacts.instructors.length === 0 ? (
             <div>Instructor: not yet assigned</div>
           ) : (
@@ -635,7 +646,7 @@ function ContactRow({ contact, checked, onToggle }) {
   );
 }
 
-function DoneStep({ result, onClose }) {
+function DoneStep({ result, onClose, enrolledNoun = "student" }) {
   const sent = result.sent || 0;
   const failed = result.failed || [];
   // The function returns 200 whether every address went out or none did, so
@@ -648,8 +659,9 @@ function DoneStep({ result, onClose }) {
   const anySent = sent > 0;
   const allSent = anySent && failed.length === 0;
   // Defined once so the branches cannot drift on the count or the plural.
+  // Same camp/after-school noun as the preview above, from the same one place.
   const rosterSuffix = result.camper_count != null
-    ? ` (${result.camper_count} camper${result.camper_count === 1 ? "" : "s"} on roster)`
+    ? ` (${result.camper_count} ${enrolledNoun}${result.camper_count === 1 ? "" : "s"} on roster)`
     : "";
   const bannerColor = allSent ? OK : anySent ? AMBER : RED;
   return (
