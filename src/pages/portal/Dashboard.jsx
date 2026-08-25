@@ -441,6 +441,17 @@ export default function Dashboard() {
         // than one org today. This never showed because the feed's own header
         // threw before it could render; it renders for the first time now.
         .eq('organization_id', org.id)
+        // Only emails that actually went out. This table is a SEND LOG, not a
+        // list of messages: it also holds rows for sends that were deliberately
+        // suppressed and rows for sends that failed. Prod's 34 suppressed rows
+        // are all one case — a child in a continuous multi-week camp would have
+        // triggered the same "Welcome — camp" once per week, so one was sent and
+        // the rest were logged as suppressed. Listing those to the family repeats
+        // one welcome four times, and a failed row would claim we sent something
+        // that never arrived. DeliveryIssuesPanel already states this rule for
+        // the operator side ("intentional skips never appear here"); the family
+        // feed was the only reader of this table missing it.
+        .eq('status', 'sent')
         .order('sent_at', { ascending: false })
         .limit(10);
 
