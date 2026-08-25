@@ -4569,7 +4569,15 @@ function PayView({ instructorId, onBack, stripePayEnabled }) {
             ? supabase.from("camp_assignments").select("camp_session_id, role, distance_bonus_cents").eq("instructor_id", instructorId).in("camp_session_id", campSessionIds)
             : NONE,
           programIds.length
-            ? supabase.from("programs").select("id, curriculum, day_of_week, start_time, end_time, program_locations:program_location_id(name)").in("id", programIds)
+            // Location NAME via program_locations_public, not the base table.
+            // This is the PAY history, so it spans assignments in any status -
+            // including `withdrawn` (11 rows on prod). The assignment-scoped
+            // policy in 20260825c deliberately covers only published /
+            // change_requested / confirmed, so once 20260825d scopes the
+            // cross-tenant public policy to anon, a withdrawn row read from the
+            // base table would render with no site name. The view has no such
+            // dependency and carries `name`, which is all this read wants.
+            ? supabase.from("programs").select("id, curriculum, day_of_week, start_time, end_time, program_locations:program_locations_public(name)").in("id", programIds)
             : NONE,
           programIds.length
             ? supabase.from("program_assignments").select("program_id, role, distance_bonus_cents").eq("instructor_id", instructorId).in("program_id", programIds)

@@ -377,14 +377,34 @@ export default function Home() {
       // the grouping silently vanished (prod 2026-08-14: j2s 19 districts signed
       // out, 0 signed in). Names now come from districts_public below, which
       // both roles can read. See 20260814k.
+      // Both location reads below go through program_locations_public, not the
+      // base table. The base table's public policy is cross-tenant with no
+      // membership test, so it let any SIGNED-IN family read every other
+      // provider's school contact phones and arrival briefings (prod
+      // 2026-08-25: 89 rows, 3 providers, 55 phones). 20260825d scopes that
+      // policy to anon; this view is what keeps the catalogue working for the
+      // 180 of 182 signed-in parents who are not org_members. Same pattern and
+      // the same reason as districts_public below.
+      //
+      // DEPLOY ORDER: migration 20260825b MUST be applied to an environment
+      // BEFORE this frontend reaches it. PostgREST fails the whole statement on
+      // an unknown relation, so without the view these reads return an error,
+      // not a partial row - and the catalogue is the money path. Measured
+      // 2026-08-25: the view is on STAGING, NOT on prod.
+      //
+      // The view carries exactly the columns these two reads ask for and
+      // nothing operator-facing; asking it for contact_phone is a 42703, which
+      // is the point.
       supabase
-        .from('program_locations')
+        .from('program_locations_public')
         .select('id, name, district, district_id, address, organization_id')
         .eq('organization_id', org.id)
         .order('name'),
       supabase
         .from('programs')
-        .select('*, program_locations(name, district_id)')
+        // Aliased to `program_locations` so every downstream reader of
+        // p.program_locations?.name (the class meta line below) is untouched.
+        .select('*, program_locations:program_locations_public(name, district_id)')
         .eq('organization_id', org.id)
         .eq('term', catalogTerm)
         .eq('status', 'open')
