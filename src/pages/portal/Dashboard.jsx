@@ -433,6 +433,14 @@ export default function Dashboard() {
         .from('automation_run_recipients')
         .select('id, status, sent_at, automations(automation_templates(display_name))')
         .eq('parent_id', p.id)
+        // Scoped to THIS provider, like the two registration queries above. The
+        // RLS policy is `parent_id = current_parent_id()` with no org term, so
+        // it returns the family's rows at EVERY provider they use — and the feed
+        // is headed "From {org.name}", which would then name one provider above
+        // another one's emails. Four families on prod are registered at more
+        // than one org today. This never showed because the feed's own header
+        // threw before it could render; it renders for the first time now.
+        .eq('organization_id', org.id)
         .order('sent_at', { ascending: false })
         .limit(10);
 
@@ -619,8 +627,8 @@ export default function Dashboard() {
 // property. Without the prop this threw `ReferenceError: org is not defined` the
 // moment a family had one notification to show, and ChunkErrorBoundary rethrows
 // anything that isn't a chunk-load failure, so the whole dashboard went blank.
-// Live on prod from 2026-07-24 to 2026-08-25; a paying parent reported it as
-// "this link doesn't work" because it fires right after the first automation
+// Live on prod from 2026-07-24 until this commit; a paying parent reported it
+// as "this link doesn't work" because it fires right after the first automation
 // email lands. There is no ESLint in this repo, so no-undef never ran on it.
 function TodayTab({ todayClasses, enrollments, notifications, slug, org }) {
   if (enrollments.length === 0) {
