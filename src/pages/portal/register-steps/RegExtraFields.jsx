@@ -162,8 +162,9 @@ export function PickupDismissalSection({ std, dismissalMethod, onDismissalChange
                   always-required, so leaving its follow-up optional meant a family
                   could answer "aftercare" and leave the destination blank - the
                   roster would then read "Aftercare (provider not stated)" forever
-                  for a family who did answer. Enforced in Register.jsx's canAdvance
-                  and the pickup gate's blocker through the same shared helper. */}
+                  for a family who did answer. Enforced by advanceProblem()
+                  (src/lib/registerAdvance.js) and the pickup gate's blocker
+                  through the same shared helper. */}
               <label className="label-field" htmlFor={providerInputId}>
                 Which aftercare program?<span className="text-j2s-orange-dark"> *</span>
               </label>

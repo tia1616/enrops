@@ -64,7 +64,8 @@ eq('one year over MAX is caught', birthdateProblem('2006-08-19', '2026-08-19')?.
 
 // --- birthdateProblem: empty is NOT this guard's business -----------------
 // Returning a problem for '' would light the field red before the parent types.
-// The required-field check in Register.jsx canAdvance() owns the empty case.
+// The required-field check in advanceProblem() (src/lib/registerAdvance.js) owns
+// the empty case, and says "Add your child's date of birth." for it.
 
 eq('empty string is silent', birthdateProblem('', '2026-08-19'), null);
 eq('undefined is silent', birthdateProblem(undefined, '2026-08-19'), null);

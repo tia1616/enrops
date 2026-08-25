@@ -92,7 +92,8 @@ export default function PickupInfoGate({ students, parent, orgId, onComplete }) 
     if (needsAuthorizedPickup(d.dismissal_method) && nonEmpty(d.pickup).length === 0) {
       return "Add at least one person who can pick them up.";
     }
-    // Mirror Register's canAdvance: if the org marked do-not-release required, the
+    // Mirror the registration wizard's advanceProblem (src/lib/registerAdvance.js):
+    // if the org marked do-not-release required, the
     // backfill gate must enforce it too (the label shows Required in both flows).
     if (std?.do_not_release?.required && nonEmpty(d.doNotRelease).length === 0) {
       return "Add the name(s) we should not release this child to.";

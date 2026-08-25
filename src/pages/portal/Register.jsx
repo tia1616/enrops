@@ -1,8 +1,7 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams, useOutletContext } from 'react-router-dom';
 import { supabase, API_BASE } from '../../lib/supabase.js';
-import { needsAuthorizedPickup, dismissalAnswerIncomplete } from '../../lib/dismissal.js';
-import { birthdateProblem } from '../../lib/studentBirthdate.js';
+import { advanceProblem } from '../../lib/registerAdvance.js';
 import { VIP_PRICE_PER_TERM_CENTS } from '../../lib/pricing.js';
 import { schoolYearTermsForFall } from '../../lib/terms.js';
 import { useCart } from '../../context/CartContext.jsx';
@@ -14,14 +13,6 @@ import StepReview from './register-steps/StepReview.jsx';
 import StepPay from './register-steps/StepPay.jsx';
 import { parseRegFields, pickupDnrConflicts } from './register-steps/RegExtraFields.jsx';
 import { renderWaiverText } from '../../lib/waiverText.js';
-
-// Has the parent answered a custom question? (by field type)
-function hasAnswer(value, type) {
-  if (type === 'multiselect') return Array.isArray(value) && value.length > 0;
-  if (type === 'checkbox') return value === true || value === 'true';
-  if (type === 'number') return value !== undefined && value !== null && String(value).trim() !== '';
-  return typeof value === 'string' ? value.trim() !== '' : value != null;
-}
 
 // Tenant resolution: `org` (id, slug, name, ...) is provided by PublicLayout
 // via Outlet context — see src/layouts/PublicLayout.jsx. No more hardcoded
@@ -376,88 +367,25 @@ export default function Register() {
   }
 
   // Navigation guards — steps are 0=Student, 1=Parent, 2=Waivers, 3=Review, 4=Pay.
-  function canAdvance() {
-    switch (step) {
-      case 0: {
-        const s = activeChild.student;
-        const base =
-          !!s.first_name &&
-          !!s.last_name &&
-          (isLean || s.grade !== '') &&
-          // Homeroom teacher, required for the same orgs that render it (full-nav
-          // only - see StepStudent). Whitespace does not count: a single space
-          // would satisfy a truthiness check and land a blank on the roster,
-          // which is the state this requirement exists to eliminate.
-          (isLean || !!(s.homeroom_teacher || '').trim()) &&
-          !!s.birthdate &&
-          !!s.emergency_contact_name &&
-          !!s.emergency_contact_phone;
-        if (!base) return false;
-        // A date that is not plausibly a student's blocks the step. StepStudent
-        // renders the reason inline against the field, so this is not a silent
-        // wall. Same function both sides - the button and the message cannot
-        // disagree about what counts as wrong.
-        if (birthdateProblem(s.birthdate)) return false;
-        const std = regFields.std;
-        // dismissal method (if enabled + required)
-        if (std.dismissal_method?.required && !s.dismissal_method) return false;
-        // "Aftercare" with no program named is an incomplete answer, not a
-        // complete one - it says the category and withholds the destination.
-        if (dismissalAnswerIncomplete(s.dismissal_method, s.aftercare_provider)) return false;
-        // pickup list required when released to an adult — or always, if the org
-        // enabled pickup without the dismissal question (matches the form's render)
-        if (std.authorized_pickup?.required && (needsAuthorizedPickup(s.dismissal_method) || !std.dismissal_method)) {
-          const named = (activeChild.authorized_pickup || []).filter(
-            (p) => (p.first_name || '').trim() && (p.last_name || '').trim(),
-          );
-          if (named.length === 0) return false;
-        }
-        // do-not-release names required when the org marked that question required
-        // (the builder shows a * and canAdvance must enforce it — otherwise the
-        // form accepts an empty answer the label promised was required)
-        if (std.do_not_release?.required) {
-          const namedDnr = (activeChild.do_not_release || []).filter(
-            (p) => (p.first_name || '').trim() && (p.last_name || '').trim(),
-          );
-          if (namedDnr.length === 0) return false;
-        }
-        // required custom questions
-        for (const f of regFields.custom) {
-          if (f.is_required && !hasAnswer(activeChild.custom_answers?.[f.field_key], f.field_type)) return false;
-        }
-        // A person can't be on both the pickup and do-not-release lists (the DB
-        // enforces this too). Block until the parent resolves the overlap.
-        if (pickupDnrConflicts(activeChild.authorized_pickup, activeChild.do_not_release).length > 0) return false;
-        return true;
-      }
-      case 1: {
-        const base =
-          !!cart.parent.first_name &&
-          !!cart.parent.last_name &&
-          !!cart.parent.email &&
-          !!cart.parent.phone;
-        if (!base) return false;
-        if (regFields.std.guardian_secondary?.required) {
-          const g = cart.parent.guardian2 || {};
-          if (!(g.first_name || '').trim() || !(g.last_name || '').trim()) return false;
-        }
-        return true;
-      }
-      case 2: {
-        const requiredWaivers = waivers.filter((w) => w.required);
-        return requiredWaivers.every(
-          (w) => activeChild.waivers[w.id]?.agreed === true,
-        );
-      }
-      case 3:
-        return true;
-      default:
-        return false;
-    }
-  }
+  //
+  // ONE call answers both "is this blocked" and "what do we tell them". It used
+  // to answer only the first, and the three list-shaped requirements (pickup,
+  // do-not-release, second guardian) could then grey Continue out with nothing
+  // on the page explaining why - see src/lib/registerAdvance.js. Derived on every
+  // render rather than held in state, so the sentence cannot lag what the parent
+  // has already typed.
+  const advanceBlocker = advanceProblem({
+    step,
+    isLean,
+    activeChild,
+    parent: cart.parent,
+    regFields,
+    waivers,
+    conflicts: pickupDnrConflicts(activeChild.authorized_pickup, activeChild.do_not_release),
+  });
 
   function next() {
-    if (!canAdvance()) return;
+    if (advanceBlocker) return;
     setError('');
     setStep((s) => Math.min(4, s + 1));
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -804,6 +732,28 @@ export default function Register() {
         </div>
 
         {/* Nav */}
+        {/* WHY THE BUTTON IS GREY, next to the button. Keyed off the SAME value
+            that disables it, so Continue can never be dead with nothing here -
+            that pairing is the whole fix, and splitting them is how the silence
+            came back last time. Sits above the nav row rather than at the top of
+            the page with the checkout error banner, because a reason a parent
+            has to scroll up to find is a reason nobody reads.
+
+            role="alert" matches the pickup/do-not-release conflict warning in
+            RegExtraFields and the pickup gate's blocker box, and it is the only
+            explanation a screen reader gets for a disabled button. Styling is the
+            gate's box verbatim: quiet purple, not an alarm - nothing has gone
+            wrong, something is simply not filled in yet. */}
+        {step < 4 && advanceBlocker && (
+          <div
+            role="alert"
+            className="mt-8 rounded-lg border-2 border-j2s-purple/15 bg-j2s-purple-soft/40 px-4 py-3 text-sm text-j2s-ink/80"
+          >
+            <span className="font-semibold text-j2s-ink">Still needed before you continue: </span>
+            {advanceBlocker}
+          </div>
+        )}
+
         <div className="mt-10 flex items-center justify-between border-t border-j2s-purple/10 pt-6">
           <button
             onClick={back}
@@ -815,7 +765,7 @@ export default function Register() {
           {step < 4 ? (
             <button
               onClick={next}
-              disabled={!canAdvance()}
+              disabled={!!advanceBlocker}
               className="btn-j2s-primary"
             >
               Continue →
