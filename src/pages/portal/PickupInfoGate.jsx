@@ -14,7 +14,8 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase.js";
-import { needsAuthorizedPickup, needsAftercareProvider, dismissalAnswerIncomplete } from "../../lib/dismissal.js";
+import { needsAftercareProvider, dismissalAnswerIncomplete } from "../../lib/dismissal.js";
+import { namedContacts, contactsWithAnyName } from "../../lib/registrationFields.js";
 import {
   PickupDismissalSection,
   GuardianSecondarySection,
@@ -22,7 +23,13 @@ import {
   pickupDnrConflicts,
 } from "./register-steps/RegExtraFields.jsx";
 
-const nonEmpty = (list) => (Array.isArray(list) ? list : []).filter((p) => (p?.first_name || "").trim());
+// WHAT GETS SAVED: anything the parent typed a name into, either box. NOT the
+// stricter "counts as an answer" rule (namedContacts) - filtering the save with
+// that would silently delete real entries, and prod has three of them:
+// "Club K Teachers", "Casey Negrieff", "AINSWORTH AFTERCARE - MOST DAYS".
+// Slightly wider than the old test, which looked at first_name only and threw
+// away a row carrying just a surname.
+const nonEmpty = contactsWithAnyName;
 
 export default function PickupInfoGate({ students, parent, orgId, onComplete }) {
   const [std, setStd] = useState(null);
@@ -89,12 +96,21 @@ export default function PickupInfoGate({ students, parent, orgId, onComplete }) 
     if (dismissalAnswerIncomplete(d.dismissal_method, d.aftercare_provider)) {
       return "Add which aftercare program they go to.";
     }
-    if (needsAuthorizedPickup(d.dismissal_method) && nonEmpty(d.pickup).length === 0) {
-      return "Add at least one person who can pick them up.";
-    }
-    // Mirror Register's canAdvance: if the org marked do-not-release required, the
+    // NO REQUIREMENT ON THE EXTRA-ADULTS LIST. This used to demand a name from
+    // anyone whose child is released to an adult, and - unlike the registration
+    // form - it never consulted the provider's setting at all, so no switch
+    // anywhere could relieve it. On a gate that replaces the whole dashboard,
+    // that stranded any family whose only collectors are the parents.
+    //
+    // The safety answer this screen exists for is the one above: HOW the child
+    // leaves, which is radio buttons and always answerable. Who ELSE may collect
+    // them is extra, and blank means nobody - see src/lib/registrationQuestions.js.
+    // Mirror the registration wizard's advanceProblem (src/lib/registerAdvance.js):
+    // if the org marked do-not-release required, the
     // backfill gate must enforce it too (the label shows Required in both flows).
-    if (std?.do_not_release?.required && nonEmpty(d.doNotRelease).length === 0) {
+    // namedContacts, not nonEmpty: this asks "has a mandatory question been
+    // answered", which is the strict rule. What we SAVE is the wide one above.
+    if (std?.do_not_release?.required && namedContacts(d.doNotRelease).length === 0) {
       return "Add the name(s) we should not release this child to.";
     }
     if (pickupDnrConflicts(d.pickup, d.doNotRelease).length > 0) {

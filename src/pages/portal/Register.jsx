@@ -1,8 +1,7 @@
 import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams, useOutletContext } from 'react-router-dom';
 import { supabase, API_BASE } from '../../lib/supabase.js';
-import { needsAuthorizedPickup, dismissalAnswerIncomplete } from '../../lib/dismissal.js';
-import { birthdateProblem } from '../../lib/studentBirthdate.js';
+import { advanceProblem } from '../../lib/registerAdvance.js';
 import { VIP_PRICE_PER_TERM_CENTS } from '../../lib/pricing.js';
 import { schoolYearTermsForFall } from '../../lib/terms.js';
 import { useCart } from '../../context/CartContext.jsx';
@@ -14,14 +13,6 @@ import StepReview from './register-steps/StepReview.jsx';
 import StepPay from './register-steps/StepPay.jsx';
 import { parseRegFields, pickupDnrConflicts } from './register-steps/RegExtraFields.jsx';
 import { renderWaiverText } from '../../lib/waiverText.js';
-
-// Has the parent answered a custom question? (by field type)
-function hasAnswer(value, type) {
-  if (type === 'multiselect') return Array.isArray(value) && value.length > 0;
-  if (type === 'checkbox') return value === true || value === 'true';
-  if (type === 'number') return value !== undefined && value !== null && String(value).trim() !== '';
-  return typeof value === 'string' ? value.trim() !== '' : value != null;
-}
 
 // Tenant resolution: `org` (id, slug, name, ...) is provided by PublicLayout
 // via Outlet context — see src/layouts/PublicLayout.jsx. No more hardcoded
@@ -376,89 +367,74 @@ export default function Register() {
   }
 
   // Navigation guards — steps are 0=Student, 1=Parent, 2=Waivers, 3=Review, 4=Pay.
-  function canAdvance() {
-    switch (step) {
-      case 0: {
-        const s = activeChild.student;
-        const base =
-          !!s.first_name &&
-          !!s.last_name &&
-          (isLean || s.grade !== '') &&
-          // Homeroom teacher, required for the same orgs that render it (full-nav
-          // only - see StepStudent). Whitespace does not count: a single space
-          // would satisfy a truthiness check and land a blank on the roster,
-          // which is the state this requirement exists to eliminate.
-          (isLean || !!(s.homeroom_teacher || '').trim()) &&
-          !!s.birthdate &&
-          !!s.emergency_contact_name &&
-          !!s.emergency_contact_phone;
-        if (!base) return false;
-        // A date that is not plausibly a student's blocks the step. StepStudent
-        // renders the reason inline against the field, so this is not a silent
-        // wall. Same function both sides - the button and the message cannot
-        // disagree about what counts as wrong.
-        if (birthdateProblem(s.birthdate)) return false;
-        const std = regFields.std;
-        // dismissal method (if enabled + required)
-        if (std.dismissal_method?.required && !s.dismissal_method) return false;
-        // "Aftercare" with no program named is an incomplete answer, not a
-        // complete one - it says the category and withholds the destination.
-        if (dismissalAnswerIncomplete(s.dismissal_method, s.aftercare_provider)) return false;
-        // pickup list required when released to an adult — or always, if the org
-        // enabled pickup without the dismissal question (matches the form's render)
-        if (std.authorized_pickup?.required && (needsAuthorizedPickup(s.dismissal_method) || !std.dismissal_method)) {
-          const named = (activeChild.authorized_pickup || []).filter(
-            (p) => (p.first_name || '').trim() && (p.last_name || '').trim(),
-          );
-          if (named.length === 0) return false;
-        }
-        // do-not-release names required when the org marked that question required
-        // (the builder shows a * and canAdvance must enforce it — otherwise the
-        // form accepts an empty answer the label promised was required)
-        if (std.do_not_release?.required) {
-          const namedDnr = (activeChild.do_not_release || []).filter(
-            (p) => (p.first_name || '').trim() && (p.last_name || '').trim(),
-          );
-          if (namedDnr.length === 0) return false;
-        }
-        // required custom questions
-        for (const f of regFields.custom) {
-          if (f.is_required && !hasAnswer(activeChild.custom_answers?.[f.field_key], f.field_type)) return false;
-        }
-        // A person can't be on both the pickup and do-not-release lists (the DB
-        // enforces this too). Block until the parent resolves the overlap.
-        if (pickupDnrConflicts(activeChild.authorized_pickup, activeChild.do_not_release).length > 0) return false;
-        return true;
-      }
-      case 1: {
-        const base =
-          !!cart.parent.first_name &&
-          !!cart.parent.last_name &&
-          !!cart.parent.email &&
-          !!cart.parent.phone;
-        if (!base) return false;
-        if (regFields.std.guardian_secondary?.required) {
-          const g = cart.parent.guardian2 || {};
-          if (!(g.first_name || '').trim() || !(g.last_name || '').trim()) return false;
-        }
-        return true;
-      }
-      case 2: {
-        const requiredWaivers = waivers.filter((w) => w.required);
-        return requiredWaivers.every(
-          (w) => activeChild.waivers[w.id]?.agreed === true,
-        );
-      }
-      case 3:
-        return true;
-      default:
-        return false;
-    }
+  //
+  // ONE call answers both "is this blocked" and "what do we tell them". It used
+  // to answer only the first, and the three list-shaped requirements (pickup,
+  // do-not-release, second guardian) could then grey Continue out with nothing
+  // on the page explaining why - see src/lib/registerAdvance.js. Derived on every
+  // render rather than held in state, so the sentence cannot lag what the parent
+  // has already typed.
+  const advanceBlocker = advanceProblem({
+    step,
+    isLean,
+    activeChild,
+    parent: cart.parent,
+    regFields,
+    waivers,
+    conflicts: pickupDnrConflicts(activeChild.authorized_pickup, activeChild.do_not_release),
+  });
+
+  // Has this step had a Continue press REFUSED? Continue stays enabled and the
+  // warning stays hidden until then, so the first thing a parent sees is a
+  // normal form rather than a page telling them off for not having filled it in
+  // yet. Jessica, on the disabled-button version: "i didn't even notice it -
+  // looks like just a part of the form to fill out." A warning that was already
+  // sitting there before you did anything reads as furniture; one that appears
+  // because you pressed the button reads as an answer.
+  const [advanceRefused, setAdvanceRefused] = useState(false);
+  // Cleared on every step change so a warning earned on the student step is not
+  // still on screen over the parent step.
+  useEffect(() => { setAdvanceRefused(false); }, [step]);
+  // Once they HAVE been refused, the warning tracks live as they type, so the
+  // sentence never describes a field they already fixed.
+  const showAdvanceWarning = advanceRefused && !!advanceBlocker;
+
+  // Send the parent to the field the sentence is about. Matched on
+  // data-reg-field rather than an id, because one step renders at a time so the
+  // key is unique, and the step components do not have to know the wizard exists.
+  function goToBlockedField() {
+    const key = advanceBlocker?.focus;
+    if (!key) return;
+    const el = document.querySelector(`[data-reg-field="${CSS.escape(key)}"]`);
+    if (!el) return;
+    // Focus the control itself, not the wrapper - a parent who taps "Take me
+    // there" wants a cursor in the box, not merely to be looking at it.
+    //
+    // ORDER MATTERS, and it is the opposite of the obvious one. Focusing after
+    // the scroll can cancel it mid-flight, leaving the page a few hundred pixels
+    // from where it was and nowhere near the field. preventScroll keeps the
+    // focus itself from jumping, then the scroll runs and lands.
+    const control = el.matches('input, select, textarea')
+      ? el
+      : el.querySelector('input, select, textarea');
+    if (control) control.focus({ preventScroll: true });
+    // DELIBERATELY NOT `behavior: 'smooth'`. Smooth scrolling is a no-op wherever
+    // the page is not actively painting, and it is also what a reduced-motion
+    // setting suppresses - measured here, a smooth call left scrollY at 1500
+    // while the instant one landed it at 34. This button exists so a blocked
+    // parent is never left pressing something that does nothing; making it
+    // depend on an animation that can silently decline to run would rebuild the
+    // dead-control bug inside its own fix. The jump is the feature, not the glide.
+    el.scrollIntoView({ block: 'center' });
   }
 
   function next() {
-    if (!canAdvance()) return;
+    if (advanceBlocker) {
+      setAdvanceRefused(true);
+      return;
+    }
     setError('');
+    setAdvanceRefused(false);
     setStep((s) => Math.min(4, s + 1));
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
@@ -804,6 +780,47 @@ export default function Register() {
         </div>
 
         {/* Nav */}
+        {/* THE REFUSED PRESS, ANSWERED. Shown only after Continue has actually
+            been pressed and refused - see advanceRefused above for why an
+            always-on explanation was invisible.
+
+            Orange, not the quiet purple this used to be: it borrows the exact
+            palette the birth-date problem and the pickup/do-not-release conflict
+            already use on this same form, so a parent who has seen one of those
+            recognises this instantly as "something needs fixing" rather than as
+            another thing to fill in.
+
+            POLITE, not role="alert". It is announced, but queued rather than
+            interrupting. The conflict warning in RegExtraFields is role="alert"
+            and should be - it appears once and then sits still. This one TRACKS
+            the parent: fill the first name and it immediately becomes "add your
+            child's last name". Assertive would cut across whatever the screen
+            reader is saying every time they complete a field, including the echo
+            of their own typing. */}
+        {step < 4 && showAdvanceWarning && (
+          <div
+            id="advance-warning"
+            role="status"
+            aria-live="polite"
+            className="mt-8 flex items-start gap-3 rounded-xl border-2 border-j2s-orange-dark bg-j2s-orange-dark/5 px-4 py-4"
+          >
+            <span aria-hidden="true" className="mt-px flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-j2s-orange-dark text-sm font-bold text-white">!</span>
+            <div>
+              <p className="font-titan text-base text-j2s-orange-dark">We still need one thing</p>
+              <p className="mt-1 text-sm text-j2s-ink">{advanceBlocker.message}</p>
+              {advanceBlocker.focus && (
+                <button
+                  type="button"
+                  onClick={goToBlockedField}
+                  className="mt-2 text-sm font-semibold text-j2s-orange-dark underline underline-offset-2 hover:no-underline"
+                >
+                  Take me there
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
         <div className="mt-10 flex items-center justify-between border-t border-j2s-purple/10 pt-6">
           <button
             onClick={back}
@@ -813,9 +830,12 @@ export default function Register() {
             &larr; Back
           </button>
           {step < 4 ? (
+            /* NOT disabled. A dead button gives a family nothing to press and no
+               way to find out why, which is exactly how the 24 Aug call happened.
+               It stays live and next() refuses the press with a reason. */
             <button
               onClick={next}
-              disabled={!canAdvance()}
+              aria-describedby={showAdvanceWarning ? 'advance-warning' : undefined}
               className="btn-j2s-primary"
             >
               Continue →
