@@ -2062,12 +2062,32 @@ function SubOfferCard({ sub, busy, busyAction, onAccept, onDecline, readOnly, on
   );
 }
 
+// TWO time formats reach this function and it only ever handled one.
+// camp_sessions.start_time is a Postgres `time` ("14:35:00"), which the 24-hour
+// maths below parses. programs.start_time is 12-HOUR TEXT ("2:35 PM"), where
+// Number("35 PM") is NaN - so every PROGRAM sub card and sub detail printed
+// "2:NaNam-3:NaNam" and a sub covering a class could not see what time to turn
+// up. Found on staging 2026-08-25 with a real sub assignment; it is on prod too.
+//
+// The 12-hour branch mirrors fmtTime in admin/AfterschoolSchedule.jsx, which has
+// always handled both because it is the screen that displays programs. Same rule,
+// second spelling - the class of bug this whole pass keeps finding.
 function fmtTimePretty(t) {
   if (!t) return "";
+  const twelve = /^\s*(\d{1,2}):(\d{2})\s*([AaPp])[Mm]\s*$/.exec(t);
+  if (twelve) {
+    const hr = parseInt(twelve[1], 10);
+    const min = twelve[2];
+    const ampm = twelve[3].toLowerCase() === "p" ? "pm" : "am";
+    return min === "00" ? `${hr}${ampm}` : `${hr}:${min}${ampm}`;
+  }
   const [h, m] = t.split(":").map(Number);
+  // Anything that is neither format is returned as typed rather than as NaN:
+  // an unreadable time is bad, an invented one is worse.
+  if (Number.isNaN(h)) return t;
   const hr12 = ((h + 11) % 12) + 1;
   const ampm = h >= 12 ? "pm" : "am";
-  return m === 0 ? `${hr12}${ampm}` : `${hr12}:${String(m).padStart(2, "0")}${ampm}`;
+  return !m ? `${hr12}${ampm}` : `${hr12}:${String(m).padStart(2, "0")}${ampm}`;
 }
 
 function roleLabel(r) {
