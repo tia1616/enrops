@@ -266,7 +266,10 @@ export default function Register() {
     (async () => {
       const { data: matches } = await supabase
         .from('programs')
-        .select('*, program_locations:program_location_id(name)')
+        // Location name via program_locations_public, not the base table - see
+        // the load() query below for why. Still aliased to `program_locations`
+        // so pricing.js's prog.program_locations?.name is untouched.
+        .select('*, program_locations:program_locations_public(name)')
         .eq('program_location_id', program.program_location_id)
         .eq('day_of_week', program.day_of_week)
         .eq('runs_own_registration', false) // don't bundle partner-run programs into a paid VIP offer
@@ -300,18 +303,31 @@ export default function Register() {
 
   async function load() {
     const [schoolsRes, programsRes, waiversRes, regFieldsRes, feeRes, cancelPolicyRes] = await Promise.all([
+      // program_locations_public, NOT the base table. The old comment below said
+      // "Anon-safe: public_read_program_locations allows anon reads" - true, but
+      // that policy is `TO public`, so it served signed-in families too and let
+      // any of them read every other provider's school contact phones and
+      // arrival briefings cross-tenant (prod 2026-08-25: 89 rows, 3 providers,
+      // 55 phones, 5 private notes). 20260825d scopes it to anon; this view is
+      // what keeps registration working for signed-in parents, who are not
+      // org_members.
+      //
+      // DEPLOY ORDER: migration 20260825b MUST reach an environment BEFORE this
+      // frontend. PostgREST fails the whole statement on an unknown relation, so
+      // without the view this read errors rather than degrading - and this is
+      // the checkout path. Measured 2026-08-25: the view is on STAGING, NOT prod.
       supabase
-        .from('program_locations')
+        .from('program_locations_public')
         .select('id, name, district, address')
         .eq('organization_id', ORG_ID)
         .order('name'),
       supabase
         .from('programs')
         // Join the location NAME so the Review line can show it (pricing.js reads
-        // prog.program_locations?.name). Anon-safe: public_read_program_locations
-        // allows anon reads for public_org_directory orgs — same pattern Home.jsx
-        // already uses. Location-less programs return null here (name omitted).
-        .select('*, program_locations:program_location_id(name)')
+        // prog.program_locations?.name). Aliased to `program_locations` so that
+        // reader, and WaitlistModal's program?.program_locations?.name, are both
+        // untouched. Location-less programs return null here (name omitted).
+        .select('*, program_locations:program_locations_public(name)')
         .eq('organization_id', ORG_ID)
         .eq('status', 'open')
         .eq('runs_own_registration', false) // exclude partner-run programs — no public checkout

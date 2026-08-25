@@ -383,9 +383,38 @@ eq('everything off still leaves the agreement',
   // column altogether. That is the dangerous direction — the wizard then reads
   // undefined for every key, `!== false` calls all of them ON, and every instructor
   // is asked for documents with no published body.
+  //
+  // MATCH A REDEFINITION, NOT A MENTION. This used to be
+  // `.includes('public_org_directory')`, which fired on any migration that so
+  // much as SELECTED from the view. That is most of them: it is the tenant
+  // allowlist every public-facing policy and view filters on, so
+  // `organization_id in (select id from public_org_directory)` appears in
+  // ordinary, harmless files. 20260825b/c/d each read it that way to scope the
+  // sites fix, and the guard failed on 20260825d - a migration that does not go
+  // near this view's shape.
+  //
+  // A read cannot drop a column; only a redefinition or a drop can, and that is
+  // exactly what the paragraph above is guarding against. So match the DDL
+  // verbs and nothing else. Kept deliberately loose on whitespace and the
+  // optional schema qualifier, and case-insensitive for the same reason
+  // aliasRe() is: these files are often pasted from what Postgres prints.
+  //
+  // DOUBLE QUOTES ARE TOLERATED even though all 11 current definitions write
+  // `public.public_org_directory` bare. Narrowing this filter traded one failure
+  // mode for another: a mention-match over-fires LOUDLY (which is how it was
+  // caught), but a DDL-match that misses a spelling under-fires SILENTLY - the
+  // newest redefinition drops out of `touching`, the documents file is once again
+  // last, and the test goes green while the column it guards is gone. That is
+  // strictly the worse direction, so the pattern accepts "public"."x" and "x"
+  // as well as the bare forms.
+  const q = (n) => `"?${n}"?`;
+  const redefinesRe = new RegExp(
+    `(create\\s+(or\\s+replace\\s+)?view|drop\\s+view(\\s+if\\s+exists)?|alter\\s+view)`
+    + `\\s+(${q('public')}\\s*\\.\\s*)?${q('public_org_directory')}(\\s|$|;|\\()`,
+    'i',
+  );
   const touching = sqlFiles
-    .filter((f) => readFileSync(new URL(f, migrationsDir), 'utf8')
-      .includes('public_org_directory'));
+    .filter((f) => redefinesRe.test(readFileSync(new URL(f, migrationsDir), 'utf8')));
   eq('the newest migration touching the view is the one that defines the documents',
     touching[touching.length - 1], newest);
 

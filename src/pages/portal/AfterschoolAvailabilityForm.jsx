@@ -125,8 +125,16 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
           .eq("instructor_id", instructorId)
           .eq("term", term)
           .maybeSingle(),
+        // program_locations_public, not the base table. An instructor fills this
+        // form in BEFORE holding any assignment, so the assignment-scoped policy
+        // (20260825c) deliberately does not cover them here - and once 20260825d
+        // scopes the cross-tenant public policy to anon, this read would have
+        // returned nothing at all. The view carries `area` for exactly this
+        // caller. It is also strictly less than the base table gave: no `notes`.
+        //
+        // DEPLOY ORDER: 20260825b must reach an environment before this file.
         supabase
-          .from("program_locations")
+          .from("program_locations_public")
           .select("area")
           .eq("organization_id", orgId)
           .not("area", "is", null),
