@@ -9,7 +9,10 @@
 // those are turned on in Settings.
 import React from 'react';
 import { offeredChoices, needsAuthorizedPickup, needsAftercareProvider } from '../../../lib/dismissal.js';
-import { standardQuestionRequired } from '../../../lib/registrationQuestions.js';
+// parseRegFields moved to src/lib/registrationFields.js so the rule it applies
+// is reachable by the test runner, which cannot import a .jsx. Re-exported here
+// because several screens already import it from this module.
+export { parseRegFields } from '../../../lib/registrationFields.js';
 
 const MAX_PICKUP = 4;
 
@@ -44,36 +47,6 @@ export function pickupDnrConflicts(pickup, doNotRelease) {
     }
   }
   return conflicts;
-}
-
-// Turn the get_active_registration_fields() rows into a convenient shape.
-export function parseRegFields(rows) {
-  const std = {};
-  const custom = [];
-  for (const r of rows || []) {
-    if (r.standard_key) {
-      // `options` carried through, not dropped. It is a real column on
-      // custom_reg_fields and get_active_registration_fields returns the whole
-      // row, so the provider's per-question configuration was already arriving
-      // here and being thrown away one line before it could be used. That is
-      // what kept the dismissal answers hardcoded to two.
-      // THE ONE PLACE the "can this question be mandatory at all" rule is
-      // applied. Questions whose answer is a person a family may not have
-      // (pickup, do-not-release, second guardian) come back optional however
-      // they are stored - see src/lib/registrationQuestions.js. Doing it here
-      // means the asterisk, the wizard's advance guard and the parent-portal
-      // pickup gate all agree without any of them repeating the rule.
-      std[r.standard_key] = {
-        enabled: true,
-        required: standardQuestionRequired(r.standard_key, r.is_required),
-        label: r.label,
-        options: r.options ?? null,
-      };
-    } else if (r.is_active !== false) {
-      custom.push(r);
-    }
-  }
-  return { std, custom };
 }
 
 // Is the "extra questions" content non-empty for a child? (drives whether we

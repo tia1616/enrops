@@ -790,12 +790,18 @@ export default function Register() {
             recognises this instantly as "something needs fixing" rather than as
             another thing to fill in.
 
-            role="alert" so a screen reader announces it the moment it appears,
-            which is the whole point of moving the feedback onto the press. */}
+            POLITE, not role="alert". It is announced, but queued rather than
+            interrupting. The conflict warning in RegExtraFields is role="alert"
+            and should be - it appears once and then sits still. This one TRACKS
+            the parent: fill the first name and it immediately becomes "add your
+            child's last name". Assertive would cut across whatever the screen
+            reader is saying every time they complete a field, including the echo
+            of their own typing. */}
         {step < 4 && showAdvanceWarning && (
           <div
             id="advance-warning"
-            role="alert"
+            role="status"
+            aria-live="polite"
             className="mt-8 flex items-start gap-3 rounded-xl border-2 border-j2s-orange-dark bg-j2s-orange-dark/5 px-4 py-4"
           >
             <span aria-hidden="true" className="mt-px flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-j2s-orange-dark text-sm font-bold text-white">!</span>

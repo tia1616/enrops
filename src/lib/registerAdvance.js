@@ -39,6 +39,7 @@
 // writes the sentence for it.
 import { needsAuthorizedPickup, dismissalAnswerIncomplete } from './dismissal.js';
 import { birthdateProblem } from './studentBirthdate.js';
+import { namedContacts, firstHalfNamedContact, contactDisplayName } from './registrationFields.js';
 
 // Has the parent answered a custom question? (by field type)
 export function hasAnswer(value, type) {
@@ -48,12 +49,18 @@ export function hasAnswer(value, type) {
   return typeof value === 'string' ? value.trim() !== '' : value != null;
 }
 
-// A contact row only counts once it carries BOTH names. One name is not enough
-// to release a child to somebody at a school door, and it is the DB's rule too.
-function fullyNamed(list) {
-  return (Array.isArray(list) ? list : []).filter(
-    (p) => (p.first_name || '').trim() && (p.last_name || '').trim(),
-  );
+// The name rule is NOT spelled again here - it is imported, because the
+// parent-portal pickup gate applies the same one to rows that land in the same
+// table, and the two used to disagree.
+const fullyNamed = namedContacts;
+
+// Names the half a parent actually typed and asks for the other half, rather
+// than saying "a name is incomplete" and leaving them to find which row.
+function halfNameMessage(contact) {
+  const missingLast = !!(contact?.first_name || '').trim();
+  return missingLast
+    ? `Add a last name for ${contactDisplayName(contact)}, or clear that row.`
+    : `Add a first name for ${contactDisplayName(contact)}, or clear that row.`;
 }
 
 // One blocking reason, with the field it belongs to.
@@ -127,6 +134,19 @@ export function advanceProblem({
       if (std.do_not_release?.required && fullyNamed(child.do_not_release).length === 0) {
         return stop('do_not_release', 'Add a first and last name for anyone we should not release your child to.');
       }
+
+      // HALF-FILLED ROWS, whether or not the question is mandatory. A row with a
+      // first name and no surname does not count as an answer anywhere, so
+      // before this it was simply ignored - and then saved, putting a one-word
+      // contact like "Grandma" on a dismissal list, which identifies nobody at a
+      // school door. Silently dropping it instead would be worse: the parent
+      // typed a name and would never learn it went nowhere. So it is said out
+      // loud, with the name they already typed, and clearing the row satisfies
+      // it just as well as finishing it.
+      const halfPickup = firstHalfNamedContact(child.authorized_pickup);
+      if (halfPickup) return stop('authorized_pickup', halfNameMessage(halfPickup));
+      const halfDnr = firstHalfNamedContact(child.do_not_release);
+      if (halfDnr) return stop('do_not_release', halfNameMessage(halfDnr));
 
       // Named with the provider's own label, since a custom question is whatever
       // they wrote and "answer the required question" would send a parent hunting.

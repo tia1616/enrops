@@ -15,6 +15,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase.js";
 import { needsAftercareProvider, dismissalAnswerIncomplete } from "../../lib/dismissal.js";
+import { namedContacts, firstHalfNamedContact, contactDisplayName } from "../../lib/registrationFields.js";
 import {
   PickupDismissalSection,
   GuardianSecondarySection,
@@ -22,7 +23,11 @@ import {
   pickupDnrConflicts,
 } from "./register-steps/RegExtraFields.jsx";
 
-const nonEmpty = (list) => (Array.isArray(list) ? list : []).filter((p) => (p?.first_name || "").trim());
+// ONE definition of "a named person", shared with the registration form. This
+// used to accept a first name on its own while the registration form demanded
+// both, so the same "Grandma" was a complete answer on one screen and an
+// incomplete one on the other - on rows that land in the same table.
+const nonEmpty = namedContacts;
 
 export default function PickupInfoGate({ students, parent, orgId, onComplete }) {
   const [std, setStd] = useState(null);
@@ -106,6 +111,17 @@ export default function PickupInfoGate({ students, parent, orgId, onComplete }) 
     }
     if (pickupDnrConflicts(d.pickup, d.doNotRelease).length > 0) {
       return "A name is on both the pickup and do-not-release lists. Remove it from one.";
+    }
+    // A row with one name and not the other is not an answer, and nonEmpty()
+    // now drops it before the save - so say so rather than discarding a name the
+    // parent typed without telling them. Same rule and same wording as the
+    // registration form (src/lib/registerAdvance.js).
+    const half = firstHalfNamedContact(d.pickup) || firstHalfNamedContact(d.doNotRelease);
+    if (half) {
+      const who = contactDisplayName(half);
+      return (half.first_name || "").trim()
+        ? `Add a last name for ${who}, or clear that row.`
+        : `Add a first name for ${who}, or clear that row.`;
     }
     return null;
   }

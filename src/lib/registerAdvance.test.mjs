@@ -144,6 +144,38 @@ clear('optional pickup list, nobody named', step0({
   activeChild: { student: releasedToAdult },
 }));
 
+// --- step 0: a half-filled row, required or not -----------------------------
+// "Grandma" with no surname is not an answer anywhere, and it used to be
+// silently ignored and then saved - a one-word contact on a dismissal list.
+// Now it is said out loud, and it fires even though pickup is optional.
+
+blocked('an optional pickup list still blocks on a half-filled row', step0({
+  regFields: { std: { authorized_pickup: { required: false } }, custom: [] },
+  activeChild: { student: { ...goodStudent }, authorized_pickup: [{ first_name: 'Grandma', last_name: '' }] },
+}), 'Add a last name for Grandma');
+blocked('a last-name-only row asks for the FIRST name', step0({
+  activeChild: { student: { ...goodStudent }, authorized_pickup: [{ first_name: '', last_name: 'Byron' }] },
+}), 'Add a first name for Byron');
+blocked('a half-filled do-not-release row blocks too', step0({
+  activeChild: { student: { ...goodStudent }, do_not_release: [{ first_name: 'Uncle' }] },
+}), 'Add a last name for Uncle');
+focusOf('a half-filled pickup row points at the pickup list', step0({
+  activeChild: { student: { ...goodStudent }, authorized_pickup: [{ first_name: 'Grandma' }] },
+}), 'authorized_pickup');
+// The pickup section renders one empty placeholder row for every family. If that
+// counted as half-filled, every registration on the platform would be blocked.
+clear('the untouched placeholder row does not nag', step0({
+  activeChild: { student: { ...goodStudent }, authorized_pickup: [{ first_name: '', last_name: '', phone: '' }] },
+}));
+clear('a complete row is fine', step0({
+  activeChild: { student: { ...goodStudent }, authorized_pickup: [{ first_name: 'Pat', last_name: 'Byron' }] },
+}));
+// Clearing the row is as good as finishing it - the message says so, so it has
+// to be true.
+clear('clearing a half-filled row unblocks', step0({
+  activeChild: { student: { ...goodStudent }, authorized_pickup: [] },
+}));
+
 // --- step 0: required do-not-release ---------------------------------------
 
 const dnrReq = { std: { do_not_release: { required: true } }, custom: [] };
