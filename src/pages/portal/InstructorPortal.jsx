@@ -2286,13 +2286,19 @@ function AssignmentCard({ assignment, coInstructors = [], messages = [], busy, o
 // program editor), `program_locations.room_number` is per SITE (typed in the
 // location editor). This portal only ever read the site one, so on 2026-08-25,
 // of 32 open FA26 classes, 15 had a room on the class that no instructor could
-// see and 2 showed the instructor a DIFFERENT room from the one on their class -
-// including a library, where a wrong room is a locked door.
+// see and 2 showed the instructor a DIFFERENT room from the one on their class.
 //
-// The class wins because it is the more specific fact: one school can run two
-// classes in two rooms, and the site column cannot say that. The site value
-// stays as the fallback so the 4 classes that only have it keep working, and
-// camps keep working unchanged (camp_sessions has no room column at all).
+// The class wins because it is the more specific fact, and Happy Valley Library
+// is the proof rather than a data error: ONE site row serves 6 summer camp
+// sessions AND 3 after-school classes. Its room_number is "Community Room B"
+// because that is the SUMMER room; the after-school class carries "Community
+// Room A". Neither is wrong and neither can be deleted - the site column cannot
+// hold both, and camps read only the site row. Preferring the class here is what
+// lets each audience see its own room. (Jessica, 2026-08-25: "i've been updating
+// rooms in programs, not locations" - which was the correct instinct.)
+//
+// The site value stays as the fallback so the 4 classes carrying only a site
+// room keep working, and camps are untouched (camp_sessions has no room column).
 //
 // This does NOT fix the underlying two-boxes-one-fact problem - that is the
 // locations/programs unification on the backlog. It stops instructors being the
@@ -3122,7 +3128,12 @@ function SubDetailView({ sub, instructor, onBack, onMarkTaught, markBusy, error,
         )}
       </div>
 
-      <LocationSection location={loc} fallbackName={venueName} />
+      {/* program={prog} for a PROGRAM sub: a sub has most likely never been in
+          this room, so they are the last person who should be shown the site's
+          room instead of their class's. Camps pass null - camp_sessions has no
+          room of its own. `prog` reaches here from get_my_sub_details, whose
+          whitelist had to gain 'room' for this to be non-null. */}
+      <LocationSection location={loc} fallbackName={venueName} program={isCamp ? null : prog} />
       <SubCheckInSection sub={sub} onMarkTaught={onMarkTaught} markBusy={markBusy} />
       {/* Roster + lessons for BOTH camp and after-school subs — the sub offer
           emails promise "the roster and lesson plan are in your portal", so a
