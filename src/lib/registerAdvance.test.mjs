@@ -91,6 +91,15 @@ clear('aftercare with the program named', step0({
 // --- step 0: THE 24 AUG WALL - required authorized pickup ------------------
 // Jasmine Conn's shape: released to an adult, required pickup list, nothing
 // named. Before this file, Continue simply went grey.
+//
+// READ THIS BEFORE CHANGING THE BLOCK BELOW. As of 25 Aug 2026 these inputs can
+// no longer arise on a real form: parseRegFields() runs every standard question
+// through standardQuestionRequired(), and pickup / do-not-release / second
+// guardian always come back optional (src/lib/registrationQuestions.js, pinned by
+// registrationQuestions.test.mjs). These stay as CONTRACT tests of the guard
+// itself - given a required question, it blocks and says why - because the guard
+// must not silently ignore a `required` it is handed. They are not a claim that a
+// provider can still arm these three.
 
 const pickupReq = {
   std: { dismissal_method: { required: true }, authorized_pickup: { required: true } },

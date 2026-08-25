@@ -35,14 +35,24 @@ const RED = "#a13a3a";
 const AMBER = "#8a6d1a";
 
 // The platform's standard questions. `key` = custom_reg_fields.standard_key.
-// `alwaysRequired` questions can't be made optional (they're safety-critical).
+//
+// FOUR SEPARATE FLAGS, because `alwaysRequired` used to mean three different
+// things at once and splitting it is what let the pickup question stop being
+// mandatory without also losing the two behaviours that were riding along:
+//   `defaultEnabled` - starts ON for a brand-new org, so the builder shows the
+//                      safety questions pre-selected (dismissal + pickup).
+//   `alwaysRequired` - cannot be made optional. Now dismissal only.
+//   `neverRequired`  - cannot be made mandatory, because a family may have no
+//                      answer. See src/lib/registrationQuestions.js.
+//   `safetyCoupled`  - carries the "this powers your dismissal tooling" note.
 // `sensitive` questions carry a privacy note. Order here = default sort order.
 const STANDARD_FIELDS = [
   {
     key: "guardian_secondary",
     label: "Second parent or guardian",
-    desc: "Name, email, and phone for a second guardian. The person who registers is always the first guardian.",
+    desc: "Name, email, and phone for a second guardian. The person who registers is always the first guardian. Always optional - a single parent has no second guardian to name.",
     defaultRequired: false,
+    neverRequired: true,
   },
   {
     key: "dismissal_method",
@@ -50,6 +60,8 @@ const STANDARD_FIELDS = [
     desc: "You choose which ways of leaving families can pick from.",
     defaultRequired: true,
     alwaysRequired: true,
+    defaultEnabled: true,
+    safetyCoupled: true,
     // The ONLY standard question whose answers a provider chooses. Declared as
     // data rather than special-cased in the save, so a second question that
     // needs choices later follows the same path instead of growing another
@@ -60,16 +72,26 @@ const STANDARD_FIELDS = [
   {
     key: "authorized_pickup",
     label: "Besides the parent(s) listed in registration, who else is allowed to pick up your child?",
-    desc: "Extra people besides the parent/guardians (first and last name). Parents and guardians can always pick up. Asked when the child is released to an adult.",
-    defaultRequired: true,
-    alwaysRequired: true,
+    desc: "Extra people besides the parent/guardians (first and last name). Parents and guardians can always pick up. Asked when the child is released to an adult. Always optional - a family whose only collectors are the parents has nobody to name here.",
+    defaultRequired: false,
+    // WAS alwaysRequired: true, which is what made the 24 Aug wall unfixable
+    // from inside the product: a family with nobody else to name could not
+    // finish, and no switch on this screen could relieve it. See
+    // src/lib/registrationQuestions.js.
+    //
+    // It KEEPS starting on and it KEEPS its dismissal-tooling note - those rode
+    // on the same flag and are not what was wrong with it.
+    neverRequired: true,
+    defaultEnabled: true,
+    safetyCoupled: true,
   },
   {
     key: "do_not_release",
     label: "Anyone we should NOT release your child to?",
-    desc: "Optional, for custody or safety situations. Shown to you, your staff, and the child's instructors (for safe dismissal) — never to other families.",
+    desc: "Optional, for custody or safety situations. Shown to you, your staff, and the child's instructors (for safe dismissal) — never to other families. Always optional - most families have nobody to name here.",
     defaultRequired: false,
     sensitive: true,
+    neverRequired: true,
   },
 ];
 
@@ -139,11 +161,15 @@ function seedStdFromRows(rows) {
     seeded[f.key] = {
       // Existing rows keep their saved state (J2S and any org that already
       // configured its form are untouched). For a brand-new org with no row,
-      // the safety-critical fields (alwaysRequired: dismissal + pickup) start
+      // the safety-critical fields (defaultEnabled: dismissal + pickup) start
       // ON so the builder shows them pre-selected; saving activates them. This
       // is what the section copy promises.
-      enabled: row ? row.is_active !== false : !!f.alwaysRequired,
-      required: f.alwaysRequired ? true : (row ? !!row.is_required : f.defaultRequired),
+      enabled: row ? row.is_active !== false : !!f.defaultEnabled,
+      // neverRequired wins over anything stored, so an org whose row still says
+      // is_required = true from before 25 Aug (staging j2s and riverbend both
+      // did) shows optional here and SAVES optional, rather than the screen
+      // quietly re-arming a question the family cannot answer.
+      required: f.neverRequired ? false : (f.alwaysRequired ? true : (row ? !!row.is_required : f.defaultRequired)),
       label: row?.label ?? f.label,
       // Which answers this provider offers. Seeded THROUGH offeredChoices so
       // the builder shows exactly what the registration form will render -
@@ -162,7 +188,7 @@ function seedStdFromRows(rows) {
 // state. Identical to seedStdFromRows EXCEPT for `enabled`, and that one field is
 // the whole point:
 //
-//   - seedStdFromRows pre-selects the safety questions (alwaysRequired) for an
+//   - seedStdFromRows pre-selects the safety questions (defaultEnabled) for an
 //     org with no row, because the section promises "they start on — review them
 //     and Save to add them to your form". That is a PROPOSAL, not the truth.
 //   - the form asks a question only when an ACTIVE ROW EXISTS. No row = not asked.
@@ -369,7 +395,10 @@ export default function RegistrationQuestions() {
         const s = std[f.key];
         const existing = byStd[f.key];
         const label = (s.label || "").trim() || f.label;
-        const required = f.alwaysRequired ? true : !!s.required;
+        // neverRequired is enforced on the WRITE too, not only in the seed. The
+        // seed protects what this screen shows; this protects what it stores, so
+        // a save can never put a family-trapping value back into the row.
+        const required = f.neverRequired ? false : (f.alwaysRequired ? true : !!s.required);
         if (s.enabled) {
           // Upsert on the deterministic std_<key> field_key so a stale `rows`
           // snapshot (e.g. a concurrent admin session already created the row)
@@ -699,15 +728,20 @@ function StandardRow({ field, state, canEdit, first, hasInstructorPortal = true,
         <>
         <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 14 }}>
           {/* mandatory / optional */}
-          <label style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, color: field.alwaysRequired ? MUTED : INK }}>
+          {/* A tick box that cannot change anything is a control that lies, so a
+              never-required question shows it off and locked with the reason
+              beside it rather than letting an operator arm a question their
+              families cannot answer and wonder why nothing happened. */}
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, color: (field.alwaysRequired || field.neverRequired) ? MUTED : INK }}>
             <input
               type="checkbox"
-              checked={field.alwaysRequired ? true : !!state.required}
-              disabled={!canEdit || field.alwaysRequired}
+              checked={field.alwaysRequired ? true : (field.neverRequired ? false : !!state.required)}
+              disabled={!canEdit || field.alwaysRequired || field.neverRequired}
               onChange={(e) => onChange({ required: e.target.checked })}
             />
             Required
             {field.alwaysRequired && <span style={{ color: MUTED }}>(always)</span>}
+            {field.neverRequired && <span style={{ color: MUTED }}>(always optional &mdash; a family may have nobody to name)</span>}
           </label>
           {/* label override */}
           <span style={{ display: "inline-flex", alignItems: "center", gap: 7, flex: 1, minWidth: 220 }}>
@@ -771,7 +805,7 @@ function StandardRow({ field, state, canEdit, first, hasInstructorPortal = true,
             differently for providers on the reduced nav - they have no instructor
             portal, so "your instructors won't see the dismissal step" points at a
             screen that does not exist for them. */}
-        {field.alwaysRequired && (
+        {field.safetyCoupled && (
           <div style={{ marginTop: 8, fontSize: 12, color: MUTED, lineHeight: 1.5, maxWidth: 460, fontStyle: "italic" }}>
             {hasInstructorPortal
               ? "Powers your instructors' dismissal check-off and Class Reports. Turn it off and families won't be asked at registration, and instructors won't see the dismissal step."
@@ -1152,8 +1186,8 @@ function FormPreview({ std, customRows, programs, orgSlug, stdDirty, stdEdited, 
           turns every standard question off and saves gets "No extra questions
           turned on yet." in that list, and "your form now asks these questions"
           would be pointing at nothing. Both safety questions CAN be switched off
-          (alwaysRequired governs required, not enabled), so that state is
-          reachable. "Up to date" is true in every state a save can leave. */}
+          (defaultEnabled governs only the starting state, not enabled), so that
+          state is reachable. "Up to date" is true in every state a save can leave. */}
       {savedStd && !stdDirty && (
         <div role="status" aria-live="polite" style={{ fontSize: 12, color: OK_GREEN, fontWeight: 600, marginBottom: 10 }}>
           Saved ✓ Your form is up to date.

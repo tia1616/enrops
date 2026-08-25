@@ -14,7 +14,7 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase.js";
-import { needsAuthorizedPickup, needsAftercareProvider, dismissalAnswerIncomplete } from "../../lib/dismissal.js";
+import { needsAftercareProvider, dismissalAnswerIncomplete } from "../../lib/dismissal.js";
 import {
   PickupDismissalSection,
   GuardianSecondarySection,
@@ -89,9 +89,15 @@ export default function PickupInfoGate({ students, parent, orgId, onComplete }) 
     if (dismissalAnswerIncomplete(d.dismissal_method, d.aftercare_provider)) {
       return "Add which aftercare program they go to.";
     }
-    if (needsAuthorizedPickup(d.dismissal_method) && nonEmpty(d.pickup).length === 0) {
-      return "Add at least one person who can pick them up.";
-    }
+    // NO REQUIREMENT ON THE EXTRA-ADULTS LIST. This used to demand a name from
+    // anyone whose child is released to an adult, and - unlike the registration
+    // form - it never consulted the provider's setting at all, so no switch
+    // anywhere could relieve it. On a gate that replaces the whole dashboard,
+    // that stranded any family whose only collectors are the parents.
+    //
+    // The safety answer this screen exists for is the one above: HOW the child
+    // leaves, which is radio buttons and always answerable. Who ELSE may collect
+    // them is extra, and blank means nobody - see src/lib/registrationQuestions.js.
     // Mirror the registration wizard's advanceProblem (src/lib/registerAdvance.js):
     // if the org marked do-not-release required, the
     // backfill gate must enforce it too (the label shows Required in both flows).

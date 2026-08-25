@@ -9,6 +9,7 @@
 // those are turned on in Settings.
 import React from 'react';
 import { offeredChoices, needsAuthorizedPickup, needsAftercareProvider } from '../../../lib/dismissal.js';
+import { standardQuestionRequired } from '../../../lib/registrationQuestions.js';
 
 const MAX_PICKUP = 4;
 
@@ -56,7 +57,18 @@ export function parseRegFields(rows) {
       // row, so the provider's per-question configuration was already arriving
       // here and being thrown away one line before it could be used. That is
       // what kept the dismissal answers hardcoded to two.
-      std[r.standard_key] = { enabled: true, required: !!r.is_required, label: r.label, options: r.options ?? null };
+      // THE ONE PLACE the "can this question be mandatory at all" rule is
+      // applied. Questions whose answer is a person a family may not have
+      // (pickup, do-not-release, second guardian) come back optional however
+      // they are stored - see src/lib/registrationQuestions.js. Doing it here
+      // means the asterisk, the wizard's advance guard and the parent-portal
+      // pickup gate all agree without any of them repeating the rule.
+      std[r.standard_key] = {
+        enabled: true,
+        required: standardQuestionRequired(r.standard_key, r.is_required),
+        label: r.label,
+        options: r.options ?? null,
+      };
     } else if (r.is_active !== false) {
       custom.push(r);
     }
