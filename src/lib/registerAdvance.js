@@ -17,8 +17,20 @@
 //
 // The fix is the one `birthdateProblem()` and `PickupInfoGate.problemFor()`
 // already use here: ONE function answers both "is this blocked" and "what do we
-// tell them", so the button and the message cannot disagree. Callers disable
-// Continue on a non-null return and render that same sentence beside it.
+// tell them", so the button and the message cannot disagree.
+//
+// WHY CONTINUE IS NOT DISABLED. The first version of this greyed the button out
+// and put the sentence beside it, and Jessica read straight past it - "looks
+// like just a part of the form to fill out". That is the documented failure of
+// disabled submit buttons: nothing ever responds to the parent, so an
+// explanation sitting on the page is page furniture rather than an answer. The
+// established guidance is to leave the control enabled, validate when it is
+// pressed, and say what is wrong then. So callers keep Continue live, call this
+// on click, and only show the warning once a press has actually been refused.
+//
+// `focus` names the field the sentence is about, matched in the DOM by
+// `[data-reg-field="..."]`. One step renders at a time, so exactly one element
+// carries any given key and callers do not need to know which component owns it.
 //
 // Pure and dependency-light on purpose - it is imported by a .test.mjs that node
 // runs directly, so nothing in this file may reach a .jsx module. That is why
@@ -44,17 +56,22 @@ function fullyNamed(list) {
   );
 }
 
+// One blocking reason, with the field it belongs to.
+function stop(focus, message) {
+  return { focus, message };
+}
+
 /**
  * What (if anything) stops this family advancing from `step`?
  *
- * Returns null when the step is complete, otherwise ONE sentence a parent can
- * act on. First failure wins, in the order the questions appear on the page, so
- * the sentence always points at the topmost thing still missing rather than at
- * whichever check happened to be written last.
+ * Returns null when the step is complete, otherwise ONE reason a parent can act
+ * on: `{ focus, message }`. First failure wins, in the order the questions
+ * appear on the page, so it always points at the topmost thing still missing
+ * rather than at whichever check happened to be written last.
  *
  * Steps are 0=Student, 1=Parent, 2=Waivers, 3=Review, 4=Pay.
  *
- * @returns {null | string}
+ * @returns {null | { focus: string, message: string }}
  */
 export function advanceProblem({
   step,
@@ -76,67 +93,70 @@ export function advanceProblem({
       // through. Tightening one of them here would newly block a family who can
       // submit today, which is a different change from telling them why they are
       // blocked, and this one is not that change.
-      if (!s.first_name) return "Add your child's first name.";
-      if (!s.last_name) return "Add your child's last name.";
-      if (!isLean && s.grade === '') return "Choose your child's grade.";
-      if (!isLean && !(s.homeroom_teacher || '').trim()) return "Add your child's homeroom teacher.";
-      if (!s.birthdate) return "Add your child's date of birth.";
-      if (!s.emergency_contact_name) return 'Add an emergency contact name.';
-      if (!s.emergency_contact_phone) return 'Add an emergency contact phone number.';
+      if (!s.first_name) return stop('student_first_name', "Add your child's first name.");
+      if (!s.last_name) return stop('student_last_name', "Add your child's last name.");
+      if (!isLean && s.grade === '') return stop('student_grade', "Choose your child's grade.");
+      if (!isLean && !(s.homeroom_teacher || '').trim()) return stop('student_homeroom', "Add your child's homeroom teacher.");
+      if (!s.birthdate) return stop('student_birthdate', "Add your child's date of birth.");
+      if (!s.emergency_contact_name) return stop('emergency_name', 'Add an emergency contact name.');
+      if (!s.emergency_contact_phone) return stop('emergency_phone', 'Add an emergency contact phone number.');
 
       // StepStudent already renders this one against the field itself. Repeating
       // it beside the button is not noise: the birth date sits far enough up the
       // form that on a phone the inline message and the grey button are never on
       // screen together, and the same string in both places cannot drift.
       const dob = birthdateProblem(s.birthdate);
-      if (dob) return dob.message;
+      if (dob) return stop('student_birthdate', dob.message);
 
       if (std.dismissal_method?.required && !s.dismissal_method) {
-        return 'Choose how your child leaves at the end of class.';
+        return stop('dismissal_method', 'Choose how your child leaves at the end of class.');
       }
       // "Aftercare" with no program named answers the category and withholds the
       // destination - the one detail the answer exists to supply.
       if (dismissalAnswerIncomplete(s.dismissal_method, s.aftercare_provider)) {
-        return 'Add which aftercare program your child goes to.';
+        return stop('aftercare_provider', 'Add which aftercare program your child goes to.');
       }
 
       // THE WALL THIS FILE WAS WRITTEN FOR. Says "first and last name" out loud,
       // because a half-filled row looks answered and reads as a working form.
       if (std.authorized_pickup?.required && (needsAuthorizedPickup(s.dismissal_method) || !std.dismissal_method)) {
         if (fullyNamed(child.authorized_pickup).length === 0) {
-          return 'Add a first and last name for at least one person who can pick up your child.';
+          return stop('authorized_pickup', 'Add a first and last name for at least one person who can pick up your child.');
         }
       }
       if (std.do_not_release?.required && fullyNamed(child.do_not_release).length === 0) {
-        return 'Add a first and last name for anyone we should not release your child to.';
+        return stop('do_not_release', 'Add a first and last name for anyone we should not release your child to.');
       }
 
       // Named with the provider's own label, since a custom question is whatever
       // they wrote and "answer the required question" would send a parent hunting.
       for (const f of regFields?.custom || []) {
         if (f.is_required && !hasAnswer(child.custom_answers?.[f.field_key], f.field_type)) {
-          return f.label ? `Answer "${f.label}".` : 'Answer the required question above.';
+          return stop(
+            `custom:${f.field_key}`,
+            f.label ? `Answer "${f.label}".` : 'Answer the required question above.',
+          );
         }
       }
 
       // RegExtraFields shows a richer named warning up at the list itself; this
       // is the same fact where the parent is looking when the button fails them.
       if ((conflicts || []).length > 0) {
-        return "A name is on both the pickup and do-not-release lists. The same person can't be on both - remove it from one.";
+        return stop('do_not_release', "A name is on both the pickup and do-not-release lists. The same person can't be on both - remove it from one.");
       }
       return null;
     }
     case 1: {
       const p = parent || {};
-      if (!p.first_name) return 'Add your first name.';
-      if (!p.last_name) return 'Add your last name.';
-      if (!p.email) return 'Add your email address.';
-      if (!p.phone) return 'Add your phone number.';
+      if (!p.first_name) return stop('parent_first_name', 'Add your first name.');
+      if (!p.last_name) return stop('parent_last_name', 'Add your last name.');
+      if (!p.email) return stop('parent_email', 'Add your email address.');
+      if (!p.phone) return stop('parent_phone', 'Add your phone number.');
       if (std.guardian_secondary?.required) {
         const g = p.guardian2 || {};
         if (!(g.first_name || '').trim() || !(g.last_name || '').trim()) {
           const label = std.guardian_secondary.label || 'second parent or guardian';
-          return `Add a first and last name for the ${label.toLowerCase()}.`;
+          return stop('guardian_secondary', `Add a first and last name for the ${label.toLowerCase()}.`);
         }
       }
       return null;
@@ -148,18 +168,19 @@ export function advanceProblem({
         (w) => w.required && child.waivers?.[w.id]?.agreed !== true,
       );
       if (unsigned.length === 0) return null;
+      const focus = `waiver:${unsigned[0].id}`;
       if (unsigned.length === 1) {
-        return unsigned[0].name
+        return stop(focus, unsigned[0].name
           ? `Tick the box to agree to the ${unsigned[0].name.toLowerCase()}.`
-          : 'Tick the box to agree to the required form.';
+          : 'Tick the box to agree to the required form.');
       }
-      return `Tick the box on each required form - ${unsigned.length} still need your agreement.`;
+      return stop(focus, `Tick the box on each required form - ${unsigned.length} still need your agreement.`);
     }
     case 3:
       return null;
     default:
-      // Unreachable while Continue only renders for steps 0-3, but a sentence
+      // Unreachable while Continue only renders for steps 0-3, but a reason
       // beats `false` if a step is ever added and this switch is not.
-      return 'Finish this step to continue.';
+      return stop('', 'Finish this step to continue.');
   }
 }

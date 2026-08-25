@@ -34,8 +34,11 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
           : 'We use this info for rosters, medical notes, and pickup.'}
       </p>
 
+      {/* data-reg-field marks the field each advanceProblem() sentence is about,
+          so the wizard's "Take me there" can find it without this component
+          knowing the wizard exists. See src/lib/registerAdvance.js. */}
       <div className="mt-8 grid gap-5 sm:grid-cols-2">
-        <div>
+        <div data-reg-field="student_first_name">
           <label className="label-field">First name *</label>
           <input
             className="input-field"
@@ -45,7 +48,7 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
             name="student-first-name"
           />
         </div>
-        <div>
+        <div data-reg-field="student_last_name">
           <label className="label-field">Last name *</label>
           <input
             className="input-field"
@@ -66,7 +69,7 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
             working payment path is not something to do in the same pass that
             introduces the question. The asterisk follows the real rule rather than
             being decorative. */}
-        <div>
+        <div data-reg-field="student_grade">
           {/* "(optional)" spelled out rather than just dropping the asterisk. Every
               sibling field here is starred, so an unmarked one reads as a mistake
               and a parent skips it - which defeats the point of asking. htmlFor/id
@@ -89,7 +92,7 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
             ))}
           </select>
         </div>
-        <div>
+        <div data-reg-field="student_birthdate">
           <label className="label-field" htmlFor={`student-birthdate-${childIndex}`}>Birth date *</label>
           <input
             id={`student-birthdate-${childIndex}`}
@@ -121,7 +124,7 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
           )}
         </div>
         {!lean && (
-          <div>
+          <div data-reg-field="student_homeroom">
             {/* Required as of 2026-08-24. Jessica, on FA26: 42 of 118 confirmed
                 registrations had no homeroom teacher, so instructors collecting a
                 class from classrooms had nothing to go on for a third of the
@@ -173,7 +176,7 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
         Someone we can reach if we can't reach you.
       </p>
       <div className="mt-4 grid gap-5 sm:grid-cols-2">
-        <div>
+        <div data-reg-field="emergency_name">
           <label className="label-field">Name *</label>
           <input
             className="input-field"
@@ -181,7 +184,7 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
             onChange={(e) => onUpdate({ emergency_contact_name: e.target.value })}
           />
         </div>
-        <div>
+        <div data-reg-field="emergency_phone">
           <label className="label-field">Phone *</label>
           <input
             type="tel"

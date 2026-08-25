@@ -125,7 +125,7 @@ export function PickupDismissalSection({ std, dismissalMethod, onDismissalChange
   return (
     <div className="mt-4 grid gap-5">
       {std.dismissal_method && (
-        <div>
+        <div data-reg-field="dismissal_method">
           <label className="label-field">
             {std.dismissal_method.label || 'How does your child leave?'}<Req on={std.dismissal_method.required} />
           </label>
@@ -157,7 +157,7 @@ export function PickupDismissalSection({ std, dismissalMethod, onDismissalChange
               be. dismissalSummary() says so out loud on every staff surface
               when it is missing, rather than letting silence read as "we know". */}
           {showAftercareProvider && (
-            <div className="mt-3">
+            <div className="mt-3" data-reg-field="aftercare_provider">
               {/* REQUIRED, matching the question it belongs to. dismissal_method is
                   always-required, so leaving its follow-up optional meant a family
                   could answer "aftercare" and leave the destination blank - the
@@ -185,7 +185,7 @@ export function PickupDismissalSection({ std, dismissalMethod, onDismissalChange
       )}
 
       {std.authorized_pickup && (releasedToAdult || !std.dismissal_method) && (
-        <div>
+        <div data-reg-field="authorized_pickup">
           <label className="label-field">
             {std.authorized_pickup.label || 'Besides the parent(s) listed in registration, who else is allowed to pick up your child?'}<Req on={std.authorized_pickup.required} />
           </label>
@@ -215,7 +215,7 @@ export function PickupDismissalSection({ std, dismissalMethod, onDismissalChange
       )}
 
       {std.do_not_release && (
-        <div>
+        <div data-reg-field="do_not_release">
           <label className="label-field">
             {std.do_not_release.label || 'Anyone we should NOT release your child to?'}<Req on={std.do_not_release.required} />
           </label>
@@ -253,7 +253,7 @@ export function GuardianSecondarySection({ config, value, onChange }) {
   const g = value || {};
   const set = (patch) => onChange({ ...g, ...patch });
   return (
-    <div>
+    <div data-reg-field="guardian_secondary">
       <h2 className="mt-10 font-titan text-xl text-j2s-ink">
         {config.label || 'Second parent or guardian'}
         {!config.required && <span className="ml-2 text-sm font-normal text-j2s-ink/50">(optional)</span>}
@@ -300,7 +300,7 @@ function CustomQuestion({ field, value, onChange }) {
   );
   const opts = Array.isArray(field.options) ? field.options : [];
   return (
-    <div>
+    <div data-reg-field={`custom:${field.field_key}`}>
       {field.field_type !== 'checkbox' && label}
       {field.field_type === 'text' && (
         <input className="input-field" value={value || ''} onChange={(e) => onChange(e.target.value)} />

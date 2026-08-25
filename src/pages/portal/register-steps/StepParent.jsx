@@ -12,7 +12,9 @@ export default function StepParent({ parent, onUpdate, guardianConfig }) {
       </p>
 
       <div className="mt-8 grid gap-5 sm:grid-cols-2">
-        <div>
+        {/* data-reg-field: see src/lib/registerAdvance.js - it lets the wizard's
+            "Take me there" land on the field its sentence is about. */}
+        <div data-reg-field="parent_first_name">
           <label className="label-field">First name *</label>
           <input
             className="input-field"
@@ -21,7 +23,7 @@ export default function StepParent({ parent, onUpdate, guardianConfig }) {
             autoComplete="given-name"
           />
         </div>
-        <div>
+        <div data-reg-field="parent_last_name">
           <label className="label-field">Last name *</label>
           <input
             className="input-field"
@@ -30,7 +32,7 @@ export default function StepParent({ parent, onUpdate, guardianConfig }) {
             autoComplete="family-name"
           />
         </div>
-        <div>
+        <div data-reg-field="parent_email">
           <label className="label-field">Email *</label>
           <input
             type="email"
@@ -43,7 +45,7 @@ export default function StepParent({ parent, onUpdate, guardianConfig }) {
             We'll send your receipt and updates here.
           </p>
         </div>
-        <div>
+        <div data-reg-field="parent_phone">
           <label className="label-field">Phone *</label>
           <input
             type="tel"

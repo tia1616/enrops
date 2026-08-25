@@ -20,13 +20,18 @@ function ok(name, cond) { eq(name, !!cond, true); }
 // Asserts blocked AND that the parent is told something - the pairing the whole
 // file exists to defend. A bare `!== null` would pass on an empty string.
 function blocked(name, state, contains) {
-  const msg = advanceProblem(state);
+  const r = advanceProblem(state);
+  const msg = r?.message;
   if (typeof msg === 'string' && msg.length > 0 && (!contains || msg.includes(contains))) {
     pass++; console.log(`PASS  ${name}`);
   } else {
-    fail++; console.error(`FAIL  ${name}\n  expected: a message${contains ? ` containing ${JSON.stringify(contains)}` : ''}\n  actual:   ${JSON.stringify(msg)}`);
+    fail++; console.error(`FAIL  ${name}\n  expected: a message${contains ? ` containing ${JSON.stringify(contains)}` : ''}\n  actual:   ${JSON.stringify(r)}`);
   }
 }
+// Every reason must also name the field it is about, or "Take me there" lands
+// nowhere. Asserted separately so a missing focus key fails loudly rather than
+// silently degrading to a warning with a dead button on it.
+function focusOf(name, state, expected) { eq(name, advanceProblem(state)?.focus, expected); }
 function clear(name, state) { eq(name, advanceProblem(state), null); }
 
 // A lean org's step 0, complete. Lean skips grade + homeroom teacher.
@@ -205,7 +210,7 @@ clear('review step always advances', { step: 3, regFields: { std: {}, custom: []
 blocked('an unknown step blocks with a sentence', { step: 9, regFields: { std: {}, custom: [] }, activeChild: {} });
 // Called with nothing at all during an early render must not throw.
 blocked('no arguments at all does not throw', undefined);
-ok('a bare call returns a string', typeof advanceProblem() === 'string');
+ok('a bare call still returns a reason object', typeof advanceProblem()?.message === 'string');
 
 // --- hasAnswer, by field type ----------------------------------------------
 
@@ -219,6 +224,32 @@ eq('multiselect: one choice is an answer', hasAnswer(['a'], 'multiselect'), true
 eq('number: zero IS an answer', hasAnswer(0, 'number'), true);
 eq('number: empty string is not', hasAnswer('', 'number'), false);
 eq('number: null is not', hasAnswer(null, 'number'), false);
+
+// --- every reason names a field, and it is the RIGHT field -----------------
+// "Take me there" queries [data-reg-field="<focus>"]. A wrong or missing key is
+// invisible in the message, so it is pinned here rather than trusted.
+
+focusOf('first name points at the first-name field', step0({ activeChild: { student: { ...goodStudent, first_name: '' } } }), 'student_first_name');
+focusOf('grade points at the grade field', step0({ isLean: false, activeChild: { student: { ...goodStudent, grade: '', homeroom_teacher: 'Ms. Frizzle' } } }), 'student_grade');
+focusOf('homeroom points at the homeroom field', step0({ isLean: false, activeChild: { student: { ...goodStudent, grade: '2', homeroom_teacher: '  ' } } }), 'student_homeroom');
+focusOf('emergency name points at its own field', step0({ activeChild: { student: { ...goodStudent, emergency_contact_name: '' } } }), 'emergency_name');
+focusOf('an implausible birth date points at the birth date', step0({ activeChild: { student: { ...goodStudent, birthdate: '1980-12-18' } } }), 'student_birthdate');
+focusOf('dismissal points at the dismissal question', step0({ regFields: dismissalReq }), 'dismissal_method');
+focusOf('aftercare points at the provider box, NOT the radios', step0({
+  regFields: dismissalReq,
+  activeChild: { student: { ...goodStudent, dismissal_method: 'aftercare' } },
+}), 'aftercare_provider');
+focusOf('the pickup wall points at the pickup list', step0({ regFields: pickupReq, activeChild: { student: releasedToAdult } }), 'authorized_pickup');
+focusOf('do-not-release points at its own list', step0({ regFields: dnrReq }), 'do_not_release');
+// The conflict is BETWEEN two lists; it points at the do-not-release one because
+// that is where the named warning already renders.
+focusOf('a both-lists conflict points at do-not-release', step0({ conflicts: ['Pat Byron'] }), 'do_not_release');
+focusOf('a custom question points at itself by key', step0({ regFields: customReq }), 'custom:allergies');
+focusOf('parent email points at the parent email', step1({ parent: { ...goodParent, email: '' } }), 'parent_email');
+focusOf('the second guardian points at its section', step1({ regFields: g2Req }), 'guardian_secondary');
+// With several unsigned, it points at the FIRST one so the jump is deterministic.
+focusOf('waivers point at the first unsigned form', step2({}), 'waiver:w2');
+focusOf('waivers skip one already agreed', step2({ w2: { agreed: true } }), 'waiver:w3');
 
 console.log(`\nregisterAdvance: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

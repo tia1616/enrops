@@ -28,6 +28,7 @@ export default function StepWaivers({
           return (
             <div
               key={w.id}
+              data-reg-field={`waiver:${w.id}`}
               className={`rounded-2xl border-2 p-6 transition ${
                 agreed
                   ? 'border-j2s-purple bg-j2s-purple-soft/40'

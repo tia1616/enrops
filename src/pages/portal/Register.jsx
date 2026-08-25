@@ -384,9 +384,57 @@ export default function Register() {
     conflicts: pickupDnrConflicts(activeChild.authorized_pickup, activeChild.do_not_release),
   });
 
+  // Has this step had a Continue press REFUSED? Continue stays enabled and the
+  // warning stays hidden until then, so the first thing a parent sees is a
+  // normal form rather than a page telling them off for not having filled it in
+  // yet. Jessica, on the disabled-button version: "i didn't even notice it -
+  // looks like just a part of the form to fill out." A warning that was already
+  // sitting there before you did anything reads as furniture; one that appears
+  // because you pressed the button reads as an answer.
+  const [advanceRefused, setAdvanceRefused] = useState(false);
+  // Cleared on every step change so a warning earned on the student step is not
+  // still on screen over the parent step.
+  useEffect(() => { setAdvanceRefused(false); }, [step]);
+  // Once they HAVE been refused, the warning tracks live as they type, so the
+  // sentence never describes a field they already fixed.
+  const showAdvanceWarning = advanceRefused && !!advanceBlocker;
+
+  // Send the parent to the field the sentence is about. Matched on
+  // data-reg-field rather than an id, because one step renders at a time so the
+  // key is unique, and the step components do not have to know the wizard exists.
+  function goToBlockedField() {
+    const key = advanceBlocker?.focus;
+    if (!key) return;
+    const el = document.querySelector(`[data-reg-field="${CSS.escape(key)}"]`);
+    if (!el) return;
+    // Focus the control itself, not the wrapper - a parent who taps "Take me
+    // there" wants a cursor in the box, not merely to be looking at it.
+    //
+    // ORDER MATTERS, and it is the opposite of the obvious one. Focusing after
+    // the scroll can cancel it mid-flight, leaving the page a few hundred pixels
+    // from where it was and nowhere near the field. preventScroll keeps the
+    // focus itself from jumping, then the scroll runs and lands.
+    const control = el.matches('input, select, textarea')
+      ? el
+      : el.querySelector('input, select, textarea');
+    if (control) control.focus({ preventScroll: true });
+    // DELIBERATELY NOT `behavior: 'smooth'`. Smooth scrolling is a no-op wherever
+    // the page is not actively painting, and it is also what a reduced-motion
+    // setting suppresses - measured here, a smooth call left scrollY at 1500
+    // while the instant one landed it at 34. This button exists so a blocked
+    // parent is never left pressing something that does nothing; making it
+    // depend on an animation that can silently decline to run would rebuild the
+    // dead-control bug inside its own fix. The jump is the feature, not the glide.
+    el.scrollIntoView({ block: 'center' });
+  }
+
   function next() {
-    if (advanceBlocker) return;
+    if (advanceBlocker) {
+      setAdvanceRefused(true);
+      return;
+    }
     setError('');
+    setAdvanceRefused(false);
     setStep((s) => Math.min(4, s + 1));
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
@@ -732,25 +780,38 @@ export default function Register() {
         </div>
 
         {/* Nav */}
-        {/* WHY THE BUTTON IS GREY, next to the button. Keyed off the SAME value
-            that disables it, so Continue can never be dead with nothing here -
-            that pairing is the whole fix, and splitting them is how the silence
-            came back last time. Sits above the nav row rather than at the top of
-            the page with the checkout error banner, because a reason a parent
-            has to scroll up to find is a reason nobody reads.
+        {/* THE REFUSED PRESS, ANSWERED. Shown only after Continue has actually
+            been pressed and refused - see advanceRefused above for why an
+            always-on explanation was invisible.
 
-            role="alert" matches the pickup/do-not-release conflict warning in
-            RegExtraFields and the pickup gate's blocker box, and it is the only
-            explanation a screen reader gets for a disabled button. Styling is the
-            gate's box verbatim: quiet purple, not an alarm - nothing has gone
-            wrong, something is simply not filled in yet. */}
-        {step < 4 && advanceBlocker && (
+            Orange, not the quiet purple this used to be: it borrows the exact
+            palette the birth-date problem and the pickup/do-not-release conflict
+            already use on this same form, so a parent who has seen one of those
+            recognises this instantly as "something needs fixing" rather than as
+            another thing to fill in.
+
+            role="alert" so a screen reader announces it the moment it appears,
+            which is the whole point of moving the feedback onto the press. */}
+        {step < 4 && showAdvanceWarning && (
           <div
+            id="advance-warning"
             role="alert"
-            className="mt-8 rounded-lg border-2 border-j2s-purple/15 bg-j2s-purple-soft/40 px-4 py-3 text-sm text-j2s-ink/80"
+            className="mt-8 flex items-start gap-3 rounded-xl border-2 border-j2s-orange-dark bg-j2s-orange-dark/5 px-4 py-4"
           >
-            <span className="font-semibold text-j2s-ink">Still needed before you continue: </span>
-            {advanceBlocker}
+            <span aria-hidden="true" className="mt-px flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-j2s-orange-dark text-sm font-bold text-white">!</span>
+            <div>
+              <p className="font-titan text-base text-j2s-orange-dark">We still need one thing</p>
+              <p className="mt-1 text-sm text-j2s-ink">{advanceBlocker.message}</p>
+              {advanceBlocker.focus && (
+                <button
+                  type="button"
+                  onClick={goToBlockedField}
+                  className="mt-2 text-sm font-semibold text-j2s-orange-dark underline underline-offset-2 hover:no-underline"
+                >
+                  Take me there
+                </button>
+              )}
+            </div>
           </div>
         )}
 
@@ -763,9 +824,12 @@ export default function Register() {
             &larr; Back
           </button>
           {step < 4 ? (
+            /* NOT disabled. A dead button gives a family nothing to press and no
+               way to find out why, which is exactly how the 24 Aug call happened.
+               It stays live and next() refuses the press with a reason. */
             <button
               onClick={next}
-              disabled={!!advanceBlocker}
+              aria-describedby={showAdvanceWarning ? 'advance-warning' : undefined}
               className="btn-j2s-primary"
             >
               Continue →
