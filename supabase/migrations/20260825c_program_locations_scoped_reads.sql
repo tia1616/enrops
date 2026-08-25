@@ -49,6 +49,11 @@
 -- BOTH program shapes. After-school classes hang off programs.program_location_id
 -- and camps off camp_sessions.location_id; the dashboard renders both, so both
 -- arms are needed. Querying only one is the "two tables, query all" trap.
+-- Guarded so the file is re-runnable, matching
+-- instructors_read_assigned_locations below. Without this a retry after a
+-- partial apply dies here with 42710 and never reaches the instructor policy,
+-- which is the worse half to leave missing.
+drop policy if exists parents_read_enrolled_locations on public.program_locations;
 create policy parents_read_enrolled_locations
   on public.program_locations
   for select
