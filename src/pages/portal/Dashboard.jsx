@@ -437,8 +437,11 @@ export default function Dashboard() {
         // RLS policy is `parent_id = current_parent_id()` with no org term, so
         // it returns the family's rows at EVERY provider they use — and the feed
         // is headed "From {org.name}", which would then name one provider above
-        // another one's emails. Four families on prod are registered at more
-        // than one org today. This never showed because the feed's own header
+        // another one's emails. Latent rather than live when this was written:
+        // four families on prod use more than one provider, but none of them has
+        // an automation row at more than one yet, so nobody could have seen it.
+        // Filtering here is what keeps it that way as those two sets converge.
+        // It also never got the chance to show, because the feed's own header
         // threw before it could render; it renders for the first time now.
         .eq('organization_id', org.id)
         // Only emails that actually went out. This table is a SEND LOG, not a
