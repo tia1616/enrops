@@ -31,6 +31,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
 import { loadOrgBrand, formatFromAddress, resolveTestRecipient, NO_TENANT_INBOX_MESSAGE } from '../_shared/orgBrand.ts';
+import { roomDisplay } from '../_shared/roomLabel.ts';
 
 // Per-environment site origin. Staging Supabase sets PUBLIC_SITE_URL to the staging
 // site so portal links in offer emails point at staging, not prod. Defaults to prod.
@@ -148,6 +149,9 @@ serve(async (req: Request) => {
     let endTime: string | null = null;
     let locationId: string | null = null;
     let locationName: string | null = null;
+    // The class's own room, for a PROGRAM sub. Camps have no room of their own,
+    // so it stays null there and the site room is used - unchanged behaviour.
+    let classRoom: string | null = null;
 
     if (parentType === 'camp') {
       const { data: parent } = await supabase
@@ -181,7 +185,10 @@ serve(async (req: Request) => {
 
       const { data: prog } = await supabase
         .from('programs')
-        .select('curriculum, start_time, end_time, program_location_id')
+        // `room` added 2026-08-25: this email told a sub the SITE room, which at
+        // Happy Valley Library is the summer camp room, not the after-school one.
+        // A sub has most likely never been in the building.
+        .select('curriculum, start_time, end_time, program_location_id, room')
         .eq('id', parent.program_id)
         .maybeSingle();
       if (prog) {
@@ -189,6 +196,7 @@ serve(async (req: Request) => {
         startTime = prog.start_time;
         endTime = prog.end_time;
         locationId = prog.program_location_id;
+        classRoom = prog.room ?? null;
       }
     }
 
@@ -279,7 +287,9 @@ serve(async (req: Request) => {
     const subFirst = sub.preferred_name || sub.first_name || 'there';
     const friendlyDate = fmtDate(date);
     const timeRange = startTime && endTime ? `${fmtTime(startTime)}–${fmtTime(endTime)}` : (startTime ? fmtTime(startTime) : '');
-    const venueDisplay = [locationName, roomNumber ? `Room ${roomNumber}` : null].filter(Boolean).join(' · ');
+    // Through the shared rule: the class's room beats the site's, and the label
+    // arrives already worded (no "Room Makerspace", no "Room Room 111").
+    const venueDisplay = [locationName, roomDisplay(classRoom, roomNumber)].filter(Boolean).join(' · ');
     // Tenant slug must come from org_branding/organizations. No hardcoded
     // fallback — a misconfigured org should surface as a missing link, not
     // a quiet route to the wrong tenant.

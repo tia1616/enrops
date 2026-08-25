@@ -20,6 +20,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { PDFDocument, StandardFonts, rgb } from 'https://esm.sh/pdf-lib@1.17.1';
 import { loadOrgBrand, renderSignatureBlock, formatFromAddress } from '../_shared/orgBrand.ts';
+import { roomDisplay } from '../_shared/roomLabel.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -444,7 +445,15 @@ async function buildRosterPdf(params: {
 
     const leftLines: string[] = [];
     if (partner?.partner_name) leftLines.push(`Partner: ${partner.partner_name}`);
-    if (location?.name) leftLines.push(`Location: ${location.name}${program.room ? ` (Room ${program.room})` : (location.room_number ? ` (Room ${location.room_number})` : '')}`);
+    // roomDisplay returns a FINISHED label, so the word "Room" is not written
+    // here any more. It used to be, which printed "(Room Room 111)" and
+    // "(Room Makerspace)" to instructors and school partners for 15 of the 32
+    // open FA26 classes. The class-over-site precedence this function already
+    // had was the correct one and is now the shared rule everywhere.
+    if (location?.name) {
+      const room = roomDisplay(program.room, location.room_number);
+      leftLines.push(`Location: ${location.name}${room ? ` (${room})` : ''}`);
+    }
     if (location?.address) leftLines.push(location.address);
 
     const rightLines: string[] = [];

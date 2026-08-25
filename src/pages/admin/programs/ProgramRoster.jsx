@@ -15,6 +15,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import { dismissalSummary } from "../../../lib/dismissal.js";
+import { roomDisplay } from "../../../lib/roomLabel.js";
 import { WAITLIST_STATUS } from "../../../lib/waitlistState.js";
 import { usePermissions } from "../../../lib/permissions.js";
 import WaitingList from "../../../components/WaitingList.jsx";
@@ -313,7 +314,11 @@ export default function ProgramRoster() {
     (program?.start_time || program?.end_time)
       ? `${fmtTime(program.start_time)}${program.end_time ? `–${fmtTime(program.end_time)}` : ""}`
       : null,
-    program?.room ? `Room ${program.room}` : null,
+    // Through the shared rule, so this header, the instructor portal, the roster
+    // email and the sub email cannot disagree. It also gains the SITE fallback it
+    // never had: a class carrying only program_locations.room_number showed no
+    // room here at all, which is 4 of the 32 open FA26 classes.
+    roomDisplay(program?.room, loc?.room_number),
   ].filter(Boolean).join(" · ");
 
   return (

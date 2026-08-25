@@ -15,6 +15,7 @@ import {
 } from "../../lib/dismissal.js";
 import PortalSwitcher from "../../components/PortalSwitcher.jsx";
 import { displayFirstName } from "../../lib/instructorName";
+import { roomDisplay } from "../../lib/roomLabel.js";
 import { avatarUrl } from "../../lib/avatars";
 import InstructorAvailabilityForm from "./InstructorAvailabilityForm.jsx";
 import AfterschoolAvailabilityForm from "./AfterschoolAvailabilityForm.jsx";
@@ -2323,20 +2324,13 @@ function AssignmentCard({ assignment, coInstructors = [], messages = [], busy, o
 // This does NOT fix the underlying two-boxes-one-fact problem - that is the
 // locations/programs unification on the backlog. It stops instructors being the
 // ones who pay for it.
-// Returns the LABEL, already worded, because the callers used to write
-// `Room ${value}` themselves and these values are not all numbers. Real J2S
-// values today: "9", "203", "Room 111", "C102", "Makerspace", "Stage",
-// "Kindy Tables", "Community Room A", "Kindergarten room", "Computer Lab".
-// Prefixing all of those produced "Room Room 111" and "Room Stage" - caught on
-// staging, and it was already latent for the site-room values before the class
-// room ever reached this screen. So: a value that STARTS WITH A DIGIT is a bare
-// room number and gets the word; anything that already names a place is printed
-// as the operator typed it. One place decides, so no caller can re-introduce
-// the double word.
+// The rule itself now lives in src/lib/roomLabel.js, with 18 assertions and a
+// mutation check behind it, because the roster email, the offer emails, the sub
+// email and the admin roster all had to agree with this screen. This wrapper
+// only adapts the (program, location) shape the components here already pass.
+// It returns a FINISHED label - never add the word "Room" at a call site.
 function roomForInstructor(program, location) {
-  const room = (program?.room ?? "").trim() || (location?.room_number ?? "").trim();
-  if (!room) return null;
-  return /^\d/.test(room) ? `Room ${room}` : room;
+  return roomDisplay(program?.room, location?.room_number);
 }
 
 function AfterschoolAssignmentCard({ assignment, coInstructors = [], schedule = [], messages = [], busy, onAccept, onRequestChange, readOnly, onOpen }) {

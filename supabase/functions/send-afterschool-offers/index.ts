@@ -17,6 +17,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
 import { AVAILABILITY_OVERRIDE_NOTE_HTML, AVAILABILITY_OVERRIDE_NOTE_TEXT, hasAvailabilityOverride } from '../_shared/offerCopy.ts';
 import { loadOrgBrand, renderSignatureBlock, formatFromAddress, resolveTestRecipient, NO_TENANT_INBOX_MESSAGE } from '../_shared/orgBrand.ts';
+import { roomDisplay } from '../_shared/roomLabel.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -142,7 +143,10 @@ serve(async (req: Request) => {
     // Programs for this term (open only).
     const { data: progs } = await supabase
       .from('programs')
-      .select('id, curriculum, day_of_week, start_time, end_time, program_location_id')
+      // `room` added 2026-08-25: the offer email showed only the SITE room, so an
+      // instructor accepting a class at Happy Valley Library was told the summer
+      // camp room. The class's own room now wins, via the shared rule.
+      .select('id, curriculum, day_of_week, start_time, end_time, program_location_id, room')
       .eq('organization_id', organizationId).eq('term', term).eq('status', 'open');
     const programIds = (progs ?? []).map((p: any) => p.id);
     if (programIds.length === 0) return json({ sent: 0, failed: [], preview: [], note: 'No open classes for this term.' });
@@ -263,11 +267,14 @@ serve(async (req: Request) => {
   }
 });
 
-function venueHtml(loc: any): string {
+// `classRoom` is the program's own room and beats the site's; the shared rule
+// also supplies the wording, so the word "Room" is not written here any more.
+function venueHtml(loc: any, classRoom?: string | null): string {
   if (!loc) return '';
   const lines: string[] = [];
-  if (loc.address) lines.push(`<div>${escape(loc.address)}${loc.room_number ? ` · Room ${escape(loc.room_number)}` : ''}</div>`);
-  else if (loc.room_number) lines.push(`<div>Room ${escape(loc.room_number)}</div>`);
+  const room = roomDisplay(classRoom, loc.room_number);
+  if (loc.address) lines.push(`<div>${escape(loc.address)}${room ? ` · ${escape(room)}` : ''}</div>`);
+  else if (room) lines.push(`<div>${escape(room)}</div>`);
   if (loc.arrival_instructions) lines.push(`<div><strong>Arrival:</strong> ${escape(loc.arrival_instructions)}</div>`);
   if (loc.dismissal_instructions) lines.push(`<div><strong>Dismissal:</strong> ${escape(loc.dismissal_instructions)}</div>`);
   if (loc.food_drink_policy) lines.push(`<div><strong>Food/drink:</strong> ${escape(loc.food_drink_policy)}</div>`);
@@ -304,7 +311,7 @@ function renderHtml({ org, primary, firstName, termDisplay, classes, portalUrl, 
         ${escape(dayLabel(p.day_of_week))} ${escape(p.start_time ?? '')}–${escape(p.end_time ?? '')} · <strong>all term</strong><br/>
         ${escape(loc?.name ?? '')}${area}${ab ? ` · please arrive by ${ab}` : ''}
       </div>
-      ${venueHtml(loc)}
+      ${venueHtml(loc, p.room)}
       ${bonus}
       ${availNote}
     </td></tr>`;
@@ -341,7 +348,11 @@ function renderText({ org, firstName, termDisplay, classes, portalUrl, deadline,
     const ab = arriveBy(p.start_time);
     lines.push(`• ${p.curriculum ?? 'Class'}`);
     lines.push(`  ${dayLabel(p.day_of_week)} ${p.start_time ?? ''}–${p.end_time ?? ''} · all term`);
-    lines.push(`  ${loc?.name ?? ''}${loc?.area ? ` · ${loc.area}` : ''}${ab ? ` · arrive by ${ab}` : ''}`);
+    // The HTML half has carried the room in its venue block all along and this
+    // half never mentioned it, so a plain-text reader was told the school and not
+    // the room. Same shared label, so the two halves cannot disagree.
+    const room = roomDisplay(p.room, loc?.room_number);
+    lines.push(`  ${loc?.name ?? ''}${room ? ` · ${room}` : ''}${loc?.area ? ` · ${loc.area}` : ''}${ab ? ` · arrive by ${ab}` : ''}`);
     if (a.distance_bonus_cents) lines.push(`  Includes a ${dollars(a.distance_bonus_cents)} bonus`);
     // Same note as the HTML half. Plain-text readers get the same explanation.
     if (hasAvailabilityOverride(a.flags)) lines.push(`  ${AVAILABILITY_OVERRIDE_NOTE_TEXT}`);

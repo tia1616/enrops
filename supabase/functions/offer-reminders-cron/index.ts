@@ -34,6 +34,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 import { AVAILABILITY_OVERRIDE_NOTE_HTML, AVAILABILITY_OVERRIDE_NOTE_TEXT, hasAvailabilityOverride } from '../_shared/offerCopy.ts';
+import { roomDisplay } from '../_shared/roomLabel.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -419,7 +420,9 @@ serve(async (req: Request) => {
       const programIds = theirRows.map((r) => r.program_id);
       const { data: programs } = await supabase
         .from('programs')
-        .select('id, curriculum, day_of_week, start_time, end_time, program_location_id, term')
+        // `room` added 2026-08-25 so the after-school reminder shows the class's
+        // own room. The camp half of this function is deliberately untouched.
+        .select('id, curriculum, day_of_week, start_time, end_time, program_location_id, term, room')
         .in('id', programIds);
       const programById = new Map((programs ?? []).map((p: any) => [p.id, p]));
 
@@ -623,11 +626,16 @@ serve(async (req: Request) => {
   }
 });
 
-function renderVenueDetailsHtml(loc: any): string {
+// classRoom is passed by the AFTER-SCHOOL callers only. The camp callers pass
+// nothing, so camps keep reading the site room exactly as before (Jessica,
+// 2026-08-25: "don't worry about camps they're over and we'll fix later").
+// The label arrives already worded - never add "Room" at a call site.
+function renderVenueDetailsHtml(loc: any, classRoom?: string | null): string {
   if (!loc) return '';
   const lines: string[] = [];
-  if (loc.address) lines.push(`<div>${escape(loc.address)}${loc.room_number ? ` · Room ${escape(loc.room_number)}` : ''}</div>`);
-  else if (loc.room_number) lines.push(`<div>Room ${escape(loc.room_number)}</div>`);
+  const room = roomDisplay(classRoom, loc.room_number);
+  if (loc.address) lines.push(`<div>${escape(loc.address)}${room ? ` · ${escape(room)}` : ''}</div>`);
+  else if (room) lines.push(`<div>${escape(room)}</div>`);
   if (loc.arrival_instructions) lines.push(`<div><strong>Arrival:</strong> ${escape(loc.arrival_instructions)}</div>`);
   if (loc.dismissal_instructions) lines.push(`<div><strong>Dismissal:</strong> ${escape(loc.dismissal_instructions)}</div>`);
   if (loc.food_drink_policy) lines.push(`<div><strong>Food/drink:</strong> ${escape(loc.food_drink_policy)}</div>`);
@@ -641,11 +649,12 @@ function renderVenueDetailsHtml(loc: any): string {
   return `<div style="margin-top:4px;font-size:11px;color:${MUTED};line-height:1.5;">${lines.join('')}</div>`;
 }
 
-function renderVenueDetailsText(loc: any): string[] {
+function renderVenueDetailsText(loc: any, classRoom?: string | null): string[] {
   if (!loc) return [];
   const out: string[] = [];
-  if (loc.address) out.push(`  ${loc.address}${loc.room_number ? ` · Room ${loc.room_number}` : ''}`);
-  else if (loc.room_number) out.push(`  Room ${loc.room_number}`);
+  const room = roomDisplay(classRoom, loc.room_number);
+  if (loc.address) out.push(`  ${loc.address}${room ? ` · ${room}` : ''}`);
+  else if (room) out.push(`  ${room}`);
   if (loc.arrival_instructions) out.push(`  Arrival: ${loc.arrival_instructions}`);
   if (loc.dismissal_instructions) out.push(`  Dismissal: ${loc.dismissal_instructions}`);
   if (loc.food_drink_policy) out.push(`  Food/drink: ${loc.food_drink_policy}`);
@@ -713,7 +722,7 @@ function buildProgramReminderHtml({ branding, firstName, classes, termDisplay, p
     const loc = p.program_location_id ? locationById?.get(p.program_location_id) : undefined;
     const area = loc?.area ? ` · ${escape(loc.area)}` : '';
     const ab = arriveBy(p.start_time);
-    const venue = renderVenueDetailsHtml(loc);
+    const venue = renderVenueDetailsHtml(loc, p.room);
     const hardship = Array.isArray(a.flags) && (a.flags.includes('location_override') || a.flags.includes('location_low_pref'));
     const bonus = a.distance_bonus_cents
       ? `<div style="margin-top:6px;font-size:13px;color:${primary};font-weight:600;">Includes a ${dollars(a.distance_bonus_cents)} bonus${hardship ? `<div style="font-size:12px;color:${MUTED};font-weight:400;">Thanks for covering an area outside your preference.</div>` : ''}</div>`
@@ -749,7 +758,7 @@ function buildProgramReminderText({ firstName, classes, termDisplay, portalUrl, 
     lines.push(`• ${p.curriculum ?? 'Class'}`);
     lines.push(`  ${dayLabel(p.day_of_week)} ${p.start_time ?? ''}–${p.end_time ?? ''} · all term`);
     lines.push(`  ${loc?.name ?? ''}${loc?.area ? ` · ${loc.area}` : ''}${ab ? ` · arrive by ${ab}` : ''}`);
-    for (const v of renderVenueDetailsText(loc)) lines.push(v);
+    for (const v of renderVenueDetailsText(loc, p.room)) lines.push(v);
     if (a.distance_bonus_cents) lines.push(`  Includes a ${dollars(a.distance_bonus_cents)} bonus`);
     if (hasAvailabilityOverride(a.flags)) lines.push(`  ${AVAILABILITY_OVERRIDE_NOTE_TEXT}`);
   }
