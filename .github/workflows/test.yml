@@ -51,9 +51,26 @@ jobs:
         with:
           node-version: 20
 
+      - name: Install node dependencies
+        # This step did not exist until 2026-08-26, and its absence was a
+        # deliberate, documented choice: the src tests imported only local source
+        # and node builtins, so there was nothing to install and the job stayed
+        # fast. freeIdentifiers.test.mjs broke that invariant on purpose. It needs
+        # a real JavaScript parser to answer "is this name ever defined", and the
+        # alternative - hand-rolling scope analysis over a regex - is exactly the
+        # kind of approximate check that reports a clean tree while a page is
+        # dead, which is the bug it exists to catch.
+        #
+        # `npm ci` and not `npm install`: it installs from the lockfile exactly,
+        # so CI cannot silently resolve a different version of the parser than
+        # the one the check was written and tested against. devDependencies are
+        # included by default, which is where @babel/parser and @babel/traverse
+        # live; do not add --omit=dev here or the guard dies on import and takes
+        # every other src test down with it.
+        run: npm ci
+
       - name: Run src unit tests
         # The src/**/*.test.mjs files are plain node scripts (pass/fail counter +
         # process.exit), which `deno test` above does not pick up. This runner
-        # executes each with node and fails the job if any fails. No `npm ci` -
-        # these tests import only local source + node builtins, no deps.
+        # executes each with node and fails the job if any fails.
         run: npm test
