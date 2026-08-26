@@ -43,34 +43,37 @@ export function getTenant(slug) {
   return TENANTS[slug] || null;
 }
 
-// === v1 multi-tenant shims ===========================================
-// Today Enrops has exactly one tenant (J2S). Several places in the app
-// need to know "which tenant does this parent belong to?" but we don't
-// yet have a parent->tenant lookup table (registrations live under each
-// tenant's own surfaces and there's no global mapping).
+// REMOVED 2026-08-26: defaultTenantSlug() + parentLandingPath().
 //
-// These helpers return the single-tenant defaults so callers don't have
-// to hardcode 'j2s' inline. When tenant #2 onboards, the bodies here
-// switch to real DB lookups (probably `select organization_id from
-// registrations where parent_auth_user_id = $1` or similar) and every
-// caller picks up the new behavior for free.
-
-/**
- * The default tenant slug for v1 routing decisions (parent landing,
- * registration entry, etc.). Returns the only configured tenant today.
- */
-export function defaultTenantSlug() {
-  const keys = Object.keys(TENANTS);
-  return keys[0] ?? null;
-}
-
-/**
- * Parent-portal landing path for a signed-in user. v1: always the
- * default tenant's /<slug> URL. v2+: query parent->tenant mapping by
- * userId.
- */
-// eslint-disable-next-line no-unused-vars
-export function parentLandingPath(userId) {
-  const slug = defaultTenantSlug();
-  return slug ? `/${slug}` : '/';
-}
+// These were the "v1 multi-tenant shims", written when Enrops had exactly one
+// tenant. Both returned the FIRST KEY OF THE MAP ABOVE, which is J2S, and the
+// header comment they carried said a parent->tenant lookup did not exist yet.
+// That stopped being true when registration was built, and the shims quietly
+// became a hardcoded tenant sitting in the routing path of an 8-org platform.
+//
+// What they were doing, measured on prod the day they were removed:
+//
+//   * parentLandingPath() sent EVERY signed-in parent to `/<j2s>` — and to the
+//     public catalogue at that, not the family dashboard. 192 parents resolve to
+//     a registration; 79 of them belong to a provider that is not J2S. Those 79
+//     were being shown another company's storefront.
+//   * AdminOverview and AdminLayout used defaultTenantSlug() as the fallback for
+//     an org that had not loaded, so an admin of any other provider got links
+//     into J2S. Both callers already had a correct tenant-neutral branch that
+//     the fallback made unreachable.
+//
+// The replacements are not new machinery. A parent's provider is resolved from
+// their own newest registration (Landing.jsx); an instructor's from their own
+// instructor record, which the tenant-less /instructor route already did. Two
+// earlier removals took the same shape and left the same note — see
+// onboardingFetch.js and Schedule.jsx, both 2026-08-12.
+//
+// If something ever genuinely needs "the default tenant", it does not exist:
+// ask what that code is really trying to name and resolve it from the row in
+// front of it.
+//
+// STILL HARDCODED, DELIBERATELY: the TENANTS map above. It holds J2S's name,
+// tagline, colours, fonts and support contacts, and getTenant() returns null for
+// every other provider. Unpicking it touches the parent dashboard and every
+// brand consumer at once, so it is parked as its own pass rather than bolted
+// onto this one. It is on the board under "Parked, deliberately".

@@ -4,7 +4,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
-import { defaultTenantSlug } from "../../lib/tenants.js";
 import { fetchOrgTerms } from "../../lib/terms.js";
 import Ennie from "../../components/Ennie";
 import { classifyFailure } from "../../lib/deliveryIssues.js";
@@ -1292,9 +1291,16 @@ function TeachingScheduleCard({ teaching, orgSlug }) {
   // teaching = { instructorId, assignments: [...] }. Both upcoming-empty
   // and upcoming-some states render — the CTA is the same either way.
   const next = teaching.assignments ?? [];
-  // Multi-tenant: use THIS org's slug; fall back to the resolver, never a literal.
-  const slug = orgSlug || defaultTenantSlug();
-  const portalPath = slug ? `/${slug}/instructor` : "/instructor";
+  // Multi-tenant: use THIS org's slug, and when it has not resolved use the
+  // TENANT-LESS portal route, which looks the org up from the signed-in
+  // instructor's own record.
+  //
+  // The fallback used to be defaultTenantSlug(), i.e. the first key of a
+  // hardcoded map, i.e. J2S. So an admin of any other provider whose org had not
+  // loaded got a link into J2S's portal. The `slug ? … : "/instructor"` branch
+  // below was already the right answer and was simply unreachable while the
+  // fallback guaranteed a slug.
+  const portalPath = orgSlug ? `/${orgSlug}/instructor` : "/instructor";
 
   return (
     <div style={{

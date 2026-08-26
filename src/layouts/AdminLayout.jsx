@@ -10,7 +10,6 @@ import PwaInstallButton from "../components/pwa/PwaInstallButton.jsx";
 import EnropsWordmark from "../components/EnropsWordmark.jsx";
 import FeedbackWidget from "../components/feedback/FeedbackWidget.jsx";
 import AnnouncementBanner from "../components/feedback/AnnouncementBanner.jsx";
-import { defaultTenantSlug } from "../lib/tenants.js";
 import { getPermissions } from "../lib/permissions";
 import { canManageInstructors } from "../lib/entitlements.js";
 import PortalSwitcher from "../components/PortalSwitcher.jsx";
@@ -800,7 +799,15 @@ export default function AdminLayout() {
               and/or are a parent. Placed up top so it's discoverable, not
               buried at the foot of the sidebar. Single-role admins see nothing. */}
           <div style={{ padding: "14px 20px 0" }}>
-            <PortalSwitcher current="admin" slug={org?.slug ?? defaultTenantSlug()} label="Switch view" block />
+            {/* NO FALLBACK SLUG. PortalSwitcher deliberately dropped its own
+                'j2s' default because "any caller that failed to pass one
+                silently linked their user into another tenant", and it already
+                handles a missing slug honestly: it omits the family chip (the
+                dashboard only exists under /:slug) and sends the instructor chip
+                to the tenant-less /instructor, which self-resolves. Passing
+                defaultTenantSlug() here was the last place re-introducing the
+                exact default that component removed. */}
+            <PortalSwitcher current="admin" slug={org?.slug} label="Switch view" block />
           </div>
 
           <nav style={{ padding: "12px 8px", flex: 1 }}>
