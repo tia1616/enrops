@@ -107,22 +107,40 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
   // because the field it meant was off-screen above. She only got through by
   // submitting again. The message now renders AT the field and we scroll there.
   const [errorField, setErrorField] = useState(null); // 'week' | 'days' | 'areas' | null
+  // Bumped on EVERY failed submit, including one that fails the same way twice.
+  // errorField alone cannot drive the scroll: submit with no days picked, don't
+  // change anything, submit again — same field, same message, no state change,
+  // no effect, no scroll. That repeat is exactly the case this fix exists for.
+  const [errorSeq, setErrorSeq] = useState(0);
   const weekRef = useRef(null);
   const daysRef = useRef(null);
   const areasRef = useRef(null);
 
-  // Set an error that belongs to a field, and take the instructor to it.
+  // Set an error that belongs to a field.
   // Returns false so callers can `return fail(...)` and keep validation flat.
   function fail(field, message) {
     setError(message);
     setErrorField(field);
-    const ref = field === "week" ? weekRef : field === "days" ? daysRef : areasRef;
-    // After paint, so the note we just revealed is part of what gets centred.
-    requestAnimationFrame(() => {
-      ref.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-    });
+    setErrorSeq((n) => n + 1);
     return false;
   }
+
+  // Take the instructor to the field, AFTER React has committed the message
+  // into the DOM.
+  //
+  // This started life inside fail() on a requestAnimationFrame and did not work:
+  // rAF runs before the commit, so the error block was not in the document yet,
+  // the page then grew by its height, and the browser's scroll anchoring
+  // cancelled the smooth scroll outright. The result passed every static check —
+  // the message rendered at the right field — while the instructor stayed
+  // parked at the bottom of the form looking at the Submit button, which is the
+  // whole complaint. Caught on staging 2026-08-26 by measuring scrollY rather
+  // than by reading the diff.
+  useEffect(() => {
+    if (!errorField) return;
+    const ref = errorField === "week" ? weekRef : errorField === "days" ? daysRef : areasRef;
+    ref.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [errorSeq, errorField]);
 
   const [week, setWeek] = useState(EMPTY_WEEK());   // { mon: { from: "13:00", until: "17:00" }, ... }
   const [daysRange, setDaysRange] = useState("");
