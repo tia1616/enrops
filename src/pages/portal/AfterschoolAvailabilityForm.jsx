@@ -594,6 +594,9 @@ function FieldError({ on, fieldError, innerRef }) {
         fontSize: 13,
         lineHeight: 1.45,
         marginBottom: 12,
+        // block:"start" puts this flush against the very top edge, which on a
+        // phone can sit under the browser chrome. Measured at top: -0.5px.
+        scrollMarginTop: 16,
       }}
     >
       {fieldError.message}
