@@ -47,7 +47,11 @@ function emptyChild(index) {
 
 function emptyCart() {
   return {
-    tenant_slug: 'j2s',
+    // REMOVED 2026-08-26: `tenant_slug: 'j2s'`. A hardcoded tenant seeded into
+    // every cart on an 8-org platform, and grepped repo-wide it had ZERO readers
+    // — nothing ever consumed it, so it was dead v1 state rather than a live
+    // bug. Removed with the routing shims it belonged to; the org a checkout is
+    // for comes from the :slug route and the program's own organization_id.
     parent: {
       first_name: '',
       last_name: '',
