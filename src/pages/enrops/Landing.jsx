@@ -106,7 +106,14 @@ export default function EnropsLanding({ signedOutTo = null } = {}) {
         // against prod with a real parent's own session: the directory returns 7
         // rows and `organizations` returns 0, because parents are not org
         // members. The instructor branch above lives within the same constraint.
-        const { data: newestReg } = await supabase
+        // BOTH ERRORS ARE CAPTURED AND LOGGED, not discarded. Every failure below
+        // ends at the same place — the entry card — so without a log a real
+        // parent seeing a marketing page is indistinguishable from a signed-out
+        // visitor, and an RLS or grant regression on `registrations`/`parents`
+        // would look exactly like "this person has no children enrolled".
+        // Failing closed is right; failing closed and SILENT is how a leak or a
+        // regression survives. Same shape as InstructorPortal's directory read.
+        const { data: newestReg, error: regErr } = await supabase
           .from('registrations')
           .select('organization_id, registered_at, parents!inner(auth_id)')
           .eq('parents.auth_id', session.user.id)
@@ -114,8 +121,11 @@ export default function EnropsLanding({ signedOutTo = null } = {}) {
           .limit(1)
           .maybeSingle();
         if (cancelled) return;
+        if (regErr) {
+          console.error('[EnropsLanding] parent org lookup failed', regErr);
+        }
         if (newestReg?.organization_id) {
-          const { data: parentOrg } = await supabase
+          const { data: parentOrg, error: dirErr } = await supabase
             .from('public_org_directory')
             .select('slug')
             .eq('id', newestReg.organization_id)
@@ -125,6 +135,18 @@ export default function EnropsLanding({ signedOutTo = null } = {}) {
             navigate(`/${parentOrg.slug}/dashboard`, { replace: true });
             return;
           }
+          // A registration pointing at an org the directory does not expose.
+          // public_org_directory only lists orgs with status = 'active', so the
+          // live cause is a PAUSED or ARCHIVED provider whose families still have
+          // registrations. Zero such orgs on prod today, which is why this is
+          // logged rather than given its own screen — but it is reachable the
+          // moment a provider is paused, and it must not look like "no children
+          // enrolled" when someone goes looking.
+          console.error('[EnropsLanding] parent org not in the public directory', {
+            organization_id: newestReg.organization_id,
+            reason: dirErr ? 'read_failed' : 'no_active_row',
+            dirErr,
+          });
         }
 
         // Signed in and we cannot place them: no membership, no instructor
