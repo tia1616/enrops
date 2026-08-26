@@ -97,32 +97,46 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
 
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
+  // SAVE failures only — something the server rejected, which belongs to no
+  // field and renders in the banner by the Submit button.
   const [error, setError] = useState(null);
-  // WHICH field the error belongs to, or null for a save failure that belongs to
-  // no field. Every validation message used to render in one banner pinned above
-  // the Submit button at the very bottom of a long form, so "Pick how many days
-  // a week you'd like to teach" appeared several screens below the control it
-  // was talking about. Jeff's tester Dana hit exactly that on 2026-08-26: she
-  // kept tapping things near the message, and the message kept coming back,
-  // because the field it meant was off-screen above. She only got through by
-  // submitting again. The message now renders AT the field and we scroll there.
-  const [errorField, setErrorField] = useState(null); // 'week' | 'days' | 'areas' | null
-  // Bumped on EVERY failed submit, including one that fails the same way twice.
-  // errorField alone cannot drive the scroll: submit with no days picked, don't
-  // change anything, submit again — same field, same message, no state change,
-  // no effect, no scroll. That repeat is exactly the case this fix exists for.
-  const [errorSeq, setErrorSeq] = useState(0);
+  // VALIDATION failures, which belong to a field: { field, message, seq }.
+  //
+  // One object rather than a parallel `error` + `errorField` pair. They encoded
+  // a single fact between them and had to be hand-synchronised at every site:
+  // the banner below had to read `error && !errorField`, and clearing just the
+  // field would have hidden the note at the control and instantly resurfaced
+  // that same field-specific sentence down in the save-error banner.
+  //
+  // Why any of this exists: every validation message used to render in one
+  // banner pinned above Submit at the bottom of a long form, so "Pick how many
+  // days a week you'd like to teach" appeared several screens below the control
+  // it named. Jeff's tester Dana hit exactly that on 2026-08-26 — she kept
+  // tapping things near the message and it kept coming back, because the field
+  // it meant was off-screen above.
+  //
+  // `seq` is bumped on EVERY failed submit, including one that fails the same
+  // way twice. Without it, submitting with no days picked, changing nothing and
+  // submitting again is no state change at all — so no effect, no scroll — and
+  // that repeat is precisely the case this exists for.
+  const [fieldError, setFieldError] = useState(null);
   const weekRef = useRef(null);
   const daysRef = useRef(null);
   const areasRef = useRef(null);
+  const errorNoteRef = useRef(null);
 
-  // Set an error that belongs to a field.
-  // Returns false so callers can `return fail(...)` and keep validation flat.
   function fail(field, message) {
-    setError(message);
-    setErrorField(field);
-    setErrorSeq((n) => n + 1);
-    return false;
+    setFieldError((prev) => ({ field, message, seq: (prev?.seq ?? 0) + 1 }));
+  }
+
+  // Dismiss the note as soon as the instructor edits the field it is about.
+  // Without this the red box sits unchanged directly above the control they
+  // just corrected, which is the other half of Dana's report: "no matter what
+  // she clicked it would have a red error prompt... even after she picked days
+  // multiple times." Only the OWNING field clears it — editing areas must not
+  // silence an unresolved weekday problem.
+  function clearErrorFor(field) {
+    setFieldError((prev) => (prev?.field === field ? null : prev));
   }
 
   // Take the instructor to the field, AFTER React has committed the message
@@ -147,11 +161,23 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
   // An instant jump always lands. It is also the better behaviour here: this
   // fires when someone has just been told they missed a field, and the job is to
   // put that field in front of them, not to animate toward it.
+  //
+  // SCROLL THE NOTE, NOT ITS CARD, and use block:"start". Centring the card was
+  // the first attempt and it reproduced the original bug on the tall ones: the
+  // note renders at the card's TOP, and the areas card measures 1921px against
+  // an 812px viewport, so centring it put the note 554px ABOVE the fold. An
+  // instructor who missed one area got scrolled into the middle of the list with
+  // no message in sight. The days card is 162px, which is why centring looked
+  // fine until every card was measured.
+  //
+  // Falls back to the card only if the note has not mounted, so a future caller
+  // that scrolls without rendering a note still lands somewhere sensible.
   useEffect(() => {
-    if (!errorField) return;
-    const ref = errorField === "week" ? weekRef : errorField === "days" ? daysRef : areasRef;
-    ref.current?.scrollIntoView({ block: "center" });
-  }, [errorSeq, errorField]);
+    if (!fieldError) return;
+    const card = fieldError.field === "week" ? weekRef : fieldError.field === "days" ? daysRef : areasRef;
+    const target = errorNoteRef.current ?? card.current;
+    target?.scrollIntoView({ block: "start" });
+  }, [fieldError]);
 
   const [week, setWeek] = useState(EMPTY_WEEK());   // { mon: { from: "13:00", until: "17:00" }, ... }
   const [daysRange, setDaysRange] = useState("");
@@ -258,6 +284,7 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
 
   function setDayTime(day, field, value) {
     setWeek((prev) => ({ ...prev, [day]: { ...prev[day], [field]: value } }));
+    clearErrorFor("week");
   }
 
   // Explicit per-day availability. Marking a day unavailable clears its times.
@@ -266,10 +293,12 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
       ...prev,
       [day]: available ? { ...prev[day], available: true } : { available: false, from: "", until: "" },
     }));
+    clearErrorFor("week");
   }
 
   function setAreaPref(area, preference) {
     setAreaPrefs((prev) => ({ ...prev, [area]: preference }));
+    clearErrorFor("areas");
   }
 
   function toggleCategory(value) {
@@ -288,7 +317,7 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
 
   async function save() {
     setError(null);
-    setErrorField(null);
+    setFieldError(null);
     const anyDay = DAYS.some((d) => week[d.value]?.available);
     if (!anyDay) { fail("week", "Mark at least one weekday as available."); return; }
     for (const d of DAYS) {
@@ -389,7 +418,7 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
       </header>
 
       <Card innerRef={weekRef} title="Which days and times can you teach?" subtitle="Mark each weekday available or unavailable. For the days you're available, set the earliest you can start (add an 'until' time only if you have to leave by a certain point). We'll only assign a class you can reach in time (about 15 minutes before it starts).">
-        <FieldError show={errorField === "week"} message={error} />
+        <FieldError innerRef={errorNoteRef} on="week" fieldError={fieldError} />
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {DAYS.map((d) => {
             const w = week[d.value];
@@ -424,8 +453,12 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
 
       {!disabled.has("days_per_week") && (
       <Card innerRef={daysRef} title="How many days a week do you want?" subtitle="Your target — we'll try not to assign you more classes than the top of this range.">
-        <FieldError show={errorField === "days"} message={error} />
-        <select value={daysRange} onChange={(e) => setDaysRange(e.target.value)} style={{ ...inputStyle, width: 220 }}>
+        <FieldError innerRef={errorNoteRef} on="days" fieldError={fieldError} />
+        <select
+          value={daysRange}
+          onChange={(e) => { setDaysRange(e.target.value); clearErrorFor("days"); }}
+          style={{ ...inputStyle, width: 220 }}
+        >
           <option value="" disabled>Select…</option>
           {DAYS_RANGES.map((r) => (
             <option key={r.value} value={r.value}>{r.label}</option>
@@ -436,7 +469,7 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
 
       {!disabled.has("areas") && (
       <Card innerRef={areasRef} title="Which areas do you want to teach in?" subtitle="Rate every area: 'Love to' is where you'd most like to be, 'Happy to' means you're glad to teach there, and 'Can't' means we won't schedule you there.">
-        <FieldError show={errorField === "areas"} message={error} />
+        <FieldError innerRef={errorNoteRef} on="areas" fieldError={fieldError} />
 
         {areas.length === 0 ? (
           <div style={{ color: MUTED, fontSize: 13, fontStyle: "italic" }}>
@@ -517,7 +550,7 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
       {/* Only errors that belong to NO field land here now — i.e. a save that
           failed on the server. Field validation renders at its own field above,
           next to the control that fixes it. */}
-      {error && !errorField && (
+      {error && (
         <div style={{ background: `${CORAL}1F`, border: `1px solid ${CORAL}`, color: CORAL, padding: 12, borderRadius: 8, fontSize: 13 }}>
           {error}
         </div>
@@ -536,12 +569,21 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
   );
 }
 
-// The validation message, rendered at the field it is about. role="alert" so a
-// screen reader announces it when it appears rather than leaving it to be found.
-function FieldError({ show, message }) {
-  if (!show || !message) return null;
+// The validation message, rendered at the field it is about.
+//
+// Takes the whole fieldError object and decides for itself whether it is the
+// one being addressed, so the three call sites cannot drift on how they compare.
+//
+// The `key` is load-bearing: role="alert" only announces on a CONTENT change,
+// so failing the same way twice reconciled identical text into the same node and
+// a screen-reader user heard nothing on the second submit. Keying on seq forces
+// a remount, and the announcement fires every time the visual scroll does.
+function FieldError({ on, fieldError, innerRef }) {
+  if (fieldError?.field !== on || !fieldError?.message) return null;
   return (
     <div
+      key={fieldError.seq}
+      ref={innerRef}
       role="alert"
       style={{
         background: `${CORAL}1F`,
@@ -554,7 +596,7 @@ function FieldError({ show, message }) {
         marginBottom: 12,
       }}
     >
-      {message}
+      {fieldError.message}
     </div>
   );
 }
