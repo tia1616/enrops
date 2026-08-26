@@ -48,7 +48,12 @@ export function isHandledRedirect(err) {
   return err?.name === 'OnboardingNavigated' || err?.handled === true;
 }
 
-async function readError(invokeError) {
+// Exported because the instructor portal's link-instructor call needs the same
+// thing this wrapper needs — the edge function's real status + JSON body — but
+// none of the navigation side-effects invokeOnboardingFn performs. Kept as one
+// implementation so a fix to the body-reading (clone-before-read, non-JSON
+// fallback) lands in both places at once.
+export async function readInvokeError(invokeError) {
   if (!invokeError) return { status: null, body: null };
   const ctx = invokeError.context;
   if (!ctx) return { status: null, body: { error: invokeError.message } };
@@ -84,7 +89,7 @@ export async function invokeOnboardingFn(name, body, { navigate } = {}) {
     return { data, error: null, status: 200 };
   }
 
-  const { status, body: errBody } = await readError(invokeError);
+  const { status, body: errBody } = await readInvokeError(invokeError);
 
   if (status === 410 && errBody?.redirect && navigate) {
     navigate(errBody.redirect, { replace: true });

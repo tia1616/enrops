@@ -25,6 +25,7 @@ import WizardHost from "../onboarding/WizardHost.jsx";
 import { fetchLegalDocument } from "../../lib/legalDoc.js";
 import { isDocumentEnabled } from "../../lib/instructorDocuments.js";
 import { loadTrainingConfig } from "../../lib/instructorTrainingConfig.js";
+import { readInvokeError } from "../../lib/onboardingFetch.js";
 import { earlyReleaseLine } from "../../lib/timeText.js";
 import { linkifyText } from "../../lib/linkifyText.jsx";
 import { WAITLIST_STATUS } from "../../lib/waitlistState.js";
@@ -144,6 +145,12 @@ export default function InstructorPortal() {
   const [sendBusy, setSendBusy] = useState(false);
   const [sendMsg, setSendMsg] = useState("");
   const [error, setError] = useState("");
+  // Set when the signed-in address has no instructor record (link-instructor
+  // 404), or belongs to someone else's record (409). Holds the address they
+  // ACTUALLY signed in with, which is the one fact that lets them fix it
+  // themselves — see the wrongAccount screen. Survives signOut deliberately so
+  // the login screen can keep explaining it; cleared only on a real sign-in.
+  const [wrongAccount, setWrongAccount] = useState(null); // { email, status }
   const [instructor, setInstructor] = useState(null);
   const [onboarding, setOnboarding] = useState(null);
   // Authoritative tenant slug for this instructor's org (from the public
@@ -326,7 +333,11 @@ export default function InstructorPortal() {
           return;
         }
 
-        await linkAndLoad();
+        // The signed-in address is PASSED IN, not read from state: setState is
+        // async, so a setSignedInEmail() here would still be "" inside
+        // linkAndLoad on this same tick — and an empty address is precisely
+        // what the wrongAccount screen cannot work without.
+        await linkAndLoad(session.user.email ?? "");
       } catch (err) {
         if (mounted) {
           setError(err.message ?? "Couldn't load.");
@@ -338,7 +349,7 @@ export default function InstructorPortal() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function linkAndLoad() {
+  async function linkAndLoad(signedInEmail = "") {
     setPhase("linking");
     setError("");
     try {
@@ -346,8 +357,41 @@ export default function InstructorPortal() {
         body: {},
       });
       if (linkErr || linkData?.error) {
-        throw new Error(linkData?.error ?? linkErr?.message ?? "Couldn't find your instructor record.");
+        // READ THE FUNCTION'S OWN STATUS, don't just take linkErr.message.
+        // supabase-js reports any non-2xx as a FunctionsHttpError whose message
+        // is the fixed string "Edge Function returned a non-2xx status code",
+        // so link-instructor's real answer — 404 "no instructor record for this
+        // email" — never reached the UI. The friendly() mapper below matched
+        // that jargon and rendered "your account isn't fully set up as an
+        // instructor yet", which tells someone to go ask their operator for an
+        // invite they already have.
+        //
+        // That is what happened to an instructor on 2026-08-26: invited on her
+        // .edu address, she tapped "Continue with Google", the account chooser
+        // handed us her personal gmail, and the portal never mentioned WHICH
+        // address it had failed on. The only button was "Sign out and try
+        // again", which returned her to a screen whose most prominent control
+        // is the same Google button — a loop with no exit that reads, from the
+        // instructor's side, as "it won't keep me signed in".
+        const { status, body } = await readInvokeError(linkErr);
+        // 404: no instructor row for this address. 409: the row belongs to a
+        // different auth account. Both are "you are signed in as the wrong
+        // person", both are fixable by the instructor, and neither is fixable
+        // without naming the address — so they get a screen instead of the
+        // generic error string.
+        if (status === 404 || status === 409) {
+          setWrongAccount({ email: signedInEmail, status });
+          setPhase("wrongAccount");
+          return;
+        }
+        throw new Error(
+          linkData?.error ?? body?.error ?? linkErr?.message ?? "Couldn't find your instructor record.",
+        );
       }
+      // Linked. Drop any stale "wrong address" notice from an earlier attempt —
+      // they have now signed in as someone we can actually find, so the login
+      // screen must not keep warning about the address they abandoned.
+      setWrongAccount(null);
       // Fetch the full instructor row for profile fields (RLS self-read).
       const { data: full } = await supabase
         .from("instructors")
@@ -797,6 +841,9 @@ export default function InstructorPortal() {
     setSendBusy(true);
     setSendMsg("");
     setError("");
+    // They have acted on the notice by requesting a link for a specific
+    // address; the "Check your email" confirmation replaces it.
+    setWrongAccount(null);
     try {
       // Return them to the portal they are signing in from — see portalReturnUrl.
       const returnTo = portalReturnUrl();
@@ -836,7 +883,7 @@ export default function InstructorPortal() {
     }
   }
 
-  async function signOut() {
+  async function clearSessionState() {
     await supabase.auth.signOut();
     setInstructor(null);
     setAssignments([]);
@@ -844,6 +891,24 @@ export default function InstructorPortal() {
     setCoInstructorsProgram({});
     setProgramAssignments([]);
     setPhase("login");
+  }
+
+  async function signOut() {
+    setWrongAccount(null);
+    await clearSessionState();
+  }
+
+  // The wrongAccount screen's way out. Deliberately NOT signOut(): the whole
+  // point is that the login screen keeps saying which address just failed, so
+  // they don't land back on a screen whose biggest button is the same Google
+  // one they already tried and repeat the loop.
+  //
+  // A SEPARATE FUNCTION rather than signOut({ keepNotice: true }), because
+  // signOut is passed as a handler reference at eleven call sites in this file
+  // (one onClick, ten onSignOut) — an options-object parameter would receive a
+  // click Event at every one of them and quietly read as falsy.
+  async function signOutKeepingNotice() {
+    await clearSessionState();
   }
 
   // Chunk F: Accept + Request Change now route through respond-to-assignment.
@@ -1025,6 +1090,21 @@ export default function InstructorPortal() {
             </div>
           )}
 
+          {/* Carried over from the wrongAccount screen through sign-out. It sits
+              ABOVE the Google button on purpose: the address they used is the
+              only thing that stops them tapping it again and repeating the same
+              failure. */}
+          {wrongAccount && (
+            <div
+              role="status"
+              style={{ margin: "0 0 18px", padding: 12, borderRadius: 8, background: `${CORAL}14`, border: `1px solid ${CORAL}55`, color: INK, fontSize: 13, lineHeight: 1.5 }}
+            >
+              {wrongAccount.email
+                ? <>You were signed in as <strong>{wrongAccount.email}</strong>, and that address isn&rsquo;t set up as an instructor. Use the address your program manager invited you on.</>
+                : <>That account isn&rsquo;t set up as an instructor. Use the address your program manager invited you on.</>}
+            </div>
+          )}
+
           <button
             type="button"
             onClick={handleGoogle}
@@ -1112,6 +1192,75 @@ export default function InstructorPortal() {
           {error && (
             <div style={{ marginTop: 14, padding: 10, borderRadius: 6, background: `${CORAL}1A`, color: CORAL, fontSize: 13 }}>{error}</div>
           )}
+        </div>
+      </Shell>
+    );
+  }
+
+  // Signed in fine, but as somebody we have no instructor record for. This used
+  // to fall through to phase "error", which said "your account isn't fully set
+  // up as an instructor yet" and offered one button: sign out and try again.
+  // Neither half was true or useful — the account IS set up, just under a
+  // different address, and "try again" returned them to the same Google button.
+  if (phase === "wrongAccount") {
+    const alreadyLinked = wrongAccount?.status === 409;
+    return (
+      <Shell>
+        <div style={{ background: "#fff", border: `1px solid ${CORAL}`, borderRadius: 12, padding: 28, maxWidth: 540 }}>
+          <h1 style={{ margin: "0 0 10px", fontSize: 20, fontWeight: 700, color: INK }}>
+            You&rsquo;re signed in with a different email
+          </h1>
+
+          {/* CARRIED OVER FROM THE OLD "error" SCREEN, which rendered this and
+              which this phase now intercepts. Dropping it would have rebuilt the
+              exact bug the error screen was fixed for on 2026-08-01: a stale
+              session plus a dead link, where the session check "succeeds" and
+              the failed link is never mentioned. A stale session under the wrong
+              address is precisely that shape, so the link error still goes
+              FIRST and the address explanation follows it. */}
+          {authLinkError && (
+            <p style={{ color: INK, fontSize: 14, margin: "0 0 12px", lineHeight: 1.5, fontWeight: 600 }}>
+              {authLinkError.isExpiredLink ? EXPIRED_LINK_MESSAGE : genericAuthErrorMessage(authLinkError)}
+            </p>
+          )}
+
+          {wrongAccount?.email && (
+            <p style={{ color: INK, fontSize: 14, margin: "0 0 12px", lineHeight: 1.5 }}>
+              You signed in as <strong>{wrongAccount.email}</strong>.
+            </p>
+          )}
+
+          <p style={{ color: MUTED, fontSize: 14, margin: "0 0 16px", lineHeight: 1.5 }}>
+            {alreadyLinked
+              ? "That instructor record is already connected to a different sign-in. Ask your program manager to check which email you're set up under."
+              : "We don't have an instructor set up under that address. This usually happens when “Continue with Google” picks a personal Google account instead of the email your program manager invited you on."}
+          </p>
+
+          {!alreadyLinked && (
+            <p style={{ color: MUTED, fontSize: 14, margin: "0 0 16px", lineHeight: 1.5 }}>
+              Sign out, then enter your invited email address and we&rsquo;ll send you a sign-in link. That works whether or not it&rsquo;s a Google address.
+            </p>
+          )}
+
+          {/* The same 404 covers a DEACTIVATED instructor, because
+              link-instructor filters on is_active. We cannot tell the two apart
+              from here, so the wrong-address explanation above stays hedged
+              ("usually") and this line carries the other case. Being confidently
+              wrong to someone already stuck is the failure mode this whole
+              screen exists to end. */}
+          {!alreadyLinked && (
+            <p style={{ color: MUTED, fontSize: 14, margin: "0 0 20px", lineHeight: 1.5 }}>
+              If that already is your invited address, check with your program manager that your instructor account is still active.
+            </p>
+          )}
+
+          <button
+            type="button"
+            onClick={signOutKeepingNotice}
+            style={{ padding: "10px 16px", background: BRIGHT, color: "#fff", border: "none", borderRadius: 6, fontSize: 14, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}
+          >
+            Sign out and use a different email
+          </button>
         </div>
       </Shell>
     );
