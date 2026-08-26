@@ -132,10 +132,17 @@ export default function Screen1Welcome({ slug, instructor, onboarding, onAdvance
             value={preferredName}
             onChange={(e) => setPreferredName(e.target.value)}
             autoComplete="nickname"
-            placeholder="What you go by — e.g. Bo"
+            placeholder="e.g. Bo"
           />
+          {/* "Just one name" is doing real work here. An instructor answered the
+              old wording conversationally — "Jennifer or Jen" — and since this
+              value is what every greeting and email uses, her portal read
+              "Hi Jennifer or Jen" and her offer emails followed suit
+              (2026-08-26). The field reads as a question, so it needs to say
+              what shape the answer takes. */}
           <p className="mt-1 text-xs text-neutral-500">
-            What you go by day-to-day. We&rsquo;ll use this on your schedule and in messages.
+            Just one name &mdash; what you go by day-to-day. We&rsquo;ll use it on your
+            schedule and in messages.
           </p>
         </div>
 

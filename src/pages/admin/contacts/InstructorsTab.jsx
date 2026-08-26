@@ -1058,6 +1058,13 @@ function EditNameForm({ row, onCancel, onSave }) {
       <div>
         <label style={labelStyle}>Preferred name <span style={{ color: MUTED, fontWeight: 400, textTransform: 'none' }}>(optional)</span></label>
         <input type="text" value={preferred} onChange={(e) => setPreferred(e.target.value)} style={inputStyle} placeholder={row.first_name ?? ''} />
+        {/* The third door onto instructors.preferred_name, and the one an
+            operator uses to CLEAN UP what an instructor typed. It drives every
+            greeting and email, so say so here too — the other two are
+            Screen1Welcome and InstructorProfile. */}
+        <div style={{ color: MUTED, fontSize: 11, marginTop: 2 }}>
+          Just one name — used in their greeting and emails.
+        </div>
       </div>
       <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8, alignItems: 'center', marginTop: 4, flexWrap: 'wrap' }}>
         <button

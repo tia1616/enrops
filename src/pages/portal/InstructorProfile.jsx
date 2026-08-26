@@ -285,11 +285,15 @@ export default function InstructorProfile({ instructor, onBack, onSaved }) {
               type="text"
               value={preferredName}
               onChange={(e) => setPreferredName(e.target.value)}
-              placeholder="What people call you — e.g. Bo"
+              placeholder="e.g. Bo"
               style={input()}
             />
+            {/* Same wording as the onboarding field (Screen1Welcome) and the
+                admin one (InstructorsTab) — three doors onto one column, so they
+                have to ask for the same shape of answer. See the note on
+                Screen1Welcome for what happened when this read as a question. */}
             <div style={{ color: MUTED, fontSize: 11, marginTop: 2 }}>
-              We'll use this on your schedule and in messages.
+              Just one name — we'll use it on your schedule and in messages.
             </div>
           </Row>
           <Row label="Phone">
