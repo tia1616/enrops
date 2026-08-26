@@ -136,10 +136,21 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
   // parked at the bottom of the form looking at the Submit button, which is the
   // whole complaint. Caught on staging 2026-08-26 by measuring scrollY rather
   // than by reading the diff.
+  // NO `behavior: "smooth"`. It was written that way first and measured as a
+  // complete no-op: scrollY 3262 before and 3262 after, while the same call
+  // without it moved the page to 799. A smooth scroll is an animation, and an
+  // animation can be suppressed — by prefers-reduced-motion, by a background or
+  // non-compositing tab, by the browser deciding not to run it. When it is
+  // suppressed there is no fallback: the page simply does not move, which is
+  // indistinguishable from the bug this effect exists to fix.
+  //
+  // An instant jump always lands. It is also the better behaviour here: this
+  // fires when someone has just been told they missed a field, and the job is to
+  // put that field in front of them, not to animate toward it.
   useEffect(() => {
     if (!errorField) return;
     const ref = errorField === "week" ? weekRef : errorField === "days" ? daysRef : areasRef;
-    ref.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    ref.current?.scrollIntoView({ block: "center" });
   }, [errorSeq, errorField]);
 
   const [week, setWeek] = useState(EMPTY_WEEK());   // { mon: { from: "13:00", until: "17:00" }, ... }
