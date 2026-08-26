@@ -26,6 +26,7 @@ import { fetchLegalDocument } from "../../lib/legalDoc.js";
 import { isDocumentEnabled } from "../../lib/instructorDocuments.js";
 import { loadTrainingConfig } from "../../lib/instructorTrainingConfig.js";
 import { readInvokeError } from "../../lib/onboardingFetch.js";
+import { scheduleCountLine } from "../../lib/scheduleCountLine.js";
 import { earlyReleaseLine } from "../../lib/timeText.js";
 import { linkifyText } from "../../lib/linkifyText.jsx";
 import { WAITLIST_STATUS } from "../../lib/waitlistState.js";
@@ -1376,6 +1377,17 @@ export default function InstructorPortal() {
   );
   const acceptedAS = currentPrograms.filter((a) => a.status === "confirmed" && a.instructor_response_at);
 
+  // The header's one-line summary. currentPrograms, NOT programAssignments:
+  // totalCount above is built from currentAssignments, so counting classes off
+  // the unfiltered list had the two halves of one sentence measuring different
+  // things — a finished spring class kept padding "your schedule" all autumn
+  // while a finished camp correctly dropped off.
+  const headerLine = scheduleCountLine(
+    currentPrograms.length,
+    totalCount,
+    needsResponse.length + needsResponseAS.length,
+  );
+
   // CPR cert expiry nudge: render a clickable pill if the cert is expired or
   // within 60 days of expiring. Tap → opens the profile screen where the
   // upload + expiry field live.
@@ -1571,8 +1583,20 @@ export default function InstructorPortal() {
           <strong>Admin preview</strong> — you're signed in as <em>{impersonating.signedInEmail}</em> and viewing <em>{impersonating.asEmail}</em>'s portal. Accept and Request change actions will fire on this instructor's behalf.
         </div>
       )}
-      <header style={{ marginBottom: 18, display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0 }}>
+      {/* flexWrap IS THE FIX, not a tidy-up. This row had no wrap and the button
+          block below is flexShrink: 0, so on a phone the four buttons claimed the
+          width and the name block — which carries minWidth: 0 — was crushed to
+          almost nothing. The greeting then broke one word per line: "Hi" sat
+          alongside the buttons and "You / have / 0 / camps / on / your /
+          schedule." ran down the page. Reported by both of Jeff's testers on
+          2026-08-26 with screenshots, on names as short as "Dana", so this was
+          never about long names.
+
+          `flex: 1 1 260px` on the name block is what actually triggers the wrap:
+          below 260px of available width the button block drops to its own line
+          instead of squeezing its neighbour. */}
+      <header style={{ marginBottom: 18, display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, minWidth: 0, flex: "1 1 260px" }}>
           {instructor.photo_url && (
             <img
               src={avatarUrl(instructor.photo_url)}
@@ -1584,10 +1608,20 @@ export default function InstructorPortal() {
             <h1 style={{ margin: 0, fontSize: 24, fontWeight: 700, color: INK, letterSpacing: -0.3 }}>
               Hi {displayFirstName(instructor)} 👋
             </h1>
-            <p style={{ color: MUTED, margin: "4px 0 0", fontSize: 14 }}>
-              You have {totalCount + programAssignments.length} {programAssignments.length > 0 && totalCount === 0 ? `class${programAssignments.length === 1 ? "" : "es"}` : `camp${totalCount + programAssignments.length === 1 ? "" : "s"}`} on your schedule
-              {(needsResponse.length + needsResponseAS.length) > 0 && ` · ${needsResponse.length + needsResponseAS.length} awaiting your response`}.
-            </p>
+            {/* The old expression had TWO branches for four cases, and the
+                fall-through said "camps". An after-school provider with nothing
+                assigned yet was told "You have 0 camps on your schedule" — wrong
+                noun and wrong tense at once (Jeff's tester Dana, 2026-08-26).
+                A provider with both camps and classes was told everything was a
+                camp. Every case now names what it actually is.
+
+                Zero renders NOTHING, deliberately: the empty-state card directly
+                below already says "No schedule yet. Your admin will email you
+                when it's ready." A "you have nothing" line above it is the same
+                sentence twice. */}
+            {headerLine && (
+              <p style={{ color: MUTED, margin: "4px 0 0", fontSize: 14 }}>{headerLine}</p>
+            )}
           </div>
         </div>
         <div style={{ display: "flex", gap: 6, flexShrink: 0, flexWrap: "wrap", justifyContent: "flex-end" }}>

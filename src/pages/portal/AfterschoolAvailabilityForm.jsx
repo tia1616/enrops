@@ -18,7 +18,7 @@
 //   - rows to instructor_term_area_preferences (one per area the instructor ranked)
 // keyed by (org, instructor, term). Pre-fills from existing rows so instructors can edit.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { supabase } from "../../lib/supabase";
 
 const PURPLE = "#1C004F";
@@ -98,6 +98,31 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  // WHICH field the error belongs to, or null for a save failure that belongs to
+  // no field. Every validation message used to render in one banner pinned above
+  // the Submit button at the very bottom of a long form, so "Pick how many days
+  // a week you'd like to teach" appeared several screens below the control it
+  // was talking about. Jeff's tester Dana hit exactly that on 2026-08-26: she
+  // kept tapping things near the message, and the message kept coming back,
+  // because the field it meant was off-screen above. She only got through by
+  // submitting again. The message now renders AT the field and we scroll there.
+  const [errorField, setErrorField] = useState(null); // 'week' | 'days' | 'areas' | null
+  const weekRef = useRef(null);
+  const daysRef = useRef(null);
+  const areasRef = useRef(null);
+
+  // Set an error that belongs to a field, and take the instructor to it.
+  // Returns false so callers can `return fail(...)` and keep validation flat.
+  function fail(field, message) {
+    setError(message);
+    setErrorField(field);
+    const ref = field === "week" ? weekRef : field === "days" ? daysRef : areasRef;
+    // After paint, so the note we just revealed is part of what gets centred.
+    requestAnimationFrame(() => {
+      ref.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    return false;
+  }
 
   const [week, setWeek] = useState(EMPTY_WEEK());   // { mon: { from: "13:00", until: "17:00" }, ... }
   const [daysRange, setDaysRange] = useState("");
@@ -234,20 +259,21 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
 
   async function save() {
     setError(null);
+    setErrorField(null);
     const anyDay = DAYS.some((d) => week[d.value]?.available);
-    if (!anyDay) { setError("Mark at least one weekday as available."); return; }
+    if (!anyDay) { fail("week", "Mark at least one weekday as available."); return; }
     for (const d of DAYS) {
       const w = week[d.value];
       if (!w.available) continue;
-      if (!w.from) { setError(`Set a start time for ${d.label}, or mark it unavailable.`); return; }
+      if (!w.from) { fail("week", `Set a start time for ${d.label}, or mark it unavailable.`); return; }
       if (w.until && w.until <= w.from) {
-        setError(`On ${d.label}, the 'until' time needs to be after the 'from' time.`); return;
+        fail("week", `On ${d.label}, the 'until' time needs to be after the 'from' time.`); return;
       }
     }
-    if (!disabled.has("days_per_week") && !daysRange) { setError("Pick how many days a week you'd like to teach (choose 'No limit' if you have no cap)."); return; }
+    if (!disabled.has("days_per_week") && !daysRange) { fail("days", "Pick how many days a week you'd like to teach (choose 'No limit' if you have no cap)."); return; }
     if (!disabled.has("areas")) {
       const unrated = areas.filter((a) => !areaPrefs[a]);
-      if (unrated.length > 0) { setError(`Please rate every area — still missing: ${unrated.join(", ")}.`); return; }
+      if (unrated.length > 0) { fail("areas", `Please rate every area — still missing: ${unrated.join(", ")}.`); return; }
     }
 
     setSaving(true);
@@ -333,7 +359,8 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
         </p>
       </header>
 
-      <Card title="Which days and times can you teach?" subtitle="Mark each weekday available or unavailable. For the days you're available, set the earliest you can start (add an 'until' time only if you have to leave by a certain point). We'll only assign a class you can reach in time (about 15 minutes before it starts).">
+      <Card innerRef={weekRef} title="Which days and times can you teach?" subtitle="Mark each weekday available or unavailable. For the days you're available, set the earliest you can start (add an 'until' time only if you have to leave by a certain point). We'll only assign a class you can reach in time (about 15 minutes before it starts).">
+        <FieldError show={errorField === "week"} message={error} />
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           {DAYS.map((d) => {
             const w = week[d.value];
@@ -367,7 +394,8 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
       </Card>
 
       {!disabled.has("days_per_week") && (
-      <Card title="How many days a week do you want?" subtitle="Your target — we'll try not to assign you more classes than the top of this range.">
+      <Card innerRef={daysRef} title="How many days a week do you want?" subtitle="Your target — we'll try not to assign you more classes than the top of this range.">
+        <FieldError show={errorField === "days"} message={error} />
         <select value={daysRange} onChange={(e) => setDaysRange(e.target.value)} style={{ ...inputStyle, width: 220 }}>
           <option value="" disabled>Select…</option>
           {DAYS_RANGES.map((r) => (
@@ -378,7 +406,8 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
       )}
 
       {!disabled.has("areas") && (
-      <Card title="Which areas do you want to teach in?" subtitle="Rate every area: 'Love to' is where you'd most like to be, 'Happy to' means you're glad to teach there, and 'Can't' means we won't schedule you there.">
+      <Card innerRef={areasRef} title="Which areas do you want to teach in?" subtitle="Rate every area: 'Love to' is where you'd most like to be, 'Happy to' means you're glad to teach there, and 'Can't' means we won't schedule you there.">
+        <FieldError show={errorField === "areas"} message={error} />
 
         {areas.length === 0 ? (
           <div style={{ color: MUTED, fontSize: 13, fontStyle: "italic" }}>
@@ -456,7 +485,10 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
       </Card>
       )}
 
-      {error && (
+      {/* Only errors that belong to NO field land here now — i.e. a save that
+          failed on the server. Field validation renders at its own field above,
+          next to the control that fixes it. */}
+      {error && !errorField && (
         <div style={{ background: `${CORAL}1F`, border: `1px solid ${CORAL}`, color: CORAL, padding: 12, borderRadius: 8, fontSize: 13 }}>
           {error}
         </div>
@@ -475,9 +507,35 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
   );
 }
 
-function Card({ title, subtitle, children }) {
+// The validation message, rendered at the field it is about. role="alert" so a
+// screen reader announces it when it appears rather than leaving it to be found.
+function FieldError({ show, message }) {
+  if (!show || !message) return null;
   return (
-    <section style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10, padding: 20 }}>
+    <div
+      role="alert"
+      style={{
+        background: `${CORAL}1F`,
+        border: `1px solid ${CORAL}`,
+        color: CORAL,
+        padding: 10,
+        borderRadius: 8,
+        fontSize: 13,
+        lineHeight: 1.45,
+        marginBottom: 12,
+      }}
+    >
+      {message}
+    </div>
+  );
+}
+
+// `innerRef` rather than wrapping each Card in a positioning <div>: the parent is
+// a flex column with a gap, so an extra wrapper would become the flex item and
+// quietly change the spacing between cards.
+function Card({ title, subtitle, children, innerRef }) {
+  return (
+    <section ref={innerRef} style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10, padding: 20 }}>
       <h2 style={{ margin: 0, fontSize: 15, fontWeight: 700, color: INK }}>{title}</h2>
       {subtitle && <p style={{ margin: "4px 0 12px", color: MUTED, fontSize: 13, lineHeight: 1.5 }}>{subtitle}</p>}
       {!subtitle && <div style={{ height: 12 }} />}
