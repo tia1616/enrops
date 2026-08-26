@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
-import { parentLandingPath } from '../../lib/tenants.js';
 import EnropsWordmark from '../../components/EnropsWordmark.jsx';
 
 // enrops.com home page.
@@ -84,8 +83,79 @@ export default function EnropsLanding({ signedOutTo = null } = {}) {
           }
         }
 
-        // Signed in but neither admin nor instructor — they're a parent.
-        navigate(parentLandingPath(session.user.id), { replace: true });
+        // Signed in, not an admin, not an instructor: treat them as a parent and
+        // send them to THEIR provider's family dashboard.
+        //
+        // This was parentLandingPath(), which returned defaultTenantSlug() — the
+        // first key of a hardcoded map, i.e. J2S — for every parent alive, and
+        // pointed at `/<slug>`, the provider's public CATALOGUE, rather than at
+        // the family dashboard they actually wanted. Measured on prod
+        // 2026-08-26: 192 parents resolve to a newest registration and 79 of them
+        // belong to a provider that is NOT J2S. Those 79 were being handed
+        // another company's storefront, and it is the same mechanism that sent
+        // Jeff's instructor to a "Sign in to Journey to STEAM" page.
+        //
+        // Newest registration wins because a family can have registered with more
+        // than one provider (4 do on prod today). The newest is the one they are
+        // most likely here for, and the dashboard links onward from there.
+        // nullsFirst:false matters — Postgres sorts NULLs FIRST on a descending
+        // order, so a row with no registered_at would otherwise outrank every
+        // real one.
+        //
+        // The slug comes from public_org_directory, NOT organizations. Verified
+        // against prod with a real parent's own session: the directory returns 7
+        // rows and `organizations` returns 0, because parents are not org
+        // members. The instructor branch above lives within the same constraint.
+        // BOTH ERRORS ARE CAPTURED AND LOGGED, not discarded. Every failure below
+        // ends at the same place — the entry card — so without a log a real
+        // parent seeing a marketing page is indistinguishable from a signed-out
+        // visitor, and an RLS or grant regression on `registrations`/`parents`
+        // would look exactly like "this person has no children enrolled".
+        // Failing closed is right; failing closed and SILENT is how a leak or a
+        // regression survives. Same shape as InstructorPortal's directory read.
+        const { data: newestReg, error: regErr } = await supabase
+          .from('registrations')
+          .select('organization_id, registered_at, parents!inner(auth_id)')
+          .eq('parents.auth_id', session.user.id)
+          .order('registered_at', { ascending: false, nullsFirst: false })
+          .limit(1)
+          .maybeSingle();
+        if (cancelled) return;
+        if (regErr) {
+          console.error('[EnropsLanding] parent org lookup failed', regErr);
+        }
+        if (newestReg?.organization_id) {
+          const { data: parentOrg, error: dirErr } = await supabase
+            .from('public_org_directory')
+            .select('slug')
+            .eq('id', newestReg.organization_id)
+            .maybeSingle();
+          if (cancelled) return;
+          if (parentOrg?.slug) {
+            navigate(`/${parentOrg.slug}/dashboard`, { replace: true });
+            return;
+          }
+          // A registration pointing at an org the directory does not expose.
+          // public_org_directory only lists orgs with status = 'active', so the
+          // live cause is a PAUSED or ARCHIVED provider whose families still have
+          // registrations. Zero such orgs on prod today, which is why this is
+          // logged rather than given its own screen — but it is reachable the
+          // moment a provider is paused, and it must not look like "no children
+          // enrolled" when someone goes looking.
+          console.error('[EnropsLanding] parent org not in the public directory', {
+            organization_id: newestReg.organization_id,
+            reason: dirErr ? 'read_failed' : 'no_active_row',
+            dirErr,
+          });
+        }
+
+        // Signed in and we cannot place them: no membership, no instructor
+        // record, no registration. Show the entry card rather than hand them to a
+        // provider they have no relationship with. That substitution is the whole
+        // bug — an instructor who signed in with a personal Google account was
+        // silently dropped onto J2S's parent sign-in page, which told her she was
+        // in the wrong place in the most confusing way available.
+        setRoleChecked(true);
         return;
       } catch (err) {
         // Auth check failed — show the card rather than blocking on errors.

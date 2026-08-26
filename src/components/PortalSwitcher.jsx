@@ -24,8 +24,15 @@ const LABELS = { family: 'Family', instructor: 'Instructor', admin: 'Admin' };
 // Callers that omit orgId (instructor Shell, admin sidebar) keep prior behavior.
 // NO DEFAULT SLUG. It used to default to 'j2s' — one provider's slug, in a
 // component rendered on every provider's header, so any caller that failed to
-// pass one silently linked their user into another tenant. All three callers do
-// pass one, so the default only ever fired on a bug, and made that bug invisible.
+// pass one silently linked their user into another tenant.
+//
+// UPDATED 2026-08-26: "all three callers do pass one" is no longer true, and
+// that is deliberate. The admin sidebar used to satisfy it by passing
+// defaultTenantSlug() — the same 'j2s' default this component had just removed,
+// reintroduced one file away. It now passes org?.slug and lets it be undefined,
+// so a missing slug reaches the honest handling below instead of being papered
+// over. The no-slug path is therefore REACHED IN NORMAL USE now, not only on a
+// bug; it is verified on staging rather than assumed.
 //
 // An EMPTY slug is now handled too, which the default never caught: `slug=""` is
 // not undefined, so it sailed past and produced "//dashboard". That is reachable
