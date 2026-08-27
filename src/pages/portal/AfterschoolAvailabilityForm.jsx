@@ -20,6 +20,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "../../lib/supabase";
+import { planTimeCopy, applyTimeCopy, timeWindowLabel, listSentence } from "../../lib/weekTimes.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Enrops default)
@@ -189,6 +190,11 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
   const [dateToAdd, setDateToAdd] = useState("");
 
   const [areas, setAreas] = useState([]);
+  // Confirmation for the copy button: which day was copied, to where, and the
+  // times. Kept as an object with a `seq` so pressing it twice re-announces —
+  // same reason fieldError carries one (role="status" only speaks on a content
+  // change, and the second press is often the one someone is unsure about).
+  const [copyNote, setCopyNote] = useState(null);
   const [hasExisting, setHasExisting] = useState(false);
   // Questions the operator turned off in Settings (org_survey_config). Hidden here
   // and skipped in validation. Empty = ask everything (default).
@@ -282,8 +288,14 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
     return () => { alive = false; };
   }, [instructorId, orgId, term]);
 
+  // Both of these drop the copy confirmation, because the moment a day is edited
+  // by hand the note stops describing the form. "Copied Monday's times to Tuesday
+  // and Wednesday" sitting above a Wednesday that now says something else is a
+  // message that has outlived its own truth — the note is confirmation of an
+  // action, not a permanent label.
   function setDayTime(day, field, value) {
     setWeek((prev) => ({ ...prev, [day]: { ...prev[day], [field]: value } }));
+    setCopyNote(null);
     clearErrorFor("week");
   }
 
@@ -293,6 +305,36 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
       ...prev,
       [day]: available ? { ...prev[day], available: true } : { available: false, from: "", until: "" },
     }));
+    setCopyNote(null);
+    clearErrorFor("week");
+  }
+
+  // Which day the repeat button copies FROM, and which days it would change.
+  // Both come from planTimeCopy so the button's label, its visibility, the write
+  // and the confirmation all read the same rule — see lib/weekTimes.js.
+  const { source: copySource, targets: copyTargets } = planTimeCopy(week, DAYS);
+
+  // Jeff's team, 2026-08-26: "would be nice to have first time added auto repeat
+  // for others". Five weekdays x two fields is up to ten passes through a native
+  // time wheel on a phone, for an answer that is usually the same every day.
+  function copyTimesToOtherDays() {
+    if (!copySource || copyTargets.length === 0) return;
+    const src = week[copySource.value];
+    // Snapshot the labels and times BEFORE the state update. Reading them back
+    // out of `week` afterwards would describe the new state, so a note that is
+    // meant to say what changed would instead say that nothing did.
+    const note = {
+      day: copySource.label,
+      from: src.from,
+      until: src.until,
+      days: copyTargets.map((d) => d.label),
+      seq: copyNote ? copyNote.seq + 1 : 1,
+    };
+    setWeek((prev) => applyTimeCopy(prev, copySource, copyTargets));
+    // AFTER setWeek, because setDayTime-style clearing runs inside it elsewhere;
+    // here the order matters only for readability, but the note must not be set
+    // before the write it describes succeeds.
+    setCopyNote(note);
     clearErrorFor("week");
   }
 
@@ -436,11 +478,30 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
                   </button>
                 </div>
                 {w.available ? (
-                  <div style={{ display: "grid", gridTemplateColumns: "auto minmax(120px, 150px)", gap: "8px 10px", alignItems: "center", justifyContent: "start" }}>
+                  /* Each time gets a Clear of OUR OWN. Jeff's team reported "no
+                     option to change end times or reset once they are set" — the
+                     value is in fact changeable and clearable, and their own
+                     video shows a finish time being changed. What is missing is
+                     any clear control belonging to this page: on a phone the only
+                     one is Apple's, grey-on-grey inside the grey picker wheel,
+                     and the wheel covers the row you are editing so you cannot
+                     see which day you just changed. A visible Clear next to the
+                     field is the affordance they were looking for. */
+                  <div style={{ display: "grid", gridTemplateColumns: "auto minmax(120px, 150px) auto", gap: "8px 10px", alignItems: "center", justifyContent: "start" }}>
                     <span style={{ fontSize: 13, color: MUTED }}>From</span>
                     <input type="time" value={w.from} onChange={(e) => setDayTime(d.value, "from", e.target.value)} style={{ ...inputStyle, width: "100%" }} />
+                    <ClearTimeButton
+                      show={!!w.from}
+                      label={`Clear ${d.label} start time`}
+                      onClear={() => setDayTime(d.value, "from", "")}
+                    />
                     <span style={{ fontSize: 13, color: MUTED }}>Until <span style={{ fontSize: 11 }}>(optional)</span></span>
                     <input type="time" value={w.until} onChange={(e) => setDayTime(d.value, "until", e.target.value)} style={{ ...inputStyle, width: "100%" }} />
+                    <ClearTimeButton
+                      show={!!w.until}
+                      label={`Clear ${d.label} finish time`}
+                      onClear={() => setDayTime(d.value, "until", "")}
+                    />
                   </div>
                 ) : (
                   <span style={{ fontSize: 12, color: MUTED, fontStyle: "italic" }}>Won't teach this day</span>
@@ -449,6 +510,49 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
             );
           })}
         </div>
+
+        {/* Rendered only when it would actually do something: there is a day to
+            copy FROM (available, with a start time) and at least one other
+            available day whose times DIFFER. A button that is present but inert
+            is the dead-control bug this codebase has already paid for once. */}
+        {copySource && copyTargets.length > 0 && (
+          <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${RULE}` }}>
+            <button
+              type="button"
+              onClick={copyTimesToOtherDays}
+              style={{
+                padding: "9px 16px", borderRadius: 6, border: `1px solid ${BRIGHT}`,
+                background: "#fff", color: BRIGHT, fontSize: 14, fontWeight: 600,
+                fontFamily: "inherit", cursor: "pointer", textAlign: "left",
+              }}
+            >
+              Use {copySource.label}&rsquo;s times for my other {copyTargets.length === 1 ? "day" : `${copyTargets.length} days`}
+            </button>
+            <div style={{ fontSize: 12, color: MUTED, marginTop: 6 }}>
+              {copySource.label} is {timeWindowLabel(week[copySource.value])}. You can still
+              change any day afterwards.
+            </div>
+          </div>
+        )}
+
+        {/* Says what it DID, naming the days, because the rows it changed can be
+            below the fold on a phone — the same reason the validation messages on
+            this form were moved to their own fields. `key` on seq so a second
+            press re-announces to a screen reader. */}
+        {copyNote && (
+          <div
+            key={copyNote.seq}
+            role="status"
+            style={{
+              marginTop: 10, padding: 10, borderRadius: 8, fontSize: 13, lineHeight: 1.45,
+              background: `${OK_GREEN}14`, border: `1px solid ${OK_GREEN}66`, color: INK,
+            }}
+          >
+            Copied {copyNote.day}&rsquo;s {timeWindowLabel({ from: copyNote.from, until: copyNote.until })} to{" "}
+            <b>{listSentence(copyNote.days)}</b>. Nothing is saved until you press{" "}
+            {hasExisting ? "Save changes" : "Submit availability"}.
+          </div>
+        )}
       </Card>
 
       {!disabled.has("days_per_week") && (
@@ -615,6 +719,36 @@ function Card({ title, subtitle, children, innerRef }) {
       {!subtitle && <div style={{ height: 12 }} />}
       {children}
     </section>
+  );
+}
+
+// A clear control that BELONGS TO THIS PAGE, next to the field it clears.
+//
+// Rendered only when there is something to clear, so it is never a control that
+// does nothing. 32px square rather than a text link: this is the surface Jeff's
+// team was using on a phone, and it sits beside a native picker that opens a
+// full-screen wheel on the slightest mis-tap.
+//
+// aria-label names the DAY as well as the field, because "Clear" repeated ten
+// times down the form tells a screen-reader user nothing about which one they
+// are on — and the visible × has the same problem for everyone else, which is
+// why it sits directly against its own input.
+function ClearTimeButton({ show, label, onClear }) {
+  if (!show) return <span aria-hidden="true" />;
+  return (
+    <button
+      type="button"
+      onClick={onClear}
+      aria-label={label}
+      title={label}
+      style={{
+        width: 32, height: 32, lineHeight: 1, padding: 0,
+        border: `1px solid ${RULE}`, borderRadius: 6, background: "#fff",
+        color: MUTED, fontSize: 16, fontFamily: "inherit", cursor: "pointer",
+      }}
+    >
+      &times;
+    </button>
   );
 }
 

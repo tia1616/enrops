@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { invokeOnboardingFn, isHandledRedirect } from '../../../lib/onboardingFetch.js';
 import { STEP_KEYS } from '../../../lib/onboardingSteps.js';
 import { phoneIsValid, looksLikeName } from '../../../lib/validation.js';
+import { normalizePreferredName } from '../../../lib/instructorName.js';
 import WizardLayout, { PrimaryButton, FieldError, ScreenError } from '../WizardLayout.jsx';
 
 // Screen 1 — Welcome + Identity. Phone is required; legal + preferred name
@@ -67,7 +68,10 @@ export default function Screen1Welcome({ slug, instructor, onboarding, onAdvance
             phone: phone.trim(),
             first_name: firstName.trim() || null,
             last_name: lastName.trim() || null,
-            preferred_name: preferredName.trim(),
+            // Normalised, not raw: someone who types their own legal first name
+            // here is saying nothing, and the column should hold nothing. The
+            // edge function treats '' as "clear it". See normalizePreferredName.
+            preferred_name: normalizePreferredName(preferredName, firstName),
           },
         },
         { navigate }
@@ -128,21 +132,38 @@ export default function Screen1Welcome({ slug, instructor, onboarding, onAdvance
 
         <div className="mt-4">
           <Label>Preferred name (optional)</Label>
+          {/* NO autoComplete. It asked for "nickname", which is a real contact
+              field an autofill source can offer to complete — and when a contact
+              card has no nickname, filling it from the given name is a plausible
+              thing for a browser to do. Jeff's team reported this field becoming
+              the legal name "automatically" (2026-08-26). Nothing in our code
+              copies it, and this hint bought nothing even when it worked: a
+              stored nickname is exactly the answer we DON'T want, because the
+              value is only meaningful when the person types it deliberately. */}
           <Input
             value={preferredName}
             onChange={(e) => setPreferredName(e.target.value)}
-            autoComplete="nickname"
+            autoComplete="off"
             placeholder="e.g. Bo"
           />
-          {/* "Just one name" is doing real work here. An instructor answered the
-              old wording conversationally — "Jennifer or Jen" — and since this
-              value is what every greeting and email uses, her portal read
-              "Hi Jennifer or Jen" and her offer emails followed suit
-              (2026-08-26). The field reads as a question, so it needs to say
-              what shape the answer takes. */}
+          {/* This helper has now been wrong in two different directions, and both
+              were answered correctly by the instructor.
+              1. "What you go by day-to-day" got "Jennifer or Jen" — a true answer
+                 that is not a name, so her portal read "Hi Jennifer or Jen".
+                 Hence "one name".
+              2. The same wording got "Lana" from someone whose legal name is
+                 Lana — also a true answer, and also not what the column is for.
+                 Hence naming their own first name back at them as the case for
+                 leaving it EMPTY. A blank box has to look like a real answer or
+                 people will fill it in.
+              The save normalises this anyway (normalizePreferredName), so a
+              legal-name answer is harmless now; the wording is what stops the
+              person wondering why their nickname says what it says. */}
           <p className="mt-1 text-xs text-neutral-500">
-            Just one name &mdash; what you go by day-to-day. We&rsquo;ll use it on your
-            schedule and in messages.
+            Only if you go by something <em>different</em> &mdash; one name, not a list.
+            {firstName.trim()
+              ? <> Leave it blank if you go by {firstName.trim()}.</>
+              : <> Leave it blank if you go by your legal first name.</>}
           </p>
         </div>
 

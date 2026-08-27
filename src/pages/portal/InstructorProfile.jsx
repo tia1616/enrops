@@ -12,6 +12,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { AVATARS, DEFAULT_AVATAR, avatarUrl } from '../../lib/avatars';
 import { ensureBrowserSafeImage, extensionFor } from '../../lib/heicConvert';
+import { normalizePreferredName } from '../../lib/instructorName';
 
 const PURPLE = '#1C004F';
 const BRIGHT = '#5847C9';   // indigo - primary actions (Enrops default)
@@ -30,7 +31,12 @@ const ALLOWED_CERT_MIME = new Set([
 ]);
 const MAX_CERT_BYTES = 5 * 1024 * 1024;
 
-export default function InstructorProfile({ instructor, onBack, onSaved }) {
+// `orgName` comes from the portal, which already resolved it from
+// public_org_directory. It is NOT re-fetched here: instructors are not
+// org_members, and the RLS policy on `organizations` is is_org_member(id), so an
+// instructor selecting that table gets zero rows and no error. Passing the name
+// the portal already holds is the only read that works.
+export default function InstructorProfile({ instructor, orgName = '', onBack, onSaved }) {
   // Initial values come from the instructor prop (already loaded by parent).
   const [firstName] = useState(instructor.first_name || '');
   const [lastName] = useState(instructor.last_name || '');
@@ -50,14 +56,32 @@ export default function InstructorProfile({ instructor, onBack, onSaved }) {
   const [busy, setBusy] = useState(false);
   const [success, setSuccess] = useState(false);
 
-  // Snapshot the initial state so we can detect "dirty" cleanly.
-  const initial = useMemo(() => ({
+  // The baseline every field is diffed against to decide what to send.
+  //
+  // STATE, not a useMemo keyed on instructor.id — because the id never changes
+  // while this screen is open, so the memo never recomputed and the baseline
+  // stayed frozen at whatever was loaded on mount, for the whole session. Any
+  // second save was then diffed against a stale snapshot.
+  //
+  // That is not theoretical; it was caught on staging on 2026-08-27 by walking
+  // the form rather than by re-reading it. Load with preferred_name "Riley",
+  // change it to "Bo" and save (fine), then change it back to "Riley" and save:
+  // the new value equals the FROZEN baseline, so the diff is empty, the
+  // "nothing changed" branch fires, and the instructor gets the success tick
+  // while the database keeps "Bo". A save that reports success and writes
+  // nothing is the worst version of this bug, because nobody goes looking.
+  //
+  // Re-baselining after each successful save is what makes the diff mean
+  // "changed since the last thing we stored" instead of "changed since I opened
+  // the page". Reverting a field to its original value is an ordinary thing to
+  // do and has to reach the server like any other edit.
+  const [initial, setInitial] = useState(() => ({
     preferred_name: instructor.preferred_name || '',
     phone: instructor.phone || '',
     photo_url: instructor.photo_url || '',
     shirt_size: instructor.shirt_size || '',
     first_aid_cpr_expires_at: instructor.first_aid_cpr_expires_at || '',
-  }), [instructor.id]);
+  }));
 
   // Load existing emergency contacts on mount.
   useEffect(() => {
@@ -137,8 +161,13 @@ export default function InstructorProfile({ instructor, onBack, onSaved }) {
   // empty-after-trim phone → omit (don't overwrite real number with '').
   function buildPayload(uploadedCprUrl) {
     const body = {};
+    // Dirty-gated on the RAW value, sent NORMALISED. Gating on the normalised
+    // value instead would clear a stored legal-name copy on any unrelated save
+    // — a write to a field she never touched, which is the whole-row-write
+    // defect this codebase already has six of. Her row heals when she edits the
+    // name, which is the moment she is looking at it.
     if (preferredName !== initial.preferred_name) {
-      body.preferred_name = preferredName.trim();
+      body.preferred_name = normalizePreferredName(preferredName, firstName);
     }
     if (phone.trim() !== initial.phone.trim()) {
       body.phone = phone.trim();
@@ -230,6 +259,27 @@ export default function InstructorProfile({ instructor, onBack, onSaved }) {
         return;
       }
 
+      // Show what was actually stored. If she typed her own legal first name the
+      // payload above sent '' — leaving "Lana" sitting in the box would be the
+      // form telling her something the database does not say.
+      const storedPreferred = 'preferred_name' in payload
+        ? payload.preferred_name
+        : preferredName;
+      if ('preferred_name' in payload) setPreferredName(storedPreferred);
+      // Re-baseline to what the server now holds, so the next save diffs against
+      // stored values rather than against page-load values. Built from the same
+      // `payload` that was actually accepted — never from the form state, which
+      // can hold a raw legal-name string the server stored as blank.
+      setInitial((prev) => ({
+        ...prev,
+        preferred_name: storedPreferred,
+        phone: 'phone' in payload ? payload.phone : prev.phone,
+        photo_url: 'avatar_key' in payload ? payload.avatar_key : prev.photo_url,
+        shirt_size: 'shirt_size' in payload ? payload.shirt_size : prev.shirt_size,
+        first_aid_cpr_expires_at: 'first_aid_cpr_expires_at' in payload
+          ? payload.first_aid_cpr_expires_at
+          : prev.first_aid_cpr_expires_at,
+      }));
       setSuccess(true);
       setBusy(false);
       if (onSaved) onSaved();
@@ -273,8 +323,28 @@ export default function InstructorProfile({ instructor, onBack, onSaved }) {
           <SectionLabel>Your identity</SectionLabel>
           <Row label="Legal name (locked)">
             <span style={{ color: INK }}>{firstName} {lastName}</span>
-            <div style={{ color: MUTED, fontSize: 11, marginTop: 2 }}>
-              Need a legal-name change? Contact admin.
+            {/* WAS: "Need a legal-name change? Contact admin." — an instruction
+                with nothing to carry it out with. Jeff's team hit exactly that on
+                2026-08-26: "it says it needs to contact admin. No button to
+                contact Admin on that page." Same defect as the Continue button
+                that shipped on 25 Aug — the product names an action and withholds
+                it.
+                NOT a mailto. public_org_directory carries no email (checked), and
+                the only org address an instructor could be shown would have to be
+                published to anon to get here. RegisterSuccess already settled this
+                shape for families: point at a route they already have rather than
+                invent an address that might bounce.
+                The first sentence matters more than the second. Most people
+                reading this do not want their tax forms changed — they want the
+                name other people see, which is the editable box directly below. */}
+            <div style={{ color: MUTED, fontSize: 11, marginTop: 2, lineHeight: 1.5 }}>
+              This is the name on your contractor agreement and tax forms, so it stays as
+              your legal name. <b style={{ color: INK }}>To change the name people see</b>{' '}
+              &mdash; on your schedule, and in messages &mdash; use Preferred name below.
+              <br />
+              If your legal name itself is wrong or has changed, only{' '}
+              {orgName || 'your provider'} can update it: reply to any email they have
+              sent you and ask.
             </div>
           </Row>
           <Row label="Email (locked)">
@@ -292,8 +362,19 @@ export default function InstructorProfile({ instructor, onBack, onSaved }) {
                 admin one (InstructorsTab) — three doors onto one column, so they
                 have to ask for the same shape of answer. See the note on
                 Screen1Welcome for what happened when this read as a question. */}
-            <div style={{ color: MUTED, fontSize: 11, marginTop: 2 }}>
-              Just one name — we'll use it on your schedule and in messages.
+            <div style={{ color: MUTED, fontSize: 11, marginTop: 2, lineHeight: 1.5 }}>
+              Only if you go by something <em>different</em> &mdash; one name, not a list.
+              Leave it blank if you go by {firstName || 'your legal first name'}.
+              {/* The answer to "why does my nickname say my legal name?" is right
+                  here, in the value rather than in a sentence about it. Someone
+                  who typed "Lana" sees that blanking the box changes nothing, so
+                  the box stops looking like the thing that is wrong. */}
+              <div style={{ marginTop: 4 }}>
+                People currently see:{' '}
+                <b style={{ color: INK }}>
+                  {normalizePreferredName(preferredName, firstName) || firstName || '—'}
+                </b>
+              </div>
             </div>
           </Row>
           <Row label="Phone">

@@ -1475,8 +1475,17 @@ export default function InstructorPortal() {
   if (view === "profile") {
     return (
       <Shell slug={orgSlug} instructorName={displayFirstName(instructor)} onSignOut={signOut}>
+        {/* KEYED ON THE INSTRUCTOR. The profile's dirty baseline is state, not a
+            memo keyed on the id, so a second instructor rendered into the SAME
+            mounted component would be diffed against the first one's values and a
+            field that happened to match would be dropped from the payload. Not
+            reachable today — ?as= changes the URL and remounts — so this is a
+            keyed remount rather than a rewrite: it restores structurally what the
+            memo used to guarantee. */}
         <InstructorProfile
+          key={instructor.id ?? instructor.instructor_id}
           instructor={{ ...instructor, id: instructor.id ?? instructor.instructor_id }}
+          orgName={orgName}
           onBack={() => setView("schedule")}
           onSaved={refetchInstructor}
         />

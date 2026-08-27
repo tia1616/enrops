@@ -126,8 +126,8 @@ Confirm a btree index on `camp_assignments.instructor_id` exists; if absent, add
 Direct client query, `instructors` self-read RLS.
 
 **Profile screen displays:**
-- `first_name`, `last_name` — **read-only.** Legal name was locked when the contractor agreement was signed. Helper text: "Need a legal-name change? Contact admin."
-- `preferred_name` — **editable.** Optional. What you go by day-to-day (e.g. Rebecca → Bo). Drives `displayFirstName` everywhere.
+- `first_name`, `last_name` — **read-only.** Legal name was locked when the contractor agreement was signed. Helper text points at the editable field first, then names the provider: an instructor who wants "the name people see" changed needs `preferred_name`, not their admin. **Superseded 2026-08-27:** this line used to specify "Need a legal-name change? Contact admin." — an instruction with nothing to carry it out with, which Jeff's team reported as a dead end. Do not restore it.
+- `preferred_name` — **editable.** Optional, and only when the instructor goes by something *different* (e.g. Rebecca → Bo). Drives `displayFirstName` everywhere. Written through `normalizePreferredName`, so a value equal to the legal first name stores blank — it was always a no-op for display, and storing it made the field look like the thing that was wrong.
 - `email` — read-only.
 - `phone` — editable.
 - `avatar` (in `photo_url`) — editable. See §3.2.

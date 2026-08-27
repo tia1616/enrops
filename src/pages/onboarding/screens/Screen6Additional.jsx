@@ -112,19 +112,50 @@ const MANDATORY_ACK =
 // understand something is not evidence that they do.
 const PHOTO_CONSENT_KEY = 'photo_consent';
 
-const photoAcks = (orgName) => [
-  {
-    key: PHOTO_CONSENT_KEY,
-    label: renderWaiverText(
-      'I agree to {{org}} photographing or recording me at program sites, and to my likeness being used in their marketing',
-      orgName,
-    ),
-  },
+// A TICK BECAME A CHOICE on 2026-08-27. The consent itself is unchanged — it is
+// still refusable, and refusing still does not affect the work offered. What
+// changed is that "no" is now something you SAY rather than something you fail
+// to do.
+//
+// The old shape was one optional tick, and an untick was written as an explicit
+// `false`. That made two very different people identical in the record: the one
+// who read it and declined, and the one who never noticed the box. The migration
+// that introduced the column named this as its known cost and took it knowingly
+// ("the cost is that someone who does not notice the box is recorded as
+// declining, and that is the fail-safe direction").
+//
+// Jeff asked for the opposite fix — make consent mandatory — and that is the one
+// thing this must never become. Checked on prod before building: 9 of 9 of his
+// instructors who reached this screen agreed, and across 736 real registrations
+// on both providers not one family has ever declined. Nobody is refusing. A
+// mandatory yes would change no outcome and would cost the only evidence that
+// the yeses are real, exactly as his "been in a class before?" question now
+// holds 62 answers that all say yes because the form allowed nothing else.
+//
+// So: answering is required, agreeing is not. Both answers continue.
+const PHOTO_QUESTION = (orgName) =>
+  renderWaiverText(
+    'May {{org}} photograph or record you at program sites, and use your likeness in their marketing?',
+    orgName,
+  );
+
+// "No" is written first in neither position and given equal weight deliberately.
+// A refusal offered as an afterthought is a refusal people do not take.
+const PHOTO_OPTIONS = [
+  { value: 'yes', label: 'Yes, that’s fine' },
+  { value: 'no', label: 'No, please don’t' },
 ];
 
 const PHOTO_FOOTNOTE =
-  'This one is optional. Leave it unticked and carry on — it does not affect the work you are offered, '
+  'Either answer lets you carry on — it does not affect the work you are offered, '
   + 'and you can change your mind later by telling your program manager in writing.';
+
+// ONE STRING, ONE PLACE. Written at submit and cleared when the control it names
+// is satisfied, so both sites must agree on the exact text — comparing against a
+// second copy of the sentence would silently stop clearing the moment either was
+// reworded.
+const PHOTO_ANSWER_ERROR =
+  'Choose Yes or No for the photo and video question — either answer lets you continue.';
 
 const VEHICLE_ACKS = [
   { key: 'vehicle_own_transport', label: 'I am responsible for my own transportation' },
@@ -139,7 +170,7 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
     () => ALL_DOC_KEYS.filter((k) => isDocumentEnabled(documentConfig, k)),
     [documentConfig],
   );
-  const PHOTO_ACKS = useMemo(() => photoAcks(orgName), [orgName]);
+  const photoQuestion = useMemo(() => PHOTO_QUESTION(orgName), [orgName]);
   const showMandatory = DOC_KEYS.includes(MANDATORY_KEY);
   const showPhoto = DOC_KEYS.includes(PHOTO_KEY);
   const showVehicle = DOC_KEYS.includes(VEHICLE_KEY);
@@ -149,23 +180,32 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
   const [photoExpanded, setPhotoExpanded] = useState(false);
   const [vehicleExpanded, setVehicleExpanded] = useState(false);
   // SEEDED FROM WHAT THEY ALREADY ANSWERED, unlike every other group on this
-  // screen. The others are acknowledgements: re-ticking one you have already
-  // ticked costs nothing, because the answer can only ever be yes. This one is a
-  // consent with a real no, and it is the ONLY box here whose blank state is a
-  // meaningful answer that gets written.
+  // screen. The others are acknowledgements: re-confirming one you have already
+  // confirmed costs nothing, because the answer can only ever be yes. This one is
+  // a consent with a real no, so re-showing it must re-show what they said.
   //
-  // Starting it unticked meant a resubmission silently overwrote an agreement
-  // with a refusal: press Back from Screen 7, re-tick the mandatory-reporter and
-  // driving boxes to re-enable Continue, miss the optional photo box, and the
-  // consent you gave is now recorded as declined with today's date. One
-  // direction only, and invisible to everyone.
+  // The original defect this seeding fixed, kept because it explains the shape:
+  // when the control was a single tick that started unticked, pressing Back from
+  // Screen 7 and resubmitting silently overwrote an agreement with a refusal —
+  // one direction only, and invisible to everyone. As a Yes/No choice that class
+  // is gone: there is no state the control can return to that writes an answer
+  // nobody gave. An unanswered question now blocks the submit instead of
+  // defaulting, which is the point of the whole change.
   //
-  // Strictly `=== true`: null means never asked, and an instructor who has not
-  // answered must see an empty box, not a ticked one.
-  const [photoChecked, setPhotoChecked] = useState(() =>
-    Object.fromEntries(
-      PHOTO_ACKS.map((a) => [a.key, instructor?.photo_release_consent === true]),
-    )
+  // THREE STATES, and the third one is the whole reason this is not a boolean.
+  //   'yes'  -> agreed          (column true)
+  //   'no'   -> declined        (column false)
+  //   null   -> not answered yet (column null: never asked)
+  //
+  // Mapping the nullable column onto two radios via a plain boolean would
+  // pre-select "No" for every instructor who has never been asked — 17 of them on
+  // production right now — and the first thing they would see is the form
+  // claiming they had already refused. Strictly === true and === false, so null
+  // lands on neither option.
+  const [photoConsent, setPhotoConsent] = useState(() =>
+    instructor?.photo_release_consent === true ? 'yes'
+      : instructor?.photo_release_consent === false ? 'no'
+        : null
   );
   const [vehicleChecked, setVehicleChecked] = useState(() =>
     Object.fromEntries(VEHICLE_ACKS.map((a) => [a.key, false]))
@@ -242,7 +282,43 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
   const allAcksChecked =
     (!showMandatory || mandatoryAck) &&
     allVehicleChecked;
+  // THE ANSWER IS REQUIRED. THE CONSENT IS NOT. Kept as its own named boolean,
+  // separate from allAcksChecked, so the difference is visible in one line and
+  // cannot be blurred by a later edit: this compares against null, never against
+  // 'yes'. `photoConsent === 'no'` satisfies it exactly as `'yes'` does, and
+  // there is deliberately no expression anywhere in this component that requires
+  // the value to be 'yes' in order to proceed.
+  //
+  // Pinned by instructorDocuments.test.mjs, which parses this file: the gate may
+  // test that an answer EXISTS and must never test WHICH answer it is.
+  //
+  // DELIBERATELY UI-ONLY, against the usual rule that an invariant belongs in the
+  // write path as well. submit-acknowledgments treats an ABSENT key as "this
+  // caller did not ask the question" and leaves the column untouched — which is
+  // what protects a real answer from being overwritten by an older bundle, and
+  // what makes "provider switched the release off" storable as null. Making the
+  // server reject an `additional` submit that carries the photo document without
+  // a boolean would turn every stale cached bundle into a hard onboarding failure
+  // during a deploy, and this app is a PWA that serves stale assets by design.
+  // A null answer is a gap in a record; a rejected submit is an instructor who
+  // cannot start work. The fail-safe direction is the one taken here.
+  const photoAnswered = !showPhoto || photoConsent !== null;
   // Not gated on DOC_KEYS.length — see the empty-set guard in handleSubmit.
+  // photoAnswered is DELIBERATELY NOT HERE, and that is the whole point.
+  //
+  // Adding it disabled Continue whenever the question was unanswered, which made
+  // the requirement invisible: a grey button explains nothing, the submit handler
+  // is never reached, and the message written for exactly this case could never
+  // render. Caught on staging 2026-08-27 by ticking every other box and watching
+  // the button stay dead with nothing on screen.
+  //
+  // That is the same defect fixed on the registration form on 25 Aug, where the
+  // answer was: the button stays live and the reason arrives BECAUSE they pressed
+  // it. Same answer here. The unanswered-photo case is caught in handleSubmit and
+  // says what is missing.
+  //
+  // The acknowledgements keep gating the button as they always have — that
+  // behaviour is untouched by this change and is not mine to widen here.
   const canSubmit = allLoaded && allAcksChecked;
 
   async function handleSubmit(e) {
@@ -253,6 +329,16 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
     // this is a backstop rather than the mechanism.
     if (DOC_KEYS.length === 0) {
       onAdvance();
+      return;
+    }
+    // NAMES THE THING THAT IS MISSING, and the photo case gets its own sentence.
+    // "Acknowledge all required items" is useless to someone whose only gap is a
+    // question they are allowed to answer either way — it reads as "you must
+    // agree", which is the exact misunderstanding this change exists to remove.
+    // Same lesson as the Continue button that shipped on 25 Aug: say what is
+    // missing, do not just refuse.
+    if (!photoAnswered) {
+      setConfirmError(PHOTO_ANSWER_ERROR);
       return;
     }
     if (!allAcksChecked) {
@@ -276,7 +362,18 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
           // and posting `false` would record a refusal nobody made — the server
           // leaves the column untouched when the key is absent, which is what
           // "never asked" has to look like.
-          ...(showPhoto ? { photo_release_consent: !!photoChecked[PHOTO_CONSENT_KEY] } : {}),
+          // STRUCTURALLY GUARDED, not just ordered. `photoConsent === 'yes'`
+          // turns null into false, so on its own this expression would record a
+          // deliberate REFUSAL for someone who never answered — silence-means-
+          // declined, the exact thing this change removed. The early return on
+          // !photoAnswered makes that unreachable today, but that is an ordering
+          // guarantee, and reordering the guards or adding a new path to this
+          // payload would reinstate it silently on a consent record.
+          // Requiring non-null here means the key is ABSENT when unanswered,
+          // which is what the comment above says absent must mean.
+          ...(showPhoto && photoConsent !== null
+            ? { photo_release_consent: photoConsent === 'yes' }
+            : {}),
         },
         { navigate }
       );
@@ -350,9 +447,28 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
             isExpanded={photoExpanded}
             onToggle={() => setPhotoExpanded((v) => !v)}
             disabled={!docs[PHOTO_KEY]}
-            acks={PHOTO_ACKS}
-            checked={photoChecked}
-            onCheck={(k, v) => setPhotoChecked((s) => ({ ...s, [k]: v }))}
+            choice={{
+              name: PHOTO_CONSENT_KEY,
+              question: photoQuestion,
+              options: PHOTO_OPTIONS,
+              value: photoConsent,
+              // Clears ONLY ITS OWN message, never whatever is showing.
+              //
+              // The first version cleared unconditionally, which wiped
+              // "Acknowledge all required items" — a message that is still TRUE —
+              // the moment someone changed their photo answer, leaving them with a
+              // disabled Continue and nothing on screen. That is the same
+              // dead-control state this change exists to remove, reached from the
+              // other side. Caught in review.
+              //
+              // Same rule as clearErrorFor(field) in AfterschoolAvailabilityForm:
+              // only the OWNING control may dismiss a note, because an unresolved
+              // problem someone else owns must survive.
+              onChange: (v) => {
+                setPhotoConsent(v);
+                setConfirmError((cur) => (cur === PHOTO_ANSWER_ERROR ? '' : cur));
+              },
+            }}
             footnote={PHOTO_FOOTNOTE}
             className="mt-3"
           />
@@ -397,6 +513,16 @@ function MultiAckAccordion({
   acks,
   checked,
   onCheck,
+  // Optional. When present this section asks ONE question with mutually
+  // exclusive answers instead of listing tick boxes. Added rather than forked so
+  // the document body, the accordion and the footnote placement stay in one
+  // place — the photo release and the driving acknowledgements are the same kind
+  // of section wrapping different kinds of answer.
+  //
+  // `value` may be null, which selects NEITHER radio. That is load-bearing: null
+  // means the question has not been answered, and rendering it as one of the two
+  // options would put words in someone's mouth.
+  choice,
   footnote,
   className = '',
 }) {
@@ -422,18 +548,39 @@ function MultiAckAccordion({
         </div>
       )}
       <div className="space-y-2 border-t border-neutral-200 px-4 py-3">
-        {acks.map((a) => (
-          <label key={a.key} className="flex items-start gap-3 text-sm text-neutral-800">
-            <input
-              type="checkbox"
-              checked={checked[a.key]}
-              onChange={(e) => onCheck(a.key, e.target.checked)}
-              disabled={disabled}
-              className="mt-0.5 h-4 w-4 flex-shrink-0 rounded border-neutral-400 disabled:opacity-50"
-            />
-            <span>{a.label}</span>
-          </label>
-        ))}
+        {choice ? (
+          <fieldset disabled={disabled} className="disabled:opacity-50">
+            <legend className="text-sm text-neutral-800">{choice.question}</legend>
+            <div className="mt-2 space-y-2">
+              {choice.options.map((o) => (
+                <label key={o.value} className="flex items-start gap-3 text-sm text-neutral-800">
+                  <input
+                    type="radio"
+                    name={choice.name}
+                    value={o.value}
+                    checked={choice.value === o.value}
+                    onChange={() => choice.onChange(o.value)}
+                    className="mt-0.5 h-4 w-4 flex-shrink-0 border-neutral-400 disabled:opacity-50"
+                  />
+                  <span>{o.label}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+        ) : (
+          acks.map((a) => (
+            <label key={a.key} className="flex items-start gap-3 text-sm text-neutral-800">
+              <input
+                type="checkbox"
+                checked={checked[a.key]}
+                onChange={(e) => onCheck(a.key, e.target.checked)}
+                disabled={disabled}
+                className="mt-0.5 h-4 w-4 flex-shrink-0 rounded border-neutral-400 disabled:opacity-50"
+              />
+              <span>{a.label}</span>
+            </label>
+          ))
+        )}
         {/* Sits WITH the box, not at the bottom of the screen. An instructor
             deciding whether to tick needs to know it is optional at the moment
             they are deciding — guidance they have to scroll to find is guidance
