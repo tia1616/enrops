@@ -15,6 +15,10 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import { dismissalSummary } from "../../../lib/dismissal.js";
+import { roomDisplay } from "../../../lib/roomLabel.js";
+import { WAITLIST_STATUS } from "../../../lib/waitlistState.js";
+import { usePermissions } from "../../../lib/permissions.js";
+import WaitingList from "../../../components/WaitingList.jsx";
 import EmailRosterModal from "../EmailRosterModal.jsx";
 import InviteFamiliesModal from "../InviteFamiliesModal.jsx";
 
@@ -87,12 +91,19 @@ function Tel({ phone }) {
 
 export default function ProgramRoster() {
   const { org } = useOutletContext();
+  const perm = usePermissions();
   const { programId } = useParams();
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [program, setProgram] = useState(null);
   const [rows, setRows] = useState([]); // all un-cancelled regs (enrolled + pending)
+  // Waiting families, in line order. Loaded SEPARATELY from `rows` on purpose: rows is
+  // the roster, and the roster query now excludes waitlist rows precisely so a waiting
+  // child cannot be mistaken for an enrolled one. Keeping them in a different piece of
+  // state means no downstream consumer (the CSV, the roster email, the counts) can pick
+  // them up by accident.
+  const [waitlist, setWaitlist] = useState([]);
   const [contactsByStudent, setContactsByStudent] = useState({}); // { [student_id]: [student_contacts] }
 
   useEffect(() => {
@@ -111,7 +122,7 @@ export default function ProgramRoster() {
             id, curriculum, term, day_of_week, start_time, end_time, room,
             instructor_name, max_capacity, status, program_location_id,
             first_session_date, session_count,
-            program_locations ( name, district )
+            program_locations ( name, district, room_number )
           `)
           .eq("id", programId)
           .eq("organization_id", org.id)
@@ -142,6 +153,9 @@ export default function ProgramRoster() {
           `)
           .eq("program_id", programId)
           .is("cancelled_at", null)
+          // A waiting child is not on the roster. Without this they appear as an
+          // enrolled student, complete with allergy and pickup fields nobody collected.
+          .neq("status", WAITLIST_STATUS)
           .order("registered_at", { ascending: true });
         if (rErr) throw rErr;
 
@@ -162,6 +176,27 @@ export default function ProgramRoster() {
         if (mounted) {
           setProgram(prog);
           setRows(regRows ?? []);
+
+          // Waiting families, in line order. Only the light fields exist for these:
+          // a waitlist join collects child name + grade and parent contact, and NOT
+          // allergies, pickup or dismissal answers. So this select deliberately asks
+          // for nothing more - requesting the safety columns would render a row of
+          // reassuring blanks for data nobody has ever been asked for.
+          const { data: wlRows, error: wlErr } = await supabase
+            .from("registrations")
+            .select(`
+              id, waitlist_position, registered_at,
+              student:students ( id, first_name, last_name, grade ),
+              parent:parents ( first_name, last_name, email, phone )
+            `)
+            .eq("program_id", programId)
+            .eq("status", WAITLIST_STATUS)
+            .is("cancelled_at", null)
+            .order("waitlist_position", { ascending: true });
+          // A failed waitlist read must not blank the roster: the enrolled list is the
+          // load-bearing half of this page. Log it and show no waitlist section.
+          if (wlErr) console.warn("[ProgramRoster] waitlist unavailable:", wlErr.message);
+          if (mounted) setWaitlist(wlErr ? [] : (wlRows ?? []));
           setContactsByStudent(contactMap);
         }
       } catch (e) {
@@ -279,7 +314,11 @@ export default function ProgramRoster() {
     (program?.start_time || program?.end_time)
       ? `${fmtTime(program.start_time)}${program.end_time ? `–${fmtTime(program.end_time)}` : ""}`
       : null,
-    program?.room ? `Room ${program.room}` : null,
+    // Through the shared rule, so this header, the instructor portal, the roster
+    // email and the sub email cannot disagree. It also gains the SITE fallback it
+    // never had: a class carrying only program_locations.room_number showed no
+    // room here at all, which is 4 of the 32 open FA26 classes.
+    roomDisplay(program?.room, loc?.room_number),
   ].filter(Boolean).join(" · ");
 
   return (
@@ -344,9 +383,25 @@ export default function ProgramRoster() {
             bodyKey: "program_id",
           }}
           onClose={() => setEmailing(false)}
-          onSent={() => setEmailing(false)}
         />
       )}
+
+      {/* WAITING FAMILIES.
+          Deliberately BELOW the roster and visually quieter than it. These children do
+          not have a place, and the roster is what an operator prints, hands to an
+          instructor and counts heads against. A waiting child appearing with equal
+          weight is how one ends up on a sign-in sheet.
+
+          The markup and the Remove action live in components/WaitingList.jsx, because
+          the expanded row on Class rosters shows the same list and the two navs render
+          different components. One copy, two mounts. */}
+      <WaitingList
+        programId={programId}
+        orgId={org?.id}
+        rows={waitlist}
+        canEdit={perm.canEdit}
+        onChanged={setWaitlist}
+      />
 
       {showInvite && program && (
         <InviteFamiliesModal

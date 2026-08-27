@@ -13,6 +13,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { dismissalSummary } from "../../lib/dismissal.js";
+import { WAITLIST_STATUS } from "../../lib/waitlistState.js";
+import WaitingList from "../../components/WaitingList.jsx";
 import EmailRosterModal from "./EmailRosterModal";
 import InviteFamiliesModal from "./InviteFamiliesModal";
 import RefundDrawer from "../../components/RefundDrawer";
@@ -231,7 +233,15 @@ export default function Rosters() {
           camp={emailingFor}
           orgId={org?.id}
           onClose={() => setEmailingFor(null)}
-          onSent={() => {
+          onSent={(result) => {
+            // Only claim "emailed" if someone actually received it. onSent fires
+            // on any 200, and the function returns 200 with sent: 0 when Resend
+            // rejected every address - stamping there would put a delivery date
+            // on the row for a send that reached nobody, and it would vanish on
+            // the next load anyway because the loader counts status='sent' rows
+            // only. sent > 0 is exactly the rule the function uses to write that
+            // status, so the row and the table agree.
+            if (!(result?.sent > 0)) return;
             const now = new Date().toISOString();
             setCamps((cs) => (cs ?? []).map((c) =>
               c.id === emailingFor.id ? { ...c, last_emailed_at: now } : c
@@ -406,6 +416,10 @@ function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled
       `)
       .eq(target.column, target.id);
     if (excludeCancelled) q = q.is("cancelled_at", null);
+    // A waiting child is never a roster row, whatever excludeCancelled is set to. This
+    // loader feeds the roster list and the roster email, and neither should reach a
+    // family who does not have a place yet.
+    q = q.neq("status", WAITLIST_STATUS);
     const { data, error } = await q.order("registered_at", { ascending: true });
     if (error) {
       console.error("[RosterEditor] load failed", error);
@@ -1797,6 +1811,11 @@ function AfterschoolRostersSection({ org, canEdit }) {
           .from("programs")
           .select("id, curriculum, day_of_week, start_time, end_time, max_capacity, program_location_id, first_session_date, session_count, program_locations ( name, district )")
           .eq("organization_id", org.id)
+          // Published only. A draft cannot have registrations, so it would list at
+          // "0 enrolled" next to a roster-email control that would send a school an
+          // empty roster for a class that is not live. Reachable since 2026-08-08,
+          // when the lean quick builder gained Save as draft.
+          .eq("status", "open")
           .eq("term", term);
         if (pErr) throw pErr;
         const ids = (progRows ?? []).map((p) => p.id);
@@ -1807,6 +1826,7 @@ function AfterschoolRostersSection({ org, canEdit }) {
             .from("registrations")
             .select("program_id, status, payment_status")
             .in("program_id", ids)
+            .neq("status", WAITLIST_STATUS)
             .is("cancelled_at", null);
           for (const r of regs ?? []) {
             if (r.payment_status === "paid" || r.status === "confirmed") {
@@ -1841,6 +1861,7 @@ function AfterschoolRostersSection({ org, canEdit }) {
       .from("registrations")
       .select("status, payment_status")
       .eq("program_id", programId)
+      .neq("status", WAITLIST_STATUS)
       .is("cancelled_at", null)
       .then(({ data }) => {
         const n = (data ?? []).filter((r) => r.payment_status === "paid" || r.status === "confirmed").length;
@@ -1909,7 +1930,18 @@ function AfterschoolRostersSection({ org, canEdit }) {
             bodyKey: "program_id",
           }}
           onClose={() => setEmailingProgram(null)}
-          onSent={() => setEmailingProgram(null)}
+          onSent={(result) => {
+            // Mirror the camps path above: stamp the row so its "emailed <date>"
+            // label is true immediately, and DON'T close here — onSent fires on
+            // success, and closing would unmount the modal's own DoneStep before
+            // the operator ever sees who it went to. Closing is onClose's job.
+            // Same sent > 0 gate as camps: a 200 is not a delivery.
+            if (!(result?.sent > 0)) return;
+            const now = new Date().toISOString();
+            setPrograms((ps) => (ps ?? []).map((p) =>
+              p.id === emailingProgram.id ? { ...p, last_emailed_at: now } : p
+            ));
+          }}
         />
       )}
 
@@ -1999,15 +2031,65 @@ function ProgramRosterRow({ program: p, orgId, orgSlug, canEdit, expanded, onTog
       </div>
 
       {expanded && (
-        <RosterEditor
-          target={{ column: "program_id", id: p.id }}
-          orgId={orgId}
-          onChanged={onChanged}
-          refreshToken={p.refresh_token || 0}
-          excludeCancelled
-          canManage={canEdit}
-        />
+        <>
+          <RosterEditor
+            target={{ column: "program_id", id: p.id }}
+            orgId={orgId}
+            onChanged={onChanged}
+            refreshToken={p.refresh_token || 0}
+            excludeCancelled
+            canManage={canEdit}
+          />
+          {/* The waiting list belongs HERE, under the class an operator just expanded.
+              It also renders on the per-class roster page, but that page is behind a
+              "View / print" button and a list nobody opens is a list nobody acts on. */}
+          <WaitlistForProgram programId={p.id} orgId={orgId} canEdit={canEdit} />
+        </>
       )}
     </div>
+  );
+}
+
+// Loads this program's waiting families and hands them to the shared list.
+//
+// Its own fetch rather than a prop from the section above: the section's query is a
+// COUNT query (program_id/status/payment_status only) and widening it would pull parent
+// contact details for every class in the term to render a section most rows never open.
+// This runs only when a row is expanded.
+function WaitlistForProgram({ programId, orgId, canEdit }) {
+  const [rows, setRows] = useState([]);
+
+  useEffect(() => {
+    if (!programId) return;
+    let alive = true;
+    (async () => {
+      const { data, error } = await supabase
+        .from("registrations")
+        .select(`
+          id, waitlist_position, registered_at,
+          student:students ( id, first_name, last_name, grade ),
+          parent:parents ( first_name, last_name, email, phone )
+        `)
+        .eq("program_id", programId)
+        .eq("status", WAITLIST_STATUS)
+        .is("cancelled_at", null)
+        .order("waitlist_position", { ascending: true });
+      if (!alive) return;
+      // A failed waitlist read must not break the roster above it. Log and show nothing.
+      if (error) { console.warn("[Rosters] waitlist unavailable:", error.message); setRows([]); return; }
+      setRows(data ?? []);
+    })();
+    return () => { alive = false; };
+  }, [programId]);
+
+  return (
+    <WaitingList
+      programId={programId}
+      orgId={orgId}
+      rows={rows}
+      canEdit={canEdit}
+      onChanged={setRows}
+      compact
+    />
   );
 }
