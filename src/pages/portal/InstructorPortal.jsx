@@ -1477,6 +1477,7 @@ export default function InstructorPortal() {
       <Shell slug={orgSlug} instructorName={displayFirstName(instructor)} onSignOut={signOut}>
         <InstructorProfile
           instructor={{ ...instructor, id: instructor.id ?? instructor.instructor_id }}
+          orgName={orgName}
           onBack={() => setView("schedule")}
           onSaved={refetchInstructor}
         />

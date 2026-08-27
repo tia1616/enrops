@@ -12,6 +12,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { AVATARS, DEFAULT_AVATAR, avatarUrl } from '../../lib/avatars';
 import { ensureBrowserSafeImage, extensionFor } from '../../lib/heicConvert';
+import { normalizePreferredName } from '../../lib/instructorName';
 
 const PURPLE = '#1C004F';
 const BRIGHT = '#5847C9';   // indigo - primary actions (Enrops default)
@@ -30,7 +31,12 @@ const ALLOWED_CERT_MIME = new Set([
 ]);
 const MAX_CERT_BYTES = 5 * 1024 * 1024;
 
-export default function InstructorProfile({ instructor, onBack, onSaved }) {
+// `orgName` comes from the portal, which already resolved it from
+// public_org_directory. It is NOT re-fetched here: instructors are not
+// org_members, and the RLS policy on `organizations` is is_org_member(id), so an
+// instructor selecting that table gets zero rows and no error. Passing the name
+// the portal already holds is the only read that works.
+export default function InstructorProfile({ instructor, orgName = '', onBack, onSaved }) {
   // Initial values come from the instructor prop (already loaded by parent).
   const [firstName] = useState(instructor.first_name || '');
   const [lastName] = useState(instructor.last_name || '');
@@ -137,8 +143,13 @@ export default function InstructorProfile({ instructor, onBack, onSaved }) {
   // empty-after-trim phone → omit (don't overwrite real number with '').
   function buildPayload(uploadedCprUrl) {
     const body = {};
+    // Dirty-gated on the RAW value, sent NORMALISED. Gating on the normalised
+    // value instead would clear a stored legal-name copy on any unrelated save
+    // — a write to a field she never touched, which is the whole-row-write
+    // defect this codebase already has six of. Her row heals when she edits the
+    // name, which is the moment she is looking at it.
     if (preferredName !== initial.preferred_name) {
-      body.preferred_name = preferredName.trim();
+      body.preferred_name = normalizePreferredName(preferredName, firstName);
     }
     if (phone.trim() !== initial.phone.trim()) {
       body.phone = phone.trim();
@@ -230,6 +241,10 @@ export default function InstructorProfile({ instructor, onBack, onSaved }) {
         return;
       }
 
+      // Show what was actually stored. If she typed her own legal first name the
+      // payload above sent '' — leaving "Lana" sitting in the box would be the
+      // form telling her something the database does not say.
+      if ('preferred_name' in payload) setPreferredName(payload.preferred_name);
       setSuccess(true);
       setBusy(false);
       if (onSaved) onSaved();
@@ -273,8 +288,28 @@ export default function InstructorProfile({ instructor, onBack, onSaved }) {
           <SectionLabel>Your identity</SectionLabel>
           <Row label="Legal name (locked)">
             <span style={{ color: INK }}>{firstName} {lastName}</span>
-            <div style={{ color: MUTED, fontSize: 11, marginTop: 2 }}>
-              Need a legal-name change? Contact admin.
+            {/* WAS: "Need a legal-name change? Contact admin." — an instruction
+                with nothing to carry it out with. Jeff's team hit exactly that on
+                2026-08-26: "it says it needs to contact admin. No button to
+                contact Admin on that page." Same defect as the Continue button
+                that shipped on 25 Aug — the product names an action and withholds
+                it.
+                NOT a mailto. public_org_directory carries no email (checked), and
+                the only org address an instructor could be shown would have to be
+                published to anon to get here. RegisterSuccess already settled this
+                shape for families: point at a route they already have rather than
+                invent an address that might bounce.
+                The first sentence matters more than the second. Most people
+                reading this do not want their tax forms changed — they want the
+                name other people see, which is the editable box directly below. */}
+            <div style={{ color: MUTED, fontSize: 11, marginTop: 2, lineHeight: 1.5 }}>
+              This is the name on your contractor agreement and tax forms, so it stays as
+              your legal name. <b style={{ color: INK }}>To change the name people see</b>{' '}
+              &mdash; on your schedule, and in messages &mdash; use Preferred name below.
+              <br />
+              If your legal name itself is wrong or has changed, only{' '}
+              {orgName || 'your provider'} can update it: reply to any email they have
+              sent you and ask.
             </div>
           </Row>
           <Row label="Email (locked)">
@@ -292,8 +327,19 @@ export default function InstructorProfile({ instructor, onBack, onSaved }) {
                 admin one (InstructorsTab) — three doors onto one column, so they
                 have to ask for the same shape of answer. See the note on
                 Screen1Welcome for what happened when this read as a question. */}
-            <div style={{ color: MUTED, fontSize: 11, marginTop: 2 }}>
-              Just one name — we'll use it on your schedule and in messages.
+            <div style={{ color: MUTED, fontSize: 11, marginTop: 2, lineHeight: 1.5 }}>
+              Only if you go by something <em>different</em> &mdash; one name, not a list.
+              Leave it blank if you go by {firstName || 'your legal first name'}.
+              {/* The answer to "why does my nickname say my legal name?" is right
+                  here, in the value rather than in a sentence about it. Someone
+                  who typed "Lana" sees that blanking the box changes nothing, so
+                  the box stops looking like the thing that is wrong. */}
+              <div style={{ marginTop: 4 }}>
+                People currently see:{' '}
+                <b style={{ color: INK }}>
+                  {normalizePreferredName(preferredName, firstName) || firstName || '—'}
+                </b>
+              </div>
             </div>
           </Row>
           <Row label="Phone">

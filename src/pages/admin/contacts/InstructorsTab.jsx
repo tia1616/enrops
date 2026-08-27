@@ -14,6 +14,7 @@ import Chevron from '../../../components/Chevron.jsx';
 // Document LABELS come from the one list that defines them, so this panel cannot
 // drift from Settings > Instructor documents or from the wizard.
 import { documentByKey } from '../../../lib/instructorDocuments.js';
+import { normalizePreferredName } from '../../../lib/instructorName.js';
 
 const PURPLE = '#1C004F';
 const BRIGHT = '#5847C9';   // indigo - primary actions (Figma)
@@ -241,10 +242,13 @@ export default function InstructorsTab({ org }) {
   }
 
   async function saveName(instructorId, { first_name, last_name, preferred_name }) {
+    // Normalised against the first name being saved in the SAME payload, not the
+    // one already on the row — an operator fixing a typo in the legal name and
+    // the preferred name together must be judged on what they are saving.
     const payload = {
       first_name: first_name.trim(),
       last_name: last_name.trim(),
-      preferred_name: preferred_name.trim() || null,
+      preferred_name: normalizePreferredName(preferred_name, first_name) || null,
     };
     const { error: updErr } = await supabase
       .from('instructors')
@@ -1057,13 +1061,27 @@ function EditNameForm({ row, onCancel, onSave }) {
       </div>
       <div>
         <label style={labelStyle}>Preferred name <span style={{ color: MUTED, fontWeight: 400, textTransform: 'none' }}>(optional)</span></label>
-        <input type="text" value={preferred} onChange={(e) => setPreferred(e.target.value)} style={inputStyle} placeholder={row.first_name ?? ''} />
+        {/* PLACEHOLDER IS NOT THE LEGAL FIRST NAME any more. Greyed into an empty
+            box, it read as a filled-in value and taught the same wrong idea the
+            onboarding field did — that the legal name is what belongs here. Jeff's
+            team came back on 2026-08-26 with the nickname set to the legal name;
+            this is the third door onto that column, so it had to stop saying it
+            too. "Leave blank" is the placeholder because blank is the answer for
+            almost everyone. */}
+        <input type="text" value={preferred} onChange={(e) => setPreferred(e.target.value)} style={inputStyle} placeholder="Leave blank unless they go by something else" />
         {/* The third door onto instructors.preferred_name, and the one an
             operator uses to CLEAN UP what an instructor typed. It drives every
             greeting and email, so say so here too — the other two are
             Screen1Welcome and InstructorProfile. */}
-        <div style={{ color: MUTED, fontSize: 11, marginTop: 2 }}>
-          Just one name — used in their greeting and emails.
+        <div style={{ color: MUTED, fontSize: 11, marginTop: 2, lineHeight: 1.5 }}>
+          Only if they go by something different — one name, not a list. Used in their
+          greeting and emails.
+          {normalizePreferredName(preferred, firstName) === '' && preferred.trim() !== '' && (
+            <div style={{ marginTop: 3 }}>
+              That is their legal first name, so it will be saved as blank — the greeting
+              reads <b style={{ color: INK }}>{firstName.trim() || '—'}</b> either way.
+            </div>
+          )}
         </div>
       </div>
       <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8, alignItems: 'center', marginTop: 4, flexWrap: 'wrap' }}>
