@@ -23,6 +23,7 @@ import EnnieTip from "../../../components/EnnieTip.jsx";
 import EmbedSnippet from "../../../components/EmbedSnippet.jsx";
 import { buildCatalogUrl } from "../../../lib/regLinks.js";
 import { WAITLIST_STATUS } from "../../../lib/waitlistState.js";
+import { enrolledSeats, enrollmentBreakdown } from "../../../lib/enrollmentSummary.js";
 import { fetchOrgTerms, formatTermLabel } from "../../../lib/terms.js";
 import { getPermissions } from "../../../lib/permissions.js";
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
@@ -720,10 +721,48 @@ export default function ProgramsCalendar() {
             .is("cancelled_at", null);
           if (regErr) throw regErr;
           for (const r of regRows ?? []) {
-            const e = enrollment[r.program_id] ??= { paid: 0, unpaid: 0, pending: 0 };
+            const e = enrollment[r.program_id] ??= { paid: 0, unpaid: 0, pending: 0, waiting: 0 };
             if (r.payment_status === "paid") e.paid++;
             else if (r.status === "confirmed") e.unpaid++;
             else e.pending++;
+          }
+
+          // WAITING FAMILIES, COUNTED SEPARATELY AND ON PURPOSE.
+          //
+          // This is the page an operator sits on when deciding whether to add a seat,
+          // and until now it was the one screen that could not tell them anyone was
+          // waiting: a full class with six families queued read exactly like a full
+          // class with nobody queued. Jessica, 2026-08-27, looking at Woodstock.
+          //
+          // A SECOND QUERY rather than dropping the `.neq` above and bucketing inline.
+          // That `.neq` is the guard that makes the query above mean ENROLLED - it was
+          // added deliberately, across seven admin readers, because waiting children
+          // were inflating counts that drive real decisions. Loosening it here and
+          // sorting the rows out by hand would put the whole thing one careless
+          // `else` away from counting a waiting child as pending again, which is the
+          // exact bug being fixed on the roster pages in the same breath.
+          //
+          // Both roster surfaces already fetch their waiting families in their own
+          // query for the same reason; this is the third instance of one shape, not a
+          // new one.
+          //
+          // FAILS SOFT. A waiting count that cannot be read must not take the
+          // programs page down with it - the enrolled numbers are what this screen is
+          // for. On error every class simply shows no waiting line, which is what the
+          // page did yesterday.
+          const { data: wlRows, error: wlErr } = await supabase
+            .from("registrations")
+            .select("program_id")
+            .in("program_id", progIds)
+            .eq("status", WAITLIST_STATUS)
+            .is("cancelled_at", null);
+          if (wlErr) {
+            console.warn("[ProgramsCalendar] waiting counts unavailable:", wlErr.message);
+          } else {
+            for (const r of wlRows ?? []) {
+              const e = enrollment[r.program_id] ??= { paid: 0, unpaid: 0, pending: 0, waiting: 0 };
+              e.waiting++;
+            }
           }
         }
 
@@ -820,17 +859,23 @@ export default function ProgramsCalendar() {
   }, [org?.id, term, termsLoaded]);
 
   const totals = useMemo(() => {
-    let paid = 0, unpaid = 0, pending = 0, capacity = 0;
+    let paid = 0, unpaid = 0, pending = 0, waiting = 0, capacity = 0;
     for (const p of programs) {
-      const e = enrollmentByProgram[p.id] ?? { paid: 0, unpaid: 0, pending: 0 };
+      const e = enrollmentByProgram[p.id] ?? { paid: 0, unpaid: 0, pending: 0, waiting: 0 };
       paid += e.paid;
       unpaid += e.unpaid;
       pending += e.pending;
+      // `?? 0` because a waiting count that failed to load leaves the key absent,
+      // and `undefined` would turn this whole total into NaN — which renders as
+      // "NaN waiting" rather than as nothing. The read fails soft; so must the sum.
+      waiting += (e.waiting ?? 0);
       capacity += (p.max_capacity ?? 0);
     }
     // "Enrolled" = seats committed (paid OR confirmed-unpaid, e.g. VIP on installments).
     // Pending = incomplete checkouts; not counted as seats held.
-    return { paid, unpaid, pending, capacity, programCount: programs.length, enrolled: paid + unpaid };
+    // Waiting = families in the queue. Not a seat either, and deliberately kept
+    // out of `enrolled` so the headline number still means "people who have a place".
+    return { paid, unpaid, pending, waiting, capacity, programCount: programs.length, enrolled: paid + unpaid };
   }, [programs, enrollmentByProgram]);
 
   return (
@@ -1010,6 +1055,11 @@ export default function ProgramsCalendar() {
             )}
           </div>
           {totals.pending > 0 && <div style={{ color: MUTED }}>+{totals.pending} pending</div>}
+          {/* Shown on the same terms as pending: only when there is one, same quiet
+              colour, because neither is a seat. Its own <div> rather than appended to
+              the pending one, so a term with families waiting and no pending checkouts
+              still says so - which is exactly the case on both providers today. */}
+          {totals.waiting > 0 && <div style={{ color: MUTED }}>{totals.waiting} waiting</div>}
         </div>
       )}
 
@@ -1356,8 +1406,12 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
   // (legacy_own_platform) keeps them all.
   const { org: rowOrg } = useOutletContext() ?? {};
   const isLean = rowOrg?.instructor_pay_model === "enrops_platform";
-  const enr = e ?? { paid: 0, unpaid: 0, pending: 0 };
-  const enrolled = enr.paid + enr.unpaid;
+  const enr = e;
+  // Through the shared rule, so the headline number and the line beneath it
+  // cannot drift apart, and so "waiting is not a seat" is pinned by a test
+  // instead of living as four ifs inside a component. Both tolerate a missing
+  // entry — a class nobody has registered for has no key in the map at all.
+  const enrolled = enrolledSeats(enr);
   const capacity = p.max_capacity ?? 0;
   const pct = capacity > 0 ? Math.min(1, enrolled / capacity) : 0;
   const isFull = capacity > 0 && enrolled >= capacity;
@@ -1374,11 +1428,9 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
   // a feature you have, and this one has a next step worth offering.
   const publishBlocked = publishBlockedByStripe(rowOrg, p);
 
-  const breakdownParts = [];
-  if (enr.paid > 0) breakdownParts.push(`${enr.paid} paid`);
-  if (enr.unpaid > 0) breakdownParts.push(`${enr.unpaid} on installments`);
-  if (enr.pending > 0) breakdownParts.push(`+${enr.pending} pending`);
-  const breakdown = breakdownParts.join(" · ");
+  // "waiting", never "waitlist": it describes the families, not the feature, and
+  // it matches the word the roster's own section already uses.
+  const breakdown = enrollmentBreakdown(enr);
 
   // sessionDates is the full schedule ({date,kind,reason}); the row count and
   // "No dates" flag reflect real sessions only (no-school rows don't count).
