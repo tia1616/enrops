@@ -298,7 +298,22 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
   // cannot start work. The fail-safe direction is the one taken here.
   const photoAnswered = !showPhoto || photoConsent !== null;
   // Not gated on DOC_KEYS.length — see the empty-set guard in handleSubmit.
-  const canSubmit = allLoaded && allAcksChecked && photoAnswered;
+  // photoAnswered is DELIBERATELY NOT HERE, and that is the whole point.
+  //
+  // Adding it disabled Continue whenever the question was unanswered, which made
+  // the requirement invisible: a grey button explains nothing, the submit handler
+  // is never reached, and the message written for exactly this case could never
+  // render. Caught on staging 2026-08-27 by ticking every other box and watching
+  // the button stay dead with nothing on screen.
+  //
+  // That is the same defect fixed on the registration form on 25 Aug, where the
+  // answer was: the button stays live and the reason arrives BECAUSE they pressed
+  // it. Same answer here. The unanswered-photo case is caught in handleSubmit and
+  // says what is missing.
+  //
+  // The acknowledgements keep gating the button as they always have — that
+  // behaviour is untouched by this change and is not mine to widen here.
+  const canSubmit = allLoaded && allAcksChecked;
 
   async function handleSubmit(e) {
     e.preventDefault();

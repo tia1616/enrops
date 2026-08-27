@@ -755,6 +755,19 @@ eq('...and it is screen 3 that empties',
       ok(`no path makes 'yes' a condition of continuing (${bad.source.slice(0, 28)}…)`,
         !bad.test(s6));
     }
+
+    // AND THE REQUIREMENT MUST NOT DISABLE THE BUTTON. Found on staging
+    // 2026-08-27 by ticking every other box and watching Continue stay grey with
+    // nothing on screen to say why — a requirement enforced by a dead control is
+    // a requirement nobody can see, which is the exact bug the registration form
+    // shipped a fix for on 25 Aug. photoAnswered belongs in handleSubmit, where
+    // pressing the button produces a sentence, and NOT in canSubmit.
+    const submit = /const canSubmit\s*=([\s\S]*?);/.exec(s6);
+    ok('the canSubmit expression was found', Boolean(submit));
+    ok('an unanswered photo question does not grey out Continue',
+      Boolean(submit) && !/photoAnswered/.test(submit[1]));
+    ok('...it is enforced in the submit handler instead, with a message',
+      /if\s*\(\s*!photoAnswered\s*\)[\s\S]{0,200}setConfirmError/.test(s6));
     // 'yes' may appear exactly where it SHOULD: converting the choice to the
     // boolean column. If that disappears, the answer stops being recorded.
     ok("'yes' is used to record the answer, not to gate it",
