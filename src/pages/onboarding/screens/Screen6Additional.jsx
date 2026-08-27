@@ -150,6 +150,13 @@ const PHOTO_FOOTNOTE =
   'Either answer lets you carry on — it does not affect the work you are offered, '
   + 'and you can change your mind later by telling your program manager in writing.';
 
+// ONE STRING, ONE PLACE. Written at submit and cleared when the control it names
+// is satisfied, so both sites must agree on the exact text — comparing against a
+// second copy of the sentence would silently stop clearing the moment either was
+// reworded.
+const PHOTO_ANSWER_ERROR =
+  'Choose Yes or No for the photo and video question — either answer lets you continue.';
+
 const VEHICLE_ACKS = [
   { key: 'vehicle_own_transport', label: 'I am responsible for my own transportation' },
   { key: 'vehicle_insurance', label: 'I maintain valid auto insurance' },
@@ -173,19 +180,18 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
   const [photoExpanded, setPhotoExpanded] = useState(false);
   const [vehicleExpanded, setVehicleExpanded] = useState(false);
   // SEEDED FROM WHAT THEY ALREADY ANSWERED, unlike every other group on this
-  // screen. The others are acknowledgements: re-ticking one you have already
-  // ticked costs nothing, because the answer can only ever be yes. This one is a
-  // consent with a real no, and it is the ONLY box here whose blank state is a
-  // meaningful answer that gets written.
+  // screen. The others are acknowledgements: re-confirming one you have already
+  // confirmed costs nothing, because the answer can only ever be yes. This one is
+  // a consent with a real no, so re-showing it must re-show what they said.
   //
-  // Starting it unticked meant a resubmission silently overwrote an agreement
-  // with a refusal: press Back from Screen 7, re-tick the mandatory-reporter and
-  // driving boxes to re-enable Continue, miss the optional photo box, and the
-  // consent you gave is now recorded as declined with today's date. One
-  // direction only, and invisible to everyone.
+  // The original defect this seeding fixed, kept because it explains the shape:
+  // when the control was a single tick that started unticked, pressing Back from
+  // Screen 7 and resubmitting silently overwrote an agreement with a refusal —
+  // one direction only, and invisible to everyone. As a Yes/No choice that class
+  // is gone: there is no state the control can return to that writes an answer
+  // nobody gave. An unanswered question now blocks the submit instead of
+  // defaulting, which is the point of the whole change.
   //
-  // Strictly `=== true`: null means never asked, and an instructor who has not
-  // answered must see an empty box, not a ticked one.
   // THREE STATES, and the third one is the whole reason this is not a boolean.
   //   'yes'  -> agreed          (column true)
   //   'no'   -> declined        (column false)
@@ -332,7 +338,7 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
     // Same lesson as the Continue button that shipped on 25 Aug: say what is
     // missing, do not just refuse.
     if (!photoAnswered) {
-      setConfirmError('Choose Yes or No for the photo and video question — either answer lets you continue.');
+      setConfirmError(PHOTO_ANSWER_ERROR);
       return;
     }
     if (!allAcksChecked) {
@@ -356,7 +362,18 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
           // and posting `false` would record a refusal nobody made — the server
           // leaves the column untouched when the key is absent, which is what
           // "never asked" has to look like.
-          ...(showPhoto ? { photo_release_consent: photoConsent === 'yes' } : {}),
+          // STRUCTURALLY GUARDED, not just ordered. `photoConsent === 'yes'`
+          // turns null into false, so on its own this expression would record a
+          // deliberate REFUSAL for someone who never answered — silence-means-
+          // declined, the exact thing this change removed. The early return on
+          // !photoAnswered makes that unreachable today, but that is an ordering
+          // guarantee, and reordering the guards or adding a new path to this
+          // payload would reinstate it silently on a consent record.
+          // Requiring non-null here means the key is ABSENT when unanswered,
+          // which is what the comment above says absent must mean.
+          ...(showPhoto && photoConsent !== null
+            ? { photo_release_consent: photoConsent === 'yes' }
+            : {}),
         },
         { navigate }
       );
@@ -435,11 +452,22 @@ export default function Screen6Additional({ slug, instructor, onboarding, onAdva
               question: photoQuestion,
               options: PHOTO_OPTIONS,
               value: photoConsent,
-              // Clearing the confirm error here, not only on submit: the message
-              // names this control, so it has to stop being true the moment the
-              // control is satisfied. A refusal notice that outlives the refusal
-              // is the stale-feedback bug.
-              onChange: (v) => { setPhotoConsent(v); setConfirmError(''); },
+              // Clears ONLY ITS OWN message, never whatever is showing.
+              //
+              // The first version cleared unconditionally, which wiped
+              // "Acknowledge all required items" — a message that is still TRUE —
+              // the moment someone changed their photo answer, leaving them with a
+              // disabled Continue and nothing on screen. That is the same
+              // dead-control state this change exists to remove, reached from the
+              // other side. Caught in review.
+              //
+              // Same rule as clearErrorFor(field) in AfterschoolAvailabilityForm:
+              // only the OWNING control may dismiss a note, because an unresolved
+              // problem someone else owns must survive.
+              onChange: (v) => {
+                setPhotoConsent(v);
+                setConfirmError((cur) => (cur === PHOTO_ANSWER_ERROR ? '' : cur));
+              },
             }}
             footnote={PHOTO_FOOTNOTE}
             className="mt-3"

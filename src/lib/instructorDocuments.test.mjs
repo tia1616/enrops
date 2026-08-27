@@ -789,7 +789,26 @@ eq('...and it is screen 3 that empties',
     // provider who switched it off would have every instructor recorded as
     // refusing a document they were never shown.
     ok('...and only when the provider has the release switched on',
-      /showPhoto\s*\?\s*\{\s*photo_release_consent/.test(s6));
+      /showPhoto\s*&&[\s\S]{0,60}\?\s*\{\s*photo_release_consent/.test(s6));
+    // AND ONLY WHEN THERE IS AN ANSWER. `photoConsent === 'yes'` turns null into
+    // false, so without this condition the payload would record a deliberate
+    // REFUSAL for someone who never answered. The early return on !photoAnswered
+    // makes that unreachable today, but that is an ordering guarantee on a
+    // consent record; this pins the guard to the expression itself.
+    ok('...and only when the question was actually answered',
+      /showPhoto\s*&&\s*photoConsent\s*!==\s*null/.test(s6));
+
+    // THE PHOTO MESSAGE CLEARS ONLY ITSELF. Clearing unconditionally wiped
+    // "Acknowledge all required items" — still true — the moment someone changed
+    // their photo answer, leaving a disabled Continue and a blank screen.
+    ok('answering the photo question does not wipe an unrelated error',
+      !/onChange:\s*\(v\)\s*=>\s*\{[^}]*setConfirmError\(\s*''\s*\)/.test(s6));
+    ok('...it clears its own message by identity',
+      /setConfirmError\(\s*\(cur\)\s*=>\s*\(?\s*cur\s*===\s*PHOTO_ANSWER_ERROR/.test(s6));
+    // One string, one place: the sentence is written and compared from the same
+    // constant, so a reword cannot silently stop the clearing from matching.
+    eq('the photo message is defined exactly once',
+      (s6.match(/Choose Yes or No for the photo/g) ?? []).length, 1);
 
     // The mandatory-reporter tick may not assert training the platform cannot
     // verify — the wording that prompted this, and the reason it read wrong.
