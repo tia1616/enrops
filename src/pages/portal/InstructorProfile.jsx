@@ -56,14 +56,32 @@ export default function InstructorProfile({ instructor, orgName = '', onBack, on
   const [busy, setBusy] = useState(false);
   const [success, setSuccess] = useState(false);
 
-  // Snapshot the initial state so we can detect "dirty" cleanly.
-  const initial = useMemo(() => ({
+  // The baseline every field is diffed against to decide what to send.
+  //
+  // STATE, not a useMemo keyed on instructor.id — because the id never changes
+  // while this screen is open, so the memo never recomputed and the baseline
+  // stayed frozen at whatever was loaded on mount, for the whole session. Any
+  // second save was then diffed against a stale snapshot.
+  //
+  // That is not theoretical; it was caught on staging on 2026-08-27 by walking
+  // the form rather than by re-reading it. Load with preferred_name "Riley",
+  // change it to "Bo" and save (fine), then change it back to "Riley" and save:
+  // the new value equals the FROZEN baseline, so the diff is empty, the
+  // "nothing changed" branch fires, and the instructor gets the success tick
+  // while the database keeps "Bo". A save that reports success and writes
+  // nothing is the worst version of this bug, because nobody goes looking.
+  //
+  // Re-baselining after each successful save is what makes the diff mean
+  // "changed since the last thing we stored" instead of "changed since I opened
+  // the page". Reverting a field to its original value is an ordinary thing to
+  // do and has to reach the server like any other edit.
+  const [initial, setInitial] = useState(() => ({
     preferred_name: instructor.preferred_name || '',
     phone: instructor.phone || '',
     photo_url: instructor.photo_url || '',
     shirt_size: instructor.shirt_size || '',
     first_aid_cpr_expires_at: instructor.first_aid_cpr_expires_at || '',
-  }), [instructor.id]);
+  }));
 
   // Load existing emergency contacts on mount.
   useEffect(() => {
@@ -244,7 +262,24 @@ export default function InstructorProfile({ instructor, orgName = '', onBack, on
       // Show what was actually stored. If she typed her own legal first name the
       // payload above sent '' — leaving "Lana" sitting in the box would be the
       // form telling her something the database does not say.
-      if ('preferred_name' in payload) setPreferredName(payload.preferred_name);
+      const storedPreferred = 'preferred_name' in payload
+        ? payload.preferred_name
+        : preferredName;
+      if ('preferred_name' in payload) setPreferredName(storedPreferred);
+      // Re-baseline to what the server now holds, so the next save diffs against
+      // stored values rather than against page-load values. Built from the same
+      // `payload` that was actually accepted — never from the form state, which
+      // can hold a raw legal-name string the server stored as blank.
+      setInitial((prev) => ({
+        ...prev,
+        preferred_name: storedPreferred,
+        phone: 'phone' in payload ? payload.phone : prev.phone,
+        photo_url: 'avatar_key' in payload ? payload.avatar_key : prev.photo_url,
+        shirt_size: 'shirt_size' in payload ? payload.shirt_size : prev.shirt_size,
+        first_aid_cpr_expires_at: 'first_aid_cpr_expires_at' in payload
+          ? payload.first_aid_cpr_expires_at
+          : prev.first_aid_cpr_expires_at,
+      }));
       setSuccess(true);
       setBusy(false);
       if (onSaved) onSaved();
