@@ -63,8 +63,17 @@ eq('a conversational answer is NOT silently rewritten',
   normalizePreferredName('Jennifer or Jen', 'Jennifer'), 'Jennifer or Jen');
 
 // --- the invariant that makes all of the above safe ----------------------
-// Normalising must never change what a human reads. If this group ever fails,
-// clearing the column stopped being a no-op and the fix became a rename.
+// Normalising must never change what THESE TWO FUNCTIONS return. If this group
+// ever fails, clearing the column stopped being a no-op and the fix became a
+// rename.
+//
+// SCOPE, stated because the comment in instructorName.js used to overstate it:
+// this guarantee covers displayFirstName and displayFullName, which is every
+// greeting and every email. It does NOT cover the ~35 places that hand-spell the
+// rule inline. Five of those read "preferred ALONE, else first+last"
+// (InstructorsTab, AssignSubModal, Payroll, ClassReports, AudienceContacts) and
+// there a cleared row genuinely renders differently — "Avery" becomes
+// "Avery Flores". Accepted, and documented at the top of instructorName.js.
 for (const [first, typed] of [
   ['Lana', 'Lana'], ['Zach', 'zach'], ['Chelsea', ' Chelsea '], ['Rose', 'ROSE'],
 ]) {

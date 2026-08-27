@@ -21,9 +21,28 @@
 // your name?", so someone called Lana answers "Lana". That is a correct answer
 // to the question as it was asked, which is why the wording changed too.
 //
-// Storing first_name here was always a no-op — displayFirstName returns the same
-// string either way — so normalising it costs nothing and makes the box mean one
-// thing: "I go by something else". Existing rows heal on their owner's next save.
+// Storing first_name here is a no-op for the GREETING — displayFirstName returns
+// the same string either way — so normalising costs nothing where it matters and
+// makes the box mean one thing: "I go by something else". Existing rows heal on
+// their owner's next save.
+//
+// IT IS NOT A NO-OP EVERYWHERE, and the earlier version of this comment said it
+// was. Found by reviewing the three builds as one release, 2026-08-27. The rule
+// is hand-spelled ~35 times across the app in two different shapes:
+//
+//   shape 1  (preferred || first) + last     -> clearing changes nothing
+//   shape 2  preferred ALONE, else first+last -> clearing changes the string
+//
+// Shape 2 lives on five ADMIN surfaces — InstructorsTab, AssignSubModal, Payroll,
+// ClassReports, AudienceContacts — where a cleared row goes from "Avery" to
+// "Avery Flores". That is fuller, not worse, and Payroll in particular wants the
+// full name, so it is accepted rather than fixed. But it is a real visible change
+// on six production rows and the invariant test below cannot see it: that test
+// pins displayFirstName and displayFullName only, which is the scope the
+// guarantee actually holds for.
+//
+// The 35 spellings are the underlying problem — one rule, one place — and that is
+// its own cleanup, on the board rather than in this change.
 //
 // SPACE-insensitive but CASE-SENSITIVE, and the case half is not fussiness.
 //
