@@ -731,16 +731,47 @@ eq('...and it is screen 3 that empties',
     ok('the driving and mandatory-reporter acks still gate Continue',
       Boolean(gate) && /Vehicle/i.test(gate[1]) && /mandatory/i.test(gate[1]));
 
-    // ONE box, not three.
-    const photoBlock = /const photoAcks\s*=[\s\S]*?\n\];/.exec(s6);
-    ok('the photo ack list was found', Boolean(photoBlock));
-    eq('the photo release asks exactly one thing',
-      (photoBlock?.[1] ?? photoBlock?.[0] ?? '').match(/key:/g)?.length ?? 0, 1);
+    // ANSWERING IS REQUIRED; AGREEING IS NOT. Added 2026-08-27, when the tick
+    // became a Yes/No choice, and this is the pair of assertions that keeps that
+    // distinction from collapsing.
+    //
+    // Jeff asked for photo consent to be mandatory. It must never become that,
+    // so the rule is pinned precisely rather than by the old proxy ("photo
+    // appears nowhere in any gate"), which was correct for a tick box and would
+    // simply have been deleted to make room for this change. The gate may test
+    // that an answer EXISTS. It may never test WHICH answer it is.
+    const answered = /const photoAnswered\s*=([\s\S]*?);/.exec(s6);
+    ok('the photo answered-gate was found', Boolean(answered));
+    ok('it requires an answer to exist',
+      Boolean(answered) && /photoConsent\s*!==\s*null/.test(answered[1]));
+    ok('...and does not require that answer to be yes',
+      Boolean(answered) && !/'yes'/.test(answered[1]));
+    // The strong form: NOWHERE in the component may proceeding depend on 'yes'.
+    // Catches a second gate added elsewhere, which the check above cannot see.
+    for (const bad of [
+      /canSubmit[\s\S]{0,120}===\s*'yes'/,
+      /photoConsent\s*===\s*'yes'[\s\S]{0,40}&&[\s\S]{0,40}(canSubmit|allAcks)/,
+    ]) {
+      ok(`no path makes 'yes' a condition of continuing (${bad.source.slice(0, 28)}…)`,
+        !bad.test(s6));
+    }
+    // 'yes' may appear exactly where it SHOULD: converting the choice to the
+    // boolean column. If that disappears, the answer stops being recorded.
+    ok("'yes' is used to record the answer, not to gate it",
+      /photo_release_consent:\s*photoConsent\s*===\s*'yes'/.test(s6));
 
-    // AND THE ANSWER IS SENT. Without this the box is merely decorative and a
+    // ONE question with TWO answers — not three boxes, and not one tick.
+    const photoBlock = /const PHOTO_OPTIONS\s*=[\s\S]*?\n\];/.exec(s6);
+    ok('the photo options list was found', Boolean(photoBlock));
+    eq('the photo release offers exactly two answers',
+      (photoBlock?.[0] ?? '').match(/value:/g)?.length ?? 0, 2);
+    ok('...and one of them is a refusal',
+      /value:\s*'no'/.test(photoBlock?.[0] ?? ''));
+
+    // AND THE ANSWER IS SENT. Without this the control is merely decorative and a
     // refusal dies in the browser.
     ok('the answer is posted to the server',
-      /photo_release_consent:\s*!!photoChecked\[/.test(s6));
+      /photo_release_consent:\s*photoConsent/.test(s6));
     // Only when the release is actually on this provider's screen — otherwise a
     // provider who switched it off would have every instructor recorded as
     // refusing a document they were never shown.
@@ -759,11 +790,21 @@ eq('...and it is screen 3 that empties',
     // may start blank; this one may not, because its blank state is an answer
     // that gets written.
     ok('the photo consent starts from the stored answer, not from false',
-      /useState\([\s\S]{0,220}instructor\?\.photo_release_consent === true/.test(s6));
+      /useState\([\s\S]{0,320}instructor\?\.photo_release_consent === true/.test(s6));
     // ...and strictly against true, so "never asked" (null) still renders empty.
     ok('...and null is not treated as agreed',
       !/photo_release_consent\s*\)\s*\)/.test(s6)
         && /photo_release_consent === true/.test(s6));
+    // AND STRICTLY AGAINST FALSE TOO — new with the Yes/No choice, and the
+    // sharper half. With a single tick, null and false both rendered as "not
+    // ticked" and the distinction cost nothing on screen. With two radios, a
+    // nullable boolean mapped naively pre-selects "No", so 17 instructors on
+    // production who have NEVER been asked would open the page to find it
+    // already saying they had refused. Null must select neither option.
+    ok('...and null is not treated as declined either',
+      /photo_release_consent === false\s*\?\s*'no'/.test(s6));
+    ok('...with null as the remaining state', /:\s*null\s*\)?;?\s*$/m.test(s6)
+      || /'no'\s*\n?\s*:\s*null/.test(s6));
   }
 
   // --- A STEP THAT WAS NEVER RECORDED MUST FAIL LOUDLY ------------------------
