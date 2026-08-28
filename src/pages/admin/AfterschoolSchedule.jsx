@@ -98,32 +98,32 @@ function listDates(dates) {
 
 // The extra reasons under an instructor's name in the assign picker.
 //
-// ONE COMPONENT FOR ALL THREE BUCKETS, deliberately. evaluate() returns a BLOCK
-// (`reason`) plus any number of additional `warnings`, and the picker splits
-// instructors into eligible / overridable / can't-assign. Only the eligible
-// bucket ever rendered the warnings, so an instructor who was BLOCKED showed
-// exactly one line and everything else evaluate() had worked out was thrown away
-// on screen.
+// ONE COMPONENT FOR ALL FOUR CALL SITES — eligible, overridable, can't-assign and
+// the confirm dialog. evaluate() returns a BLOCK (`reason`) plus any number of
+// additional `warnings`; only the eligible bucket ever rendered the warnings, so a
+// BLOCKED instructor showed one line and everything else evaluate() worked out was
+// discarded on screen (found on staging 2026-08-28).
 //
-// Jessica caught this on the deployed staging site on 2026-08-28, on the very
-// class used to test it: Jordan Nguyen at Irvington read only "Jordan isn't
-// available on Thursday" with no mention that he had also marked Portland as a
-// place he can't go. The overridable bucket is the one that matters most, because
-// it carries an "Assign anyway" button - so withholding the area refusal there is
-// precisely the case where an operator can act on a decision they cannot see.
-//
-// Rendered as its own component so the three call sites cannot drift apart again,
-// which is how they got out of step in the first place.
+// The overridable bucket matters most: it carries an "Assign anyway" button, so
+// withholding a reason there lets an operator act on a decision they cannot see.
 function ReasonLines({ warnings = [], muted = false }) {
   if (!warnings.length) return null;
-  return warnings.map((w, i) => (
-    <span
-      key={i}
-      style={{ fontSize: 12, color: muted ? MUTED : CORAL, fontWeight: muted ? 400 : 500, lineHeight: 1.35 }}
-    >
-      ⚠ {w}
+  // Owns its own stacking. Returning a bare array left spacing to each parent, and
+  // two of the four had no `gap` — so the same lines rendered airy in one bucket
+  // and as a wall of text in another, which is the drift this component exists to
+  // prevent. marginTop separates the first line from the block reason above it.
+  return (
+    <span style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 2 }}>
+      {warnings.map((w, i) => (
+        <span
+          key={i}
+          style={{ fontSize: 12, color: muted ? MUTED : CORAL, fontWeight: muted ? 400 : 500, lineHeight: 1.35 }}
+        >
+          ⚠ {w}
+        </span>
+      ))}
     </span>
-  ));
+  );
 }
 
 const FILTER_STATUSES = [
@@ -900,37 +900,32 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     const wd = av?.weekday_availability || {};
     const code = DAY_TO_CODE[dayKey(program.day_of_week)];
     const dayLabel = DAYS.find((d) => d.code === code)?.label ?? "that day";
-    // AREA AND DATE CONFLICTS ARE COMPUTED FIRST, ON PURPOSE — DO NOT MOVE THEM BACK DOWN.
+    // AREA AND DATE CONFLICTS ARE COMPUTED FIRST — DO NOT MOVE THEM BACK DOWN.
     //
-    // These two used to sit at the BOTTOM of this function, after five early
-    // returns (no_survey, day_off, no_time, hours, double_booked, max_days). So the
-    // moment an instructor tripped any of those, their area preference and their
-    // unavailable dates were never evaluated AT ALL: the operator was told "their
-    // Tuesday hours don't cover this class time" and never learned the instructor
-    // had also marked that area as somewhere they can't go. Jessica reported exactly
-    // that on 2026-08-28: "for those unavailable, it only says their hours don't
-    // match, when some it's the area that doesn't match."
-    //
-    // Worse than a missing label. The hours block is `overridable: true`, so an
+    // Below the five early returns (no_survey, day_off, no_time, double_booked,
+    // max_days) they were unreachable: an instructor blocked on hours never had
+    // their area evaluated at all. The hours block is `overridable: true`, so an
     // operator could override it and assign someone into an area they had
-    // explicitly refused, with NO warning ever shown, because this code had not
-    // run. J2S alone holds 140 "can't go there" rows across 17 instructors, so this
-    // fires constantly rather than being a corner case.
+    // explicitly refused with no warning ever shown. Not rare — as of 2026-08-28,
+    // J2S held 140 "can't go there" rows across 17 instructors.
     //
-    // `warnings` is already threaded into every return below, so computing these up
-    // front means every block carries the whole picture instead of only the first
-    // thing found. NOTHING ABOUT THE BLOCK DECISIONS CHANGES — both of these have
-    // always been warnings, never blocks, and they still are.
+    // `warnings` is threaded into every return below, so computing these up front
+    // means every block carries the whole picture. No block decision changes; both
+    // have always been warnings and still are.
     //
-    // Safe to run before the no_survey guard: unavailableConflicts() re-reads
-    // availByInstr itself and optional-chains a missing row, and area preferences
-    // live in a SEPARATE map, so an instructor can legitimately have refused an area
-    // without having submitted a weekday survey. Saying both is more useful than
-    // saying one. `needs_confirmation` deliberately stays below — it dereferences
-    // `av`, and when there is no survey the no_survey block already says so.
+    // Safe above the no_survey guard: unavailableConflicts() re-reads availByInstr
+    // and optional-chains a missing row, and area preferences live in a SEPARATE
+    // map — someone can refuse an area without having submitted a survey.
+    // `needs_confirmation` stays below because it dereferences `av`.
     const area = program.program_location_id ? (locArea.get(program.program_location_id) ?? null) : null;
     const pref = area ? (areaPrefByInstr.get(instructorId) || {})[area] : undefined;
-    if (pref === "unavailable") warnings.push(`${first} marked ${area} as a place they can't go.`);
+    // Kept as the exact string that was pushed, and returned below, so the confirm
+    // dialog can drop THIS line without pattern-matching the copy. One definition.
+    let areaWarningText = null;
+    if (pref === "unavailable") {
+      areaWarningText = `${first} marked ${area} as a place they can't go.`;
+      warnings.push(areaWarningText);
+    }
     // Date-specific unavailability: a weekly class isn't blocked by a missed session,
     // but flag which of this class's dates need a sub so it's not an invisible landmine.
     const dateHits = unavailableConflicts(instructorId, program);
@@ -1063,7 +1058,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     // function now, so every early return carries them too. See the block comment
     // there before adding anything here.
     if (av.needs_confirmation) warnings.push(`${first}'s availability is unconfirmed.`);
-    return { ok: true, reason: null, pref, warnings };
+    return { ok: true, reason: null, pref, warnings, areaWarningText };
   }
 
   function matchesFilters(p) {
@@ -3058,11 +3053,24 @@ function PickerModal({ program, loc, current, instructors, evaluate, onAssign, o
               when ev.pref === 'unavailable' (see clickEligible), so its sentence
               above already IS the area warning and repeating it would say the same
               thing twice. */}
-          {confirming.isOverride && confirming.ev.warnings?.length > 0 && (
-            <div style={{ display: "flex", flexDirection: "column", gap: 3, marginBottom: 14 }}>
-              <ReasonLines warnings={confirming.ev.warnings} />
-            </div>
-          )}
+          {/* The last screen before the assignment is written, so it carries every
+              reason the row carried. On the NON-override branch the prose above
+              already states the area refusal (clickEligible only opens it when
+              pref === 'unavailable'), so that one line is filtered out rather than
+              the whole list suppressed — the list can also hold sub-needed dates,
+              back-to-back, tight turnaround and unconfirmed-availability, and those
+              were vanishing exactly where the gas bonus gets typed. */}
+          {(() => {
+            const all = confirming.ev.warnings ?? [];
+            const areaLine = confirming.ev.areaWarningText;
+            const shown = confirming.isOverride ? all : all.filter((w) => w !== areaLine);
+            if (!shown.length) return null;
+            return (
+              <div style={{ marginBottom: 14 }}>
+                <ReasonLines warnings={shown} />
+              </div>
+            );
+          })()}
           <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: INK, marginBottom: 6 }}>
             Gas / distance bonus for this class (optional)
           </label>
@@ -3147,8 +3155,11 @@ function PickerModal({ program, loc, current, instructors, evaluate, onAssign, o
             {hardBlocked.map(({ inst, ev }) => (
               <div key={inst.id} style={{ padding: "8px 12px", fontSize: 13, color: MUTED, display: "flex", flexDirection: "column" }}>
                 <span style={{ fontWeight: 600 }}>{inst.preferred_name || inst.first_name} {inst.last_name}</span>
-                <span style={{ fontSize: 12 }}>{ev.reason}</span>
-                {/* Muted here: this bucket cannot be assigned at all, so the extra
+                {/* The block is the headline, so it keeps INK against the muted
+                    extras below — otherwise both render at 12px MUTED and read as
+                    one run-on sentence with a stray glyph in the middle. */}
+                <span style={{ fontSize: 12, color: INK }}>{ev.reason}</span>
+                {/* Muted: this bucket cannot be assigned at all, so the extra
                     reasons are context rather than a call to action. */}
                 <ReasonLines warnings={ev.warnings} muted />
               </div>

@@ -241,6 +241,20 @@ function businessDaysFromToday(days) {
   return d.toISOString().slice(0, 10);
 }
 
+// Today as YYYY-MM-DD in the BROWSER'S LOCAL calendar, for comparing against
+// zoneless Postgres `date` columns.
+//
+// Not `toISOString().slice(0,10)` — that is a UTC day, so west of Greenwich it
+// reads as tomorrow for the last hours of the evening. InstructorDocuments hit
+// exactly this: publishing at 5:15pm Pacific stamped effective_from as tomorrow.
+// Mirrors AfterschoolSchedule.jsx's helper of the same name.
+function todayIso() {
+  const d = new Date();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
 function classDaysOverlap(a, b) {
   if (!Array.isArray(a) || !Array.isArray(b)) return false;
   return a.some((d) => b.includes(d));
@@ -281,6 +295,15 @@ function instructorCoversSessionType(sessionTypes, sessionType) {
 // validateDrop returns { ok: boolean, hardBlocks: [msg], warnings: [msg] }.
 // `srcAssignmentId` is excluded from double-booking checks because it's the row being moved.
 // `srcRole` preserves lead-vs-developing on drop and gates developing → low-enrollment camps.
+// NOT UNIT-TESTED, and it should be. The hoist below is guarded by a comment
+// rather than a gate, because run-src-tests.mjs spawns plain `node` and a
+// .test.mjs cannot import a .jsx module — so exporting this is not enough on its
+// own. Testing it means extracting it to src/lib/ the way classifyOther was
+// (src/lib/scheduleConflicts.js), which is a real refactor: it also needs
+// MIN_ENROLLMENT, DEVELOPING_THRESHOLD, classDaysOverlap, sessionTimeOverlap,
+// sameDayDifferentLocationConflict, titleCase and instructorCoversSessionType.
+// Worth doing next time this function is opened; deliberately not bundled into a
+// release. Raised by /code-review 2026-08-28.
 function validateDrop({
   instructor, availability, locPref, curPref,
   targetSession, otherAssignments, srcAssignmentId, srcRole,
@@ -290,20 +313,22 @@ function validateDrop({
   const firstName = instructor?.first_name ?? "Instructor";
 
   // THE SURVEY-INDEPENDENT WARNINGS COME FIRST, ABOVE THE EARLY RETURN BELOW.
+  // Covered by validateDrop.test.mjs — that test, not this comment, is the guard.
   //
-  // Same defect as evaluate() in AfterschoolSchedule.jsx, found reviewing that fix
-  // (2026-08-28) — and this is the camp-vs-after-school divergence Jessica named.
   // These three read `locPref`, `curPref` and `targetSession`, all PARAMETERS, so
-  // none of them needs an availability survey. They used to sit below the
-  // `!availability` return, so an instructor with no survey was told only "no
-  // availability survey" and never that they had also marked this location or this
-  // subject as not preferred, or that the camp is under-enrolled.
+  // none needs an availability survey. Below the `!availability` return they were
+  // unreachable for a surveyless instructor, who was told only "no availability
+  // survey" and never that they had also marked this location or subject
+  // not-preferred, or that the camp is under-enrolled.
   //
   // The two that genuinely DO depend on the survey (reserved-for-full-day,
   // needs_confirmation) stay below, where `availability` is known to exist.
   //
-  // Only the ORDER of the warnings list changes; DragHoverPopup renders it as a
-  // bulleted list, so no message text and no block decision moves.
+  // No block decision changes. Note the returned ORDER does not change either —
+  // these already sat immediately before the full_day push. What changes is that
+  // `warnings` is now non-empty on the blocked path, which is why DragHoverPopup
+  // had to learn to render warnings alongside a block; without that half this
+  // whole hoist is computed and discarded.
   if (locPref === "not_preferred") {
     warnings.push(`${firstName} marked ${targetSession.location_name} as not preferred.`);
   }
@@ -471,6 +496,11 @@ export default function Schedule() {
   // without going through stale closures.
   const stateRef = useRef(state);
   useEffect(() => { stateRef.current = state; }, [state]);
+  // Same mirror trick, for the auto-flip effect below. That effect's deps are
+  // [org?.id], so reading `selectedCycleId` from its closure would forever see the
+  // mount-time null and the guard would never fire.
+  const selectedCycleIdRef = useRef(selectedCycleId);
+  useEffect(() => { selectedCycleIdRef.current = selectedCycleId; }, [selectedCycleId]);
   // IDs the admin has chosen to skip during this change-request walk. Cleared when a
   // walk starts (Hat click or calendar-card click) so skipped items resurface next time.
   const skippedThisWalkRef = useRef(new Set());
@@ -646,11 +676,12 @@ export default function Schedule() {
         // half-loaded [] would flip an actual camp operator into after-school
         // mode on a slow connection.
         //
-        // `ends_on` is selected and the `.limit(1)` is gone on purpose: the
+        // Both dates are selected and the `.limit(1)` is gone on purpose: the
         // question below is no longer "does a camp cycle exist" but "is any camp
-        // cycle still current", which cannot be answered from one arbitrary row.
-        // Orgs hold a handful of cycles, so the unbounded read is cheap.
-        supabase.from("scheduling_cycles").select("id, ends_on").eq("organization_id", org.id).eq("cycle_type", "summer_camp").neq("status", "archived"),
+        // cycle running today", which cannot be answered from one arbitrary row.
+        // Orgs hold a handful of cycles (prod: one, as of 2026-08-28), so the
+        // unbounded read is a row or two and runs once per org, not per render.
+        supabase.from("scheduling_cycles").select("id, starts_on, ends_on").eq("organization_id", org.id).eq("cycle_type", "summer_camp").neq("status", "archived"),
       ]);
       if (!alive) return;
       const terms = new Set();
@@ -696,26 +727,33 @@ export default function Schedule() {
       // operator's board on a transient failure. Only an empty, successful
       // result counts.
       //
-      // "RUNS CAMPS" AND "IS RUNNING A CAMP TODAY" ARE DIFFERENT QUESTIONS, and
-      // conflating them parked J2S on a dead board. Their only camp cycle (SU26)
-      // ended 2026-08-14, but because a camp cycle EXISTED this flip was skipped,
-      // so Instructors kept opening on the summer calendar two weeks after summer
-      // finished while Fall was already the default term. Jessica, 2026-08-28:
-      // "i should be landing on fall term in instructor schedule. summer has been
-      // over for weeks. should be automatic."
+      // "RUNS CAMPS" and "IS RUNNING A CAMP TODAY" are different questions.
+      // Conflating them parked J2S on a dead summer board (as of 2026-08-28: SU26
+      // ended 08-14 yet still held the board, because a camp cycle merely EXISTED).
       //
-      // The test is now whether any camp cycle is still CURRENT. Note it is the
-      // DATES that decide, not `status`: SU26 sat at 'scheduling' long after it
-      // ended, so status would have kept reading as live.
+      // BOTH ENDS, or a cycle nobody has reached yet pins the board: `ends_on >=
+      // today` alone is "has not ended", which is true of next summer. Creating
+      // SU27 while planning would reproduce the original bug, because loadAll picks
+      // camp cycles by starts_on DESC and takes the first.
       //
-      // A cycle with NO ends_on still holds the board — we cannot prove it
-      // finished, and moving an operator off their own board is the worse error of
-      // the two. Same fail-safe direction as the error guard above.
-      const todayIso = new Date().toISOString().slice(0, 10);
+      // DATES decide, not `status` — SU26 sat at 'scheduling' long after it ended.
+      // Dates are guaranteed present here: migration 20260607 CHECKs that a
+      // non-afterschool cycle has both, so there is no null case to guard.
+      //
+      // LOCAL date, not UTC. toISOString() is a UTC day, so a Pacific operator
+      // after 17:00 would be bounced off the camp board on camp's final afternoon —
+      // the direction this whole guard exists to avoid.
+      const todayStr = todayIso();
       const hasCurrentCamp = (campCycleRes.data ?? []).some(
-        (c) => !c.ends_on || String(c.ends_on).slice(0, 10) >= todayIso,
+        (c) => String(c.starts_on).slice(0, 10) <= todayStr && String(c.ends_on).slice(0, 10) >= todayStr,
       );
-      if (landOn && !hasCurrentCamp && !campCycleRes.error) {
+      // Never yank a board out from under someone mid-click. This effect resolves
+      // two round trips after mount, and loadAll (one trip) paints the camp board
+      // first — so before this guard an operator who picked a cycle in that window
+      // had the selection silently discarded when the flip landed. Widening the
+      // flip to orgs that OWN a camp board is what made that reachable; they now
+      // have something to lose. setSelectedTerm was already defensive this way.
+      if (landOn && !hasCurrentCamp && !campCycleRes.error && selectedCycleIdRef.current == null) {
         setScheduleMode("afterschool");
         setSelectedTerm((cur) => cur ?? landOn);
       }
@@ -972,7 +1010,9 @@ export default function Schedule() {
       d.setDate(d.getDate() + days);
       return d.toISOString().slice(0, 10);
     }
-    const todayIso = new Date().toISOString().slice(0, 10);
+    // Local, via the shared helper — this was a second character-identical UTC
+    // spelling of "today" in the same file.
+    const todayStr = todayIso();
     const pending = state.assignments.filter(
       (a) => a.status === "published"
         && !a.reminder_sent_at
@@ -985,7 +1025,7 @@ export default function Schedule() {
     const buckets = new Map();
     for (const a of pending) {
       const computed = addDays(a.deadline, -3);
-      const fire = computed < todayIso ? todayIso : computed;
+      const fire = computed < todayStr ? todayStr : computed;
       if (!buckets.has(fire)) buckets.set(fire, { instructors: new Set(), camps: 0 });
       const b = buckets.get(fire);
       b.instructors.add(a.instructor_id);
@@ -3698,10 +3738,18 @@ function SubLine({ sub, onClick }) {
   );
 }
 
+// A BLOCKED DROP STILL SHOWS ITS WARNINGS. This used to render hardBlocks XOR
+// warnings, so every reason beyond the first was computed by validateDrop and then
+// thrown away here — an instructor with no survey who had ALSO marked the location
+// not-preferred got only the survey line. Since `ok === hardBlocks.length === 0`,
+// the warn branch could never show them either, which made the whole warnings half
+// of validateDrop unreachable for blocked instructors.
 function DragHoverPopup({ kind, warnings, hardBlocks }) {
   const isBlock = kind === "block";
   const color = isBlock ? CORAL : VIOLET;
   const items = isBlock ? hardBlocks : warnings;
+  // Blocked AND warned: the block is the headline, the rest goes underneath.
+  const alsoNote = isBlock ? (warnings ?? []) : [];
   return (
     <div style={{
       position: "absolute",
@@ -3729,6 +3777,23 @@ function DragHoverPopup({ kind, warnings, hardBlocks }) {
       <ul style={{ margin: 0, paddingLeft: 16, color: INK, fontSize: 12, lineHeight: 1.4 }}>
         {items.map((t, i) => <li key={i}>{t}</li>)}
       </ul>
+      {alsoNote.length > 0 && (
+        <>
+          <div style={{
+            fontSize: 10,
+            fontWeight: 700,
+            color: VIOLET,
+            textTransform: "uppercase",
+            letterSpacing: 0.6,
+            margin: "8px 0 4px",
+          }}>
+            Also
+          </div>
+          <ul style={{ margin: 0, paddingLeft: 16, color: INK, fontSize: 12, lineHeight: 1.4 }}>
+            {alsoNote.map((t, i) => <li key={i}>{t}</li>)}
+          </ul>
+        </>
+      )}
     </div>
   );
 }
