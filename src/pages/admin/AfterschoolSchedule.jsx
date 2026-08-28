@@ -16,8 +16,15 @@ import NotifyRemovalModal from "./NotifyRemovalModal.jsx";
 import AssignSubModal from "./AssignSubModal";
 import HatGuide from "../../components/HatGuide";
 import NeedsCoverBanner from "../../components/NeedsCoverBanner.jsx";
+import ScheduleStepBar from "../../components/ScheduleStepBar.jsx";
+import { resolveBoardSendIntro } from "../../lib/boardSendCopy.js";
 import { classifyOther } from "../../lib/scheduleConflicts.js";
 import { parseBonusDollars } from "../../lib/bonusAmount.js";
+// Replaces a local gradeLabel() that has been deleted with its last caller. It
+// rendered "?" for a missing grade - printing a question mark where the answer is
+// "they didn't say" - which is the exact behaviour the shared module was written
+// to stop. Nothing else referenced it.
+import { audienceLabel } from "../../lib/grades.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -87,6 +94,36 @@ function listDates(dates) {
   const sorted = [...dates].sort();
   if (sorted.length <= 2) return sorted.map(shortDate).join(" and ");
   return `${shortDate(sorted[0])}, ${shortDate(sorted[1])} +${sorted.length - 2} more`;
+}
+
+// The extra reasons under an instructor's name in the assign picker.
+//
+// ONE COMPONENT FOR ALL FOUR CALL SITES — eligible, overridable, can't-assign and
+// the confirm dialog. evaluate() returns a BLOCK (`reason`) plus any number of
+// additional `warnings`; only the eligible bucket ever rendered the warnings, so a
+// BLOCKED instructor showed one line and everything else evaluate() worked out was
+// discarded on screen (found on staging 2026-08-28).
+//
+// The overridable bucket matters most: it carries an "Assign anyway" button, so
+// withholding a reason there lets an operator act on a decision they cannot see.
+function ReasonLines({ warnings = [], muted = false }) {
+  if (!warnings.length) return null;
+  // Owns its own stacking. Returning a bare array left spacing to each parent, and
+  // two of the four had no `gap` — so the same lines rendered airy in one bucket
+  // and as a wall of text in another, which is the drift this component exists to
+  // prevent. marginTop separates the first line from the block reason above it.
+  return (
+    <span style={{ display: "flex", flexDirection: "column", gap: 3, marginTop: 2 }}>
+      {warnings.map((w, i) => (
+        <span
+          key={i}
+          style={{ fontSize: 12, color: muted ? MUTED : CORAL, fontWeight: muted ? 400 : 500, lineHeight: 1.35 }}
+        >
+          ⚠ {w}
+        </span>
+      ))}
+    </span>
+  );
 }
 
 const FILTER_STATUSES = [
@@ -319,7 +356,10 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       const [progRes, locRes, instRes, availRes, surveyRes, areaPrefRes, cycleRes, cfgRes] = await Promise.all([
         supabase
           .from("programs")
-          .select("id, curriculum, day_of_week, start_time, end_time, program_location_id, status, max_capacity, grade_min, grade_max")
+          // age_min/age_max added with audienceLabel: the helper answers "grades OR
+          // ages", so selecting only the grade pair would have made it silently
+          // render nothing for an age-based class rather than "Ages 6-12".
+          .select("id, curriculum, day_of_week, start_time, end_time, program_location_id, status, max_capacity, grade_min, grade_max, age_min, age_max, age_format")
           .eq("organization_id", org.id)
           .eq("term", term)
           .not("status", "in", '("cancelled","archived")'),
@@ -381,46 +421,15 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       if (cycleRes.error) throw cycleRes.error;
       setOrgSurveyIntro(cfgRes.data?.intro ?? "");
 
-      // If the operator saved a default intro in Automations > Instructors >
-      // Availability survey (body_override), it takes priority over the legacy
-      // org_survey_config row. HTML → plain text for the textarea.
-      try {
-        const { data: surveyTpl } = await supabase
-          .from("automation_templates").select("id").eq("key", "availability_survey").maybeSingle();
-        if (surveyTpl?.id) {
-          const { data: surveyAuto } = await supabase
-            .from("automations").select("body_override").eq("organization_id", org.id)
-            .eq("template_id", surveyTpl.id).maybeSingle();
-          if (surveyAuto?.body_override) {
-            const plain = surveyAuto.body_override
-              .replace(/<\/p>\s*<p[^>]*>/gi, "\n\n").replace(/<br\s*\/?>/gi, "\n")
-              .replace(/<[^>]+>/g, "")
-              .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-              .replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'")
-              .replace(/&mdash;/g, "—").replace(/&ndash;/g, "–").trim();
-            if (plain) setOrgSurveyIntro(plain);
-          }
-        }
-      } catch { /* non-critical — falls back to org_survey_config or builtin */ }
-
-      try {
-        const { data: offerTpl } = await supabase
-          .from("automation_templates").select("id").eq("key", "assignment_offer").maybeSingle();
-        if (offerTpl?.id) {
-          const { data: offerAuto } = await supabase
-            .from("automations").select("body_override").eq("organization_id", org.id)
-            .eq("template_id", offerTpl.id).maybeSingle();
-          if (offerAuto?.body_override) {
-            const plain = offerAuto.body_override
-              .replace(/<\/p>\s*<p[^>]*>/gi, "\n\n").replace(/<br\s*\/?>/gi, "\n")
-              .replace(/<[^>]+>/g, "")
-              .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-              .replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'")
-              .replace(/&mdash;/g, "—").replace(/&ndash;/g, "–").trim();
-            if (plain) setOrgOfferIntro(plain);
-          }
-        }
-      } catch { /* non-critical */ }
+      // Operator's saved default intros for the board sends, authored in
+      // Comms > Automations > Instructors (automations.body_override). Each takes
+      // priority over the fallback set just above (survey: org_survey_config;
+      // offer: the edge fn's per-instructor default). Shared resolver so the four
+      // board copies (survey/offer × camp/after-school) stay in one place.
+      const savedSurveyIntro = await resolveBoardSendIntro(supabase, org.id, "availability_survey");
+      if (savedSurveyIntro) setOrgSurveyIntro(savedSurveyIntro);
+      const savedOfferIntro = await resolveBoardSendIntro(supabase, org.id, "assignment_offer");
+      if (savedOfferIntro) setOrgOfferIntro(savedOfferIntro);
 
       const programs = (progRes.data ?? []).filter((p) => DAY_TO_CODE[dayKey(p.day_of_week)]);
       const programIds = programs.map((p) => p.id);
@@ -433,11 +442,36 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         : { data: [], error: null };
       if (assignRes.error) throw assignRes.error;
 
+      // seats_taken AS WELL AS enrolled, because since 20260819j they are two different
+      // numbers and this screen was showing only one of them.
+      //
+      //   enrolled    = children actually in the class (paid or confirmed)
+      //   seats_taken = chairs that cannot be sold - also a checkout in flight, an ACH
+      //                 transfer clearing, and a waitlisted family holding a live invite
+      //
+      // Showing enrolled alone meant this column could read "3 / 14" while the capacity
+      // gate 409'd every family and the catalog said the class was full. The operator had
+      // no way to see the eleven held seats, so the screen and the product disagreed with
+      // nothing on screen to explain it. Both are shown now; see the cell below.
       const enrollRes = programIds.length
-        ? await supabase.from("program_enrollment").select("program_id, enrolled, max_capacity").in("program_id", programIds)
+        ? await supabase.from("program_enrollment").select("program_id, enrolled, seats_taken, max_capacity").in("program_id", programIds)
         : { data: [], error: null };
+      // THE ERROR WAS BEING DISCARDED. `data ?? []` on a failed read leaves `enrollment`
+      // empty and every class silently shows a dash - which looks like "no data yet"
+      // rather than "this query failed". That matters now more than it did: seats_taken
+      // only exists from 20260819j, so shipping this screen to an environment without
+      // that migration fails the WHOLE select, and the old code would have hidden it.
+      if (enrollRes.error) {
+        console.error("[AfterschoolSchedule] enrollment read failed", enrollRes.error.message);
+      }
       const enrollment = {};
-      for (const r of enrollRes.data ?? []) enrollment[r.program_id] = { enrolled: Number(r.enrolled ?? 0), max: r.max_capacity ?? null };
+      for (const r of enrollRes.data ?? []) {
+        enrollment[r.program_id] = {
+          enrolled: Number(r.enrolled ?? 0),
+          seatsTaken: Number(r.seats_taken ?? 0),
+          max: r.max_capacity ?? null,
+        };
+      }
 
       const assignments = (assignRes.data ?? []).map((a) => ({
         id: a.id,
@@ -866,6 +900,36 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     const wd = av?.weekday_availability || {};
     const code = DAY_TO_CODE[dayKey(program.day_of_week)];
     const dayLabel = DAYS.find((d) => d.code === code)?.label ?? "that day";
+    // AREA AND DATE CONFLICTS ARE COMPUTED FIRST — DO NOT MOVE THEM BACK DOWN.
+    //
+    // Below the five early returns (no_survey, day_off, no_time, double_booked,
+    // max_days) they were unreachable: an instructor blocked on hours never had
+    // their area evaluated at all. The hours block is `overridable: true`, so an
+    // operator could override it and assign someone into an area they had
+    // explicitly refused with no warning ever shown. Not rare — as of 2026-08-28,
+    // J2S held 140 "can't go there" rows across 17 instructors.
+    //
+    // `warnings` is threaded into every return below, so computing these up front
+    // means every block carries the whole picture. No block decision changes; both
+    // have always been warnings and still are.
+    //
+    // Safe above the no_survey guard: unavailableConflicts() re-reads availByInstr
+    // and optional-chains a missing row, and area preferences live in a SEPARATE
+    // map — someone can refuse an area without having submitted a survey.
+    // `needs_confirmation` stays below because it dereferences `av`.
+    const area = program.program_location_id ? (locArea.get(program.program_location_id) ?? null) : null;
+    const pref = area ? (areaPrefByInstr.get(instructorId) || {})[area] : undefined;
+    // Kept as the exact string that was pushed, and returned below, so the confirm
+    // dialog can drop THIS line without pattern-matching the copy. One definition.
+    let areaWarningText = null;
+    if (pref === "unavailable") {
+      areaWarningText = `${first} marked ${area} as a place they can't go.`;
+      warnings.push(areaWarningText);
+    }
+    // Date-specific unavailability: a weekly class isn't blocked by a missed session,
+    // but flag which of this class's dates need a sub so it's not an invisible landmine.
+    const dateHits = unavailableConflicts(instructorId, program);
+    if (dateHits.length) warnings.push(`${first} is unavailable on ${listDates(dateHits)} — will need a sub ${dateHits.length === 1 ? "that day" : "those days"}.`);
     // Three of the blocks below are STATED PREFERENCE, not physics: the operator can
     // legitimately know better than the survey ("she can leave her other job early
     // some Tuesdays"). Those carry overridable:true so the picker can offer "Assign
@@ -990,15 +1054,11 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         return { ok: false, overridable: false, blockKind: "max_days", reason: `${first} is at their ${av.max_days}-day limit.`, warnings };
       }
     }
-    const area = program.program_location_id ? (locArea.get(program.program_location_id) ?? null) : null;
-    const pref = area ? (areaPrefByInstr.get(instructorId) || {})[area] : undefined;
-    if (pref === "unavailable") warnings.push(`${first} marked ${area} as a place they can't go.`);
+    // area / pref and the unavailable-date warnings are computed at the TOP of this
+    // function now, so every early return carries them too. See the block comment
+    // there before adding anything here.
     if (av.needs_confirmation) warnings.push(`${first}'s availability is unconfirmed.`);
-    // Date-specific unavailability: a weekly class isn't blocked by a missed session,
-    // but flag which of this class's dates need a sub so it's not an invisible landmine.
-    const hits = unavailableConflicts(instructorId, program);
-    if (hits.length) warnings.push(`${first} is unavailable on ${listDates(hits)} — will need a sub ${hits.length === 1 ? "that day" : "those days"}.`);
-    return { ok: true, reason: null, pref, warnings };
+    return { ok: true, reason: null, pref, warnings, areaWarningText };
   }
 
   function matchesFilters(p) {
@@ -1417,7 +1477,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   async function handleApprove() {
     if (programIds.length === 0) return;
     const ok = window.confirm(
-      "Approve all proposed matches for this term? This moves them to ‘ready to send’ so you can email offers. It won’t change anything an instructor has already accepted."
+      "Lock in all proposed matches for this term? This marks them ready to send — no emails go out yet. It won’t change anything an instructor has already accepted."
     );
     if (!ok) return;
     setBusy("approving");
@@ -1438,7 +1498,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       if (approved > 0) {
         logTimeSaved({
           actionType: "afterschool_matches_approved",
-          label: `Approved ${approved} after-school ${approved === 1 ? "match" : "matches"} for ${termDisplayName(term)}`,
+          label: `Locked in ${approved} after-school ${approved === 1 ? "match" : "matches"} for ${termDisplayName(term)}`,
           hours: Math.round(approved * 0.017 * 100) / 100,
         });
       }
@@ -1462,10 +1522,14 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       });
       if (error) {
         let msg = error.message ?? "function error";
-        try { const b = await error.context?.json?.(); if (b?.error) msg = b.error; } catch {}
+        // `message` before `error`: `error` is a machine code for branching
+        // ("no_tenant_inbox"), and showing the operator a code is showing them
+        // nothing. When the function supplies a sentence, that is what goes on
+        // screen; codes remain the fallback for the ones that don't.
+        try { const b = await error.context?.json?.(); if (b?.message) msg = b.message; else if (b?.error) msg = b.error; } catch {}
         throw new Error(msg);
       }
-      if (data?.error) throw new Error(data.error);
+      if (data?.error) throw new Error(data.message ?? data.error);
       setOfferDialog({ mode: "result", payload: { mode, data } });
       // ~8 min per instructor to write and send their schedule by hand. Only counts a
       // real send that actually reached someone — a preview or a 0-sent run saves nothing.
@@ -1956,6 +2020,17 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   const changeReqProgram = state.programs.find((p) => enriched.get(p.id)?.status === "change_requested");
   const changeReqLead = changeReqProgram ? enriched.get(changeReqProgram.id)?.lead : null;
 
+  // Cockpit step map — status per step from live state. Non-linear: several steps
+  // can be active at once (a new hire back at Survey while the rest are mid-Offers).
+  const awaitingReply = counts.assigned; // confirmed + emailed, not yet responded
+  const hasDraft = (counts.proposed + counts.sendable + counts.assigned + counts.accepted + counts.draft + counts.flagged + counts.changeRequested) > 0;
+  const cockpitSteps = [
+    { key: "survey", name: "Availability", meta: survey?.opened_at ? "Survey sent" : "Not sent yet", state: survey?.opened_at ? "done" : "active" },
+    { key: "responses", name: "Responses", meta: survey?.opened_at ? `${submittedCount} of ${counts.instructors} in` : "waiting on the survey", state: !survey?.opened_at ? "todo" : (counts.instructors > 0 && submittedCount >= counts.instructors ? "done" : "active") },
+    { key: "draft", name: "Draft", meta: counts.needsHire > 0 ? `${counts.needsHire} need an instructor` : counts.proposed > 0 ? (offersOut ? `${counts.proposed} to send` : `${counts.proposed} to lock in`) : hasDraft ? "Drafted" : "Not started", state: (!hasDraft && counts.needsHire === 0) ? "todo" : (counts.needsHire > 0 || counts.proposed > 0) ? "active" : "done" },
+    { key: "offers", name: "Offers", meta: counts.sendable > 0 ? `${counts.sendable} ready to send` : offersOut ? (awaitingReply > 0 ? `${awaitingReply} awaiting reply` : "all responded") : "Not sent", state: (!offersOut && counts.sendable === 0) ? "todo" : (counts.sendable > 0 || awaitingReply > 0 || counts.changeRequested > 0) ? "active" : "done" },
+    { key: "confirmed", name: "Confirmed", meta: counts.accepted > 0 ? `${counts.accepted} accepted` : "—", state: (offersOut && awaitingReply === 0 && counts.sendable === 0 && counts.proposed === 0 && counts.needsHire === 0 && counts.accepted > 0) ? "done" : offersOut ? "active" : "todo" },
+  ];
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {saveError && (
@@ -1966,7 +2041,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
 
       {pendingPatchAssignments.length > 0 && (
         <HatGuide
-          character="instructor"
+          character="ennie"
           tip={{
             key: `as-${term}-pendingpatch-${pendingPatchAssignments.length}`,
             message: pendingPatchAssignments.length === 1
@@ -1982,7 +2057,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
 
       {counts.changeRequested > 0 && changeReqLead && (
         <HatGuide
-          character="instructor"
+          character="ennie"
           tip={{
             key: `as-${term}-changereq-${counts.changeRequested}`,
             message: counts.changeRequested === 1
@@ -2014,13 +2089,14 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         lastOp={lastOp}
         onUndo={handleUndo}
         offersOut={offersOut}
+        steps={cockpitSteps}
       />
 
       {approveResult && (
         <div style={{ background: `${OK_GREEN}14`, border: `1px solid ${OK_GREEN}55`, borderRadius: 8, padding: "12px 16px", fontSize: 14, color: INK }}>
           {approveResult.count > 0
-            ? <>Approved <strong>{approveResult.count}</strong> match{approveResult.count === 1 ? "" : "es"}. They're ready to send — click <strong>Send offers</strong>.</>
-            : <>No proposed matches to approve.</>}
+            ? <>Locked in <strong>{approveResult.count}</strong> match{approveResult.count === 1 ? "" : "es"} — ready to send. <strong>No emails went out yet.</strong> Click <strong>Send offers</strong>.</>
+            : <>No draft matches to lock in.</>}
           <button onClick={() => setApproveResult(null)} style={linkBtn}>Dismiss</button>
         </div>
       )}
@@ -2328,23 +2404,84 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
 
 const linkBtn = { background: "transparent", border: "none", color: PURPLE, fontWeight: 600, cursor: "pointer", marginLeft: 10, fontSize: 13, textDecoration: "underline" };
 
-function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCamp, counts, survey, submittedCount, busy, onOpenSurvey, onMatch, onApprove, onSendOffers, hasPrograms, lastOp, onUndo, offersOut }) {
-  // Unified term selector: afterschool terms (this view) + camp cycles (switches back to Schedule).
+// The after-school scheduling COCKPIT — one card that replaces the old header +
+// passive step bar. Term selector + a clickable pipeline stepper + a panel that
+// shows ONLY the selected step's status and its primary action (progressive
+// disclosure — one clear next thing, not a wall of buttons). The scattered
+// action buttons now live inside their step's panel.
+function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCamp, counts, survey, submittedCount, busy, onOpenSurvey, onMatch, onApprove, onSendOffers, hasPrograms, lastOp, onUndo, offersOut, steps }) {
   const value = `as:${term}`;
   function onChange(e) {
     const v = e.target.value;
     if (v.startsWith("as:")) onSwitchTerm && onSwitchTerm(v.slice(3));
     else onSwitchToCamp && onSwitchToCamp(v);
   }
+
+  // Focus the current step by default; clicks let the operator revisit any step
+  // (re-enterable). Fall back to the current step if the selection went stale
+  // (e.g. after a term switch).
+  const firstActive = steps.find((s) => s.state === "active")?.key ?? steps[0]?.key;
+  const [selected, setSelected] = useState(firstActive);
+  const selKey = steps.some((s) => s.key === selected) ? selected : firstActive;
+
+  const someStaffed = (counts.assigned + counts.accepted + counts.flagged + counts.changeRequested) > 0;
+  const nothingToMatch = counts.needsHire === 0;
+  const out = Math.max(0, counts.instructors - submittedCount);
+
+  const PANELS = {
+    survey: {
+      status: survey?.opened_at
+        ? `Availability survey sent${survey.deadline ? ` · due ${fmtDeadline(survey.deadline)}` : ""}.`
+        : "Ask your instructors when and where they can teach. Their answers feed the draft.",
+      actions: [{ label: survey?.opened_at ? "Resend survey" : "Send availability survey", onClick: onOpenSurvey, primary: !survey?.opened_at, disabled: !!busy }],
+    },
+    responses: {
+      status: survey?.opened_at
+        ? `${submittedCount} of ${counts.instructors} responded${out ? ` · ${out} still out` : ""}${survey.deadline ? ` · due ${fmtDeadline(survey.deadline)}` : ""}.`
+        : "Send the availability survey first — responses land here.",
+      actions: survey?.opened_at && out > 0
+        ? [{ label: `Remind ${out} non-responder${out === 1 ? "" : "s"}`, onClick: onOpenSurvey, primary: true, disabled: !!busy }]
+        : [],
+    },
+    draft: {
+      status: counts.needsHire > 0
+        ? `${counts.needsHire} class${counts.needsHire === 1 ? "" : "es"} still need an instructor.`
+        : counts.proposed > 0
+          ? (offersOut
+              ? `${counts.proposed} instructor${counts.proposed === 1 ? "" : "s"} added since offers went out — send their offer from Ennie's prompt.`
+              : `${counts.proposed} draft match${counts.proposed === 1 ? "" : "es"} ready to lock in.`)
+          : "Draft is built. Locking it in sends no emails.",
+      actions: [
+        ...(!nothingToMatch ? [{ label: busy === "matching" ? "Matching…" : (someStaffed ? "Match remaining" : "Match instructors"), onClick: onMatch, primary: counts.proposed === 0, disabled: !!busy || !hasPrograms }] : []),
+        ...(counts.proposed > 0 && !offersOut ? [{ label: busy === "approving" ? "Locking in…" : "Lock in draft", onClick: onApprove, primary: true, disabled: !!busy, note: "no emails sent" }] : []),
+      ],
+    },
+    offers: {
+      status: counts.sendable > 0
+        ? `${counts.sendable} class${counts.sendable === 1 ? "" : "es"} ready to send offers.`
+        : offersOut
+          ? "Offers are out — waiting on replies. Reminders fire automatically."
+          : "Lock in the draft first, then send offers.",
+      actions: counts.sendable > 0
+        ? [{ label: busy === "offers" ? "Sending…" : `Send offers (${counts.sendable})`, onClick: onSendOffers, primary: true, disabled: !!busy }]
+        : [],
+    },
+    confirmed: {
+      status: `${counts.accepted} accepted${counts.assigned ? ` · ${counts.assigned} awaiting reply` : ""}${counts.changeRequested ? ` · ${counts.changeRequested} change requested` : ""}.`,
+      actions: [],
+    },
+  };
+  const panel = PANELS[selKey] ?? PANELS.survey;
+
   return (
-    <header style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: "18px 22px", display: "flex", flexWrap: "wrap", gap: 20, alignItems: "center", justifyContent: "space-between" }}>
-      <div>
+    <section style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: "16px 20px", display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", justifyContent: "space-between" }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
           <select
             value={value}
             onChange={onChange}
             title="Switch term"
-            style={{ fontSize: 14, fontWeight: 700, color: INK, letterSpacing: -0.2, fontFamily: "inherit", background: "transparent", border: "none", borderBottom: `2px dotted ${RULE}`, padding: "0 22px 2px 0", cursor: "pointer", appearance: "none",
+            style={{ fontSize: 15, fontWeight: 700, color: INK, letterSpacing: -0.2, fontFamily: "inherit", background: "transparent", border: "none", borderBottom: `2px dotted ${RULE}`, padding: "0 22px 2px 0", cursor: "pointer", appearance: "none",
               backgroundImage: `linear-gradient(45deg, transparent 50%, ${MUTED} 50%), linear-gradient(135deg, ${MUTED} 50%, transparent 50%)`,
               backgroundPosition: "calc(100% - 12px) center, calc(100% - 7px) center",
               backgroundSize: "5px 5px, 5px 5px",
@@ -2367,92 +2504,41 @@ function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCa
             After-school
           </span>
         </div>
-        <div style={{ marginTop: 8, fontSize: 13, color: MUTED, display: "flex", gap: 14, flexWrap: "wrap" }}>
-          <span><strong style={{ color: INK }}>{counts.assigned + counts.accepted}</strong> assigned</span>
-          {counts.draft > 0 && <span><strong style={{ color: INK }}>{counts.draft}</strong> need approval</span>}
-          <span><strong style={{ color: counts.needsHire ? CORAL : INK }}>{counts.needsHire}</strong> need an instructor</span>
-          {counts.changeRequested > 0 && <span><strong style={{ color: CHANGE_REQ }}>{counts.changeRequested}</strong> change requested</span>}
-          <span><strong style={{ color: INK }}>{counts.instructors}</strong> active instructors</span>
-        </div>
-        {survey?.opened_at ? (
-          <div style={{ marginTop: 6, fontSize: 12, color: OK_GREEN }}>
-            Survey open · {submittedCount} submitted{survey.deadline ? ` · due ${fmtDeadline(survey.deadline)}` : ""}
-          </div>
-        ) : (
-          <div style={{ marginTop: 6, fontSize: 12, color: MUTED }}>Availability survey not sent yet.</div>
-        )}
-      </div>
-
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        <button
-          type="button"
-          onClick={onOpenSurvey}
-          disabled={!!busy}
-          style={{ ...btnStyle, background: "#fff", color: BRIGHT, border: `1.5px solid ${BRIGHT}` }}
-        >
-          {survey?.opened_at ? "Resend survey" : "Open availability survey"}
-        </button>
-        {(() => {
-          // The matcher only fills EMPTY classes (idempotent; never touches accepted).
-          // With nothing unfilled it's a no-op, so grey it out — it re-enables the
-          // moment a slot opens (unassign someone). De-emphasize once offers exist.
-          const nothingToMatch = counts.needsHire === 0;
-          const someStaffed = (counts.assigned + counts.accepted + counts.flagged + counts.changeRequested) > 0;
-          const secondary = nothingToMatch || counts.proposed > 0 || counts.sendable > 0;
-          return (
-            <button
-              type="button"
-              onClick={onMatch}
-              disabled={!!busy || !hasPrograms || nothingToMatch}
-              title={nothingToMatch ? "Every class already has an instructor — nothing to match. Unassign someone to re-open a slot." : ""}
-              style={{ ...btnStyle,
-                background: nothingToMatch ? "#f3f1ea" : (secondary ? "#fff" : BRIGHT),
-                color: nothingToMatch ? MUTED : (secondary ? BRIGHT : "#fff"),
-                border: `1.5px solid ${nothingToMatch ? RULE : BRIGHT}`,
-                cursor: nothingToMatch ? "default" : "pointer",
-                opacity: busy === "matching" ? 0.7 : 1 }}
-            >
-              {busy === "matching" ? "Matching…" : nothingToMatch ? "All classes staffed" : someStaffed ? "Match remaining" : "Match instructors"}
-            </button>
-          );
-        })()}
         {lastOp && onUndo && (
           <button
             type="button"
             onClick={onUndo}
             title={`${lastOp.label} — undo it`}
-            style={{ ...btnStyle, background: "#fff", color: MUTED, border: `1px solid ${RULE}` }}
+            style={{ background: "transparent", border: "none", color: MUTED, fontSize: 12.5, cursor: "pointer", textDecoration: "underline", fontFamily: "inherit" }}
           >
             Undo: {lastOp.label}
           </button>
         )}
-        {/* Bulk Approve is a pre-send tool. Once offers are out it would sweep up
-            every draft on the board in one click, so it goes away (camp does the
-            same via cycle.status). Mid-flight, a newly assigned instructor is
-            approved + emailed one row at a time through the patch offer — the nudge,
-            or the Hat tip that catches the ones dismissed with "Later". */}
-        {counts.proposed > 0 && !offersOut && (
-          <button
-            type="button"
-            onClick={onApprove}
-            disabled={!!busy}
-            style={{ ...btnStyle, background: "#fff", color: BRIGHT, border: `1.5px solid ${BRIGHT}`, opacity: busy === "approving" ? 0.7 : 1 }}
-          >
-            {busy === "approving" ? "Approving…" : `Approve ${counts.proposed} match${counts.proposed === 1 ? "" : "es"}`}
-          </button>
-        )}
-        {counts.sendable > 0 && (
-          <button
-            type="button"
-            onClick={onSendOffers}
-            disabled={!!busy}
-            style={{ ...btnStyle, background: BRIGHT, color: "#fff", border: `1.5px solid ${BRIGHT}`, opacity: busy === "offers" ? 0.7 : 1 }}
-          >
-            {busy === "offers" ? "Sending…" : `Send offers (${counts.sendable})`}
-          </button>
+      </div>
+
+      <ScheduleStepBar steps={steps} selected={selKey} onSelect={setSelected} />
+
+      <div style={{ background: "#faf9fc", border: `1px solid ${RULE}`, borderRadius: 10, padding: "13px 15px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, flexWrap: "wrap" }}>
+        <div style={{ fontSize: 13.5, color: INK, lineHeight: 1.45, maxWidth: "58ch" }}>{panel.status}</div>
+        {panel.actions.length > 0 && (
+          <div style={{ display: "flex", gap: 10, alignItems: "flex-start", flexWrap: "wrap" }}>
+            {panel.actions.map((a, idx) => (
+              <div key={idx} style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2 }}>
+                <button
+                  type="button"
+                  onClick={a.onClick}
+                  disabled={a.disabled}
+                  style={{ ...btnStyle, background: a.primary ? BRIGHT : "#fff", color: a.primary ? "#fff" : BRIGHT, border: `1.5px solid ${BRIGHT}`, opacity: a.disabled ? 0.6 : 1, cursor: a.disabled ? "default" : "pointer" }}
+                >
+                  {a.label}
+                </button>
+                {a.note && <span style={{ fontSize: 11, color: MUTED }}>{a.note}</span>}
+              </div>
+            ))}
+          </div>
         )}
       </div>
-    </header>
+    </section>
   );
 }
 
@@ -2606,11 +2692,6 @@ function ActivePills({
   );
 }
 
-function gradeLabel(g) {
-  if (g === 0) return "K";
-  return g == null ? "?" : String(g);
-}
-
 function Pill({ status }) {
   const c = statusColor(status);
   return (
@@ -2713,8 +2794,16 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
                     <tr key={p.id} onClick={() => onRowClick(p)} style={{ cursor: "pointer" }}>
                       <td style={{ ...td, overflow: "hidden", textOverflow: "ellipsis" }}>
                         <div style={{ fontWeight: 700, color: INK }}>{p.curriculum || "Class"}</div>
-                        {(p.grade_min != null || p.grade_max != null) && (
-                          <div style={{ fontSize: 11.5, color: MUTED }}>Grades {gradeLabel(p.grade_min)}–{gradeLabel(p.grade_max)}</div>
+                        {/* The guard allowed ONE end to be set but the line printed
+                            both, so a range with no top rendered "Grades 2–" with a
+                            dangling dash (gradeLabel(null) is null, which React
+                            renders as nothing). That was unreachable until now - the
+                            only writer was the full-nav wizard, which always sends
+                            both ends - and the new builder/panel fields make it
+                            reachable. Same shared definition as the family-facing
+                            card, so the two can no longer disagree. */}
+                        {audienceLabel(p) && (
+                          <div style={{ fontSize: 11.5, color: MUTED }}>{audienceLabel(p)}</div>
                         )}
                       </td>
                       <td style={td}>{loc}{area && <span style={{ color: MUTED }}> · {area}</span>}</td>
@@ -2722,7 +2811,22 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
                         <span style={{ fontWeight: 600, color: INK }}>{fmtTimeRange(p.start_time, p.end_time)}</span>
                         <div style={{ fontSize: 11.5, color: PURPLE, fontWeight: 600 }}>all term</div>
                       </td>
-                      <td style={td}>{enr ? <><span style={{ fontWeight: 600, color: INK }}>{enr.enrolled}</span><span style={{ color: MUTED }}> / {enr.max ?? "—"}</span></> : <span style={{ color: MUTED }}>—</span>}</td>
+                      {/* Enrolled stays the headline number, because that is what the
+                          column says and it is the honest count of children in the class.
+                          The held seats go underneath, and ONLY when there are some, so a
+                          class with nothing pending looks exactly as it did before. This
+                          is what explains a full class whose enrolled count is lower than
+                          its cap - the difference between the two numbers is the feature
+                          (20260819j), and it needed somewhere to be visible.
+                          Copy approved by Jessica 2026-08-20. */}
+                      <td style={td}>{enr ? <>
+                        <span style={{ fontWeight: 600, color: INK }}>{enr.enrolled}</span><span style={{ color: MUTED }}> / {enr.max ?? "—"}</span>
+                        {enr.seatsTaken > enr.enrolled && (
+                          <div style={{ fontSize: 11.5, color: MUTED }}>
+                            +{enr.seatsTaken - enr.enrolled} holding a place
+                          </div>
+                        )}
+                      </> : <span style={{ color: MUTED }}>—</span>}</td>
                       <td style={td}>
                         {who ? <span style={{ fontWeight: 600, color: INK }}>{who}</span> : <span style={{ color: PURPLE, fontWeight: 600 }}>+ Assign</span>}
                         {e?.subNeeded?.length > 0 && (
@@ -2941,6 +3045,32 @@ function PickerModal({ program, loc, current, instructors, evaluate, onAssign, o
               ? <>{confirming.ev.reason} You can still assign them — they'll get an offer to accept or decline, same as anyone.</>
               : <>{name(confirming.inst)} marked this area as one they can't get to. You can offer a gas bonus to make the trip worth it.</>}
           </div>
+          {/* The FOURTH place that showed only the block reason, and the one that
+              matters most: this is the last screen before the assignment is made.
+              An override confirm that names the Thursday clash but not the area the
+              instructor refused is asking the operator to commit on half the facts.
+              Only on the override branch - the non-override branch is reached ONLY
+              when ev.pref === 'unavailable' (see clickEligible), so its sentence
+              above already IS the area warning and repeating it would say the same
+              thing twice. */}
+          {/* The last screen before the assignment is written, so it carries every
+              reason the row carried. On the NON-override branch the prose above
+              already states the area refusal (clickEligible only opens it when
+              pref === 'unavailable'), so that one line is filtered out rather than
+              the whole list suppressed — the list can also hold sub-needed dates,
+              back-to-back, tight turnaround and unconfirmed-availability, and those
+              were vanishing exactly where the gas bonus gets typed. */}
+          {(() => {
+            const all = confirming.ev.warnings ?? [];
+            const areaLine = confirming.ev.areaWarningText;
+            const shown = confirming.isOverride ? all : all.filter((w) => w !== areaLine);
+            if (!shown.length) return null;
+            return (
+              <div style={{ marginBottom: 14 }}>
+                <ReasonLines warnings={shown} />
+              </div>
+            );
+          })()}
           <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: INK, marginBottom: 6 }}>
             Gas / distance bonus for this class (optional)
           </label>
@@ -2983,9 +3113,7 @@ function PickerModal({ program, loc, current, instructors, evaluate, onAssign, o
           >
             <span style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1, minWidth: 0 }}>
               <span style={{ fontSize: 14, color: INK, fontWeight: 600 }}>{inst.preferred_name || inst.first_name} {inst.last_name}</span>
-              {ev.warnings.map((w, i) => (
-                <span key={i} style={{ fontSize: 12, color: CORAL, fontWeight: 500, lineHeight: 1.35 }}>⚠ {w}</span>
-              ))}
+              <ReasonLines warnings={ev.warnings} />
             </span>
             {(ev.pref === "preferred" || ev.pref === "highly_preferred") && (
               <span style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
@@ -3002,6 +3130,10 @@ function PickerModal({ program, loc, current, instructors, evaluate, onAssign, o
                 <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
                   <span style={{ fontSize: 13, fontWeight: 600, color: INK }}>{inst.preferred_name || inst.first_name} {inst.last_name}</span>
                   <span style={{ fontSize: 12, color: MUTED }}>{ev.reason}</span>
+                  {/* The block reason above is only the FIRST thing wrong. This row
+                      carries "Assign anyway", so every other reason has to be on
+                      screen before the operator presses it. */}
+                  <ReasonLines warnings={ev.warnings} />
                 </span>
                 {/* The person already on this class can't be re-assigned to it —
                     handleAssign early-returns on that, which would silently throw
@@ -3023,7 +3155,13 @@ function PickerModal({ program, loc, current, instructors, evaluate, onAssign, o
             {hardBlocked.map(({ inst, ev }) => (
               <div key={inst.id} style={{ padding: "8px 12px", fontSize: 13, color: MUTED, display: "flex", flexDirection: "column" }}>
                 <span style={{ fontWeight: 600 }}>{inst.preferred_name || inst.first_name} {inst.last_name}</span>
-                <span style={{ fontSize: 12 }}>{ev.reason}</span>
+                {/* The block is the headline, so it keeps INK against the muted
+                    extras below — otherwise both render at 12px MUTED and read as
+                    one run-on sentence with a stray glyph in the middle. */}
+                <span style={{ fontSize: 12, color: INK }}>{ev.reason}</span>
+                {/* Muted: this bucket cannot be assigned at all, so the extra
+                    reasons are context rather than a call to action. */}
+                <ReasonLines warnings={ev.warnings} muted />
               </div>
             ))}
           </div>
@@ -3292,7 +3430,7 @@ function OfferDialog({ dialog, term, counts, instructors, selectedInstructorIds,
     try {
       const p = await onPreview();
       setPreviews(p); setPvIdx(0);
-      if (!p.length) setPvErr("Nothing to preview — approve some matches first.");
+      if (!p.length) setPvErr("Nothing to preview — lock in the draft first.");
     } catch (e) {
       setPvErr(e.message || "Couldn't build the preview.");
     } finally { setPvBusy(false); }
@@ -3333,7 +3471,7 @@ function OfferDialog({ dialog, term, counts, instructors, selectedInstructorIds,
             </button>
           </div>
           <div style={{ maxHeight: 180, overflowY: "auto", marginTop: 4, border: `1px solid ${RULE}`, borderRadius: 8, padding: 8 }}>
-            {total === 0 && <div style={{ fontSize: 13, color: MUTED, padding: "4px 6px" }}>No instructors have approved classes yet — Approve some matches first.</div>}
+            {total === 0 && <div style={{ fontSize: 13, color: MUTED, padding: "4px 6px" }}>No instructors have classes ready yet — lock in the draft first.</div>}
             {instructors.map((i) => {
               const checked = selectedInstructorIds?.has(i.id) ?? false;
               return (
@@ -3388,9 +3526,8 @@ function OfferDialog({ dialog, term, counts, instructors, selectedInstructorIds,
 // for a term (programs link by term, not cycle_id) — turning the toggle on creates
 // it so both this control and the cron have a row to read/write.
 function AfterschoolReminders({ org, term, cycle, assignments, onChanged }) {
-  const [busy, setBusy] = useState(null); // 'toggle' | 'run' | null
+  const [busy, setBusy] = useState(null); // 'toggle' | null
   const [err, setErr] = useState(null);
-  const [result, setResult] = useState(null); // { sent, flagged } from a manual run
   const enabled = !!cycle?.auto_reminders_enabled;
 
   // Forecast: published rows still awaiting a response, bucketed by their
@@ -3434,30 +3571,6 @@ function AfterschoolReminders({ org, term, cycle, assignments, onChanged }) {
     } finally { setBusy(null); }
   }
 
-  async function runNow() {
-    setBusy("run"); setErr(null); setResult(null);
-    try {
-      // Scope the run to THIS term's after-school reminders only — never touch
-      // camp/summer or other terms from this button.
-      const { data, error } = await supabase.functions.invoke("offer-reminders-cron", {
-        body: { dry_run: false, scope: "program", organization_id: org.id, term },
-      });
-      if (error) {
-        let msg = error.message ?? "function error";
-        try { const b = await error.context?.json?.(); if (b?.error) msg = b.error; } catch {}
-        throw new Error(msg);
-      }
-      if (data?.error) throw new Error(data.error);
-      const sent = (data?.program_reminder_results ?? []).filter((r) => r.sent).length;
-      const flagged = data?.program_expired_count ?? 0;
-      setResult({ sent, flagged });
-      await onChanged();
-    } catch (e) {
-      setErr(`Couldn't send reminders: ${e.message ?? "unknown error"}`);
-      setTimeout(() => setErr(null), 8000);
-    } finally { setBusy(null); }
-  }
-
   return (
     <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10, padding: "12px 14px", display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
       <label style={{ display: "inline-flex", alignItems: "center", gap: 9, cursor: busy ? "default" : "pointer", fontSize: 13.5, color: INK, fontWeight: 600 }}>
@@ -3471,17 +3584,9 @@ function AfterschoolReminders({ org, term, cycle, assignments, onChanged }) {
               : "No replies outstanding right now.")
           : "Off — instructors won’t be nudged automatically."}
       </span>
-      <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 12 }}>
-        {result && (
-          <span style={{ fontSize: 12.5, color: OK_GREEN, fontWeight: 600 }}>
-            Sent {result.sent} reminder{result.sent === 1 ? "" : "s"}{result.flagged ? ` · flagged ${result.flagged} overdue` : ""}
-          </span>
-        )}
-        {err && <span style={{ fontSize: 12.5, color: CORAL, fontWeight: 600 }}>{err}</span>}
-        <button type="button" onClick={runNow} disabled={!!busy} style={{ background: enabled ? BRIGHT : "#fff", color: enabled ? "#fff" : MUTED, border: enabled ? "none" : `1px solid ${RULE}`, borderRadius: 7, padding: "8px 14px", fontSize: 13, fontWeight: 700, cursor: busy ? "default" : "pointer", opacity: busy ? 0.6 : 1, fontFamily: "inherit" }}>
-          {busy === "run" ? "Sending…" : "Send reminders now"}
-        </button>
-      </div>
+      {err && (
+        <span style={{ marginLeft: "auto", fontSize: 12.5, color: CORAL, fontWeight: 600 }}>{err}</span>
+      )}
     </div>
   );
 }

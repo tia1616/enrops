@@ -11,6 +11,7 @@ import { useAuth } from "../../context/AuthContext.jsx";
 // defaultTenantSlug import removed 2026-08-12 — its only use was the instructor
 // portal URL below, which no longer resolves to a specific tenant.
 import { fetchOrgTerms } from "../../lib/terms.js";
+import { resolveBoardSendIntro } from "../../lib/boardSendCopy.js";
 import HatGuide from "../../components/HatGuide";
 import Chevron from "../../components/Chevron.jsx";
 import NotifyRemovalModal from "./NotifyRemovalModal";
@@ -240,6 +241,20 @@ function businessDaysFromToday(days) {
   return d.toISOString().slice(0, 10);
 }
 
+// Today as YYYY-MM-DD in the BROWSER'S LOCAL calendar, for comparing against
+// zoneless Postgres `date` columns.
+//
+// Not `toISOString().slice(0,10)` — that is a UTC day, so west of Greenwich it
+// reads as tomorrow for the last hours of the evening. InstructorDocuments hit
+// exactly this: publishing at 5:15pm Pacific stamped effective_from as tomorrow.
+// Mirrors AfterschoolSchedule.jsx's helper of the same name.
+function todayIso() {
+  const d = new Date();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
 function classDaysOverlap(a, b) {
   if (!Array.isArray(a) || !Array.isArray(b)) return false;
   return a.some((d) => b.includes(d));
@@ -280,6 +295,15 @@ function instructorCoversSessionType(sessionTypes, sessionType) {
 // validateDrop returns { ok: boolean, hardBlocks: [msg], warnings: [msg] }.
 // `srcAssignmentId` is excluded from double-booking checks because it's the row being moved.
 // `srcRole` preserves lead-vs-developing on drop and gates developing → low-enrollment camps.
+// NOT UNIT-TESTED, and it should be. The hoist below is guarded by a comment
+// rather than a gate, because run-src-tests.mjs spawns plain `node` and a
+// .test.mjs cannot import a .jsx module — so exporting this is not enough on its
+// own. Testing it means extracting it to src/lib/ the way classifyOther was
+// (src/lib/scheduleConflicts.js), which is a real refactor: it also needs
+// MIN_ENROLLMENT, DEVELOPING_THRESHOLD, classDaysOverlap, sessionTimeOverlap,
+// sameDayDifferentLocationConflict, titleCase and instructorCoversSessionType.
+// Worth doing next time this function is opened; deliberately not bundled into a
+// release. Raised by /code-review 2026-08-28.
 function validateDrop({
   instructor, availability, locPref, curPref,
   targetSession, otherAssignments, srcAssignmentId, srcRole,
@@ -287,6 +311,33 @@ function validateDrop({
   const hardBlocks = [];
   const warnings = [];
   const firstName = instructor?.first_name ?? "Instructor";
+
+  // THE SURVEY-INDEPENDENT WARNINGS COME FIRST, ABOVE THE EARLY RETURN BELOW.
+  // Covered by validateDrop.test.mjs — that test, not this comment, is the guard.
+  //
+  // These three read `locPref`, `curPref` and `targetSession`, all PARAMETERS, so
+  // none needs an availability survey. Below the `!availability` return they were
+  // unreachable for a surveyless instructor, who was told only "no availability
+  // survey" and never that they had also marked this location or subject
+  // not-preferred, or that the camp is under-enrolled.
+  //
+  // The two that genuinely DO depend on the survey (reserved-for-full-day,
+  // needs_confirmation) stay below, where `availability` is known to exist.
+  //
+  // No block decision changes. Note the returned ORDER does not change either —
+  // these already sat immediately before the full_day push. What changes is that
+  // `warnings` is now non-empty on the blocked path, which is why DragHoverPopup
+  // had to learn to render warnings alongside a block; without that half this
+  // whole hoist is computed and discarded.
+  if (locPref === "not_preferred") {
+    warnings.push(`${firstName} marked ${targetSession.location_name} as not preferred.`);
+  }
+  if (curPref === "not_preferred") {
+    warnings.push(`${firstName} marked ${titleCase(targetSession.curriculum_category)} as not preferred.`);
+  }
+  if (targetSession.enrollment_synced_at && targetSession.current_enrollment != null && targetSession.current_enrollment < MIN_ENROLLMENT) {
+    warnings.push(`Enrollment is ${targetSession.current_enrollment} — below the ${MIN_ENROLLMENT}-student minimum.`);
+  }
 
   if (!availability) {
     hardBlocks.push(`${firstName} has no availability survey for this cycle.`);
@@ -336,15 +387,9 @@ function validateDrop({
     }
   }
 
-  if (locPref === "not_preferred") {
-    warnings.push(`${firstName} marked ${targetSession.location_name} as not preferred.`);
-  }
-  if (curPref === "not_preferred") {
-    warnings.push(`${firstName} marked ${titleCase(targetSession.curriculum_category)} as not preferred.`);
-  }
-  if (targetSession.enrollment_synced_at && targetSession.current_enrollment != null && targetSession.current_enrollment < MIN_ENROLLMENT) {
-    warnings.push(`Enrollment is ${targetSession.current_enrollment} — below the ${MIN_ENROLLMENT}-student minimum.`);
-  }
+  // locPref / curPref / enrollment are raised ABOVE the `!availability` return at
+  // the top of this function so a surveyless instructor still gets them. Do not
+  // re-add them here.
   if (
     sessionTypes.includes("full_day") &&
     (targetSession.session_type === "morning" || targetSession.session_type === "afternoon")
@@ -451,6 +496,11 @@ export default function Schedule() {
   // without going through stale closures.
   const stateRef = useRef(state);
   useEffect(() => { stateRef.current = state; }, [state]);
+  // Same mirror trick, for the auto-flip effect below. That effect's deps are
+  // [org?.id], so reading `selectedCycleId` from its closure would forever see the
+  // mount-time null and the guard would never fire.
+  const selectedCycleIdRef = useRef(selectedCycleId);
+  useEffect(() => { selectedCycleIdRef.current = selectedCycleId; }, [selectedCycleId]);
   // IDs the admin has chosen to skip during this change-request walk. Cleared when a
   // walk starts (Hat click or calendar-card click) so skipped items resurface next time.
   const skippedThisWalkRef = useRef(new Set());
@@ -531,46 +581,15 @@ export default function Schedule() {
       if (declinesRes.error) throw declinesRes.error;
       setOrgSurveyIntro(cfgRes?.data?.intro ?? "");
 
-      // If the operator saved a default intro in Automations > Instructors >
-      // Availability survey (body_override), it takes priority over the legacy
-      // org_survey_config row. HTML → plain text for the textarea.
-      try {
-        const { data: surveyTpl } = await supabase
-          .from("automation_templates").select("id").eq("key", "availability_survey").maybeSingle();
-        if (surveyTpl?.id) {
-          const { data: surveyAuto } = await supabase
-            .from("automations").select("body_override").eq("organization_id", org.id)
-            .eq("template_id", surveyTpl.id).maybeSingle();
-          if (surveyAuto?.body_override) {
-            const plain = surveyAuto.body_override
-              .replace(/<\/p>\s*<p[^>]*>/gi, "\n\n").replace(/<br\s*\/?>/gi, "\n")
-              .replace(/<[^>]+>/g, "")
-              .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-              .replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'")
-              .replace(/&mdash;/g, "—").replace(/&ndash;/g, "–").trim();
-            if (plain) setOrgSurveyIntro(plain);
-          }
-        }
-      } catch { /* non-critical — falls back to org_survey_config or builtin */ }
-
-      try {
-        const { data: offerTpl } = await supabase
-          .from("automation_templates").select("id").eq("key", "assignment_offer").maybeSingle();
-        if (offerTpl?.id) {
-          const { data: offerAuto } = await supabase
-            .from("automations").select("body_override").eq("organization_id", org.id)
-            .eq("template_id", offerTpl.id).maybeSingle();
-          if (offerAuto?.body_override) {
-            const plain = offerAuto.body_override
-              .replace(/<\/p>\s*<p[^>]*>/gi, "\n\n").replace(/<br\s*\/?>/gi, "\n")
-              .replace(/<[^>]+>/g, "")
-              .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
-              .replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'")
-              .replace(/&mdash;/g, "—").replace(/&ndash;/g, "–").trim();
-            if (plain) setOrgOfferIntro(plain);
-          }
-        }
-      } catch { /* non-critical */ }
+      // Operator's saved default intros for the board sends, authored in
+      // Comms > Automations > Instructors (automations.body_override). Each takes
+      // priority over the fallback set just above (survey: org_survey_config;
+      // offer: the edge fn's per-instructor default). Shared resolver so the four
+      // board copies (survey/offer × camp/after-school) stay in one place.
+      const savedSurveyIntro = await resolveBoardSendIntro(supabase, org.id, "availability_survey");
+      if (savedSurveyIntro) setOrgSurveyIntro(savedSurveyIntro);
+      const savedOfferIntro = await resolveBoardSendIntro(supabase, org.id, "assignment_offer");
+      if (savedOfferIntro) setOrgOfferIntro(savedOfferIntro);
 
       // Load substitutions for all camp assignments so the grid can show sub indicators.
       const assignmentIds = (assignmentsRes.data ?? []).map((a) => a.id);
@@ -652,11 +671,17 @@ export default function Schedule() {
         supabase.from("programs").select("term").eq("organization_id", org.id).not("term", "is", null),
         supabase.from("afterschool_survey_state").select("term").eq("organization_id", org.id),
         supabase.from("scheduling_cycles").select("name").eq("organization_id", org.id).eq("cycle_type", "afterschool").neq("status", "archived"),
-        // Does this org run camps at all? Asked HERE rather than reading the
+        // Is this org running a camp RIGHT NOW? Asked HERE rather than reading the
         // allCycles state, because loadAll() races this effect and reading a
         // half-loaded [] would flip an actual camp operator into after-school
         // mode on a slow connection.
-        supabase.from("scheduling_cycles").select("id").eq("organization_id", org.id).eq("cycle_type", "summer_camp").neq("status", "archived").limit(1),
+        //
+        // Both dates are selected and the `.limit(1)` is gone on purpose: the
+        // question below is no longer "does a camp cycle exist" but "is any camp
+        // cycle running today", which cannot be answered from one arbitrary row.
+        // Orgs hold a handful of cycles (prod: one, as of 2026-08-28), so the
+        // unbounded read is a row or two and runs once per org, not per render.
+        supabase.from("scheduling_cycles").select("id, starts_on, ends_on").eq("organization_id", org.id).eq("cycle_type", "summer_camp").neq("status", "archived"),
       ]);
       if (!alive) return;
       const terms = new Set();
@@ -701,8 +726,34 @@ export default function Schedule() {
       // A query ERROR must not look like "no camps" — that would flip a camp
       // operator's board on a transient failure. Only an empty, successful
       // result counts.
-      const hasCampCycles = !campCycleRes.error && (campCycleRes.data ?? []).length > 0;
-      if (landOn && !hasCampCycles && !campCycleRes.error) {
+      //
+      // "RUNS CAMPS" and "IS RUNNING A CAMP TODAY" are different questions.
+      // Conflating them parked J2S on a dead summer board (as of 2026-08-28: SU26
+      // ended 08-14 yet still held the board, because a camp cycle merely EXISTED).
+      //
+      // BOTH ENDS, or a cycle nobody has reached yet pins the board: `ends_on >=
+      // today` alone is "has not ended", which is true of next summer. Creating
+      // SU27 while planning would reproduce the original bug, because loadAll picks
+      // camp cycles by starts_on DESC and takes the first.
+      //
+      // DATES decide, not `status` — SU26 sat at 'scheduling' long after it ended.
+      // Dates are guaranteed present here: migration 20260607 CHECKs that a
+      // non-afterschool cycle has both, so there is no null case to guard.
+      //
+      // LOCAL date, not UTC. toISOString() is a UTC day, so a Pacific operator
+      // after 17:00 would be bounced off the camp board on camp's final afternoon —
+      // the direction this whole guard exists to avoid.
+      const todayStr = todayIso();
+      const hasCurrentCamp = (campCycleRes.data ?? []).some(
+        (c) => String(c.starts_on).slice(0, 10) <= todayStr && String(c.ends_on).slice(0, 10) >= todayStr,
+      );
+      // Never yank a board out from under someone mid-click. This effect resolves
+      // two round trips after mount, and loadAll (one trip) paints the camp board
+      // first — so before this guard an operator who picked a cycle in that window
+      // had the selection silently discarded when the flip landed. Widening the
+      // flip to orgs that OWN a camp board is what made that reachable; they now
+      // have something to lose. setSelectedTerm was already defensive this way.
+      if (landOn && !hasCurrentCamp && !campCycleRes.error && selectedCycleIdRef.current == null) {
         setScheduleMode("afterschool");
         setSelectedTerm((cur) => cur ?? landOn);
       }
@@ -959,7 +1010,9 @@ export default function Schedule() {
       d.setDate(d.getDate() + days);
       return d.toISOString().slice(0, 10);
     }
-    const todayIso = new Date().toISOString().slice(0, 10);
+    // Local, via the shared helper — this was a second character-identical UTC
+    // spelling of "today" in the same file.
+    const todayStr = todayIso();
     const pending = state.assignments.filter(
       (a) => a.status === "published"
         && !a.reminder_sent_at
@@ -972,7 +1025,7 @@ export default function Schedule() {
     const buckets = new Map();
     for (const a of pending) {
       const computed = addDays(a.deadline, -3);
-      const fire = computed < todayIso ? todayIso : computed;
+      const fire = computed < todayStr ? todayStr : computed;
       if (!buckets.has(fire)) buckets.set(fire, { instructors: new Set(), camps: 0 });
       const b = buckets.get(fire);
       b.instructors.add(a.instructor_id);
@@ -1145,7 +1198,15 @@ export default function Schedule() {
         <div style={{ marginBottom: 16 }}>
           <h1 style={{ color: INK, fontSize: 24, fontWeight: 800, margin: "0 0 6px" }}>Schedule</h1>
           <p style={{ color: MUTED, fontSize: 14, margin: 0, lineHeight: 1.5 }}>
-            Your weekly classes and who teaches them. Assign a coach to each class below.
+            {/* "coach" was one vocabulary leaking into shared UI, the same class
+                of bug as a tenant name. Nothing else in the product calls them
+                that: the menu says Instructors, the tab says Instructor Roster,
+                the emails say instructor. A ukulele teacher, a chess teacher and
+                a yoga teacher are not coaches, and an operator scanning for
+                "where do I assign my instructors" does not read this sentence as
+                the answer. Per-program vocabulary is a real feature and is
+                registered as debt; until it exists the neutral word wins. */}
+            Your weekly classes and who teaches them. Assign an instructor to each class below.
             Add or change classes under{" "}
             <Link to="/admin/class-schedule" style={{ color: BRIGHT, fontWeight: 600 }}>Class schedule</Link>.
           </p>
@@ -1724,7 +1785,7 @@ export default function Schedule() {
       if (flippedIds.length > 0) {
         logTimeSaved({
           actionType: "camp_matches_approved",
-          label: `Approved ${flippedIds.length} camp ${flippedIds.length === 1 ? "match" : "matches"} for ${cycleDisplayName(state.cycle.name)}`,
+          label: `Locked in ${flippedIds.length} camp ${flippedIds.length === 1 ? "match" : "matches"} for ${cycleDisplayName(state.cycle.name)}`,
           hours: Math.round(flippedIds.length * 0.017 * 100) / 100,
         });
       }
@@ -1739,7 +1800,7 @@ export default function Schedule() {
         type: "approve",
         assignmentIds: flippedIds,
         prevCycleStatus,
-        label: `Approved ${flippedIds.length} assignment${flippedIds.length === 1 ? "" : "s"}`,
+        label: `Locked in ${flippedIds.length} assignment${flippedIds.length === 1 ? "" : "s"}`,
       });
       await loadAll();
       setOfferDialog({ mode: "result", payload: { kind: "approve", count: flippedIds.length } });
@@ -1776,11 +1837,16 @@ export default function Schedule() {
         let realMsg = error.message ?? "function error";
         try {
           const body = await error.context?.json?.();
-          if (body?.error) realMsg = body.error;
+          // `message` before `error`: `error` is a machine code for branching
+          // ("no_tenant_inbox"), and showing the operator a code is showing them
+          // nothing. When the function supplies a sentence, that is what goes
+          // on screen; codes remain the fallback for the ones that don't.
+          if (body?.message) realMsg = body.message;
+          else if (body?.error) realMsg = body.error;
         } catch {}
         throw new Error(realMsg);
       }
-      if (data?.error) throw new Error(data.error);
+      if (data?.error) throw new Error(data.message ?? data.error);
       // ~8 min per instructor to write and send their camp schedule by hand. Only a
       // real send that reached someone counts — a preview or test saves nothing, and a
       // 0-sent run saved nothing either.
@@ -1858,31 +1924,6 @@ export default function Schedule() {
       console.error("Rollback failed:", err);
       setSaveError(`Couldn't roll back: ${err.message ?? "unknown error"}`);
       setTimeout(() => setSaveError(null), 6000);
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function handleRunReminders(dryRun) {
-    if (state.status !== "ready") return;
-    setBusy("reminders");
-    setSaveError(null);
-    try {
-      const { data, error } = await supabase.functions.invoke("offer-reminders-cron", {
-        body: { dry_run: dryRun, scope: "camp" },
-      });
-      if (error) {
-        let realMsg = error.message ?? "function error";
-        try { const body = await error.context?.json?.(); if (body?.error) realMsg = body.error; } catch {}
-        throw new Error(realMsg);
-      }
-      if (data?.error) throw new Error(data.error);
-      await loadAll();
-      setOfferDialog({ mode: "result", payload: { kind: "reminders", dry_run: dryRun, ...data } });
-    } catch (err) {
-      console.error("Reminders failed:", err);
-      setSaveError(`Couldn't run reminders: ${err.message ?? "unknown error"}`);
-      setTimeout(() => setSaveError(null), 8000);
     } finally {
       setBusy(null);
     }
@@ -2270,13 +2311,11 @@ export default function Schedule() {
         canApprove={cycle.status !== "published" && state.assignments.some((a) => a.status === "proposed")}
         canSend={state.assignments.some((a) => a.status === "confirmed")}
         canRematch={cycle.status === "collecting"}
-        canRunReminders={state.assignments.some((a) => a.status === "published" && !a.instructor_response_at)}
         onApprove={handleApprove}
         onSurveyClick={() => openSurvey()}
         onSendClick={() => openOfferDialog()}
         onPreviewClick={handlePreviewOffers}
         onRerunAgent={handleRerunAgent}
-        onRemindersClick={() => setOfferDialog({ mode: "reminders_choose", payload: null })}
         nextReminders={nextRemindersForecast}
         onOpenEmailActivity={() => setEmailActivityOpen(true)}
         onArchiveCycle={handleArchiveCycle}
@@ -2386,8 +2425,6 @@ export default function Schedule() {
           publishedCount={state.assignments?.filter((a) => a.status === "published").length ?? 0}
           onRollback={handleRollback}
           rollingBack={busy === "rolling_back"}
-          onRunReminders={handleRunReminders}
-          remindersBusy={busy === "reminders"}
           eligibleInstructors={(() => {
             // Build a unique, sorted list of instructors who have any
             // proposed/confirmed assignment in this cycle. These are the
@@ -2690,7 +2727,7 @@ function toggleSet(s, key) {
   return next;
 }
 
-function HeaderStrip({ cycle, allCycles, afterschoolTerms = [], onSwitchCycle, onSwitchToAfterschool, onOpenNewCycle, phaseLabel, counts, missingSurveys, lastOp, onUndo, busy, canApprove, canSend, canRematch, canRunReminders, onApprove, onSurveyClick, onSendClick, onPreviewClick, onRerunAgent, onRemindersClick, nextReminders, onOpenEmailActivity, onArchiveCycle, onUnarchiveCycle }) {
+function HeaderStrip({ cycle, allCycles, afterschoolTerms = [], onSwitchCycle, onSwitchToAfterschool, onOpenNewCycle, phaseLabel, counts, missingSurveys, lastOp, onUndo, busy, canApprove, canSend, canRematch, onApprove, onSurveyClick, onSendClick, onPreviewClick, onRerunAgent, nextReminders, onOpenEmailActivity, onArchiveCycle, onUnarchiveCycle }) {
   const otherCycles = (allCycles ?? []).filter((c) => c.id !== cycle.id);
   const hasOtherViews = otherCycles.length > 0 || (afterschoolTerms ?? []).length > 0;
   return (
@@ -2924,10 +2961,10 @@ function HeaderStrip({ cycle, allCycles, afterschoolTerms = [], onSwitchCycle, o
             type="button"
             onClick={onApprove}
             disabled={busy === "approving"}
-            title="Lock in the AI's draft assignments — flips every proposed row to confirmed so you can send offers. This is the draft-approval gate, not instructor acceptances."
+            title="Lock in the draft — marks every proposed match ready to send. No emails go out; this is the draft-approval gate, not instructor acceptances."
             style={btn("transparent", BRIGHT, true, busy === "approving")}
           >
-            {busy === "approving" ? "Approving…" : "Approve draft"}
+            {busy === "approving" ? "Locking in…" : "Lock in draft"}
           </button>
         )}
         {canSend && (
@@ -2951,17 +2988,6 @@ function HeaderStrip({ cycle, allCycles, afterschoolTerms = [], onSwitchCycle, o
               Send offers
             </button>
           </>
-        )}
-        {canRunReminders && (
-          <button
-            type="button"
-            onClick={onRemindersClick}
-            disabled={busy === "reminders"}
-            title="Fire reminder emails right now to anyone whose response is still pending (the cron auto-fires 2–3 days before each deadline — this is for manual nudges)"
-            style={btn("transparent", BRIGHT, true, busy === "reminders")}
-          >
-            {busy === "reminders" ? "Working…" : "Send reminders now"}
-          </button>
         )}
       </div>
     </header>
@@ -3712,10 +3738,18 @@ function SubLine({ sub, onClick }) {
   );
 }
 
+// A BLOCKED DROP STILL SHOWS ITS WARNINGS. This used to render hardBlocks XOR
+// warnings, so every reason beyond the first was computed by validateDrop and then
+// thrown away here — an instructor with no survey who had ALSO marked the location
+// not-preferred got only the survey line. Since `ok === hardBlocks.length === 0`,
+// the warn branch could never show them either, which made the whole warnings half
+// of validateDrop unreachable for blocked instructors.
 function DragHoverPopup({ kind, warnings, hardBlocks }) {
   const isBlock = kind === "block";
   const color = isBlock ? CORAL : VIOLET;
   const items = isBlock ? hardBlocks : warnings;
+  // Blocked AND warned: the block is the headline, the rest goes underneath.
+  const alsoNote = isBlock ? (warnings ?? []) : [];
   return (
     <div style={{
       position: "absolute",
@@ -3743,6 +3777,23 @@ function DragHoverPopup({ kind, warnings, hardBlocks }) {
       <ul style={{ margin: 0, paddingLeft: 16, color: INK, fontSize: 12, lineHeight: 1.4 }}>
         {items.map((t, i) => <li key={i}>{t}</li>)}
       </ul>
+      {alsoNote.length > 0 && (
+        <>
+          <div style={{
+            fontSize: 10,
+            fontWeight: 700,
+            color: VIOLET,
+            textTransform: "uppercase",
+            letterSpacing: 0.6,
+            margin: "8px 0 4px",
+          }}>
+            Also
+          </div>
+          <ul style={{ margin: 0, paddingLeft: 16, color: INK, fontSize: 12, lineHeight: 1.4 }}>
+            {alsoNote.map((t, i) => <li key={i}>{t}</li>)}
+          </ul>
+        </>
+      )}
     </div>
   );
 }
@@ -4174,7 +4225,7 @@ function ChangeRequestReview({ session, assignment, cycle, orgName, instructors 
   );
 }
 
-function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChange, autoReminders, onAutoRemindersChange, intro, onIntroChange, defaultIntro, publishedCount, onRollback, rollingBack, onRunReminders, remindersBusy, eligibleInstructors = [], selectedInstructorIds, onSelectedInstructorIdsChange, onPreview }) {
+function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChange, autoReminders, onAutoRemindersChange, intro, onIntroChange, defaultIntro, publishedCount, onRollback, rollingBack, eligibleInstructors = [], selectedInstructorIds, onSelectedInstructorIdsChange, onPreview }) {
   const [previews, setPreviews] = useState(null);
   const [pvIdx, setPvIdx] = useState(0);
   const [pvBusy, setPvBusy] = useState(false);
@@ -4186,7 +4237,7 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
     try {
       const p = await onPreview();
       setPreviews(p); setPvIdx(0);
-      if (!p.length) setPvErr("Nothing to preview — approve some assignments first.");
+      if (!p.length) setPvErr("Nothing to preview — lock in the draft first.");
     } catch (e) {
       setPvErr(e.message || "Couldn't build the preview.");
     } finally { setPvBusy(false); }
@@ -4194,10 +4245,9 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
 
   if (dialog.mode === "result" && dialog.payload?.kind === "approve") {
     return (
-      <ModalShell onClose={onClose} title="Approved">
+      <ModalShell onClose={onClose} title="Locked in">
         <div style={{ padding: 20, fontSize: 14, color: INK, lineHeight: 1.5 }}>
-          {dialog.payload.count} assignment{dialog.payload.count === 1 ? "" : "s"} flipped from <em>proposed</em> to <em>confirmed</em>.
-          You can now send offers.
+          {dialog.payload.count} assignment{dialog.payload.count === 1 ? "" : "s"} locked in and ready to send. <strong>No emails went out yet</strong> — click Send offers when you're ready.
         </div>
         <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
           <button type="button" onClick={onClose} style={btn(BRIGHT, "#fff")}>OK</button>
@@ -4241,85 +4291,6 @@ function OfferDialog({ dialog, onChoose, onClose, busy, deadline, onDeadlineChan
                 {rollingBack ? "Resetting…" : `Reset ${publishedCount} already-sent ${publishedCount === 1 ? "offer" : "offers"}`}
               </button>
             </div>
-          )}
-        </div>
-        <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
-          <button type="button" onClick={onClose} style={btn(BRIGHT, "#fff")}>Close</button>
-        </div>
-      </ModalShell>
-    );
-  }
-
-  if (dialog.mode === "reminders_choose") {
-    return (
-      <ModalShell onClose={onClose} title="Reminders + deadline check">
-        <div style={{ padding: 20, fontSize: 14, color: INK, lineHeight: 1.55, display: "flex", flexDirection: "column", gap: 12 }}>
-          <div style={{ color: MUTED }}>
-            Runs two passes against your active cycle:
-            <br />• Sends a reminder email to any instructor whose deadline is 2–4 days away and who hasn't responded yet
-            <br />• Flags anyone whose deadline has already passed (the card turns Flagged in your calendar — no email)
-          </div>
-          <DialogChoice
-            title="Preview (no emails, no flags)"
-            subtitle="Shows you which instructors would get a reminder and how many camps would be flagged. Nothing changes."
-            disabled={remindersBusy}
-            onClick={() => onRunReminders(true)}
-          />
-          <DialogChoice
-            title="Run it for real"
-            subtitle="Sends reminder emails to non-responders and flags expired offers in your calendar."
-            disabled={remindersBusy}
-            onClick={() => onRunReminders(false)}
-            tone="warn"
-          />
-          {remindersBusy && <div style={{ color: MUTED, fontSize: 12 }}>Working…</div>}
-        </div>
-      </ModalShell>
-    );
-  }
-
-  if (dialog.mode === "result" && dialog.payload?.kind === "reminders") {
-    const p = dialog.payload;
-    const sent = p.reminder_results?.filter((r) => r.sent).length ?? 0;
-    const wouldSend = p.reminder_results?.filter((r) => r.reason === "dry_run").length ?? 0;
-    const upcoming = p.upcoming ?? [];
-    const formatDate = (iso) => new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, { weekday: "short", month: "long", day: "numeric" });
-    return (
-      <ModalShell onClose={onClose} title={p.dry_run ? "Reminders preview" : "Reminders sent"}>
-        <div style={{ padding: 20, fontSize: 14, color: INK, lineHeight: 1.55 }}>
-          {p.dry_run ? (
-            <>
-              <div><strong>Today:</strong> {wouldSend} reminder{wouldSend === 1 ? "" : "s"} would fire now, {p.expired_count} card{p.expired_count === 1 ? "" : "s"} would be flagged past-deadline.</div>
-            </>
-          ) : (
-            <>
-              <div><strong>{sent}</strong> reminder email{sent === 1 ? "" : "s"} delivered.</div>
-              <div style={{ marginTop: 6 }}><strong>{p.expired_count}</strong> assignment{p.expired_count === 1 ? "" : "s"} flagged as past-deadline.</div>
-            </>
-          )}
-          {upcoming.length > 0 && (
-            <div style={{ marginTop: 16, padding: 12, background: `${VIOLET}1A`, border: `1px solid ${VIOLET}66`, borderRadius: 6 }}>
-              <div style={{ fontSize: 12, fontWeight: 700, color: INK, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
-                Auto-scheduled
-              </div>
-              <ul style={{ margin: 0, paddingLeft: 18, color: INK, fontSize: 13 }}>
-                {upcoming.map((u, i) => (
-                  <li key={i}>
-                    <strong>{formatDate(u.fire_date)}</strong> — {u.instructor_count} instructor{u.instructor_count === 1 ? "" : "s"} ({u.assignment_count} camp{u.assignment_count === 1 ? "" : "s"})
-                  </li>
-                ))}
-              </ul>
-              <div style={{ marginTop: 8, fontSize: 11, color: MUTED }}>
-                These fire automatically — you don't need to come back and click anything.
-              </div>
-            </div>
-          )}
-          {p.reminder_results && p.reminder_results.length > 0 && (
-            <ul style={{ marginTop: 12, paddingLeft: 18, color: MUTED, fontSize: 12 }}>
-              {p.reminder_results.map((r, i) => (
-                <li key={i}>{r.email ?? r.instructor_id.slice(0, 8)} — {r.sent ? "sent" : r.reason}</li>
-              ))}
-            </ul>
           )}
         </div>
         <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
@@ -5525,7 +5496,7 @@ function PreviewViewer({ data, onClose, onSend, sendLabel, sending, excludedInst
     return (
       <ModalShell onClose={onClose} title="Preview">
         <div style={{ padding: 20, color: MUTED, fontSize: 14 }}>
-          {data?.note ?? "No confirmed assignments to preview yet. Click Approve first."}
+          {data?.note ?? "No confirmed assignments to preview yet. Lock in the draft first."}
         </div>
         <div style={{ padding: "0 20px 20px", display: "flex", justifyContent: "flex-end" }}>
           <button type="button" onClick={onClose} style={btn(BRIGHT, "#fff")}>Close</button>
