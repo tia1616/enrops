@@ -289,6 +289,31 @@ function validateDrop({
   const warnings = [];
   const firstName = instructor?.first_name ?? "Instructor";
 
+  // THE SURVEY-INDEPENDENT WARNINGS COME FIRST, ABOVE THE EARLY RETURN BELOW.
+  //
+  // Same defect as evaluate() in AfterschoolSchedule.jsx, found reviewing that fix
+  // (2026-08-28) — and this is the camp-vs-after-school divergence Jessica named.
+  // These three read `locPref`, `curPref` and `targetSession`, all PARAMETERS, so
+  // none of them needs an availability survey. They used to sit below the
+  // `!availability` return, so an instructor with no survey was told only "no
+  // availability survey" and never that they had also marked this location or this
+  // subject as not preferred, or that the camp is under-enrolled.
+  //
+  // The two that genuinely DO depend on the survey (reserved-for-full-day,
+  // needs_confirmation) stay below, where `availability` is known to exist.
+  //
+  // Only the ORDER of the warnings list changes; DragHoverPopup renders it as a
+  // bulleted list, so no message text and no block decision moves.
+  if (locPref === "not_preferred") {
+    warnings.push(`${firstName} marked ${targetSession.location_name} as not preferred.`);
+  }
+  if (curPref === "not_preferred") {
+    warnings.push(`${firstName} marked ${titleCase(targetSession.curriculum_category)} as not preferred.`);
+  }
+  if (targetSession.enrollment_synced_at && targetSession.current_enrollment != null && targetSession.current_enrollment < MIN_ENROLLMENT) {
+    warnings.push(`Enrollment is ${targetSession.current_enrollment} — below the ${MIN_ENROLLMENT}-student minimum.`);
+  }
+
   if (!availability) {
     hardBlocks.push(`${firstName} has no availability survey for this cycle.`);
     return { ok: false, hardBlocks, warnings };
@@ -337,15 +362,9 @@ function validateDrop({
     }
   }
 
-  if (locPref === "not_preferred") {
-    warnings.push(`${firstName} marked ${targetSession.location_name} as not preferred.`);
-  }
-  if (curPref === "not_preferred") {
-    warnings.push(`${firstName} marked ${titleCase(targetSession.curriculum_category)} as not preferred.`);
-  }
-  if (targetSession.enrollment_synced_at && targetSession.current_enrollment != null && targetSession.current_enrollment < MIN_ENROLLMENT) {
-    warnings.push(`Enrollment is ${targetSession.current_enrollment} — below the ${MIN_ENROLLMENT}-student minimum.`);
-  }
+  // locPref / curPref / enrollment are raised ABOVE the `!availability` return at
+  // the top of this function so a surveyless instructor still gets them. Do not
+  // re-add them here.
   if (
     sessionTypes.includes("full_day") &&
     (targetSession.session_type === "morning" || targetSession.session_type === "afternoon")
