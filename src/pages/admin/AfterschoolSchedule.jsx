@@ -96,6 +96,36 @@ function listDates(dates) {
   return `${shortDate(sorted[0])}, ${shortDate(sorted[1])} +${sorted.length - 2} more`;
 }
 
+// The extra reasons under an instructor's name in the assign picker.
+//
+// ONE COMPONENT FOR ALL THREE BUCKETS, deliberately. evaluate() returns a BLOCK
+// (`reason`) plus any number of additional `warnings`, and the picker splits
+// instructors into eligible / overridable / can't-assign. Only the eligible
+// bucket ever rendered the warnings, so an instructor who was BLOCKED showed
+// exactly one line and everything else evaluate() had worked out was thrown away
+// on screen.
+//
+// Jessica caught this on the deployed staging site on 2026-08-28, on the very
+// class used to test it: Jordan Nguyen at Irvington read only "Jordan isn't
+// available on Thursday" with no mention that he had also marked Portland as a
+// place he can't go. The overridable bucket is the one that matters most, because
+// it carries an "Assign anyway" button - so withholding the area refusal there is
+// precisely the case where an operator can act on a decision they cannot see.
+//
+// Rendered as its own component so the three call sites cannot drift apart again,
+// which is how they got out of step in the first place.
+function ReasonLines({ warnings = [], muted = false }) {
+  if (!warnings.length) return null;
+  return warnings.map((w, i) => (
+    <span
+      key={i}
+      style={{ fontSize: 12, color: muted ? MUTED : CORAL, fontWeight: muted ? 400 : 500, lineHeight: 1.35 }}
+    >
+      ⚠ {w}
+    </span>
+  ));
+}
+
 const FILTER_STATUSES = [
   { key: "needs_hire", label: "Needs instructor" },
   { key: "change_requested", label: "Change requested" },
@@ -3020,6 +3050,19 @@ function PickerModal({ program, loc, current, instructors, evaluate, onAssign, o
               ? <>{confirming.ev.reason} You can still assign them — they'll get an offer to accept or decline, same as anyone.</>
               : <>{name(confirming.inst)} marked this area as one they can't get to. You can offer a gas bonus to make the trip worth it.</>}
           </div>
+          {/* The FOURTH place that showed only the block reason, and the one that
+              matters most: this is the last screen before the assignment is made.
+              An override confirm that names the Thursday clash but not the area the
+              instructor refused is asking the operator to commit on half the facts.
+              Only on the override branch - the non-override branch is reached ONLY
+              when ev.pref === 'unavailable' (see clickEligible), so its sentence
+              above already IS the area warning and repeating it would say the same
+              thing twice. */}
+          {confirming.isOverride && confirming.ev.warnings?.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: 3, marginBottom: 14 }}>
+              <ReasonLines warnings={confirming.ev.warnings} />
+            </div>
+          )}
           <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: INK, marginBottom: 6 }}>
             Gas / distance bonus for this class (optional)
           </label>
@@ -3062,9 +3105,7 @@ function PickerModal({ program, loc, current, instructors, evaluate, onAssign, o
           >
             <span style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1, minWidth: 0 }}>
               <span style={{ fontSize: 14, color: INK, fontWeight: 600 }}>{inst.preferred_name || inst.first_name} {inst.last_name}</span>
-              {ev.warnings.map((w, i) => (
-                <span key={i} style={{ fontSize: 12, color: CORAL, fontWeight: 500, lineHeight: 1.35 }}>⚠ {w}</span>
-              ))}
+              <ReasonLines warnings={ev.warnings} />
             </span>
             {(ev.pref === "preferred" || ev.pref === "highly_preferred") && (
               <span style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
@@ -3081,6 +3122,10 @@ function PickerModal({ program, loc, current, instructors, evaluate, onAssign, o
                 <span style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
                   <span style={{ fontSize: 13, fontWeight: 600, color: INK }}>{inst.preferred_name || inst.first_name} {inst.last_name}</span>
                   <span style={{ fontSize: 12, color: MUTED }}>{ev.reason}</span>
+                  {/* The block reason above is only the FIRST thing wrong. This row
+                      carries "Assign anyway", so every other reason has to be on
+                      screen before the operator presses it. */}
+                  <ReasonLines warnings={ev.warnings} />
                 </span>
                 {/* The person already on this class can't be re-assigned to it —
                     handleAssign early-returns on that, which would silently throw
@@ -3103,6 +3148,9 @@ function PickerModal({ program, loc, current, instructors, evaluate, onAssign, o
               <div key={inst.id} style={{ padding: "8px 12px", fontSize: 13, color: MUTED, display: "flex", flexDirection: "column" }}>
                 <span style={{ fontWeight: 600 }}>{inst.preferred_name || inst.first_name} {inst.last_name}</span>
                 <span style={{ fontSize: 12 }}>{ev.reason}</span>
+                {/* Muted here: this bucket cannot be assigned at all, so the extra
+                    reasons are context rather than a call to action. */}
+                <ReasonLines warnings={ev.warnings} muted />
               </div>
             ))}
           </div>
