@@ -870,6 +870,41 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     const wd = av?.weekday_availability || {};
     const code = DAY_TO_CODE[dayKey(program.day_of_week)];
     const dayLabel = DAYS.find((d) => d.code === code)?.label ?? "that day";
+    // AREA AND DATE CONFLICTS ARE COMPUTED FIRST, ON PURPOSE — DO NOT MOVE THEM BACK DOWN.
+    //
+    // These two used to sit at the BOTTOM of this function, after five early
+    // returns (no_survey, day_off, no_time, hours, double_booked, max_days). So the
+    // moment an instructor tripped any of those, their area preference and their
+    // unavailable dates were never evaluated AT ALL: the operator was told "their
+    // Tuesday hours don't cover this class time" and never learned the instructor
+    // had also marked that area as somewhere they can't go. Jessica reported exactly
+    // that on 2026-08-28: "for those unavailable, it only says their hours don't
+    // match, when some it's the area that doesn't match."
+    //
+    // Worse than a missing label. The hours block is `overridable: true`, so an
+    // operator could override it and assign someone into an area they had
+    // explicitly refused, with NO warning ever shown, because this code had not
+    // run. J2S alone holds 140 "can't go there" rows across 17 instructors, so this
+    // fires constantly rather than being a corner case.
+    //
+    // `warnings` is already threaded into every return below, so computing these up
+    // front means every block carries the whole picture instead of only the first
+    // thing found. NOTHING ABOUT THE BLOCK DECISIONS CHANGES — both of these have
+    // always been warnings, never blocks, and they still are.
+    //
+    // Safe to run before the no_survey guard: unavailableConflicts() re-reads
+    // availByInstr itself and optional-chains a missing row, and area preferences
+    // live in a SEPARATE map, so an instructor can legitimately have refused an area
+    // without having submitted a weekday survey. Saying both is more useful than
+    // saying one. `needs_confirmation` deliberately stays below — it dereferences
+    // `av`, and when there is no survey the no_survey block already says so.
+    const area = program.program_location_id ? (locArea.get(program.program_location_id) ?? null) : null;
+    const pref = area ? (areaPrefByInstr.get(instructorId) || {})[area] : undefined;
+    if (pref === "unavailable") warnings.push(`${first} marked ${area} as a place they can't go.`);
+    // Date-specific unavailability: a weekly class isn't blocked by a missed session,
+    // but flag which of this class's dates need a sub so it's not an invisible landmine.
+    const dateHits = unavailableConflicts(instructorId, program);
+    if (dateHits.length) warnings.push(`${first} is unavailable on ${listDates(dateHits)} — will need a sub ${dateHits.length === 1 ? "that day" : "those days"}.`);
     // Three of the blocks below are STATED PREFERENCE, not physics: the operator can
     // legitimately know better than the survey ("she can leave her other job early
     // some Tuesdays"). Those carry overridable:true so the picker can offer "Assign
@@ -994,14 +1029,10 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         return { ok: false, overridable: false, blockKind: "max_days", reason: `${first} is at their ${av.max_days}-day limit.`, warnings };
       }
     }
-    const area = program.program_location_id ? (locArea.get(program.program_location_id) ?? null) : null;
-    const pref = area ? (areaPrefByInstr.get(instructorId) || {})[area] : undefined;
-    if (pref === "unavailable") warnings.push(`${first} marked ${area} as a place they can't go.`);
+    // area / pref and the unavailable-date warnings are computed at the TOP of this
+    // function now, so every early return carries them too. See the block comment
+    // there before adding anything here.
     if (av.needs_confirmation) warnings.push(`${first}'s availability is unconfirmed.`);
-    // Date-specific unavailability: a weekly class isn't blocked by a missed session,
-    // but flag which of this class's dates need a sub so it's not an invisible landmine.
-    const hits = unavailableConflicts(instructorId, program);
-    if (hits.length) warnings.push(`${first} is unavailable on ${listDates(hits)} — will need a sub ${hits.length === 1 ? "that day" : "those days"}.`);
     return { ok: true, reason: null, pref, warnings };
   }
 

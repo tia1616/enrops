@@ -622,11 +622,16 @@ export default function Schedule() {
         supabase.from("programs").select("term").eq("organization_id", org.id).not("term", "is", null),
         supabase.from("afterschool_survey_state").select("term").eq("organization_id", org.id),
         supabase.from("scheduling_cycles").select("name").eq("organization_id", org.id).eq("cycle_type", "afterschool").neq("status", "archived"),
-        // Does this org run camps at all? Asked HERE rather than reading the
+        // Is this org running a camp RIGHT NOW? Asked HERE rather than reading the
         // allCycles state, because loadAll() races this effect and reading a
         // half-loaded [] would flip an actual camp operator into after-school
         // mode on a slow connection.
-        supabase.from("scheduling_cycles").select("id").eq("organization_id", org.id).eq("cycle_type", "summer_camp").neq("status", "archived").limit(1),
+        //
+        // `ends_on` is selected and the `.limit(1)` is gone on purpose: the
+        // question below is no longer "does a camp cycle exist" but "is any camp
+        // cycle still current", which cannot be answered from one arbitrary row.
+        // Orgs hold a handful of cycles, so the unbounded read is cheap.
+        supabase.from("scheduling_cycles").select("id, ends_on").eq("organization_id", org.id).eq("cycle_type", "summer_camp").neq("status", "archived"),
       ]);
       if (!alive) return;
       const terms = new Set();
@@ -671,8 +676,27 @@ export default function Schedule() {
       // A query ERROR must not look like "no camps" — that would flip a camp
       // operator's board on a transient failure. Only an empty, successful
       // result counts.
-      const hasCampCycles = !campCycleRes.error && (campCycleRes.data ?? []).length > 0;
-      if (landOn && !hasCampCycles && !campCycleRes.error) {
+      //
+      // "RUNS CAMPS" AND "IS RUNNING A CAMP TODAY" ARE DIFFERENT QUESTIONS, and
+      // conflating them parked J2S on a dead board. Their only camp cycle (SU26)
+      // ended 2026-08-14, but because a camp cycle EXISTED this flip was skipped,
+      // so Instructors kept opening on the summer calendar two weeks after summer
+      // finished while Fall was already the default term. Jessica, 2026-08-28:
+      // "i should be landing on fall term in instructor schedule. summer has been
+      // over for weeks. should be automatic."
+      //
+      // The test is now whether any camp cycle is still CURRENT. Note it is the
+      // DATES that decide, not `status`: SU26 sat at 'scheduling' long after it
+      // ended, so status would have kept reading as live.
+      //
+      // A cycle with NO ends_on still holds the board — we cannot prove it
+      // finished, and moving an operator off their own board is the worse error of
+      // the two. Same fail-safe direction as the error guard above.
+      const todayIso = new Date().toISOString().slice(0, 10);
+      const hasCurrentCamp = (campCycleRes.data ?? []).some(
+        (c) => !c.ends_on || String(c.ends_on).slice(0, 10) >= todayIso,
+      );
+      if (landOn && !hasCurrentCamp && !campCycleRes.error) {
         setScheduleMode("afterschool");
         setSelectedTerm((cur) => cur ?? landOn);
       }
