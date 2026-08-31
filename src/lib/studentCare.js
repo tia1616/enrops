@@ -265,16 +265,25 @@ export function careRpcArgs({ studentId, organizationId, data }) {
 // tested `includes('both')`, which is a PROXY for this error rather than the
 // error itself - it would have relabelled any unrelated failure whose message
 // happened to contain "both" as a pickup conflict.
-export function careSaveMessage(error) {
+// `action` exists because the SAME failures reach a person on the way IN and on
+// the way OUT, and only two of the branches care which. A load failure told a
+// parent "Sorry, that didn't save" - about a screen that had not tried to save
+// anything - which reads as though their data was lost. Defaulted to 'save' so
+// every existing caller is unchanged.
+export function careSaveMessage(error, { action = 'save' } = {}) {
   const raw = (error && (error.message || String(error))) || '';
   const m = raw.toLowerCase();
   if (m.includes('do-not-release list')) return raw;
   if (m.includes('which aftercare program')) return raw;
-  if (m.includes('not authorized')) {
-    return "You don't have permission to change this child's details.";
+  if (m.includes('not authorized') || m.includes('permission denied')) {
+    return action === 'load'
+      ? "You don't have permission to see this child's details."
+      : "You don't have permission to change this child's details.";
   }
   if (m.includes('network') || m.includes('failed to fetch') || m.includes('timeout')) {
     return 'Network hiccup - please try again.';
   }
-  return "Sorry, that didn't save. Please try again.";
+  return action === 'load'
+    ? "Sorry, we couldn't load that. Please try again."
+    : "Sorry, that didn't save. Please try again.";
 }

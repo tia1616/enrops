@@ -22,6 +22,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
+import { useAuth } from '../../context/AuthContext.jsx';
 import { needsAftercareProvider } from '../../lib/dismissal.js';
 import {
   parseRegFields, PickupDismissalSection, GuardianSecondarySection,
@@ -35,6 +36,7 @@ export default function StudentCare() {
   const { org } = useOutletContext() ?? {};
   const { slug, studentId } = useParams();
   const navigate = useNavigate();
+  const { user, loading: authLoading } = useAuth();
 
   const [std, setStd] = useState({});
   const [student, setStudent] = useState(null);
@@ -49,9 +51,27 @@ export default function StudentCare() {
   const [error, setError] = useState('');
   const [saved, setSaved] = useState(false);
 
+  // SIGNED OUT IS NOT AN ERROR, IT IS A SIGN-IN. This page is a deep link - it
+  // is exactly what the "update your info in your parent portal" email points a
+  // family at - so arriving here with no session is the ORDINARY case, not a
+  // fault. Without this it read as one, and badly: `students` returns 200 [] to
+  // anon (RLS hides the row) but `student_contacts` returns 42501 permission
+  // denied (anon has no GRANT on it at all), and the grant error won, so a
+  // signed-out parent got "We couldn't load these details" with no way forward.
+  //
+  // Same redirect as Dashboard.jsx:179, deliberately - one way into the portal.
+  useEffect(() => {
+    if (!slug) return;   // unresolved tenant is rendered as an error, never redirected
+    if (!authLoading && !user) navigate(`/${slug}/login`, { replace: true });
+  }, [authLoading, user, slug, navigate]);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      // Wait for the session rather than firing the reads as anon: without this
+      // the first render still asks, still gets the 42501, and still flashes the
+      // error screen before the redirect above lands.
+      if (authLoading || !user) return;
       if (!org?.id || !studentId) return;
       setLoading(true);
       setNotFound(false);
@@ -108,13 +128,13 @@ export default function StudentCare() {
         setLoading(false);
       } catch (e) {
         if (cancelled) return;
-        setLoadError(careSaveMessage(e));
+        setLoadError(careSaveMessage(e, { action: 'load' }));
         setLoading(false);
       }
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [org?.id, studentId]);
+  }, [org?.id, studentId, authLoading, user]);
 
   function update(patch) {
     setSaved(false);

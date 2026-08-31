@@ -528,7 +528,7 @@ function ContactEditForm({ contact, onCancel, onSaved, onDelete }) {
         </label>
         <label style={{ gridColumn: '1 / -1' }}>
           <Lbl>Role description (optional)</Lbl>
-          <input type="text" value={form.role_description} onChange={(e) => setForm((f) => ({ ...f, role_description: e.target.value }))} placeholder="e.g. Handles afterschool signups + day-of issues" style={inputStyle} disabled={busy} />
+          <input type="text" value={form.role_description} onChange={(e) => setForm((f) => ({ ...f, role_description: e.target.value }))} placeholder="e.g. Handles after-school signups + day-of issues" style={inputStyle} disabled={busy} />
         </label>
         <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: INK, gridColumn: '1 / -1' }}>
           <input type="checkbox" checked={form.is_org_inbox} onChange={(e) => setForm((f) => ({ ...f, is_org_inbox: e.target.checked }))} disabled={busy} />

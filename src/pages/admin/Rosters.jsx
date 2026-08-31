@@ -23,7 +23,7 @@ import {
 // From its own module, not through the portal wizard's .jsx: admin has no reason
 // to pull the family-facing components into its bundle.
 import { parseRegFields } from "../../lib/registrationFields.js";
-import { sortRosterPrograms, filterRosterPrograms, dayShort } from "./rosterSearch.js";
+import { sortRosterPrograms, filterRosterPrograms } from "./rosterSearch.js";
 import { WAITLIST_STATUS } from "../../lib/waitlistState.js";
 import WaitingList from "../../components/WaitingList.jsx";
 import EmailRosterModal from "./EmailRosterModal";
@@ -161,7 +161,7 @@ export default function Rosters() {
 
       {/* Tabs: each roster group is its own tab so neither buries the other. */}
       <div style={{ display: "flex", gap: 4, borderBottom: `1px solid ${RULE}`, marginBottom: 18 }}>
-        <TabBtn active={view === "afterschool"} onClick={() => setView("afterschool")} label="Afterschool" />
+        <TabBtn active={view === "afterschool"} onClick={() => setView("afterschool")} label="After-school" />
         {/* Camps = J2S camp-cycle rosters; a lean registration op runs programs, not camps. */}
         {org?.instructor_pay_model !== "enrops_platform" && (
           <TabBtn active={view === "camps"} onClick={() => setView("camps")} label="Camps" />
@@ -2185,7 +2185,7 @@ function AfterschoolRostersSection({ org, canEdit }) {
             .map((p) => ({ ...p, enrolled: counts.get(p.id) ?? 0, last_emailed_at: lastEmailed.get(p.id) ?? null }))));
         }
       } catch (e) {
-        if (!cancelled) { setError(e.message ?? "Couldn't load afterschool programs."); setPrograms([]); }
+        if (!cancelled) { setError(e.message ?? "Couldn't load after-school programs."); setPrograms([]); }
       }
     })();
     return () => { cancelled = true; };
@@ -2208,7 +2208,16 @@ function AfterschoolRostersSection({ org, canEdit }) {
   function subtitleFor(p) {
     return [
       p.program_locations?.name,
-      p.day_of_week ? `${dayShort(p.day_of_week)}s` : null,
+      // THE FULL DAY, not the abbreviation. This was `${dayShort(d)}s`, which
+      // pluralises three-letter stubs into things that are not words: "Thus" for
+      // Thursday (which reads as the adverb), plus "Mons" and "Fris". Jessica,
+      // 2026-08-31, reading her own roster list: "fix both thus and afterschool."
+      //
+      // "Fridays" is what the parent dashboard and RegistrationQuestions'
+      // programLabel already render, so this is matching the two siblings rather
+      // than inventing a fourth spelling of a weekday. Search still matches "fri"
+      // - the haystack carries both forms deliberately.
+      p.day_of_week ? `${p.day_of_week}s` : null,
       p.start_time || null,
     ].filter(Boolean).join(" · ");
   }
@@ -2289,7 +2298,7 @@ function AfterschoolRostersSection({ org, canEdit }) {
       {programs === null && <div style={{ color: MUTED, fontSize: 13 }}>Loading…</div>}
       {programs !== null && programs.length === 0 && !error && (
         <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 20, color: MUTED, textAlign: "center", fontSize: 13 }}>
-          No afterschool programs for {term} yet.
+          No after-school programs for {term} yet.
         </div>
       )}
       {/* TWO DIFFERENT EMPTIES, and telling them apart is the whole point. "No
