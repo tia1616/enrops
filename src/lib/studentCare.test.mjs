@@ -148,6 +148,36 @@ eq('a full name does satisfy it',
 eq('no dismissal question means no dismissal block',
   careProblem({}, { ...baseData, dismissal_method: '' }), null);
 
+// --- the same person cannot be on both lists ---------------------------------
+// The database enforces this with a constraint trigger, so every writer inherits
+// it. Three screens used to write their own sentence for it, in two different
+// wordings; the rule and the sentence now live here once. The NAMES are in the
+// sentence because a roster row can carry four people.
+
+const clash = (pickup, dnr) => careProblem(dismissalOn, { ...baseData, pickup, doNotRelease: dnr });
+eq('one clashing name is named, singular',
+  clash([{ first_name: 'Pat', last_name: 'Byron' }], [{ first_name: 'Pat', last_name: 'Byron' }]),
+  'Pat Byron is on both the pickup and do-not-release lists. Remove that name from one.');
+eq('two clashing names are named, plural',
+  clash([{ first_name: 'Pat', last_name: 'Byron' }, { first_name: 'Jo', last_name: 'Vance' }],
+        [{ first_name: 'Jo', last_name: 'Vance' }, { first_name: 'Pat', last_name: 'Byron' }]),
+  'Jo Vance, Pat Byron are on both the pickup and do-not-release lists. Remove them from one.');
+// Matched the way the trigger matches: lower + trim on first AND last. If these
+// disagreed, the screen would pass something the database then rejected.
+eq('case and whitespace do not hide a clash',
+  clash([{ first_name: ' PAT ', last_name: 'byron' }], [{ first_name: 'Pat', last_name: 'Byron ' }]),
+  'PAT byron is on both the pickup and do-not-release lists. Remove that name from one.');
+eq('different people do not clash',
+  clash([{ first_name: 'Pat', last_name: 'Byron' }], [{ first_name: 'Alex', last_name: 'Stone' }]), null);
+// The empty placeholder row every list renders is not a person, so two empty
+// rows must not read as the same person on both lists.
+eq('two empty rows are not a clash', clash([{ first_name: '', last_name: '' }], [{ first_name: '', last_name: '' }]), null);
+// A basic unanswered question comes FIRST: a family that has not said how their
+// child leaves does not need to hear about a list clash instead.
+eq('an unanswered dismissal question outranks a clash',
+  careProblem(dismissalOn, { ...baseData, dismissal_method: '', pickup: [{ first_name: 'Pat', last_name: 'Byron' }], doNotRelease: [{ first_name: 'Pat', last_name: 'Byron' }] }),
+  'Choose how this child leaves.');
+
 // --- homeroom writes only when it changed ------------------------------------
 // It is NOT part of the RPC (Jessica, 2026-08-28: an 8th argument would make a
 // third spelling of one write path). Sending nothing when nothing changed is

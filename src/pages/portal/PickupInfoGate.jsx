@@ -19,7 +19,6 @@ import {
   PickupDismissalSection,
   GuardianSecondarySection,
   parseRegFields,
-  pickupDnrConflicts,
 } from "./register-steps/RegExtraFields.jsx";
 // The validation, the payload and the "a parent cannot remove a saved
 // do-not-release name" rule are shared with StudentCare.jsx and the operator's
@@ -94,28 +93,12 @@ export default function PickupInfoGate({ students, parent, orgId, onComplete }) 
     setByStudent((m) => ({ ...m, [studentId]: { ...m[studentId], ...patch } }));
   }
 
-  // Per-child validation. The rules THEMSELVES now live in lib/studentCare.js,
+  // Per-child validation. The rules THEMSELVES live in lib/studentCare.js,
   // because as of 2026-08-31 this is no longer the only screen that writes these
   // facts: the parent's own editor (StudentCare.jsx) and the operator's roster
   // editor save the same rows. Three spellings of "is this complete" is how the
   // dismissal vocabulary ended up written six times and disagreeing.
-  //
-  // The one rule that stays HERE is the pickup/do-not-release conflict, and
-  // deliberately: it is a property of what is on this screen (it needs
-  // pickupDnrConflicts, which lives in a .jsx module that careProblem - imported
-  // by a plain-node test - may not reach). The database enforces it for every
-  // writer anyway via the constraint trigger, and careSaveMessage passes that
-  // raise through with the offending name in it, so a caller without this
-  // pre-check still gets a sentence rather than a 500.
-  function problemFor(s) {
-    const d = byStudent[s.student_id];
-    const shared = careProblem(std, d);
-    if (shared) return shared;
-    if (pickupDnrConflicts(d.pickup, d.doNotRelease).length > 0) {
-      return "A name is on both the pickup and do-not-release lists. Remove it from one.";
-    }
-    return null;
-  }
+  const problemFor = (s) => careProblem(std, byStudent[s.student_id]);
 
   // problemFor has always written a specific sentence for each thing that blocks
   // this screen, and none of them was ever rendered - the only signal was Save

@@ -19,38 +19,20 @@ export { parseRegFields } from '../../../lib/registrationFields.js';
 
 const MAX_PICKUP = 4;
 
-// Normalize a contact name the SAME way the DB trigger does (lower + trim on
-// first AND last). Returns null when there's nothing to match on. Keeping this
-// identical to student_contacts_no_pickup_dnr_overlap() means the inline
-// warning never disagrees with what the database will actually reject.
-export function normalizeContactName(c) {
-  const first = (c?.first_name || '').trim().toLowerCase();
-  const last = (c?.last_name || '').trim().toLowerCase();
-  if (!first && !last) return null;
-  return `${first} ${last}`;
-}
-
-// People who appear on BOTH the authorized-pickup and do-not-release lists for
-// one child. The same person can't be on both (Jessica: "that should be
-// impossible") — the DB enforces it; this drives the friendly warning + the
-// wizard's advance-block so the parent fixes it before checkout.
-export function pickupDnrConflicts(pickup, doNotRelease) {
-  const pickupKeys = new Map(); // normalized -> display name
-  for (const p of Array.isArray(pickup) ? pickup : []) {
-    const k = normalizeContactName(p);
-    if (k) pickupKeys.set(k, `${(p.first_name || '').trim()} ${(p.last_name || '').trim()}`.trim());
-  }
-  const seen = new Set();
-  const conflicts = [];
-  for (const d of Array.isArray(doNotRelease) ? doNotRelease : []) {
-    const k = normalizeContactName(d);
-    if (k && pickupKeys.has(k) && !seen.has(k)) {
-      seen.add(k);
-      conflicts.push(pickupKeys.get(k));
-    }
-  }
-  return conflicts;
-}
+// MOVED to src/lib/studentCare.js on 2026-08-31, and re-exported here so no
+// import site changed. They are pure functions about contacts, and while they
+// lived in this .jsx the plain-node test runner could not reach them - so the
+// three screens that need the conflict rule each spelled out their own sentence
+// for it, in two different wordings. careProblem() now owns it, once.
+//
+// IMPORTED as well as re-exported, because this file still CALLS
+// pickupDnrConflicts for its own inline warning. A bare `export ... from` does
+// not bind the name locally, so the re-export alone left a ReferenceError on the
+// live registration form - which the build did not mind and
+// freeIdentifiers.test.mjs did.
+export { normalizeContactName } from '../../../lib/studentCare.js';
+import { pickupDnrConflicts } from '../../../lib/studentCare.js';
+export { pickupDnrConflicts };
 
 // Is the "extra questions" content non-empty for a child? (drives whether we
 // render the section header at all)

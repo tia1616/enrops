@@ -20,7 +20,9 @@ import {
 import {
   CARE_CONTACT_COLUMNS, careProblem, careRpcArgs, careSaveMessage,
 } from "../../lib/studentCare.js";
-import { parseRegFields, pickupDnrConflicts } from "../portal/register-steps/RegExtraFields.jsx";
+// From its own module, not through the portal wizard's .jsx: admin has no reason
+// to pull the family-facing components into its bundle.
+import { parseRegFields } from "../../lib/registrationFields.js";
 import { WAITLIST_STATUS } from "../../lib/waitlistState.js";
 import WaitingList from "../../components/WaitingList.jsx";
 import EmailRosterModal from "./EmailRosterModal";
@@ -882,11 +884,9 @@ function CareEditForm({ studentId, studentName, orgId, std, student, contacts, o
 
   function update(patch) { setData((d) => ({ ...d, ...patch })); }
 
-  const shared = careProblem(std, data);
-  const conflict = pickupDnrConflicts(data.pickup, data.doNotRelease);
-  const problem = shared || (conflict.length > 0
-    ? `${conflict.join(", ")} ${conflict.length > 1 ? "are" : "is"} on both the pickup and do-not-release lists. Remove ${conflict.length > 1 ? "them" : "that name"} from one.`
-    : null);
+  // Every rule from careProblem, the pickup/do-not-release clash included, so the
+  // operator and the family are told the same thing about the same child.
+  const problem = careProblem(std, data);
 
   async function save() {
     if (problem || busy) return;

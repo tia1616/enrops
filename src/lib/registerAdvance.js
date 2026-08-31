@@ -33,10 +33,15 @@
 // carries any given key and callers do not need to know which component owns it.
 //
 // Pure and dependency-light on purpose - it is imported by a .test.mjs that node
-// runs directly, so nothing in this file may reach a .jsx module. That is why
-// pickupDnrConflicts() is passed IN as `conflicts` rather than imported from
-// RegExtraFields.jsx: the conflict detection stays in one place, this file only
-// writes the sentence for it.
+// runs directly, so nothing in this file may reach a .jsx module.
+//
+// `conflicts` is still passed IN rather than computed here, even though
+// pickupDnrConflicts moved to lib/studentCare.js on 2026-08-31 and is now
+// reachable: Register.jsx already computes it for the inline warning beside the
+// list, so taking it as a parameter means the warning and the block are looking
+// at the same array rather than at two evaluations of the same rule. The three
+// post-checkout editors call careProblem(), which DOES compute it - they have no
+// second caller to agree with.
 import { needsAuthorizedPickup, dismissalAnswerIncomplete } from './dismissal.js';
 import { birthdateProblem } from './studentBirthdate.js';
 import { namedContacts } from './registrationFields.js';

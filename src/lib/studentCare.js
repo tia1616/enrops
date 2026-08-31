@@ -20,6 +20,43 @@
 import { dismissalAnswerIncomplete } from './dismissal.js';
 import { namedContacts, contactsWithAnyName } from './registrationFields.js';
 
+// Normalize a contact name the SAME way the DB trigger does (lower + trim on
+// first AND last). Returns null when there's nothing to match on. Keeping this
+// identical to student_contacts_no_pickup_dnr_overlap() means the inline warning
+// never disagrees with what the database will actually reject.
+//
+// Lived in RegExtraFields.jsx until 2026-08-31. It is a pure function, and while
+// it sat in a .jsx the plain-node test runner could not reach it - so each screen
+// that needed the rule wrote its own sentence for it.
+export function normalizeContactName(c) {
+  const first = (c?.first_name || '').trim().toLowerCase();
+  const last = (c?.last_name || '').trim().toLowerCase();
+  if (!first && !last) return null;
+  return `${first} ${last}`;
+}
+
+// People who appear on BOTH the authorized-pickup and do-not-release lists for
+// one child. The same person cannot be on both (Jessica: "that should be
+// impossible") - the DB enforces it with a constraint trigger; this drives the
+// friendly warning and the advance/save block so it is fixed before the save.
+export function pickupDnrConflicts(pickup, doNotRelease) {
+  const pickupKeys = new Map(); // normalized -> display name
+  for (const p of Array.isArray(pickup) ? pickup : []) {
+    const k = normalizeContactName(p);
+    if (k) pickupKeys.set(k, `${(p.first_name || '').trim()} ${(p.last_name || '').trim()}`.trim());
+  }
+  const seen = new Set();
+  const conflicts = [];
+  for (const d of Array.isArray(doNotRelease) ? doNotRelease : []) {
+    const k = normalizeContactName(d);
+    if (k && pickupKeys.has(k) && !seen.has(k)) {
+      seen.add(k);
+      conflicts.push(pickupKeys.get(k));
+    }
+  }
+  return conflicts;
+}
+
 // THE COLUMNS A CARE EDITOR MUST READ, in one place.
 //
 // This is a select/read contract, not a convenience. `replace_student_pickup_dnr_guardian`
@@ -130,6 +167,20 @@ export function careProblem(std, data) {
   // must we keep".
   if (std?.do_not_release?.required && namedContacts(data.doNotRelease).length === 0) {
     return 'Add the name(s) we should not release this child to.';
+  }
+
+  // ONE SENTENCE FOR THE CLASH, not three. The gate, the parent editor and the
+  // operator's roster panel each wrote their own before this lived here, and two
+  // of the three had already drifted to a different wording. The names are IN the
+  // sentence because a roster row can carry four people and "a name" tells an
+  // operator nothing about which.
+  //
+  // Last, deliberately: an unanswered question is the more basic problem, and a
+  // family that has not chosen how their child leaves does not need to hear about
+  // a list clash first.
+  const clash = pickupDnrConflicts(data.pickup, data.doNotRelease);
+  if (clash.length > 0) {
+    return `${clash.join(', ')} ${clash.length > 1 ? 'are' : 'is'} on both the pickup and do-not-release lists. Remove ${clash.length > 1 ? 'them' : 'that name'} from one.`;
   }
 
   return null;
