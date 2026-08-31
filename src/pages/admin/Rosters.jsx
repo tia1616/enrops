@@ -23,6 +23,7 @@ import {
 // From its own module, not through the portal wizard's .jsx: admin has no reason
 // to pull the family-facing components into its bundle.
 import { parseRegFields } from "../../lib/registrationFields.js";
+import { sortRosterPrograms, filterRosterPrograms, dayShort } from "./rosterSearch.js";
 import { WAITLIST_STATUS } from "../../lib/waitlistState.js";
 import WaitingList from "../../components/WaitingList.jsx";
 import EmailRosterModal from "./EmailRosterModal";
@@ -2118,8 +2119,9 @@ function Inp({ value, onChange, placeholder, type = "text" }) {
 // ProgramsCalendar: un-cancelled, paid OR confirmed), each linking to the
 // per-program roster view + a partner-email action.
 
-const DAY_SHORT = { monday: "Mon", tuesday: "Tue", wednesday: "Wed", thursday: "Thu", friday: "Fri", saturday: "Sat", sunday: "Sun" };
-function dayShort(d) { return DAY_SHORT[(d ?? "").toLowerCase()] ?? (d ?? ""); }
+// DAY_SHORT / dayShort moved to rosterSearch.js, which also needs the weekday
+// ORDER to sort a timetable. Keeping the map here and the order there would be
+// two spellings of one week.
 
 function AfterschoolRostersSection({ org, canEdit }) {
   const [term, setTerm] = useState("FA26");
@@ -2128,6 +2130,7 @@ function AfterschoolRostersSection({ org, canEdit }) {
   const [emailingProgram, setEmailingProgram] = useState(null);
   const [uploadingProgram, setUploadingProgram] = useState(null);
   const [expandedId, setExpandedId] = useState(null);
+  const [query, setQuery] = useState("");
 
   useEffect(() => {
     if (!org?.id) return;
@@ -2173,9 +2176,13 @@ function AfterschoolRostersSection({ org, canEdit }) {
           }
         }
         if (!cancelled) {
-          setPrograms((progRows ?? [])
-            .map((p) => ({ ...p, enrolled: counts.get(p.id) ?? 0, last_emailed_at: lastEmailed.get(p.id) ?? null }))
-            .sort((a, b) => (b.enrolled - a.enrolled) || (a.curriculum ?? "").localeCompare(b.curriculum ?? "")));
+          // BY SCHOOL, not by enrolled count. The old order was
+          // `b.enrolled - a.enrolled`, which answers "which of my classes are
+          // fullest" - a question nobody asks on this screen, and one that
+          // scattered a school's classes through the list. Jessica, 2026-08-31:
+          // "it's hard to find the school i'm looking for."
+          setPrograms(sortRosterPrograms((progRows ?? [])
+            .map((p) => ({ ...p, enrolled: counts.get(p.id) ?? 0, last_emailed_at: lastEmailed.get(p.id) ?? null }))));
         }
       } catch (e) {
         if (!cancelled) { setError(e.message ?? "Couldn't load afterschool programs."); setPrograms([]); }
@@ -2206,18 +2213,77 @@ function AfterschoolRostersSection({ org, canEdit }) {
     ].filter(Boolean).join(" · ");
   }
 
+  // Filtered at RENDER, not by re-fetching: 34 rows on the biggest tenant, so
+  // typing should not hit the network, and clearing the box must restore the
+  // list instantly rather than re-run three queries.
+  const visible = useMemo(() => filterRosterPrograms(programs ?? [], query), [programs, query]);
+  const searching = query.trim() !== "";
+
   return (
     <div style={{ marginBottom: 28 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 12, flexWrap: "wrap" }}>
         <div style={{ fontSize: 13, color: MUTED }}>
           Rosters fill in as families register. Add offline / partner kids by hand or upload a file.
         </div>
-        <select value={term} onChange={(e) => { setTerm(e.target.value); setExpandedId(null); }} style={{ padding: "7px 10px", border: `1px solid ${RULE}`, borderRadius: 6, fontFamily: "inherit", fontSize: 13, background: "#fff", color: INK }}>
-          <option value="FA26">Fall 2026 (FA26)</option>
-          <option value="WI27">Winter 2027 (WI27)</option>
-          <option value="SP27">Spring 2027 (SP27)</option>
-        </select>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          {/* Copied from the sibling search on AfterschoolSchedule.jsx (~L2560)
+              - the other screen that lists these same classes - down to the
+              attributes: type="search" for the right phone keyboard and the
+              browser's own clear affordance, autoComplete/autoCorrect/spellCheck
+              off so a browser does not offer to autofill or "correct" a school
+              name.
+
+              A DRAFT OF THIS ADDED A TEXT "Clear" BUTTON INSIDE THE BOX. Chrome
+              already draws its own x for type="search" at that exact spot, so it
+              was two clear controls on top of each other - and no other search on
+              this platform has one. The recovery action lives in the empty state
+              below instead, which is where somebody who found nothing is looking.
+
+              No debounce: filtering is over an array already in memory (34 rows
+              on the largest tenant), so a delay would only make typing feel
+              broken. */}
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search school or class"
+            aria-label="Search rosters by school, class, day or district"
+            name="roster-search-filter"
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck={false}
+            style={{
+              padding: "7px 10px", minWidth: 210,
+              border: `1px solid ${RULE}`, borderRadius: 6, fontFamily: "inherit",
+              fontSize: 13, background: "#fff", color: INK,
+            }}
+          />
+          <select value={term} onChange={(e) => { setTerm(e.target.value); setExpandedId(null); }} style={{ padding: "7px 10px", border: `1px solid ${RULE}`, borderRadius: 6, fontFamily: "inherit", fontSize: 13, background: "#fff", color: INK }}>
+            <option value="FA26">Fall 2026 (FA26)</option>
+            <option value="WI27">Winter 2027 (WI27)</option>
+            <option value="SP27">Spring 2027 (SP27)</option>
+          </select>
+        </div>
       </div>
+
+      {/* HOW MANY OF HOW MANY. Counting beats asserting: "Showing 3 of 34" tells
+          an operator both that the filter worked and that there is more behind
+          it, which a filtered list alone cannot. Only while searching - a
+          standing "34 classes" line on an unfiltered list is noise.
+
+          "Showing N of M" rather than "N of M classes match", which needs
+          subject-verb agreement the count decides ("1 of 34 classes match") and
+          gets wrong on exactly the result an operator hunting one school sees
+          most.
+
+          AND NOT WHEN THE LOAD FAILED. The catch sets programs to [], so without
+          the !error guard a failed fetch rendered "Showing 0 of 0" directly above
+          its own error box - blaming the search for a list that never arrived. */}
+      {searching && programs !== null && !error && (
+        <div role="status" aria-live="polite" style={{ fontSize: 12, color: MUTED, marginBottom: 8 }}>
+          Showing {visible.length} of {programs.length} {programs.length === 1 ? "class" : "classes"}
+        </div>
+      )}
 
       {error && <div style={{ background: `${RED}1A`, color: RED, padding: 10, borderRadius: 6, fontSize: 13, marginBottom: 10 }}>{error}</div>}
       {programs === null && <div style={{ color: MUTED, fontSize: 13 }}>Loading…</div>}
@@ -2226,9 +2292,26 @@ function AfterschoolRostersSection({ org, canEdit }) {
           No afterschool programs for {term} yet.
         </div>
       )}
-      {programs !== null && programs.length > 0 && (
+      {/* TWO DIFFERENT EMPTIES, and telling them apart is the whole point. "No
+          programs for FA26 yet" is true of the term; this one is true of the
+          search, and showing the term's sentence to someone who has just
+          mistyped a school would send them to create a class they already have.
+          The way out is in the message, not only in the box above. */}
+      {programs !== null && programs.length > 0 && visible.length === 0 && !error && (
+        <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 20, color: MUTED, textAlign: "center", fontSize: 13 }}>
+          No classes match &ldquo;{query.trim()}&rdquo; in {term}.{" "}
+          <button
+            type="button"
+            onClick={() => setQuery("")}
+            style={{ background: "none", border: "none", color: BRIGHT, fontSize: 13, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", padding: 0, textDecoration: "underline" }}
+          >
+            Show all {programs.length}
+          </button>
+        </div>
+      )}
+      {programs !== null && visible.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {programs.map((p) => (
+          {visible.map((p) => (
             <ProgramRosterRow
               key={p.id}
               program={p}
