@@ -23,8 +23,9 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 import { needsAftercareProvider } from '../../lib/dismissal.js';
-import { parseRegFields } from './register-steps/RegExtraFields.jsx';
-import { PickupDismissalSection, GuardianSecondarySection } from './register-steps/RegExtraFields.jsx';
+import {
+  parseRegFields, pickupDnrConflicts, PickupDismissalSection, GuardianSecondarySection,
+} from './register-steps/RegExtraFields.jsx';
 import {
   CARE_CONTACT_COLUMNS, careProblem, careRpcArgs, careSaveMessage,
   homeroomPatch, lockedDoNotRelease,
@@ -120,7 +121,25 @@ export default function StudentCare() {
     setData((d) => ({ ...d, ...patch }));
   }
 
-  const problem = loading ? 'loading' : careProblem(std, data);
+  // careProblem holds the rules shared with the gate and the registration
+  // wizard. The pickup/do-not-release conflict is checked HERE for the same
+  // reason the gate checks it here: it needs pickupDnrConflicts, which lives in
+  // a .jsx module that careProblem - imported by a plain-node test - may not
+  // reach. All three surfaces block on it, so a parent never learns about the
+  // clash from a failed save when the screen could have said so first. (The
+  // database enforces it regardless via the constraint trigger, and
+  // careSaveMessage passes that raise through with the name in it - so this is
+  // the polite half of a guard that exists either way.)
+  function problemFor(d) {
+    const shared = careProblem(std, d);
+    if (shared) return shared;
+    if (pickupDnrConflicts(d.pickup, d.doNotRelease).length > 0) {
+      return 'A name is on both the pickup and do-not-release lists. Remove it from one.';
+    }
+    return null;
+  }
+
+  const problem = loading ? 'loading' : problemFor(data);
   const blocked = problem !== null;
   // 'loading' is a sentinel, never a sentence shown to a parent - it would read
   // as an instruction. The button is disabled either way; only the explanation
