@@ -1218,15 +1218,19 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
             student had them empty: 0 dietary and 0 EpiPen out of 636 on prod and
             141 on staging. Nothing was lost because nothing was there.
 
-            MEDICATIONS AT PROGRAM STAYS, deliberately, and it is the one she
-            might have expected to go too: 6 students on prod carry a medication
-            note and NONE of them has anything in Medical conditions, so it is
-            their only medical field. Taking the box away would leave a real
-            medication note visible to instructors with no screen able to correct
-            it. Folding those 6 into Medical conditions is a data change and hers
-            to call.
+            MEDICATIONS AT PROGRAM went too, once the 6 rows that had it were
+            actually READ. Every one said literally "No". There was nothing to
+            fold into Medical conditions, and writing "No" under that heading
+            would have turned six empty records into six that look like a medical
+            answer. They were cleared instead - on both environments, and only
+            where the value was a plain no AND Medical conditions was empty, so a
+            real medication note could not be caught by it - which left the column
+            at 0 of 639 on prod. Then the box followed the other two.
 
-            The two columns still EXIST and are still read - the CSV importer
+            MEDICAL CONDITIONS is what survives, and Jessica wants it asked at
+            REGISTRATION rather than typed here. That is not built yet.
+
+            The three columns still EXIST and are still read - the CSV importer
             accepts them and the instructor roster shows them - so an imported
             value would still warn somebody. This removes the asking, not the
             telling. */}
@@ -1238,9 +1242,6 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
         </Lbl>
         <Lbl label="Medical notes">
           <Inp value={form.medical_notes} onChange={(v) => update("medical_notes", v)} />
-        </Lbl>
-        <Lbl label="Medications at program">
-          <Inp value={form.medications_at_program} onChange={(v) => update("medications_at_program", v)} />
         </Lbl>
         <Lbl label="Emergency contact name">
           <Inp value={form.emergency_contact_name} onChange={(v) => update("emergency_contact_name", v)} />
