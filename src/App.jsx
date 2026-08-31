@@ -27,6 +27,7 @@ import RegisterSuccess from './pages/portal/RegisterSuccess.jsx';
 import WaitlistAccept from './pages/portal/WaitlistAccept.jsx';
 import Login from './pages/portal/Login.jsx';
 import Dashboard from './pages/portal/Dashboard.jsx';
+import StudentCare from './pages/portal/StudentCare.jsx';
 import PolicyPage from './pages/PolicyPage.jsx';
 import Unsubscribed from './pages/Unsubscribed.jsx';
 import AdminLogin from './pages/admin/AdminLogin.jsx';
@@ -257,6 +258,13 @@ export default function App() {
         <Route path="waitlist/:token" element={<WaitlistAccept />} />
         <Route path="login" element={<Login />} />
         <Route path="dashboard" element={<Dashboard />} />
+        {/* One child's pickup, dismissal and homeroom, editable any time. Its own
+            route rather than a modal so the "please update your info" email can
+            link a family straight to the child it is about. Authorization is
+            RLS, not the URL: parents_see_own_students scopes the read to
+            current_parent_id(), so another family's id returns no row and the
+            screen says so. */}
+        <Route path="dashboard/child/:studentId" element={<StudentCare />} />
         {/* No orgSlug prop: PolicyPage resolves the provider from the `:slug`
             URL param above. It used to be hardcoded to "j2s", which served
             Journey to STEAM LLC's privacy policy under every other provider's

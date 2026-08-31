@@ -9,6 +9,9 @@
 // those are turned on in Settings.
 import React from 'react';
 import { offeredChoices, needsAuthorizedPickup, needsAftercareProvider } from '../../../lib/dismissal.js';
+// The lock marker lives with the save rule it protects, not here - a locked row
+// is only meaningful because doNotReleaseToSave carries it through verbatim.
+import { isLockedContact } from '../../../lib/studentCare.js';
 // parseRegFields moved to src/lib/registrationFields.js so the rule it applies
 // is reachable by the test runner, which cannot import a .jsx. Re-exported here
 // because several screens already import it from this module.
@@ -71,7 +74,18 @@ function Req({ on }) {
 // label resolve to the FIRST match, so tapping "Which aftercare program?" under
 // child two focuses child one's box. Defaulted rather than required because the
 // registration wizard renders a single child at a time and has no id to give.
-export function PickupDismissalSection({ std, dismissalMethod, onDismissalChange, aftercareProvider, onAftercareProviderChange, pickup, onPickupChange, doNotRelease, onDoNotReleaseChange, instanceKey = 'single' }) {
+// `lockSavedDoNotRelease` — a parent may ADD a do-not-release name but not
+// remove or reword one that is already saved. Jessica, 2026-08-31. Adding to
+// that list is always safe; removing a name may be exactly what a custody order
+// forbids, and student_contacts has no `created_by`, so nothing can tell whether
+// this parent, the other parent or the operator put it there. The operator keeps
+// full edit on the roster, so the action still exists with them in the loop.
+//
+// OFF for the registration wizard and for operators: at checkout no row is saved
+// yet, and an operator is exactly who is meant to be able to remove one. The
+// flag names what it does to SAVED rows rather than naming a role, so a fourth
+// caller cannot get the rule by accident.
+export function PickupDismissalSection({ std, dismissalMethod, onDismissalChange, aftercareProvider, onAftercareProviderChange, pickup, onPickupChange, doNotRelease, onDoNotReleaseChange, instanceKey = 'single', lockSavedDoNotRelease = false }) {
   const providerInputId = `aftercare-provider-${instanceKey}`;
   // From the shared module, not a hardcoded pair. Which answers this provider
   // offers comes from their own config; the default is the two that were already
@@ -97,13 +111,23 @@ export function PickupDismissalSection({ std, dismissalMethod, onDismissalChange
   function removePickup(i) {
     onPickupChange(list.filter((_, idx) => idx !== i));
   }
+  // A saved row is locked only when the caller asked for it. Enforced in the
+  // HANDLERS, not merely by not drawing the controls: hiding a Remove button
+  // still leaves the name editable, and `doNotReleaseToSave` carries whatever is
+  // in state - so a reworded locked row would be saved as the new wording, which
+  // is deletion with extra steps.
+  const isLocked = (row) => lockSavedDoNotRelease && isLockedContact(row);
+  const lockedCount = dnr.filter(isLocked).length;
+
   function setDnrAt(i, patch) {
+    if (isLocked(dnr[i])) return;
     onDoNotReleaseChange(dnr.map((row, idx) => (idx === i ? { ...row, ...patch } : row)));
   }
   function addDnr() {
     onDoNotReleaseChange([...dnr, { first_name: '', last_name: '' }]);
   }
   function removeDnr(i) {
+    if (isLocked(dnr[i])) return;
     onDoNotReleaseChange(dnr.filter((_, idx) => idx !== i));
   }
 
@@ -213,16 +237,41 @@ export function PickupDismissalSection({ std, dismissalMethod, onDismissalChange
           )}
           <div className="mt-2 grid gap-3">
             {dnr.map((row, i) => (
-              <div key={i} className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
-                <input className="input-field" placeholder="First name" value={row.first_name || ''}
-                  onChange={(e) => setDnrAt(i, { first_name: e.target.value })} />
-                <input className="input-field" placeholder="Last name" value={row.last_name || ''}
-                  onChange={(e) => setDnrAt(i, { last_name: e.target.value })} />
-                <button type="button" onClick={() => removeDnr(i)}
-                  className="rounded-lg px-3 text-sm font-semibold text-j2s-ink/50 hover:text-j2s-orange-dark" aria-label="Remove person">Remove</button>
-              </div>
+              isLocked(row) ? (
+                /* Shown as a fact, not as a disabled input. A greyed-out text box
+                   with a dead Remove beside it reads as a broken form; a plain
+                   line reads as a record, which is what it is. The reason and the
+                   route to change it are stated once below, not repeated per row. */
+                <div key={i} className="flex items-center gap-2 rounded-lg border-2 border-j2s-purple/10 bg-j2s-purple-soft/20 px-4 py-3">
+                  <span className="text-sm font-semibold text-j2s-ink">
+                    {`${row.first_name || ''} ${row.last_name || ''}`.trim() || 'Name on file'}
+                  </span>
+                  <span className="ml-auto text-xs text-j2s-ink/50">On file</span>
+                </div>
+              ) : (
+                <div key={i} className="grid gap-2 sm:grid-cols-[1fr_1fr_auto]">
+                  <input className="input-field" placeholder="First name" value={row.first_name || ''}
+                    onChange={(e) => setDnrAt(i, { first_name: e.target.value })} />
+                  <input className="input-field" placeholder="Last name" value={row.last_name || ''}
+                    onChange={(e) => setDnrAt(i, { last_name: e.target.value })} />
+                  <button type="button" onClick={() => removeDnr(i)}
+                    className="rounded-lg px-3 text-sm font-semibold text-j2s-ink/50 hover:text-j2s-orange-dark" aria-label="Remove person">Remove</button>
+                </div>
+              )
             ))}
           </div>
+          {/* Said ONCE, and only when there is something on file it applies to -
+              a standing sentence on an empty list would describe nothing. It
+              names the action rather than withholding it: the name CAN come off,
+              it just goes through the provider, who is the only party that can
+              see who put it there. */}
+          {lockedCount > 0 && (
+            <p className="help-text mt-2">
+              {lockedCount === 1 ? 'This name is' : 'These names are'} already on file.
+              You can add another below. To take {lockedCount === 1 ? 'one' : 'any of them'} off,
+              contact us and we&rsquo;ll do it with you.
+            </p>
+          )}
           <button type="button" onClick={addDnr} className="mt-2 text-sm font-semibold text-j2s-purple hover:underline">
             + Add a name
           </button>

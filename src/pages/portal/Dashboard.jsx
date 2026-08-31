@@ -6,7 +6,7 @@ import { getTenant } from '../../lib/tenants.js';
 import { formatTermLabel } from '../../lib/terms.js';
 import { getUserRoles } from '../../lib/useUserRoles.js';
 import { renderWaiverText } from '../../lib/waiverText.js';
-import { dismissalAnswerIncomplete } from '../../lib/dismissal.js';
+import { dismissalAnswerIncomplete, dismissalSummary } from '../../lib/dismissal.js';
 import { earlyReleaseLine } from '../../lib/timeText.js';
 import WaiverGate from './WaiverGate.jsx';
 import PickupInfoGate from './PickupInfoGate.jsx';
@@ -898,16 +898,49 @@ function ClassesTab({ enrollments, expandedCards, toggleCard, slug }) {
 
   return (
     <div className="space-y-6">
-      {Object.entries(byStudent).map(([name, classes]) => (
-        <div key={name}>
-          <SectionLabel>{name}</SectionLabel>
-          <div className="mt-2 space-y-3">
-            {classes.map((e) => (
-              <ClassCard key={e.id} enrollment={e} expanded={expandedCards.has(e.id)} onToggle={() => toggleCard(e.id)} />
-            ))}
+      {Object.entries(byStudent).map(([name, classes]) => {
+        // THE ONE ROUTE A FAMILY HAS to change how their child leaves. Before
+        // this, the only surface that could write it was the backfill gate,
+        // which fires only when the answer is MISSING - so a family who answered
+        // "released to an authorized adult" and then started going to aftercare
+        // had nowhere in the app to say so, and no operator surface could type it
+        // in either.
+        //
+        // The id comes from an AFTER-SCHOOL enrollment specifically. Grouping
+        // here is by NAME, and the camp query selects students(first_name,
+        // last_name) with no id at all, so a child with only camp enrollments
+        // has nothing to link to - and care details are an after-school concept
+        // anyway (the gate excludes camps upstream for the same reason). No id,
+        // no link: a dead link is worse than no link.
+        const careStudentId = classes.find((c) => c.type !== 'camp' && c.student?.id)?.student?.id;
+        // What is on file today, said out loud next to the way to change it.
+        // A bare "Edit" would make a parent open the screen to find out whether
+        // anything needs changing.
+        const onFile = classes.find((c) => c.type !== 'camp' && c.student?.id)?.student;
+        return (
+          <div key={name}>
+            <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+              <SectionLabel>{name}</SectionLabel>
+              {careStudentId && (
+                <Link
+                  to={`/${slug}/dashboard/child/${careStudentId}`}
+                  className="text-sm font-semibold text-j2s-purple hover:underline"
+                >
+                  Pickup &amp; dismissal
+                </Link>
+              )}
+            </div>
+            {careStudentId && onFile?.dismissal_method && (
+              <p className="mt-0.5 text-xs text-j2s-ink/50">{dismissalSummary(onFile)}</p>
+            )}
+            <div className="mt-2 space-y-3">
+              {classes.map((e) => (
+                <ClassCard key={e.id} enrollment={e} expanded={expandedCards.has(e.id)} onToggle={() => toggleCard(e.id)} />
+              ))}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
