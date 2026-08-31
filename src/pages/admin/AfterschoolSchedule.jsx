@@ -253,7 +253,18 @@ function deriveStatus(programId, assignments) {
   }
   if (best.status === "change_requested") return "change_requested";
   if (best.flagged_reason) return "flagged";
-  if (Array.isArray(best.flags) && best.flags.length > 0) return "flagged";
+  // flags[] deliberately does NOT return "flagged" any more. Jessica, 2026-08-31,
+  // on two rows for the same instructor: "why flagged on one and awaiting on the
+  // other for the same instructor?" Both were published, emailed and unanswered -
+  // the only difference was that one carried availability_override, and "flagged"
+  // OUTRANKED "awaiting", so the chip hid the fact that she was still waiting on
+  // both. Measured on prod that day: every flags[] value is a note about HOW the
+  // assignment was made (availability_override, location_override,
+  // location_low_pref) - 14 of the 15 flagged rows. Those are attributes, not
+  // states, so they now ride ALONGSIDE the status instead of replacing it.
+  //
+  // flagged_reason above still replaces it, and should: its one live value is
+  // deadline_passed, which genuinely means the offer is dead rather than pending.
   if (best.status === "confirmed" && best.instructor_response_at) return "accepted";
   // Approved (or published) but never emailed: nobody has been asked anything yet,
   // so this is NOT awaiting a response — it's sitting in the Send offers queue.
@@ -280,6 +291,19 @@ function statusColor(status) {
 // Display name for an assignment row in nudge/tip copy.
 function patchNudgeName(a) {
   return a?.instructor_preferred || a?.instructor_first || "An instructor";
+}
+
+// WHAT A FLAG MEANS, in the operator's words. These used to be invisible: the
+// chip just said "Flagged" and you had to know that meant "assigned over their
+// stated availability". Anything unrecognised falls back to the raw key rather
+// than being dropped, so a new flag shows up as something rather than nothing.
+const FLAG_LABELS = {
+  availability_override: "Assigned over their stated availability",
+  location_override: "Assigned over their site preference",
+  location_low_pref: "A site they would rather not work",
+};
+export function flagLabels(flags) {
+  return (Array.isArray(flags) ? flags : []).map((f) => FLAG_LABELS[f] || f);
 }
 
 function statusLabel(status) {
@@ -650,7 +674,8 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       // Dates the assigned lead flagged as unavailable that land on this class's
       // sessions — surfaced on the card so the conflict is visible without opening it.
       const subNeeded = lead?.instructor_id ? unavailableConflicts(lead.instructor_id, p) : [];
-      m.set(p.id, { status, lead, subNeeded });
+      // `flags` rides alongside `status` rather than overwriting it - see deriveStatus.
+      m.set(p.id, { status, flags: lead?.flags ?? [], lead, subNeeded });
     }
     return m;
   }, [state, availByInstr]);
@@ -1065,7 +1090,13 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     const e = enriched.get(p.id);
     const loc = locName.get(p.program_location_id) ?? "—";
     if (selectedLocations.size && !selectedLocations.has(loc)) return false;
-    if (selectedStatuses.size && !selectedStatuses.has(e?.status)) return false;
+    // "Flagged" is no longer a status, so it needs its own test or the filter
+    // would silently stop matching the rows it is named after.
+    if (selectedStatuses.size) {
+      const flagged = !!(e?.flags?.length) || e?.status === "flagged";
+      const matches = selectedStatuses.has(e?.status) || (selectedStatuses.has("flagged") && flagged);
+      if (!matches) return false;
+    }
     const subInfo = subInfoByProgram.get(p.id);
     if (selectedInstructors.size) {
       let hit = !!(e?.lead?.instructor_id && selectedInstructors.has(e.lead.instructor_id));
@@ -2692,11 +2723,29 @@ function ActivePills({
   );
 }
 
-function Pill({ status }) {
+// The status chip, plus a flag marker when the assignment carries one. The two
+// are SEPARATE on purpose: a flag says how the assignment was made, the status
+// says where the offer stands, and letting the first hide the second is exactly
+// what made two identical rows look like different situations.
+//
+// The marker carries its reason in a title so hovering explains it, rather than
+// making an operator learn what a coloured word means.
+function Pill({ status, flags }) {
   const c = statusColor(status);
+  const reasons = flagLabels(flags);
   return (
-    <span style={{ fontSize: 11.5, fontWeight: 700, padding: "3px 10px", borderRadius: 999, color: c, background: `${c}1F`, whiteSpace: "nowrap", display: "inline-block" }}>
-      {statusLabel(status)}
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
+      <span style={{ fontSize: 11.5, fontWeight: 700, padding: "3px 10px", borderRadius: 999, color: c, background: `${c}1F`, display: "inline-block" }}>
+        {statusLabel(status)}
+      </span>
+      {reasons.length > 0 && (
+        <span
+          title={reasons.join("; ")}
+          style={{ fontSize: 10.5, fontWeight: 700, padding: "2px 7px", borderRadius: 999, color: VIOLET, background: `${VIOLET}1F` }}
+        >
+          Flagged
+        </span>
+      )}
     </span>
   );
 }
@@ -2833,7 +2882,7 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
                           <div style={{ fontSize: 11, color: CORAL, fontWeight: 600 }}>⚠ out {listDates(e.subNeeded)} — needs a sub</div>
                         )}
                       </td>
-                      <td style={td}><Pill status={e?.status} /></td>
+                      <td style={td}><Pill status={e?.status} flags={e?.flags} /></td>
                     </tr>
                   );
                 })}
@@ -3670,7 +3719,7 @@ function OfferReviewModal({ program, assignment, loc, subNeeded, onReply, onReas
       <div style={{ padding: "20px 22px", borderBottom: `1px solid ${RULE}` }}>
         <div style={{ fontSize: 16, fontWeight: 700, color: INK }}>{program.curriculum || "Class"}</div>
         <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>{loc} · {program.day_of_week}{program.start_time ? ` · ${fmtTimeRange(program.start_time, program.end_time)}` : ""}</div>
-        <div style={{ fontSize: 13, color: INK, marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontWeight: 600 }}>{who}</span> <Pill status={pillStatus} /></div>
+        <div style={{ fontSize: 13, color: INK, marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontWeight: 600 }}>{who}</span> <Pill status={pillStatus} flags={assignment?.flags} /></div>
         {assignment.deadline && <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>Response due {fmtDeadline(assignment.deadline)}</div>}
         {subNeeded?.length > 0 && (
           <div style={{ marginTop: 8, background: `${CORAL}14`, border: `1px solid ${CORAL}55`, borderRadius: 8, padding: "8px 10px", fontSize: 12.5, color: INK, fontWeight: 500 }}>
