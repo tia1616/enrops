@@ -12,7 +12,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
-import { dismissalSummary } from "../../lib/dismissal.js";
+import {
+  dismissalSummary, offeredChoices, needsAftercareProvider, needsAuthorizedPickup,
+} from "../../lib/dismissal.js";
+// The care editor below saves through the same RPC, the same validation and the
+// same payload builder as the two parent-facing screens. Only the dress differs.
+import {
+  CARE_CONTACT_COLUMNS, careProblem, careRpcArgs, careSaveMessage,
+} from "../../lib/studentCare.js";
+import { parseRegFields, pickupDnrConflicts } from "../portal/register-steps/RegExtraFields.jsx";
 import { WAITLIST_STATUS } from "../../lib/waitlistState.js";
 import WaitingList from "../../components/WaitingList.jsx";
 import EmailRosterModal from "./EmailRosterModal";
@@ -381,6 +389,12 @@ function CampRow({ camp, onUpload, onEmail, orgId, onRosterChanged, canManage })
 function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled, canManage }) {
   const [campers, setCampers] = useState(null); // null = loading
   const [contactsByStudent, setContactsByStudent] = useState({}); // { [student_id]: [student_contacts] }
+  // Did the contacts read SUCCEED? Distinct from "is it empty" - see the load.
+  const [contactsLoaded, setContactsLoaded] = useState(false);
+  // The org's registration-question config, so the editor offers exactly the
+  // ways of leaving this provider offers families and never a sixth one the
+  // CHECK constraint would reject.
+  const [regStd, setRegStd] = useState(null);
   const [customLabels, setCustomLabels] = useState({}); // { field_key: label } for the org's own questions
   const [editingId, setEditingId] = useState(null);
   const [justSavedId, setJustSavedId] = useState(null); // reg id to flash "Saved" + scroll into view
@@ -431,16 +445,39 @@ function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled
 
     // Structured contacts (guardians / pickup / do-not-release). do_not_release is
     // RLS-gated to org editors, so view-only users just don't receive those rows.
+    // They also cannot open the editor below (canManage is owner/admin, stricter
+    // than the can_edit_org the policy and the RPC use), so nobody can save on
+    // top of rows they were not allowed to read.
+    //
+    // CARE_CONTACT_COLUMNS, not a hand-written list: this feeds an editor that
+    // saves through replace_student_pickup_dnr_guardian, which replaces every
+    // contact row from its payload. A column missing here is a column the next
+    // save writes NULL over.
     const sids = [...new Set((data ?? []).map((r) => r.student?.id).filter(Boolean))];
     if (sids.length) {
-      const { data: contacts } = await supabase
+      const { data: contacts, error: cErr } = await supabase
         .from("student_contacts")
-        .select("id, student_id, role, first_name, last_name, phone, email, sort_order")
+        .select(CARE_CONTACT_COLUMNS)
         .in("student_id", sids)
         .order("sort_order", { ascending: true });
-      const byStudent = {};
-      for (const c of contacts ?? []) (byStudent[c.student_id] ||= []).push(c);
-      setContactsByStudent(byStudent);
+      // A FAILED READ IS NOT "THIS CHILD HAS NOBODY". The error used to be
+      // discarded, which is harmless while the rows are only displayed and
+      // dangerous the moment they are saved back: an empty do-not-release list
+      // sent to the RPC DELETES the custody rows we merely failed to fetch. So
+      // the failure is recorded and the editor stays shut.
+      if (cErr) {
+        console.error("[RosterEditor] contacts load failed", cErr);
+        setContactsByStudent({});
+        setContactsLoaded(false);
+      } else {
+        const byStudent = {};
+        for (const c of contacts ?? []) (byStudent[c.student_id] ||= []).push(c);
+        setContactsByStudent(byStudent);
+        setContactsLoaded(true);
+      }
+    } else {
+      // No students, so nothing to load and nothing to lose.
+      setContactsLoaded(true);
     }
 
     // Labels for the operator's own questions. custom_field_values stores
@@ -456,6 +493,17 @@ function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled
       const map = {};
       for (const f of fields ?? []) map[f.field_key] = f.label;
       setCustomLabels(map);
+
+      // The provider's OWN question config, through the same RPC and the same
+      // parser the registration form uses. The dismissal editor below must offer
+      // exactly the answers this provider offers families: reading the choices
+      // from anywhere else would let an operator set a value the form never
+      // shows, or one students_dismissal_method_check would reject.
+      const { data: regFields } = await supabase.rpc("get_active_registration_fields", {
+        p_org_id: orgId,
+        p_program_id: null,
+      });
+      setRegStd(parseRegFields(regFields || []).std);
     }
   }
 
@@ -488,6 +536,8 @@ function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled
               key={reg.id}
               registration={reg}
               contacts={contactsByStudent[reg.student?.id] || []}
+              contactsLoaded={contactsLoaded}
+              regStd={regStd}
               customLabels={customLabels}
               isEditing={editingId === reg.id}
               onToggleEdit={() => setEditingId((cur) => (cur === reg.id ? null : reg.id))}
@@ -522,10 +572,11 @@ function TelLink({ phone }) {
   return <a href={`tel:${phone.replace(/[^0-9+]/g, "")}`} style={{ color: PURPLE, textDecoration: "underline" }}>{phone}</a>;
 }
 
-function CamperEditableRow({ registration, contacts = [], customLabels = {}, isEditing, onToggleEdit, orgId, onSaved, canManage, onRemoved, justSaved }) {
+function CamperEditableRow({ registration, contacts = [], contactsLoaded = false, regStd = null, customLabels = {}, isEditing, onToggleEdit, orgId, onSaved, canManage, onRemoved, justSaved }) {
   const s = registration.student;
   const [confirming, setConfirming] = useState(false);
   const [refunding, setRefunding] = useState(false);
+  const [editingCare, setEditingCare] = useState(false);
   const rowRef = useRef(null);
   // After a save, bring the just-saved row back into view — a collapsing edit
   // form otherwise leaves the result below the fold and the operator has to
@@ -662,6 +713,47 @@ function CamperEditableRow({ registration, contacts = [], customLabels = {}, isE
             >
               View / Edit →
             </button>
+            {/* THE BOX THAT DID NOT EXIST. This row has always DISPLAYED the
+                dismissal answer and the pickup / do-not-release people; nothing
+                in the product could change them. So when a parent rang to say
+                "actually she goes to aftercare", the only fix was editing the
+                database by hand. Jessica, 2026-08-28: operators can edit a
+                parent's dismissal answer.
+
+                Only when the provider ASKS the question - an org that has
+                dismissal switched off has no answer to edit, and offering the
+                control would invent one. `regStd` is null until the config
+                loads, so the button appears with the data rather than before it.
+
+                DISABLED, NOT HIDDEN, when the contacts read failed: saving then
+                would send an empty do-not-release list and the RPC would delete
+                the custody rows we merely failed to fetch. The title says why,
+                because a control that is simply absent teaches nothing. */}
+            {canManage && regStd?.dismissal_method && (
+              <button
+                type="button"
+                onClick={() => setEditingCare((v) => !v)}
+                disabled={!contactsLoaded}
+                style={{
+                  padding: "5px 10px",
+                  background: editingCare ? PURPLE : "transparent",
+                  color: editingCare ? "#fff" : INK,
+                  border: `1px solid ${editingCare ? PURPLE : RULE}`,
+                  borderRadius: 5,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  fontFamily: "inherit",
+                  cursor: contactsLoaded ? "pointer" : "not-allowed",
+                  opacity: contactsLoaded ? 1 : 0.5,
+                  whiteSpace: "nowrap",
+                }}
+                title={contactsLoaded
+                  ? "Change how this child leaves, and who may collect them"
+                  : "We couldn't load this child's contacts, so editing is off until you refresh - saving now could remove names."}
+              >
+                Pickup &amp; dismissal
+              </button>
+            )}
             {canManage && hasPayment && payStatus !== "refunded" && (
               <button
                 type="button"
@@ -740,6 +832,127 @@ function CamperEditableRow({ registration, contacts = [], customLabels = {}, isE
           onSaved={onSaved}
         />
       )}
+
+      {editingCare && s?.id && (
+        <CareEditForm
+          studentId={s.id}
+          studentName={displayName}
+          orgId={orgId}
+          std={regStd}
+          student={s}
+          contacts={contacts}
+          onCancel={() => setEditingCare(false)}
+          onSaved={() => { setEditingCare(false); onSaved(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+// The operator's half of post-checkout care editing. Saves through the SAME
+// replace_student_pickup_dnr_guardian the parent screens use, with the SAME
+// validation (careProblem) and the SAME payload builder (careRpcArgs) - so
+// "complete" cannot mean one thing to a family and another to the operator
+// looking at the same child.
+//
+// TWO DELIBERATE DIFFERENCES FROM THE PARENT EDITOR:
+//   - no lock on the do-not-release list. A parent may add but not remove;
+//     the operator is precisely who is meant to be able to remove, and is the
+//     only party who can find out who put a name there.
+//   - no homeroom field. It is already editable in "View / Edit" on this same
+//     row, and a second box for one fact is how two screens start disagreeing.
+//
+// Its own panel rather than more fields inside CamperEditForm, because that form
+// writes the whole `students` row on save; folding a custody write into it would
+// put two write paths behind one button and make a stale draft able to revert a
+// dismissal answer.
+function CareEditForm({ studentId, studentName, orgId, std, student, contacts, onCancel, onSaved }) {
+  const [data, setData] = useState(() => ({
+    dismissal_method: student?.dismissal_method || "",
+    aftercare_provider: student?.aftercare_provider || "",
+    pickup: (contacts || []).filter((c) => c.role === "authorized_pickup"),
+    // NOT lockedDoNotRelease: an operator may remove one. The rows go in as
+    // plain contacts, so doNotReleaseToSave treats them as ordinary entries and
+    // honours a deletion instead of carrying it through.
+    doNotRelease: (contacts || []).filter((c) => c.role === "do_not_release"),
+    guardian2: (contacts || []).find((c) => c.role === "guardian") || {},
+  }));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  function update(patch) { setData((d) => ({ ...d, ...patch })); }
+
+  const shared = careProblem(std, data);
+  const conflict = pickupDnrConflicts(data.pickup, data.doNotRelease);
+  const problem = shared || (conflict.length > 0
+    ? `${conflict.join(", ")} ${conflict.length > 1 ? "are" : "is"} on both the pickup and do-not-release lists. Remove ${conflict.length > 1 ? "them" : "that name"} from one.`
+    : null);
+
+  async function save() {
+    if (problem || busy) return;
+    setBusy(true);
+    setErr("");
+    try {
+      const { error } = await supabase.rpc(
+        "replace_student_pickup_dnr_guardian",
+        careRpcArgs({ studentId, organizationId: orgId, data }),
+      );
+      if (error) throw error;
+      onSaved();
+    } catch (e) {
+      console.error("[CareEditForm] save failed", e);
+      setErr(careSaveMessage(e));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 8, padding: 12, background: "#FBFBFB", border: `1px solid ${RULE}`, borderRadius: 8 }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: PURPLE, marginBottom: 2 }}>
+        Pickup &amp; dismissal &mdash; {studentName}
+      </div>
+      <div style={{ fontSize: 11, color: MUTED, marginBottom: 10 }}>
+        The family sees and can change these too, in their parent portal.
+      </div>
+
+      <CareFields std={std} data={data} update={update} instanceKey={studentId} />
+
+      {problem && (
+        <div role="alert" style={{ marginTop: 10, background: `${RED}0F`, border: `1px solid ${RED}55`, color: RED, padding: "7px 9px", borderRadius: 6, fontSize: 12 }}>
+          {problem}
+        </div>
+      )}
+      {err && (
+        <div role="alert" style={{ marginTop: 10, background: `${RED}1A`, color: RED, padding: 8, borderRadius: 6, fontSize: 12 }}>
+          {err}
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+        <button
+          type="button"
+          onClick={save}
+          disabled={!!problem || busy}
+          style={{
+            padding: "7px 14px", background: problem || busy ? MUTED : BRIGHT, color: "#fff",
+            border: "none", borderRadius: 6, fontSize: 12, fontWeight: 700, fontFamily: "inherit",
+            cursor: problem || busy ? "not-allowed" : "pointer",
+          }}
+        >
+          {busy ? "Saving…" : "Save"}
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          style={{
+            padding: "7px 14px", background: "transparent", color: INK,
+            border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 12, fontWeight: 600,
+            fontFamily: "inherit", cursor: "pointer",
+          }}
+        >
+          Cancel
+        </button>
+      </div>
     </div>
   );
 }
@@ -1746,6 +1959,122 @@ function ManualPanel({ target, busy, setBusy, onSaved, onClose }) {
           {busy ? "Saving…" : "Add to roster"}
         </button>
       </div>
+    </div>
+  );
+}
+
+// The care fields in ADMIN dress. A second presentation, NOT a second set of
+// rules: the answers come from offeredChoices() so this offers exactly what the
+// provider offers families and never a sixth value the CHECK would reject, and
+// what counts as complete is careProblem()'s job, not this component's. The
+// parent portal renders the same facts in its own (tenant-branded, tailwind)
+// components - mixing those into the admin shell would look like a bug.
+function CareFields({ std, data, update, instanceKey }) {
+  const choices = offeredChoices(std?.dismissal_method?.options);
+  const showProvider = needsAftercareProvider(data.dismissal_method);
+  const showPickup = needsAuthorizedPickup(data.dismissal_method);
+  const pickup = Array.isArray(data.pickup) ? data.pickup : [];
+  const dnr = Array.isArray(data.doNotRelease) ? data.doNotRelease : [];
+
+  const setRow = (key, list, i, patch) =>
+    update({ [key]: list.map((r, idx) => (idx === i ? { ...r, ...patch } : r)) });
+  const addRow = (key, list, blank) => update({ [key]: [...list, blank] });
+  const dropRow = (key, list, i) => update({ [key]: list.filter((_, idx) => idx !== i) });
+
+  return (
+    <div style={{ display: "grid", gap: 12 }}>
+      <div>
+        <span style={{ fontSize: 11, fontWeight: 600, color: MUTED, display: "block", marginBottom: 4 }}>
+          How does this child leave?
+        </span>
+        <div style={{ display: "grid", gap: 4 }}>
+          {choices.map((c) => (
+            <label key={c.value} style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12, color: INK }}>
+              <input
+                type="radio"
+                name={`care-dismissal-${instanceKey}`}
+                checked={data.dismissal_method === c.value}
+                // Clearing the provider when the answer moves away from aftercare
+                // is the same rule the registration form and both parent screens
+                // apply: a provider name must never outlive the answer it
+                // describes, or a roster shows a destination for a child who now
+                // walks home.
+                onChange={() => update(needsAftercareProvider(c.value)
+                  ? { dismissal_method: c.value }
+                  : { dismissal_method: c.value, aftercare_provider: "" })}
+              />
+              {c.short}
+            </label>
+          ))}
+        </div>
+      </div>
+
+      {showProvider && (
+        <Lbl label="Which aftercare program?">
+          <Inp
+            value={data.aftercare_provider || ""}
+            onChange={(v) => update({ aftercare_provider: v })}
+            placeholder="e.g. Right At School"
+          />
+        </Lbl>
+      )}
+
+      {/* Same visibility rule as the family's form: who ELSE may collect the
+          child only matters when the child is released to an adult. Rows already
+          on file are still SAVED while hidden (careRpcArgs sends data.pickup
+          whatever is on screen), so switching the answer never silently drops
+          them. */}
+      {showPickup && (
+        <div>
+          <span style={{ fontSize: 11, fontWeight: 600, color: MUTED, display: "block", marginBottom: 4 }}>
+            Who else may collect this child?
+          </span>
+          <div style={{ display: "grid", gap: 6 }}>
+            {pickup.map((r, i) => (
+              <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr auto", gap: 6 }}>
+                <Inp value={r.first_name || ""} onChange={(v) => setRow("pickup", pickup, i, { first_name: v })} placeholder="First name" />
+                <Inp value={r.last_name || ""} onChange={(v) => setRow("pickup", pickup, i, { last_name: v })} placeholder="Last name" />
+                <Inp value={r.phone || ""} onChange={(v) => setRow("pickup", pickup, i, { phone: v })} placeholder="Phone" />
+                <button type="button" onClick={() => dropRow("pickup", pickup, i)}
+                  style={{ background: "none", border: "none", color: MUTED, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+          <button type="button" onClick={() => addRow("pickup", pickup, { first_name: "", last_name: "", phone: "" })}
+            style={{ marginTop: 6, background: "none", border: "none", color: BRIGHT, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", padding: 0 }}>
+            + Add a person
+          </button>
+        </div>
+      )}
+
+      {std?.do_not_release && (
+        <div>
+          <span style={{ fontSize: 11, fontWeight: 600, color: RED, display: "block", marginBottom: 4 }}>
+            Do NOT release to
+          </span>
+          <div style={{ display: "grid", gap: 6 }}>
+            {dnr.map((r, i) => (
+              <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 6 }}>
+                <Inp value={r.first_name || ""} onChange={(v) => setRow("doNotRelease", dnr, i, { first_name: v })} placeholder="First name" />
+                <Inp value={r.last_name || ""} onChange={(v) => setRow("doNotRelease", dnr, i, { last_name: v })} placeholder="Last name" />
+                <button type="button" onClick={() => dropRow("doNotRelease", dnr, i)}
+                  style={{ background: "none", border: "none", color: MUTED, fontSize: 11, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+          <button type="button" onClick={() => addRow("doNotRelease", dnr, { first_name: "", last_name: "" })}
+            style={{ marginTop: 6, background: "none", border: "none", color: BRIGHT, fontSize: 11, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", padding: 0 }}>
+            + Add a name
+          </button>
+          <div style={{ fontSize: 10, color: MUTED, marginTop: 4 }}>
+            Families can add a name here themselves but cannot take one off &mdash; only you can.
+          </div>
+        </div>
+      )}
     </div>
   );
 }
