@@ -3827,7 +3827,13 @@ function PatchPreviewModal({ preview, instructors, sending, needsApproval, finis
           </div>
         )}
         <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, overflow: "hidden" }}>
-          <iframe title="Patch offer email preview" srcDoc={cur?.html} style={{ width: "100%", height: 460, border: "none", background: "#fff", display: "block" }} />
+          {/* "Patch offer" is OUR word, not an operator's. Jeff asked what it
+              meant, 2026-08-31 - a title attribute renders as a hover tooltip,
+              so this internal term for "the offer sent to someone added after
+              the batch went out" was the one bit of engineering vocabulary
+              showing on this screen. The heading above already says "Offer email
+              for <name>"; this now matches it. */}
+          <iframe title="Offer email preview" srcDoc={cur?.html} style={{ width: "100%", height: 460, border: "none", background: "#fff", display: "block" }} />
         </div>
       </div>
       {error && (

@@ -1042,10 +1042,8 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
     last_name: s.last_name ?? "",
     birthdate: s.birthdate ?? "",
     allergies: s.allergies ?? "",
-    dietary_restrictions: s.dietary_restrictions ?? "",
     medical_notes: s.medical_notes ?? "",
     medical_conditions: s.medical_conditions ?? "",
-    epipen_required: !!s.epipen_required,
     medications_at_program: s.medications_at_program ?? "",
     emergency_contact_name: s.emergency_contact_name ?? "",
     emergency_contact_phone: s.emergency_contact_phone ?? "",
@@ -1082,10 +1080,13 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
         last_name: lastName,
         birthdate: emptyOrNull(form.birthdate),
         allergies: emptyOrNull(form.allergies),
-        dietary_restrictions: emptyOrNull(form.dietary_restrictions),
         medical_notes: emptyOrNull(form.medical_notes),
         medical_conditions: emptyOrNull(form.medical_conditions),
-        epipen_required: !!form.epipen_required,
+        // dietary_restrictions and epipen_required are deliberately NOT written
+        // any more, not merely absent from the form. Writing back a value the
+        // form no longer collects is how a save that never touched a field
+        // nulls it - and the CSV importer can still set both, so leaving them
+        // out is what keeps an imported value safe from an unrelated save.
         medications_at_program: emptyOrNull(form.medications_at_program),
         emergency_contact_name: emptyOrNull(form.emergency_contact_name),
         emergency_contact_phone: emptyOrNull(form.emergency_contact_phone),
@@ -1209,12 +1210,29 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
           <Inp value={form.parent_phone} onChange={(v) => update("parent_phone", v)} />
         </Lbl>
 
+        {/* DIETARY RESTRICTIONS and EPIPEN REQUIRED were here and are gone.
+            Jessica, 2026-08-31: "dietary restrictions and the others are covered
+            by 'medical conditions'." They were boxes registration never asks, so
+            the only way to fill them was for an operator to type them per child -
+            and measured on BOTH environments the day they were removed, every
+            student had them empty: 0 dietary and 0 EpiPen out of 636 on prod and
+            141 on staging. Nothing was lost because nothing was there.
+
+            MEDICATIONS AT PROGRAM STAYS, deliberately, and it is the one she
+            might have expected to go too: 6 students on prod carry a medication
+            note and NONE of them has anything in Medical conditions, so it is
+            their only medical field. Taking the box away would leave a real
+            medication note visible to instructors with no screen able to correct
+            it. Folding those 6 into Medical conditions is a data change and hers
+            to call.
+
+            The two columns still EXIST and are still read - the CSV importer
+            accepts them and the instructor roster shows them - so an imported
+            value would still warn somebody. This removes the asking, not the
+            telling. */}
         <FullField label="Allergies (flag for instructor)">
           <Inp value={form.allergies} onChange={(v) => update("allergies", v)} />
         </FullField>
-        <Lbl label="Dietary restrictions">
-          <Inp value={form.dietary_restrictions} onChange={(v) => update("dietary_restrictions", v)} />
-        </Lbl>
         <Lbl label="Medical conditions">
           <Inp value={form.medical_conditions} onChange={(v) => update("medical_conditions", v)} />
         </Lbl>
@@ -1223,16 +1241,6 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
         </Lbl>
         <Lbl label="Medications at program">
           <Inp value={form.medications_at_program} onChange={(v) => update("medications_at_program", v)} />
-        </Lbl>
-        <Lbl label="EpiPen required">
-          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: INK, padding: "5px 0" }}>
-            <input
-              type="checkbox"
-              checked={form.epipen_required}
-              onChange={(e) => update("epipen_required", e.target.checked)}
-            />
-            Yes, instructor should be aware
-          </label>
         </Lbl>
         <Lbl label="Emergency contact name">
           <Inp value={form.emergency_contact_name} onChange={(v) => update("emergency_contact_name", v)} />

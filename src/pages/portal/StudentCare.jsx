@@ -20,7 +20,7 @@
 // update your info in your parent portal" email needs somewhere to link a family
 // straight to, per child.
 import { useEffect, useState } from 'react';
-import { Link, useNavigate, useOutletContext, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { needsAftercareProvider } from '../../lib/dismissal.js';
@@ -37,6 +37,9 @@ export default function StudentCare() {
   const { slug, studentId } = useParams();
   const navigate = useNavigate();
   const { user, loading: authLoading } = useAuth();
+  // useLocation, not the window global: the effect below lists these in its deps,
+  // and React can only track the router-owned values.
+  const location = useLocation();
 
   const [std, setStd] = useState({});
   const [student, setStudent] = useState(null);
@@ -62,8 +65,15 @@ export default function StudentCare() {
   // Same redirect as Dashboard.jsx:179, deliberately - one way into the portal.
   useEffect(() => {
     if (!slug) return;   // unresolved tenant is rendered as an error, never redirected
-    if (!authLoading && !user) navigate(`/${slug}/login`, { replace: true });
-  }, [authLoading, user, slug, navigate]);
+    if (!authLoading && !user) {
+      // Carry where they were going, so signing in lands them back HERE rather
+      // than on the dashboard with the child they clicked forgotten. Login
+      // validates this through safeReturnPath before handing it to any auth
+      // provider - see src/lib/returnPath.js.
+      const next = encodeURIComponent(`${location.pathname}${location.search}`);
+      navigate(`/${slug}/login?next=${next}`, { replace: true });
+    }
+  }, [authLoading, user, slug, navigate, location.pathname, location.search]);
 
   useEffect(() => {
     let cancelled = false;
