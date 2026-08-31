@@ -123,20 +123,35 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
             </div>
           )}
         </div>
-        {!lean && (
-          <div data-reg-field="student_homeroom">
-            {/* Required as of 2026-08-24. Jessica, on FA26: 42 of 118 confirmed
-                registrations had no homeroom teacher, so instructors collecting a
-                class from classrooms had nothing to go on for a third of the
-                roster. Optional-but-asked produced exactly the gap the question
-                exists to close.
+        {/* A NORMAL CONFIGURABLE QUESTION as of 2026-08-31, not a hardcoded one.
+            This used to be `{!lean && ...}`, where `lean` is
+            `instructor_pay_model !== 'legacy_own_platform'` - a BILLING column.
+            Measured on prod 2026-08-28: j2s was the only active org of seven
+            whose families were ever asked, and the providers who could not see
+            it here could not see it in Registration Questions either, so one of
+            them built a duplicate custom question. Now the provider decides,
+            like the other standard questions, and j2s's row was seeded ON and
+            REQUIRED in 20260831a so nothing changed for the families mid-season.
 
-                Starred and enforced in Register.jsx, the same pair as Grade above -
-                a label that promises "required" while the button lets an empty
-                answer through is the mistake this mirrors away from. Only rendered
-                for full-nav orgs, so no lean tenant's checkout gains a field. */}
+            Presence in `std` means enabled: get_active_registration_fields
+            returns active rows only, which is the same test the dismissal,
+            pickup and do-not-release questions below already use.
+
+            Required as of 2026-08-24 for the org that asks it. Jessica, on FA26:
+            42 of 118 confirmed registrations had no homeroom teacher, so
+            instructors collecting a class from classrooms had nothing to go on
+            for a third of the roster.
+
+            The asterisk follows the REAL rule and is enforced in Register.jsx -
+            the same pair as Grade above. "(optional)" is spelled out rather than
+            left blank for exactly the reason the grade field spells it out: every
+            sibling field here is starred, so an unmarked one reads as a mistake
+            and a parent skips it. */}
+        {std.homeroom_teacher && (
+          <div data-reg-field="student_homeroom">
             <label className="label-field" htmlFor={`student-homeroom-${childIndex}`}>
-              Homeroom teacher *
+              {std.homeroom_teacher.label || 'Homeroom teacher'}
+              {std.homeroom_teacher.required ? ' *' : ' (optional)'}
             </label>
             <input
               id={`student-homeroom-${childIndex}`}

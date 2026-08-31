@@ -93,19 +93,51 @@ const STANDARD_FIELDS = [
     sensitive: true,
     neverRequired: true,
   },
+  {
+    // WAS NOT A CONFIGURABLE QUESTION AT ALL until 2026-08-31. The registration
+    // form hardcoded it behind `{!lean && ...}` and this screen only listed it
+    // (read-only, under "always asks") when `isLegacyReg` — both keyed on
+    // `instructor_pay_model`, a BILLING column. Measured on prod 2026-08-28:
+    // j2s was the only active org of seven where it appeared, in the form AND
+    // here, so six providers could not tell the platform already asks for a
+    // homeroom teacher and one of them built a duplicate custom question.
+    //
+    // NO defaultEnabled: a provider opts in. Switching a live checkout form on
+    // for tenants who did not ask is the mistake the mandatory photo gate made
+    // twice. The orgs whose families were already answering it were seeded ON
+    // and REQUIRED by migration 20260831a, so nothing changed under them.
+    //
+    // It CAN be made mandatory, unlike the three person-shaped questions above:
+    // every enrolled child has a homeroom teacher, which is the same property
+    // that keeps dismissal_method requirable. See src/lib/registrationQuestions.js.
+    key: "homeroom_teacher",
+    label: "Homeroom teacher",
+    // Claims only what a reader can check: the field shows on the class roster
+    // (Rosters.jsx, programs/ProgramRoster.jsx), in the roster CSV and emailed
+    // roster (both carry a "Homeroom" column), and on the instructor's roster.
+    // It does NOT say answers disappear when the question is switched off -
+    // they don't, the rosters keep showing whatever is already stored.
+    desc: "Which classroom the child comes from, so whoever collects the class knows where to go. Shows on your class rosters, roster exports and emailed rosters.",
+    defaultRequired: false,
+  },
 ];
 
 // Fields your registration form always asks (built in — not configurable here).
 // Shown read-only so the builder reflects the whole form, not just the extras.
 //
-// TWO of these are asked ONLY on the legacy registration form. StepStudent.jsx
-// wraps "Homeroom teacher" (line 107) and "How did you hear about us?" (line 206)
-// in `{!lean && (`, where Register.jsx:35 defines
+// "How did you hear about us?" is asked ONLY on the legacy registration form:
+// StepStudent.jsx wraps it in `{!lean && (`, where Register.jsx defines
 // `isLean = org.instructor_pay_model !== 'legacy_own_platform'` — so on prod only
-// j2s asks them and the other six orgs never do. Listing them for everyone was
-// wrong before this change and merely stale; the preview panel now states that
-// this list is complete AND puts a button next to it that opens the real form,
-// which turns a stale list into a claim a family-facing page disproves.
+// j2s asks it and the other six orgs never do. Listing it for everyone was wrong
+// before that change and merely stale; the preview panel now states that this
+// list is complete AND puts a button next to it that opens the real form, which
+// turns a stale list into a claim a family-facing page disproves.
+//
+// "Homeroom teacher" USED TO BE THE SECOND ENTRY HERE and is deliberately gone:
+// as of 2026-08-31 it is a standard question in STANDARD_FIELDS above, so it is
+// no longer built-in and no longer legacy-only. Leaving it here as well would
+// list one question twice on one screen, once as unchangeable and once with a
+// switch beside it — and the unchangeable copy would be the lie.
 //
 // NOTE the test is `=== 'legacy_own_platform'`, NOT the `hasInstructorPortal`
 // test further down (`!== 'enrops_platform'`). They are different axes and a
@@ -113,13 +145,12 @@ const STANDARD_FIELDS = [
 function alwaysOnFor(isLegacyReg) {
   return [
     "Child's name, grade, and birth date",
-    ...(isLegacyReg ? ["Homeroom teacher"] : []),
     "Allergies and medical notes",
     "Emergency contact",
     "Parent / guardian name, email, and phone",
     // StepParent.jsx:57 renders this for everyone — that file has no `lean` prop
     // at all — so leaving it out kept the list incomplete for all seven tenants,
-    // not just the two legacy-only chips above.
+    // not just the legacy-only chip below.
     "Mailing address",
     ...(isLegacyReg ? ["How did you hear about us?"] : []),
   ];
@@ -290,8 +321,10 @@ export default function RegistrationQuestions() {
   // reach - it reads as a missing feature rather than a feature they don't need.
   const hasInstructorPortal = org?.instructor_pay_model !== "enrops_platform";
   // A DIFFERENT axis from hasInstructorPortal above: this is the exact test the
-  // public registration form uses to decide whether to ask "Homeroom teacher"
-  // and "How did you hear about us?" (Register.jsx:35). Only j2s is legacy.
+  // public registration form uses to decide whether to ask "How did you hear
+  // about us?" (Register.jsx). Only j2s is legacy. It no longer decides anything
+  // about "Homeroom teacher" — that question moved out from behind this billing
+  // column on 2026-08-31 and is configured per org like the other four.
   const isLegacyReg = org?.instructor_pay_model === "legacy_own_platform";
   const alwaysOn = useMemo(() => alwaysOnFor(isLegacyReg), [isLegacyReg]);
   const canEdit = useMemo(() => ["owner", "admin"].includes(orgMember?.role), [orgMember]);

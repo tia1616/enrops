@@ -94,7 +94,13 @@ export function advanceProblem({
       if (!s.first_name) return stop('student_first_name', "Add your child's first name.");
       if (!s.last_name) return stop('student_last_name', "Add your child's last name.");
       if (!isLean && s.grade === '') return stop('student_grade', "Choose your child's grade.");
-      if (!isLean && !(s.homeroom_teacher || '').trim()) return stop('student_homeroom', "Add your child's homeroom teacher.");
+      // Homeroom is a CONFIGURED question as of 2026-08-31, not a lean-vs-legacy
+      // one - see StepStudent.jsx. The guard now reads the same flag the label's
+      // asterisk reads, so the two cannot disagree; `isLean` still decides grade
+      // above, which is a different question and stays as it was.
+      if (std.homeroom_teacher?.required && !(s.homeroom_teacher || '').trim()) {
+        return stop('student_homeroom', "Add your child's homeroom teacher.");
+      }
       if (!s.birthdate) return stop('student_birthdate', "Add your child's date of birth.");
       if (!s.emergency_contact_name) return stop('emergency_name', 'Add an emergency contact name.');
       if (!s.emergency_contact_phone) return stop('emergency_phone', 'Add an emergency contact phone number.');
