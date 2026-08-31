@@ -2253,6 +2253,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
                         loc={loc}
                         tint={colorMap.get(loc)}
                         status={e?.status}
+                        flags={e?.flags}
                         lead={e?.lead}
                         subNeeded={e?.subNeeded}
                         sub={subInfoByProgram.get(p.id)}
@@ -2937,7 +2938,7 @@ function WeekRail({ weeks, signals, effective, onSelect }) {
   );
 }
 
-function ProgramCard({ program, loc, tint, status, lead, sub, subNeeded, weekDate, weekSub, onClick, onSubClick }) {
+function ProgramCard({ program, loc, tint, status, flags, lead, sub, subNeeded, weekDate, weekSub, onClick, onSubClick }) {
   const sc = statusColor(status);
   const who = lead ? (lead.instructor_preferred || lead.instructor_first || "Instructor") + (lead.instructor_last ? ` ${lead.instructor_last}` : "") : null;
   // In week mode, only flag if THIS week's session is one the lead can't make.
@@ -2976,7 +2977,16 @@ function ProgramCard({ program, loc, tint, status, lead, sub, subNeeded, weekDat
             </span>
           )}
         </div>
-        <div style={{ fontSize: 10, color: sc, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>{statusLabel(status)}</div>
+        {/* Status, then the flag as its own mark. The card used to print
+            "FLAGGED" in place of the status; now that the status stays put, the
+            flag needs somewhere of its own or it disappears from this view
+            entirely - which would trade a wrong label for a missing one. */}
+        <div style={{ fontSize: 10, color: sc, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700, display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+          <span>{statusLabel(status)}</span>
+          {flagLabels(flags).length > 0 && (
+            <span title={flagLabels(flags).join("; ")} style={{ color: VIOLET }}>&#9873; Flagged</span>
+          )}
+        </div>
         {conflictDates.length > 0 && (
           <div style={{ fontSize: 11, color: CORAL, fontWeight: 600, lineHeight: 1.3 }}>
             ⚠ {who?.split(" ")[0] || "Lead"} out {listDates(conflictDates)} — needs a sub
