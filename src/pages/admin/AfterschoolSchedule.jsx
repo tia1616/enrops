@@ -410,7 +410,13 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           // NOT `.eq("status","open")`: that would also drop `closed`, which is a
           // real class that has simply stopped taking registrations and still
           // needs somebody teaching it.
-          .not("status", "in", '("cancelled","archived","draft")'),
+          // "archived" is NOT one of these. programs_status_check allows exactly
+          // draft | open | closed | cancelled, so no program can ever hold it -
+          // the value was borrowed from scheduling_cycles.status, which does have
+          // it (see isArchived in InstructorPortal). Excluding an impossible
+          // value reads as though archived programs exist, and the next person
+          // writes code for them.
+          .not("status", "in", '("cancelled","draft")'),
         supabase
           .from("program_locations")
           .select("id, name, area")

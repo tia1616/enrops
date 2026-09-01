@@ -671,7 +671,10 @@ export default function InstructorPortal() {
       // table nulls the embed instead of dropping the row unless the join is
       // forced, which would leave an assignment with no class attached.
       (data ?? [])
-        .filter((a) => !["cancelled", "draft", "archived"].includes(a.programs?.status))
+        // Only the two statuses that can actually occur here: programs_status_check
+        // is draft | open | closed | cancelled. "archived" belongs to
+        // scheduling_cycles.status (isArchived, below), not to a program.
+        .filter((a) => !["cancelled", "draft"].includes(a.programs?.status))
         .map((a) => ({ ...a, kind: "program" }))
         .sort((x, y) => {
           const dx = dayKey(x.programs?.day_of_week);
