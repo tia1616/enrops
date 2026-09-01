@@ -21,6 +21,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { PDFDocument, StandardFonts, rgb } from 'https://esm.sh/pdf-lib@1.17.1';
 import { loadOrgBrand, renderSignatureBlock, formatFromAddress } from '../_shared/orgBrand.ts';
 import { roomDisplay } from '../_shared/roomLabel.ts';
+import { sortRosterRows } from '../_shared/rosterOrder.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -190,13 +191,13 @@ serve(async (req: Request) => {
       .is('cancelled_at', null)
       .order('registered_at', { ascending: true });
     if (regErr) return json({ error: `roster query: ${regErr.message}` }, 500);
-    const students = (regs ?? [])
-      .filter((r: any) => r.student && (r.payment_status === 'paid' || r.status === 'confirmed'))
-      .sort((a: any, b: any) => {
-        const an = `${a.student?.last_name ?? ''} ${a.student?.first_name ?? ''}`.toLowerCase();
-        const bn = `${b.student?.last_name ?? ''} ${b.student?.first_name ?? ''}`.toLowerCase();
-        return an.localeCompare(bn);
-      });
+    // Alphabetical by FIRST name, the same rule the portal and the admin roster
+    // now use (_shared/rosterOrder.ts). This is the PDF an instructor carries, so
+    // it and the screen they checked it against must not disagree. Until
+    // 2026-09-01 this was a verbatim second copy of a last-name-first sort.
+    const students = sortRosterRows(
+      (regs ?? []).filter((r: any) => r.student && (r.payment_status === 'paid' || r.status === 'confirmed')),
+    );
 
     // Instructor(s): mirror the camp pattern (camp_assignments) — afterschool
     // scheduling writes program_assignments. Fall back to the denormalized

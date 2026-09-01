@@ -17,6 +17,13 @@ import { supabase } from "../../lib/supabase";
 import { usePermissions } from "../../lib/permissions";
 import Chevron from "../../components/Chevron.jsx";
 import { isSelfRelease } from "../../lib/dismissal.js";
+import { sortRosterRows } from "../../lib/rosterOrder.js";
+// THE SAME matching rule as the Class rosters tab, not a second spelling of it:
+// every typed word must match somewhere, in any field and any order, so "cleary
+// minecraft" and "minecraft cleary" both find the row. Jessica, 2026-09-01:
+// "class reports also needs a search bar like the other tabs" - "like" means the
+// same behaviour, which is what importing it rather than rewriting it buys.
+import { filterRosterPrograms } from "./rosterSearch.js";
 import { WAITLIST_STATUS } from "../../lib/waitlistState.js";
 
 const PURPLE = "#1C004F";
@@ -160,6 +167,7 @@ function AfterschoolReports({ org }) {
   const [programs, setPrograms] = useState(null);
   const [expandedId, setExpandedId] = useState(null);
   const [error, setError] = useState("");
+  const [query, setQuery] = useState("");
 
   // Terms present in the data, chronological (newest first). Default = the term
   // in progress / next up. Archive = pick an older term.
@@ -186,7 +194,11 @@ function AfterschoolReports({ org }) {
       setPrograms(null); setError("");
       const { data, error: e } = await supabase
         .from("programs")
-        .select("id, curriculum, day_of_week, start_time, term, program_locations ( name )")
+        // `district` is selected only so the search box matches the Class rosters
+        // tab, where schools are often looked up by the district they belong to.
+        // It is not rendered here. Already read on that tab for the same role, so
+        // no new grant is involved.
+        .select("id, curriculum, day_of_week, start_time, term, program_locations ( name, district )")
         .eq("organization_id", org.id).eq("term", term);
       if (cancelled) return;
       if (e) { setError("Couldn't load programs."); setPrograms([]); return; }
@@ -196,9 +208,32 @@ function AfterschoolReports({ org }) {
     return () => { cancelled = true; };
   }, [org?.id, term]);
 
+  // Filtering an array already in memory, so no debounce - a delay would only
+  // make typing feel broken.
+  const visible = useMemo(() => filterRosterPrograms(programs ?? [], query), [programs, query]);
+
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+      <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+        {/* type="search" so Chrome draws its own clear x - no second Clear button
+            on top of it, matching the Class rosters box exactly. autoComplete off
+            so the browser does not offer to "correct" a school name. */}
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => { setQuery(e.target.value); setExpandedId(null); }}
+          placeholder="Search school or class"
+          aria-label="Search class reports by school, class, day or district"
+          name="class-report-search-filter"
+          autoComplete="off"
+          autoCorrect="off"
+          spellCheck={false}
+          style={{
+            padding: "7px 10px", minWidth: 210,
+            border: `1px solid ${RULE}`, borderRadius: 6, fontFamily: "inherit",
+            fontSize: 13, background: "#fff", color: INK,
+          }}
+        />
         <label style={{ fontSize: 13, color: MUTED, display: "flex", alignItems: "center", gap: 8 }}>
           Term
           <select
@@ -220,9 +255,24 @@ function AfterschoolReports({ org }) {
       {programs !== null && programs.length === 0 && terms && terms.length > 0 && (
         <EmptyCard>No after-school programs for {term}.</EmptyCard>
       )}
-      {programs !== null && programs.length > 0 && (
+      {/* SEARCHED AND FOUND NOTHING is a different state from "this term is
+          empty", and it needs the way out in it - somebody who found nothing is
+          looking here, not back at the box they just typed into. */}
+      {programs !== null && programs.length > 0 && visible.length === 0 && (
+        <EmptyCard>
+          No class in {term} matches “{query}”.{" "}
+          <button
+            type="button"
+            onClick={() => setQuery("")}
+            style={{ background: "transparent", border: "none", padding: 0, color: BRIGHT, fontFamily: "inherit", fontSize: "inherit", fontWeight: 600, cursor: "pointer", textDecoration: "underline" }}
+          >
+            Show all {programs.length}
+          </button>
+        </EmptyCard>
+      )}
+      {programs !== null && visible.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {programs.map((p) => (
+          {visible.map((p) => (
             <ClassCard
               key={p.id}
               title={p.curriculum || "Class"}
@@ -246,6 +296,7 @@ function CampReports({ org }) {
   const [camps, setCamps] = useState(null);
   const [expandedId, setExpandedId] = useState(null);
   const [error, setError] = useState("");
+  const [query, setQuery] = useState("");
 
   useEffect(() => {
     if (!org?.id) return;
@@ -264,14 +315,60 @@ function CampReports({ org }) {
     return () => { cancelled = true; };
   }, [org?.id]);
 
+  // A camp row is shaped differently from a class (curriculum_name /
+  // location_name, and no single day_of_week), so it is MAPPED into the shape the
+  // shared filter reads rather than given a search of its own. Week is included
+  // because "week 3" is how an operator refers to a camp. Reusing the matcher is
+  // what keeps both tabs behaving the same as somebody types.
+  const visible = useMemo(() => {
+    const shaped = (camps ?? []).map((c) => ({
+      _camp: c,
+      curriculum: [c.curriculum_name, c.week_num ? `Week ${c.week_num}` : null].filter(Boolean).join(" "),
+      day_of_week: null,
+      program_locations: { name: c.location_name ?? "", district: "" },
+    }));
+    return filterRosterPrograms(shaped, query).map((s) => s._camp);
+  }, [camps, query]);
+
   return (
     <div>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => { setQuery(e.target.value); setExpandedId(null); }}
+          placeholder="Search camp or location"
+          aria-label="Search camp reports by camp, location or week"
+          name="camp-report-search-filter"
+          autoComplete="off"
+          autoCorrect="off"
+          spellCheck={false}
+          style={{
+            padding: "7px 10px", minWidth: 210,
+            border: `1px solid ${RULE}`, borderRadius: 6, fontFamily: "inherit",
+            fontSize: 13, background: "#fff", color: INK,
+          }}
+        />
+      </div>
+
       {error && <div style={{ background: `${RED}1A`, color: RED, padding: 10, borderRadius: 6, fontSize: 13, marginBottom: 10 }}>{error}</div>}
       {camps === null && <div style={{ color: MUTED, fontSize: 13 }}>Loading…</div>}
       {camps !== null && camps.length === 0 && !error && <EmptyCard>No camps yet.</EmptyCard>}
-      {camps !== null && camps.length > 0 && (
+      {camps !== null && camps.length > 0 && visible.length === 0 && (
+        <EmptyCard>
+          No camp matches “{query}”.{" "}
+          <button
+            type="button"
+            onClick={() => setQuery("")}
+            style={{ background: "transparent", border: "none", padding: 0, color: BRIGHT, fontFamily: "inherit", fontSize: "inherit", fontWeight: 600, cursor: "pointer", textDecoration: "underline" }}
+          >
+            Show all {camps.length}
+          </button>
+        </EmptyCard>
+      )}
+      {camps !== null && visible.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {camps.map((c) => (
+          {visible.map((c) => (
             <ClassCard
               key={c.id}
               title={c.curriculum_name || "Camp"}
@@ -405,8 +502,16 @@ function ClassReportPanel({ org, kind, classId, title, campMeta }) {
         const byKey = {};
         for (const r of recs ?? []) byKey[`${r.student_id}|${r.session_date}`] = r;
 
+        // Ordered by FIRST name through the shared roster comparator, like every
+        // other roster. This list was ALREADY first-name-ish, but by its own
+        // third copy of a name sort - localeCompare on the joined "First Last"
+        // display string - which put "Benjamin  Zimmerman" (prod's trailing
+        // space, so a double space) ahead of "Benjamin Adams", and filed a child
+        // with no first name under their SURNAME's letter instead of at the end.
+        // Sorting the registration rows before the map is what lets the shared
+        // rule see the two name fields separately.
         setRoster(
-          students
+          sortRosterRows(students)
             .map((r) => {
               const cs = contactsByStudent[r.student.id] ?? [];
               return {
@@ -417,7 +522,6 @@ function ClassReportPanel({ org, kind, classId, title, campMeta }) {
                 doNotRelease: cs.filter((c) => c.role === "do_not_release").map(nm).filter(Boolean),
               };
             })
-            .sort((a, b) => a.name.localeCompare(b.name))
         );
         setDates(meetingDates);
         setRecByKey(byKey);

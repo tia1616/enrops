@@ -16,6 +16,7 @@ import { Link, useParams, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import { dismissalSummary } from "../../../lib/dismissal.js";
 import { roomDisplay } from "../../../lib/roomLabel.js";
+import { sortRosterRows } from "../../../lib/rosterOrder.js";
 import { WAITLIST_STATUS } from "../../../lib/waitlistState.js";
 import { usePermissions } from "../../../lib/permissions.js";
 import WaitingList from "../../../components/WaitingList.jsx";
@@ -216,13 +217,13 @@ export default function ProgramRoster() {
       if (r.payment_status === "paid" || r.status === "confirmed") enr.push(r);
       else pend += 1;
     }
-    // Alphabetical by last, then first — print/sign-in friendly.
-    enr.sort((a, b) => {
-      const an = `${a.student?.last_name ?? ""} ${a.student?.first_name ?? ""}`.toLowerCase();
-      const bn = `${b.student?.last_name ?? ""} ${b.student?.first_name ?? ""}`.toLowerCase();
-      return an.localeCompare(bn);
-    });
-    return { enrolled: enr, pendingCount: pend };
+    // Alphabetical by FIRST name. This was "by last, then first — print/sign-in
+    // friendly" until 2026-09-01; Jeff asked for first name across every roster
+    // and Jessica agreed, because an instructor reading this in a hallway knows
+    // the children by first name. The comparator is shared with the four other
+    // roster surfaces now (src/lib/rosterOrder.js) — it used to be written out
+    // here and again, verbatim, in the roster email.
+    return { enrolled: sortRosterRows(enr), pendingCount: pend };
   }, [rows]);
 
   function downloadCsv() {
