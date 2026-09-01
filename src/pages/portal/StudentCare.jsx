@@ -29,7 +29,7 @@ import {
 } from './register-steps/RegExtraFields.jsx';
 import {
   CARE_CONTACT_COLUMNS, careProblem, careRpcArgs, careSaveMessage,
-  homeroomPatch, lockedDoNotRelease,
+  doNotReleaseToSave, homeroomPatch, lockedDoNotRelease,
 } from '../../lib/studentCare.js';
 
 export default function StudentCare() {
@@ -191,13 +191,19 @@ export default function StudentCare() {
         setLoadedHomeroom(data.homeroom_teacher ?? '');
       }
 
-      // Re-baseline rather than re-fetch: what a parent just added is now saved,
-      // so it becomes locked. Without this, adding a second name in the same
-      // sitting would send the first one as an ADDITION again - harmless in the
-      // database (the row is replaced either way) but the screen would keep
-      // offering Remove on a name that is now on file, which is the promise this
-      // screen makes to a custody record.
-      setData((d) => ({ ...d, doNotRelease: lockedDoNotRelease((d.doNotRelease || []).map((c) => ({ ...c, role: 'do_not_release' }))) }));
+      // Re-baseline from what was actually SAVED, not from what is on screen.
+      // What a parent just added is now on file, so it becomes locked - but the
+      // list on screen also holds the BLANK row that "+ Add a name" pushes, and
+      // re-baselining the raw state locked that too: it came back as an entry
+      // rendering "Name on file", on a custody record, that they could not remove.
+      // doNotReleaseToSave() is the exact list the RPC just received, so the screen
+      // now shows precisely what the database holds.
+      setData((d) => ({
+        ...d,
+        doNotRelease: lockedDoNotRelease(
+          doNotReleaseToSave(d.doNotRelease).map((c) => ({ ...c, role: 'do_not_release' })),
+        ),
+      }));
       setSaved(true);
     } catch (e) {
       setError(careSaveMessage(e));

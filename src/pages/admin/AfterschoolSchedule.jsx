@@ -1108,7 +1108,12 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     // "Flagged" is no longer a status, so it needs its own test or the filter
     // would silently stop matching the rows it is named after.
     if (selectedStatuses.size) {
-      const flagged = !!(e?.flags?.length) || e?.status === "flagged";
+      // The SAME rule the chip uses, so the filter cannot promise a row the row
+      // does not show. Once an offer is accepted the flag stops rendering, and a
+      // "Flagged" filter that still returned it would hand back classes with no
+      // flag visible on them - the operator filtering for things to look at would
+      // get settled ones.
+      const flagged = visibleFlagLabels(e?.flags, e?.status).length > 0 || e?.status === "flagged";
       const matches = selectedStatuses.has(e?.status) || (selectedStatuses.has("flagged") && flagged);
       if (!matches) return false;
     }

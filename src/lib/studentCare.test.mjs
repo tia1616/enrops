@@ -59,6 +59,26 @@ eq('a whitespace-only added row is not saved',
   doNotReleaseToSave([...locked, { first_name: '   ', last_name: '' }]).length, 2);
 eq('a non-array is empty, not a crash', doNotReleaseToSave(null), []);
 
+// THE PHANTOM "Name on file" (found by /code-review, 2026-08-31). The parent
+// editor re-locks the list after a save so a name just added reads as on file.
+// Re-locking the RAW ON-SCREEN state also locked the blank row that "+ Add a
+// name" pushes, so it came back as an entry rendering "Name on file" - on a
+// custody record - that the parent could not remove. The database was correct
+// the whole time; only the screen lied. Re-baseline from doNotReleaseToSave(),
+// which is the exact list the RPC received.
+const rebaseline = (list) =>
+  lockedDoNotRelease(doNotReleaseToSave(list).map((c) => ({ ...c, role: 'do_not_release' })));
+eq('a blank added row does not come back as a locked ghost',
+  rebaseline([...locked, { first_name: '', last_name: '' }]).map((c) => c.first_name),
+  ['Alex', 'Rene']);
+eq('a whitespace-only added row does not either',
+  rebaseline([...locked, { first_name: '   ', last_name: '  ' }]).length, 2);
+eq('a real addition DOES come back locked',
+  rebaseline([...locked, { first_name: 'Jo', last_name: 'Vance' }]).map((c) => c.first_name),
+  ['Alex', 'Rene', 'Jo']);
+eq('everything the re-baseline returns is locked',
+  rebaseline([...locked, { first_name: 'Jo', last_name: 'Vance' }]).every(isLockedContact), true);
+
 // --- a carried-through row keeps every field the RPC inserts -----------------
 // The RPC writes relationship and notes from the payload, so a row that loses
 // them on the round trip has them NULLed. Nothing populates those columns today
