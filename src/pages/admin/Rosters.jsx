@@ -1043,7 +1043,6 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
     birthdate: s.birthdate ?? "",
     allergies: s.allergies ?? "",
     medical_notes: s.medical_notes ?? "",
-    medications_at_program: s.medications_at_program ?? "",
     emergency_contact_name: s.emergency_contact_name ?? "",
     emergency_contact_phone: s.emergency_contact_phone ?? "",
     special_needs_accommodations: s.special_needs_accommodations ?? "",
@@ -1080,12 +1079,12 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
         birthdate: emptyOrNull(form.birthdate),
         allergies: emptyOrNull(form.allergies),
         medical_notes: emptyOrNull(form.medical_notes),
-        // dietary_restrictions and epipen_required are deliberately NOT written
-        // any more, not merely absent from the form. Writing back a value the
-        // form no longer collects is how a save that never touched a field
-        // nulls it - and the CSV importer can still set both, so leaving them
-        // out is what keeps an imported value safe from an unrelated save.
-        medications_at_program: emptyOrNull(form.medications_at_program),
+        // dietary_restrictions, epipen_required, medications_at_program and
+        // medical_conditions are deliberately NOT written any more, not merely
+        // absent from the form. Writing back a value the form no longer collects is
+        // how a save that never touched a field nulls it - and the CSV importer can
+        // still set all four, so leaving them out is what keeps an imported value
+        // safe from an unrelated save.
         emergency_contact_name: emptyOrNull(form.emergency_contact_name),
         emergency_contact_phone: emptyOrNull(form.emergency_contact_phone),
         special_needs_accommodations: emptyOrNull(form.special_needs_accommodations),
@@ -1223,12 +1222,18 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
             answer. They were cleared instead - on both environments, and only
             where the value was a plain no AND Medical conditions was empty, so a
             real medication note could not be caught by it - which left the column
-            at 0 of 639 on prod. Then the box followed the other two.
+            at 0 on prod. Then the box followed the other two.
 
-            MEDICAL CONDITIONS is what survives, and Jessica wants it asked at
-            REGISTRATION rather than typed here. That is not built yet.
+            MEDICAL CONDITIONS went too, an hour later, and this comment said the
+            opposite until the review caught it. Jessica: "we don't need medical
+            conditions and medical notes. they're redundant. go with whatever is
+            already built." MEDICAL NOTES is the one already built into
+            REGISTRATION, so it is the survivor and conditions was retired into it -
+            6 real rows ("Autism", "ADHD", "Fractured wrist - limit sports ~6
+            weeks"), every one with notes empty, so nothing collided. She wants
+            medical notes asked at registration too; that part is not built yet.
 
-            The three columns still EXIST and are still read - the CSV importer
+            All four columns still EXIST and are still read - the CSV importer
             accepts them and the instructor roster shows them - so an imported
             value would still warn somebody. This removes the asking, not the
             telling. */}
