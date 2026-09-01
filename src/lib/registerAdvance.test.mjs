@@ -34,7 +34,8 @@ function blocked(name, state, contains) {
 function focusOf(name, state, expected) { eq(name, advanceProblem(state)?.focus, expected); }
 function clear(name, state) { eq(name, advanceProblem(state), null); }
 
-// A lean org's step 0, complete. Lean skips grade + homeroom teacher.
+// A lean org's step 0, complete. Lean makes grade optional, and `regFields.std`
+// is empty below, so no configured question is on either - homeroom included.
 const goodStudent = {
   first_name: 'Ada', last_name: 'Lovelace', birthdate: '2017-05-04',
   emergency_contact_name: 'Annabella Byron', emergency_contact_phone: '555-0100',
@@ -55,17 +56,45 @@ blocked('missing emergency contact name', step0({ activeChild: { student: { ...g
 blocked('missing emergency contact phone', step0({ activeChild: { student: { ...goodStudent, emergency_contact_phone: '' } } }), 'phone');
 
 // --- step 0: lean vs full nav -----------------------------------------------
-// Grade and homeroom teacher are full-nav only. A lean org never renders them,
-// so requiring them there would be a wall with no field to fix it in.
+// Grade is full-nav only. A lean org renders it optional, so requiring it there
+// would be a wall with no field to fix it in.
 
-const fullNav = { isLean: false, activeChild: { student: { ...goodStudent, grade: '2', homeroom_teacher: 'Ms. Frizzle' } } };
-clear('full-nav student with grade + homeroom advances', step0(fullNav));
-blocked('full nav: empty grade blocks', step0({ isLean: false, activeChild: { student: { ...goodStudent, grade: '', homeroom_teacher: 'Ms. Frizzle' } } }), 'grade');
-blocked('full nav: whitespace homeroom teacher blocks', step0({ isLean: false, activeChild: { student: { ...goodStudent, grade: '2', homeroom_teacher: '   ' } } }), 'homeroom');
+const fullNav = { isLean: false, activeChild: { student: { ...goodStudent, grade: '2' } } };
+clear('full-nav student with a grade advances', step0(fullNav));
+blocked('full nav: empty grade blocks', step0({ isLean: false, activeChild: { student: { ...goodStudent, grade: '' } } }), 'grade');
 // Preserved from the old boolean ON PURPOSE: `grade !== ''` lets undefined past.
 // Tightening it would newly block families who can submit today.
-clear('full nav: an absent grade key is not blocked (unchanged behaviour)', step0({ isLean: false, activeChild: { student: { ...goodStudent, homeroom_teacher: 'Ms. Frizzle' } } }));
-clear('lean org ignores grade and homeroom teacher', step0({ activeChild: { student: { ...goodStudent, grade: '' } } }));
+clear('full nav: an absent grade key is not blocked (unchanged behaviour)', step0({ isLean: false, activeChild: { student: { ...goodStudent } } }));
+clear('lean org ignores grade', step0({ activeChild: { student: { ...goodStudent, grade: '' } } }));
+
+// --- step 0: homeroom teacher is CONFIGURED, not lean-vs-legacy -------------
+// Until 2026-08-31 this was `!isLean`, i.e. gated on instructor_pay_model - a
+// BILLING column - so j2s was the only org of seven whose families were ever
+// asked. It is now the fifth standard question and the guard reads the same
+// `required` flag the label's asterisk reads.
+//
+// THE PAIR THAT MATTERS IS THE SECOND AND THIRD. A provider who has the question
+// on but optional must NOT be blocked (that is the new default), and a provider
+// who has it on and mandatory must still be blocked exactly as j2s was on
+// 2026-08-24 - whatever pay model either of them is on. Testing only the lean
+// case would have let the required half rot silently.
+
+const homeroomReq = { std: { homeroom_teacher: { enabled: true, required: true } }, custom: [] };
+const homeroomOptional = { std: { homeroom_teacher: { enabled: true, required: false } }, custom: [] };
+
+clear('homeroom off: a blank homeroom does not block', step0({ activeChild: { student: { ...goodStudent, homeroom_teacher: '' } } }));
+clear('homeroom on but optional: a blank homeroom does not block', step0({ regFields: homeroomOptional, activeChild: { student: { ...goodStudent, homeroom_teacher: '' } } }));
+blocked('homeroom required: an empty homeroom blocks', step0({ regFields: homeroomReq, activeChild: { student: { ...goodStudent, homeroom_teacher: '' } } }), 'homeroom');
+blocked('homeroom required: whitespace only blocks', step0({ regFields: homeroomReq, activeChild: { student: { ...goodStudent, homeroom_teacher: '   ' } } }), 'homeroom');
+blocked('homeroom required: an absent key blocks', step0({ regFields: homeroomReq }), 'homeroom');
+clear('homeroom required and answered advances', step0({ regFields: homeroomReq, activeChild: { student: { ...goodStudent, homeroom_teacher: 'Ms. Frizzle' } } }));
+// A LEAN org can now require it, which the old gate made impossible. This is the
+// whole point of the change: the question follows the provider's configuration,
+// never their pay model.
+blocked('a LEAN org that requires homeroom blocks too', step0({ isLean: true, regFields: homeroomReq, activeChild: { student: { ...goodStudent, homeroom_teacher: '' } } }), 'homeroom');
+// And a full-nav org that has NOT enabled it is not blocked - the mirror image,
+// and the case that proves the guard stopped reading isLean at all.
+clear('a full-nav org with the question off is not blocked', step0({ isLean: false, activeChild: { student: { ...goodStudent, grade: '2', homeroom_teacher: '' } } }));
 
 // --- step 0: the birth date reason is the SAME string shown inline ----------
 
@@ -268,8 +297,8 @@ eq('number: null is not', hasAnswer(null, 'number'), false);
 // invisible in the message, so it is pinned here rather than trusted.
 
 focusOf('first name points at the first-name field', step0({ activeChild: { student: { ...goodStudent, first_name: '' } } }), 'student_first_name');
-focusOf('grade points at the grade field', step0({ isLean: false, activeChild: { student: { ...goodStudent, grade: '', homeroom_teacher: 'Ms. Frizzle' } } }), 'student_grade');
-focusOf('homeroom points at the homeroom field', step0({ isLean: false, activeChild: { student: { ...goodStudent, grade: '2', homeroom_teacher: '  ' } } }), 'student_homeroom');
+focusOf('grade points at the grade field', step0({ isLean: false, activeChild: { student: { ...goodStudent, grade: '' } } }), 'student_grade');
+focusOf('homeroom points at the homeroom field', step0({ regFields: homeroomReq, activeChild: { student: { ...goodStudent, homeroom_teacher: '  ' } } }), 'student_homeroom');
 focusOf('emergency name points at its own field', step0({ activeChild: { student: { ...goodStudent, emergency_contact_name: '' } } }), 'emergency_name');
 focusOf('an implausible birth date points at the birth date', step0({ activeChild: { student: { ...goodStudent, birthdate: '1980-12-18' } } }), 'student_birthdate');
 focusOf('dismissal points at the dismissal question', step0({ regFields: dismissalReq }), 'dismissal_method');

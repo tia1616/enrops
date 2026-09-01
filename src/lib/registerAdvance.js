@@ -33,10 +33,15 @@
 // carries any given key and callers do not need to know which component owns it.
 //
 // Pure and dependency-light on purpose - it is imported by a .test.mjs that node
-// runs directly, so nothing in this file may reach a .jsx module. That is why
-// pickupDnrConflicts() is passed IN as `conflicts` rather than imported from
-// RegExtraFields.jsx: the conflict detection stays in one place, this file only
-// writes the sentence for it.
+// runs directly, so nothing in this file may reach a .jsx module.
+//
+// `conflicts` is still passed IN rather than computed here, even though
+// pickupDnrConflicts moved to lib/studentCare.js on 2026-08-31 and is now
+// reachable: Register.jsx already computes it for the inline warning beside the
+// list, so taking it as a parameter means the warning and the block are looking
+// at the same array rather than at two evaluations of the same rule. The three
+// post-checkout editors call careProblem(), which DOES compute it - they have no
+// second caller to agree with.
 import { needsAuthorizedPickup, dismissalAnswerIncomplete } from './dismissal.js';
 import { birthdateProblem } from './studentBirthdate.js';
 import { namedContacts } from './registrationFields.js';
@@ -94,7 +99,13 @@ export function advanceProblem({
       if (!s.first_name) return stop('student_first_name', "Add your child's first name.");
       if (!s.last_name) return stop('student_last_name', "Add your child's last name.");
       if (!isLean && s.grade === '') return stop('student_grade', "Choose your child's grade.");
-      if (!isLean && !(s.homeroom_teacher || '').trim()) return stop('student_homeroom', "Add your child's homeroom teacher.");
+      // Homeroom is a CONFIGURED question as of 2026-08-31, not a lean-vs-legacy
+      // one - see StepStudent.jsx. The guard now reads the same flag the label's
+      // asterisk reads, so the two cannot disagree; `isLean` still decides grade
+      // above, which is a different question and stays as it was.
+      if (std.homeroom_teacher?.required && !(s.homeroom_teacher || '').trim()) {
+        return stop('student_homeroom', "Add your child's homeroom teacher.");
+      }
       if (!s.birthdate) return stop('student_birthdate', "Add your child's date of birth.");
       if (!s.emergency_contact_name) return stop('emergency_name', 'Add an emergency contact name.');
       if (!s.emergency_contact_phone) return stop('emergency_phone', 'Add an emergency contact phone number.');

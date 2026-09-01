@@ -6,7 +6,7 @@ import { getTenant } from '../../lib/tenants.js';
 import { formatTermLabel } from '../../lib/terms.js';
 import { getUserRoles } from '../../lib/useUserRoles.js';
 import { renderWaiverText } from '../../lib/waiverText.js';
-import { dismissalAnswerIncomplete } from '../../lib/dismissal.js';
+import { dismissalAnswerIncomplete, dismissalSummary } from '../../lib/dismissal.js';
 import { earlyReleaseLine } from '../../lib/timeText.js';
 import WaiverGate from './WaiverGate.jsx';
 import PickupInfoGate from './PickupInfoGate.jsx';
@@ -190,12 +190,31 @@ export default function Dashboard() {
       setError(null);
 
       // 1. Parent
-      const { data: p, error: pErr } = await supabase
+      let { data: p, error: pErr } = await supabase
         .from('parents')
         .select('id, first_name, last_name, communication_preferences')
         .eq('auth_id', user.id)
         .maybeSingle();
       if (pErr) { setError('fetch_failed'); setLoading(false); return; }
+
+      // A family that already had an enrops account before they registered has a
+      // parents row with no auth_id, because the auth.users trigger only links
+      // when the ACCOUNT is the new side. They land here and see nothing. Being
+      // signed in means they received mail at this address, which is the proof
+      // that makes claiming the row safe -- so claim it now and re-read.
+      // Returns null when there is nothing to claim, which is the ordinary case.
+      if (!p) {
+        const { data: claimedId } = await supabase.rpc('claim_parent_record');
+        if (claimedId) {
+          const { data: claimed } = await supabase
+            .from('parents')
+            .select('id, first_name, last_name, communication_preferences')
+            .eq('id', claimedId)
+            .maybeSingle();
+          if (claimed) p = claimed;
+        }
+      }
+
       if (!p) {
         // No family record for this user. The header "My account" link and the
         // family login both funnel everyone to this dashboard, so an instructor
@@ -391,10 +410,10 @@ export default function Dashboard() {
           )
         );
         programIdsForDates.forEach(({ enrollmentId }, i) => {
-          // The RPC returns rows keyed entry_date/kind/reason/session_time/
-          // session_end_time; normalize entry_date -> date. The two times carry
-          // the EARLIER window on a kept early-release date — the one day a
-          // parent must not assume the usual pickup time.
+          // The RPC returns rows keyed entry_date/kind/reason/session_time;
+          // normalize entry_date -> date. session_time carries the EARLIER time
+          // on a kept early-release date — the one day a parent must not assume
+          // the usual pickup time.
           const schedule = (dateResults[i]?.data || []).map((x) => ({
             date: x.entry_date, kind: x.kind, reason: x.reason,
             session_time: x.session_time, session_end_time: x.session_end_time,
@@ -818,9 +837,9 @@ function ScheduleTab({ enrollments }) {
                           <p className="text-sm text-j2s-ink/50">Session {idx + 1}</p>
                         )}
                         {/* EARLY RELEASE. School lets out early, so this one
-                            class runs at a different time from the card above.
-                            Said on the row itself because a parent reads the
-                            date, not the header, when working out pickup. */}
+                            class starts earlier than the time on the card
+                            above. Said on the row itself because a parent reads
+                            the date, not the header, when working out pickup. */}
                         {row.reason === 'Early release' && (
                           <p className="text-xs font-semibold text-j2s-ink/70">
                             {earlyReleaseLine(row.session_time, row.session_end_time)}
@@ -879,16 +898,49 @@ function ClassesTab({ enrollments, expandedCards, toggleCard, slug }) {
 
   return (
     <div className="space-y-6">
-      {Object.entries(byStudent).map(([name, classes]) => (
-        <div key={name}>
-          <SectionLabel>{name}</SectionLabel>
-          <div className="mt-2 space-y-3">
-            {classes.map((e) => (
-              <ClassCard key={e.id} enrollment={e} expanded={expandedCards.has(e.id)} onToggle={() => toggleCard(e.id)} />
-            ))}
+      {Object.entries(byStudent).map(([name, classes]) => {
+        // THE ONE ROUTE A FAMILY HAS to change how their child leaves. Before
+        // this, the only surface that could write it was the backfill gate,
+        // which fires only when the answer is MISSING - so a family who answered
+        // "released to an authorized adult" and then started going to aftercare
+        // had nowhere in the app to say so, and no operator surface could type it
+        // in either.
+        //
+        // The id comes from an AFTER-SCHOOL enrollment specifically. Grouping
+        // here is by NAME, and the camp query selects students(first_name,
+        // last_name) with no id at all, so a child with only camp enrollments
+        // has nothing to link to - and care details are an after-school concept
+        // anyway (the gate excludes camps upstream for the same reason). No id,
+        // no link: a dead link is worse than no link.
+        const careStudentId = classes.find((c) => c.type !== 'camp' && c.student?.id)?.student?.id;
+        // What is on file today, said out loud next to the way to change it.
+        // A bare "Edit" would make a parent open the screen to find out whether
+        // anything needs changing.
+        const onFile = classes.find((c) => c.type !== 'camp' && c.student?.id)?.student;
+        return (
+          <div key={name}>
+            <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+              <SectionLabel>{name}</SectionLabel>
+              {careStudentId && (
+                <Link
+                  to={`/${slug}/dashboard/child/${careStudentId}`}
+                  className="text-sm font-semibold text-j2s-purple hover:underline"
+                >
+                  Pickup &amp; dismissal
+                </Link>
+              )}
+            </div>
+            {careStudentId && onFile?.dismissal_method && (
+              <p className="mt-0.5 text-xs text-j2s-ink/50">{dismissalSummary(onFile)}</p>
+            )}
+            <div className="mt-2 space-y-3">
+              {classes.map((e) => (
+                <ClassCard key={e.id} enrollment={e} expanded={expandedCards.has(e.id)} onToggle={() => toggleCard(e.id)} />
+              ))}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

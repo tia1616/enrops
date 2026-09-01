@@ -1,13 +1,26 @@
 import React, { useState } from 'react';
-import { Link, useOutletContext } from 'react-router-dom';
+import { Link, useOutletContext, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { supabase } from '../../lib/supabase.js';
+import { returnUrl } from '../../lib/returnPath.js';
 
 export default function Login() {
   const { org } = useOutletContext();
   const { signInWithGoogle } = useAuth();
-  // Land the parent in THEIR org's portal after auth, never a hardcoded tenant.
-  const dashboardUrl = `${window.location.origin}/${org?.slug || ''}/dashboard`;
+  const [searchParams] = useSearchParams();
+  // BACK TO THE PAGE THEY ASKED FOR, not always the dashboard. The portal has
+  // deep links now - the per-child pickup-and-dismissal editor, and whatever the
+  // "update your info in your parent portal" email points at - and sending a
+  // family to the dashboard after they signed in meant the page they came for
+  // was simply lost. Jessica hit exactly that, 2026-08-31.
+  //
+  // `next` is attacker-controlled (it is in the URL), so it goes through
+  // safeReturnPath, which allows only a same-site absolute path. The dashboard
+  // remains the fallback for no/!safe values, so behaviour is unchanged for
+  // everyone arriving at /login normally. Land the parent in THEIR org's portal,
+  // never a hardcoded tenant.
+  const dashboardPath = `/${org?.slug || ''}/dashboard`;
+  const dashboardUrl = returnUrl(window.location.origin, searchParams.get('next'), dashboardPath);
   const [email, setEmail] = useState('');
   const [msg, setMsg] = useState('');
   const [error, setError] = useState('');

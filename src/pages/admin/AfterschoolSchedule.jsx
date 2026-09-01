@@ -19,6 +19,7 @@ import NeedsCoverBanner from "../../components/NeedsCoverBanner.jsx";
 import ScheduleStepBar from "../../components/ScheduleStepBar.jsx";
 import { resolveBoardSendIntro } from "../../lib/boardSendCopy.js";
 import { classifyOther } from "../../lib/scheduleConflicts.js";
+import { programScheduleSummary } from "../../lib/programSchedule.js";
 import { parseBonusDollars } from "../../lib/bonusAmount.js";
 // Replaces a local gradeLabel() that has been deleted with its last caller. It
 // rendered "?" for a missing grade - printing a question mark where the answer is
@@ -253,7 +254,18 @@ function deriveStatus(programId, assignments) {
   }
   if (best.status === "change_requested") return "change_requested";
   if (best.flagged_reason) return "flagged";
-  if (Array.isArray(best.flags) && best.flags.length > 0) return "flagged";
+  // flags[] deliberately does NOT return "flagged" any more. Jessica, 2026-08-31,
+  // on two rows for the same instructor: "why flagged on one and awaiting on the
+  // other for the same instructor?" Both were published, emailed and unanswered -
+  // the only difference was that one carried availability_override, and "flagged"
+  // OUTRANKED "awaiting", so the chip hid the fact that she was still waiting on
+  // both. Measured on prod that day: every flags[] value is a note about HOW the
+  // assignment was made (availability_override, location_override,
+  // location_low_pref) - 14 of the 15 flagged rows. Those are attributes, not
+  // states, so they now ride ALONGSIDE the status instead of replacing it.
+  //
+  // flagged_reason above still replaces it, and should: its one live value is
+  // deadline_passed, which genuinely means the offer is dead rather than pending.
   if (best.status === "confirmed" && best.instructor_response_at) return "accepted";
   // Approved (or published) but never emailed: nobody has been asked anything yet,
   // so this is NOT awaiting a response — it's sitting in the Send offers queue.
@@ -280,6 +292,33 @@ function statusColor(status) {
 // Display name for an assignment row in nudge/tip copy.
 function patchNudgeName(a) {
   return a?.instructor_preferred || a?.instructor_first || "An instructor";
+}
+
+// WHAT A FLAG MEANS, in the operator's words. These used to be invisible: the
+// chip just said "Flagged" and you had to know that meant "assigned over their
+// stated availability". Anything unrecognised falls back to the raw key rather
+// than being dropped, so a new flag shows up as something rather than nothing.
+const FLAG_LABELS = {
+  availability_override: "Assigned over their stated availability",
+  location_override: "Assigned over their site preference",
+  location_low_pref: "A site they would rather not work",
+};
+// A FLAG IS A CAVEAT ON AN UNANSWERED OFFER, so it stops once the answer is
+// yes. Jessica, 2026-08-31: "after acceptance, it shouldn't say flagged
+// anymore, it should just say accepted like the rest." The flag means "we
+// assigned them past what they told us" - once they have ACCEPTED, they have
+// agreed to it, and the caveat is spent. Keeping it would leave a permanent
+// mark on a class that is settled.
+//
+// change_requested deliberately still shows it: they pushed back, so how they
+// were assigned is exactly the context for the conversation. Same for the
+// pre-send states, where nobody has been asked anything yet.
+export function visibleFlagLabels(flags, status) {
+  return status === "accepted" ? [] : flagLabels(flags);
+}
+
+export function flagLabels(flags) {
+  return (Array.isArray(flags) ? flags : []).map((f) => FLAG_LABELS[f] || f);
 }
 
 function statusLabel(status) {
@@ -359,7 +398,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           // age_min/age_max added with audienceLabel: the helper answers "grades OR
           // ages", so selecting only the grade pair would have made it silently
           // render nothing for an age-based class rather than "Ages 6-12".
-          .select("id, curriculum, day_of_week, start_time, end_time, program_location_id, status, max_capacity, grade_min, grade_max, age_min, age_max, age_format")
+          .select("id, curriculum, day_of_week, start_time, end_time, program_location_id, status, max_capacity, grade_min, grade_max, age_min, age_max, age_format, first_session_date, session_count")
           .eq("organization_id", org.id)
           .eq("term", term)
           .not("status", "in", '("cancelled","archived")'),
@@ -650,7 +689,8 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       // Dates the assigned lead flagged as unavailable that land on this class's
       // sessions — surfaced on the card so the conflict is visible without opening it.
       const subNeeded = lead?.instructor_id ? unavailableConflicts(lead.instructor_id, p) : [];
-      m.set(p.id, { status, lead, subNeeded });
+      // `flags` rides alongside `status` rather than overwriting it - see deriveStatus.
+      m.set(p.id, { status, flags: lead?.flags ?? [], lead, subNeeded });
     }
     return m;
   }, [state, availByInstr]);
@@ -1065,7 +1105,18 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     const e = enriched.get(p.id);
     const loc = locName.get(p.program_location_id) ?? "—";
     if (selectedLocations.size && !selectedLocations.has(loc)) return false;
-    if (selectedStatuses.size && !selectedStatuses.has(e?.status)) return false;
+    // "Flagged" is no longer a status, so it needs its own test or the filter
+    // would silently stop matching the rows it is named after.
+    if (selectedStatuses.size) {
+      // The SAME rule the chip uses, so the filter cannot promise a row the row
+      // does not show. Once an offer is accepted the flag stops rendering, and a
+      // "Flagged" filter that still returned it would hand back classes with no
+      // flag visible on them - the operator filtering for things to look at would
+      // get settled ones.
+      const flagged = visibleFlagLabels(e?.flags, e?.status).length > 0 || e?.status === "flagged";
+      const matches = selectedStatuses.has(e?.status) || (selectedStatuses.has("flagged") && flagged);
+      if (!matches) return false;
+    }
     const subInfo = subInfoByProgram.get(p.id);
     if (selectedInstructors.size) {
       let hit = !!(e?.lead?.instructor_id && selectedInstructors.has(e.lead.instructor_id));
@@ -2222,6 +2273,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
                         loc={loc}
                         tint={colorMap.get(loc)}
                         status={e?.status}
+                        flags={e?.flags}
                         lead={e?.lead}
                         subNeeded={e?.subNeeded}
                         sub={subInfoByProgram.get(p.id)}
@@ -2692,11 +2744,29 @@ function ActivePills({
   );
 }
 
-function Pill({ status }) {
+// The status chip, plus a flag marker when the assignment carries one. The two
+// are SEPARATE on purpose: a flag says how the assignment was made, the status
+// says where the offer stands, and letting the first hide the second is exactly
+// what made two identical rows look like different situations.
+//
+// The marker carries its reason in a title so hovering explains it, rather than
+// making an operator learn what a coloured word means.
+function Pill({ status, flags }) {
   const c = statusColor(status);
+  const reasons = visibleFlagLabels(flags, status);
   return (
-    <span style={{ fontSize: 11.5, fontWeight: 700, padding: "3px 10px", borderRadius: 999, color: c, background: `${c}1F`, whiteSpace: "nowrap", display: "inline-block" }}>
-      {statusLabel(status)}
+    <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-start", gap: 3 }}>
+      <span style={{ fontSize: 11.5, fontWeight: 700, padding: "3px 10px", borderRadius: 999, color: c, background: `${c}1F`, display: "inline-block", whiteSpace: "nowrap" }}>
+        {statusLabel(status)}
+      </span>
+      {reasons.length > 0 && (
+        <span
+          title={reasons.join("; ")}
+          style={{ fontSize: 10.5, fontWeight: 700, padding: "2px 7px", borderRadius: 999, color: VIOLET, background: `${VIOLET}1F`, whiteSpace: "nowrap" }}
+        >
+          Flagged
+        </span>
+      )}
     </span>
   );
 }
@@ -2809,7 +2879,25 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
                       <td style={td}>{loc}{area && <span style={{ color: MUTED }}> · {area}</span>}</td>
                       <td style={td}>
                         <span style={{ fontWeight: 600, color: INK }}>{fmtTimeRange(p.start_time, p.end_time)}</span>
-                        <div style={{ fontSize: 11.5, color: PURPLE, fontWeight: 600 }}>all term</div>
+                        {/* WHEN THIS CLASS RUNS, from the SHARED helper the family-
+                            facing catalog cards and the pre-payment review line
+                            already use. The list view had no start date at all, and
+                            my first pass at adding one wrote its own "from <date> -
+                            all term" string - which then said "all term" on her
+                            single-session library class, because a one-off workshop
+                            has no term to run all of.
+
+                            programScheduleSummary already answers exactly this and
+                            its header says why: "so they can never drift into
+                            formatting the same date two different ways, or disagree
+                            about what a one-session workshop is called." It returns
+                            "Meets Oct 1" for the library class, "Starts Sep 4 - 8
+                            sessions" for a recurring one, and null when the operator
+                            has set neither - which is where "all term" survives as a
+                            fallback rather than as a claim. */}
+                        <div style={{ fontSize: 11.5, color: PURPLE, fontWeight: 600 }}>
+                          {programScheduleSummary(p) || "all term"}
+                        </div>
                       </td>
                       {/* Enrolled stays the headline number, because that is what the
                           column says and it is the honest count of children in the class.
@@ -2833,7 +2921,7 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
                           <div style={{ fontSize: 11, color: CORAL, fontWeight: 600 }}>⚠ out {listDates(e.subNeeded)} — needs a sub</div>
                         )}
                       </td>
-                      <td style={td}><Pill status={e?.status} /></td>
+                      <td style={td}><Pill status={e?.status} flags={e?.flags} /></td>
                     </tr>
                   );
                 })}
@@ -2888,7 +2976,7 @@ function WeekRail({ weeks, signals, effective, onSelect }) {
   );
 }
 
-function ProgramCard({ program, loc, tint, status, lead, sub, subNeeded, weekDate, weekSub, onClick, onSubClick }) {
+function ProgramCard({ program, loc, tint, status, flags, lead, sub, subNeeded, weekDate, weekSub, onClick, onSubClick }) {
   const sc = statusColor(status);
   const who = lead ? (lead.instructor_preferred || lead.instructor_first || "Instructor") + (lead.instructor_last ? ` ${lead.instructor_last}` : "") : null;
   // In week mode, only flag if THIS week's session is one the lead can't make.
@@ -2927,7 +3015,16 @@ function ProgramCard({ program, loc, tint, status, lead, sub, subNeeded, weekDat
             </span>
           )}
         </div>
-        <div style={{ fontSize: 10, color: sc, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>{statusLabel(status)}</div>
+        {/* Status, then the flag as its own mark. The card used to print
+            "FLAGGED" in place of the status; now that the status stays put, the
+            flag needs somewhere of its own or it disappears from this view
+            entirely - which would trade a wrong label for a missing one. */}
+        <div style={{ fontSize: 10, color: sc, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700, display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+          <span>{statusLabel(status)}</span>
+          {visibleFlagLabels(flags, status).length > 0 && (
+            <span title={visibleFlagLabels(flags, status).join("; ")} style={{ color: VIOLET }}>&#9873; Flagged</span>
+          )}
+        </div>
         {conflictDates.length > 0 && (
           <div style={{ fontSize: 11, color: CORAL, fontWeight: 600, lineHeight: 1.3 }}>
             ⚠ {who?.split(" ")[0] || "Lead"} out {listDates(conflictDates)} — needs a sub
@@ -3670,7 +3767,7 @@ function OfferReviewModal({ program, assignment, loc, subNeeded, onReply, onReas
       <div style={{ padding: "20px 22px", borderBottom: `1px solid ${RULE}` }}>
         <div style={{ fontSize: 16, fontWeight: 700, color: INK }}>{program.curriculum || "Class"}</div>
         <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>{loc} · {program.day_of_week}{program.start_time ? ` · ${fmtTimeRange(program.start_time, program.end_time)}` : ""}</div>
-        <div style={{ fontSize: 13, color: INK, marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontWeight: 600 }}>{who}</span> <Pill status={pillStatus} /></div>
+        <div style={{ fontSize: 13, color: INK, marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontWeight: 600 }}>{who}</span> <Pill status={pillStatus} flags={assignment?.flags} /></div>
         {assignment.deadline && <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>Response due {fmtDeadline(assignment.deadline)}</div>}
         {subNeeded?.length > 0 && (
           <div style={{ marginTop: 8, background: `${CORAL}14`, border: `1px solid ${CORAL}55`, borderRadius: 8, padding: "8px 10px", fontSize: 12.5, color: INK, fontWeight: 500 }}>
@@ -3827,7 +3924,13 @@ function PatchPreviewModal({ preview, instructors, sending, needsApproval, finis
           </div>
         )}
         <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, overflow: "hidden" }}>
-          <iframe title="Patch offer email preview" srcDoc={cur?.html} style={{ width: "100%", height: 460, border: "none", background: "#fff", display: "block" }} />
+          {/* "Patch offer" is OUR word, not an operator's. Jeff asked what it
+              meant, 2026-08-31 - a title attribute renders as a hover tooltip,
+              so this internal term for "the offer sent to someone added after
+              the batch went out" was the one bit of engineering vocabulary
+              showing on this screen. The heading above already says "Offer email
+              for <name>"; this now matches it. */}
+          <iframe title="Offer email preview" srcDoc={cur?.html} style={{ width: "100%", height: 460, border: "none", background: "#fff", display: "block" }} />
         </div>
       </div>
       {error && (

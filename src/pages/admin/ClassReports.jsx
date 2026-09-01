@@ -128,7 +128,7 @@ export default function ClassReports() {
       </header>
 
       <div style={{ display: "flex", gap: 4, borderBottom: `1px solid ${RULE}`, marginBottom: 18 }}>
-        <TabBtn active={view === "afterschool"} onClick={() => setView("afterschool")} label="Afterschool" />
+        <TabBtn active={view === "afterschool"} onClick={() => setView("afterschool")} label="After-school" />
         <TabBtn active={view === "camps"} onClick={() => setView("camps")} label="Camps" />
       </div>
 
@@ -215,10 +215,10 @@ function AfterschoolReports({ org }) {
       {error && <div style={{ background: `${RED}1A`, color: RED, padding: 10, borderRadius: 6, fontSize: 13, marginBottom: 10 }}>{error}</div>}
       {(terms === null || programs === null) && <div style={{ color: MUTED, fontSize: 13 }}>Loading…</div>}
       {terms !== null && terms.length === 0 && (
-        <EmptyCard>No afterschool terms yet. Reports appear once programs run.</EmptyCard>
+        <EmptyCard>No after-school terms yet. Reports appear once programs run.</EmptyCard>
       )}
       {programs !== null && programs.length === 0 && terms && terms.length > 0 && (
-        <EmptyCard>No afterschool programs for {term}.</EmptyCard>
+        <EmptyCard>No after-school programs for {term}.</EmptyCard>
       )}
       {programs !== null && programs.length > 0 && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>

@@ -14,22 +14,21 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase.js";
-import { needsAftercareProvider, dismissalAnswerIncomplete } from "../../lib/dismissal.js";
-import { namedContacts, contactsWithAnyName } from "../../lib/registrationFields.js";
+import { needsAftercareProvider } from "../../lib/dismissal.js";
 import {
   PickupDismissalSection,
   GuardianSecondarySection,
   parseRegFields,
-  pickupDnrConflicts,
 } from "./register-steps/RegExtraFields.jsx";
-
-// WHAT GETS SAVED: anything the parent typed a name into, either box. NOT the
-// stricter "counts as an answer" rule (namedContacts) - filtering the save with
-// that would silently delete real entries, and prod has three of them:
-// "Club K Teachers", "Casey Negrieff", "AINSWORTH AFTERCARE - MOST DAYS".
-// Slightly wider than the old test, which looked at first_name only and threw
-// away a row carrying just a surname.
-const nonEmpty = contactsWithAnyName;
+// The validation, the payload and the "a parent cannot remove a saved
+// do-not-release name" rule are shared with StudentCare.jsx and the operator's
+// roster editor. What gets SAVED (anything with a name in either box, not the
+// stricter "counts as an answer" rule) moved there with them - prod holds
+// "Club K Teachers", "Casey Negrieff" and "AINSWORTH AFTERCARE - MOST DAYS",
+// and filtering the save strictly would delete all three.
+import {
+  CARE_CONTACT_COLUMNS, careProblem, careRpcArgs, careSaveMessage, lockedDoNotRelease,
+} from "../../lib/studentCare.js";
 
 export default function PickupInfoGate({ students, parent, orgId, onComplete }) {
   const [std, setStd] = useState(null);
@@ -46,7 +45,11 @@ export default function PickupInfoGate({ students, parent, orgId, onComplete }) 
         const ids = students.map((s) => s.student_id);
         const [{ data: fields }, { data: contacts }, { data: studs }] = await Promise.all([
           supabase.rpc("get_active_registration_fields", { p_org_id: orgId }),
-          supabase.from("student_contacts").select("student_id, role, first_name, last_name, phone, email").in("student_id", ids),
+          // EVERY column the RPC re-inserts, from the shared list. This select
+          // used to stop at email, so `relationship` and `notes` were written
+          // NULL on every save this screen made. Nothing populates those columns
+          // on either environment today, which is exactly why it went unnoticed.
+          supabase.from("student_contacts").select(CARE_CONTACT_COLUMNS).in("student_id", ids),
           // aftercare_provider selected alongside the method. Without it the
           // "Which aftercare program?" box renders EMPTY for a child who already
           // has one on file, and re-saving would blank a name the family had
@@ -67,7 +70,12 @@ export default function PickupInfoGate({ students, parent, orgId, onComplete }) 
             dismissal_method: dm,
             aftercare_provider: stu?.aftercare_provider || "",
             pickup: cs.filter((c) => c.role === "authorized_pickup"),
-            doNotRelease: cs.filter((c) => c.role === "do_not_release"),
+            // Locked, exactly as on the parent's own editor. This screen is
+            // parent-facing too, so the same rule applies: a family may add a
+            // do-not-release name here but not take one off. Two parent screens
+            // disagreeing about a custody record is the failure this shares one
+            // helper to avoid.
+            doNotRelease: lockedDoNotRelease(cs),
             guardian2: cs.find((c) => c.role === "guardian") || {},
           };
         }
@@ -85,39 +93,12 @@ export default function PickupInfoGate({ students, parent, orgId, onComplete }) 
     setByStudent((m) => ({ ...m, [studentId]: { ...m[studentId], ...patch } }));
   }
 
-  // Per-child validation mirrors the registration rules.
-  function problemFor(s) {
-    const d = byStudent[s.student_id];
-    if (!d) return "loading";
-    if (std?.dismissal_method && !d.dismissal_method) return "Choose how this child leaves.";
-    // Same completeness rule as the registration form, through the same helper -
-    // this gate exists to finish missing pickup info, so it must not let a family
-    // "finish" with the aftercare destination blank.
-    if (dismissalAnswerIncomplete(d.dismissal_method, d.aftercare_provider)) {
-      return "Add which aftercare program they go to.";
-    }
-    // NO REQUIREMENT ON THE EXTRA-ADULTS LIST. This used to demand a name from
-    // anyone whose child is released to an adult, and - unlike the registration
-    // form - it never consulted the provider's setting at all, so no switch
-    // anywhere could relieve it. On a gate that replaces the whole dashboard,
-    // that stranded any family whose only collectors are the parents.
-    //
-    // The safety answer this screen exists for is the one above: HOW the child
-    // leaves, which is radio buttons and always answerable. Who ELSE may collect
-    // them is extra, and blank means nobody - see src/lib/registrationQuestions.js.
-    // Mirror the registration wizard's advanceProblem (src/lib/registerAdvance.js):
-    // if the org marked do-not-release required, the
-    // backfill gate must enforce it too (the label shows Required in both flows).
-    // namedContacts, not nonEmpty: this asks "has a mandatory question been
-    // answered", which is the strict rule. What we SAVE is the wide one above.
-    if (std?.do_not_release?.required && namedContacts(d.doNotRelease).length === 0) {
-      return "Add the name(s) we should not release this child to.";
-    }
-    if (pickupDnrConflicts(d.pickup, d.doNotRelease).length > 0) {
-      return "A name is on both the pickup and do-not-release lists. Remove it from one.";
-    }
-    return null;
-  }
+  // Per-child validation. The rules THEMSELVES live in lib/studentCare.js,
+  // because as of 2026-08-31 this is no longer the only screen that writes these
+  // facts: the parent's own editor (StudentCare.jsx) and the operator's roster
+  // editor save the same rows. Three spellings of "is this complete" is how the
+  // dismissal vocabulary ended up written six times and disagreeing.
+  const problemFor = (s) => careProblem(std, byStudent[s.student_id]);
 
   // problemFor has always written a specific sentence for each thing that blocks
   // this screen, and none of them was ever rendered - the only signal was Save
@@ -151,26 +132,26 @@ export default function PickupInfoGate({ students, parent, orgId, onComplete }) 
       // replaced in a single transaction, so a pickup<->do-not-release move can't
       // race the exclusion trigger and half-save (audit P2).
       for (const s of students) {
-        const d = byStudent[s.student_id];
-        const g2 = d.guardian2 || {};
-        const { error: saveErr } = await supabase.rpc("replace_student_pickup_dnr_guardian", {
-          p_student_id: s.student_id,
-          p_organization_id: orgId,
-          p_pickup: nonEmpty(d.pickup),
-          p_do_not_release: nonEmpty(d.doNotRelease),
-          p_guardian: (g2.first_name || "").trim() ? [g2] : [],
-          p_dismissal_method: d.dismissal_method || null,
-          // 7th argument, added by migration 20260807b. The parameter has NO
-          // default there on purpose, so the old 6-arg signature and this one
-          // coexist unambiguously while both environments roll forward - which
-          // means this call must always pass it, even as null.
-          p_aftercare_provider: d.aftercare_provider || null,
-        });
+        // The payload is built by careRpcArgs, shared with the parent and
+        // operator editors - including the 7th argument, which migration
+        // 20260807b deliberately gave no default so the 6-arg and 7-arg
+        // overloads coexist. Omitting it resolves to the OLD function and
+        // silently drops the aftercare destination, which is exactly the kind of
+        // detail that rots when three screens each spell the call out.
+        const { error: saveErr } = await supabase.rpc(
+          "replace_student_pickup_dnr_guardian",
+          careRpcArgs({ studentId: s.student_id, organizationId: orgId, data: byStudent[s.student_id] }),
+        );
         if (saveErr) throw saveErr;
       }
       onComplete();
     } catch (e) {
-      setError(e.message ?? "We couldn't save your info. Please try again.");
+      // Was `e.message`, which put raw plpgsql raises in front of a parent -
+      // including 'not authorized to edit contacts for student <uuid>'.
+      // careSaveMessage passes through the two the database already wrote to a
+      // person (the pickup conflict, which names the contact) and replaces the
+      // two that carry raw ids.
+      setError(careSaveMessage(e));
       setSaving(false);
     }
   }
@@ -195,6 +176,7 @@ export default function PickupInfoGate({ students, parent, orgId, onComplete }) 
               <h2 className="font-titan text-xl text-j2s-ink">{s.name || "Your child"}</h2>
               <PickupDismissalSection
                 std={std}
+                lockSavedDoNotRelease
                 // Every child renders at once here, so the radio group name and
                 // the provider input id have to differ per child.
                 instanceKey={s.student_id}

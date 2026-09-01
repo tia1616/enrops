@@ -37,6 +37,22 @@ eq('dismissal_method keeps its required flag',
 eq('dismissal_method optional stays optional',
   parseRegFields([row({ standard_key: 'dismissal_method', is_required: false })]).std.dismissal_method.required, false);
 
+// homeroom_teacher joined the standard keys on 2026-08-31. It belongs with
+// dismissal_method rather than with the three above: every enrolled child has a
+// homeroom teacher, so a provider may mark it mandatory and j2s's seeded row
+// does. Pinned here because the whole point of the change was that the question
+// stops depending on instructor_pay_model - if this ever came back optional, the
+// asterisk on the live form would keep promising "required" while the button let
+// an empty answer through.
+eq('homeroom_teacher parses as a standard question, not a custom one',
+  parseRegFields([row({ standard_key: 'homeroom_teacher' })]).custom.length, 0);
+eq('homeroom_teacher keeps its required flag',
+  parseRegFields([row({ standard_key: 'homeroom_teacher', is_required: true })]).std.homeroom_teacher.required, true);
+eq('homeroom_teacher optional stays optional',
+  parseRegFields([row({ standard_key: 'homeroom_teacher', is_required: false })]).std.homeroom_teacher.required, false);
+eq('homeroom_teacher carries the operator label',
+  parseRegFields([row({ standard_key: 'homeroom_teacher', label: 'Which classroom?' })]).std.homeroom_teacher.label, 'Which classroom?');
+
 // --- the rest of the shape survived the move --------------------------------
 
 const mixed = parseRegFields([
