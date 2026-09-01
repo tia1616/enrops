@@ -302,6 +302,20 @@ const FLAG_LABELS = {
   location_override: "Assigned over their site preference",
   location_low_pref: "A site they would rather not work",
 };
+// A FLAG IS A CAVEAT ON AN UNANSWERED OFFER, so it stops once the answer is
+// yes. Jessica, 2026-08-31: "after acceptance, it shouldn't say flagged
+// anymore, it should just say accepted like the rest." The flag means "we
+// assigned them past what they told us" - once they have ACCEPTED, they have
+// agreed to it, and the caveat is spent. Keeping it would leave a permanent
+// mark on a class that is settled.
+//
+// change_requested deliberately still shows it: they pushed back, so how they
+// were assigned is exactly the context for the conversation. Same for the
+// pre-send states, where nobody has been asked anything yet.
+export function visibleFlagLabels(flags, status) {
+  return status === "accepted" ? [] : flagLabels(flags);
+}
+
 export function flagLabels(flags) {
   return (Array.isArray(flags) ? flags : []).map((f) => FLAG_LABELS[f] || f);
 }
@@ -383,7 +397,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           // age_min/age_max added with audienceLabel: the helper answers "grades OR
           // ages", so selecting only the grade pair would have made it silently
           // render nothing for an age-based class rather than "Ages 6-12".
-          .select("id, curriculum, day_of_week, start_time, end_time, program_location_id, status, max_capacity, grade_min, grade_max, age_min, age_max, age_format")
+          .select("id, curriculum, day_of_week, start_time, end_time, program_location_id, status, max_capacity, grade_min, grade_max, age_min, age_max, age_format, first_session_date")
           .eq("organization_id", org.id)
           .eq("term", term)
           .not("status", "in", '("cancelled","archived")'),
@@ -2733,7 +2747,7 @@ function ActivePills({
 // making an operator learn what a coloured word means.
 function Pill({ status, flags }) {
   const c = statusColor(status);
-  const reasons = flagLabels(flags);
+  const reasons = visibleFlagLabels(flags, status);
   return (
     <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-start", gap: 3 }}>
       <span style={{ fontSize: 11.5, fontWeight: 700, padding: "3px 10px", borderRadius: 999, color: c, background: `${c}1F`, display: "inline-block", whiteSpace: "nowrap" }}>
@@ -2859,7 +2873,20 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
                       <td style={td}>{loc}{area && <span style={{ color: MUTED }}> · {area}</span>}</td>
                       <td style={td}>
                         <span style={{ fontWeight: 600, color: INK }}>{fmtTimeRange(p.start_time, p.end_time)}</span>
-                        <div style={{ fontSize: 11.5, color: PURPLE, fontWeight: 600 }}>all term</div>
+                        {/* THE START DATE, which the list view never carried.
+                            Jessica, 2026-08-31: "the classes should have the start
+                            date on there in list view."
+
+                            Only when there IS one. Measured the same day: prod's
+                            live FA26 term has a first_session_date on all 55
+                            classes, but the two future terms have none on any of
+                            them (25 and 25) because they are not scheduled yet, and
+                            staging is half and half. Printing an empty date, or the
+                            word "Invalid Date", on a class nobody has scheduled is
+                            worse than the plain "all term" this replaces. */}
+                        <div style={{ fontSize: 11.5, color: PURPLE, fontWeight: 600 }}>
+                          {p.first_session_date ? `from ${fmtDateShort(p.first_session_date)} · all term` : "all term"}
+                        </div>
                       </td>
                       {/* Enrolled stays the headline number, because that is what the
                           column says and it is the honest count of children in the class.
@@ -2983,8 +3010,8 @@ function ProgramCard({ program, loc, tint, status, flags, lead, sub, subNeeded, 
             entirely - which would trade a wrong label for a missing one. */}
         <div style={{ fontSize: 10, color: sc, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700, display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
           <span>{statusLabel(status)}</span>
-          {flagLabels(flags).length > 0 && (
-            <span title={flagLabels(flags).join("; ")} style={{ color: VIOLET }}>&#9873; Flagged</span>
+          {visibleFlagLabels(flags, status).length > 0 && (
+            <span title={visibleFlagLabels(flags, status).join("; ")} style={{ color: VIOLET }}>&#9873; Flagged</span>
           )}
         </div>
         {conflictDates.length > 0 && (

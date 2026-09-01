@@ -1249,7 +1249,7 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
         <Lbl label="Emergency contact phone">
           <Inp value={form.emergency_contact_phone} onChange={(v) => update("emergency_contact_phone", v)} />
         </Lbl>
-        <Lbl label="Homeroom teacher (for after-school release)">
+        <Lbl label="Homeroom teacher">
           <Inp value={form.homeroom_teacher} onChange={(v) => update("homeroom_teacher", v)} placeholder="e.g. Ms. Jones, Room 12" />
         </Lbl>
         <FullField label="Authorized pickup (other than parent)">
