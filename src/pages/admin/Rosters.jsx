@@ -1142,30 +1142,21 @@ function CamperEditForm({ registration, orgId, canEdit = false, onCancel, onSave
           phone: emptyOrNull(form.parent_phone),
         };
         if (existingParent) {
-          // WORDED FOR THE ONE CASE THAT ACTUALLY HITS THIS. The parents policies
-          // (read AND write) both require a parent_org_relationships row joining
-          // that parent to an org you belong to, and 47 registrations on prod have
-          // no such row for their own org. For those, this update has always
-          // matched zero rows - the operator's parent edit was silently dropped
-          // and the form still said SAVED. Now it is reported, and the message has
-          // to say that the CHILD's details did save a moment ago, because the
-          // generic "nothing was saved" would read as "nothing saved at all" and
-          // send an operator hunting for an edit that is already in the database.
-          try {
-            requireWritten(
-              await supabase
-                .from("parents")
-                .update(parentFields)
-                .eq("id", existingParent.id)
-                .select("id"),
-            );
-          } catch (e) {
-            if (!isWriteRefused(e)) throw e;
-            throw new Error(
-              "The child's details were saved. The parent's name, email and phone were NOT — " +
-              "this parent record isn't linked to your organisation, so it can't be edited here.",
-            );
-          }
+          // Guarded like the others, but note this one can barely fire: the read
+          // and write policies on `parents` share a predicate (a
+          // parent_org_relationships row joining that parent to an org you belong
+          // to), so a parent you can SEE is a parent you can UPDATE. If
+          // existingParent is set at all, the row was visible. Kept for the case
+          // nobody predicted - a policy edit that separates the two - which is the
+          // whole point of the guard.
+          requireWritten(
+            await supabase
+              .from("parents")
+              .update(parentFields)
+              .eq("id", existingParent.id)
+              .select("id"),
+            "the parent's contact details",
+          );
         } else {
           const { data: newParent, error: pErr } = await supabase
             .from("parents")
