@@ -195,10 +195,11 @@ export default function ProgramsCalendar() {
       ? "\n\nHeads up: because Stripe isn't connected, you won't be able to publish it until it is."
       : "";
     const question = fromCancelled
-      // Draft is NOT excluded from the instructor schedule board (it filters only
-      // cancelled and archived), so this genuinely does come back there — which is
-      // the half an operator cares about after cancelling one by mistake.
-      ? `Reopen this class as a draft? It won't be offered to families until you publish it, and it'll come back on your instructor schedule.${stripeNote}`
+      // Draft IS excluded from the instructor schedule board as of 2026-08-31,
+      // so this sentence had to change with it: it used to promise the class
+      // "will come back on your instructor schedule", which is now the opposite
+      // of what reopening does. Publishing is what puts it back.
+      ? `Reopen this class as a draft? It won't be offered to families until you publish it, and it won't appear on your instructor schedule until it is.${stripeNote}`
       : `Unpublish this program? It'll be hidden from the public catalog and stop appearing in marketing campaigns. Existing registrations are unaffected.${stripeNote}`;
     if (!confirm(question)) return;
     const { error: unpubErr } = await supabase

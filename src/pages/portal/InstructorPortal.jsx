@@ -638,7 +638,7 @@ export default function InstructorPortal() {
   async function loadAfterschoolAssignments(instructorId) {
     const { data, error: aErr } = await supabase
       .from("program_assignments")
-      .select("id, status, role, distance_bonus_cents, flags, change_request_message, instructor_response_at, deadline, published_at, program_id, programs(id, curriculum, curriculum_id, day_of_week, start_time, end_time, session_count, term, room, program_location_id, program_locations:program_location_id(id, name, address, contact_phone, room_number, arrival_instructions, dismissal_instructions)), instructor_offer_messages(id, sender_role, sender_instructor_id, message, created_at)")
+      .select("id, status, role, distance_bonus_cents, flags, change_request_message, instructor_response_at, deadline, published_at, program_id, programs(id, status, curriculum, curriculum_id, day_of_week, start_time, end_time, session_count, term, room, program_location_id, program_locations:program_location_id(id, name, address, contact_phone, room_number, arrival_instructions, dismissal_instructions)), instructor_offer_messages(id, sender_role, sender_instructor_id, message, created_at)")
       .eq("instructor_id", instructorId)
       .not("published_at", "is", null)
       .in("status", ["published", "change_requested", "confirmed"]);
@@ -657,7 +657,20 @@ export default function InstructorPortal() {
       return DAY_ORDER[String(dow).trim().toLowerCase()] ?? 9;
     };
     setProgramAssignments(
+      // A CANCELLED OR UNPUBLISHED CLASS IS NOT ON ANYBODY'S SCHEDULE.
+      // This filtered only the ASSIGNMENT status, never the class's own - so
+      // cancelling a class removed it from the operator's board (which does
+      // exclude cancelled) and left it sitting on the instructor's schedule, who
+      // would turn up to teach it. Nothing has hit this yet only because no
+      // cancelled or draft class currently has an instructor on it (checked on
+      // prod, 2026-08-31: 0 of 3 cancelled and 0 of 12 draft) - and being able to
+      // cancel a STAFFED class is exactly what is being asked for next.
+      //
+      // Filtered here rather than in the query: a PostgREST filter on an embedded
+      // table nulls the embed instead of dropping the row unless the join is
+      // forced, which would leave an assignment with no class attached.
       (data ?? [])
+        .filter((a) => !["cancelled", "draft", "archived"].includes(a.programs?.status))
         .map((a) => ({ ...a, kind: "program" }))
         .sort((x, y) => {
           const dx = dayKey(x.programs?.day_of_week);

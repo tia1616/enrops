@@ -401,7 +401,16 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           .select("id, curriculum, day_of_week, start_time, end_time, program_location_id, status, max_capacity, grade_min, grade_max, age_min, age_max, age_format, first_session_date, session_count")
           .eq("organization_id", org.id)
           .eq("term", term)
-          .not("status", "in", '("cancelled","archived")'),
+          // DRAFT JOINS cancelled and archived. Jessica, 2026-08-31: "take out
+          // cancelled classes/draft classes from instructor portal and my schedule
+          // board." A draft is a class that does not exist for anybody yet, so it
+          // is not something to staff. Costs nothing today - checked on prod, not
+          // one of the 12 draft classes has an instructor on it.
+          //
+          // NOT `.eq("status","open")`: that would also drop `closed`, which is a
+          // real class that has simply stopped taking registrations and still
+          // needs somebody teaching it.
+          .not("status", "in", '("cancelled","archived","draft")'),
         supabase
           .from("program_locations")
           .select("id, name, area")
