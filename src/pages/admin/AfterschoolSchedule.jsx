@@ -19,6 +19,7 @@ import NeedsCoverBanner from "../../components/NeedsCoverBanner.jsx";
 import ScheduleStepBar from "../../components/ScheduleStepBar.jsx";
 import { resolveBoardSendIntro } from "../../lib/boardSendCopy.js";
 import { classifyOther } from "../../lib/scheduleConflicts.js";
+import { programScheduleSummary } from "../../lib/programSchedule.js";
 import { parseBonusDollars } from "../../lib/bonusAmount.js";
 // Replaces a local gradeLabel() that has been deleted with its last caller. It
 // rendered "?" for a missing grade - printing a question mark where the answer is
@@ -397,7 +398,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           // age_min/age_max added with audienceLabel: the helper answers "grades OR
           // ages", so selecting only the grade pair would have made it silently
           // render nothing for an age-based class rather than "Ages 6-12".
-          .select("id, curriculum, day_of_week, start_time, end_time, program_location_id, status, max_capacity, grade_min, grade_max, age_min, age_max, age_format, first_session_date")
+          .select("id, curriculum, day_of_week, start_time, end_time, program_location_id, status, max_capacity, grade_min, grade_max, age_min, age_max, age_format, first_session_date, session_count")
           .eq("organization_id", org.id)
           .eq("term", term)
           .not("status", "in", '("cancelled","archived")'),
@@ -2873,19 +2874,24 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
                       <td style={td}>{loc}{area && <span style={{ color: MUTED }}> · {area}</span>}</td>
                       <td style={td}>
                         <span style={{ fontWeight: 600, color: INK }}>{fmtTimeRange(p.start_time, p.end_time)}</span>
-                        {/* THE START DATE, which the list view never carried.
-                            Jessica, 2026-08-31: "the classes should have the start
-                            date on there in list view."
+                        {/* WHEN THIS CLASS RUNS, from the SHARED helper the family-
+                            facing catalog cards and the pre-payment review line
+                            already use. The list view had no start date at all, and
+                            my first pass at adding one wrote its own "from <date> -
+                            all term" string - which then said "all term" on her
+                            single-session library class, because a one-off workshop
+                            has no term to run all of.
 
-                            Only when there IS one. Measured the same day: prod's
-                            live FA26 term has a first_session_date on all 55
-                            classes, but the two future terms have none on any of
-                            them (25 and 25) because they are not scheduled yet, and
-                            staging is half and half. Printing an empty date, or the
-                            word "Invalid Date", on a class nobody has scheduled is
-                            worse than the plain "all term" this replaces. */}
+                            programScheduleSummary already answers exactly this and
+                            its header says why: "so they can never drift into
+                            formatting the same date two different ways, or disagree
+                            about what a one-session workshop is called." It returns
+                            "Meets Oct 1" for the library class, "Starts Sep 4 - 8
+                            sessions" for a recurring one, and null when the operator
+                            has set neither - which is where "all term" survives as a
+                            fallback rather than as a claim. */}
                         <div style={{ fontSize: 11.5, color: PURPLE, fontWeight: 600 }}>
-                          {p.first_session_date ? `from ${fmtDateShort(p.first_session_date)} · all term` : "all term"}
+                          {programScheduleSummary(p) || "all term"}
                         </div>
                       </td>
                       {/* Enrolled stays the headline number, because that is what the
