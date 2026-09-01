@@ -16,6 +16,7 @@ import {
 import PortalSwitcher from "../../components/PortalSwitcher.jsx";
 import { displayFirstName } from "../../lib/instructorName";
 import { roomDisplay } from "../../lib/roomLabel.js";
+import { sortRosterRows } from "../../lib/rosterOrder.js";
 import { avatarUrl } from "../../lib/avatars";
 import InstructorAvailabilityForm from "./InstructorAvailabilityForm.jsx";
 import AfterschoolAvailabilityForm from "./AfterschoolAvailabilityForm.jsx";
@@ -4025,7 +4026,12 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
           setRows([]);
           return;
         }
-        setRows(data ?? []);
+        // Alphabetical by FIRST name, not the registration order this showed
+        // until 2026-09-01. Jeff asked for it specifically "including instructor
+        // portal", and this is the screen an instructor reads standing in front
+        // of the class, so it must match the emailed PDF exactly - both now go
+        // through src/lib/rosterOrder.js and its Deno twin.
+        setRows(sortRosterRows(data));
 
         // Pull the structured contacts (guardians / authorized pickup / do-not-
         // release / etc.) for these students. Instructors DO receive do_not_release

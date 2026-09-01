@@ -17,6 +17,7 @@ import { supabase } from "../../lib/supabase";
 import { usePermissions } from "../../lib/permissions";
 import Chevron from "../../components/Chevron.jsx";
 import { isSelfRelease } from "../../lib/dismissal.js";
+import { sortRosterRows } from "../../lib/rosterOrder.js";
 import { WAITLIST_STATUS } from "../../lib/waitlistState.js";
 
 const PURPLE = "#1C004F";
@@ -405,8 +406,16 @@ function ClassReportPanel({ org, kind, classId, title, campMeta }) {
         const byKey = {};
         for (const r of recs ?? []) byKey[`${r.student_id}|${r.session_date}`] = r;
 
+        // Ordered by FIRST name through the shared roster comparator, like every
+        // other roster. This list was ALREADY first-name-ish, but by its own
+        // third copy of a name sort - localeCompare on the joined "First Last"
+        // display string - which put "Benjamin  Zimmerman" (prod's trailing
+        // space, so a double space) ahead of "Benjamin Adams", and filed a child
+        // with no first name under their SURNAME's letter instead of at the end.
+        // Sorting the registration rows before the map is what lets the shared
+        // rule see the two name fields separately.
         setRoster(
-          students
+          sortRosterRows(students)
             .map((r) => {
               const cs = contactsByStudent[r.student.id] ?? [];
               return {
@@ -417,7 +426,6 @@ function ClassReportPanel({ org, kind, classId, title, campMeta }) {
                 doNotRelease: cs.filter((c) => c.role === "do_not_release").map(nm).filter(Boolean),
               };
             })
-            .sort((a, b) => a.name.localeCompare(b.name))
         );
         setDates(meetingDates);
         setRecByKey(byKey);

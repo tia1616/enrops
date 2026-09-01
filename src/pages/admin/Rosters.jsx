@@ -24,6 +24,9 @@ import {
 // to pull the family-facing components into its bundle.
 import { parseRegFields } from "../../lib/registrationFields.js";
 import { sortRosterPrograms, filterRosterPrograms } from "./rosterSearch.js";
+// rosterSearch orders the LIST OF CLASSES; rosterOrder orders the CHILDREN
+// inside one of them. Two different questions, hence two modules.
+import { sortRosterRows } from "../../lib/rosterOrder.js";
 import { WAITLIST_STATUS } from "../../lib/waitlistState.js";
 import WaitingList from "../../components/WaitingList.jsx";
 import EmailRosterModal from "./EmailRosterModal";
@@ -444,7 +447,12 @@ function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled
       setCampers([]);
       return;
     }
-    setCampers(data ?? []);
+    // Alphabetical by FIRST name, not the registration order this list showed
+    // until 2026-09-01 (Jeff's ask, Jessica's call - see src/lib/rosterOrder.js).
+    // The .order() above stays as the query's own deterministic base order; this
+    // row shape does NOT select registered_at, so the shared comparator's last
+    // tiebreak is the registration id.
+    setCampers(sortRosterRows(data));
 
     // Structured contacts (guardians / pickup / do-not-release). do_not_release is
     // RLS-gated to org editors, so view-only users just don't receive those rows.

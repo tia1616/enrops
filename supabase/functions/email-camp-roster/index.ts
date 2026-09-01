@@ -19,6 +19,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { PDFDocument, StandardFonts, rgb } from 'https://esm.sh/pdf-lib@1.17.1';
 import { loadOrgBrand, renderSignatureBlock, formatFromAddress } from '../_shared/orgBrand.ts';
+import { sortRosterRows } from '../_shared/rosterOrder.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -186,7 +187,14 @@ serve(async (req: Request) => {
       .eq('camp_session_id', camp.id)
       .order('registered_at', { ascending: true });
     if (regErr) return json({ error: `roster query: ${regErr.message}` }, 500);
-    const campers = (regs ?? []).filter((r: any) => r.student && r.status !== 'cancelled');
+    // Alphabetical by FIRST name (_shared/rosterOrder.ts). This roster had NO
+    // name sort at all - it printed in registration order - and it is the one
+    // surface where the last-name tiebreak actually earns its keep: five camp
+    // sessions on prod carry two children with the same first name, while zero
+    // after-school classes do.
+    const campers = sortRosterRows(
+      (regs ?? []).filter((r: any) => r.student && r.status !== 'cancelled'),
+    );
 
     // ── Load instructor(s) on this camp ────────────────────────────────────
     const { data: asgs } = await supabase
