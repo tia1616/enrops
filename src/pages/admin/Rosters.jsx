@@ -27,6 +27,8 @@ import { sortRosterPrograms, filterRosterPrograms } from "./rosterSearch.js";
 // rosterSearch orders the LIST OF CLASSES; rosterOrder orders the CHILDREN
 // inside one of them. Two different questions, hence two modules.
 import { sortRosterRows } from "../../lib/rosterOrder.js";
+import { usePermissions } from "../../lib/permissions.js";
+import { requireWritten, isWriteRefused } from "../../lib/writeGuard.js";
 import { WAITLIST_STATUS } from "../../lib/waitlistState.js";
 import WaitingList from "../../components/WaitingList.jsx";
 import EmailRosterModal from "./EmailRosterModal";
@@ -585,6 +587,16 @@ function TelLink({ phone }) {
 
 function CamperEditableRow({ registration, contacts = [], contactsLoaded = false, regStd = null, customLabels = {}, isEditing, onToggleEdit, orgId, onSaved, canManage, onRemoved, justSaved }) {
   const s = registration.student;
+  // WHICH ROLE MAY EDIT A CHILD'S DETAILS - and it is NOT canManage. canManage is
+  // owner/admin, deliberately stricter than the DB, and it correctly gates Refund
+  // (money) and Remove beside this button. The student and registration rows are
+  // gated in RLS on can_edit_org = owner/admin/STAFF, so gating this form on
+  // canManage would take a capability staff genuinely has. perm.canEdit is the UI
+  // mirror of can_edit_org, which is the only gate that agrees with the database.
+  // A viewer keeps the button - reading a child's details is their job - but gets
+  // a read-only form, because until 2026-09-01 they got an armed Save that lied.
+  const perm = usePermissions();
+  const canEditStudent = perm.canEdit;
   const [confirming, setConfirming] = useState(false);
   const [refunding, setRefunding] = useState(false);
   const [editingCare, setEditingCare] = useState(false);
@@ -722,7 +734,7 @@ function CamperEditableRow({ registration, contacts = [], contactsLoaded = false
                 whiteSpace: "nowrap",
               }}
             >
-              View / Edit →
+              {canEditStudent ? "View / Edit →" : "View →"}
             </button>
             {/* THE BOX THAT DID NOT EXIST. This row has always DISPLAYED the
                 dismissal answer and the pickup / do-not-release people; nothing
@@ -839,6 +851,7 @@ function CamperEditableRow({ registration, contacts = [], contactsLoaded = false
         <CamperEditForm
           registration={registration}
           orgId={orgId}
+          canEdit={canEditStudent}
           onCancel={onToggleEdit}
           onSaved={onSaved}
         />
@@ -1042,7 +1055,10 @@ function RemoveConfirm({ registration, name, onClose, onRemoved }) {
   );
 }
 
-function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
+// canEdit defaults to FALSE, not true. A caller that forgets to pass it gets a
+// read-only form, which is the harmless failure; defaulting to true would hand
+// the next caller the same silent-save bug this was written to end.
+function CamperEditForm({ registration, orgId, canEdit = false, onCancel, onSaved }) {
   const s = registration.student;
   const existingParent = registration.parent;
   const [form, setForm] = useState({
@@ -1102,11 +1118,20 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
         authorized_pickup_contacts: emptyOrNull(form.authorized_pickup_contacts),
         notes: emptyOrNull(form.notes),
       };
-      const { error: sErr } = await supabase
-        .from("students")
-        .update(studentFields)
-        .eq("id", s.id);
-      if (sErr) throw sErr;
+      // .select("id") + requireWritten, NOT `if (error)`. RLS refusing an UPDATE
+      // is not an error: the row falls outside the policy, Postgres updates zero
+      // rows, and PostgREST returns success. This write is FIRST on purpose - it
+      // is the one gated on can_edit_org, so a caller who may not edit is stopped
+      // here, before the parent write below (whose policy is looser) can land a
+      // half-applied change. See src/lib/writeGuard.js.
+      requireWritten(
+        await supabase
+          .from("students")
+          .update(studentFields)
+          .eq("id", s.id)
+          .select("id"),
+        "this student's details",
+      );
 
       // Parent: update existing or create new
       if (emptyOrNull(form.parent_email)) {
@@ -1117,11 +1142,14 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
           phone: emptyOrNull(form.parent_phone),
         };
         if (existingParent) {
-          const { error: pErr } = await supabase
-            .from("parents")
-            .update(parentFields)
-            .eq("id", existingParent.id);
-          if (pErr) throw pErr;
+          requireWritten(
+            await supabase
+              .from("parents")
+              .update(parentFields)
+              .eq("id", existingParent.id)
+              .select("id"),
+            "the parent's contact details",
+          );
         } else {
           const { data: newParent, error: pErr } = await supabase
             .from("parents")
@@ -1137,15 +1165,24 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
         }
       }
 
-      const { error: rErr } = await supabase
-        .from("registrations")
-        .update(regFields)
-        .eq("id", registration.id);
-      if (rErr) throw rErr;
+      requireWritten(
+        await supabase
+          .from("registrations")
+          .update(regFields)
+          .eq("id", registration.id)
+          .select("id"),
+        "the registration notes",
+      );
       if (onSaved) onSaved();
     } catch (e) {
       console.error("[CamperEditForm] save failed", e);
-      if (/permission denied|policy/i.test(e.message ?? "")) {
+      // A REFUSAL IS NOT A CRASH, and it is not a "permission denied" string
+      // either - that branch below was written expecting RLS to raise, which it
+      // does not do for an UPDATE. isWriteRefused is the only reliable signal
+      // that nothing was written, and its message already says so plainly.
+      if (isWriteRefused(e)) {
+        setErr(e.message);
+      } else if (/permission denied|policy/i.test(e.message ?? "")) {
         setErr("You don't have permission to edit this camper.");
       } else {
         setErr(e.message ?? "Couldn't save.");
@@ -1160,7 +1197,7 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: INK }}>
-          Editing: {name}
+          {canEdit ? `Editing: ${name}` : `${name} — view only`}
         </div>
         <button
           type="button"
@@ -1179,6 +1216,19 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
         </div>
       )}
 
+      {/* READ-ONLY FOR A VIEWER, via one disabled <fieldset> rather than a
+          `disabled` prop threaded onto every input. A viewer SHOULD be able to
+          read a child's allergy note and emergency contact - that is the job -
+          so the fields stay visible and legible; they just cannot be typed into,
+          and the Save button below is not rendered at all. The fieldset is the
+          load-bearing choice: it disables every descendant control natively,
+          including the next field somebody adds, so this cannot rot the way a
+          per-input list would. `minInlineSize: auto` because a fieldset defaults
+          to min-content and would otherwise collapse the two-column grid. */}
+      <fieldset
+        disabled={!canEdit}
+        style={{ border: "none", margin: 0, padding: 0, minInlineSize: "auto" }}
+      >
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
         {/* Student name — parents sometimes enter their own name here at
             registration; correcting it also syncs the family's Contacts entry
@@ -1270,6 +1320,7 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
           <Inp value={form.notes} onChange={(v) => update("notes", v)} />
         </FullField>
       </div>
+      </fieldset>
 
       {/* Error repeated right next to the Save button — the form scrolls, and
           the top copy is off-screen when the operator clicks Save down here.
@@ -1296,27 +1347,35 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
             cursor: "pointer",
           }}
         >
-          Cancel
+          {canEdit ? "Cancel" : "Close"}
         </button>
-        <button
-          type="button"
-          onClick={save}
-          disabled={busy}
-          style={{
-            padding: "6px 14px",
-            background: BRIGHT,
-            color: "#fff",
-            border: "none",
-            borderRadius: 5,
-            fontSize: 12,
-            fontWeight: 600,
-            fontFamily: "inherit",
-            cursor: busy ? "wait" : "pointer",
-            opacity: busy ? 0.5 : 1,
-          }}
-        >
-          {busy ? "Saving…" : "Save changes"}
-        </button>
+        {/* NO SAVE BUTTON FOR A VIEWER, rather than a disabled one. A viewer used
+            to get this button fully armed: it called save(), RLS matched zero
+            rows, PostgREST returned no error, and the row flashed "✓ SAVED"
+            having written nothing (a real J2S viewer could do this on prod until
+            2026-09-01). Not rendering it is the honest version - the panel is
+            plainly a read-only view of the child, not an edit that failed. */}
+        {canEdit && (
+          <button
+            type="button"
+            onClick={save}
+            disabled={busy}
+            style={{
+              padding: "6px 14px",
+              background: BRIGHT,
+              color: "#fff",
+              border: "none",
+              borderRadius: 5,
+              fontSize: 12,
+              fontWeight: 600,
+              fontFamily: "inherit",
+              cursor: busy ? "wait" : "pointer",
+              opacity: busy ? 0.5 : 1,
+            }}
+          >
+            {busy ? "Saving…" : "Save changes"}
+          </button>
+        )}
       </div>
     </div>
   );
