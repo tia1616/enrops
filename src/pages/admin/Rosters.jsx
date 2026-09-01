@@ -1043,7 +1043,6 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
     birthdate: s.birthdate ?? "",
     allergies: s.allergies ?? "",
     medical_notes: s.medical_notes ?? "",
-    medical_conditions: s.medical_conditions ?? "",
     medications_at_program: s.medications_at_program ?? "",
     emergency_contact_name: s.emergency_contact_name ?? "",
     emergency_contact_phone: s.emergency_contact_phone ?? "",
@@ -1081,7 +1080,6 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
         birthdate: emptyOrNull(form.birthdate),
         allergies: emptyOrNull(form.allergies),
         medical_notes: emptyOrNull(form.medical_notes),
-        medical_conditions: emptyOrNull(form.medical_conditions),
         // dietary_restrictions and epipen_required are deliberately NOT written
         // any more, not merely absent from the form. Writing back a value the
         // form no longer collects is how a save that never touched a field
@@ -1237,9 +1235,6 @@ function CamperEditForm({ registration, orgId, onCancel, onSaved }) {
         <FullField label="Allergies (flag for instructor)">
           <Inp value={form.allergies} onChange={(v) => update("allergies", v)} />
         </FullField>
-        <Lbl label="Medical conditions">
-          <Inp value={form.medical_conditions} onChange={(v) => update("medical_conditions", v)} />
-        </Lbl>
         <Lbl label="Medical notes">
           <Inp value={form.medical_notes} onChange={(v) => update("medical_notes", v)} />
         </Lbl>

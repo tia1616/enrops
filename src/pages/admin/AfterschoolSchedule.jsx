@@ -2735,14 +2735,14 @@ function Pill({ status, flags }) {
   const c = statusColor(status);
   const reasons = flagLabels(flags);
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }}>
-      <span style={{ fontSize: 11.5, fontWeight: 700, padding: "3px 10px", borderRadius: 999, color: c, background: `${c}1F`, display: "inline-block" }}>
+    <span style={{ display: "inline-flex", flexDirection: "column", alignItems: "flex-start", gap: 3 }}>
+      <span style={{ fontSize: 11.5, fontWeight: 700, padding: "3px 10px", borderRadius: 999, color: c, background: `${c}1F`, display: "inline-block", whiteSpace: "nowrap" }}>
         {statusLabel(status)}
       </span>
       {reasons.length > 0 && (
         <span
           title={reasons.join("; ")}
-          style={{ fontSize: 10.5, fontWeight: 700, padding: "2px 7px", borderRadius: 999, color: VIOLET, background: `${VIOLET}1F` }}
+          style={{ fontSize: 10.5, fontWeight: 700, padding: "2px 7px", borderRadius: 999, color: VIOLET, background: `${VIOLET}1F`, whiteSpace: "nowrap" }}
         >
           Flagged
         </span>

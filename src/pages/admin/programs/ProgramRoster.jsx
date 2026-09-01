@@ -421,14 +421,26 @@ function StudentCard({ reg, contacts = [] }) {
   const pickups = contacts.filter((c) => c.role === "authorized_pickup");
   const doNotRelease = contacts.filter((c) => c.role === "do_not_release");
   const hasAllergy = (s.allergies ?? "").trim().length > 0;
-  const hasMedCond = (s.medical_conditions ?? "").trim().length > 0;
+  // READS medical_notes, not medical_conditions. The two were redundant and the
+  // conditions column was retired on 2026-08-31 (Jessica: "we don't need medical
+  // conditions and medical notes. they're redundant") - its 6 rows, real ones
+  // like "Autism" and "Fractured wrist - limit sports ~6 weeks", were folded into
+  // medical_notes, which is the field REGISTRATION actually asks.
+  //
+  // Repointing this is not cosmetic: medical_notes used to be a SECONDARY fact
+  // here, shown but never red-flagged. Folding without this line would have
+  // stripped the red panel off exactly those 6 children. It now also promotes
+  // the notes that were already there, which is the same information an
+  // instructor should have been seeing prominently all along.
+  const hasMedCond = (s.medical_notes ?? "").trim().length > 0;
   const flagged = hasAllergy || s.epipen_required || hasMedCond;
 
   // Secondary safety facts (shown but not red-flagged).
   const secondary = [
     s.dietary_restrictions && { label: "Dietary", value: s.dietary_restrictions },
     s.medications_at_program && { label: "Medications", value: s.medications_at_program },
-    s.medical_notes && { label: "Medical notes", value: s.medical_notes },
+    // medical_notes moved UP into the red panel above - listing it here too
+    // would print the same sentence twice on one card.
     s.special_needs_accommodations && { label: "Accommodations", value: s.special_needs_accommodations },
   ].filter(Boolean);
 
@@ -465,7 +477,7 @@ function StudentCard({ reg, contacts = [] }) {
         }}>
           {hasAllergy && <div><strong style={{ color: RED }}>Allergies:</strong> {s.allergies}</div>}
           {s.epipen_required && <div><strong style={{ color: RED }}>EpiPen required.</strong></div>}
-          {hasMedCond && <div><strong style={{ color: RED }}>Medical:</strong> {s.medical_conditions}</div>}
+          {hasMedCond && <div><strong style={{ color: RED }}>Medical:</strong> {s.medical_notes}</div>}
         </div>
       )}
 
