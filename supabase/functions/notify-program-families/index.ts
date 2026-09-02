@@ -226,7 +226,13 @@ serve(async (req: Request) => {
       const since = new Date(Date.now() - DUPLICATE_WINDOW_MINUTES * 60_000).toISOString();
       const { data: recent, error: dupErr } = await supabase
         .from('program_family_messages')
-        .select('id, sent_at, sent_count, status')
+        // The AUDIENCE of the previous send is selected too, because the operator
+        // needs it to judge. Deliberately NOT part of the match key: the groups
+        // are ADDITIVE, so a second send with the waiting or refunded box newly
+        // ticked still re-emails every enrolled family. Keying on the flags would
+        // let that through silently; keying on subject alone catches it and lets
+        // them decide with "Send it again anyway".
+        .select('id, sent_at, sent_count, status, include_waitlist, include_cancelled')
         .eq('program_id', programId)
         .eq('subject', subject)
         .in('status', ['sent', 'partial'])
@@ -242,8 +248,15 @@ serve(async (req: Request) => {
         return json({
           error: 'duplicate_send',
           message:
-            `An identical message about this class was sent ${recent[0].sent_count} time(s) ` +
-            `less than ${DUPLICATE_WINDOW_MINUTES} minutes ago. Send it again only if you mean to.`,
+            `The same message went to ${recent[0].sent_count} ` +
+            `${recent[0].sent_count === 1 ? 'family' : 'families'} on this class less than ` +
+            `${DUPLICATE_WINDOW_MINUTES} minutes ago` +
+            // Names the audience that already received it, so an operator who
+            // has just ticked a new group can tell whether the people they are
+            // trying to reach were covered or not.
+            `${recent[0].include_cancelled ? ', including families who had left or been refunded' : ''}` +
+            `${recent[0].include_waitlist ? ', including the waiting list' : ''}` +
+            '. Sending again will email everyone on the list above a second time.',
           previous: recent[0],
         }, 409);
       }
