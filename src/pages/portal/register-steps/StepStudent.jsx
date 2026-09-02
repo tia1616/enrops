@@ -1,6 +1,6 @@
 import React from 'react';
 import { PickupDismissalSection, CustomQuestionsSection, hasPickupSection } from './RegExtraFields.jsx';
-import { GRADE_OPTIONS_LONG } from '../../../lib/grades.js';
+import { GRADE_OPTIONS_LONG, gradeFitProblem } from '../../../lib/grades.js';
 import { needsAftercareProvider } from '../../../lib/dismissal.js';
 // The referral answers, incl. the tenant-derived "<provider> email" option, live
 // in src/lib/referral.js so no tenant's channel can be written into this file
@@ -21,6 +21,20 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
   const { std = {}, custom = [] } = regFields;
   const referrals = referralOptions(orgName);
   const dobProblem = birthdateProblem(student.birthdate);
+  // ONE CHILD, POSSIBLY SEVERAL CLASSES. `child.items` is the cart's shape - a
+  // family registering one child for both Chess and Robotics has two items here -
+  // so the warning is per CLASS, not per child. That also answers "which child does
+  // it name" without naming anybody: this step renders one child at a time, so the
+  // only ambiguity left is which of THEIR classes disagrees, and the message quotes
+  // the class's own range rather than a name.
+  //
+  // Deduped by message: two classes sharing a range would otherwise stack the same
+  // sentence twice under one dropdown, which reads as a bug rather than as emphasis.
+  const gradeWarnings = [...new Set(
+    (Array.isArray(child.items) ? child.items : [])
+      .map((it) => gradeFitProblem(it?.program, student.grade)?.message)
+      .filter(Boolean),
+  )];
   return (
     <div>
       <h1 className="font-titan text-3xl text-j2s-ink sm:text-4xl">
@@ -91,6 +105,29 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
               </option>
             ))}
           </select>
+          {/* WARN, NOT BLOCK - and it has to LOOK like the difference.
+              Deliberately NOT the orange treatment the birth-date problem uses two
+              fields below: that one stops the parent, this one does not, and two
+              identical-looking boxes teach a parent that the orange one is also
+              ignorable. Purple-soft is what the rest of this wizard uses for
+              something worth reading, so this borrows the tone rather than
+              inventing a third colour.
+
+              role="status", not role="alert", for the same reason: status is
+              announced politely when the parent lands on it, alert interrupts. The
+              choice of grade is not an emergency.
+
+              No aria-invalid on the select either - the value is not invalid, and
+              saying so would make a screen reader contradict the sentence. */}
+          {gradeWarnings.map((message) => (
+            <div
+              key={message}
+              role="status"
+              className="mt-2 rounded-lg border-2 border-j2s-purple/20 bg-j2s-purple-soft/40 px-4 py-3 text-sm text-j2s-ink"
+            >
+              {message}
+            </div>
+          ))}
         </div>
         <div data-reg-field="student_birthdate">
           <label className="label-field" htmlFor={`student-birthdate-${childIndex}`}>Birth date *</label>

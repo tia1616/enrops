@@ -4,7 +4,7 @@
 // These exist because the vocabulary was written FOUR times with four different
 // answers (K-12 vs K-6, Pre-K handled vs not). One definition is only worth
 // anything if it stays the definition.
-import { GRADE_OPTIONS, GRADE_OPTIONS_LONG, gradeLabel, audienceLabel, audienceMode, audiencePatch, rangeBackwards, rangeBackwardsMessage, isUnset, KINDERGARTEN } from './grades.js';
+import { GRADE_OPTIONS, GRADE_OPTIONS_LONG, gradeLabel, audienceLabel, audienceMode, audiencePatch, rangeBackwards, rangeBackwardsMessage, isUnset, KINDERGARTEN, gradeFitProblem, gradeFitMessage } from './grades.js';
 
 let pass = 0, fail = 0;
 function eq(name, actual, expected) {
@@ -201,6 +201,86 @@ eq('unknown mode falls back to grades, not ages', rangeBackwardsMessage(undefine
 for (const m of ['grades', 'ages']) {
   eq(`${m}: names no control`, /below|above|button|right|left/i.test(rangeBackwardsMessage(m)), false);
 }
+
+// --- gradeFitProblem: the checkout warning ------------------------------------
+// 2026-08-25: a parent paid, then realised her son was below the range. WARN, not
+// block - so the thing these tests must protect hardest is every case that has to
+// stay SILENT. A warning that fires when it should not is worse than none: the
+// parent learns to click past it, including the time it was right.
+const G46 = { grade_min: 4, grade_max: 6, age_format: 'grade' };
+
+eq('below the range warns', gradeFitProblem(G46, '2')?.code, 'below');
+eq('above the range warns', gradeFitProblem(G46, '8')?.code, 'above');
+eq('inside the range is silent', gradeFitProblem(G46, '5'), null);
+eq('on the lower edge is silent', gradeFitProblem(G46, '4'), null);
+eq('on the upper edge is silent', gradeFitProblem(G46, '6'), null);
+
+// KINDERGARTEN IS ZERO, AND '' IS NOT. Number('') is 0, so a form field the parent
+// has not touched would read as Kindergarten and warn every family registering for
+// a class that starts at grade 1. isUnset is what keeps those apart.
+eq('unanswered grade is silent', gradeFitProblem(G46, ''), null);
+eq('null grade is silent', gradeFitProblem(G46, null), null);
+eq('undefined grade is silent', gradeFitProblem(G46, undefined), null);
+eq('Kindergarten is a real answer, not a blank',
+  gradeFitProblem({ grade_min: 1, grade_max: 5, age_format: 'grade' }, '0')?.code, 'below');
+eq('Kindergarten inside a K-2 class is silent',
+  gradeFitProblem({ grade_min: 0, grade_max: 2, age_format: 'grade' }, '0'), null);
+
+// Open-ended ranges check ONE side. Inventing the missing bound would warn a 9th
+// grader out of a class that deliberately left the top open.
+eq('open top: far above is silent',
+  gradeFitProblem({ grade_min: 2, grade_max: null, age_format: 'grade' }, '11'), null);
+eq('open top: below still warns',
+  gradeFitProblem({ grade_min: 2, grade_max: null, age_format: 'grade' }, '1')?.code, 'below');
+eq('open bottom: far below is silent',
+  gradeFitProblem({ grade_min: null, grade_max: 6, age_format: 'grade' }, '0'), null);
+eq('open bottom: above still warns',
+  gradeFitProblem({ grade_min: null, grade_max: 6, age_format: 'grade' }, '9')?.code, 'above');
+
+// An AGE-based class has null grade columns and never stated a grade range, so
+// quoting one at a parent would be inventing it.
+eq('age-based class is silent',
+  gradeFitProblem({ age_min: 6, age_max: 12, age_format: 'age', grade_min: null, grade_max: null }, '2'), null);
+// A class carrying BOTH while claiming ages: audienceMode believes the claim, and
+// this must agree with it or the form contradicts the family-facing card.
+eq('class claiming ages wins over stray grade columns',
+  gradeFitProblem({ age_min: 6, age_max: 12, age_format: 'age', grade_min: 4, grade_max: 6 }, '2'), null);
+eq('class stating nothing at all is silent', gradeFitProblem({}, '2'), null);
+eq('no program is silent', gradeFitProblem(null, '2'), null);
+
+// A backwards range makes EVERY grade "outside", so the warning would fire at every
+// family for the operator's typo. They meet rangeBackwards in their own editor.
+eq('backwards range is silent, not a warning at every family',
+  gradeFitProblem({ grade_min: 6, grade_max: 4, age_format: 'grade' }, '5'), null);
+
+// String columns from a form round-trip must behave as numbers, not as text.
+// '10' > '9' is FALSE as strings, so a text comparison would silently stop warning
+// exactly where two-digit grades begin.
+//
+// WHAT THIS ACTUALLY PINS, checked by mutation 2026-09-02: it fails when BOTH the
+// grade and the bounds are strings. Making only one side a string still passes,
+// because JS coerces the other operand back to a number - that is not a defect,
+// it is the language doing the right thing. Written down because a test whose
+// name promises more than it checks is how a guard rots unnoticed.
+eq('numeric compare, not lexical',
+  gradeFitProblem({ grade_min: '1', grade_max: '9', age_format: 'grade' }, '10')?.code, 'above');
+
+// --- the sentence -------------------------------------------------------------
+// Quotes audienceLabel so the warning and the family-facing card cannot disagree
+// about what the class says it is for.
+eq('names the range in the parent-facing wording',
+  gradeFitMessage(G46), "This class is listed for Grades 4–6. You can still register if that's right for your child.");
+eq('a single-grade class does not say 3-3',
+  gradeFitMessage({ grade_min: 3, grade_max: 3, age_format: 'grade' }),
+  "This class is listed for Grade 3. You can still register if that's right for your child.");
+// It must not read as a block: the box renders directly under the birth-date error,
+// which DOES stop the parent, and one that looks identical costs a registration.
+eq('says they can still register', /still register/.test(gradeFitMessage(G46)), true);
+eq('never renders the word null', /null/.test(gradeFitMessage(G46)), false);
+// Promises nothing the code does not do, and points at no control.
+eq('promises no follow-up nobody performs',
+  /we'll|we will|let (the|your) (teacher|provider|instructor) know|contact you/i.test(gradeFitMessage(G46)), false);
+eq('names no control', /below|above the button|grey button/i.test(gradeFitMessage(G46)), false);
 
 console.log(`\n${fail ? 'FAILURES' : 'ALL PASS'}  (${pass} passed, ${fail} failed)`);
 process.exit(fail ? 1 : 0);
