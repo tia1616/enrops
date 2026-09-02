@@ -70,8 +70,12 @@ function Req({ on }) {
 export function PickupDismissalSection({ std, dismissalMethod, onDismissalChange, aftercareProvider, onAftercareProviderChange, pickup, onPickupChange, doNotRelease, onDoNotReleaseChange, instanceKey = 'single', lockSavedDoNotRelease = false }) {
   const providerInputId = `aftercare-provider-${instanceKey}`;
   // From the shared module, not a hardcoded pair. Which answers this provider
-  // offers comes from their own config; the default is the two that were already
-  // live, so nobody's form changes until they turn something on.
+  // offers comes from their own config. A provider who stored an explicit list
+  // gets exactly that list and nothing else, so switching a new answer into the
+  // default cannot change a form that is already taking registrations. Only a
+  // provider who has never chosen - no row, or the options = NULL row that lean
+  // onboarding writes - renders DEFAULT_OFFERED, which since 2026-09-02 includes
+  // aftercare.
   const dismissalChoices = offeredChoices(std.dismissal_method?.options);
   const releasedToAdult = needsAuthorizedPickup(dismissalMethod);
   const showAftercareProvider = needsAftercareProvider(dismissalMethod);
