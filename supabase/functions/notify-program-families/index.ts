@@ -79,6 +79,7 @@ interface RequestBody {
   program_id?: string;
   organization_id?: string;
   include_waitlist?: boolean;
+  include_cancelled?: boolean;
   subject?: string;
   body_text?: string;
   mode?: 'preview' | 'send';
@@ -125,6 +126,7 @@ serve(async (req: Request) => {
     const programId = body.program_id?.trim();
     const orgId = body.organization_id?.trim();
     const includeWaitlist = !!body.include_waitlist;
+    const includeCancelled = !!body.include_cancelled;
     const mode = body.mode === 'send' ? 'send' : 'preview';
     const subject = body.subject?.trim() ?? '';
     const bodyText = body.body_text?.trim() ?? '';
@@ -180,6 +182,7 @@ serve(async (req: Request) => {
       p_program_id: programId,
       p_org_id: orgId,
       p_include_waitlist: includeWaitlist,
+      p_include_cancelled: includeCancelled,
     });
     if (rErr) {
       console.error('[notify-program-families] recipients failed:', rErr);
@@ -195,6 +198,7 @@ serve(async (req: Request) => {
         mode: 'preview',
         program: { id: programId, name: programName, summary: programSummary },
         include_waitlist: includeWaitlist,
+        include_cancelled: includeCancelled,
         // Names and addresses so the operator can COUNT and INSPECT before
         // sending, and can see which children sit behind an address.
         recipients: grouped.sendable.map((g) => ({
@@ -259,6 +263,7 @@ serve(async (req: Request) => {
         subject,
         body_text: bodyText,
         include_waitlist: includeWaitlist,
+        include_cancelled: includeCancelled,
         recipient_count: 0,
         sent_count: 0,
         failed_count: 0,
@@ -321,6 +326,7 @@ serve(async (req: Request) => {
       subject,
       body_text: bodyText,
       include_waitlist: includeWaitlist,
+      include_cancelled: includeCancelled,
       recipient_count: tally.total,
       sent_count: tally.sent,
       failed_count: tally.failed,

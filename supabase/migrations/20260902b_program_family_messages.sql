@@ -72,3 +72,11 @@ revoke all on table public.program_family_messages from public;
 revoke all on table public.program_family_messages from anon;
 grant select on table public.program_family_messages to authenticated;
 grant all    on table public.program_family_messages to service_role;
+
+-- ADDED 2026-09-02, same day, before any row existed. `include_waitlist` alone
+-- could not describe a send that opted into the CANCELLED/REFUNDED group, and an
+-- audit row saying "waitlist included" when it was not is a false record - the
+-- first version of this briefly OR'd the two flags into one column, which is
+-- exactly that lie.
+alter table public.program_family_messages
+  add column if not exists include_cancelled boolean not null default false;

@@ -149,7 +149,7 @@ export default function CancelClassModal({ program, orgId, onConfirm, onTellFami
           <div style={{ marginTop: 14 }}>
             <div style={{ background: "#eef7ee", border: "1px solid #cfe6cf", borderRadius: 8, padding: 12 }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: OK_GREEN }}>
-                It's off your schedule board and any instructor's portal.
+                Cancelled. It's off your schedule board and any instructor's portal.
               </div>
               <div style={{ fontSize: 12, color: INK, marginTop: 6 }}>
                 Nobody has been emailed and no money has moved. It still shows in Programs with a
@@ -163,21 +163,28 @@ export default function CancelClassModal({ program, orgId, onConfirm, onTellFami
             {(enrolled.length > 0 || waiting.length > 0) && (
               <div style={{ marginTop: 12, border: `1px solid ${RULE}`, borderRadius: 8, padding: 12 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: INK }}>
-                  {enrolled.length + waiting.length} {enrolled.length + waiting.length === 1 ? "family" : "families"} still need telling
+                  Now do these two, in this order
                 </div>
-                <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>
-                  Nothing has gone out. Write them one message now.
+                <div style={{ fontSize: 12.5, color: INK, marginTop: 8, lineHeight: 1.6 }}>
+                  <strong>1. Tell the {enrolled.length + waiting.length} {enrolled.length + waiting.length === 1 ? "family" : "families"}.</strong> Nothing has gone out yet.
                 </div>
                 <button type="button" onClick={() => { onTellFamilies?.(); }}
-                  style={{ marginTop: 10, padding: "8px 14px", background: BRIGHT, color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>
+                  style={{ marginTop: 8, padding: "8px 14px", background: BRIGHT, color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>
                   Message families
                 </button>
                 {waiting.length > 0 && (
-                  <div style={{ fontSize: 12, color: AMBER, marginTop: 10 }}>
-                    {waiting.length} of them {waiting.length === 1 ? "is" : "are"} on the waiting list and still
-                    holding a place in the queue. Tick "also include families on the waiting list" so they hear too.
+                  <div style={{ fontSize: 12, color: AMBER, marginTop: 8, lineHeight: 1.6 }}>
+                    {waiting.length} of them {waiting.length === 1 ? "is" : "are"} on the waiting list. Tick
+                    "also include families on the waiting list" so they hear too.
                   </div>
                 )}
+                <div style={{ fontSize: 12.5, color: INK, marginTop: 12, lineHeight: 1.6 }}>
+                  <strong>2. Refund them</strong> in Class rosters: open this class, then <em>Refund</em> on each child.
+                </div>
+                <div style={{ fontSize: 12, color: MUTED, marginTop: 6, lineHeight: 1.6 }}>
+                  If you refund before messaging, tick <em>“families who have left or been refunded”</em> so
+                  they still hear from you.
+                </div>
               </div>
             )}
             <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 14 }}>
@@ -218,17 +225,34 @@ export default function CancelClassModal({ program, orgId, onConfirm, onTellFami
               )}
             </div>
 
-            {/* WHAT CANCELLING DOES AND DOES NOT DO. Said before the button, not
-                after, because these are the two things an operator assumes wrongly. */}
+            {/* WHAT TO DO NEXT, IN ORDER - and the order is a real constraint,
+                not advice. A refund sets registrations.status='cancelled' AND
+                cancelled_at (all 11 refunded rows on prod are that shape), and
+                the message recipient rule excludes both. So refunding FIRST
+                removes the family from the recipient list and they can never be
+                told. Jessica worked this out herself; it is stated here because
+                the product is the only thing that knows it. */}
             <div style={{ marginTop: 14, background: "#fdf6e3", border: "1px solid #ecdca6", borderRadius: 8, padding: 12 }}>
-              <div style={{ fontSize: 12, color: INK, lineHeight: 1.7 }}>
-                <strong>No refunds and no emails.</strong> Cancelling only changes the class's status.
-                Money and messages stay separate and deliberate, so nothing is refunded and nobody is
-                told until you do it.
+              <div style={{ fontSize: 12.5, color: INK, lineHeight: 1.6 }}>
+                <strong>Cancelling doesn't refund anyone or send any emails.</strong> Two things to do
+                afterwards:
               </div>
-              <div style={{ fontSize: 12, color: MUTED, marginTop: 8, lineHeight: 1.7 }}>
-                It stops being offered to families, comes off your schedule board and any assigned
-                instructor's portal, and keeps every existing record. You can reopen it as a draft later.
+              <ol style={{ margin: "8px 0 0", paddingLeft: 20, fontSize: 12.5, color: INK, lineHeight: 1.9 }}>
+                <li><strong>Message the families</strong> — offered here as soon as you cancel, or from
+                  Class rosters &rsaquo; <em>Message families</em>.</li>
+                <li><strong>Refund them</strong> — Class rosters, open the class, then <em>Refund</em> on
+                  each child.</li>
+              </ol>
+              {/* THE ORDER USED TO BE A TRAP and this panel warned about it: a
+                  refund sets the registration to cancelled, which took the family
+                  off the roster and out of the recipient list for good. Jessica's
+                  fix was better than the warning - the message panel now has a
+                  "families who have left or been refunded" group, so either order
+                  works. The note stays because refunding first still means an
+                  extra tick box to remember. */}
+              <div style={{ fontSize: 12, color: MUTED, marginTop: 8, lineHeight: 1.6 }}>
+                Either order works. If you refund first, tick <em>“families who have left or been
+                refunded”</em> in the message panel so they still hear from you.
               </div>
             </div>
 

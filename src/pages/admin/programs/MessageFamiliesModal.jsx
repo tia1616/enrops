@@ -48,6 +48,13 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [includeWaitlist, setIncludeWaitlist] = useState(false);
+  // THE THIRD GROUP, and it exists because of a dead end Jessica spotted: a
+  // refund sets the registration to cancelled, which takes the family off the
+  // roster - so after refunding, there was no way left to email them at all. One
+  // cancelled class on prod has 2 refunded families and returned ZERO reachable
+  // people. Sawyer solves it the same way, with a separate "canceled" tab you
+  // can still message from.
+  const [includeCancelled, setIncludeCancelled] = useState(false);
   const [preview, setPreview] = useState(null);       // null = loading
   const [previewError, setPreviewError] = useState("");
   const [phase, setPhase] = useState("compose");       // compose | sending | done
@@ -72,12 +79,16 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
           program_id: program?.id,
           organization_id: orgId,
           include_waitlist: includeWaitlist,
+          include_cancelled: includeCancelled,
           ...payload,
         }),
       },
     );
     return { status: resp.status, json: await resp.json().catch(() => ({})) };
-  }, [program?.id, orgId, includeWaitlist]);
+    // includeCancelled is a dependency for the same reason includeWaitlist is:
+    // `call` is what the preview effect watches, so leaving it out would show a
+    // count that no longer matches the boxes as they sit.
+  }, [program?.id, orgId, includeWaitlist, includeCancelled]);
 
   // Re-previewed whenever the audience changes, so the count on screen always
   // belongs to the toggle as it currently sits. A stale count is the thing that
@@ -218,6 +229,15 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
                   onChange={(e) => setIncludeWaitlist(e.target.checked)} />
                 Also include families on the waiting list
               </label>
+              {/* Worded as "left or been refunded" rather than "cancelled",
+                  because the operator is thinking about the family, not the
+                  registration's status value. Off by default: most messages are
+                  for the people currently in the class. */}
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: INK, marginTop: 6 }}>
+                <input type="checkbox" checked={includeCancelled} disabled={sending}
+                  onChange={(e) => setIncludeCancelled(e.target.checked)} />
+                Also include families who have left or been refunded
+              </label>
 
               <div style={{ marginTop: 10, fontSize: 13, color: INK }}>
                 {preview === null ? (
@@ -243,9 +263,18 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
                           them, which reads as "this family has no place" when
                           one of their children does. Seen live on staging:
                           Jessica Vorster has Priya enrolled and J dog waiting. */}
-                      {r.audiences?.includes("waitlist") && (
+                      {/* FOUR STATES, FOUR LABELS. A family can be in more than
+                          one group at once - one child enrolled, another waiting
+                          or refunded - and a single-word badge for that reads as
+                          the wrong fact about them. Seen live: Jessica Vorster
+                          has Priya enrolled and J dog waiting on the same class. */}
+                      {(r.audiences?.includes("waitlist") || r.audiences?.includes("cancelled")) && (
                         <span style={{ color: AMBER, fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>
-                          {r.audiences?.includes("enrolled") ? "ENROLLED + WAITING" : "WAITING LIST"}
+                          {r.audiences?.includes("enrolled")
+                            ? "ENROLLED + OTHER"
+                            : r.audiences?.includes("waitlist") && r.audiences?.includes("cancelled")
+                              ? "WAITING + LEFT"
+                              : r.audiences?.includes("waitlist") ? "WAITING LIST" : "LEFT / REFUNDED"}
                         </span>
                       )}
                     </div>
