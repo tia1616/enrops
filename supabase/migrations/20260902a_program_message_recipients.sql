@@ -32,7 +32,14 @@
 -- email against a per-PARENT list is how Yu Zhou's second son went unmentioned
 -- on 2026-08-14.
 
-create or replace function public.program_message_recipients(
+-- DROP first: Postgres cannot change a function's RETURN TYPE with CREATE OR
+-- REPLACE, and unreachable_reason was added to the returns table after the first
+-- version was applied. Safe because NOTHING calls this yet - it was applied
+-- additive and inert on purpose. Once anything imports it, a return-shape change
+-- becomes a deploy-order contract instead of a drop.
+drop function if exists public.program_message_recipients(uuid, uuid, boolean);
+
+create function public.program_message_recipients(
   p_program_id uuid,
   p_org_id uuid,
   p_include_waitlist boolean default false
@@ -44,7 +51,24 @@ returns table (
   parent_id         uuid,
   student_id        uuid,
   student_first_name text,
-  audience          text    -- 'enrolled' | 'waitlist'
+  audience          text,   -- 'enrolled' | 'waitlist'
+  -- NULL means sendable. 'placeholder_email' means this family came from a
+  -- partner-run roster IMPORT and has no real address, so the row is returned to
+  -- be COUNTED and shown, never emailed.
+  --
+  -- WHY THIS COLUMN EXISTS. Measured on prod 2026-09-02: of the 32
+  -- confirmed-but-unpaid after-school registrations, 22 are OES - a school that
+  -- runs its own registration - and ALL 22 carry an @import.local address minted
+  -- by the roster importers. 36 parents hold one and NONE has a login. Filtering
+  -- only on "email is not empty" would have handed the operator "22 recipients"
+  -- where zero are reachable, burned 22 bounces per send against the org's
+  -- sending reputation, and told them it went fine.
+  --
+  -- The rule is not invented here: invite-parents already skips
+  -- `@import.local` and counts it as skippedNoEmail. This is the same rule,
+  -- applied to the audience instead of to invitations, so the operator is TOLD
+  -- rather than the families being silently dropped.
+  unreachable_reason text
 )
 language plpgsql
 stable
@@ -110,7 +134,8 @@ begin
     ri.parent_id,
     ri.student_id,
     s.first_name,
-    ri.audience
+    ri.audience,
+    case when lower(btrim(pa.email)) like '%@import.local' then 'placeholder_email' end
   from rows_in_scope ri
   join parents  pa on pa.id = ri.parent_id
   join students s  on s.id  = ri.student_id
@@ -129,7 +154,8 @@ begin
     ri.parent_id,
     ri.student_id,
     s.first_name,
-    ri.audience
+    ri.audience,
+    case when lower(btrim(sc.email)) like '%@import.local' then 'placeholder_email' end
   from rows_in_scope ri
   join students s on s.id = ri.student_id
   join student_contacts sc

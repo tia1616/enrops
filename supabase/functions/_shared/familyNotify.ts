@@ -45,6 +45,8 @@ export interface MessageRecipientRow {
   student_id: string;
   student_first_name: string | null;
   audience: 'enrolled' | 'waitlist' | string;
+  /** null = sendable. 'placeholder_email' = imported roster, no real address. */
+  unreachable_reason?: string | null;
 }
 
 // COLLAPSE TO ONE EMAIL PER ADDRESS, naming every child that address is
@@ -92,6 +94,7 @@ export function groupRecipientsByAddress(rows: MessageRecipientRow[]) {
     childIds: Set<string>;
     audiences: Set<string>;
     parentIds: Set<string>;
+    unreachable: string | null;
   }>();
 
   for (const r of rows ?? []) {
@@ -127,8 +130,16 @@ export function groupRecipientsByAddress(rows: MessageRecipientRow[]) {
         childIds: new Set(),
         audiences: new Set(),
         parentIds: new Set(),
+        unreachable: null,
       };
       byEmail.set(key, g);
+    }
+    // STICKY, and it fails CLOSED: once any row for this address says the
+    // address is unreachable, the whole group stays unreachable. The alternative
+    // - last row wins - would let one sendable-looking row promote a placeholder
+    // address back into the send.
+    if (r.unreachable_reason && !g.unreachable) {
+      g.unreachable = String(r.unreachable_reason);
     }
     // The account holder's name wins over a guardian's for the same inbox.
     if (r.recipient_kind === 'parent' && (r.recipient_name ?? '').trim()) {
@@ -146,7 +157,7 @@ export function groupRecipientsByAddress(rows: MessageRecipientRow[]) {
     }
   }
 
-  return [...byEmail.values()]
+  const all = [...byEmail.values()]
     .sort((a, b) => (a.email < b.email ? -1 : a.email > b.email ? 1 : 0))
     .map((g) => ({
       parent_id: [...g.parentIds][0] ?? '',
@@ -158,7 +169,21 @@ export function groupRecipientsByAddress(rows: MessageRecipientRow[]) {
       child_count: g.childIds.size,
       kinds: [...g.kinds].sort(),
       audiences: [...g.audiences].sort(),
+      unreachable_reason: g.unreachable ?? null,
     }));
+
+  // TWO LISTS, NOT ONE LIST PLUS A FLAG, and that is deliberate. A caller who
+  // forgets to filter a flag sends to everybody; a caller who forgets to read
+  // `unreachable` simply does not mention it. The failure mode of the shape
+  // decides which mistake is possible, so the shape makes the harmful one hard.
+  //
+  // Measured on prod 2026-09-02: the OES Pokemon class returns 13 recipients and
+  // ALL 13 are placeholder addresses from a partner-run roster import. Flat, an
+  // operator would be told 13 were emailed while 13 bounced.
+  return {
+    sendable: all.filter((g) => !g.unreachable_reason),
+    unreachable: all.filter((g) => !!g.unreachable_reason),
+  };
 }
 
 export interface FamilySendResult {
