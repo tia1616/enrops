@@ -64,14 +64,39 @@ const CHOICES = [
   },
 ];
 
-// What a provider offers when they have not chosen. NOT all five: turning three
-// new options on for every existing tenant silently would change a live
-// registration form nobody asked to change. A provider opts in per choice.
-export const DEFAULT_OFFERED = [RELEASED_TO_ADULT, WALKS_OR_BIKES];
+// What a provider offers when they have not chosen.
+//
+// AFTERCARE IS IN THE DEFAULT since 2026-09-02, and the evidence is why. J2S
+// went 167 registrations from 5 May with ZERO aftercare answers, then got its
+// first one the day the choice was switched on. The Ukulele Project opened
+// registration on 7 Aug and switched aftercare on on 13 Aug, which stranded the
+// 22 families who had already registered - they were never asked, so they had
+// no answer to give, and the gap had to be closed by hand over email. Leaving
+// the choice off by default does not mean families decline aftercare; it means
+// nobody asks them, and the provider finds out after the families are in.
+//
+// Still NOT all five. `bus` and `other` stay opt-in: neither is a safety gap
+// that costs a provider a cleanup, and `other` in particular is a free-text
+// escape hatch that a provider should choose deliberately.
+//
+// This is safe for the tenants already running because BOTH of them store an
+// explicit `offered` array (verified on prod and staging, 2026-09-02), and an
+// explicit array is never overridden by this default. Only an org with no
+// dismissal row, or one whose row has options = NULL, reads it - and every such
+// org on prod today has 0 classes and 0 registrations. See Jessica, 2026-09-02:
+// "new orgs only."
+export const DEFAULT_OFFERED = [RELEASED_TO_ADULT, WALKS_OR_BIKES, AFTERCARE];
 
 // The choices to render, from custom_reg_fields.options for the dismissal_method
-// row. `options` is null for every provider today, which is exactly why the
-// default has to be the two that are already live.
+// row. Two writers put that row there and they behave differently, which is the
+// whole reason this fallback carries weight:
+//   - RegistrationQuestions.jsx (Settings) always writes an explicit `offered`.
+//   - QuickProgramBuilder.jsx (lean onboarding) upserts the row with NO options
+//     key at all, so a provider who never opens Settings has options = NULL and
+//     their family-facing form renders exactly DEFAULT_OFFERED.
+// That second path is how a new tenant gets a registration form, so the default
+// is not a placeholder - it IS the live question for every org onboarded that
+// way.
 //
 // Filtered against CHOICES rather than trusted: options is operator-editable
 // data, and a stale or hand-edited value must not render a radio the database

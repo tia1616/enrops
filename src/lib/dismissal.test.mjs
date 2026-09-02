@@ -34,12 +34,32 @@ eq('every offered choice is a legal value',
 eq('no duplicate values', new Set(DISMISSAL_VALUES).size, DISMISSAL_VALUES.length);
 
 // --- what a provider gets before they choose -------------------------------
-// The two that are already live on prod (35 real answers). Adding the other
-// three silently would change a live registration form nobody asked to change.
-eq('default is exactly the two already in use', DEFAULT_OFFERED, [RELEASED_TO_ADULT, WALKS_OR_BIKES]);
-eq('null options -> the current two', offeredChoices(null).map((c) => c.value), DEFAULT_OFFERED);
-eq('undefined options -> the current two', offeredChoices(undefined).map((c) => c.value), DEFAULT_OFFERED);
-eq('options with no offered key -> the current two', offeredChoices({}).map((c) => c.value), DEFAULT_OFFERED);
+// Aftercare is IN the default since 2026-09-02: leaving it out is what stranded
+// the Ukulele Project's first 22 families, who registered before the choice was
+// switched on and so were never asked. bus and other stay opt-in.
+eq('default is the two live answers plus aftercare',
+  DEFAULT_OFFERED, [RELEASED_TO_ADULT, WALKS_OR_BIKES, AFTERCARE]);
+eq('aftercare is offered by default', DEFAULT_OFFERED.includes(AFTERCARE), true);
+eq('bus and other stay opt-in',
+  [BUS, OTHER].some((v) => DEFAULT_OFFERED.includes(v)), false);
+// The lean-onboarding row (QuickProgramBuilder) is written with no options key,
+// so it arrives here as null. That is a LIVE family-facing form, not a
+// placeholder.
+eq('null options -> the default', offeredChoices(null).map((c) => c.value), DEFAULT_OFFERED);
+eq('undefined options -> the default', offeredChoices(undefined).map((c) => c.value), DEFAULT_OFFERED);
+eq('options with no offered key -> the default', offeredChoices({}).map((c) => c.value), DEFAULT_OFFERED);
+
+// THE NEGATIVE CONTROL, and the reason this change was safe to make. A provider
+// who stored an explicit list must keep exactly that list - widening the default
+// must never reach an org that already answered the question. Both live tenants
+// on prod store explicit arrays, which is what made "new orgs only" true by
+// construction rather than by a guard somebody has to remember.
+eq('an explicit two-answer config is NOT widened by the default',
+  offeredChoices({ offered: [RELEASED_TO_ADULT, WALKS_OR_BIKES] }).map((c) => c.value),
+  [RELEASED_TO_ADULT, WALKS_OR_BIKES]);
+eq('an explicit config that omits aftercare stays without it',
+  offeredChoices({ offered: [RELEASED_TO_ADULT, WALKS_OR_BIKES] }).map((c) => c.value).includes(AFTERCARE),
+  false);
 
 // --- opting in -------------------------------------------------------------
 eq('aftercare can be added',
