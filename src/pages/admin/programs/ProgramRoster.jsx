@@ -21,6 +21,7 @@ import { WAITLIST_STATUS } from "../../../lib/waitlistState.js";
 import { usePermissions } from "../../../lib/permissions.js";
 import WaitingList from "../../../components/WaitingList.jsx";
 import EmailRosterModal from "../EmailRosterModal.jsx";
+import MessageFamiliesModal from "./MessageFamiliesModal.jsx";
 import InviteFamiliesModal from "../InviteFamiliesModal.jsx";
 
 const PURPLE = "#1C004F";
@@ -285,6 +286,7 @@ export default function ProgramRoster() {
 
   // Invite this program's families into the parent portal (preview-then-send modal).
   const [showInvite, setShowInvite] = useState(false);
+  const [messaging, setMessaging] = useState(false);
 
   // ---- Render ----
 
@@ -357,6 +359,23 @@ export default function ProgramRoster() {
           <button type="button" onClick={() => setShowInvite(true)} disabled={enrolled.length === 0} style={ghostBtn(enrolled.length === 0)} title="Preview and send a portal sign-in invite to this program's families.">
             Invite families to portal
           </button>
+          {/* ONE ENTRY POINT, and it is here rather than also on the Class
+              rosters list: this is the page with the class's families already in
+              front of you, which is where somebody realises they need to tell
+              them something. A second button on the list view would be a second
+              place to do one thing.
+              Gated on perm.canSend (owner/admin/staff), which is the SAME rule
+              notify-program-families authorises with - so the button cannot offer
+              something the function will refuse. Its two neighbours are ungated
+              and their edge functions do refuse a viewer, which is the same
+              lying-control class fixed in Rosters.jsx; not changed here, noted
+              instead. Disabled rather than hidden when nobody is enrolled, so the
+              reason is visible. */}
+          {perm.canSend && (
+            <button type="button" onClick={() => setMessaging(true)} disabled={enrolled.length === 0} style={ghostBtn(enrolled.length === 0)} title="Write one message to this class's families. You see exactly who would get it before anything sends.">
+              Message families
+            </button>
+          )}
         </div>
       </div>
 
@@ -410,6 +429,14 @@ export default function ProgramRoster() {
           orgSlug={org.slug}
           programId={programId}
           onClose={() => setShowInvite(false)}
+        />
+      )}
+
+      {messaging && program && (
+        <MessageFamiliesModal
+          program={program}
+          orgId={org?.id}
+          onClose={() => setMessaging(false)}
         />
       )}
     </div>
