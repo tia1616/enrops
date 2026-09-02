@@ -232,8 +232,16 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
                         {r.name || r.email}
                         <span style={{ color: MUTED }}> · {r.children}</span>
                       </span>
+                      {/* THREE STATES, THREE SENTENCES. A family can be BOTH -
+                          one child enrolled and another waiting - and the first
+                          version of this badge said only "WAITING LIST" for
+                          them, which reads as "this family has no place" when
+                          one of their children does. Seen live on staging:
+                          Jessica Vorster has Priya enrolled and J dog waiting. */}
                       {r.audiences?.includes("waitlist") && (
-                        <span style={{ color: AMBER, fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>WAITING LIST</span>
+                        <span style={{ color: AMBER, fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" }}>
+                          {r.audiences?.includes("enrolled") ? "ENROLLED + WAITING" : "WAITING LIST"}
+                        </span>
                       )}
                     </div>
                   ))}
