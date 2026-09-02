@@ -195,11 +195,19 @@ export default function ProgramsCalendar() {
       ? "\n\nHeads up: because Stripe isn't connected, you won't be able to publish it until it is."
       : "";
     const question = fromCancelled
-      // Draft is NOT excluded from the instructor schedule board (it filters only
-      // cancelled and archived), so this genuinely does come back there — which is
-      // the half an operator cares about after cancelling one by mistake.
-      ? `Reopen this class as a draft? It won't be offered to families until you publish it, and it'll come back on your instructor schedule.${stripeNote}`
-      : `Unpublish this program? It'll be hidden from the public catalog and stop appearing in marketing campaigns. Existing registrations are unaffected.${stripeNote}`;
+      // Draft IS excluded from the instructor schedule board as of 2026-08-31,
+      // so this sentence had to change with it: it used to promise the class
+      // "will come back on your instructor schedule", which is now the opposite
+      // of what reopening does. Publishing is what puts it back.
+      ? `Reopen this class as a draft? It won't be offered to families until you publish it, and it won't appear on your instructor schedule until it is.${stripeNote}`
+      // BOTH BRANCHES WRITE status:"draft", so both inherit the new rule - and
+      // this is the branch where it BITES. Reopening a cancelled class touches
+      // one nobody is teaching; unpublishing is used on a LIVE class that may
+      // have a confirmed instructor, who now loses it from their portal without
+      // being told. Saying only "hidden from the public catalog" while a staffed
+      // class silently leaves two schedules is the same defect the branch above
+      // was just fixed for.
+      : `Unpublish this program? It'll be hidden from the public catalog, stop appearing in marketing campaigns, and come off your schedule board and any assigned instructor's portal until you publish it again. Existing registrations are unaffected.${stripeNote}`;
     if (!confirm(question)) return;
     const { error: unpubErr } = await supabase
       .from("programs")
