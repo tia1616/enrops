@@ -1,6 +1,7 @@
 import React from 'react';
 import { PickupDismissalSection, CustomQuestionsSection, hasPickupSection } from './RegExtraFields.jsx';
 import { GRADE_OPTIONS_LONG, gradeFitProblem } from '../../../lib/grades.js';
+import { programsForChild } from '../../../lib/cartPrograms.js';
 import { needsAftercareProvider } from '../../../lib/dismissal.js';
 // The referral answers, incl. the tenant-derived "<provider> email" option, live
 // in src/lib/referral.js so no tenant's channel can be written into this file
@@ -21,18 +22,25 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
   const { std = {}, custom = [] } = regFields;
   const referrals = referralOptions(orgName);
   const dobProblem = birthdateProblem(student.birthdate);
-  // ONE CHILD, POSSIBLY SEVERAL CLASSES. `child.items` is the cart's shape - a
-  // family registering one child for both Chess and Robotics has two items here -
-  // so the warning is per CLASS, not per child. That also answers "which child does
-  // it name" without naming anybody: this step renders one child at a time, so the
-  // only ambiguity left is which of THEIR classes disagrees, and the message quotes
-  // the class's own range rather than a name.
+  // EVERY class this child is actually buying, VIP bundle legs included.
   //
-  // Deduped by message: two classes sharing a range would otherwise stack the same
-  // sentence twice under one dropdown, which reads as a bug rather than as emphasis.
+  // Read through programsForChild rather than `item.program`: a VIP bundle is ONE
+  // item holding three term rows, and reading the item's own program would check
+  // only the Fall leg. StepReview matches per line and so would have caught a
+  // Winter-only mismatch this screen had said nothing about - the form and the last
+  // screen before the card disagreeing about the same child. One join, one answer,
+  // and it has tests in src/lib/cartPrograms.test.mjs because neither screen can be
+  // imported by the test runner.
+  //
+  // Deduped by message: the three legs of a bundle share a grade range, so without
+  // this a VIP family would get the same sentence three times under one dropdown,
+  // which reads as a bug rather than as emphasis.
+  //
+  // This step renders ONE child at a time, so the message needs no name to be
+  // unambiguous about who it is about.
   const gradeWarnings = [...new Set(
-    (Array.isArray(child.items) ? child.items : [])
-      .map((it) => gradeFitProblem(it?.program, student.grade)?.message)
+    programsForChild(child)
+      .map((program) => gradeFitProblem(program, student.grade)?.message)
       .filter(Boolean),
   )];
   return (

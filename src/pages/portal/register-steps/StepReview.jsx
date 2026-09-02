@@ -3,32 +3,10 @@ import { formatMoney, INSTALLMENT_MIN_CENTS } from '../../../lib/pricing.js';
 import { programScheduleSummary, formatStartDate, formatDayLabel } from '../../../lib/programSchedule.js';
 import { dismissalSummary } from '../../../lib/dismissal.js';
 import { gradeFitProblem } from '../../../lib/grades.js';
-
-// THE PROGRAM BEHIND A CART LINE, for display only.
-//
-// A pricing line carries the program's NAME and schedule but not its grade range,
-// and it is deliberately not gaining one: pricing_snapshot is POSTed to
-// create-registration, so every field added to a line crosses the wire to the money
-// endpoint. A range that only ever gets read to draw a sentence has no business
-// there. The cart already holds the whole program row on the client, so join to it
-// here instead.
-//
-// VIP legs are matched too. A bundle expands into three lines (Fall/Winter/Spring),
-// each carrying its OWN program_id, so matching only `item.program` would silently
-// find nothing for two lines out of three and drop the warning on exactly the
-// families buying the most.
-function programForLine(child, line) {
-  for (const it of child?.items ?? []) {
-    if (it?.program?.id === line.program_id) return it.program;
-    const b = it?.vipBundle;
-    if (b) {
-      for (const leg of [b.fall, b.winter, b.spring]) {
-        if (leg?.id === line.program_id) return leg;
-      }
-    }
-  }
-  return null;
-}
+// The cart -> program join, shared with StepStudent so the form and the last screen
+// before the card cannot disagree about which class a warning is about. It lived
+// here as a local function first, which is exactly how the two screens drifted.
+import { programForLine } from '../../../lib/cartPrograms.js';
 
 // Was the fifth copy of this map. Now src/lib/dismissal.js. Review shows the
 // same summary the roster will, provider name included, so what the parent
