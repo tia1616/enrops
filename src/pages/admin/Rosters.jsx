@@ -33,6 +33,7 @@ import { WAITLIST_STATUS } from "../../lib/waitlistState.js";
 import WaitingList from "../../components/WaitingList.jsx";
 import EmailRosterModal from "./EmailRosterModal";
 import InviteFamiliesModal from "./InviteFamiliesModal";
+import MessageFamiliesModal from "./programs/MessageFamiliesModal.jsx";
 import RefundDrawer from "../../components/RefundDrawer";
 import Chevron from "../../components/Chevron.jsx";
 import {
@@ -2482,6 +2483,7 @@ function ProgramRosterRow({ program: p, orgId, orgSlug, canEdit, expanded, onTog
     ? new Date(p.last_emailed_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })
     : null;
   const [showInvite, setShowInvite] = useState(false);
+  const [messaging, setMessaging] = useState(false);
   return (
     <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderLeft: p.enrolled > 0 ? `3px solid ${OK}` : `3px solid ${RULE}`, borderRadius: 12, padding: "12px 16px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
@@ -2518,6 +2520,19 @@ function ProgramRosterRow({ program: p, orgId, orgSlug, canEdit, expanded, onTog
                 Invite families →
               </button>
             )}
+            {/* THE ONE ENTRY POINT, and it is HERE because this is where Jessica
+                went looking for it. It was first put on the per-class roster page
+                behind "View / print", on the reasoning that you would realise you
+                needed it while reading the roster - and she opened Class rosters,
+                did not find it, and said so. The list is also where the sibling
+                send already lives ("Email roster →", to the partner), so the two
+                read as a pair. Removed from the class page rather than added
+                here, so there is still one place to do this. */}
+            {canEdit && p.enrolled > 0 && (
+              <button type="button" onClick={() => setMessaging(true)} style={{ padding: "6px 12px", background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }} title="Write one message to this class's families. You see exactly who would get it before anything sends.">
+                Message families →
+              </button>
+            )}
             <Link to={`/admin/programs/${p.id}/roster`} style={{ padding: "6px 12px", background: "transparent", color: MUTED, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 12, fontWeight: 600, textDecoration: "none" }} title="Open the printable roster">
               View / print →
             </Link>
@@ -2529,6 +2544,13 @@ function ProgramRosterRow({ program: p, orgId, orgSlug, canEdit, expanded, onTog
               orgSlug={orgSlug}
               programId={p.id}
               onClose={() => setShowInvite(false)}
+            />
+          )}
+          {messaging && (
+            <MessageFamiliesModal
+              program={{ id: p.id, curriculum: p.curriculum }}
+              orgId={orgId}
+              onClose={() => setMessaging(false)}
             />
           )}
         </div>
