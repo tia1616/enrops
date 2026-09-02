@@ -82,7 +82,23 @@ interface RequestBody {
   subject?: string;
   body_text?: string;
   mode?: 'preview' | 'send';
+  /** Set only after the operator has been told an identical send just went out. */
+  confirm_duplicate?: boolean;
 }
+
+// How recently an identical send counts as an accidental repeat.
+//
+// A SEND IS SLOW ENOUGH TO INVITE A SECOND CLICK: it is one sequential POST per
+// family, so a class of 14 takes several seconds with nothing obviously
+// happening. A double click, an impatient refresh or a network retry would email
+// every family in the class twice, and unlike a failed send there is no undo -
+// the families already have it.
+//
+// Five minutes, keyed on (class + exact subject): long enough to cover a retry
+// or a re-click, short enough that a genuinely intended second message later in
+// the day is not blocked. Deliberately NOT a hard block - `confirm_duplicate`
+// lets an operator who really does mean it through, once they have been told.
+const DUPLICATE_WINDOW_MINUTES = 5;
 
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
@@ -197,6 +213,38 @@ serve(async (req: Request) => {
     }
 
     // ── SEND ────────────────────────────────────────────────────────────────
+
+    // DID THIS EXACT MESSAGE JUST GO OUT? Checked BEFORE anything is sent, and
+    // only for sends that actually reached families ('sent' or 'partial') - a
+    // previous 'no_recipients' or 'failed' attempt must not block a real retry,
+    // which is the whole reason an operator would press it again.
+    if (!body.confirm_duplicate) {
+      const since = new Date(Date.now() - DUPLICATE_WINDOW_MINUTES * 60_000).toISOString();
+      const { data: recent, error: dupErr } = await supabase
+        .from('program_family_messages')
+        .select('id, sent_at, sent_count, status')
+        .eq('program_id', programId)
+        .eq('subject', subject)
+        .in('status', ['sent', 'partial'])
+        .gte('sent_at', since)
+        .order('sent_at', { ascending: false })
+        .limit(1);
+      // A FAILED LOOKUP MUST NOT BLOCK A SEND. Failing closed here would mean a
+      // database hiccup silently stops a class being told their class moved,
+      // which is worse than the duplicate this guard exists to prevent.
+      if (dupErr) {
+        console.error('[notify-program-families] duplicate check failed, allowing send:', dupErr);
+      } else if (recent && recent.length > 0) {
+        return json({
+          error: 'duplicate_send',
+          message:
+            `An identical message about this class was sent ${recent[0].sent_count} time(s) ` +
+            `less than ${DUPLICATE_WINDOW_MINUTES} minutes ago. Send it again only if you mean to.`,
+          previous: recent[0],
+        }, 409);
+      }
+    }
+
     const brand = await loadOrgBrand(supabase, orgId);
     const fromAddress = formatFromAddress(brand);
 
@@ -215,7 +263,15 @@ serve(async (req: Request) => {
         sent_count: 0,
         failed_count: 0,
         status: 'no_recipients',
-        recipients: grouped.unreachable,
+        // Same shape as the sent path: every element states its own status.
+        recipients: grouped.unreachable.map((g) => ({
+          parent_id: g.parent_id,
+          name: g.name,
+          email: g.email,
+          resend_message_id: null,
+          status: 'not_attempted',
+          failure_reason: g.unreachable_reason,
+        })),
       });
       return json({
         mode: 'send', status: 'no_recipients',
@@ -269,7 +325,21 @@ serve(async (req: Request) => {
       sent_count: tally.sent,
       failed_count: tally.failed,
       status,
-      recipients: [...results, ...grouped.unreachable],
+      // EVERY element carries a `status`, including the families that were never
+      // attempted. Mixed shapes in one jsonb column is how a reader concludes a
+      // row with no status "probably sent" - so an unreachable family is
+      // explicitly not_attempted rather than merely lacking the field.
+      recipients: [
+        ...results,
+        ...grouped.unreachable.map((g) => ({
+          parent_id: g.parent_id,
+          name: g.name,
+          email: g.email,
+          resend_message_id: null,
+          status: 'not_attempted',
+          failure_reason: g.unreachable_reason,
+        })),
+      ],
     });
     // The emails have ALREADY gone. A failed audit write must not be reported as
     // a failed send - it is logged loudly and the true outcome is returned, or
