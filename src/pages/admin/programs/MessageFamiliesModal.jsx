@@ -151,8 +151,13 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
   const sending = phase === "sending";
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: 24, zIndex: 60, overflowY: "auto" }}>
-      <div style={{ background: "#fff", borderRadius: 12, maxWidth: 640, width: "100%", padding: 20, boxShadow: "0 12px 40px rgba(0,0,0,0.2)" }}>
+    // textAlign RESET, and it is not cosmetic paranoia. This panel is opened
+    // from the Class rosters row, whose action column is `textAlign: "right"`,
+    // and a fixed-position child still INHERITS text alignment from its DOM
+    // parent - so every label, the placeholder list and the footer note came out
+    // right-aligned. A modal must not depend on where it happens to be mounted.
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: 24, zIndex: 60, overflowY: "auto", textAlign: "left" }}>
+      <div style={{ background: "#fff", borderRadius: 12, maxWidth: 640, width: "100%", padding: 20, boxShadow: "0 12px 40px rgba(0,0,0,0.2)", textAlign: "left" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, marginBottom: 4 }}>
           <div>
             <div style={{ fontSize: 16, fontWeight: 700, color: PURPLE }}>Message families</div>

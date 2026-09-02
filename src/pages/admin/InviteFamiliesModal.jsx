@@ -70,7 +70,13 @@ export default function InviteFamiliesModal({ orgId, orgSlug, programId, onClose
   return (
     <div
       onClick={busy ? undefined : onClose}
-      style={{ position: "fixed", inset: 0, background: "rgba(28,0,79,0.32)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "5vh 16px", zIndex: 200, fontFamily: "inherit" }}
+      // textAlign: "left" because this modal is ALSO rendered inside the Class
+      // rosters row's action column, which is textAlign:"right" - a
+      // fixed-position child still inherits text alignment from its DOM parent,
+      // so every label in here has been right-aligned on that surface. Found
+      // 2026-09-02 while fixing the same inherited bug in MessageFamiliesModal;
+      // this one predates it.
+      style={{ position: "fixed", inset: 0, background: "rgba(28,0,79,0.32)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "5vh 16px", zIndex: 200, fontFamily: "inherit", textAlign: "left" }}
     >
       <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, maxWidth: 620, width: "100%", maxHeight: "90vh", overflowY: "auto", boxShadow: "0 10px 40px rgba(0,0,0,0.25)" }}>
         <div style={{ padding: "18px 24px", borderBottom: `1px solid ${RULE}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
