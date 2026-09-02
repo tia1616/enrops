@@ -1165,7 +1165,7 @@ async function resolveWelcomeAudience(
         id, parent_id, registered_at,
         students!inner ( id, first_name ),
         parents!inner ( id, first_name, email ),
-        programs!inner ( id, curriculum, day_of_week, first_session_date, start_time, end_time, program_location_id, curriculum_id, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
+        programs!inner ( id, curriculum, runs_own_registration, day_of_week, first_session_date, start_time, end_time, program_location_id, curriculum_id, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
       `;
     const afterschoolBase = () => supabase
       .from("registrations")
@@ -1203,8 +1203,14 @@ async function resolveWelcomeAudience(
     // {{session_dates_block}} renders "12 weekly sessions, starting Sep 9..."
     // for afterschool programs. derive_program_session_dates honors location
     // + district closures, so no per-row math here.
+    // Narrowed FIRST, so a partner-run roster costs neither an email nor a
+    // derive_program_session_dates call below - same order as the recap
+    // resolver. Doing it after would still suppress the email but would keep
+    // paying one RPC per excluded program.
+    const mailable = data.filter((r: any) => r.parents?.email && r.students?.id && !isPartnerRun(r.programs));
+
     const sessionsByProgram = new Map<string, string[]>();
-    const uniqueProgramIds = Array.from(new Set(data.map((r: any) => r.programs?.id).filter(Boolean)));
+    const uniqueProgramIds = Array.from(new Set(mailable.map((r: any) => r.programs?.id).filter(Boolean)));
     for (const pid of uniqueProgramIds) {
       try {
         const { data: sessions } = await supabase.rpc("derive_program_session_dates", { p_program_id: pid });
@@ -1214,8 +1220,7 @@ async function resolveWelcomeAudience(
       }
     }
 
-    return data
-      .filter((r: any) => r.parents?.email && r.students?.id)
+    return mailable
       .map((r: any) => ({
         r,
         sessions: sessionsByProgram.get(r.programs.id) ?? [],
@@ -1409,7 +1414,7 @@ async function resolveCheckInAudience(
       id, parent_id,
       students!inner ( id, first_name ),
       parents!inner ( id, first_name, email ),
-      programs!inner ( id, curriculum, first_session_date, start_time, end_time, program_location_id, curriculum_id, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
+      programs!inner ( id, curriculum, runs_own_registration, first_session_date, start_time, end_time, program_location_id, curriculum_id, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
     `)
     .eq("organization_id", a.organization_id)
     .eq("status", "confirmed")
@@ -1419,7 +1424,7 @@ async function resolveCheckInAudience(
   if (error) throw error;
 
   return (data ?? [])
-    .filter((r: any) => r.parents?.email && r.students?.id)
+    .filter((r: any) => r.parents?.email && r.students?.id && !isPartnerRun(r.programs))
     .map((r: any) => ({
       context_key: `program:${r.programs.id}:parent:${r.parents.id}:student:${r.students.id}:check_in`,
       parent_id: r.parents.id,
@@ -1585,13 +1590,16 @@ async function resolveRecapAudience(
   if (includeAfterschool) {
       const { data: programs, error: pErr } = await supabase
       .from("programs")
-      .select("id, curriculum, first_session_date, start_time, end_time, program_location_id, curriculum_id, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions ), curricula ( final_showcase, mid_term_skills, final_recap_skills )")
+      .select("id, curriculum, runs_own_registration, first_session_date, start_time, end_time, program_location_id, curriculum_id, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions ), curricula ( final_showcase, mid_term_skills, final_recap_skills )")
       .eq("organization_id", a.organization_id);
     if (pErr) throw pErr;
 
     const matchingProgramIds: string[] = [];
     const programMeta = new Map<string, any>();
     for (const p of (programs ?? []) as any[]) {
+      // Skipped BEFORE the per-program RPC, so a partner-run roster costs no
+      // derive_program_session_dates call either.
+      if (isPartnerRun(p)) continue;
       const { data: sessions, error: dErr } = await supabase
         .rpc("derive_program_session_dates", { p_program_id: p.id });
       if (dErr || !sessions) continue;
@@ -1914,12 +1922,21 @@ async function resolveBirthdayAudience(
     const studentIds = birthdayStudents.map((s: any) => s.id);
     const { data: regs, error: rErr } = await supabase
       .from("registrations")
-      .select("student_id")
+      .select("student_id, programs ( runs_own_registration )")
       .eq("organization_id", a.organization_id)
       .eq("status", "confirmed")
       .in("student_id", studentIds);
     if (rErr) throw rErr;
-    const registeredStudentIds = new Set((regs ?? []).map((r: any) => r.student_id));
+    // A registration to a PARTNER-RUN program does not make the family ours to
+    // email. It still counts if the same child also has a normal registration,
+    // which is why this filters the qualifying rows rather than the students:
+    // the child stays eligible on the strength of any non-partner-run signup.
+    // Camp registrations (no program row) count exactly as before.
+    const registeredStudentIds = new Set(
+      (regs ?? [])
+        .filter((r: any) => !r.programs || !isPartnerRun(r.programs))
+        .map((r: any) => r.student_id),
+    );
     studentEntries = birthdayStudents
       .filter((s: any) => registeredStudentIds.has(s.id) && s.parents?.email)
       .map((s: any) => {
@@ -2146,7 +2163,7 @@ async function resolveReviewRequestAudience(
         id, parent_id,
         students!inner ( id, first_name ),
         parents!inner ( id, first_name, email ),
-        programs!inner ( id, curriculum, first_session_date )
+        programs!inner ( id, curriculum, runs_own_registration, first_session_date )
       `)
       .eq("organization_id", a.organization_id)
       .eq("status", "confirmed")
@@ -2156,6 +2173,7 @@ async function resolveReviewRequestAudience(
     if (error) throw error;
     for (const r of (data ?? []) as any[]) {
       if (!r.parents?.email || !r.students?.id) continue;
+      if (isPartnerRun(r.programs)) continue;
       regEntries.push(makeReviewEntry({
         year,
         parentId: r.parents.id,
@@ -2417,7 +2435,7 @@ async function resolveNoSchoolDayAudience(
   // live in camp_sessions and never follow the school calendar).
   const { data: progs, error: progErr } = await supabase
     .from("programs")
-    .select("id, curriculum, term, day_of_week, first_session_date, program_location_id, status, program_locations!inner ( name )")
+    .select("id, curriculum, term, day_of_week, first_session_date, program_location_id, status, runs_own_registration, program_locations!inner ( name )")
     .eq("organization_id", a.organization_id);
   if (progErr) throw progErr;
 
@@ -2556,27 +2574,34 @@ async function resolveNoSchoolDayAudience(
         // Parents — confirmed registrations for this program. One heads-up per
         // parent per program per closure (program-centric copy, no child name),
         // so a parent with two kids in the same class isn't emailed twice.
-        const { data: regs, error: regErr } = await supabase
-          .from("registrations")
-          .select("parents!inner ( id, first_name, email )")
-          .eq("organization_id", a.organization_id)
-          .eq("program_id", p.id)
-          .eq("status", "confirmed");
-        if (regErr) throw regErr;
-        const seenParents = new Set<string>();
-        for (const r of (regs ?? []) as any[]) {
-          const par = r.parents;
-          if (!par?.email || seenParents.has(par.id)) continue;
-          seenParents.add(par.id);
-          entries.push({
-            ...base,
-            context_key: `noschool:${period.startIso}:program:${p.id}:parent:${par.id}`,
-            parent_id: par.id,
-            parent_email: par.email,
-            parent_first_name: par.first_name ?? null,
-            child_first_name: null,
-            recipient_role: "parent",
-          });
+        //
+        // Partner-run rosters skip the PARENT half only, and skip it before the
+        // query rather than after: the partner tells its own families about a
+        // closure. The instructor half below still runs, because our instructor
+        // is ours either way and still needs to know the school is closed.
+        if (!isPartnerRun(p)) {
+          const { data: regs, error: regErr } = await supabase
+            .from("registrations")
+            .select("parents!inner ( id, first_name, email )")
+            .eq("organization_id", a.organization_id)
+            .eq("program_id", p.id)
+            .eq("status", "confirmed");
+          if (regErr) throw regErr;
+          const seenParents = new Set<string>();
+          for (const r of (regs ?? []) as any[]) {
+            const par = r.parents;
+            if (!par?.email || seenParents.has(par.id)) continue;
+            seenParents.add(par.id);
+            entries.push({
+              ...base,
+              context_key: `noschool:${period.startIso}:program:${p.id}:parent:${par.id}`,
+              parent_id: par.id,
+              parent_email: par.email,
+              parent_first_name: par.first_name ?? null,
+              child_first_name: null,
+              recipient_role: "parent",
+            });
+          }
         }
 
         // Instructor(s) — assigned + locked in via program_assignments, the single
@@ -2728,6 +2753,46 @@ function buildArrivalDismissalBlock(arrival: string | null | undefined, dismissa
   const arrivalSection = a ? `<p style="${labelStyle}">Arrival</p><p style="${textStyle}${d ? "margin-bottom:12px;" : ""}">${escapeHtml(a)}</p>` : "";
   const dismissalSection = d ? `<p style="${labelStyle}">Dismissal</p><p style="${textStyle}">${escapeHtml(d)}</p>` : "";
   return `<div style="background:#f5f4ee;padding:14px 18px;margin:16px 0;border-radius:6px;border-left:3px solid ${brand.primary_color};">${arrivalSection}${dismissalSection}</div>`;
+}
+
+// THE one rule for "enrops must not email this program's FAMILIES".
+//
+// A partner-run program (programs.runs_own_registration = true) is a roster we
+// hold for attendance and payroll only. The PARTNER owns registration and owns
+// parent communication - OES reaches its families through SchoolBuddy, Camas
+// Community Education emails its own families the week before a class starts.
+// Because those rosters are IMPORTED rather than booked through checkout, the
+// parent rows carry placeholder `@import.local` addresses.
+//
+// The flag was NOT new to the backend - three edge paths already honored it,
+// and this helper deliberately matches the spelling they use:
+//   - create-registration and join-waitlist both guard with
+//     `x.runs_own_registration === true` on a row already in hand (same shape
+//     as here, which is why this is `=== true` and not a truthiness check)
+//   - the partner_roster resolver in THIS file filters query-side with
+//     `.eq("runs_own_registration", false)` because it queries `programs`
+//     directly
+// Query-side is the better spelling when you own the query, but it cannot serve
+// the birthday resolver: there the embed is deliberately NOT `!inner` so CAMP
+// registrations (programs = null) still count, and an `.eq()` on the embedded
+// column would silently drop them. One JS predicate across all six family
+// resolvers beats a mix, so the rule is named once here.
+//
+// What was missing was any check in the LIFECYCLE resolvers, so the cron mailed
+// these families anyway: 22 welcome emails to OES families nobody intended to
+// contact, all bounced, on the same Resend domain that mails real families.
+// Zellerbach was a near-miss only because it has 0 registrations, not because
+// it was protected.
+//
+// NOT applied to INSTRUCTOR sends. A partner running its own registration
+// changes nothing about our instructor still teaching the class and still
+// needing to hear that the school is closed on a given day.
+//
+// Camps are the untouched twin: camp_sessions has its own
+// runs_own_registration and the camp resolvers do not check it yet. Dormant
+// while camps are out of season - fix it when camps come back.
+function isPartnerRun(program: { runs_own_registration?: boolean | null } | null | undefined): boolean {
+  return program?.runs_own_registration === true;
 }
 
 // Auto-detect helper. Returns true when the org has at least one program OR
