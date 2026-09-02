@@ -17,6 +17,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import EditProgramCurriculumModal from "./EditProgramCurriculumModal.jsx";
+import CancelClassModal from "./CancelClassModal.jsx";
+import MessageFamiliesModal from "./MessageFamiliesModal.jsx";
 import ShareProgram from "../../../components/ShareProgram.jsx";
 import ShareLink from "../../../components/ShareLink.jsx";
 import EnnieTip from "../../../components/EnnieTip.jsx";
@@ -228,16 +230,32 @@ export default function ProgramsCalendar() {
   // cancelled classes on production were set by hand in SQL. 'cancelled' is an
   // existing allowed value of programs_status_check, so this needs no migration
   // and no new status for the rest of the system to learn.
+  // Returns {ok} so a caller can react, instead of only alerting. CancelClassModal
+  // needs to know whether it worked before it offers to tell the families.
+  //
+  // .select("id") AND A ZERO-ROW CHECK, not just `if (error)`. RLS refusing an
+  // UPDATE is not an error: the row falls outside the policy, Postgres updates
+  // ZERO rows and PostgREST returns success. So the old version would have shown
+  // no alert, flipped the row to "cancelled" on screen, and left the class open
+  // in the database - the same silent-save defect fixed in Rosters.jsx, sitting
+  // in the one function whose whole job is taking a class off the schedule.
   async function cancelProgram(programId) {
-    const { error: cancelErr } = await supabase
+    const { data, error: cancelErr } = await supabase
       .from("programs")
       .update({ status: "cancelled" })
-      .eq("id", programId);
+      .eq("id", programId)
+      .select("id");
     if (cancelErr) {
       alert(`Couldn't cancel: ${cancelErr.message}`);
-      return;
+      return { ok: false, message: cancelErr.message };
+    }
+    if (!Array.isArray(data) || data.length === 0) {
+      const message = "Nothing was cancelled. You may not have permission to change this class.";
+      alert(message);
+      return { ok: false, message };
     }
     setPrograms((prev) => prev.map((p) => (p.id === programId ? { ...p, status: "cancelled" } : p)));
+    return { ok: true };
   }
 
   // Remove a class from the schedule — by deleting it when the database will
@@ -1108,6 +1126,7 @@ export default function ProgramsCalendar() {
               onPublish={publishProgram}
               onUnpublish={unpublishProgram}
               onDelete={deleteProgram}
+              onCancel={cancelProgram}
               onUpdate={updateProgramFields}
               onScheduleChanged={refreshProgramSchedule}
               onDuplicate={duplicateProgram}
@@ -1130,6 +1149,7 @@ export default function ProgramsCalendar() {
               onPublish={publishProgram}
               onUnpublish={unpublishProgram}
               onDelete={deleteProgram}
+              onCancel={cancelProgram}
               onUpdate={updateProgramFields}
               onScheduleChanged={refreshProgramSchedule}
               onDuplicate={duplicateProgram}
@@ -1180,7 +1200,7 @@ export default function ProgramsCalendar() {
 
 // ---- Views ----
 
-function CalendarView({ programs, enrollment, sessionDatesByProgram, driftByProgram, calendarCoverage, expandedDates, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, onScheduleChanged, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
+function CalendarView({ programs, enrollment, sessionDatesByProgram, driftByProgram, calendarCoverage, expandedDates, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onCancel, onUpdate, onScheduleChanged, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
   const byDay = useMemo(() => {
     const map = Object.fromEntries(DAYS_OF_WEEK.map((d) => [d, []]));
     for (const p of programs) {
@@ -1227,6 +1247,7 @@ function CalendarView({ programs, enrollment, sessionDatesByProgram, driftByProg
               onPublish={onPublish}
               onUnpublish={onUnpublish}
               onDelete={onDelete}
+                onCancel={onCancel}
               onUpdate={onUpdate}
               onScheduleChanged={onScheduleChanged}
               onDuplicate={onDuplicate}
@@ -1242,7 +1263,7 @@ function CalendarView({ programs, enrollment, sessionDatesByProgram, driftByProg
   );
 }
 
-function BySchoolView({ programs, enrollment, sessionDatesByProgram, driftByProgram, calendarCoverage, expandedDates, onToggleDates, onToggleSchool, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, onScheduleChanged, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
+function BySchoolView({ programs, enrollment, sessionDatesByProgram, driftByProgram, calendarCoverage, expandedDates, onToggleDates, onToggleSchool, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onCancel, onUpdate, onScheduleChanged, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
   const bySchool = useMemo(() => {
     const map = {};
     for (const p of programs) {
@@ -1349,6 +1370,7 @@ function BySchoolView({ programs, enrollment, sessionDatesByProgram, driftByProg
                 onPublish={onPublish}
                 onUnpublish={onUnpublish}
                 onDelete={onDelete}
+                onCancel={onCancel}
                 onUpdate={onUpdate}
                 onScheduleChanged={onScheduleChanged}
                 onDuplicate={onDuplicate}
@@ -1408,7 +1430,7 @@ function districtHasCal(program, calendarCoverage) {
   return entry.hasCalendar;
 }
 
-function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, isDatesExpanded, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onUpdate, onScheduleChanged, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm, showDay = false }) {
+function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, isDatesExpanded, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onCancel, onUpdate, onScheduleChanged, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm, showDay = false }) {
   // Lean registration ops have no curriculum library, no partner-school
   // facilities, and no instructors — hide those J2S-shaped affordances. J2S
   // (legacy_own_platform) keeps them all.
@@ -1700,6 +1722,7 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
         onPublish={onPublish}
         onUnpublish={onUnpublish}
         onDelete={onDelete}
+                onCancel={onCancel}
         onDuplicate={onDuplicate}
         termOptions={termOptions}
         locations={locations}
@@ -1715,7 +1738,7 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
 // bottom, an editable form for day/time/dates/capacity/price/location at
 // the top, and the unpublish + delete actions on a footer row. The panel
 // only renders when the operator clicks "Expand" on a program row.
-function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUpdate, onScheduleChanged, onPublish, onUnpublish, onDelete, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
+function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUpdate, onScheduleChanged, onPublish, onUnpublish, onDelete, onCancel, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm }) {
   // Lean ops don't have partner-run registration or instructors — hide those.
   const { org: panelOrg } = useOutletContext() ?? {};
   const isLean = panelOrg?.instructor_pay_model === "enrops_platform";
@@ -2294,6 +2317,13 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
   const isDraft = program.status === "draft";
   const isCancelled = program.status === "cancelled";
   const isOpen = program.status === "open";
+
+  // Cancelling, and telling the families afterwards. Two panels rather than one
+  // because they are two decisions: a class can be cancelled without a message
+  // (Sawyer's behaviour, and the operator may want to phone instead), and a
+  // message can be sent without cancelling anything.
+  const [cancelling, setCancelling] = useState(false);
+  const [tellingFamilies, setTellingFamilies] = useState(false);
 
   // Unsaved SCHEDULE edits? The SESSION DATES list at the bottom shows the SAVED
   // schedule (from the derive fn), so it won't match the form's live preview until
@@ -2901,6 +2931,24 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
             title="Unpublish — hide from catalog and stop appearing in marketing"
           >Unpublish</button>
         )}
+        {/* CANCEL, which until now you could not do to a class with families in
+            it. `deleteProgram` refused with "refund or cancel those places
+            first", and cancelProgram was reachable only for a class with nobody
+            enrolled, nobody waiting, and some cancelled history - so the normal
+            reason to cancel (low enrolment, not enough kit) had no route.
+            Hidden once already cancelled: Reopen is the action then, and a
+            Cancel button on a cancelled class is a control that does nothing. */}
+        {!isCancelled && (
+          <button
+            type="button"
+            onClick={() => setCancelling(true)}
+            style={{
+              background: "transparent", color: AMBER, border: `1px solid ${AMBER}`, padding: "7px 14px",
+              borderRadius: 6, fontSize: 12.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer",
+            }}
+            title="Cancel this class. Nothing is refunded and nobody is emailed until you choose to."
+          >Cancel class</button>
+        )}
         <button
           type="button"
           onClick={() => onDelete?.(program.id)}
@@ -2971,6 +3019,31 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         </div>
       )}
       <SessionDatesPanel program={program} dates={dates} districtHasCalendar={districtHasCalendar} onScheduleChanged={onScheduleChanged} inline />
+
+      {cancelling && (
+        <CancelClassModal
+          program={program}
+          orgId={panelOrg?.id}
+          // cancelProgram, threaded down - ONE writer. The modal does not write
+          // the status itself: that function already owns the write, the
+          // zero-rows-means-refused check, and the local row refresh, and a
+          // second copy in the modal would be a second thing to keep correct.
+          onConfirm={onCancel}
+          // Hands straight over to the message panel, which is the whole point:
+          // cancelling without telling anyone is the failure mode, so the next
+          // step is offered where the decision was made.
+          onTellFamilies={() => { setCancelling(false); setTellingFamilies(true); }}
+          onClose={() => setCancelling(false)}
+        />
+      )}
+
+      {tellingFamilies && (
+        <MessageFamiliesModal
+          program={program}
+          orgId={panelOrg?.id}
+          onClose={() => setTellingFamilies(false)}
+        />
+      )}
     </div>
   );
 }
