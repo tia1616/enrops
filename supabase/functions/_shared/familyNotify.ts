@@ -50,13 +50,24 @@ export interface MessageRecipientRow {
 // COLLAPSE TO ONE EMAIL PER ADDRESS, naming every child that address is
 // responsible for.
 //
-// GROUPED BY ADDRESS, NOT BY PARENT, and that is the whole point. Now that a
-// second guardian is a recipient (Jessica: "both parents should also be
-// emailed"), the same person can arrive twice - once as the account holder and
-// once as the guardian on their own child. Measured on prod 2026-09-02: 12
-// enrolled children across the two live orgs have a guardian email IDENTICAL to
-// the primary, and the first staging class tested was exactly that shape. Keyed
-// by parent_id those are two rows and the family gets two identical emails.
+// GROUPED BY (ADDRESS, FAMILY) - both halves are load-bearing, for opposite
+// reasons, and getting either alone wrong is a real defect:
+//
+//   ADDRESS, so one inbox gets ONE email. Now that a second guardian is a
+//   recipient (Jessica: "both parents should also be emailed") the same person
+//   can arrive twice - once as the account holder, once as the guardian on their
+//   own child. Measured on prod 2026-09-02: 12 enrolled children across the two
+//   live orgs have a guardian address IDENTICAL to the primary, and the first
+//   staging class tested was exactly that shape. Keyed by parent alone, that
+//   family gets two identical emails.
+//
+//   FAMILY, so one email never names TWO households' children. An address can
+//   legitimately serve two families in one class - a grandparent minding two
+//   cousins, a nanny guardian for two households. Keyed by address alone those
+//   merge and each household learns the other's child. Zero such addresses exist
+//   on prod today; this keeps it impossible rather than waiting for the first.
+//   Two families sharing an inbox therefore get two emails, which is correct -
+//   they are two separate pieces of business.
 //
 // Lower-cased because the addresses come back lower-cased from SQL, but a
 // hand-typed guardian address may not be - "Sam@x.com" and "sam@x.com" are one
@@ -86,7 +97,27 @@ export function groupRecipientsByAddress(rows: MessageRecipientRow[]) {
   for (const r of rows ?? []) {
     const email = (r?.recipient_email ?? '').trim().toLowerCase();
     if (!email) continue;
-    let g = byEmail.get(email);
+    // KEYED BY (ADDRESS, FAMILY), NOT ADDRESS ALONE - and the second half is a
+    // privacy rule, not tidiness. One address can legitimately appear against
+    // two DIFFERENT families in the same class: a grandparent minding two
+    // cousins, a nanny listed as guardian for two households. Keyed by address
+    // alone, those merge into one email naming BOTH families' children, so each
+    // household learns who else is in the class - the same disclosure this file
+    // avoids by never putting two addresses in one `to`.
+    //
+    // It still collapses the case that actually occurs: the 12 children whose
+    // guardian address equals the account holder's are the SAME parent_id, so
+    // they remain one email. Two families sharing an inbox get two emails, which
+    // is correct - they are two separate pieces of business.
+    //
+    // Zero addresses on prod currently span two families in one class (measured
+    // 2026-09-02); this keeps it impossible rather than waiting for the first one.
+    // Delimited with a pipe, which cannot occur in an email address or a UUID.
+    // Concatenated bare, "a@x.test" + "famA" and "a@x.testfamA" + "" are the
+    // same key - vanishingly unlikely with UUID parent ids, but a key that is
+    // only safe by luck is not a key.
+    const key = `${email}|${r.parent_id ?? ''}`;
+    let g = byEmail.get(key);
     if (!g) {
       g = {
         email,
@@ -97,7 +128,7 @@ export function groupRecipientsByAddress(rows: MessageRecipientRow[]) {
         audiences: new Set(),
         parentIds: new Set(),
       };
-      byEmail.set(email, g);
+      byEmail.set(key, g);
     }
     // The account holder's name wins over a guardian's for the same inbox.
     if (r.recipient_kind === 'parent' && (r.recipient_name ?? '').trim()) {

@@ -241,3 +241,51 @@ Deno.test('junk rows cannot become a send to nobody', () => {
   assertEquals(noName[0].child_count, 1);
   assertEquals(noName[0].student_first_name, 'your child');
 });
+
+Deno.test('ONE INBOX, TWO FAMILIES: never one email naming both households children', () => {
+  // A grandparent minding two cousins in the same class, or a nanny listed as
+  // guardian for two households. Keyed by address alone these merge and each
+  // family learns the other's child's name.
+  const out = groupRecipientsByAddress([
+    row({ recipient_email: 'nan@x.test', recipient_kind: 'guardian',
+          parent_id: 'famA', student_id: 'kidA', student_first_name: 'Ada' }),
+    row({ recipient_email: 'nan@x.test', recipient_kind: 'guardian',
+          parent_id: 'famB', student_id: 'kidB', student_first_name: 'Bo' }),
+  ]);
+  assertEquals(out.length, 2, 'two separate pieces of business, two emails');
+  const names = out.map((r) => r.student_first_name).sort();
+  assertEquals(names, ['Ada', 'Bo']);
+  // Neither email may mention the other household's child.
+  for (const g of out) {
+    assertEquals(g.child_count, 1);
+    assertEquals(g.student_first_name.includes(' and '), false, 'no cross-family merge');
+  }
+});
+
+Deno.test('same inbox, SAME family, both roles: still exactly one email', () => {
+  // The 12-case trap again, now under the compound key - it must NOT have been
+  // broken by the fix for the cross-family case.
+  const out = groupRecipientsByAddress([
+    row({ recipient_email: 'me@x.test', recipient_kind: 'parent',   parent_id: 'famA', student_id: 'kid1', student_first_name: 'Ryan' }),
+    row({ recipient_email: 'me@x.test', recipient_kind: 'guardian', parent_id: 'famA', student_id: 'kid1', student_first_name: 'Ryan' }),
+    row({ recipient_email: 'me@x.test', recipient_kind: 'parent',   parent_id: 'famA', student_id: 'kid2', student_first_name: 'Evan' }),
+  ]);
+  assertEquals(out.length, 1, 'one family, one inbox, one email');
+  assertEquals(out[0].student_first_name, 'Ryan and Evan');
+  assertEquals(out[0].child_count, 2);
+});
+
+// KNOWN LIMITATION, pinned so it cannot change silently: a child with no first
+// name is COUNTED but cannot be NAMED, so the greeting names fewer children than
+// child_count. Zero students on prod or staging have a blank first name
+// (measured 2026-09-02) and registration requires one, so this is unreachable
+// today - but if it ever happens, child_count is the honest number and callers
+// should prefer it over counting names in the string.
+Deno.test('a nameless child is counted even though it cannot be named', () => {
+  const out = groupRecipientsByAddress([
+    row({ student_id: 'kid1', student_first_name: 'Ryan' }),
+    row({ student_id: 'kid2', student_first_name: null }),
+  ]);
+  assertEquals(out[0].child_count, 2, 'both children are accounted for');
+  assertEquals(out[0].student_first_name, 'Ryan', 'and the unnamed one cannot be greeted');
+});
