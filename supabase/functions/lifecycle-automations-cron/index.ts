@@ -1203,8 +1203,14 @@ async function resolveWelcomeAudience(
     // {{session_dates_block}} renders "12 weekly sessions, starting Sep 9..."
     // for afterschool programs. derive_program_session_dates honors location
     // + district closures, so no per-row math here.
+    // Narrowed FIRST, so a partner-run roster costs neither an email nor a
+    // derive_program_session_dates call below - same order as the recap
+    // resolver. Doing it after would still suppress the email but would keep
+    // paying one RPC per excluded program.
+    const mailable = data.filter((r: any) => r.parents?.email && r.students?.id && !isPartnerRun(r.programs));
+
     const sessionsByProgram = new Map<string, string[]>();
-    const uniqueProgramIds = Array.from(new Set(data.map((r: any) => r.programs?.id).filter(Boolean)));
+    const uniqueProgramIds = Array.from(new Set(mailable.map((r: any) => r.programs?.id).filter(Boolean)));
     for (const pid of uniqueProgramIds) {
       try {
         const { data: sessions } = await supabase.rpc("derive_program_session_dates", { p_program_id: pid });
@@ -1214,8 +1220,7 @@ async function resolveWelcomeAudience(
       }
     }
 
-    return data
-      .filter((r: any) => r.parents?.email && r.students?.id && !isPartnerRun(r.programs))
+    return mailable
       .map((r: any) => ({
         r,
         sessions: sessionsByProgram.get(r.programs.id) ?? [],
@@ -2750,11 +2755,6 @@ function buildArrivalDismissalBlock(arrival: string | null | undefined, dismissa
   return `<div style="background:#f5f4ee;padding:14px 18px;margin:16px 0;border-radius:6px;border-left:3px solid ${brand.primary_color};">${arrivalSection}${dismissalSection}</div>`;
 }
 
-// Auto-detect helper. Returns true when the org has at least one program OR
-// camp_session starting more than 14 days from today — i.e. a real "next term"
-// to point at. The 14-day cutoff filters out the very camp/program a Welcome
-// is currently announcing, so welcome_camp for a camp starting in 7 days
-// doesn't promote that same camp as "what's next."
 // THE one rule for "enrops must not email this program's FAMILIES".
 //
 // A partner-run program (programs.runs_own_registration = true) is a roster we
@@ -2781,6 +2781,11 @@ function isPartnerRun(program: { runs_own_registration?: boolean | null } | null
   return program?.runs_own_registration === true;
 }
 
+// Auto-detect helper. Returns true when the org has at least one program OR
+// camp_session starting more than 14 days from today — i.e. a real "next term"
+// to point at. The 14-day cutoff filters out the very camp/program a Welcome
+// is currently announcing, so welcome_camp for a camp starting in 7 days
+// doesn't promote that same camp as "what's next."
 async function hasFutureProgramsForOrg(supabase: SupabaseClient, orgId: string): Promise<boolean> {
   const futureCutoff = new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10);
   const { data: futureProgram } = await supabase
