@@ -2764,11 +2764,25 @@ function buildArrivalDismissalBlock(arrival: string | null | undefined, dismissa
 // Because those rosters are IMPORTED rather than booked through checkout, the
 // parent rows carry placeholder `@import.local` addresses.
 //
-// Nothing on the backend read this flag before 2026-09-02 (every reader was
-// frontend catalog/checkout code), so the lifecycle cron happily mailed them:
-// 22 welcome emails to OES families nobody intended to contact, all bounced,
-// on the same Resend domain that mails real families. Zellerbach was a
-// near-miss only because it has 0 registrations, not because it was protected.
+// The flag was NOT new to the backend - three edge paths already honored it,
+// and this helper deliberately matches the spelling they use:
+//   - create-registration and join-waitlist both guard with
+//     `x.runs_own_registration === true` on a row already in hand (same shape
+//     as here, which is why this is `=== true` and not a truthiness check)
+//   - the partner_roster resolver in THIS file filters query-side with
+//     `.eq("runs_own_registration", false)` because it queries `programs`
+//     directly
+// Query-side is the better spelling when you own the query, but it cannot serve
+// the birthday resolver: there the embed is deliberately NOT `!inner` so CAMP
+// registrations (programs = null) still count, and an `.eq()` on the embedded
+// column would silently drop them. One JS predicate across all six family
+// resolvers beats a mix, so the rule is named once here.
+//
+// What was missing was any check in the LIFECYCLE resolvers, so the cron mailed
+// these families anyway: 22 welcome emails to OES families nobody intended to
+// contact, all bounced, on the same Resend domain that mails real families.
+// Zellerbach was a near-miss only because it has 0 registrations, not because
+// it was protected.
 //
 // NOT applied to INSTRUCTOR sends. A partner running its own registration
 // changes nothing about our instructor still teaching the class and still
