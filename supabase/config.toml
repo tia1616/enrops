@@ -93,6 +93,13 @@ verify_jwt = true
 [functions.notify-program-curriculum-change]
 verify_jwt = true
 
+# Same reasoning as the two above, pinned on the day it was created rather than
+# after a redeploy drifted it. This one takes an operator's JWT and authorises
+# owner/admin/staff itself before touching anything, so a missing JWT must be a
+# 401 and never an anonymous send to a class's families.
+[functions.notify-program-families]
+verify_jwt = true
+
 # ── verify_jwt = false (public / webhook / cron entrypoints) ──
 [functions.backup-storage-objects]
 # PINNED FIRST, because the header above singles this one out as the highest-risk
