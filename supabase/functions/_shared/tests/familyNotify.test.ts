@@ -150,3 +150,94 @@ Deno.test('an empty class sends nothing and reports nothing sent', async () => {
 Deno.test('tally does not crash on a missing result list', () => {
   assertEquals(tallyFamilySends(undefined as never), { sent: 0, failed: 0, total: 0 });
 });
+
+// ── grouping: one email per ADDRESS ─────────────────────────────────────────
+// The rows below are the shape program_message_recipients returns. The cases
+// are the ones prod actually contains, not invented ones.
+import { groupRecipientsByAddress } from '../familyNotify.ts';
+
+const row = (over: Record<string, unknown> = {}) => ({
+  recipient_email: 'a@x.test',
+  recipient_name: 'Ada Adams',
+  recipient_kind: 'parent',
+  parent_id: 'par1',
+  student_id: 'stu1',
+  student_first_name: 'Ryan',
+  audience: 'enrolled',
+  ...over,
+});
+
+Deno.test('THE 12-CASE TRAP: guardian email identical to the parent is ONE email', () => {
+  // Exactly the first staging class tested: same child, guardian address ==
+  // primary address. Keyed by parent this is two rows and two identical emails.
+  const out = groupRecipientsByAddress([
+    row({ recipient_kind: 'parent',   recipient_email: 'jessica@j2s.test', recipient_name: 'Jessica Vorster' }),
+    row({ recipient_kind: 'guardian', recipient_email: 'jessica@j2s.test', recipient_name: 'Jessica Vorster' }),
+  ]);
+  assertEquals(out.length, 1, 'one inbox, one email');
+  assertEquals(out[0].child_count, 1, 'and the child is not named twice');
+  assertEquals(out[0].student_first_name, 'Ryan');
+  assertEquals(out[0].kinds, ['guardian', 'parent']);
+});
+
+Deno.test('a DIFFERENT second guardian is a second recipient', () => {
+  const out = groupRecipientsByAddress([
+    row({ recipient_kind: 'parent',   recipient_email: 'mum@x.test', recipient_name: 'Mum M' }),
+    row({ recipient_kind: 'guardian', recipient_email: 'dad@x.test', recipient_name: 'Dad D' }),
+  ]);
+  assertEquals(out.map((r) => r.email), ['dad@x.test', 'mum@x.test'], 'both, ordered by address');
+  assertEquals(out.every((r) => r.student_first_name === 'Ryan'), true);
+});
+
+Deno.test('two children in one class = ONE email naming both (the Yu Zhou bug)', () => {
+  const out = groupRecipientsByAddress([
+    row({ student_id: 'stu1', student_first_name: 'Ryan' }),
+    row({ student_id: 'stu2', student_first_name: 'Evan' }),
+  ]);
+  assertEquals(out.length, 1);
+  assertEquals(out[0].student_first_name, 'Ryan and Evan');
+  assertEquals(out[0].child_count, 2);
+});
+
+Deno.test('case-different addresses are one inbox', () => {
+  const out = groupRecipientsByAddress([
+    row({ recipient_email: 'Sam@X.test' }),
+    row({ recipient_email: 'sam@x.test', student_id: 'stu2', student_first_name: 'Evan' }),
+  ]);
+  assertEquals(out.length, 1);
+  assertEquals(out[0].email, 'sam@x.test');
+  assertEquals(out[0].student_first_name, 'Ryan and Evan');
+});
+
+Deno.test('the account holder names the email, not whichever row came first', () => {
+  const guardianFirst = groupRecipientsByAddress([
+    row({ recipient_kind: 'guardian', recipient_email: 's@x.test', recipient_name: 'Guardian G' }),
+    row({ recipient_kind: 'parent',   recipient_email: 's@x.test', recipient_name: 'Account Holder' }),
+  ]);
+  assertEquals(guardianFirst[0].name, 'Account Holder');
+  // With only a guardian on file, their name is used rather than nothing.
+  const guardianOnly = groupRecipientsByAddress([
+    row({ recipient_kind: 'guardian', recipient_email: 'g@x.test', recipient_name: 'Guardian G' }),
+  ]);
+  assertEquals(guardianOnly[0].name, 'Guardian G');
+});
+
+Deno.test('waitlist rows are tagged so the operator can see what they selected', () => {
+  const out = groupRecipientsByAddress([
+    row({ recipient_email: 'e@x.test', audience: 'enrolled' }),
+    row({ recipient_email: 'w@x.test', audience: 'waitlist', student_id: 'stu9', student_first_name: 'Wanda' }),
+  ]);
+  assertEquals(out.find((r) => r.email === 'w@x.test')!.audiences, ['waitlist']);
+  assertEquals(out.find((r) => r.email === 'e@x.test')!.audiences, ['enrolled']);
+});
+
+Deno.test('junk rows cannot become a send to nobody', () => {
+  assertEquals(groupRecipientsByAddress([]), []);
+  assertEquals(groupRecipientsByAddress(undefined as never), []);
+  // A row with no address is dropped, not emailed to ''.
+  assertEquals(groupRecipientsByAddress([row({ recipient_email: '   ' })]).length, 0);
+  // A child with no name still counts as a child, and reads as "your child".
+  const noName = groupRecipientsByAddress([row({ student_first_name: null })]);
+  assertEquals(noName[0].child_count, 1);
+  assertEquals(noName[0].student_first_name, 'your child');
+});

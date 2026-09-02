@@ -26,12 +26,108 @@
 // branch, the throw branch and the happy path, which is not possible against the
 // real Resend API.
 
+import { joinChildNames } from './familyRecipients.ts';
+
 export interface FamilyRecipient {
   parent_id: string;
   name: string;
   email: string;
   /** Every child this parent has in the class, already joined by groupFamilyRecipients. */
   student_first_name?: string;
+}
+
+// One FLAT row per (address, child) as program_message_recipients returns them.
+export interface MessageRecipientRow {
+  recipient_email: string;
+  recipient_name: string;
+  recipient_kind: 'parent' | 'guardian' | string;
+  parent_id: string;
+  student_id: string;
+  student_first_name: string | null;
+  audience: 'enrolled' | 'waitlist' | string;
+}
+
+// COLLAPSE TO ONE EMAIL PER ADDRESS, naming every child that address is
+// responsible for.
+//
+// GROUPED BY ADDRESS, NOT BY PARENT, and that is the whole point. Now that a
+// second guardian is a recipient (Jessica: "both parents should also be
+// emailed"), the same person can arrive twice - once as the account holder and
+// once as the guardian on their own child. Measured on prod 2026-09-02: 12
+// enrolled children across the two live orgs have a guardian email IDENTICAL to
+// the primary, and the first staging class tested was exactly that shape. Keyed
+// by parent_id those are two rows and the family gets two identical emails.
+//
+// Lower-cased because the addresses come back lower-cased from SQL, but a
+// hand-typed guardian address may not be - "Sam@x.com" and "sam@x.com" are one
+// inbox and must be one email.
+//
+// CHILD NAMES ARE DEDUPED TOO: a child reached via both the parent row and the
+// guardian row would otherwise be named twice ("Ryan and Ryan").
+//
+// THE NAME shown is the account holder's where we have it, falling back to the
+// guardian's - so an email addressed to a shared inbox greets the person who
+// registered rather than whichever row sorted first.
+//
+// Deterministic order (by address) so a preview, the send and the audit row all
+// list recipients the same way. An operator who counts 14 names in the preview
+// must see the same 14, in the same order, in the record afterwards.
+export function groupRecipientsByAddress(rows: MessageRecipientRow[]) {
+  const byEmail = new Map<string, {
+    email: string;
+    name: string;
+    kinds: Set<string>;
+    childNames: string[];
+    childIds: Set<string>;
+    audiences: Set<string>;
+    parentIds: Set<string>;
+  }>();
+
+  for (const r of rows ?? []) {
+    const email = (r?.recipient_email ?? '').trim().toLowerCase();
+    if (!email) continue;
+    let g = byEmail.get(email);
+    if (!g) {
+      g = {
+        email,
+        name: (r.recipient_name ?? '').trim(),
+        kinds: new Set(),
+        childNames: [],
+        childIds: new Set(),
+        audiences: new Set(),
+        parentIds: new Set(),
+      };
+      byEmail.set(email, g);
+    }
+    // The account holder's name wins over a guardian's for the same inbox.
+    if (r.recipient_kind === 'parent' && (r.recipient_name ?? '').trim()) {
+      g.name = (r.recipient_name ?? '').trim();
+    } else if (!g.name && (r.recipient_name ?? '').trim()) {
+      g.name = (r.recipient_name ?? '').trim();
+    }
+    if (r.recipient_kind) g.kinds.add(String(r.recipient_kind));
+    if (r.audience) g.audiences.add(String(r.audience));
+    if (r.parent_id) g.parentIds.add(r.parent_id);
+    const childName = (r.student_first_name ?? '').trim();
+    if (r.student_id && !g.childIds.has(r.student_id)) {
+      g.childIds.add(r.student_id);
+      if (childName) g.childNames.push(childName);
+    }
+  }
+
+  return [...byEmail.values()]
+    .sort((a, b) => (a.email < b.email ? -1 : a.email > b.email ? 1 : 0))
+    .map((g) => ({
+      parent_id: [...g.parentIds][0] ?? '',
+      email: g.email,
+      name: g.name,
+      // joinChildNames, not a local join: it is the one place that decides
+      // "Ryan and Evan" vs "Ryan, Evan and Mia" vs "your child".
+      student_first_name: joinChildNames(g.childNames),
+      child_count: g.childIds.size,
+      kinds: [...g.kinds].sort(),
+      audiences: [...g.audiences].sort(),
+    }));
 }
 
 export interface FamilySendResult {
