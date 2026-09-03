@@ -238,5 +238,63 @@ eq('an unrelated error mentioning "both" is not called a pickup conflict',
 eq('no error object at all still yields a sentence',
   careSaveMessage(null), "Sorry, that didn't save. Please try again.");
 
+// --- the attendance trigger's two raises -------------------------------------
+// Both carry a raw student uuid. Both used to reach a parent as either that
+// uuid or as "Please try again" for a failure that could never succeed.
+//
+// THE ORDER TEST IS THE IMPORTANT ONE. The do-not-release raise contains the
+// exact phrase the pass-through branch matches, so before 2026-09-03 it was
+// returned VERBATIM - printing the student id on a parent's screen.
+const STUDENT_UUID = '9445a268-0000-0000-0000-000000000000';
+const attDnr = `attendance_records: "Pat Byron" is on the do-not-release list for student ${STUDENT_UUID} and cannot be released to`;
+const attGuardian = `attendance_records: released_to_name "Amy Burke" is not the account parent or a guardian of student ${STUDENT_UUID}`;
+
+eq('the attendance do-not-release raise is NOT returned raw',
+  careSaveMessage({ message: attDnr }),
+  'That didn\'t save. "Pat Byron" is on the do-not-release list, and an attendance record for this child names them as the adult who collected them. That release record has to be sorted out before this will save.');
+eq('the attendance guardian raise names the adult and explains itself',
+  careSaveMessage({ message: attGuardian }),
+  'That didn\'t save. It conflicts with an attendance record for this child, which names "Amy Burke" as the adult who collected them. That release record has to be sorted out before this will save.');
+
+// GATE xii REGRESSION. A first draft said "that name is not on file as a parent
+// or guardian" - the condition the trigger checks, and FALSE on the screen that
+// fires it: Seth Ring's guardian WAS on file, and failed the check only for the
+// instant the replace had deleted her row. The sentence must not assert who is
+// on file, because this state does not prove it.
+eq('the guardian sentence does not claim the adult is off-file',
+  /not on file|no longer on file|cannot remove/i.test(careSaveMessage({ message: attGuardian })),
+  false);
+
+// The whole point: a parent must never see the id. Asserted on the OUTPUT, not
+// on which branch ran, because that is the property that actually matters.
+eq('neither attendance sentence leaks the student id',
+  [careSaveMessage({ message: attDnr }), careSaveMessage({ message: attGuardian })]
+    .some((s) => s.includes(STUDENT_UUID)),
+  false);
+
+// Fail-closed: the trigger has other raises (future date, registration
+// mismatch) and may grow more. An unrecognised one must not be echoed.
+const attUnknown = `attendance_records: registration ${STUDENT_UUID} is not student ${STUDENT_UUID} on this class`;
+eq('an unrecognised attendance raise is not echoed',
+  careSaveMessage({ message: attUnknown }),
+  "Sorry, that didn't save, so nothing changed. Tell us if it keeps happening.");
+eq('...and it does not leak the ids it carried',
+  careSaveMessage({ message: attUnknown }).includes(STUDENT_UUID), false);
+eq('an unrecognised attendance raise on LOAD says load, not save',
+  careSaveMessage({ message: attUnknown }, { action: 'load' }),
+  "Sorry, we couldn't load that. Please try again.");
+
+// No quoted name (a release recorded with an empty name, or a reworded raise):
+// still a real sentence, and it must not invent one.
+eq('the guardian raise without a quoted name does not pretend to name anybody',
+  careSaveMessage({ message: `attendance_records: released_to_name is not the account parent or a guardian of student ${STUDENT_UUID}` }),
+  "That didn't save. It conflicts with an attendance record for this child, naming the adult who collected them. That release record has to be sorted out before this will save.");
+
+// REGRESSION for the new first branch: the pickup/do-not-release CONSTRAINT
+// TRIGGER message is a different sentence from a different table and must still
+// pass through verbatim. It has no 'attendance_records:' prefix, which is
+// exactly why the branch keys on that prefix and not on 'do-not-release'.
+eq('the contact-overlap conflict still passes through verbatim', careSaveMessage({ message: overlap }), overlap);
+
 console.log(`\nstudentCare: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
