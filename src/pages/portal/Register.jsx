@@ -398,6 +398,10 @@ export default function Register() {
     regFields,
     waivers,
     conflicts: pickupDnrConflicts(activeChild.authorized_pickup, activeChild.do_not_release),
+    // Named in the grade-gate sentence, so a blocked family is told WHO to ask
+    // rather than reading our internal word for them. Falls back to a generic
+    // phrasing when the org has not loaded yet.
+    orgName: org?.name || '',
   });
 
   // Has this step had a Continue press REFUSED? Continue stays enabled and the
@@ -734,6 +738,7 @@ export default function Register() {
             <StepReview
               cart={cart}
               pricing={pricing}
+              orgName={org?.name || ''}
               installmentSchedule={installmentSchedule?.display || null}
               onPromoApply={async (code) => {
                 setPromoInput(code);

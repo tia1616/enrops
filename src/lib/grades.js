@@ -185,18 +185,30 @@ export function rangeBackwardsMessage(mode) {
   return `Put the ${mode === 'ages' ? 'younger age' : 'lower grade'} first.`;
 }
 
-// DOES THIS CHILD'S GRADE FIT THE CLASS? A WARNING, NEVER A BLOCK.
+// DOES THIS CHILD'S GRADE FIT THE CLASS? A GATE.
 //
 // 2026-08-25: a parent picked a class, filled the form, paid, and only afterwards
 // realised her son was below the range. The class carries grade_min/grade_max, the
 // form asks the grade, and nothing ever compared the two.
 //
-// Jessica set the scope the same day: WARN, DO NOT BLOCK. A hard gate stops the
-// advanced child, the sibling a provider is happy to take, and the range typed
-// slightly wrong - each of them with a card already in hand. The provider knows
-// their own exceptions; the product does not, so it says what it noticed and gets
-// out of the way. That is why this returns a message and nothing calls it from an
-// advance guard.
+// IT WAS A WARNING FIRST, AND JESSICA CHANGED IT TO A GATE on 2026-09-03: "we
+// shouldn't allow people to register if they're not in the grade range. shouldn't
+// be a warning should be a gate." Recorded with the number she was told before
+// deciding, because it is the cost of the rule: measured on prod that day, 29 of
+// 414 live registrations were BELOW the class range - across 25 classes and BOTH
+// tenants, every one paid, every one off by exactly one grade, and not one
+// registration anywhere above the range. So this is not typos; families with a
+// slightly-young child were registering and both providers were keeping them.
+// A gate turns those away at checkout.
+//
+// WHAT MAKES THE GATE SAFE IS THAT THE PROVIDER STILL HAS A DOOR. Blocking the
+// family does not lose the registration: an operator can add the child from the
+// roster by hand, which runs through admin-import-program-roster and never
+// touches this rule. So the decision moves to the person who knows their own
+// exceptions, instead of the product guessing. The message says so rather than
+// leaving a family at a wall - this codebase has now removed three hard gates
+// that trapped somebody with no way past, and that is the pattern to avoid, not
+// gating itself.
 //
 // Returns null - meaning "say nothing" - in every case where a warning would be
 // noise or a lie:
@@ -213,7 +225,7 @@ export function rangeBackwardsMessage(mode) {
 //     condition, and the operator meets it in their own editor.
 //
 // @returns {null | { code: 'below'|'above', message: string }}
-export function gradeFitProblem(program, grade) {
+export function gradeFitProblem(program, grade, providerName) {
   if (!program || isUnset(grade)) return null;
   // defaultMode null: a class that states neither grades nor ages must not be
   // treated as grade-shaped just because grades are the common case.
@@ -232,23 +244,29 @@ export function gradeFitProblem(program, grade) {
   else if (hi != null && g > hi) code = 'above';
   if (!code) return null;
 
-  return { code, message: gradeFitMessage(program) };
+  return { code, message: gradeFitMessage(program, providerName) };
 }
 
 // The sentence, beside the rule that produces it - same reason
-// rangeBackwardsMessage lives here. Two surfaces show this (the student step and
-// the review screen, which is the last thing before the card), and the moment it
-// is typed twice they start drifting.
+// rangeBackwardsMessage lives here. Three surfaces show this now (the student
+// step, the advance guard beside the Continue button, and the review screen), and
+// the moment it is typed twice they start drifting.
 //
-// It states what was noticed and stops. It does NOT tell the parent to contact
-// anyone - this module does not know the provider's name and a generic "check with
-// the provider" reads as a brush-off - and it does not promise that anybody will be
-// told, because nothing in the code tells them. Saying "you can still register" out
-// loud matters: the box looks like the birth-date error directly beneath it, which
-// DOES block, and a parent who cannot tell them apart abandons a checkout that was
-// never actually stopped.
-export function gradeFitMessage(program) {
-  return `This class is listed for ${audienceLabel(program)}. You can still register if that's right for your child.`;
+// A GATE HAS TO NAME THE WAY OUT. The previous wording ended "you can still
+// register if that's right for your child", which was true of a warning and is a
+// lie about a gate. What replaces it is not "sorry": it is the two things the
+// family can actually do - pick a class that fits, or ask the provider, who can
+// add them by hand. A blocked family with no next step is the exact pattern that
+// cost this platform a registration on 24 Aug and has been removed three times.
+//
+// The provider is named when the caller knows the name, because "contact the
+// provider" is our word for them, not a parent's. It falls back rather than
+// printing an empty gap, and stays out of this module's own knowledge - the same
+// reason referral.js takes the org name rather than importing a tenant.
+export function gradeFitMessage(program, providerName) {
+  const who = (providerName || '').trim();
+  const ask = who ? `ask ${who}` : 'get in touch';
+  return `This class is for ${audienceLabel(program)}. Choose a class that matches your child's grade, or ${ask} if they should be in this one.`;
 }
 
 // THE ONLY PLACE THAT DECIDES WHICH COLUMNS AN AUDIENCE EDIT WRITES.

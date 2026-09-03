@@ -38,9 +38,13 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
   //
   // This step renders ONE child at a time, so the message needs no name to be
   // unambiguous about who it is about.
+  //
+  // Same call the advance guard makes, with the same provider name, so the box
+  // under the field and the sentence beside the refused Continue press are the
+  // same string rather than two that can drift.
   const gradeWarnings = [...new Set(
     programsForChild(child)
-      .map((program) => gradeFitProblem(program, student.grade)?.message)
+      .map((program) => gradeFitProblem(program, student.grade, orgName)?.message)
       .filter(Boolean),
   )];
   return (
@@ -105,6 +109,8 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
             className="input-field"
             value={student.grade}
             onChange={(e) => onUpdate({ grade: e.target.value })}
+            aria-invalid={gradeWarnings.length ? 'true' : undefined}
+            aria-describedby={gradeWarnings.length ? `student-grade-problem-${childIndex}` : undefined}
           >
             <option value="">Select&hellip;</option>
             {GRADE_OPTIONS.map((g) => (
@@ -113,25 +119,22 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
               </option>
             ))}
           </select>
-          {/* WARN, NOT BLOCK - and it has to LOOK like the difference.
-              Deliberately NOT the orange treatment the birth-date problem uses two
-              fields below: that one stops the parent, this one does not, and two
-              identical-looking boxes teach a parent that the orange one is also
-              ignorable. Purple-soft is what the rest of this wizard uses for
-              something worth reading, so this borrows the tone rather than
-              inventing a third colour.
+          {/* THIS BLOCKS, so it wears the blocking colours. It was purple-soft
+              while it was only a warning; Jessica made it a gate on 2026-09-03
+              and the styling had to follow, because a box that stops a family
+              must not look like the same box that does not. It is now the exact
+              orange treatment the birth-date problem uses two fields below, which
+              is the palette this form already uses for "you cannot go on".
 
-              role="status", not role="alert", for the same reason: status is
-              announced politely when the parent lands on it, alert interrupts. The
-              choice of grade is not an emergency.
-
-              No aria-invalid on the select either - the value is not invalid, and
-              saying so would make a screen reader contradict the sentence. */}
+              role="alert" and aria-invalid, both upgraded from the warning
+              version for the same reason: the value now IS refused, and a screen
+              reader that says otherwise would contradict the Continue button. */}
           {gradeWarnings.map((message) => (
             <div
               key={message}
-              role="status"
-              className="mt-2 rounded-lg border-2 border-j2s-purple/20 bg-j2s-purple-soft/40 px-4 py-3 text-sm text-j2s-ink"
+              id={`student-grade-problem-${childIndex}`}
+              role="alert"
+              className="mt-2 rounded-lg border-2 border-j2s-orange-dark/30 bg-j2s-orange-dark/5 px-4 py-3 text-sm text-j2s-orange-dark"
             >
               {message}
             </div>

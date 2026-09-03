@@ -45,6 +45,23 @@
 import { needsAuthorizedPickup, dismissalAnswerIncomplete } from './dismissal.js';
 import { birthdateProblem } from './studentBirthdate.js';
 import { namedContacts } from './registrationFields.js';
+import { gradeFitProblem } from './grades.js';
+import { programsForChild } from './cartPrograms.js';
+
+// The grade gate, in one place so step 0 and step 3 cannot disagree about it.
+//
+// Reads EVERY class the child is buying, VIP bundle legs included, and returns
+// the first that does not fit. `gradeFitProblem` decides what "does not fit"
+// means and stays silent for an unanswered grade, an age-based class, a class
+// with no stated range and a class whose own range reads backwards - so this
+// blocks only where there is a real, stated mismatch.
+function gradeGate(child, orgName) {
+  for (const program of programsForChild(child)) {
+    const problem = gradeFitProblem(program, child?.student?.grade, orgName);
+    if (problem) return problem;
+  }
+  return null;
+}
 
 // Has the parent answered a custom question? (by field type)
 export function hasAnswer(value, type) {
@@ -84,6 +101,7 @@ export function advanceProblem({
   regFields,
   waivers,
   conflicts,
+  orgName,
 } = {}) {
   const std = regFields?.std || {};
   const child = activeChild || {};
@@ -116,6 +134,18 @@ export function advanceProblem({
       // screen together, and the same string in both places cannot drift.
       const dob = birthdateProblem(s.birthdate);
       if (dob) return stop('student_birthdate', dob.message);
+
+      // THE GRADE GATE. Jessica, 2026-09-03: "we shouldn't allow people to
+      // register if they're not in the grade range. shouldn't be a warning should
+      // be a gate." It sits AFTER the birth date deliberately - a family who has
+      // mistyped the year should be told about that first, since correcting it is
+      // more likely than the grade being genuinely wrong.
+      //
+      // Blocking here rather than only at the end is the whole point: the last
+      // thing this platform wants is a family who has filled in every screen and
+      // signed the waivers before being told no.
+      const gradeProblem = gradeGate(child, orgName);
+      if (gradeProblem) return stop('student_grade', gradeProblem.message);
 
       if (std.dismissal_method?.required && !s.dismissal_method) {
         return stop('dismissal_method', 'Choose how your child leaves at the end of class.');
@@ -195,7 +225,19 @@ export function advanceProblem({
       return stop(focus, `Tick the box on each required form - ${unsigned.length} still need your agreement.`);
     }
     case 3:
-      return null;
+      // The review screen, and the last press before the card. Step 0 already
+      // refuses an out-of-range grade, so reaching here with one means the cart
+      // was restored from an earlier session or the grade changed underneath -
+      // rare, and precisely why the money press gets its own check rather than
+      // trusting a guard three screens back.
+      //
+      // Empty focus, not 'student_grade': that field is three screens back and
+      // not in the DOM here, so naming it would scroll to nothing. The message
+      // still says which class and what to do.
+      {
+        const late = gradeGate(child, orgName);
+        return late ? stop('', late.message) : null;
+      }
     default:
       // Unreachable while Continue only renders for steps 0-3, but a reason
       // beats `false` if a step is ever added and this switch is not.

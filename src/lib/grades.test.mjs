@@ -266,21 +266,48 @@ eq('numeric compare, not lexical',
   gradeFitProblem({ grade_min: '1', grade_max: '9', age_format: 'grade' }, '10')?.code, 'above');
 
 // --- the sentence -------------------------------------------------------------
-// Quotes audienceLabel so the warning and the family-facing card cannot disagree
+// Quotes audienceLabel so the gate and the family-facing card cannot disagree
 // about what the class says it is for.
-eq('names the range in the parent-facing wording',
-  gradeFitMessage(G46), "This class is listed for Grades 4–6. You can still register if that's right for your child.");
+eq('names the range and both ways out',
+  gradeFitMessage(G46, 'Journey to STEAM'),
+  "This class is for Grades 4–6. Choose a class that matches your child's grade, or ask Journey to STEAM if they should be in this one.");
 eq('a single-grade class does not say 3-3',
-  gradeFitMessage({ grade_min: 3, grade_max: 3, age_format: 'grade' }),
-  "This class is listed for Grade 3. You can still register if that's right for your child.");
-// It must not read as a block: the box renders directly under the birth-date error,
-// which DOES stop the parent, and one that looks identical costs a registration.
-eq('says they can still register', /still register/.test(gradeFitMessage(G46)), true);
-eq('never renders the word null', /null/.test(gradeFitMessage(G46)), false);
+  gradeFitMessage({ grade_min: 3, grade_max: 3, age_format: 'grade' }, 'Journey to STEAM'),
+  "This class is for Grade 3. Choose a class that matches your child's grade, or ask Journey to STEAM if they should be in this one.");
+
+// A GATE HAS TO NAME THE WAY OUT. This is the pinned half: the wording must never
+// go back to "you can still register", which was true of the warning and is a lie
+// about a gate, and it must always leave the family something to do. Three hard
+// gates with no way past have been removed from this codebase; the sentence is
+// what stops this becoming the fourth.
+eq('does NOT claim they can still register', /still register/.test(gradeFitMessage(G46)), false);
+eq('offers a class that fits', /Choose a class/.test(gradeFitMessage(G46)), true);
+eq('offers asking the provider', /if they should be in this one/.test(gradeFitMessage(G46)), true);
+
+// The provider is named when known, and the sentence still reads when it is not.
+eq('names the provider when it is known',
+  /ask Journey to STEAM/.test(gradeFitMessage(G46, 'Journey to STEAM')), true);
+eq('falls back rather than printing a gap',
+  /get in touch/.test(gradeFitMessage(G46)), true);
+eq('no provider means no dangling "ask"',
+  /ask\s+if|ask\s*$/.test(gradeFitMessage(G46)), false);
+eq('a blank provider name is treated as absent',
+  gradeFitMessage(G46, '   '), gradeFitMessage(G46));
+eq('never says our own word for them at a parent',
+  /the provider\b/i.test(gradeFitMessage(G46)), false);
+
+eq('never renders the word null', /null/.test(gradeFitMessage(G46, null)), false);
+eq('never renders undefined', /undefined/.test(gradeFitMessage(G46, undefined)), false);
 // Promises nothing the code does not do, and points at no control.
 eq('promises no follow-up nobody performs',
   /we'll|we will|let (the|your) (teacher|provider|instructor) know|contact you/i.test(gradeFitMessage(G46)), false);
 eq('names no control', /below|above the button|grey button/i.test(gradeFitMessage(G46)), false);
+
+// The problem object carries the SAME sentence, with the same provider name, so
+// the box under the field and the refused-Continue message cannot drift.
+eq('the problem carries the provider-named sentence',
+  gradeFitProblem(G46, '2', 'Journey to STEAM')?.message,
+  gradeFitMessage(G46, 'Journey to STEAM'));
 
 console.log(`\n${fail ? 'FAILURES' : 'ALL PASS'}  (${pass} passed, ${fail} failed)`);
 process.exit(fail ? 1 : 0);

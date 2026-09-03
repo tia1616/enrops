@@ -21,6 +21,10 @@ export default function StepReview({
   onPromoClear,
   onTogglePaymentPlan,
   onAddAnotherChild,
+  // Named in the grade-gate sentence. Defaulted rather than required so this
+  // screen still renders if it is ever mounted without an org loaded - the
+  // message falls back to a generic phrasing instead of printing a blank.
+  orgName = '',
 }) {
   const [promoField, setPromoField] = useState(cart.promo?.code || '');
   const [validating, setValidating] = useState(false);
@@ -99,9 +103,9 @@ export default function StepReview({
                         already attached to the right child and the right class
                         without naming either. */}
                     {(() => {
-                      const problem = gradeFitProblem(programForLine(child, l), student?.grade);
+                      const problem = gradeFitProblem(programForLine(child, l), student?.grade, orgName);
                       return problem ? (
-                        <p role="status" className="mt-2 rounded-lg border-2 border-j2s-purple/20 bg-j2s-purple-soft/40 px-3 py-2 text-sm text-j2s-ink">
+                        <p role="alert" className="mt-2 rounded-lg border-2 border-j2s-orange-dark/30 bg-j2s-orange-dark/5 px-3 py-2 text-sm text-j2s-orange-dark">
                           {problem.message}
                         </p>
                       ) : null;
