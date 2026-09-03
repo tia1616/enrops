@@ -160,7 +160,7 @@ serve(async (req) => {
     const allProgramIds = [...new Set(flat.map((f) => f.program_id))];
     const { data: cartPrograms, error: pubErr } = await admin
       .from('programs')
-      .select('id, status, organization_id, runs_own_registration')
+      .select('id, status, organization_id, runs_own_registration, grade_min, grade_max, age_format')
       .in('id', allProgramIds);
     if (pubErr) throw new Error(`cart validation: ${pubErr.message}`);
     const byId = new Map((cartPrograms || []).map((p) => [p.id, p]));
@@ -176,6 +176,48 @@ serve(async (req) => {
     if (rejected.length) {
       console.warn('[create-registration] BLOCKED: cart holds programs that are not this org\'s, open and ours to sell', rejected);
       return json({ error: 'A class in your cart is no longer open for registration. Please refresh and try again.' }, 400);
+    }
+
+    // THE GRADE GATE, server side. Jessica made this a gate rather than a warning
+    // on 2026-09-03, and the browser half is not the gate - it is the courtesy.
+    // This endpoint is public: the same "a screen is not a gate" reasoning three
+    // paragraphs up applies here, and the Comms gate that shipped UI-only was
+    // bypassed from a browser console the same day.
+    //
+    // Deliberately mirrors src/lib/grades.js gradeFitProblem, and is silent in
+    // exactly the same four cases, because a server that refuses more than the
+    // form warned about is a family stopped with no explanation on screen:
+    //   - no grade stated (it is optional for lean orgs)
+    //   - the class states no grade range
+    //   - the class is age-based (age_format 'age' with ages actually set)
+    //   - the class's own range reads backwards, which is the operator's typo
+    //
+    // NOT applied to admin-import-program-roster. An operator adding a child by
+    // hand is the deliberate exception this gate assumes exists, and routing that
+    // decision to the person who knows their own class is the whole reason
+    // blocking the family here is safe.
+    const outOfRange = flat.filter((f) => {
+      const p = byId.get(f.program_id);
+      if (!p) return false;
+      const raw = children[f.child_index]?.student?.grade;
+      if (raw === '' || raw === null || raw === undefined) return false;
+      const g = Number(raw);
+      if (!Number.isFinite(g)) return false;
+      const lo = p.grade_min === null || p.grade_min === undefined ? null : Number(p.grade_min);
+      const hi = p.grade_max === null || p.grade_max === undefined ? null : Number(p.grade_max);
+      if (lo === null && hi === null) return false;
+      // age_format is the operator's stated answer, and only counts when the pair
+      // it names holds something - same rule audienceMode applies on the client.
+      if (p.age_format === 'age') return false;
+      if (lo !== null && hi !== null && lo > hi) return false;
+      return (lo !== null && g < lo) || (hi !== null && g > hi);
+    });
+    if (outOfRange.length) {
+      console.warn('[create-registration] BLOCKED: grade outside the class range',
+        outOfRange.map((f) => ({ program_id: f.program_id, child_index: f.child_index })));
+      return json({
+        error: "One of these classes is for a different grade than the child registering for it. Please check the grade, or ask the provider to add them.",
+      }, 400);
     }
 
     // CAPACITY. This function has never counted seats, so a full class could be

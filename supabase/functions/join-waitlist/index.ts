@@ -135,7 +135,7 @@ serve(async (req) => {
     // ---------------------------------------------------------------------
     const { data: prog, error: progErr } = await admin
       .from('programs')
-      .select('id, organization_id, status, runs_own_registration')
+      .select('id, organization_id, status, runs_own_registration, grade_min, grade_max, age_format')
       .eq('id', program_id)
       .maybeSingle();
     if (progErr) {
@@ -152,6 +152,33 @@ serve(async (req) => {
         program_id, org: org.id,
       });
       return json({ error: 'That class is not open for registration.' }, 400);
+    }
+
+    // THE GRADE GATE, at the other door. Same rule as create-registration, applied
+    // here because the waiting list leads back to it: waitlist-accept is read only,
+    // so accepting an offer goes through create-registration and WOULD be refused.
+    // Without this, an out-of-range family joins the queue, waits, is offered a
+    // seat, and is turned away at the end - and that offer is spent, so the seat
+    // sits idle instead of going to the next family in line.
+    //
+    // Silent in the same cases as everywhere else (no grade, no range, age-based
+    // class, backwards range), so this never refuses more than checkout would.
+    // `grade` is the one already parsed above - number or null, with K kept as 0
+    // rather than falsy-nulled. Re-parsing it here would be a second spelling of
+    // the same rule, which is how the two drift.
+    {
+      const g = grade;
+      const lo = prog.grade_min === null || prog.grade_min === undefined ? null : Number(prog.grade_min);
+      const hi = prog.grade_max === null || prog.grade_max === undefined ? null : Number(prog.grade_max);
+      const gradeShaped = prog.age_format !== 'age' && (lo !== null || hi !== null);
+      const backwards = lo !== null && hi !== null && lo > hi;
+      if (g !== null && Number.isFinite(g) && gradeShaped && !backwards
+          && ((lo !== null && g < lo) || (hi !== null && g > hi))) {
+        console.warn('[join-waitlist] BLOCKED: grade outside the class range', { program_id, grade: g, lo, hi });
+        return json({
+          error: "This class is for a different grade than the child joining the list. Please check the grade, or ask the provider to add them.",
+        }, 400);
+      }
     }
 
     // --- Parent: reuse by email, else create ---
