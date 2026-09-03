@@ -52,7 +52,8 @@ export default function EmailRosterModal({ camp, target: targetProp, orgId, onCl
   const [selected, setSelected] = useState(new Set()); // partner_contact ids
   const [includeLocationContact, setIncludeLocationContact] = useState(false);
   const [ccText, setCcText] = useState("");
-  const [subject, setSubject] = useState("");
+  // No `subject` state: the roster functions build the subject themselves and
+  // ignore anything sent, so holding one here would only ever be discarded.
   const [body, setBody] = useState("");
   const [emailFacts, setEmailFacts] = useState({ enrolledCount: 0, instructors: [] });
   // The enrolled child is a "camper" at camp and a "student" after school. One
@@ -151,8 +152,9 @@ export default function EmailRosterModal({ camp, target: targetProp, orgId, onCl
     setSelected(pre);
     setPhase("compose");
 
-    // Fetch defaults for Subject + Body from the edge function so the
-    // editable preview has accurate camper count / instructor info.
+    // Fetch the recipient list and the enrolled count / instructor info from the
+    // edge function. It used to be described as fetching the Subject too; the
+    // subject is the platform's and is no longer shown as an editable field.
     loadPreview(Array.from(pre));
   }
 
@@ -181,7 +183,12 @@ export default function EmailRosterModal({ camp, target: targetProp, orgId, onCl
       const json = await resp.json();
       if (resp.ok) {
         // Only pre-fill if the user hasn't started editing yet.
-        setSubject((cur) => cur || json.default_subject || "");
+        // NOTE: neither roster function's preview returns `default_body` today
+        // (email-program-roster :225-233, email-camp-roster :215-223), so this
+        // resolves to "" and the box opens empty. Left in place because it is
+        // the contract we want — the preview SHOULD hand back a starting draft
+        // — and it costs nothing while it does not. The dropped
+        // `default_subject` prefill went with the editable subject box.
         setBody((cur) => cur || json.default_body || "");
         // camper_count is the edge function's field name, kept for wire
         // compatibility; the noun the operator READS is decided above.
@@ -234,8 +241,14 @@ export default function EmailRosterModal({ camp, target: targetProp, orgId, onCl
             recipient_contact_ids: Array.from(selected),
             include_location_contact: includeLocationContact,
             cc: parseCcEmails(ccText),
-            subject: subject.trim() || undefined,
-            body: body || undefined,
+            // `message` is the key BOTH roster functions read for the operator's
+            // note (email-program-roster :55, email-camp-roster :48). This used
+            // to send it as `body`, which neither function reads — so every note
+            // an operator typed was silently discarded and the school got the
+            // default email while this screen reported success. Proved on prod:
+            // of the 12 roster emails ever sent, 4 by a person, ZERO carried a
+            // note. Jeff caught it 2026-09-03 by sending one to himself.
+            message: body || undefined,
             mode: "send",
           }),
         }
@@ -336,8 +349,6 @@ export default function EmailRosterModal({ camp, target: targetProp, orgId, onCl
             setIncludeLocationContact={setIncludeLocationContact}
             ccText={ccText}
             setCcText={setCcText}
-            subject={subject}
-            setSubject={setSubject}
             body={body}
             setBody={setBody}
             emailFacts={emailFacts}
@@ -476,7 +487,7 @@ function PickPartnerStep({ location, orgId, onLinked, onCancel }) {
   );
 }
 
-function ComposeStep({ enrolledNoun = "student", partner, location, operational, otherContacts, selected, toggle, includeLocationContact, setIncludeLocationContact, ccText, setCcText, subject, setSubject, body, setBody, emailFacts, previewLoading, selectedCount, onSend, onClose, onChangePartner }) {
+function ComposeStep({ enrolledNoun = "student", partner, location, operational, otherContacts, selected, toggle, includeLocationContact, setIncludeLocationContact, ccText, setCcText, body, setBody, emailFacts, previewLoading, selectedCount, onSend, onClose, onChangePartner }) {
   const [showOthers, setShowOthers] = useState(false);
   return (
     <div>
@@ -575,17 +586,39 @@ function ComposeStep({ enrolledNoun = "student", partner, location, operational,
           )}
         </div>
 
-        <label style={{ display: "block", marginBottom: 8 }}>
+        {/* THE SUBJECT IS THE PLATFORM'S, NOT THE OPERATOR'S. Jessica, 2026-09-03:
+            "lock the subject that's fine - no need to be editable."
+
+            This was an editable box whose value was thrown away: it POSTed
+            `subject`, which neither roster function reads, because each one
+            builds the subject itself from the class (email-program-roster :254,
+            email-camp-roster :252). So it was a control that could not work.
+
+            It is a STATEMENT, not a read-only copy of the subject line, on
+            purpose. Rendering the real text here would mean spelling that
+            template a second time in the front end, and the two would drift the
+            first time either side changed — the same one-rule-two-places defect
+            as the room label and the dismissal vocabulary. The function already
+            computes the true subject; showing it needs the PREVIEW to return it,
+            which is an edge deploy and is held behind the unreleased reply-to
+            work. That is the follow-on, and it is the only version worth
+            building. */}
+        <div style={{ marginBottom: 8 }}>
           <span style={{ fontSize: 11, fontWeight: 600, color: MUTED, display: "block", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>
             Subject
           </span>
-          <input
-            type="text"
-            value={subject}
-            onChange={(e) => setSubject(e.target.value)}
-            style={{ width: "100%", padding: "8px 12px", fontSize: 13, border: `1px solid ${RULE}`, borderRadius: 6, fontFamily: "inherit", boxSizing: "border-box" }}
-          />
-        </label>
+          {/* Deliberately does NOT enumerate what the subject contains. A first
+              draft said "it names the class, the schedule and the school" — but
+              the school half is conditional in both functions
+              (`subjectWhere ? ...`), and the camp subject carries dates rather
+              than a weekly schedule. Promising three things we only sometimes
+              deliver is the same class of lie as a preview that is not the real
+              email. Copy approved by Jessica 2026-09-03 ("copy is fine"), after
+              she confirmed a real send on staging arrived with its note. */}
+          <div style={{ fontSize: 12.5, color: MUTED, fontStyle: "italic" }}>
+            Set automatically from the class details.
+          </div>
+        </div>
 
         <label style={{ display: "block" }}>
           <span style={{ fontSize: 11, fontWeight: 600, color: MUTED, display: "block", marginBottom: 4, textTransform: "uppercase", letterSpacing: 0.5 }}>
