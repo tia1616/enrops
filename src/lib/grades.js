@@ -185,6 +185,93 @@ export function rangeBackwardsMessage(mode) {
   return `Put the ${mode === 'ages' ? 'younger age' : 'lower grade'} first.`;
 }
 
+// DOES THIS CHILD'S GRADE FIT THE CLASS? A GATE.
+//
+// 2026-08-25: a parent picked a class, filled the form, paid, and only afterwards
+// realised her son was below the range. The class carries grade_min/grade_max, the
+// form asks the grade, and nothing ever compared the two.
+//
+// IT WAS A WARNING FIRST, AND JESSICA CHANGED IT TO A GATE on 2026-09-03: "we
+// shouldn't allow people to register if they're not in the grade range. shouldn't
+// be a warning should be a gate." Recorded with the number she was told before
+// deciding, because it is the cost of the rule: measured on prod that day, 29 of
+// 414 live registrations were BELOW the class range - across 25 classes and BOTH
+// tenants, every one paid, every one off by exactly one grade, and not one
+// registration anywhere above the range. So this is not typos; families with a
+// slightly-young child were registering and both providers were keeping them.
+// A gate turns those away at checkout.
+//
+// WHAT MAKES THE GATE SAFE IS THAT THE PROVIDER STILL HAS A DOOR. Blocking the
+// family does not lose the registration: an operator can add the child from the
+// roster by hand, which runs through admin-import-program-roster and never
+// touches this rule. So the decision moves to the person who knows their own
+// exceptions, instead of the product guessing. The message says so rather than
+// leaving a family at a wall - this codebase has now removed three hard gates
+// that trapped somebody with no way past, and that is the pattern to avoid, not
+// gating itself.
+//
+// Returns null - meaning "let them through" - in every case where refusing would
+// be wrong. These matter more than the blocking cases now that this is a gate:
+// each false block is a paid registration turned away, and last term there were
+// 29 real ones riding on exactly these rules.
+//   - the grade is not filled in yet. Same rule as birthdateProblem: lighting the
+//     form up before the parent has answered teaches them to ignore it. It is also
+//     OPTIONAL for lean orgs, so an unanswered grade is a legitimate final state.
+//   - the class is age-based, or states no audience at all. audienceMode is the one
+//     place that decides which question a class answers; comparing a grade against
+//     the grade columns of an age-based class would quote a range the provider
+//     never stated.
+//   - the class's own range reads backwards (grade_max below grade_min). Every
+//     grade is "outside" a backwards range, so the gate would refuse EVERY family
+//     for what is the operator's typo - it would read as the class being broken.
+//     rangeBackwards already names that condition, and the operator meets it in
+//     their own editor.
+//
+// @returns {null | { code: 'below'|'above', message: string }}
+export function gradeFitProblem(program, grade, providerName) {
+  if (!program || isUnset(grade)) return null;
+  // defaultMode null: a class that states neither grades nor ages must not be
+  // treated as grade-shaped just because grades are the common case.
+  if (audienceMode(program, { defaultMode: null }) !== 'grades') return null;
+  if (rangeBackwards(program.grade_min, program.grade_max)) return null;
+
+  const g = Number(grade);
+  const lo = isUnset(program.grade_min) ? null : Number(program.grade_min);
+  const hi = isUnset(program.grade_max) ? null : Number(program.grade_max);
+
+  // Open-ended ranges check ONE side. "Grades 2+" has nothing to say about an
+  // upper bound, and inventing one would warn a 9th grader out of a class that
+  // deliberately left the top open.
+  let code = null;
+  if (lo != null && g < lo) code = 'below';
+  else if (hi != null && g > hi) code = 'above';
+  if (!code) return null;
+
+  return { code, message: gradeFitMessage(program, providerName) };
+}
+
+// The sentence, beside the rule that produces it - same reason
+// rangeBackwardsMessage lives here. Three surfaces show this now (the student
+// step, the advance guard beside the Continue button, and the review screen), and
+// the moment it is typed twice they start drifting.
+//
+// A GATE HAS TO NAME THE WAY OUT. The previous wording ended "you can still
+// register if that's right for your child", which was true of a warning and is a
+// lie about a gate. What replaces it is not "sorry": it is the two things the
+// family can actually do - pick a class that fits, or ask the provider, who can
+// add them by hand. A blocked family with no next step is the exact pattern that
+// cost this platform a registration on 24 Aug and has been removed three times.
+//
+// The provider is named when the caller knows the name, because "contact the
+// provider" is our word for them, not a parent's. It falls back rather than
+// printing an empty gap, and stays out of this module's own knowledge - the same
+// reason referral.js takes the org name rather than importing a tenant.
+export function gradeFitMessage(program, providerName) {
+  const who = (providerName || '').trim();
+  const ask = who ? `ask ${who}` : 'get in touch';
+  return `This class is for ${audienceLabel(program)}. Choose a class that matches your child's grade, or ${ask} if they should be in this one.`;
+}
+
 // THE ONLY PLACE THAT DECIDES WHICH COLUMNS AN AUDIENCE EDIT WRITES.
 //
 // Returns the complete five-column patch, so a caller cannot express "both" even by
@@ -217,8 +304,11 @@ export function audiencePatch(mode, { gradeMin, gradeMax, ageMin, ageMax } = {})
   };
 }
 
-// TRACKED, not done here: repoint CurriculumReview, CurriculaList,
-// AfterschoolSchedule and StepStudent at this module. StepStudent is the parent
-// registration form and only offers K-6, so a class set to grade 7+ cannot be
-// matched by any parent - a real bug, but it is on the money path and wants its
-// own verified change rather than riding along with a builder field.
+// TRACKED, not done here: repoint CurriculumReview, CurriculaList and
+// AfterschoolSchedule at this module.
+//
+// StepStudent IS DONE and is off this list. It reads GRADE_OPTIONS_LONG, so the
+// parent form offers K-12 and a class set to grade 7+ is reachable at checkout;
+// verified rendering all thirteen grades on staging 2026-09-02. The note here
+// still described the old K-6 list long after it was replaced, which is the kind
+// of claim that sends somebody to fix a bug that is already fixed.

@@ -2,6 +2,11 @@ import React, { useState } from 'react';
 import { formatMoney, INSTALLMENT_MIN_CENTS } from '../../../lib/pricing.js';
 import { programScheduleSummary, formatStartDate, formatDayLabel } from '../../../lib/programSchedule.js';
 import { dismissalSummary } from '../../../lib/dismissal.js';
+import { gradeFitProblem } from '../../../lib/grades.js';
+// The cart -> program join, shared with StepStudent so the form and the last screen
+// before the card cannot disagree about which class a warning is about. It lived
+// here as a local function first, which is exactly how the two screens drifted.
+import { programForLine } from '../../../lib/cartPrograms.js';
 
 // Was the fifth copy of this map. Now src/lib/dismissal.js. Review shows the
 // same summary the roster will, provider name included, so what the parent
@@ -16,6 +21,10 @@ export default function StepReview({
   onPromoClear,
   onTogglePaymentPlan,
   onAddAnotherChild,
+  // Named in the grade-gate sentence. Defaulted rather than required so this
+  // screen still renders if it is ever mounted without an org loaded - the
+  // message falls back to a generic phrasing instead of printing a blank.
+  orgName = '',
 }) {
   const [promoField, setPromoField] = useState(cart.promo?.code || '');
   const [validating, setValidating] = useState(false);
@@ -83,6 +92,24 @@ export default function StepReview({
                       Child {l.child_index + 1}
                       {student?.first_name && `: ${student.first_name} ${student.last_name}`}
                     </p>
+                    {/* THE LAST SCREEN BEFORE THE CARD, which is the whole point.
+                        The 25 Aug parent saw the class, filled the form and paid,
+                        and only afterwards worked out her son was below the range.
+                        Repeating it here is not redundancy - the student step is
+                        several screens back, and this is the last moment the
+                        information can still change her mind for free.
+
+                        Sits on the LINE, so in a cart with two children it is
+                        already attached to the right child and the right class
+                        without naming either. */}
+                    {(() => {
+                      const problem = gradeFitProblem(programForLine(child, l), student?.grade, orgName);
+                      return problem ? (
+                        <p role="alert" className="mt-2 rounded-lg border-2 border-j2s-orange-dark/30 bg-j2s-orange-dark/5 px-3 py-2 text-sm text-j2s-orange-dark">
+                          {problem.message}
+                        </p>
+                      ) : null;
+                    })()}
                     {l.sibling_discount_cents > 0 && (
                       <p className="mt-1 text-xs font-semibold text-j2s-purple">
                         Sibling discount: -{formatMoney(l.sibling_discount_cents)}

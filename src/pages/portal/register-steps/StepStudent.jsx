@@ -1,6 +1,7 @@
 import React from 'react';
 import { PickupDismissalSection, CustomQuestionsSection, hasPickupSection } from './RegExtraFields.jsx';
-import { GRADE_OPTIONS_LONG } from '../../../lib/grades.js';
+import { GRADE_OPTIONS_LONG, gradeFitProblem } from '../../../lib/grades.js';
+import { programsForChild } from '../../../lib/cartPrograms.js';
 import { needsAftercareProvider } from '../../../lib/dismissal.js';
 // The referral answers, incl. the tenant-derived "<provider> email" option, live
 // in src/lib/referral.js so no tenant's channel can be written into this file
@@ -21,6 +22,31 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
   const { std = {}, custom = [] } = regFields;
   const referrals = referralOptions(orgName);
   const dobProblem = birthdateProblem(student.birthdate);
+  // EVERY class this child is actually buying, VIP bundle legs included.
+  //
+  // Read through programsForChild rather than `item.program`: a VIP bundle is ONE
+  // item holding three term rows, and reading the item's own program would check
+  // only the Fall leg. StepReview matches per line and so would have caught a
+  // Winter-only mismatch this screen had said nothing about - the form and the last
+  // screen before the card disagreeing about the same child. One join, one answer,
+  // and it has tests in src/lib/cartPrograms.test.mjs because neither screen can be
+  // imported by the test runner.
+  //
+  // Deduped by message: the three legs of a bundle share a grade range, so without
+  // this a VIP family would get the same sentence three times under one dropdown,
+  // which reads as a bug rather than as emphasis.
+  //
+  // This step renders ONE child at a time, so the message needs no name to be
+  // unambiguous about who it is about.
+  //
+  // Same call the advance guard makes, with the same provider name, so the box
+  // under the field and the sentence beside the refused Continue press are the
+  // same string rather than two that can drift.
+  const gradeWarnings = [...new Set(
+    programsForChild(child)
+      .map((program) => gradeFitProblem(program, student.grade, orgName)?.message)
+      .filter(Boolean),
+  )];
   return (
     <div>
       <h1 className="font-titan text-3xl text-j2s-ink sm:text-4xl">
@@ -83,6 +109,14 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
             className="input-field"
             value={student.grade}
             onChange={(e) => onUpdate({ grade: e.target.value })}
+            aria-invalid={gradeWarnings.length ? 'true' : undefined}
+            // Every message, space-separated, not just the first. A VIP bundle
+            // whose terms carry different ranges renders more than one box, and
+            // aria-describedby naming a single id would read one of them out and
+            // silently drop the rest.
+            aria-describedby={gradeWarnings.length
+              ? gradeWarnings.map((_, i) => `student-grade-problem-${childIndex}-${i}`).join(' ')
+              : undefined}
           >
             <option value="">Select&hellip;</option>
             {GRADE_OPTIONS.map((g) => (
@@ -91,6 +125,29 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
               </option>
             ))}
           </select>
+          {/* THIS BLOCKS, so it wears the blocking colours. It was purple-soft
+              while it was only a warning; Jessica made it a gate on 2026-09-03
+              and the styling had to follow, because a box that stops a family
+              must not look like the same box that does not. It is now the exact
+              orange treatment the birth-date problem uses two fields below, which
+              is the palette this form already uses for "you cannot go on".
+
+              role="alert" and aria-invalid, both upgraded from the warning
+              version for the same reason: the value now IS refused, and a screen
+              reader that says otherwise would contradict the Continue button. */}
+          {gradeWarnings.map((message, i) => (
+            <div
+              key={message}
+              // Indexed, because more than one of these can render and a repeated
+              // id is invalid HTML that resolves to the first match - the same
+              // trap RegExtraFields already documents for its per-child inputs.
+              id={`student-grade-problem-${childIndex}-${i}`}
+              role="alert"
+              className="mt-2 rounded-lg border-2 border-j2s-orange-dark/30 bg-j2s-orange-dark/5 px-4 py-3 text-sm text-j2s-orange-dark"
+            >
+              {message}
+            </div>
+          ))}
         </div>
         <div data-reg-field="student_birthdate">
           <label className="label-field" htmlFor={`student-birthdate-${childIndex}`}>Birth date *</label>

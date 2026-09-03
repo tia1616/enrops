@@ -318,5 +318,102 @@ focusOf('the second guardian points at its section', step1({ regFields: g2Req })
 focusOf('waivers point at the first unsigned form', step2({}), 'waiver:w2');
 focusOf('waivers skip one already agreed', step2({ w2: { agreed: true } }), 'waiver:w3');
 
+// --- step 0: THE GRADE GATE ---------------------------------------------------
+// Jessica, 2026-09-03: "we shouldn't allow people to register if they're not in
+// the grade range. shouldn't be a warning should be a gate." It was a warning
+// first, so these tests are what stop it quietly becoming one again.
+//
+// The measured cost of the rule, on prod the day it was decided: 29 of 414 live
+// registrations were below the class range, every one paid, across 25 classes and
+// both tenants. That is why the SILENT cases below matter as much as the blocking
+// ones - each false block is a paid registration turned away.
+const G25 = { id: 'p1', grade_min: 2, grade_max: 5, age_format: 'grade' };
+const withClass = (grade, program = G25) => step0({
+  isLean: false,
+  orgName: 'Journey to STEAM',
+  activeChild: { student: { ...goodStudent, grade }, items: [{ program }] },
+});
+
+blocked('a kindergartener is stopped from a Grades 2-5 class', withClass('0'), 'Grades 2–5');
+blocked('a 6th grader is stopped from a Grades 2-5 class', withClass('6'), 'Grades 2–5');
+focusOf('the gate points at the grade field', withClass('0'), 'student_grade');
+// It must tell them what to do, not merely refuse.
+blocked('the gate names the provider to ask', withClass('0'), 'Journey to STEAM');
+blocked('the gate offers a class that fits', withClass('0'), 'Choose a class');
+
+clear('inside the range advances', withClass('3'));
+clear('the lower edge advances', withClass('2'));
+clear('the upper edge advances', withClass('5'));
+
+// THE FALSE-BLOCK CASES. Every one of these is a real registration that must
+// still go through.
+clear('an age-based class does not gate on grade',
+  withClass('0', { id: 'p2', age_min: 5, age_max: 12, age_format: 'age', grade_min: null, grade_max: null }));
+clear('a class stating no range does not gate', withClass('0', { id: 'p3' }));
+clear('a backwards range is the operator typo, not the family\'s problem',
+  withClass('3', { id: 'p4', grade_min: 5, grade_max: 2, age_format: 'grade' }));
+clear('an open top does not invent an upper bound',
+  withClass('11', { id: 'p5', grade_min: 2, grade_max: null, age_format: 'grade' }));
+clear('an open bottom does not invent a lower bound',
+  withClass('0', { id: 'p6', grade_min: null, grade_max: 6, age_format: 'grade' }));
+// A lean org leaves grade optional. An unanswered grade cannot be compared, and
+// blocking on it would be a wall with nothing to fix.
+clear('a lean org with no grade answer is not gated', step0({
+  orgName: 'Cascade', activeChild: { student: { ...goodStudent, grade: '' }, items: [{ program: G25 }] },
+}));
+// A cart with no items at all - the state before a program is chosen.
+clear('no items means nothing to compare', step0({ isLean: false, activeChild: { student: { ...goodStudent, grade: '0' } } }));
+
+// A VIP bundle is ONE item holding three term rows. Reading item.program alone
+// would check only Fall, which is the bug self-review caught in the warning.
+const bundleChild = (grade) => step0({
+  isLean: false, orgName: 'Journey to STEAM',
+  activeChild: {
+    student: { ...goodStudent, grade },
+    items: [{
+      isVip: true,
+      program: { id: 'f', grade_min: 0, grade_max: 8, age_format: 'grade' },
+      vipBundle: {
+        fall: { id: 'f', grade_min: 0, grade_max: 8, age_format: 'grade' },
+        winter: { id: 'w', grade_min: 2, grade_max: 5, age_format: 'grade' },
+        spring: { id: 's', grade_min: 0, grade_max: 8, age_format: 'grade' },
+      },
+    }],
+  },
+});
+blocked('a VIP bundle is gated on its WINTER leg, not just Fall', bundleChild('6'), 'Grades 2–5');
+clear('a VIP bundle whose every leg fits advances', bundleChild('3'));
+
+// --- step 3: the last press before the card -----------------------------------
+// Step 0 already refuses, so this only fires on a restored cart - which is
+// exactly the case worth catching, because the next press takes money.
+const review = (grade) => ({
+  step: 3, isLean: false, orgName: 'Journey to STEAM', regFields: { std: {}, custom: [] }, conflicts: [],
+  activeChild: { student: { ...goodStudent, grade }, items: [{ program: G25 }] },
+});
+blocked('review refuses an out-of-range grade', review('0'), 'Grades 2–5');
+clear('review passes a grade that fits', review('3'));
+
+// EVERY CHILD, not just the active one. One press pays for the whole cart, and
+// checking only the active child let the button through while the review lines
+// were already drawing a red box for the sibling - the server then refused the
+// press in its own words, which is being told at the very end.
+const twoKids = (activeGrade, otherGrade) => ({
+  step: 3, isLean: false, orgName: 'Journey to STEAM',
+  regFields: { std: {}, custom: [] }, conflicts: [],
+  activeChild: { student: { ...goodStudent, grade: activeGrade }, items: [{ program: G25 }] },
+  children: [
+    { student: { ...goodStudent, grade: activeGrade }, items: [{ program: G25 }] },
+    { student: { ...goodStudent, grade: otherGrade }, items: [{ program: G25 }] },
+  ],
+});
+blocked('review refuses when a NON-active child is out of range', twoKids('3', '0'), 'Grades 2–5');
+clear('review passes when every child fits', twoKids('3', '4'));
+// The guard must never get weaker than it was when no cart is passed.
+blocked('with no cart it still checks the active child', review('0'), 'Grades 2–5');
+// Not 'student_grade': that field is three screens back and not in this DOM, so
+// naming it would scroll to nothing.
+focusOf('review names no field to scroll to', review('0'), '');
+
 console.log(`\nregisterAdvance: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
