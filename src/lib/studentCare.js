@@ -261,6 +261,30 @@ export function careRpcArgs({ studentId, organizationId, data }) {
 // for student <uuid>' and 'student <uuid> not in organization <uuid>' both put
 // raw ids on screen, so they fall through to the generic line.
 //
+// ATTENDANCE IS CHECKED FIRST, AND THAT ORDER IS LOAD-BEARING. The attendance
+// trigger raises two of its own, and one of them contains the exact phrase
+// 'do-not-release list' - so under the old order it hit the pass-through branch
+// above and printed a raw STUDENT UUID to a parent. Any `attendance_records:`
+// message is handled here or falls to the generic line; none is ever returned
+// raw. (Found 2026-09-03 while diagnosing the save that Seth Ring could not
+// complete. His screen said "Sorry, that didn't save. Please try again." for a
+// failure that could never succeed - the release record for his child named a
+// guardian, and replacing the contact rows nulled the pointer to her, which
+// re-ran the trigger. The one fact that made it actionable was thrown away at
+// the last step.)
+//
+// The NAME is kept for the same reason the pickup conflict keeps it: it is the
+// only detail that makes the sentence actionable. The uuid beside it is not.
+//
+// BOTH SENTENCES DESCRIBE THE CONFLICT AND ASSERT NOTHING ABOUT WHO IS ON FILE,
+// and Seth's own case is why. A first draft said "that name is not on file as a
+// parent or guardian" - which is what the trigger checked, and was FALSE on his
+// screen: Amy Burke WAS his guardian. She only failed the check for the instant
+// mid-transaction when the replace had deleted her row and not yet re-inserted
+// it. Copy may only assert what the state selecting it actually proves (gate
+// xii), and "you cannot remove this person" fails the same way - the save that
+// fires this removed nobody. So they name the record, not a verdict.
+//
 // Matched on the distinctive phrase, not on a common word. An earlier draft
 // tested `includes('both')`, which is a PROXY for this error rather than the
 // error itself - it would have relabelled any unrelated failure whose message
@@ -270,9 +294,45 @@ export function careRpcArgs({ studentId, organizationId, data }) {
 // parent "Sorry, that didn't save" - about a screen that had not tried to save
 // anything - which reads as though their data was lost. Defaulted to 'save' so
 // every existing caller is unchanged.
+
+// The adult's name out of an attendance raise, which carries it double-quoted.
+// Returns '' when there is nothing quoted, so the caller falls back to a
+// sentence that does not pretend to name anybody. Matched non-greedily and on
+// the FIRST quoted run: both raises quote exactly one name, and a greedy match
+// would swallow everything up to a later quote if the format ever grows one.
+// Read off the ORIGINAL string, not the lower-cased copy, so the name keeps the
+// capitalisation the family typed.
+function quotedName(raw) {
+  const found = /"([^"]+)"/.exec(raw);
+  return found ? found[1].trim() : '';
+}
+
+// One sentence, one place. It ends all four attendance sentences, and four
+// copies would drift the first time one of them is reworded.
+const FIX_THE_RECORD = 'That release record has to be sorted out before this will save.';
+
 export function careSaveMessage(error, { action = 'save' } = {}) {
   const raw = (error && (error.message || String(error))) || '';
   const m = raw.toLowerCase();
+  // FIRST, and never `return raw` - see the header. Anything from this trigger
+  // that is not one of the two known sentences falls through to the generic
+  // line rather than leaking whatever ids it carries.
+  if (m.includes('attendance_records:')) {
+    const who = quotedName(raw);
+    if (m.includes('is on the do-not-release list')) {
+      return who
+        ? `That didn't save. "${who}" is on the do-not-release list, and an attendance record for this child names them as the adult who collected them. ${FIX_THE_RECORD}`
+        : `That didn't save. Someone on the do-not-release list is named on an attendance record as the adult who collected this child. ${FIX_THE_RECORD}`;
+    }
+    if (m.includes('is not the account parent or a guardian')) {
+      return who
+        ? `That didn't save. It conflicts with an attendance record for this child, which names "${who}" as the adult who collected them. ${FIX_THE_RECORD}`
+        : `That didn't save. It conflicts with an attendance record for this child, naming the adult who collected them. ${FIX_THE_RECORD}`;
+    }
+    return action === 'load'
+      ? "Sorry, we couldn't load that. Please try again."
+      : "Sorry, that didn't save, so nothing changed. Tell us if it keeps happening.";
+  }
   if (m.includes('do-not-release list')) return raw;
   if (m.includes('which aftercare program')) return raw;
   if (m.includes('not authorized') || m.includes('permission denied')) {
