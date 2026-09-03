@@ -402,6 +402,8 @@ export default function Register() {
     // rather than reading our internal word for them. Falls back to a generic
     // phrasing when the org has not loaded yet.
     orgName: org?.name || '',
+    // Read only on the review step, where one press pays for every child.
+    children: cart.children,
   });
 
   // Has this step had a Continue press REFUSED? Continue stays enabled and the

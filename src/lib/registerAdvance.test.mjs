@@ -393,6 +393,24 @@ const review = (grade) => ({
 });
 blocked('review refuses an out-of-range grade', review('0'), 'Grades 2–5');
 clear('review passes a grade that fits', review('3'));
+
+// EVERY CHILD, not just the active one. One press pays for the whole cart, and
+// checking only the active child let the button through while the review lines
+// were already drawing a red box for the sibling - the server then refused the
+// press in its own words, which is being told at the very end.
+const twoKids = (activeGrade, otherGrade) => ({
+  step: 3, isLean: false, orgName: 'Journey to STEAM',
+  regFields: { std: {}, custom: [] }, conflicts: [],
+  activeChild: { student: { ...goodStudent, grade: activeGrade }, items: [{ program: G25 }] },
+  children: [
+    { student: { ...goodStudent, grade: activeGrade }, items: [{ program: G25 }] },
+    { student: { ...goodStudent, grade: otherGrade }, items: [{ program: G25 }] },
+  ],
+});
+blocked('review refuses when a NON-active child is out of range', twoKids('3', '0'), 'Grades 2–5');
+clear('review passes when every child fits', twoKids('3', '4'));
+// The guard must never get weaker than it was when no cart is passed.
+blocked('with no cart it still checks the active child', review('0'), 'Grades 2–5');
 // Not 'student_grade': that field is three screens back and not in this DOM, so
 // naming it would scroll to nothing.
 focusOf('review names no field to scroll to', review('0'), '');

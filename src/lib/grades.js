@@ -210,8 +210,10 @@ export function rangeBackwardsMessage(mode) {
 // that trapped somebody with no way past, and that is the pattern to avoid, not
 // gating itself.
 //
-// Returns null - meaning "say nothing" - in every case where a warning would be
-// noise or a lie:
+// Returns null - meaning "let them through" - in every case where refusing would
+// be wrong. These matter more than the blocking cases now that this is a gate:
+// each false block is a paid registration turned away, and last term there were
+// 29 real ones riding on exactly these rules.
 //   - the grade is not filled in yet. Same rule as birthdateProblem: lighting the
 //     form up before the parent has answered teaches them to ignore it. It is also
 //     OPTIONAL for lean orgs, so an unanswered grade is a legitimate final state.
@@ -220,9 +222,10 @@ export function rangeBackwardsMessage(mode) {
 //     the grade columns of an age-based class would quote a range the provider
 //     never stated.
 //   - the class's own range reads backwards (grade_max below grade_min). Every
-//     grade is "outside" a backwards range, so the warning would fire at every
-//     family for what is the operator's typo. rangeBackwards already names that
-//     condition, and the operator meets it in their own editor.
+//     grade is "outside" a backwards range, so the gate would refuse EVERY family
+//     for what is the operator's typo - it would read as the class being broken.
+//     rangeBackwards already names that condition, and the operator meets it in
+//     their own editor.
 //
 // @returns {null | { code: 'below'|'above', message: string }}
 export function gradeFitProblem(program, grade, providerName) {

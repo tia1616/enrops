@@ -102,6 +102,10 @@ export function advanceProblem({
   waivers,
   conflicts,
   orgName,
+  // The whole cart, for the review step only. Optional: every other step is about
+  // the child in front of the parent, and passing it is what lets the last press
+  // before the card speak for all of them.
+  children,
 } = {}) {
   const std = regFields?.std || {};
   const child = activeChild || {};
@@ -234,9 +238,21 @@ export function advanceProblem({
       // Empty focus, not 'student_grade': that field is three screens back and
       // not in the DOM here, so naming it would scroll to nothing. The message
       // still says which class and what to do.
+      //
+      // EVERY CHILD, not just the active one. Step 0 gates each child as they are
+      // filled in, but this screen pays for the whole cart at once - and the
+      // review lines already draw a red box for every affected child. Checking
+      // only the active child let the button through while the screen showed the
+      // refusal, and the server then refused the press in its own words. Falls
+      // back to the active child when the caller passes no cart, so the guard
+      // never gets quietly weaker than it was.
       {
-        const late = gradeGate(child, orgName);
-        return late ? stop('', late.message) : null;
+        const all = Array.isArray(children) && children.length ? children : [child];
+        for (const c of all) {
+          const late = gradeGate(c, orgName);
+          if (late) return stop('', late.message);
+        }
+        return null;
       }
     default:
       // Unreachable while Continue only renders for steps 0-3, but a reason

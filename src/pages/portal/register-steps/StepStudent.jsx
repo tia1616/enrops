@@ -110,7 +110,13 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
             value={student.grade}
             onChange={(e) => onUpdate({ grade: e.target.value })}
             aria-invalid={gradeWarnings.length ? 'true' : undefined}
-            aria-describedby={gradeWarnings.length ? `student-grade-problem-${childIndex}` : undefined}
+            // Every message, space-separated, not just the first. A VIP bundle
+            // whose terms carry different ranges renders more than one box, and
+            // aria-describedby naming a single id would read one of them out and
+            // silently drop the rest.
+            aria-describedby={gradeWarnings.length
+              ? gradeWarnings.map((_, i) => `student-grade-problem-${childIndex}-${i}`).join(' ')
+              : undefined}
           >
             <option value="">Select&hellip;</option>
             {GRADE_OPTIONS.map((g) => (
@@ -129,10 +135,13 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
               role="alert" and aria-invalid, both upgraded from the warning
               version for the same reason: the value now IS refused, and a screen
               reader that says otherwise would contradict the Continue button. */}
-          {gradeWarnings.map((message) => (
+          {gradeWarnings.map((message, i) => (
             <div
               key={message}
-              id={`student-grade-problem-${childIndex}`}
+              // Indexed, because more than one of these can render and a repeated
+              // id is invalid HTML that resolves to the first match - the same
+              // trap RegExtraFields already documents for its per-child inputs.
+              id={`student-grade-problem-${childIndex}-${i}`}
               role="alert"
               className="mt-2 rounded-lg border-2 border-j2s-orange-dark/30 bg-j2s-orange-dark/5 px-4 py-3 text-sm text-j2s-orange-dark"
             >
