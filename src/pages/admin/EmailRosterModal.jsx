@@ -613,7 +613,8 @@ function ComposeStep({ enrolledNoun = "student", partner, location, operational,
               (`subjectWhere ? ...`), and the camp subject carries dates rather
               than a weekly schedule. Promising three things we only sometimes
               deliver is the same class of lie as a preview that is not the real
-              email. COPY NOT YET APPROVED BY JESSICA. */}
+              email. Copy approved by Jessica 2026-09-03 ("copy is fine"), after
+              she confirmed a real send on staging arrived with its note. */}
           <div style={{ fontSize: 12.5, color: MUTED, fontStyle: "italic" }}>
             Set automatically from the class details.
           </div>
