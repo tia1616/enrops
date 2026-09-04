@@ -215,8 +215,15 @@ export function rangeBackwardsMessage(mode) {
 // each false block is a paid registration turned away, and last term there were
 // 29 real ones riding on exactly these rules.
 //   - the grade is not filled in yet. Same rule as birthdateProblem: lighting the
-//     form up before the parent has answered teaches them to ignore it. It is also
-//     OPTIONAL for lean orgs, so an unanswered grade is a legitimate final state.
+//     form up before the parent has answered teaches them to ignore it. Since
+//     2026-09-04 the registration form requires a grade of every org, so an
+//     unanswered one is no longer a legitimate FINAL state there - but this
+//     function must still stay silent on it, because "you have not answered yet"
+//     and "your answer does not fit this class" are two different sentences and
+//     registerAdvance.js says the first one. The other three callers (the review
+//     screen, the student step's inline box, and create-registration) can all be
+//     handed a blank from a cart restored from an earlier session, and none of
+//     them should read a blank as a mismatch.
 //   - the class is age-based, or states no audience at all. audienceMode is the one
 //     place that decides which question a class answers; comparing a grade against
 //     the grade columns of an age-based class would quote a range the provider

@@ -89,20 +89,25 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
             grade range on a class, so a roster with no grade on it is a gap for
             exactly the operators who just gained the field.
 
-            Required only where it always was (full-nav orgs, enforced in
-            Register.jsx). For lean orgs it is OPTIONAL: /j2s/register is not the
-            only live checkout any more, and adding a NEW blocking field to a
-            working payment path is not something to do in the same pass that
-            introduces the question. The asterisk follows the real rule rather than
-            being decorative. */}
+            REQUIRED OF EVERY FAMILY as of 2026-09-04. It was optional for lean orgs
+            for four weeks, on the reasoning that adding a new blocking field to a
+            working payment path should not happen in the same pass that introduces
+            the question. That pass is long over, and the measurement it was waiting
+            for came back: of the 128 children the Ukulele Project took after the
+            field went live, 3 came through with no grade, and the 8 from before it
+            existed have none either. An optional field on a checkout is answered by
+            most and skipped by some, and "some" is the roster gap the provider then
+            has to chase by hand. Enforced in registerAdvance.js, which now applies
+            the same rule to every org - founding-plan tenants included, since those
+            are lean too.
+
+            The asterisk follows the real rule rather than being decorative, so it
+            is unconditional now that the rule is. */}
         <div data-reg-field="student_grade">
-          {/* "(optional)" spelled out rather than just dropping the asterisk. Every
-              sibling field here is starred, so an unmarked one reads as a mistake
-              and a parent skips it - which defeats the point of asking. htmlFor/id
-              because the label was naming nothing: a screen reader announced this
-              only as "Select...". */}
+          {/* htmlFor/id because the label was naming nothing: a screen reader
+              announced this only as "Select...". */}
           <label className="label-field" htmlFor={`student-grade-${childIndex}`}>
-            Grade{lean ? " (optional)" : " *"}
+            Grade *
           </label>
           <select
             id={`student-grade-${childIndex}`}
@@ -199,11 +204,13 @@ export default function StepStudent({ student, onUpdate, childIndex, regFields =
             instructors collecting a class from classrooms had nothing to go on
             for a third of the roster.
 
-            The asterisk follows the REAL rule and is enforced in Register.jsx -
-            the same pair as Grade above. "(optional)" is spelled out rather than
-            left blank for exactly the reason the grade field spells it out: every
+            The asterisk follows the REAL rule and is enforced in
+            registerAdvance.js - the same pair as Grade above, though Grade's rule
+            stopped varying on 2026-09-04 and its label is now unconditional.
+            "(optional)" is spelled out rather than left blank because every
             sibling field here is starred, so an unmarked one reads as a mistake
-            and a parent skips it. */}
+            and a parent skips it - which is what the grade field's label said
+            while it still had an optional half. */}
         {std.homeroom_teacher && (
           <div data-reg-field="student_homeroom">
             <label className="label-field" htmlFor={`student-homeroom-${childIndex}`}>

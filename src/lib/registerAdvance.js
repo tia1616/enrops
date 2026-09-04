@@ -45,7 +45,7 @@
 import { needsAuthorizedPickup, dismissalAnswerIncomplete } from './dismissal.js';
 import { birthdateProblem } from './studentBirthdate.js';
 import { namedContacts } from './registrationFields.js';
-import { gradeFitProblem } from './grades.js';
+import { gradeFitProblem, isUnset } from './grades.js';
 import { programsForChild } from './cartPrograms.js';
 
 // The grade gate, in one place so step 0 and step 3 cannot disagree about it.
@@ -95,7 +95,10 @@ function stop(focus, message) {
  */
 export function advanceProblem({
   step,
-  isLean,
+  // `isLean` used to live here and decided whether grade was required. It stopped
+  // deciding anything on 2026-09-04 and is gone rather than left to rot: an
+  // accepted-but-ignored option is the shape that lets a caller believe it is
+  // still steering something. Callers that still pass it are harmless.
   activeChild,
   parent,
   regFields,
@@ -113,18 +116,29 @@ export function advanceProblem({
   switch (step) {
     case 0: {
       const s = child.student || {};
-      // These truthiness checks are deliberately IDENTICAL to the ones that used
-      // to gate the button - including `s.grade !== ''` letting undefined
-      // through. Tightening one of them here would newly block a family who can
-      // submit today, which is a different change from telling them why they are
-      // blocked, and this one is not that change.
       if (!s.first_name) return stop('student_first_name', "Add your child's first name.");
       if (!s.last_name) return stop('student_last_name', "Add your child's last name.");
-      if (!isLean && s.grade === '') return stop('student_grade', "Choose your child's grade.");
+      // EVERY ORG, not just the legacy one. Jessica, 2026-09-04, after 11 of the
+      // Ukulele Project's 136 children turned out to have no grade on them: "make
+      // grade required for lean orgs too and founders". Founding-plan tenants are
+      // already lean (platform_plan and instructor_pay_model are different
+      // columns, and every non-legacy org on prod is enrops_platform), so one
+      // rule covers both - which is the point. No `isLean` here any more.
+      //
+      // `isUnset` rather than the old `s.grade === ''`, because that comparison
+      // was written when the check only ran for full-nav orgs and it let two
+      // values past that mean exactly the same thing to a parent: a `grade` key
+      // that is absent (a child hydrated from a row saved before the field
+      // existed - which is precisely Jeff's eleven) and an explicit null. It is
+      // the same function `gradeFitProblem` uses to decide "not stated", so the
+      // required-check and the range-check cannot disagree about what an
+      // unanswered grade is. It says NO to "" / null / undefined and YES to
+      // Kindergarten, which is the string "0" here and the number 0 off the
+      // database - the one value a truthiness test would have wrongly refused.
+      if (isUnset(s.grade)) return stop('student_grade', "Choose your child's grade.");
       // Homeroom is a CONFIGURED question as of 2026-08-31, not a lean-vs-legacy
-      // one - see StepStudent.jsx. The guard now reads the same flag the label's
-      // asterisk reads, so the two cannot disagree; `isLean` still decides grade
-      // above, which is a different question and stays as it was.
+      // one - see StepStudent.jsx. The guard reads the same flag the label's
+      // asterisk reads, so the two cannot disagree.
       if (std.homeroom_teacher?.required && !(s.homeroom_teacher || '').trim()) {
         return stop('student_homeroom', "Add your child's homeroom teacher.");
       }
@@ -249,6 +263,31 @@ export function advanceProblem({
       {
         const all = Array.isArray(children) && children.length ? children : [child];
         for (const c of all) {
+          // A BLANK GRADE IS NOW A REFUSAL HERE TOO, and it is the case this
+          // screen is most likely to meet: until 2026-09-04 an empty grade was a
+          // legitimate saved state for a lean org, so a cart left in progress
+          // before that date restores into a wizard whose step 0 would now stop
+          // it - and the whole reason case 3 re-checks is that a restored cart
+          // can arrive here without step 0 running again. gradeGate is silent on
+          // a blank by design (it answers "does this fit", not "did you
+          // answer"), so the required-check has to be stated separately.
+          //
+          // ONLY A CHILD WHO IS ACTUALLY BUYING SOMETHING, which is the same set
+          // gradeGate walks. `cart.children` can hold a row with no items - a
+          // second child part-way through being added - and that row produces no
+          // registration and therefore no gradeless roster line. Refusing on it
+          // would wall the parent at the money press over a child they are not
+          // paying for, which is the trap this file has now removed three times.
+          //
+          // Named child, because this screen shows the whole cart and "your
+          // child" would not say which row to go back and fix.
+          const s = c?.student || {};
+          if (programsForChild(c).length > 0 && isUnset(s.grade)) {
+            const who = (s.first_name || '').trim();
+            return stop('', who
+              ? `Go back to the first step and choose ${who}'s grade.`
+              : "Go back to the first step and choose your child's grade.");
+          }
           const late = gradeGate(c, orgName);
           if (late) return stop('', late.message);
         }

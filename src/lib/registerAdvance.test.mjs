@@ -34,10 +34,17 @@ function blocked(name, state, contains) {
 function focusOf(name, state, expected) { eq(name, advanceProblem(state)?.focus, expected); }
 function clear(name, state) { eq(name, advanceProblem(state), null); }
 
-// A lean org's step 0, complete. Lean makes grade optional, and `regFields.std`
-// is empty below, so no configured question is on either - homeroom included.
+// A lean org's step 0, complete. `regFields.std` is empty below, so no configured
+// question is on - homeroom included.
+//
+// GRADE IS PART OF "COMPLETE" as of 2026-09-04. It was absent from this fixture
+// while grade was full-nav-only, which quietly meant every `clear()` case in this
+// file was asserting that a gradeless child advances. Adding it here rather than
+// per-case is deliberate: the fixture is meant to be the child who should get
+// through, and leaving it out would have turned two dozen unrelated assertions
+// into grade tests that all fail for the same reason.
 const goodStudent = {
-  first_name: 'Ada', last_name: 'Lovelace', birthdate: '2017-05-04',
+  first_name: 'Ada', last_name: 'Lovelace', birthdate: '2017-05-04', grade: '2',
   emergency_contact_name: 'Annabella Byron', emergency_contact_phone: '555-0100',
 };
 const step0 = (over = {}) => ({
@@ -55,17 +62,29 @@ blocked('missing birthdate', step0({ activeChild: { student: { ...goodStudent, b
 blocked('missing emergency contact name', step0({ activeChild: { student: { ...goodStudent, emergency_contact_name: '' } } }), 'emergency contact name');
 blocked('missing emergency contact phone', step0({ activeChild: { student: { ...goodStudent, emergency_contact_phone: '' } } }), 'phone');
 
-// --- step 0: lean vs full nav -----------------------------------------------
-// Grade is full-nav only. A lean org renders it optional, so requiring it there
-// would be a wall with no field to fix it in.
+// --- step 0: grade is required of EVERY org ---------------------------------
+// Jessica, 2026-09-04: "make grade required for lean orgs too and founders."
+// Until then it was full-nav-only, and the lean half of the platform - which is
+// every org except j2s, founding-plan tenants included - could check out without
+// one. The pair that matters is the first two: the rule must not depend on
+// `isLean`, so both values of it are asserted against the same blank.
 
 const fullNav = { isLean: false, activeChild: { student: { ...goodStudent, grade: '2' } } };
 clear('full-nav student with a grade advances', step0(fullNav));
 blocked('full nav: empty grade blocks', step0({ isLean: false, activeChild: { student: { ...goodStudent, grade: '' } } }), 'grade');
-// Preserved from the old boolean ON PURPOSE: `grade !== ''` lets undefined past.
-// Tightening it would newly block families who can submit today.
-clear('full nav: an absent grade key is not blocked (unchanged behaviour)', step0({ isLean: false, activeChild: { student: { ...goodStudent } } }));
-clear('lean org ignores grade', step0({ activeChild: { student: { ...goodStudent, grade: '' } } }));
+blocked('LEAN: empty grade blocks too - the change of 2026-09-04', step0({ activeChild: { student: { ...goodStudent, grade: '' } } }), 'grade');
+// THE CASE THAT WAS EXPLICITLY LET THROUGH BEFORE, and the one that describes
+// Jeff's eleven: a child hydrated from a row saved before the field existed has
+// no `grade` key at all, and the old `grade === ''` comparison could not see it.
+// null is the same state arriving off the database rather than out of the form.
+blocked('an absent grade key blocks', step0({ activeChild: { student: { ...goodStudent, grade: undefined } } }), 'grade');
+blocked('a null grade blocks', step0({ activeChild: { student: { ...goodStudent, grade: null } } }), 'grade');
+// KINDERGARTEN IS ZERO AND MUST NOT READ AS BLANK. A truthiness test passes the
+// string "0" by luck and refuses the number 0, which is what a saved child
+// carries - so the youngest cohort would have been the one group unable to
+// register. Both spellings asserted, because both reach this guard.
+clear('Kindergarten as the string "0" advances', step0({ activeChild: { student: { ...goodStudent, grade: '0' } } }));
+clear('Kindergarten as the number 0 advances', step0({ activeChild: { student: { ...goodStudent, grade: 0 } } }));
 
 // --- step 0: homeroom teacher is CONFIGURED, not lean-vs-legacy -------------
 // Until 2026-08-31 this was `!isLean`, i.e. gated on instructor_pay_model - a
@@ -356,11 +375,14 @@ clear('an open top does not invent an upper bound',
   withClass('11', { id: 'p5', grade_min: 2, grade_max: null, age_format: 'grade' }));
 clear('an open bottom does not invent a lower bound',
   withClass('0', { id: 'p6', grade_min: null, grade_max: 6, age_format: 'grade' }));
-// A lean org leaves grade optional. An unanswered grade cannot be compared, and
-// blocking on it would be a wall with nothing to fix.
-clear('a lean org with no grade answer is not gated', step0({
+// AN UNANSWERED GRADE IS REFUSED BY THE REQUIRED-CHECK, NOT BY THE FIT-CHECK, and
+// the two say different sentences. Before 2026-09-04 a lean org could leave this
+// blank and neither check fired. Now the first one does - and the assertion is on
+// WHICH message comes back, because a family who has not answered yet must be
+// told to answer, never told their child is the wrong age for the class.
+blocked('a blank grade is refused as unanswered, not as a mismatch', step0({
   orgName: 'Cascade', activeChild: { student: { ...goodStudent, grade: '' }, items: [{ program: G25 }] },
-}));
+}), "Choose your child's grade.");
 // A cart with no items at all - the state before a program is chosen.
 clear('no items means nothing to compare', step0({ isLean: false, activeChild: { student: { ...goodStudent, grade: '0' } } }));
 
@@ -414,6 +436,32 @@ blocked('with no cart it still checks the active child', review('0'), 'Grades 2â
 // Not 'student_grade': that field is three screens back and not in this DOM, so
 // naming it would scroll to nothing.
 focusOf('review names no field to scroll to', review('0'), '');
+
+// A BLANK GRADE AT THE MONEY PRESS. This is not hypothetical: a cart started
+// before 2026-09-04 saved a lean org's child with no grade legitimately, and a
+// restored cart is the one way to reach this screen without step 0 running
+// again. The sentence has to send them back rather than quote a class range,
+// and it names the child because this screen shows the whole cart.
+blocked('review refuses a blank grade on a restored cart', review(''), 'grade');
+blocked('review names the child whose grade is missing', review(''), 'Ada');
+blocked('review sends them back rather than quoting the range', review(''), 'Go back to the first step');
+blocked('review refuses a blank grade on a NON-active child', twoKids('3', ''), 'Go back to the first step');
+// AND MUST NOT WALL THEM OVER A CHILD THEY ARE NOT PAYING FOR. A cart row with no
+// items is a second child part-way through being added; it produces no
+// registration, so a blank grade on it is not a roster gap - and refusing at the
+// money press over it would be a wall with nothing on this screen to fix.
+clear('review ignores a gradeless child with nothing in the cart', {
+  step: 3, orgName: 'Journey to STEAM', regFields: { std: {}, custom: [] }, conflicts: [],
+  activeChild: { student: { ...goodStudent, grade: '3' }, items: [{ program: G25 }] },
+  children: [
+    { student: { ...goodStudent, grade: '3' }, items: [{ program: G25 }] },
+    { student: { first_name: 'Bram' }, items: [] },
+  ],
+});
+// The blank check must not swallow the mismatch check: a child who HAS answered
+// and does not fit still gets the class sentence.
+blocked('an answered but out-of-range grade still gets the class message', review('0'), 'Grades 2â€“5');
+focusOf('the blank-grade refusal also names no field to scroll to', review(''), '');
 
 console.log(`\nregisterAdvance: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
