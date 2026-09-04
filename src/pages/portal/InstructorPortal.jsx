@@ -28,6 +28,7 @@ import { isDocumentEnabled } from "../../lib/instructorDocuments.js";
 import { loadTrainingConfig } from "../../lib/instructorTrainingConfig.js";
 import { readInvokeError } from "../../lib/onboardingFetch.js";
 import { scheduleCountLine } from "../../lib/scheduleCountLine.js";
+import { attendanceSaveMessage } from "../../lib/studentCare.js";
 import { earlyReleaseLine } from "../../lib/timeText.js";
 import { linkifyText } from "../../lib/linkifyText.jsx";
 import { WAITLIST_STATUS } from "../../lib/waitlistState.js";
@@ -3853,7 +3854,13 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
   const todayStr = todayLocalISO();
   const [sessionDate, setSessionDate] = useState(() => lockedDate ?? defaultSessionDate(sessionDates, todayStr));
   const [attByStudent, setAttByStudent] = useState({}); // { [student_id]: attendance_records row }
-  const [attErr, setAttErr] = useState("");
+  const [attErr, setAttErr] = useState(""); // section-level: the DAY failed to load
+  // Per-child SAVE failures, keyed by student_id. Deliberately not the banner
+  // above: that banner sits at the top of the roster, and an instructor
+  // releasing the fifteenth child on the list never scrolls back up to read it.
+  // A custody refusal has to appear against the child it refused, on the row
+  // their thumb is already on. Cleared per child when they retry that child.
+  const [saveErrByStudent, setSaveErrByStudent] = useState({});
   const [savingIds, setSavingIds] = useState(() => new Set()); // students with a save in flight
   const canRecord = Boolean(instructorId && sessionDate);
   // A custody record must reflect a day that has happened. When today isn't a
@@ -3901,6 +3908,9 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
     let cancelled = false;
     setAttByStudent({});
     setAttErr("");
+    // A refusal belongs to one child on one DAY. Switching days must not leave
+    // yesterday's refusal sitting on today's row.
+    setSaveErrByStudent({});
     (async () => {
       const { data, error } = await supabase
         .from("attendance_records")
@@ -3933,7 +3943,15 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
     if ("released_at" in patch) patch.released_by = patch.released_at ? instructorId : null;
     const dateAtSave = sessionDate; // guard against a mid-flight day switch
     setSavingIds((s) => new Set(s).add(studentId));
-    setAttErr("");
+    // Clear only THIS child's previous failure. Wiping the whole map would hide
+    // a refusal on another child that the instructor has not dealt with yet.
+    setSaveErrByStudent((m) => (m[studentId] ? { ...m, [studentId]: "" } : m));
+    // DELIBERATELY does not clear attErr, which this line used to do. attErr is
+    // the DAY-LOAD failure, and when that fires attByStudent stays empty, so
+    // every child renders as un-recorded whether or not they have a record.
+    // That banner is the only warning about it and it is still true after a
+    // save succeeds, so dismissing it here was hiding a live problem. It clears
+    // when the day actually reloads. Do not "restore" this.
     const cols = "id, student_id, present, checked_in_at, dismissal_kind, released_to_contact_id, released_to_name, released_at, notes";
     const updateById = (id) =>
       supabase.from("attendance_records").update(patch).eq("id", id).select(cols).single();
@@ -3980,7 +3998,13 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
     } catch (e) {
       console.error("[RosterSection] attendance save failed", e);
       if (sessionDateRef.current === dateAtSave) {
-        setAttErr("Couldn't save. Check your connection and try again.");
+        // A blanket "check your connection" was wrong for every refusal the
+        // attendance trigger raises - the connection had worked, and the save
+        // was declined on purpose. The custody ones matter most: an instructor
+        // told to retry keeps retrying a release the platform will never allow,
+        // instead of ringing the parents. attendanceSaveMessage names the
+        // refusal and only says "connection" when it really was one.
+        setSaveErrByStudent((m) => ({ ...m, [studentId]: attendanceSaveMessage(e) }));
       }
     } finally {
       setSavingIds((s) => { const n = new Set(s); n.delete(studentId); return n; });
@@ -4146,6 +4170,7 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
                   orgAsksDismissal={orgAsksDismissal}
                   attRecord={attByStudent[r.student?.id] || null}
                   saving={savingIds.has(r.student?.id)}
+                  saveError={saveErrByStudent[r.student?.id] || ""}
                   onSave={(patch) => saveAttendance(r, patch)}
                 />
               ))}
@@ -4171,7 +4196,7 @@ function TelPhone({ phone }) {
 
 const contactName = (c) => `${c.first_name ?? ""} ${c.last_name ?? ""}`.trim();
 
-function CamperRow({ registration, contacts = [], canRecord = false, orgAsksDismissal = false, attRecord = null, saving = false, onSave }) {
+function CamperRow({ registration, contacts = [], canRecord = false, orgAsksDismissal = false, attRecord = null, saving = false, saveError = "", onSave }) {
   const s = registration.student;
   if (!s) return null;
   const p = registration.parent;
@@ -4346,6 +4371,22 @@ function CamperRow({ registration, contacts = [], canRecord = false, orgAsksDism
           saving={saving}
           onSave={onSave}
         />
+      )}
+
+      {/* Directly under the control that was just tapped, inside this child's
+          card, so the refusal is on screen wherever the roster is scrolled to.
+          role="alert" so a screen reader announces it without a focus move -
+          an instructor at pick-up is holding a child, not reading carefully. */}
+      {saveError && (
+        <div
+          role="alert"
+          style={{
+            marginTop: 8, background: `${CORAL}1F`, border: `1px solid ${CORAL}`,
+            color: CORAL, padding: 8, borderRadius: 6, fontSize: 12, lineHeight: 1.45,
+          }}
+        >
+          {saveError}
+        </div>
       )}
     </div>
   );

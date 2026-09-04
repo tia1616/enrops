@@ -14,7 +14,7 @@
 import {
   careProblem, careRpcArgs, careSaveMessage, doNotReleaseToSave,
   homeroomPatch, lockedDoNotRelease, isLockedContact, toRpcContact,
-  CARE_CONTACT_COLUMNS,
+  CARE_CONTACT_COLUMNS, attendanceSaveMessage,
 } from './studentCare.js';
 
 let pass = 0, fail = 0;
@@ -295,6 +295,91 @@ eq('the guardian raise without a quoted name does not pretend to name anybody',
 // pass through verbatim. It has no 'attendance_records:' prefix, which is
 // exactly why the branch keys on that prefix and not on 'do-not-release'.
 eq('the contact-overlap conflict still passes through verbatim', careSaveMessage({ message: overlap }), overlap);
+
+// --- attendanceSaveMessage: the INSTRUCTOR side ------------------------------
+// Same raises, opposite direction. The instructor is holding the child, so the
+// sentence has to say the release was refused and who to ring - not "sort out
+// the release record", which is careSaveMessage's answer to a different person.
+//
+// THE BUG THIS REPLACES: every one of these reached the portal as "Couldn't
+// save. Check your connection and try again." The connection was fine. An
+// instructor reading that retries a release the platform will never allow.
+const ACTION = 'If no authorized adult is present for pick-up, call the parents.';
+const attPickupId = `attendance_records: released_to_contact_id ${STUDENT_UUID} is not an authorized pickup or guardian for student ${STUDENT_UUID}`;
+const attFuture = 'attendance_records: cannot record attendance for a future date (2027-02-20)';
+const attAbsent = 'attendance_records: a released child cannot be marked absent (clear the release first)';
+const attNoName = 'attendance_records: released_to_guardian requires released_to_name';
+
+eq('the do-not-release refusal names the adult and gives the action',
+  attendanceSaveMessage({ message: attDnr }),
+  `That didn't save. "Pat Byron" is on this child's do-not-release list, so this child cannot be released to them. ${ACTION}`);
+eq('the guardian refusal names the adult and gives the action',
+  attendanceSaveMessage({ message: attGuardian }),
+  `That didn't save. We couldn't confirm "Amy Burke" as an adult approved to collect this child. ${ACTION}`);
+eq('the by-contact-id refusal quotes nobody but still gives the action',
+  attendanceSaveMessage({ message: attPickupId }),
+  `That didn't save. We couldn't confirm that adult as someone approved to collect this child. ${ACTION}`);
+
+// GATE xii again, on the new function: a refusal does NOT prove the adult is
+// absent from the record - the check fails mid-replace too.
+eq('no custody sentence claims the adult is off-file',
+  [attDnr, attGuardian, attPickupId]
+    .map((s) => attendanceSaveMessage({ message: s }))
+    .some((s) => /not on file|no longer on file|isn't on|is not on this child's/i.test(s)),
+  false);
+
+// The property that actually matters: no student id ever reaches the screen.
+eq('no attendance sentence leaks the student id',
+  [attDnr, attGuardian, attPickupId, attFuture, attAbsent, attNoName]
+    .map((s) => attendanceSaveMessage({ message: s }))
+    .some((s) => s.includes(STUDENT_UUID)),
+  false);
+
+// The action half belongs to custody refusals ONLY. Bolting "call the parents"
+// onto a future-date typo would train instructors to ignore it.
+eq('only the custody refusals carry the call-the-parents action',
+  [attFuture, attAbsent, attNoName, attUnknown]
+    .map((s) => attendanceSaveMessage({ message: s }))
+    .some((s) => s.includes(ACTION)),
+  false);
+
+eq('the future-date raise says what is actually wrong',
+  attendanceSaveMessage({ message: attFuture }),
+  "That didn't save. This class day hasn't happened yet.");
+eq('the marked-absent raise says what is actually wrong',
+  attendanceSaveMessage({ message: attAbsent }),
+  "That didn't save. This child is already marked as released. Clear the release first, then mark them absent.");
+eq('the missing-name raise asks for the name',
+  attendanceSaveMessage({ message: attNoName }),
+  "That didn't save. Add the name of the adult collecting this child.");
+
+// Fail closed, exactly as careSaveMessage does.
+eq('an unrecognised attendance raise is not echoed',
+  attendanceSaveMessage({ message: attUnknown }),
+  "Sorry, that didn't save, so nothing changed. Tell us if it keeps happening.");
+
+// THE REGRESSION THAT DEFINES THIS CHANGE: "check your connection" survives for
+// a real transport failure and for NOTHING else.
+eq('a real network failure still says check your connection',
+  attendanceSaveMessage({ message: 'TypeError: Failed to fetch' }),
+  "Couldn't save. Check your connection and try again.");
+eq('a server refusal never says check your connection',
+  [attDnr, attGuardian, attPickupId, attFuture, attAbsent, attNoName, attUnknown]
+    .map((s) => attendanceSaveMessage({ message: s }))
+    .some((s) => /check your connection/i.test(s)),
+  false);
+eq('a permission failure is not a connection problem either',
+  attendanceSaveMessage({ message: 'permission denied for table attendance_records' }),
+  "You don't have permission to record attendance for this child.");
+eq('a null error does not crash and does not blame the connection',
+  attendanceSaveMessage(null),
+  "Sorry, that didn't save. Please try again.");
+
+// careSaveMessage must be UNCHANGED by all of the above - three contacts
+// screens still call it and still need the fix-the-record wording.
+eq('careSaveMessage still answers the contacts side, not the instructor side',
+  careSaveMessage({ message: attDnr }),
+  'That didn\'t save. "Pat Byron" is on the do-not-release list, and an attendance record for this child names them as the adult who collected them. That release record has to be sorted out before this will save.');
 
 console.log(`\nstudentCare: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

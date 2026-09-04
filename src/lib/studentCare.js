@@ -347,3 +347,84 @@ export function careSaveMessage(error, { action = 'save' } = {}) {
     ? "Sorry, we couldn't load that. Please try again."
     : "Sorry, that didn't save. Please try again.";
 }
+
+// Jessica's words, approved 2026-09-04. It is the ACTION half and never stands
+// alone: every branch below NAMES what was refused first, then ends with this.
+// A bare instruction to phone home, with no reason attached, is the same
+// unhelpful shrug as "check your connection" - just politer.
+const CALL_THE_PARENTS = 'If no authorized adult is present for pick-up, call the parents.';
+
+/**
+ * The INSTRUCTOR-PORTAL half of the release rules.
+ *
+ * careSaveMessage() above and this one read the SAME trigger raises and must
+ * not be merged. They speak to people standing in opposite directions:
+ *
+ *   careSaveMessage      - someone EDITING CONTACTS, told that an attendance
+ *                          record already on file contradicts the edit. The
+ *                          fix is to the record: FIX_THE_RECORD.
+ *   attendanceSaveMessage - the instructor recording a release AS IT HAPPENS,
+ *                          with the child in front of them. Nothing about a
+ *                          past record helps; what helps is knowing the release
+ *                          was refused and who to ring: CALL_THE_PARENTS.
+ *
+ * Only the PARSING is shared (quotedName + the 'attendance_records:' prefix),
+ * which is why this lives here rather than in InstructorPortal.jsx - a second
+ * copy of the prefix test is how the two would drift.
+ *
+ * Two properties the tests pin, both learned the hard way:
+ *   - NEVER echo a raw raise. Every one of them carries a student uuid.
+ *   - NEVER assert that an adult is "not on file". The guardian check fails for
+ *     the instant a contact replace has deleted the row it is about to re-add,
+ *     so a refusal does not prove absence. Say what could not be CONFIRMED.
+ */
+export function attendanceSaveMessage(error) {
+  const raw = (error && (error.message || String(error))) || '';
+  const m = raw.toLowerCase();
+
+  if (m.includes('attendance_records:')) {
+    const who = quotedName(raw);
+
+    // --- the three custody refusals: name the refusal, then the action -----
+    if (m.includes('is on the do-not-release list')) {
+      return who
+        ? `That didn't save. "${who}" is on this child's do-not-release list, so this child cannot be released to them. ${CALL_THE_PARENTS}`
+        : `That didn't save. That adult is on this child's do-not-release list, so this child cannot be released to them. ${CALL_THE_PARENTS}`;
+    }
+    // Both the by-name and by-contact-id checks land here. The by-id raise
+    // quotes nothing, so `who` is '' and the unnamed sentence runs.
+    if (m.includes('is not the account parent or a guardian')
+        || m.includes('is not an authorized pickup or guardian')) {
+      return who
+        ? `That didn't save. We couldn't confirm "${who}" as an adult approved to collect this child. ${CALL_THE_PARENTS}`
+        : `That didn't save. We couldn't confirm that adult as someone approved to collect this child. ${CALL_THE_PARENTS}`;
+    }
+
+    // --- not custody refusals, but the same catch called these a connection
+    // problem too. Each is fixable at the screen, and none carries a name. ---
+    if (m.includes('requires released_to_name')) {
+      return "That didn't save. Add the name of the adult collecting this child.";
+    }
+    if (m.includes('cannot record attendance for a future date')) {
+      return "That didn't save. This class day hasn't happened yet.";
+    }
+    if (m.includes('a released child cannot be marked absent')) {
+      return "That didn't save. This child is already marked as released. Clear the release first, then mark them absent.";
+    }
+
+    // Fail closed. The trigger has other raises and may grow more; an
+    // unrecognised one carries ids and must never reach a screen.
+    return "Sorry, that didn't save, so nothing changed. Tell us if it keeps happening.";
+  }
+
+  if (m.includes('not authorized') || m.includes('permission denied')) {
+    return "You don't have permission to record attendance for this child.";
+  }
+  // Only a REAL transport failure keeps the connection wording. That sentence
+  // was the whole bug: it was being shown for refusals the connection had
+  // delivered perfectly well.
+  if (m.includes('network') || m.includes('failed to fetch') || m.includes('timeout')) {
+    return "Couldn't save. Check your connection and try again.";
+  }
+  return "Sorry, that didn't save. Please try again.";
+}
