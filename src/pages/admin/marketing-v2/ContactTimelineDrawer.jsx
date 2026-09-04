@@ -126,6 +126,13 @@ async function fetchFamily(contact, orgId) {
     // NOTE the key is `status`, not `delivery` as roster_email_sends uses. All
     // 211 recipient entries on prod carry it; reading `delivery` here would be
     // undefined every time and quietly report a failed send as delivered.
+    //
+    // The 300 bounds ORG-WIDE sends, not this contact's, so it bites sooner than
+    // the same limit does on the sibling reads above - a family appears in few
+    // campaigns, but an org accumulates class messages forever. At 26 sends on
+    // prod today it is nowhere near, and the oldest would drop off first. Push
+    // the match into the query (jsonb containment on a GIN index) before an org
+    // gets near 300, or the 301st send silently stops appearing on timelines.
     const { data: fam } = await supabase
       .from("program_family_messages")
       .select("id, program_id, subject, recipients, status, sent_at")
@@ -147,11 +154,20 @@ async function fetchFamily(contact, orgId) {
       }
       for (const { r, hit } of famMine) {
         const className = fMap.get(r.program_id)?.curriculum || "";
-        // Same three states as the partner roster, and the same restraint: say
-        // THAT it did not arrive, not why. `failed` covers our own API key or a
-        // rate limit as readily as a bad address, and sending an operator to
-        // chase a family over our outage is worse than saying less.
-        const failed = hit.status ? hit.status === "failed" : r.status === "failed";
+        // FAIL CLOSED: only an explicit 'sent' counts as delivered. The sender
+        // writes THREE statuses, not two - 'sent', 'failed', and
+        // 'not_attempted', the last for an address it could never try (an OES
+        // @import.local placeholder, say). Testing `=== 'failed'` would read
+        // 'not_attempted' as delivered and tell an operator a family was told
+        // when the platform recorded that it never even tried. Any status added
+        // later reads as not-delivered until this line is taught about it, which
+        // is the safe direction: under-claiming beats claiming a family was
+        // reached.
+        //
+        // Same restraint as the partner roster on WHY: 'failed' covers our own
+        // API key or a rate limit as readily as a bad address, and sending an
+        // operator to chase a family over our outage is worse than saying less.
+        const failed = hit.status ? hit.status !== "sent" : r.status !== "sent";
         const title = r.subject || "Message to families";
         events.push({
           id: "pfm" + r.id,
