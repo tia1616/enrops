@@ -281,12 +281,29 @@ export function advanceProblem({
           //
           // Named child, because this screen shows the whole cart and "your
           // child" would not say which row to go back and fix.
+          //
+          // AND THE INSTRUCTION HAS TO BE ONE THEY CAN CARRY OUT, which is why
+          // this branches on whether the blank child is the ACTIVE one. Back
+          // returns to step 0 showing `activeChild` and nothing else: the wizard
+          // has no control that switches between children (StepReview offers
+          // "Register another child" and no per-child edit, and CartContext's
+          // setActiveChildIndex has no caller anywhere in the app). So "go back
+          // to the first step" is true for the active child and a dead end for a
+          // sibling - a first draft said it to both, which is the wall-with-no-
+          // way-past that this file has removed three times. The sibling branch
+          // hands over the same escape the grade-mismatch sentence uses: the
+          // provider, who can add the child from the roster by hand.
           const s = c?.student || {};
           if (programsForChild(c).length > 0 && isUnset(s.grade)) {
             const who = (s.first_name || '').trim();
-            return stop('', who
-              ? `Go back to the first step and choose ${who}'s grade.`
-              : "Go back to the first step and choose your child's grade.");
+            if (c === child) {
+              return stop('', who
+                ? `Go back to the first step and choose ${who}'s grade.`
+                : "Go back to the first step and choose your child's grade.");
+            }
+            const ask = (orgName || '').trim();
+            const name = who || 'one of your children';
+            return stop('', `We still need ${name}'s grade. Start their registration again from the class page, or ${ask ? `ask ${ask}` : 'get in touch'} and they can add it for you.`);
           }
           const late = gradeGate(c, orgName);
           if (late) return stop('', late.message);

@@ -445,7 +445,31 @@ focusOf('review names no field to scroll to', review('0'), '');
 blocked('review refuses a blank grade on a restored cart', review(''), 'grade');
 blocked('review names the child whose grade is missing', review(''), 'Ada');
 blocked('review sends them back rather than quoting the range', review(''), 'Go back to the first step');
-blocked('review refuses a blank grade on a NON-active child', twoKids('3', ''), 'Go back to the first step');
+// A SIBLING'S BLANK GRADE GETS A DIFFERENT SENTENCE, because Back returns to the
+// ACTIVE child's form and the wizard has no control that switches between
+// children. Telling them to go back would be an instruction they cannot carry
+// out. Asserted as an absence as well as a presence: the dead-end wording must
+// not be what a sibling is shown.
+blocked('review refuses a blank grade on a NON-active child', twoKids('3', ''), 'grade');
+blocked('a sibling is named, not called "your child"', twoKids('3', ''), 'Ada');
+blocked('a sibling is offered the provider as the way out', twoKids('3', ''), 'Journey to STEAM');
+eq('a sibling is NOT told to go back to a screen that will not show them',
+  advanceProblem(twoKids('3', ''))?.message.includes('Go back to the first step'), false);
+// THE MIRROR, and the case that proves the branch is reading identity and not
+// merely "is there more than one child". In the real cart `activeChild` IS
+// `cart.children[active_child_index]` - the same object, not a copy - so the
+// blank-graded ACTIVE child in a two-child cart still gets the instruction that
+// works. Built with a shared reference on purpose; a spread copy here would pass
+// the assertion for the wrong reason.
+{
+  const blankActive = { student: { ...goodStudent, grade: '' }, items: [{ program: G25 }] };
+  const state = {
+    step: 3, orgName: 'Journey to STEAM', regFields: { std: {}, custom: [] }, conflicts: [],
+    activeChild: blankActive,
+    children: [blankActive, { student: { ...goodStudent, grade: '4' }, items: [{ program: G25 }] }],
+  };
+  blocked('the ACTIVE child in a two-child cart is still told to go back', state, 'Go back to the first step');
+}
 // AND MUST NOT WALL THEM OVER A CHILD THEY ARE NOT PAYING FOR. A cart row with no
 // items is a second child part-way through being added; it produces no
 // registration, so a blank grade on it is not a roster gap - and refusing at the
