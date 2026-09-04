@@ -3,7 +3,8 @@
 // A read-side union over tables that already record sends + responses (no new
 // central log). Keyed by audience -> its source tables:
 //   families    : marketing_sends (by recipient_id) + automation_run_recipients
-//                 (by email) + marketing_suppressions
+//                 (by email) + marketing_suppressions + program_family_messages
+//                 (Message families, by email in the recipients snapshot)
 //   instructors : camp/program assignment offers + responses, substitute offers,
 //                 instructor_survey_sends, onboarding invite, availability submitted
 //   partners    : roster_email_sends (by partner_id, filtered to this contact via
@@ -110,6 +111,57 @@ async function fetchFamily(contact, orgId) {
     for (const a of autos ?? []) {
       const tone = a.status === "sent" ? "sent" : (a.status?.startsWith("skipped") ? "neutral" : "negative");
       events.push({ id: "ar" + a.id, at: a.sent_at, icon: "🔔", title: autoLabel.get(a.automation_id) || "Automated email", detail: a.status ? cap(a.status.replace(/_/g, " ")) : "", tone });
+    }
+
+    // Message families — the per-class operator send (program_family_messages).
+    // It was the one real family-facing send missing from this timeline: an
+    // operator could email 23 families about their child's dismissal and none
+    // of it showed on any of their records.
+    //
+    // No per-contact key to filter on, so this fetches the org's sends (indexed
+    // on organization_id, sent_at DESC) and matches inside the recipients
+    // snapshot, the way fetchPartner does for roster sends. That snapshot is
+    // per-recipient, so THIS contact's own outcome survives a partial send.
+    //
+    // NOTE the key is `status`, not `delivery` as roster_email_sends uses. All
+    // 211 recipient entries on prod carry it; reading `delivery` here would be
+    // undefined every time and quietly report a failed send as delivered.
+    const { data: fam } = await supabase
+      .from("program_family_messages")
+      .select("id, program_id, subject, recipients, status, sent_at")
+      .eq("organization_id", orgId)
+      .order("sent_at", { ascending: false })
+      .limit(300);
+    const famMine = (fam ?? [])
+      .map((r) => ({
+        r,
+        hit: (Array.isArray(r.recipients) ? r.recipients : []).find((x) => low(x.email) === email),
+      }))
+      .filter((x) => x.hit);
+    if (famMine.length) {
+      const fIds = [...new Set(famMine.map(({ r }) => r.program_id).filter(Boolean))];
+      const fMap = new Map();
+      if (fIds.length) {
+        const { data } = await supabase.from("programs").select("id, curriculum").in("id", fIds);
+        for (const p of data ?? []) fMap.set(p.id, p);
+      }
+      for (const { r, hit } of famMine) {
+        const className = fMap.get(r.program_id)?.curriculum || "";
+        // Same three states as the partner roster, and the same restraint: say
+        // THAT it did not arrive, not why. `failed` covers our own API key or a
+        // rate limit as readily as a bad address, and sending an operator to
+        // chase a family over our outage is worse than saying less.
+        const failed = hit.status ? hit.status === "failed" : r.status === "failed";
+        const title = r.subject || "Message to families";
+        events.push({
+          id: "pfm" + r.id,
+          at: r.sent_at,
+          icon: "✉️",
+          title: failed ? `Not delivered: ${title}` : title,
+          detail: className,
+          tone: failed ? "negative" : "sent",
+        });
+      }
     }
 
     const { data: sup } = await supabase
