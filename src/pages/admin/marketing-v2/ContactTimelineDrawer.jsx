@@ -3,7 +3,8 @@
 // A read-side union over tables that already record sends + responses (no new
 // central log). Keyed by audience -> its source tables:
 //   families    : marketing_sends (by recipient_id) + automation_run_recipients
-//                 (by email) + marketing_suppressions
+//                 (by email) + marketing_suppressions + program_family_messages
+//                 (Message families, by email in the recipients snapshot)
 //   instructors : camp/program assignment offers + responses, substitute offers,
 //                 instructor_survey_sends, onboarding invite, availability submitted
 //   partners    : roster_email_sends (by partner_id, filtered to this contact via
@@ -112,6 +113,73 @@ async function fetchFamily(contact, orgId) {
       events.push({ id: "ar" + a.id, at: a.sent_at, icon: "🔔", title: autoLabel.get(a.automation_id) || "Automated email", detail: a.status ? cap(a.status.replace(/_/g, " ")) : "", tone });
     }
 
+    // Message families — the per-class operator send (program_family_messages).
+    // It was the one real family-facing send missing from this timeline: an
+    // operator could email 23 families about their child's dismissal and none
+    // of it showed on any of their records.
+    //
+    // No per-contact key to filter on, so this fetches the org's sends (indexed
+    // on organization_id, sent_at DESC) and matches inside the recipients
+    // snapshot, the way fetchPartner does for roster sends. That snapshot is
+    // per-recipient, so THIS contact's own outcome survives a partial send.
+    //
+    // NOTE the key is `status`, not `delivery` as roster_email_sends uses. All
+    // 211 recipient entries on prod carry it; reading `delivery` here would be
+    // undefined every time and quietly report a failed send as delivered.
+    //
+    // The 300 bounds ORG-WIDE sends, not this contact's, so it bites sooner than
+    // the same limit does on the sibling reads above - a family appears in few
+    // campaigns, but an org accumulates class messages forever. At 26 sends on
+    // prod today it is nowhere near, and the oldest would drop off first. Push
+    // the match into the query (jsonb containment on a GIN index) before an org
+    // gets near 300, or the 301st send silently stops appearing on timelines.
+    const { data: fam } = await supabase
+      .from("program_family_messages")
+      .select("id, program_id, subject, recipients, status, sent_at")
+      .eq("organization_id", orgId)
+      .order("sent_at", { ascending: false })
+      .limit(300);
+    const famMine = (fam ?? [])
+      .map((r) => ({
+        r,
+        hit: (Array.isArray(r.recipients) ? r.recipients : []).find((x) => low(x.email) === email),
+      }))
+      .filter((x) => x.hit);
+    if (famMine.length) {
+      const fIds = [...new Set(famMine.map(({ r }) => r.program_id).filter(Boolean))];
+      const fMap = new Map();
+      if (fIds.length) {
+        const { data } = await supabase.from("programs").select("id, curriculum").in("id", fIds);
+        for (const p of data ?? []) fMap.set(p.id, p);
+      }
+      for (const { r, hit } of famMine) {
+        const className = fMap.get(r.program_id)?.curriculum || "";
+        // FAIL CLOSED: only an explicit 'sent' counts as delivered. The sender
+        // writes THREE statuses, not two - 'sent', 'failed', and
+        // 'not_attempted', the last for an address it could never try (an OES
+        // @import.local placeholder, say). Testing `=== 'failed'` would read
+        // 'not_attempted' as delivered and tell an operator a family was told
+        // when the platform recorded that it never even tried. Any status added
+        // later reads as not-delivered until this line is taught about it, which
+        // is the safe direction: under-claiming beats claiming a family was
+        // reached.
+        //
+        // Same restraint as the partner roster on WHY: 'failed' covers our own
+        // API key or a rate limit as readily as a bad address, and sending an
+        // operator to chase a family over our outage is worse than saying less.
+        const failed = hit.status ? hit.status !== "sent" : r.status !== "sent";
+        const title = r.subject || "Message to families";
+        events.push({
+          id: "pfm" + r.id,
+          at: r.sent_at,
+          icon: "✉️",
+          title: failed ? `Not delivered: ${title}` : title,
+          detail: className,
+          tone: failed ? "negative" : "sent",
+        });
+      }
+    }
+
     const { data: sup } = await supabase
       .from("marketing_suppressions")
       .select("suppressed_at, reason")
@@ -133,14 +201,29 @@ async function fetchFamily(contact, orgId) {
       const name = r.program_name || "a program";
       const child = r.child_name || "";
       const cancelled = !!r.cancelled_at;
-      const past = !cancelled && r.starts_at && new Date(r.starts_at) < now;
+      // A WAITLIST ROW IS NOT A REGISTRATION, and this timeline was calling it one.
+      //
+      // 20260819f added status='waitlist' to a table this screen already read. A waiting
+      // family has cancelled_at null, so `past` went true as soon as the class had
+      // started, and the event rendered as "🎓 Attended: Game Design Studio", tone
+      // positive - a graduation cap for a child who never got a place. The status was in
+      // the detail line, so the truth was on screen underneath a title contradicting it.
+      //
+      // Kept in the timeline rather than filtered out, deliberately: that this family
+      // wanted a place and did not get one is exactly the kind of thing the person reading
+      // a contact timeline needs to know.
+      // Copy approved by Jessica 2026-08-20.
+      const waitlisted = r.status === "waitlist";
+      const past = !cancelled && !waitlisted && r.starts_at && new Date(r.starts_at) < now;
       events.push({
         id: "reg" + r.registration_id,
         at: r.registered_at,
-        icon: past ? "🎓" : "📝",
-        title: `${past ? "Attended" : "Registered"}: ${name}`,
-        detail: [child, cancelled ? "later cancelled" : (r.status && r.status !== "confirmed" ? cap(r.status) : "")].filter(Boolean).join(" · "),
-        tone: cancelled ? "neutral" : "positive",
+        icon: waitlisted ? "⏳" : (past ? "🎓" : "📝"),
+        title: waitlisted
+          ? `Joined the waitlist: ${name}`
+          : `${past ? "Attended" : "Registered"}: ${name}`,
+        detail: [child, cancelled ? "later cancelled" : (!waitlisted && r.status && r.status !== "confirmed" ? cap(r.status) : "")].filter(Boolean).join(" · "),
+        tone: cancelled ? "neutral" : (waitlisted ? "neutral" : "positive"),
       });
       if (cancelled) {
         events.push({ id: "regc" + r.registration_id, at: r.cancelled_at, icon: "✖️", title: `Cancelled: ${name}`, detail: child, tone: "negative" });
@@ -218,12 +301,16 @@ async function fetchPartner(contact) {
 
   // Keep only sends this contact was actually on. New sends carry
   // partner_contact_id in the recipients snapshot; older ones match by email.
-  const mine = (rs ?? []).filter((r) => Array.isArray(r.recipients) && r.recipients.some(
+  // Hold on to the matched recipient entry, not just the fact that one matched:
+  // it carries this contact's OWN delivery outcome, which the row-level status
+  // cannot express on a partial send.
+  const matchOf = (r) => (Array.isArray(r.recipients) ? r.recipients : []).find(
     (x) => (x.partner_contact_id && x.partner_contact_id === contact.id) || (email && low(x.email) === email),
-  ));
+  );
+  const mine = (rs ?? []).map((r) => ({ r, hit: matchOf(r) })).filter((x) => x.hit);
 
-  const pIds = [...new Set(mine.map((r) => r.program_id).filter(Boolean))];
-  const csIds = [...new Set(mine.map((r) => r.camp_session_id).filter(Boolean))];
+  const pIds = [...new Set(mine.map(({ r }) => r.program_id).filter(Boolean))];
+  const csIds = [...new Set(mine.map(({ r }) => r.camp_session_id).filter(Boolean))];
   const pMap = new Map();
   const csMap = new Map();
   if (pIds.length) {
@@ -234,11 +321,38 @@ async function fetchPartner(contact) {
     const { data } = await supabase.from("camp_sessions").select("id, curriculum_name").in("id", csIds);
     for (const s of data ?? []) csMap.set(s.id, s);
   }
-  for (const r of mine) {
+  for (const { r, hit } of mine) {
     let name = "Class roster";
     if (r.program_id && pMap.get(r.program_id)) name = `${pMap.get(r.program_id).curriculum ?? "Class"} roster`;
     else if (r.camp_session_id && csMap.get(r.camp_session_id)) name = `${csMap.get(r.camp_session_id).curriculum_name ?? "Camp"} roster`;
-    events.push({ id: "rs" + r.id, at: r.sent_at, icon: "📄", title: `${name} sent`, detail: r.status === "failed" ? "Failed" : "", tone: r.status === "failed" ? "negative" : "sent" });
+    // Three states, and the middle one is the whole point of this:
+    //   hit.delivery === 'failed'  -> the send to THIS address did not go
+    //                                 through, even if the send as a whole is
+    //                                 recorded as sent.
+    //   hit.delivery === 'sent'    -> this contact got it.
+    //   undefined (rows written before per-recipient outcome existed) -> the
+    //                                 row status is all we have. A wholly failed
+    //                                 row means nobody got it, so that much is
+    //                                 still safe to say; a partial old row will
+    //                                 read as sent, which is the limit of what
+    //                                 was recorded and is not backfillable.
+    //
+    // The title says THAT it did not arrive and stops there. We do not know
+    // WHY: 'failed' is stamped for any non-2xx from Resend, which covers our
+    // own API key being wrong or rate-limited just as much as a bad address.
+    // There is a real send on record that failed for every recipient with
+    // "API key is invalid" - telling that operator their partner's address was
+    // at fault would send them to chase a school over our outage. The reason
+    // stays in failure_reason on the row, which is where it belongs.
+    const contactFailed = hit.delivery === "failed" || (hit.delivery == null && r.status === "failed");
+    events.push({
+      id: "rs" + r.id,
+      at: r.sent_at,
+      icon: "📄",
+      title: contactFailed ? `${name} not delivered` : `${name} sent`,
+      detail: "",
+      tone: contactFailed ? "negative" : "sent",
+    });
   }
   return events;
 }
