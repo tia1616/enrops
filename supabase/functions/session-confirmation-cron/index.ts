@@ -23,6 +23,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
+import { fetchProgramRunStates } from '../_shared/programRunning.ts';
 
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
@@ -191,8 +192,47 @@ serve(async (req: Request) => {
             .filter((id): id is string => !!id),
         ),
       ];
+      // A CANCELLED OR DRAFT CLASS MEETS ON NO DATE, whatever the schedule RPC
+      // says. The RPC derives dates from the weekly cadence and never looks at
+      // programs.status, so without this a cancelled class keeps seeding
+      // confirmations every week for as long as its assignment stays
+      // 'confirmed' - and those rows carry an admin "Confirm & pay" button.
+      //
+      // PERMISSIVE on 'unknown': a status the constraint does not have yet is
+      // still seeded, because the alternative is silently dropping a real
+      // class's session off Payroll (see the note above). The surprise goes in
+      // summary.errors so it is visible instead of guessed at. 'missing' is not
+      // permissive - there is no class to teach.
+      const { states: progStates, statuses: progStatuses, error: progStateErr } =
+        await fetchProgramRunStates(supabase, uniqueProgramIds);
+      if (progStateErr) {
+        // Fail-closed here is NOT an option (it would skip every real class
+        // today), and neither is guessing. Seed nothing from this pass and
+        // surface it loudly: the rows are recoverable tomorrow by the
+        // instructor's own "Mark taught", a wrong pay line is not.
+        console.error('Job C program-status lookup failed:', progStateErr);
+        summary.errors.push(`job_c_program_status: ${progStateErr}`);
+      }
+      const runnableProgramIds = new Set<string>();
+      if (!progStateErr) {
+        for (const pid of uniqueProgramIds) {
+          const state = progStates.get(pid) ?? 'missing';
+          if (state === 'running') {
+            runnableProgramIds.add(pid);
+          } else if (state === 'unknown') {
+            runnableProgramIds.add(pid);
+            summary.errors.push(
+              `job_c_unknown_program_status:${pid}: ${progStatuses.get(pid) ?? 'null'} (seeded anyway)`,
+            );
+          }
+          // 'not_running' / 'missing': skipped silently. Cancelling a class is a
+          // deliberate act, and it happening every week is not news.
+        }
+      }
+
       const meetsToday = new Set<string>();
       for (const pid of uniqueProgramIds) {
+        if (!runnableProgramIds.has(pid)) continue;
         const { data: sched, error: schedErr } = await supabase.rpc(
           'derive_program_session_schedule',
           { p_program_id: pid },

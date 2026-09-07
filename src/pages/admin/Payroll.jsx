@@ -96,6 +96,10 @@ function confirmErrorMessage(code, status) {
       return 'You don’t have permission to confirm pay for this instructor.';
     case 'invalid_confirmation_no_parent':
       return 'This day isn’t linked to a camp or program, so it can’t be confirmed here.';
+    case 'program_not_running':
+      // admin-confirm-session refuses a day on a cancelled or unpublished class.
+      // Without this case the operator got the raw code on a money screen.
+      return 'This class is cancelled, so this day can’t be paid. If it was taught before the class was cancelled, reopen the class, confirm the day, then cancel it again.';
     default:
       return code ? `Could not confirm this day (${code}).` : `Could not confirm this day (${status}).`;
   }

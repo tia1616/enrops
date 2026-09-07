@@ -49,6 +49,7 @@ import {
   adminClient,
 } from '../_shared/instructor.ts';
 import { resolvePayAmount } from '../_shared/payRates.ts';
+import { fetchProgramRunState, mayBecomePay } from '../_shared/programRunning.ts';
 
 interface RequestBody {
   camp_assignment_id?: string;
@@ -152,6 +153,29 @@ serve(async (req: Request) => {
       if (assignment.status !== 'confirmed') {
         return json({ error: 'assignment_not_confirmed', status: assignment.status }, 409);
       }
+      // A CANCELLED OR DRAFT CLASS HAS NO TAUGHT DAYS. The schedule RPC below
+      // cannot tell you this: it derives dates from the weekly cadence and
+      // never reads programs.status, so it happily returns 'session' entries
+      // for a class that was cancelled weeks ago. Nor does the assignment check
+      // above - cancelling a class leaves the assignment 'confirmed'.
+      //
+      // The portal already agrees with this: a cancelled class renders no card,
+      // so no instructor reaches this endpoint through the UI. The guard is for
+      // the raw-API caller and the stale open tab.
+      //
+      // Fail-closed, same rule as the admin path. RECOVERY for a day genuinely
+      // taught before the cancellation and never marked: put the program back
+      // to 'open', mark it, cancel again.
+      const { state: runState, status: progStatus, error: runErr } =
+        await fetchProgramRunState(supabase, assignment.program_id);
+      if (runErr) {
+        console.error('program status lookup failed:', runErr);
+        return json({ error: 'lookup_failed' }, 500);
+      }
+      if (!mayBecomePay(runState)) {
+        return json({ error: 'program_not_running', program_status: progStatus }, 409);
+      }
+
       // Programs have no starts_on/ends_on range — the valid set is the derived
       // session schedule (weekly cadence minus closures). Validate the date is a
       // real 'session' entry, so a raw-API caller can't confirm an arbitrary day.
