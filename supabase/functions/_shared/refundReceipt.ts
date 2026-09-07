@@ -216,7 +216,7 @@ interface SendArgs extends RefundReceiptInput {
  */
 export async function sendRefundReceipt(
   args: SendArgs,
-): Promise<{ sent: boolean; reason?: string; messageId?: string | null; status?: number; detail?: string }> {
+): Promise<{ sent: boolean; reason?: string; messageId?: string | null; status?: number; detail?: string; subject?: string }> {
   const to = (args.to ?? '').trim();
   if (!to) return { sent: false, reason: 'no recipient on file' };
 
@@ -255,14 +255,17 @@ export async function sendRefundReceipt(
       // the code, a permanently undeliverable receipt classifies as transient and
       // never reaches the operator as needs-you. `reason` keeps its old wording
       // so existing callers and tests are unaffected.
-      return { sent: false, reason: `resend ${resp.status}`, status: resp.status, detail: body };
+      return { sent: false, reason: `resend ${resp.status}`, status: resp.status, detail: body, subject };
     }
     // The Resend message id, so the caller's send-log row can be matched by
     // marketing-resend-webhook (it looks up on resend_message_id alone) and pick
     // up delivered / bounced / complained. Without it the refund receipt would be
     // the one family email logged with no delivery verdict possible.
     const okBody = await resp.json().catch(() => ({} as Record<string, unknown>));
-    return { sent: true, messageId: (okBody as { id?: string })?.id ?? null };
+    // `subject` goes back out so the caller can log the line the family actually
+    // saw. It is the one renderRefundReceipt already built above and handed to
+    // Resend, so the log and the inbox cannot disagree.
+    return { sent: true, messageId: (okBody as { id?: string })?.id ?? null, subject };
   } catch (err) {
     console.error('[refund receipt] send error:', err);
     return { sent: false, reason: (err as Error).message };

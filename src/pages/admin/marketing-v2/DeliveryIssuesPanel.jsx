@@ -112,7 +112,7 @@ export default function DeliveryIssuesPanel({ org }) {
       // hits the partial index automation_run_recipients_failed_idx.
       const { data: failed, error: fErr } = await supabase
         .from("automation_run_recipients")
-        .select("id, context_key, parent_id, email, automation_id, source, label, error_message, attempts, last_attempt_at")
+        .select("id, context_key, parent_id, email, automation_id, source, label, rendered_subject, error_message, attempts, last_attempt_at")
         .eq("organization_id", org.id)
         .eq("status", "failed")
         .is("resolved_at", null)
@@ -181,7 +181,7 @@ export default function DeliveryIssuesPanel({ org }) {
           // misses, so a transactional failure is correctly NOT offered a resend
           // button — re-firing a registration confirmation needs its whole Stripe
           // context and cannot be done from here.
-          emailName: r.label || autoName.get(r.automation_id) || "An email",
+          emailName: r.rendered_subject || r.label || autoName.get(r.automation_id) || "An email",
           programName,
           startDate,
           reason,

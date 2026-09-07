@@ -88,7 +88,7 @@ async function fetchFamily(contact, orgId) {
   if (email) {
     const { data: autos } = await supabase
       .from("automation_run_recipients")
-      .select("id, sent_at, status, automation_id, source, label")
+      .select("id, sent_at, status, automation_id, source, label, rendered_subject")
       .eq("email", email)
       .order("sent_at", { ascending: false })
       .limit(300);
@@ -115,8 +115,22 @@ async function fetchFamily(contact, orgId) {
       // "Refund receipt", "Registration confirmed". Prefer the stored label:
       // without it every transactional send renders as the bare fallback
       // "Automated email", which is what this timeline exists to stop.
-      const title = a.source ? (a.label || "Email") : (autoLabel.get(a.automation_id) || "Automated email");
-      events.push({ id: "ar" + a.id, at: a.sent_at, icon: a.source ? "✉️" : "🔔", title, detail: a.status ? cap(a.status.replace(/_/g, " ")) : "", tone });
+      // Prefer the SUBJECT the family actually received (20260907b). It is what an
+      // operator recognises — "Your $45.00 refund from Journey to STEAM" rather
+      // than our category word for it. The label stays as the fallback and moves
+      // into the detail line so the category is still scannable down the column.
+      // Automation rows carry no subject yet and keep their template display name.
+      const subject = a.rendered_subject || null;
+      const label = a.source ? (a.label || "Email") : (autoLabel.get(a.automation_id) || "Automated email");
+      const status = a.status ? cap(a.status.replace(/_/g, " ")) : "";
+      events.push({
+        id: "ar" + a.id,
+        at: a.sent_at,
+        icon: a.source ? "✉️" : "🔔",
+        title: subject || label,
+        detail: subject ? [label, status].filter(Boolean).join(" · ") : status,
+        tone,
+      });
     }
 
     // Message families — the per-class operator send (program_family_messages).

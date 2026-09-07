@@ -805,8 +805,10 @@ serve(async (req: Request) => {
     // can be logged: the id is what lets marketing-resend-webhook attach a
     // delivery verdict, and the status is what makes a permanent failure
     // classify as permanent rather than silently transient.
-    let receipt: { sent: boolean; reason?: string; messageId?: string | null; status?: number; detail?: string } =
-      { sent: false, reason: 'not attempted' };
+    let receipt: {
+      sent: boolean; reason?: string; messageId?: string | null;
+      status?: number; detail?: string; subject?: string;
+    } = { sent: false, reason: 'not attempted' };
     try {
       const { data: parentRow } = await supabase
         .from('parents')
@@ -875,6 +877,10 @@ serve(async (req: Request) => {
         await logTransactionalSend(supabase, {
           organizationId: reg.organization_id,
           source: 'refund_receipt',
+          // The subject the family actually saw ("Your $X refund from <org>"),
+          // handed back by sendRefundReceipt so the log and the inbox cannot
+          // disagree about what was said.
+          subject: receipt.subject ?? null,
           // The `none:<reg>` fallback is load-bearing even though it looks like
           // belt-and-braces. With no refund rows the key would be the CONSTANT
           // string "refunded:", and the dedupe index is

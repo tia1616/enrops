@@ -1320,6 +1320,7 @@ async function recordExternalRefund(
         contextKey: `refunded:${input.stripeRefundId}`,
         email: parent.email,
         parentId: reg.parent_id ?? null,
+        subject: r.subject ?? null,
         send: r.sent
           ? { ok: true, id: r.messageId ?? null }
           : { ok: false, error: formatSendError(r.status, r.detail ?? r.reason) },
@@ -1909,6 +1910,7 @@ ${renderPlatformFooterHtml("regConfirm")}
     contextKey: `session:${sessionId}`,
     email: to,
     parentId: registrations.find((r) => r?.parent_id)?.parent_id ?? null,
+    subject: renderedSubject,
     send: sendOutcome,
   });
 }

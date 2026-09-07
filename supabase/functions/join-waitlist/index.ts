@@ -363,6 +363,9 @@ serve(async (req) => {
     // up", and that promise is kept by chunk 2's invite, not by this message.
     let emailSent = false;
     let sendOutcome: { ok: true; id: string | null } | { ok: false; error: string } | null = null;
+    // Hoisted: `built` is scoped to the try below, and the log call that needs
+    // its subject runs after the catch.
+    let sentSubject: string | null = null;
     try {
       const { data: prog } = await admin
         .from('programs')
@@ -386,6 +389,7 @@ serve(async (req) => {
         position: Number(position),
       });
 
+      sentSubject = built.subject;
       const resp = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: {
@@ -441,6 +445,7 @@ serve(async (req) => {
         contextKey: `program:${prog.id}:parent:${parentId}:student:${studentId}`,
         email: parentEmail,
         parentId,
+        subject: sentSubject,
         send: sendOutcome,
       });
     }

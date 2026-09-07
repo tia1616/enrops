@@ -242,6 +242,9 @@ export async function runWaitlistSweep(
   // rows again (they are no longer status=waitlist). A missed lapse note is the
   // smallest harm in this file.
   for (const r of lapsedRows) {
+    // Declared OUTSIDE the try on purpose: `built` is scoped to the try, and the
+    // catch below logs the send too, so it needs the subject to have survived.
+    let lapseSubject: string | null = null;
     try {
       // The expire RPC LEFT-joins parent/student, so a lapsed row whose family was removed
       // comes back with a null email. It was still correctly cancelled and counted; there
@@ -283,6 +286,7 @@ export async function runWaitlistSweep(
         catalogUrl: `${opts.baseUrl.replace(/\/+$/, '')}/${org.slug}`,
         nextInLine: (behind ?? 0) > 0,
       });
+      lapseSubject = built.subject;
       const resp = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
@@ -319,6 +323,7 @@ export async function runWaitlistSweep(
         source: 'waitlist_lapsed',
         contextKey: `registration:${r.registration_id}:lapsed:${new Date().toISOString().slice(0, 10)}`,
         email: r.parent_email ?? '',
+        subject: lapseSubject,
         send: lapseOutcome,
       });
     } catch (e) {
@@ -334,6 +339,7 @@ export async function runWaitlistSweep(
         source: 'waitlist_lapsed',
         contextKey: `registration:${r.registration_id}:lapsed:${new Date().toISOString().slice(0, 10)}`,
         email: r.parent_email ?? '',
+        subject: lapseSubject,
         send: { ok: false, error: formatSendError(undefined, (e as Error).message) },
       });
     }
@@ -450,6 +456,7 @@ export async function runWaitlistSweep(
             source: 'waitlist_invite',
             contextKey: `registration:${row.registration_id}:invite:${row.invite_token}`,
             email: row.parent_email,
+            subject: built.subject,
             send: { ok: false, error: formatSendError(resp.status, body) },
           });
         } else {
@@ -468,6 +475,7 @@ export async function runWaitlistSweep(
               source: 'waitlist_invite',
               contextKey: `registration:${row.registration_id}:invite:${row.invite_token}`,
               email: row.parent_email,
+              subject: built.subject,
               send: { ok: true, id: (okBody as { id?: string })?.id ?? null },
             });
           }

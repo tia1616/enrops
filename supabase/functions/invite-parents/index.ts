@@ -238,6 +238,7 @@ serve(async (req) => {
           contextKey: `program:${programId}:parent:${c.parentId}`,
           email: c.email,
           parentId: c.parentId,
+          subject,
           send,
         });
 

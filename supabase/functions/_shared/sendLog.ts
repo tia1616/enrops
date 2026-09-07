@@ -78,6 +78,15 @@ export async function logTransactionalSend(
     send: SendOutcome;
     /** Overrides SEND_SOURCES[source]; only for a send whose name varies. */
     label?: string;
+    /**
+     * The subject line AS THE FAMILY RECEIVED IT, after variable substitution --
+     * not the template's raw text with {{placeholders}} still in it. This is what
+     * an operator recognises on a family's record; `label` is only the category.
+     * Every caller already computes it to pass to Resend, so it is passed through
+     * rather than rebuilt (rebuilding it here would be a second spelling of the
+     * subject, and the two would drift the first time either changed).
+     */
+    subject?: string | null;
   },
 ): Promise<void> {
   try {
@@ -105,6 +114,11 @@ export async function logTransactionalSend(
       parent_id: args.parentId ?? null,
       source: args.source,
       label: args.label ?? SEND_SOURCES[args.source],
+      // Trimmed and capped: it renders in a timeline row, a delivery panel row
+      // and an operator alert email, and a runaway subject would stretch all
+      // three. Null rather than '' when absent, so a reader's `|| label`
+      // fallback fires instead of rendering an empty title.
+      rendered_subject: args.subject?.trim() ? args.subject.trim().slice(0, 300) : null,
       context_key: args.contextKey,
       email: args.email,
       resend_message_id: ok ? args.send.id : null,
