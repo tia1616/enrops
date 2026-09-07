@@ -1165,11 +1165,15 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
   // Gated on isInternalAdmin, so a real family can never receive a sample name.
   // Jessica picked "Nina" on 2026-09-07; the test email says these are samples
   // so nobody mistakes one for a real child on their roster.
-  tokens.set(
-    "first_name",
-    splitFirstName(r.parent_name) || (isInternalAdmin ? splitFirstName(SAMPLE_PARENT) : "") || "there",
-  );
-  tokens.set("parent_name", r.parent_name?.trim() || (isInternalAdmin ? SAMPLE_PARENT : ""));
+  // The PARENT tokens are deliberately NOT seeded, and that is a reversal of my
+  // own first attempt. {{first_name}} already falls back to "there", which is
+  // exactly what a real family with no parent name on file receives — so the
+  // test is accurate as-is. Seeding it read "Hi Sample," instead of "Hi there,"
+  // on 36 of the 38 touchpoints that use this token, which is LESS
+  // representative, not more. The complaint was the missing CHILD name; only
+  // that is seeded.
+  tokens.set("first_name", splitFirstName(r.parent_name) || "there");
+  tokens.set("parent_name", r.parent_name?.trim() || "");
   // REAL SENDS GET A FALLBACK TOO, and that is a separate fix in the same line.
   // {{first_name}} has always fallen back to "there"; {{child_first_name}} fell
   // back to empty, so a family with no child name on file received the sentence
@@ -1180,7 +1184,9 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
     r.child_first_name?.trim() || (isInternalAdmin ? SAMPLE_CHILD_FIRST : "your child"),
   );
   // Last name has no safe generic ("your child Smith" reads wrong), so a real
-  // send with no last name still resolves to empty. Only the test is seeded.
+  // send with no last name still resolves to empty. Seeded for the test only for
+  // symmetry with the first name — measured as unused by all 38 touchpoints
+  // today, so this is defensive rather than load-bearing.
   tokens.set(
     "child_last_name",
     r.child_last_name?.trim() || (isInternalAdmin ? SAMPLE_CHILD_LAST : ""),
