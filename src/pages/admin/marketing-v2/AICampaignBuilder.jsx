@@ -472,6 +472,43 @@ export default function AICampaignBuilder() {
       alert("No touchpoint selected. Click the touchpoint card first, then send test.");
       return;
     }
+
+    // PRE-FLIGHT ON WHAT IS ON SCREEN, before asking the server.
+    //
+    // The function refuses with one message — "touchpoint payload missing subject
+    // or body_html" — for TWO different causes: content the operator has typed
+    // but not saved, and content that does not exist at all. An earlier version
+    // of this handler mapped that single string to the first cause and told
+    // everyone to "save your changes first". For an email with an empty SUBJECT
+    // that advice is a loop: saving faithfully stores the empty subject and the
+    // next test fails identically. Jessica reproduced exactly that on
+    // 2026-09-07 — edit, Done editing, Send test, "save first", Save as draft,
+    // "save first" again.
+    //
+    // Local state is the honest source here: it holds what the operator can see,
+    // including edits not yet written. So name the missing field instead of
+    // guessing at a cause, in the same shape as the registration form's
+    // "We still need one thing".
+    const tp = (state.draft?.schedule?.touchpoints ?? []).find((t) => t.id === touchpointId);
+    const missing = [];
+    if (!tp?.subject?.trim()) missing.push("a subject");
+    if (!tp?.body_html?.trim()) missing.push("an email body");
+    if (missing.length > 0) {
+      // NAME THE EMAIL. The footer "Send test to me" always targets
+      // touchpoints[0] (ScheduleReview.jsx:339) while each card has its own
+      // button for its own id — two controls, the same label, different targets.
+      // On a multi-email campaign an operator can be looking at the second card
+      // and testing the first, so a message about "this email" would describe a
+      // card they are not reading.
+      const which = tp?.label ? `"${tp.label}"` : "This email";
+      alert(
+        `${which} still needs ${missing.join(" and ")}.\n\n` +
+        `Add ${missing.length > 1 ? "them" : "it"} on that email, then send the test. ` +
+        `Saving won't help on its own — the test sends what the email actually contains.`,
+      );
+      return;
+    }
+
     setBusyAction("test");
     try {
       const { data, error } = await supabase.functions.invoke("marketing-touchpoint-send", {
