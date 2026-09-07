@@ -73,7 +73,7 @@ serve(async (req: Request) => {
     // ── load the failed recipient row (authoritative, server-side) ──────────
     const { data: rec, error: recErr } = await supabase
       .from("automation_run_recipients")
-      .select("id, organization_id, context_key, parent_id, status, attempts, resolved_at")
+      .select("id, organization_id, context_key, parent_id, status, attempts, resolved_at, source")
       .eq("id", recipientId)
       .maybeSingle();
     if (recErr) {
@@ -109,6 +109,23 @@ serve(async (req: Request) => {
     }
 
     // ── resend ──────────────────────────────────────────────────────────────
+    // This path re-renders through lifecycle-automations-cron, which only knows
+    // how to build AUTOMATION email. As of 20260907a this table also holds
+    // transactional sends (registration confirmation, refund receipt, waitlist),
+    // and re-firing one of those needs its own Stripe or waitlist context that
+    // the cron does not have.
+    //
+    // It already failed safe twice by accident — most transactional context keys
+    // do not parse below, and `waitlist_joined` (which does) is caught by the
+    // status='confirmed' lookup, since a waiting registration is not confirmed.
+    // Both are incidental. Stated explicitly here so the guard cannot be lost by
+    // a later change to either of them: a row with a source is not resendable
+    // from this endpoint, full stop. DeliveryIssuesPanel already declines to
+    // offer the button for these; this is the server saying the same thing.
+    if (rec.source) {
+      return json({ ok: false, action, reason: "not_resendable_transactional" });
+    }
+
     // Map the recipient back to its confirmed registration.
     const pk = parseContextKey(rec.context_key);
     if (!pk.kind || !pk.refId || !pk.studentId) {

@@ -88,6 +88,7 @@ import { readChargeFeeFacts, FEE_REFUND_SOURCE_KEY, FEE_REFUND_REGISTRATION_KEY 
 import { allocateRefundAcrossRegistrations } from '../_shared/refundAllocation.ts';
 import { sendRefundReceipt } from '../_shared/refundReceipt.ts';
 import { isEmailAllowed } from '../_shared/emailGuard.ts';
+import { logTransactionalSend, formatSendError } from '../_shared/sendLog.ts';
 import { maybeAlertOperatorFlagged } from '../_shared/operatorFlagAlert.ts';
 import {
   settlementForCheckoutCompleted,
@@ -1309,6 +1310,25 @@ async function recordExternalRefund(
         accentColor: brand.accent_color,
       });
       if (!r.sent) console.warn(`[charge.refunded] receipt not sent to ${parent.email}: ${r.reason}`);
+      // Record it, same as the in-product refund path. Keyed on Stripe's own
+      // refund id: stable across the retries this handler is explicitly built to
+      // absorb, and unique per refund, so a second partial refund on the same
+      // charge correctly gets its own row instead of overwriting the first.
+      // Only log an ATTEMPTED send — same rule as the in-product refund path.
+      // A suppression (no recipient, staging allowlist, no API key) is a
+      // decision, and the delivery panel is documented to carry genuine failures
+      // only.
+      if (r.attempted) await logTransactionalSend(admin, {
+        organizationId: reg.organization_id,
+        source: 'refund_receipt',
+        contextKey: `refunded:${input.stripeRefundId}`,
+        email: parent.email,
+        parentId: reg.parent_id ?? null,
+        subject: r.subject ?? null,
+        send: r.sent
+          ? { ok: true, id: r.messageId ?? null }
+          : { ok: false, error: formatSendError(r.status, r.detail ?? r.reason) },
+      });
     }
   } catch (receiptErr) {
     console.error('[charge.refunded] receipt failed (refund itself is recorded):', receiptErr);
@@ -1871,10 +1891,32 @@ ${renderPlatformFooterHtml("regConfirm")}
     }),
   });
 
-  if (!resendResp.ok) {
+  // Record the send. Until now this email — the one every paying family gets —
+  // was written to no table at all, so "did their confirmation arrive?" could
+  // only be answered by asking Resend. The row also gives the delivery webhook
+  // something to write its verdict onto, since that matches on message id alone.
+  //
+  // context_key is the Stripe session, so one confirmation is logged per
+  // checkout no matter how many children it covered, and a webhook Stripe
+  // retries cannot log it twice.
+  let sendOutcome;
+  if (resendResp.ok) {
+    const okBody = await resendResp.json().catch(() => ({}));
+    sendOutcome = { ok: true as const, id: okBody?.id ?? null };
+  } else {
     const body = await resendResp.text();
     console.error('Resend send failed:', resendResp.status, body);
+    sendOutcome = { ok: false as const, error: formatSendError(resendResp.status, body) };
   }
+  await logTransactionalSend(admin, {
+    organizationId: brand.org_id,
+    source: 'registration_confirmation',
+    contextKey: `session:${sessionId}`,
+    email: to,
+    parentId: registrations.find((r) => r?.parent_id)?.parent_id ?? null,
+    subject: renderedSubject,
+    send: sendOutcome,
+  });
 }
 
 // ───────────────────────────────────────────────────────────────────────────

@@ -40,6 +40,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 import { buildWaitlistConfirmation } from '../_shared/waitlistEmail.ts';
+import { logTransactionalSend, formatSendError } from '../_shared/sendLog.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -361,6 +362,10 @@ serve(async (req) => {
     // arrive. What WOULD be a lie is the screen's "we will email you if a place opens
     // up", and that promise is kept by chunk 2's invite, not by this message.
     let emailSent = false;
+    let sendOutcome: { ok: true; id: string | null } | { ok: false; error: string } | null = null;
+    // Hoisted: `built` is scoped to the try below, and the log call that needs
+    // its subject runs after the catch.
+    let sentSubject: string | null = null;
     try {
       const { data: prog } = await admin
         .from('programs')
@@ -384,6 +389,7 @@ serve(async (req) => {
         position: Number(position),
       });
 
+      sentSubject = built.subject;
       const resp = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: {
@@ -409,12 +415,39 @@ serve(async (req) => {
       });
 
       if (!resp.ok) {
-        console.error('[join-waitlist] confirmation send failed', resp.status, await resp.text());
+        const body = await resp.text();
+        console.error('[join-waitlist] confirmation send failed', resp.status, body);
+        sendOutcome = { ok: false as const, error: formatSendError(resp.status, body) };
       } else {
         emailSent = true;
+        const okBody = await resp.json().catch(() => ({}));
+        sendOutcome = { ok: true as const, id: okBody?.id ?? null };
       }
     } catch (mailErr) {
       console.error('[join-waitlist] confirmation send threw', (mailErr as Error).message);
+      sendOutcome = { ok: false as const, error: formatSendError(undefined, (mailErr as Error).message) };
+    }
+
+    // Record it. The waiting list sends three emails and, until now, logged the
+    // join confirmation and the lapse note NOWHERE and the invite only as a
+    // single overwritten timestamp — which is exactly the question Jeff asked
+    // ("what went to my waiting list?") that could only be answered by reading
+    // the cron's source.
+    //
+    // context_key uses the program:parent:student shape the delivery alert's
+    // parser understands, so a failed one renders with the child and the class
+    // instead of a bare email address. A family can only be on one class's list
+    // once, so this is also the right dedupe key.
+    if (sendOutcome) {
+      await logTransactionalSend(admin, {
+        organizationId: org.id,
+        source: 'waitlist_joined',
+        contextKey: `program:${prog.id}:parent:${parentId}:student:${studentId}`,
+        email: parentEmail,
+        parentId,
+        subject: sentSubject,
+        send: sendOutcome,
+      });
     }
 
     return json({

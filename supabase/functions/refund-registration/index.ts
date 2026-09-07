@@ -90,6 +90,7 @@ import { readChargeFeeFacts } from '../_shared/chargeFeeFacts.ts';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 import { isEmailAllowed } from '../_shared/emailGuard.ts';
 import { sendRefundReceipt } from '../_shared/refundReceipt.ts';
+import { logTransactionalSend, formatSendError } from '../_shared/sendLog.ts';
 import { maybeAlertOperatorFlagged } from '../_shared/operatorFlagAlert.ts';
 
 // Per-environment site origin, same convention as the webhook. Only used to
@@ -800,7 +801,14 @@ serve(async (req: Request) => {
     // The webhook deliberately does NOT also send for these: it recognises
     // Enrops-initiated refunds by metadata and skips them entirely, so the
     // family gets exactly one receipt.
-    let receipt: { sent: boolean; reason?: string } = { sent: false, reason: 'not attempted' };
+    // messageId / status / detail come back from sendRefundReceipt so the send
+    // can be logged: the id is what lets marketing-resend-webhook attach a
+    // delivery verdict, and the status is what makes a permanent failure
+    // classify as permanent rather than silently transient.
+    let receipt: {
+      sent: boolean; reason?: string; messageId?: string | null;
+      status?: number; detail?: string; subject?: string; attempted?: boolean;
+    } = { sent: false, reason: 'not attempted', attempted: false };
     try {
       const { data: parentRow } = await supabase
         .from('parents')
@@ -857,6 +865,45 @@ serve(async (req: Request) => {
         if (!receipt.sent) {
           console.warn(`[refund] receipt not sent to ${parent.email}: ${receipt.reason}`);
         }
+        // Record it. "Nothing records that the receipt was sent at all, so 'was
+        // this family told?' cannot be answered from the database" has been on
+        // the board since the first real prod refund; this is that gap.
+        //
+        // context_key reuses the dedupe shape this function already uses for the
+        // same event (see the `refunded:` key below) rather than inventing a
+        // second one: a Stripe retry of this call produces the same refund rows
+        // and so the same key, while a genuinely separate partial refund produces
+        // different ids and correctly gets its own receipt row.
+        // Only log a send we actually ATTEMPTED. The three suppressions inside
+        // sendRefundReceipt (no recipient, staging allowlist, no API key) are
+        // decisions, not failures, and DeliveryIssuesPanel says in writing that
+        // "intentional skips never appear here - only genuine failures". Logging
+        // one as failed would put a receipt we chose not to send into the
+        // operator's "families who didn't get an email" list.
+        if (receipt.attempted) await logTransactionalSend(supabase, {
+          organizationId: reg.organization_id,
+          source: 'refund_receipt',
+          // The subject the family actually saw ("Your $X refund from <org>"),
+          // handed back by sendRefundReceipt so the log and the inbox cannot
+          // disagree about what was said.
+          subject: receipt.subject ?? null,
+          // The `none:<reg>` fallback is load-bearing even though it looks like
+          // belt-and-braces. With no refund rows the key would be the CONSTANT
+          // string "refunded:", and the dedupe index is
+          // (organization_id, source, context_key) — so two such receipts in one
+          // org would collide and the second would silently overwrite the first's
+          // record. The nothing_paid gate at :365 makes that unreachable today;
+          // it is one changed early-return away from being reachable, and the
+          // failure mode is a lost receipt record on the money path.
+          contextKey: refundsCreated.length
+            ? `refunded:${refundsCreated.map((r) => r.refund_row_id).join('_')}`
+            : `refunded:none:${reg.id}`,
+          email: parent.email,
+          parentId: reg.parent_id ?? null,
+          send: receipt.sent
+            ? { ok: true, id: receipt.messageId ?? null }
+            : { ok: false, error: formatSendError(receipt.status, receipt.detail ?? receipt.reason) },
+        });
       } else {
         receipt = { sent: false, reason: 'no parent email on file' };
       }

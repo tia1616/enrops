@@ -216,17 +216,32 @@ interface SendArgs extends RefundReceiptInput {
  */
 export async function sendRefundReceipt(
   args: SendArgs,
-): Promise<{ sent: boolean; reason?: string }> {
+): Promise<{
+  sent: boolean; reason?: string; messageId?: string | null;
+  status?: number; detail?: string; subject?: string;
+  /**
+   * True once this has actually been handed to Resend. FALSE for the three
+   * deliberate suppressions below (no recipient, staging allowlist, no API key),
+   * which are DECISIONS rather than failures.
+   *
+   * The caller logs the send, and DeliveryIssuesPanel states in writing that
+   * "intentional skips never appear here - only genuine failures". Logging a
+   * suppression as status='failed' would drop a receipt we CHOSE not to send
+   * into the operator's "families who didn't get an email" list as an unresolved
+   * problem they cannot act on.
+   */
+  attempted: boolean;
+}> {
   const to = (args.to ?? '').trim();
-  if (!to) return { sent: false, reason: 'no recipient on file' };
+  if (!to) return { sent: false, reason: 'no recipient on file', attempted: false };
 
   // Staging allowlist. Without this a test refund on synthetic data can email a
   // real family, and the money has already moved by the time we get here.
   if (!args.isAllowed(to)) {
     console.log(`[refund receipt] suppressed by the staging allowlist: ${to}`);
-    return { sent: false, reason: 'blocked by staging allowlist' };
+    return { sent: false, reason: 'blocked by staging allowlist', attempted: false };
   }
-  if (!args.resendApiKey) return { sent: false, reason: 'no RESEND_API_KEY' };
+  if (!args.resendApiKey) return { sent: false, reason: 'no RESEND_API_KEY', attempted: false };
 
   const { subject, html, text } = renderRefundReceipt(args);
 
@@ -250,11 +265,26 @@ export async function sendRefundReceipt(
     if (!resp.ok) {
       const body = await resp.text();
       console.error('[refund receipt] send failed:', resp.status, body);
-      return { sent: false, reason: `resend ${resp.status}` };
+      // `status` is carried out so the caller can log the failure in the shape
+      // deliveryIssues.isPermanentFailure parses ("Resend <code>: ..."). Without
+      // the code, a permanently undeliverable receipt classifies as transient and
+      // never reaches the operator as needs-you. `reason` keeps its old wording
+      // so existing callers and tests are unaffected.
+      return { sent: false, reason: `resend ${resp.status}`, status: resp.status, detail: body, subject, attempted: true };
     }
-    return { sent: true };
+    // The Resend message id, so the caller's send-log row can be matched by
+    // marketing-resend-webhook (it looks up on resend_message_id alone) and pick
+    // up delivered / bounced / complained. Without it the refund receipt would be
+    // the one family email logged with no delivery verdict possible.
+    const okBody = await resp.json().catch(() => ({} as Record<string, unknown>));
+    // `subject` goes back out so the caller can log the line the family actually
+    // saw. It is the one renderRefundReceipt already built above and handed to
+    // Resend, so the log and the inbox cannot disagree.
+    return { sent: true, messageId: (okBody as { id?: string })?.id ?? null, subject, attempted: true };
   } catch (err) {
     console.error('[refund receipt] send error:', err);
-    return { sent: false, reason: (err as Error).message };
+    // Attempted: the request went out and died in flight. A genuine failure,
+    // and the one most worth surfacing to the operator.
+    return { sent: false, reason: (err as Error).message, attempted: true };
   }
 }

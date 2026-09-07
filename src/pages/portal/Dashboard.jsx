@@ -458,6 +458,21 @@ export default function Dashboard() {
         // rule for the operator side ("intentional skips never appear here");
         // the family feed was the only reader of this table missing it.
         .eq('status', 'sent')
+        // Automation sends only. As of 20260907a this table is the platform's
+        // send log, not just the lifecycle one: family transactional email
+        // (registration confirmation, thank-you, refund receipt, waitlist
+        // invite/lapse, portal invite) is recorded here too. Those rows are for
+        // the OPERATOR's visibility, and Jessica's call on 2026-09-07 was that
+        // families see nothing new in this feed for now.
+        //
+        // This is not only a scope choice, it is the correctness one. The label
+        // below comes from automations -> automation_templates.display_name; a
+        // transactional row has no automation, so every one of them would render
+        // as the literal fallback 'Update' — a refund receipt and a registration
+        // confirmation shown to a parent as the same word. Turning this feed on
+        // for transactional sends means reading `label` instead, plus copy she
+        // approves. Do not simply delete this line.
+        .not('automation_id', 'is', null)
         .order('sent_at', { ascending: false })
         .limit(10);
 
