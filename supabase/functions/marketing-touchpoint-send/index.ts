@@ -798,10 +798,19 @@ serve(async (req: Request) => {
       // Says WHICH values were invented, so an operator checking their own test
       // knows the personalisation they are looking at is a stand-in and that a
       // real family sees their own child's name here.
-      const testBannerHtml = isTestSend
+      // Gated on whether a sample was ACTUALLY substituted, not on isTestSend.
+      // ensureAdminRecipient returns an EXISTING contact row when the operator's
+      // own address is already on their list (:988) — that row can carry a real
+      // child name, and may not even hold the _internal_admin segment. Keying the
+      // banner off isTestSend alone would tell such an operator that the name
+      // they are reading is invented when it is their own real data: a message
+      // that is confidently wrong, which is worse than none.
+      const usedSampleChild = !r.child_first_name?.trim() &&
+        (r.segments ?? []).includes("_internal_admin");
+      const testBannerHtml = isTestSend && usedSampleChild
         ? `<div style="background:#FBF1DC;border:1px solid #9A6A00;border-radius:6px;padding:10px 12px;margin:0 0 16px;font:13px -apple-system,BlinkMacSystemFont,sans-serif;color:#5c4000">` +
-          `<strong>This is a test.</strong> Your list has no child or parent name for you, so sample values are shown: ` +
-          `<strong>${SAMPLE_CHILD_FIRST}</strong> for the child's name. Each family receives their own child's name here.` +
+          `<strong>This is a test.</strong> Your own contact record has no child on it, so ` +
+          `<strong>${SAMPLE_CHILD_FIRST}</strong> is shown as a sample. Each family receives their own child's name here.` +
           `</div>`
         : "";
       const innerHtml = testBannerHtml + renderedInner + downloadButtonsHtml;
