@@ -7,11 +7,14 @@
 // "was this family told, and when?" could not be answered for most of what the
 // platform sends. This is the writer that closes that.
 //
-// It writes to the SAME table rather than a new one because five surfaces already
-// read that table (operator contact timeline, delivery-issues panel, Overview
-// card, parent dashboard feed, and marketing-resend-webhook's delivery
-// write-back). The webhook matches a Resend event on resend_message_id ALONE, so
-// every row written here picks up delivered / bounced / complained for free.
+// It writes to the SAME table rather than a new one because SEVEN surfaces
+// already read that table -- counted, because an earlier draft of this comment
+// said five and undercounting is how a reader gets missed: the operator contact
+// timeline, the delivery-issues panel, the Overview "didn't get an email" card,
+// the parent dashboard feed, marketing-resend-webhook's delivery write-back,
+// delivery-alert-cron, and delivery-issue-action. The webhook matches a Resend
+// event on resend_message_id ALONE, so every row written here picks up
+// delivered / bounced / complained for free.
 //
 // See migration 20260907a for why the cron's UNIQUE (automation_id, context_key)
 // is deliberately untouched and why this path gets its own non-partial index.

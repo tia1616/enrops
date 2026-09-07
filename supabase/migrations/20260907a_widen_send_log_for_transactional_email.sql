@@ -6,9 +6,11 @@
 -- (verified in the source, 2026-09-07), so "was this family told, and when?" is
 -- unanswerable for most of what the platform sends.
 --
--- WHY WIDEN RATHER THAN MINT A SECOND LOG. Five surfaces already read this table:
--- the operator contact timeline, the delivery-issues panel, the Overview card,
--- the parent dashboard feed, and marketing-resend-webhook's delivery write-back.
+-- WHY WIDEN RATHER THAN MINT A SECOND LOG. SEVEN surfaces already read this
+-- table (counted; an earlier draft of this header said five): the operator
+-- contact timeline, the delivery-issues panel, the Overview card, the parent
+-- dashboard feed, marketing-resend-webhook's delivery write-back,
+-- delivery-alert-cron and delivery-issue-action.
 -- That webhook matches a Resend event on resend_message_id ALONE -- it never
 -- looks at automation_id -- so a transactional row picks up delivered / bounced /
 -- complained for free. A second table means rebuilding all five.
