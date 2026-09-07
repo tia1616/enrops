@@ -526,11 +526,17 @@ export default function AICampaignBuilder() {
         // instead, which always works regardless of recipient state.
         alert("Couldn't render this preview by email. Use the 'Preview as parent at' dropdown above the email body — it shows the same rendered output for any school you pick, no email needed.");
       } else if (data?.skipped_deduped > 0) {
-        // TODO: test mode should bypass per-touchpoint dedup — operators want
-        // to re-preview the same touchpoint after edits. Backlog'd alongside
-        // the other Family Comms audit items. For now, this alert just tells
-        // them why the second click went nowhere.
-        alert("Already previewed this touchpoint once today. Try a different touchpoint, or click Edit on the body to make a change and redraft.");
+        // The TODO that used to live here — "test mode should bypass
+        // per-touchpoint dedup" — is DONE as of 2026-09-07: the function skips
+        // the dedup check when mode='test' (see the note at the alreadyDelivered
+        // check). Jeff could not re-test the email he was editing, which made
+        // the previous copy unanswerable advice.
+        //
+        // The branch is KEPT rather than deleted. It is now unreachable on the
+        // test path, and that is exactly why it must stay honest: if a future
+        // change reintroduces dedup for tests, an operator gets a real
+        // explanation instead of the "nothing landed" catch-all below.
+        alert("This touchpoint was already sent to you and the send was skipped. If you were expecting a fresh test, tell us — this should not happen on a test send.");
       } else {
         alert(`Test attempted but nothing landed. Response: ${JSON.stringify(data)}`);
       }

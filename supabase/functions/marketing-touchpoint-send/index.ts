@@ -79,6 +79,16 @@ const PUBLIC_SITE_URL = (Deno.env.get("PUBLIC_SITE_URL") ?? "https://enrops.com"
 // Already-delivered statuses for dedup. Mirrors marketing-send.
 const DELIVERED_STATUSES = ["sent", "delivered", "opened", "clicked"];
 
+// Stand-in personalisation for a TEST send only. An operator's own test row is
+// bootstrapped with an email and nothing else, so the name tokens resolved to
+// empty and they read their own email with a hole in a sentence. Module scope
+// because both the token builder and the test banner name the same value - the
+// banner has to tell the operator which name was invented, and two copies of
+// "Nina" would drift. Jessica picked it on 2026-09-07.
+const SAMPLE_CHILD_FIRST = "Nina";
+const SAMPLE_CHILD_LAST = "Sample";
+const SAMPLE_PARENT = "Sample Parent";
+
 // Soft defense against test-send abuse — caps test sends per minute per user.
 const TEST_SEND_THROTTLE_PER_MINUTE = 30;
 
@@ -448,8 +458,12 @@ serve(async (req: Request) => {
   // approved_recipient_ids in one round-trip. No client-side chunking, no
   // URL-length cliff at 500+ UUIDs, and no need for the cron to ship the
   // full ID list through a fetch body.
+  // One flag, read once, used by both the recipient bootstrap below and the
+  // dedup bypass further down — rather than testing body.mode in two places and
+  // letting them drift.
+  const isTestSend = body.mode === "test";
   let recipientRows: Recipient[] = [];
-  if (body.mode === "test") {
+  if (isTestSend) {
     if (!auth.userEmail) {
       return json({ error: "test mode requires authenticated user with email" }, 400);
     }
@@ -651,7 +665,18 @@ serve(async (req: Request) => {
     if (!r.email) { results.skipped_no_email++; continue; }
     const emailLc = r.email.toLowerCase();
     if (suppressedEmails.has(emailLc)) { results.skipped_suppressed++; continue; }
-    if (alreadyDelivered.has(r.id)) { results.skipped_deduped++; continue; }
+    // Dedup is a REAL-SEND protection: it stops a family receiving the same
+    // touchpoint twice. A test goes to the operator's own inbox and is the
+    // thing they use to check an edit, so applying it there turns "preview my
+    // change" into "you already previewed this today, make another change" —
+    // which is what Jeff hit on 2026-09-07 after his first test of the morning,
+    // and it is unanswerable: he could not preview the email he was trying to
+    // fix. The TODO in AICampaignBuilder asked for exactly this bypass.
+    //
+    // Safe because a test only ever has ONE recipient row: the bootstrapped
+    // _internal_admin, whose email is the caller's own (mode='test' requires an
+    // authenticated user and uses auth.userEmail). It cannot re-send to a family.
+    if (!isTestSend && alreadyDelivered.has(r.id)) { results.skipped_deduped++; continue; }
     if (seenEmails.has(emailLc)) { results.skipped_email_deduped++; continue; }
     seenEmails.add(emailLc);
 
@@ -742,7 +767,14 @@ serve(async (req: Request) => {
         locationNameMap,
       });
 
-      const subject = postCleanCopy(replaceTokens(touchpoint.payload!.subject!, tokens, { html: false }));
+      // A test is labelled in the SUBJECT, not only in the body: it lands in the
+      // operator's own inbox next to real mail, and one that looks identical to
+      // what families got is the kind of thing that gets forwarded by mistake.
+      // The sample-name note rides here too, so "Nina" can never be read as a
+      // real child on their roster.
+      const subject = isTestSend
+        ? `[TEST] ${postCleanCopy(replaceTokens(touchpoint.payload!.subject!, tokens, { html: false }))}`
+        : postCleanCopy(replaceTokens(touchpoint.payload!.subject!, tokens, { html: false }));
       // Wrap Ennie's body in a minimal HTML shell: doctype, basic styling,
       // unsubscribe footer. Ennie writes the CONTENT; the shell guarantees:
       // - Consistent rendering across Outlook / Gmail / Apple Mail
@@ -752,7 +784,16 @@ serve(async (req: Request) => {
       const renderedInner = postCleanCopy(replaceTokens(touchpoint.payload!.body_html!, tokens, { html: true }));
       // Download buttons are appended to the BOTTOM of the body (they land above
       // the signature that wrapInEmailShell adds) — never a token in the body.
-      const innerHtml = renderedInner + downloadButtonsHtml;
+      // Says WHICH values were invented, so an operator checking their own test
+      // knows the personalisation they are looking at is a stand-in and that a
+      // real family sees their own child's name here.
+      const testBannerHtml = isTestSend
+        ? `<div style="background:#FBF1DC;border:1px solid #9A6A00;border-radius:6px;padding:10px 12px;margin:0 0 16px;font:13px -apple-system,BlinkMacSystemFont,sans-serif;color:#5c4000">` +
+          `<strong>This is a test.</strong> Your list has no child or parent name for you, so sample values are shown: ` +
+          `<strong>${SAMPLE_CHILD_FIRST}</strong> for the child's name. Each family receives their own child's name here.` +
+          `</div>`
+        : "";
+      const innerHtml = testBannerHtml + renderedInner + downloadButtonsHtml;
       const bodyHtml = wrapInEmailShell(innerHtml, tokens);
       const bodyText = (touchpoint.payload!.body_text
         ? postCleanCopy(replaceTokens(touchpoint.payload!.body_text, tokens, { html: false, multiline: true }))
@@ -1091,10 +1132,39 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
     ? (locationNameMap?.get(program.program_location_id)?.[0] ?? null)
     : null;
 
-  tokens.set("first_name", splitFirstName(r.parent_name) || "there");
-  tokens.set("parent_name", r.parent_name?.trim() || "");
-  tokens.set("child_first_name", r.child_first_name?.trim() || "");
-  tokens.set("child_last_name", r.child_last_name?.trim() || "");
+  // SAMPLE VALUES FOR A TEST SEND ONLY.
+  //
+  // ensureAdminRecipient inserts an email and the _internal_admin segment and
+  // nothing else, so an operator's own test row has no parent name and no child.
+  // {{child_first_name}} then rendered as NOTHING and the operator read their
+  // own email with a hole in the middle of a sentence, with no way to tell
+  // whether their families would see the same. Jeff asked exactly that on
+  // 2026-09-07. {{school}} already had an admin fallback for this reason
+  // (adminSchoolFallback above); the name tokens never got the same treatment.
+  //
+  // Gated on isInternalAdmin, so a real family can never receive a sample name.
+  // Jessica picked "Nina" on 2026-09-07; the test email says these are samples
+  // so nobody mistakes one for a real child on their roster.
+  tokens.set(
+    "first_name",
+    splitFirstName(r.parent_name) || (isInternalAdmin ? splitFirstName(SAMPLE_PARENT) : "") || "there",
+  );
+  tokens.set("parent_name", r.parent_name?.trim() || (isInternalAdmin ? SAMPLE_PARENT : ""));
+  // REAL SENDS GET A FALLBACK TOO, and that is a separate fix in the same line.
+  // {{first_name}} has always fallen back to "there"; {{child_first_name}} fell
+  // back to empty, so a family with no child name on file received the sentence
+  // with a gap in it. One of Jeff's 127 contacts is in that state today.
+  // Jessica's wording, 2026-09-07: "your child".
+  tokens.set(
+    "child_first_name",
+    r.child_first_name?.trim() || (isInternalAdmin ? SAMPLE_CHILD_FIRST : "your child"),
+  );
+  // Last name has no safe generic ("your child Smith" reads wrong), so a real
+  // send with no last name still resolves to empty. Only the test is seeded.
+  tokens.set(
+    "child_last_name",
+    r.child_last_name?.trim() || (isInternalAdmin ? SAMPLE_CHILD_LAST : ""),
+  );
   tokens.set("school", r.school_name?.trim() || adminSchoolFallback || "your school");
   tokens.set("city", r.city?.trim() || "");
   tokens.set("zip", r.zip?.trim() || "");
@@ -1922,9 +1992,14 @@ async function renderPreview(
   const syntheticRecipient: Recipient = {
     id: "preview",
     email: "preview@example.com",
-    parent_name: "Sample Parent",
-    child_first_name: "Sam",
-    child_last_name: "Sample",
+    // The SAME sample identity the test email uses. These were hardcoded here as
+    // "Sam" while the test send seeded nothing at all; once the test send got
+    // sample values too, two hardcoded names meant one operator could preview the
+    // same campaign two ways and meet two different children. One constant, one
+    // place - the test email's banner names it out loud, so it has to match.
+    parent_name: SAMPLE_PARENT,
+    child_first_name: SAMPLE_CHILD_FIRST,
+    child_last_name: SAMPLE_CHILD_LAST,
     school_name: loc.name,
     city: null,
     zip: null,
