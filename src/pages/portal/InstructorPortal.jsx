@@ -663,10 +663,19 @@ export default function InstructorPortal() {
       // This filtered only the ASSIGNMENT status, never the class's own - so
       // cancelling a class removed it from the operator's board (which does
       // exclude cancelled) and left it sitting on the instructor's schedule, who
-      // would turn up to teach it. Nothing has hit this yet only because no
-      // cancelled or draft class currently has an instructor on it (checked on
-      // prod, 2026-08-31: 0 of 3 cancelled and 0 of 12 draft) - and being able to
-      // cancel a STAFFED class is exactly what is being asked for next.
+      // would turn up to teach it.
+      //
+      // UPDATE 2026-09-07: the "nothing has hit this yet" note that used to sit
+      // here is no longer true. A cancelled J2S class at Astor now HAS a
+      // confirmed instructor on it (1 of 5 cancelled prod programs), which is
+      // what this filter is holding. The same day showed the filter was only
+      // half the job: the pay side had no such check, so the cancelled class
+      // kept seeding confirmations and an admin's "Confirm & pay" would pay a
+      // session that never met. That guard lives in
+      // supabase/functions/_shared/programRunning.ts, and it keeps the SAME
+      // exclude list as this line. Change one, change the other - a Deno module
+      // cannot be imported into the browser bundle, so this is two spellings of
+      // one rule on purpose.
       //
       // Filtered here rather than in the query: a PostgREST filter on an embedded
       // table nulls the embed instead of dropping the row unless the join is
@@ -3802,6 +3811,10 @@ function humanizeConfirmError(code) {
   if (code === "assignment_not_confirmed") return "This class isn't fully confirmed yet — talk to your admin.";
   if (code === "forbidden") return "You're not assigned to this class.";
   if (code === "session_covered_by_substitute") return "A substitute is covering this day — they'll handle the check-in.";
+  // A cancelled class refuses the check-in permanently, so this must NOT fall
+  // through to "Try again" — the only way to reach it is a tab that was open
+  // before the class was cancelled, and that instructor would retry forever.
+  if (code === "program_not_running") return "This class has been cancelled, so there's no check-in for it. Nothing more for you to do here.";
   return "Couldn't save your check-in. Try again.";
 }
 

@@ -23,6 +23,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
 import { resolvePayAmount } from '../_shared/payRates.ts';
+import { fetchProgramRunState, mayBecomePay } from '../_shared/programRunning.ts';
 
 type Role = 'lead' | 'developing';
 
@@ -107,6 +108,32 @@ serve(async (req: Request) => {
     // confirmed/taught sub covered THIS assignment on THIS date, the day is
     // priced at the sub's tier (the pay-line view routes the payee to the sub).
     const kind: 'camp' | 'program' = row.camp_session_id ? 'camp' : 'program';
+
+    // Guard: an admin may not turn a day on a class that is NOT RUNNING into
+    // approved pay. This endpoint only ever acts on confirmed_by='pending'
+    // (409 above), i.e. a day NOBODY has claimed to have taught - so refusing
+    // here cannot take back pay for work anyone said they did.
+    //
+    // Without this, the cron's placeholder row for a cancelled class arrived on
+    // Payroll with a "Confirm & pay" button and paid out a session that never
+    // met. The assignment allow-list further down does not catch it: cancelling
+    // a class leaves the instructor's assignment 'confirmed', which that check
+    // reads as committed.
+    //
+    // Fail-closed, including 'unknown' and 'missing' - see _shared/programRunning.ts.
+    // RECOVERY, if a day genuinely taught before the class was cancelled was
+    // never marked: put the program back to 'open', confirm the day, cancel it
+    // again. Deliberate and auditable, and it needs no hidden override flag.
+    if (kind === 'program') {
+      const { state, status, error: runErr } = await fetchProgramRunState(supabase, row.program_id!);
+      if (runErr) {
+        console.error('[admin-confirm-session] program status lookup failed:', runErr);
+        return json({ error: 'lookup_failed' }, 500);
+      }
+      if (!mayBecomePay(state)) {
+        return json({ error: 'program_not_running', program_status: status }, 409);
+      }
+    }
 
     let assignmentId: string | null = null;
     let assignmentStatus: string | null = null;

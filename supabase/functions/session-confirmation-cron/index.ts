@@ -23,6 +23,7 @@
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
+import { fetchProgramRunStates } from '../_shared/programRunning.ts';
 
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
@@ -191,8 +192,64 @@ serve(async (req: Request) => {
             .filter((id): id is string => !!id),
         ),
       ];
+      // A CANCELLED OR DRAFT CLASS MEETS ON NO DATE, whatever the schedule RPC
+      // says. The RPC derives dates from the weekly cadence and never looks at
+      // programs.status, so without this a cancelled class keeps seeding
+      // confirmations every week for as long as its assignment stays
+      // 'confirmed' - and those rows carry an admin "Confirm & pay" button.
+      //
+      // PERMISSIVE on 'unknown': a status the constraint does not have yet is
+      // still seeded, because the alternative is silently dropping a real
+      // class's session off Payroll (see the note above). The surprise goes in
+      // summary.errors so it is visible instead of guessed at. 'missing' is not
+      // permissive - there is no class to teach.
+      // Retried ONCE before giving up. This lookup is new, and it is the only
+      // thing in Job C that can fail for every class at the same time: one
+      // blip and NOT ONE confirmation gets seeded today, for any tenant. A
+      // single transient error should not cost that, so try twice.
+      let { states: progStates, statuses: progStatuses, error: progStateErr } =
+        await fetchProgramRunStates(supabase, uniqueProgramIds);
+      if (progStateErr) {
+        console.warn('Job C program-status lookup failed, retrying once:', progStateErr);
+        ({ states: progStates, statuses: progStatuses, error: progStateErr } =
+          await fetchProgramRunStates(supabase, uniqueProgramIds));
+      }
+      if (progStateErr) {
+        // Fail direction, chosen deliberately: seed NOTHING rather than seed
+        // blind. A missing placeholder is recoverable - confirm-session-taught
+        // INSERTs the row when none exists (index.ts, the idempotency block),
+        // so an instructor's own "Mark taught" still creates and confirms the
+        // day. A wrong pay line on a cancelled class is not recoverable the
+        // same way; somebody has to notice it first.
+        //
+        // NOT LOUD, and worth knowing: pg_cron discards this response body and
+        // nothing reads summary.errors, so the only trace is this log line.
+        // If this ever fires in anger the fix is to route it through
+        // founder-notify like the other unattended failures. Deliberately not
+        // done here - it would put a new send path inside the pay seeder.
+        console.error('Job C program-status lookup failed twice; seeded no program rows:', progStateErr);
+        summary.errors.push(`job_c_program_status: ${progStateErr}`);
+      }
+      const runnableProgramIds = new Set<string>();
+      if (!progStateErr) {
+        for (const pid of uniqueProgramIds) {
+          const state = progStates.get(pid) ?? 'missing';
+          if (state === 'running') {
+            runnableProgramIds.add(pid);
+          } else if (state === 'unknown') {
+            runnableProgramIds.add(pid);
+            summary.errors.push(
+              `job_c_unknown_program_status:${pid}: ${progStatuses.get(pid) ?? 'null'} (seeded anyway)`,
+            );
+          }
+          // 'not_running' / 'missing': skipped silently. Cancelling a class is a
+          // deliberate act, and it happening every week is not news.
+        }
+      }
+
       const meetsToday = new Set<string>();
       for (const pid of uniqueProgramIds) {
+        if (!runnableProgramIds.has(pid)) continue;
         const { data: sched, error: schedErr } = await supabase.rpc(
           'derive_program_session_schedule',
           { p_program_id: pid },

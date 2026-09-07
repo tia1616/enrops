@@ -21,6 +21,7 @@ import {
   adminClient,
 } from '../_shared/instructor.ts';
 import { resolvePayAmount } from '../_shared/payRates.ts';
+import { fetchProgramRunState, mayBecomePay } from '../_shared/programRunning.ts';
 
 interface ConfirmDeliveryBody {
   confirmation_id?: string;
@@ -120,6 +121,25 @@ serve(async (req: Request) => {
       }
       role = assignment.role as Role;
     } else {
+      // A CANCELLED OR DRAFT CLASS HAS NO DELIVERED SESSIONS. This path flips an
+      // EXISTING pending row to confirmed_by='self' and prices it, so it is a
+      // second door into pay that the seeder's guard does not cover: a row
+      // seeded this morning for a class cancelled this afternoon is still
+      // sitting here, pending and self-confirmable.
+      //
+      // Fail-closed, same rule and same module as the admin path. RECOVERY for
+      // a day genuinely taught before the cancellation: put the program back to
+      // 'open', confirm it, cancel again.
+      const { state: runState, status: progStatus, error: runErr } =
+        await fetchProgramRunState(supabase, row.program_id!);
+      if (runErr) {
+        console.error('program status lookup failed:', runErr);
+        return json({ error: 'lookup_failed' }, 500);
+      }
+      if (!mayBecomePay(runState)) {
+        return json({ error: 'program_not_running', program_status: progStatus }, 409);
+      }
+
       // Afterschool path — look up program_assignments instead.
       const { data: assignment, error: assignErr } = await supabase
         .from('program_assignments')

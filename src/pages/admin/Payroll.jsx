@@ -96,6 +96,14 @@ function confirmErrorMessage(code, status) {
       return 'You don’t have permission to confirm pay for this instructor.';
     case 'invalid_confirmation_no_parent':
       return 'This day isn’t linked to a camp or program, so it can’t be confirmed here.';
+    case 'program_not_running':
+      // RACE BACKSTOP, not the main path. The loader no longer lists an
+      // unconfirmed day on a cancelled class at all, so the normal way to see
+      // this is to have had Payroll open BEFORE the class was cancelled and
+      // then click the row that was still on screen. Kept because that race is
+      // real; if it were the primary experience the fix would be in the wrong
+      // place.
+      return 'This class has been cancelled, so this day can’t be paid. Refresh and it will drop off the list. If it was taught before the class was cancelled, reopen the class, confirm the day, then cancel it again.';
     default:
       return code ? `Could not confirm this day (${code}).` : `Could not confirm this day (${status}).`;
   }
@@ -195,7 +203,40 @@ export default function Payroll() {
         if (lErr) throw lErr;
         if (cancelled) return;
 
-        const rows = lines ?? [];
+        const allLines = lines ?? [];
+
+        // PAYROLL FOLLOWS THE SCHEDULE. A class that is cancelled or still a
+        // draft is not on the schedule (AfterschoolSchedule.jsx excludes exactly
+        // those two) and it is not on the instructor's portal either, so it must
+        // not put a day here to confirm and pay. `program_status` comes from
+        // v_effective_pay_lines itself (migration 20260907b) rather than a second
+        // lookup, so this screen and the pay source cannot drift apart.
+        //
+        // ONLY UNCLAIMED DAYS DROP OFF. A day somebody actually confirmed, or
+        // that is already paid or withheld, STAYS even after the class is
+        // cancelled: a class that ran four weeks and then got cancelled really
+        // was taught for four weeks, and hiding that would make this screen lie
+        // about money that moved. The predicate is therefore "nobody says they
+        // taught it AND the class does not meet".
+        //
+        // NULL program_status keeps the row. It means camp (no program at all)
+        // or a program row the caller cannot read — the view is security_invoker
+        // and left-joins, so RLS shows up as NULL, never as a missing line.
+        // Hiding earned pay on a failed lookup would be silent; showing a line
+        // that should not be there is at least visible, and the endpoint still
+        // refuses to pay it.
+        const NOT_ON_SCHEDULE = new Set(['cancelled', 'draft']);
+        const rows = allLines.filter(
+          (r) => !(r.confirmed_by === 'pending' && NOT_ON_SCHEDULE.has(r.program_status)),
+        );
+        if (allLines.length !== rows.length) {
+          // The rows still EXIST in session_delivery_confirmations; only the
+          // cron seeding them is gone. Leave a trail for whoever next wonders
+          // why this screen and the table disagree.
+          console.warn(
+            `[Payroll] hid ${allLines.length - rows.length} unconfirmed day(s) on cancelled/draft classes`,
+          );
+        }
         if (rows.length === 0) { setGroups([]); return; }
 
         const instructorIds = [...new Set([
