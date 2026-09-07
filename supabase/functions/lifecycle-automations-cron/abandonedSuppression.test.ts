@@ -283,19 +283,42 @@ Deno.test("buildResolvedIndex tolerates an empty or missing row set", () => {
 
 // ── Statuses ────────────────────────────────────────────────────────────────
 
-Deno.test("waitlist and cancelled outcomes suppress, exactly as confirmed does", () => {
-  // The caller selects every non-pending status. All of them mean the parent
-  // finished deciding, and "you almost signed up" is false for all of them.
-  // This asserts the index treats whatever it is handed uniformly.
-  for (const outcome of ["confirmed", "waitlist", "cancelled"]) {
-    const index = buildResolvedIndex([
-      resolvedRow({ parentId: ALLISON, programId: UKULELE_AT_ASTOR, childFirstName: "Molly" }),
-    ]);
-    const row = pendingRow({
-      parentId: ALLISON,
-      programId: UKULELE_AT_ASTOR,
-      childFirstName: "Molly",
-    });
-    assertEquals(isGenuinelyAbandoned(row, index), false, `outcome: ${outcome}`);
+Deno.test("the index ignores status entirely — identity is all it keys on", () => {
+  // Which statuses count as "resolved" is the CALLER's decision, made by the
+  // .neq("status","pending") filter on the lookup query. This module must never
+  // grow its own opinion about status: if it did, the two would drift and only
+  // one of them would be visible in a review of either file.
+  const index = buildResolvedIndex([
+    { ...resolvedRow({ parentId: ALLISON, programId: "prog-1", childFirstName: "Molly" }), status: "cancelled" },
+    { ...resolvedRow({ parentId: ALLISON, programId: "prog-2", childFirstName: "Molly" }), status: "waitlist" },
+    { ...resolvedRow({ parentId: ALLISON, programId: "prog-3", childFirstName: "Molly" }), status: "confirmed" },
+    // Even a row the caller should never hand over is indexed, not second-guessed.
+    { ...resolvedRow({ parentId: ALLISON, programId: "prog-4", childFirstName: "Molly" }), status: "pending" },
+  ]);
+
+  for (const prog of ["prog-1", "prog-2", "prog-3", "prog-4"]) {
+    const row = pendingRow({ parentId: ALLISON, programId: prog, childFirstName: "Molly" });
+    assertEquals(isGenuinelyAbandoned(row, index), false, `program: ${prog}`);
   }
+});
+
+Deno.test("CALLER CONTRACT: the lookup still selects every non-pending status", () => {
+  // The test above deliberately proves the module is status-blind, which leaves
+  // exactly one place where waitlist and cancelled can silently stop counting as
+  // resolved: the query in index.ts. Narrowing it to .eq("status","confirmed")
+  // would re-break suppression for those two and no unit test of this module
+  // could see it. So assert the predicate itself.
+  const source = Deno.readTextFileSync(new URL("./index.ts", import.meta.url));
+  const lookup = source.slice(source.indexOf("const { data: resolvedRows"));
+
+  assertEquals(
+    lookup.includes('.neq("status", "pending")'),
+    true,
+    'the resolved-registration lookup must stay .neq("status","pending") — an .eq() narrowing would let waitlist/cancelled rows stop suppressing',
+  );
+  assertEquals(
+    lookup.slice(0, lookup.indexOf(";")).includes('.eq("organization_id"'),
+    true,
+    "the resolved-registration lookup must stay org-scoped — parents are shared across tenants",
+  );
 });

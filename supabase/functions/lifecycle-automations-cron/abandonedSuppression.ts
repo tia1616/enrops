@@ -15,8 +15,18 @@
 // CHILD.
 //
 // Why "any non-pending status" counts as an outcome — confirmed, waitlist and
-// cancelled all mean that parent finished deciding about that offering, and
-// "you almost signed up" is false in all three. Only `pending` means unfinished.
+// cancelled all mean this parent got a real answer for that offering rather
+// than trailing off at checkout, and "you almost signed up" is false for all
+// three. Only `pending` is an unfinished attempt.
+//
+// KNOWN COST of including `cancelled`: a parent who cancels and MUCH later
+// starts a fresh registration for the same child and offering, then abandons
+// that one, is never nudged — the old cancelled row suppresses the new attempt
+// forever. Accepted deliberately. The obvious sharpening, "only suppress when
+// the outcome post-dates the pending row", trades this quiet missed nudge for
+// the loud failure we are fixing: a parent already enrolled who re-opens the
+// registration form leaves a NEWER pending row behind, and would be told they
+// never signed up. Silence is the cheaper error.
 //
 // Why PER CHILD and not per parent — a family that enrols one sibling and
 // genuinely abandons the other still deserves the nudge for the one they

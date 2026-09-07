@@ -2345,7 +2345,6 @@ async function resolveAbandonedAudience(supabase: SupabaseClient, a: AutomationR
   const hours = pickNumber(a.timing_override?.hours_after_pending, a.template.default_timing?.hours_after_pending, 24);
   const cutoff = new Date(Date.now() - hours * 3600000).toISOString();
   const oldestAcceptable = new Date(Date.now() - 7 * 24 * 3600000).toISOString();
-  const nextTermAvailable = await hasFutureProgramsForOrg(supabase, a.organization_id);
 
   // Don't chase pending registrations older than 7 days — those are rotten leads.
   const { data, error } = await supabase
@@ -2370,8 +2369,14 @@ async function resolveAbandonedAudience(supabase: SupabaseClient, a: AutomationR
   // row we cannot match is never mailed on the assumption it is unfinished.
   const pending = (data ?? []).filter((r: any) => r.parents?.email && offeringIdOf(r));
 
-  // Dormant-safe: no stale pending rows means no second query and no work.
+  // Dormant-safe: no stale pending rows means no further queries. Most ticks
+  // land here — every enabled org runs this daily and the window is usually
+  // empty — so nothing below may execute before this return.
   if (pending.length === 0) return [];
+
+  // Only needed to render the cross-sell block on an entry we are actually
+  // going to build, so it sits below the dormant return rather than above it.
+  const nextTermAvailable = await hasFutureProgramsForOrg(supabase, a.organization_id);
 
   // Which of these parents already resolved this offering? Scoped to the
   // parents actually in play (a handful) rather than the org's whole
