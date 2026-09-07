@@ -439,11 +439,21 @@ export default function AICampaignBuilder() {
       }
       // Refresh the local draft state so subsequent edits compare against
       // the latest persisted version (no surprise overwrites).
-      alert(`Saved! Your changes are safe. This stays a draft until you hit Approve — reopen it any time from Campaigns → Drafts → Resume.`);
-      // Return to the Campaigns list so the operator sees their saved draft and
-      // isn't stranded on the review screen (the top tabs / sidebar are route
-      // links to the route we're already on, so they can't reset the wizard).
-      dispatch({ type: "GO_LIST" });
+      // STAY ON THE REVIEW SCREEN. This used to dispatch GO_LIST, justified by a
+      // comment saying the operator would otherwise be "stranded ... the top tabs
+      // / sidebar are route links to the route we're already on, so they can't
+      // reset the wizard". That stopped being true when FamilyCommsTabs gained
+      // onReset: clicking Campaigns while on the wizard now calls it and returns
+      // to the list (FamilyCommsTabs.jsx:48). The eject outlived its reason.
+      //
+      // Ejecting turned "save my work" into save -> bounced out -> reopen -> edit
+      // -> bounced out again. Worse until today: reopening was the path that lost
+      // the audience, so saving effectively discarded the recipient list. Jeff
+      // reported both halves as one experience on 2026-09-07.
+      //
+      // Saving is a checkpoint, not an exit. Confirm it and leave the operator
+      // where they were working; the way out already exists.
+      alert(`Saved. Your changes are stored and you can keep editing — this stays a draft until you hit Approve.`);
     } finally {
       setBusyAction(null);
     }
