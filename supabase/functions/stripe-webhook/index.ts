@@ -1314,7 +1314,11 @@ async function recordExternalRefund(
       // refund id: stable across the retries this handler is explicitly built to
       // absorb, and unique per refund, so a second partial refund on the same
       // charge correctly gets its own row instead of overwriting the first.
-      await logTransactionalSend(admin, {
+      // Only log an ATTEMPTED send — same rule as the in-product refund path.
+      // A suppression (no recipient, staging allowlist, no API key) is a
+      // decision, and the delivery panel is documented to carry genuine failures
+      // only.
+      if (r.attempted) await logTransactionalSend(admin, {
         organizationId: reg.organization_id,
         source: 'refund_receipt',
         contextKey: `refunded:${input.stripeRefundId}`,

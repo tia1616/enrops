@@ -807,8 +807,8 @@ serve(async (req: Request) => {
     // classify as permanent rather than silently transient.
     let receipt: {
       sent: boolean; reason?: string; messageId?: string | null;
-      status?: number; detail?: string; subject?: string;
-    } = { sent: false, reason: 'not attempted' };
+      status?: number; detail?: string; subject?: string; attempted?: boolean;
+    } = { sent: false, reason: 'not attempted', attempted: false };
     try {
       const { data: parentRow } = await supabase
         .from('parents')
@@ -874,7 +874,13 @@ serve(async (req: Request) => {
         // second one: a Stripe retry of this call produces the same refund rows
         // and so the same key, while a genuinely separate partial refund produces
         // different ids and correctly gets its own receipt row.
-        await logTransactionalSend(supabase, {
+        // Only log a send we actually ATTEMPTED. The three suppressions inside
+        // sendRefundReceipt (no recipient, staging allowlist, no API key) are
+        // decisions, not failures, and DeliveryIssuesPanel says in writing that
+        // "intentional skips never appear here - only genuine failures". Logging
+        // one as failed would put a receipt we chose not to send into the
+        // operator's "families who didn't get an email" list.
+        if (receipt.attempted) await logTransactionalSend(supabase, {
           organizationId: reg.organization_id,
           source: 'refund_receipt',
           // The subject the family actually saw ("Your $X refund from <org>"),
