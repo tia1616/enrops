@@ -952,13 +952,21 @@ function TodayAgenda({ org }) {
           );
           if (candidates.length) {
             // Confirm each candidate actually meets today (honors closures/breaks).
-            const dateLists = await Promise.all(
-              candidates.map((p) =>
-                supabase.rpc("derive_program_session_dates", { p_program_id: p.id }).then((r) => r, () => ({ data: [] })),
-              ),
-            );
-            const meeting = candidates.filter((p, i) => {
-              const d = dateLists[i]?.data;
+            // ONE request for all candidates, not one per class - the same
+            // change made on the staffing board. This is the admin home, so the
+            // fan-out sat directly in front of the first screen anybody sees.
+            const { data: dateRows } = await supabase
+              .rpc("derive_program_session_dates_bulk", { p_program_ids: candidates.map((p) => p.id) })
+              .then((r) => r, () => ({ data: [] }));
+            // Fail-soft is UNCHANGED in direction: the old code defaulted a
+            // failed class to no dates, which excluded it from "meets today".
+            // An id missing from the response lands on the same empty default.
+            const datesById = new Map();
+            for (const row of dateRows ?? []) {
+              if (row?.program_id) datesById.set(row.program_id, row.session_dates ?? []);
+            }
+            const meeting = candidates.filter((p) => {
+              const d = datesById.get(p.id);
               return Array.isArray(d) && d.includes(today);
             });
             if (meeting.length) {

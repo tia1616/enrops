@@ -392,7 +392,19 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     if (!org?.id || !term) return;
     setState({ status: "loading" });
     try {
-      const [progRes, locRes, instRes, availRes, surveyRes, areaPrefRes, cycleRes, cfgRes] = await Promise.all([
+      // WAVE 1 of three. This loader used to run about thirteen sequential
+      // network round-trips: this batch, then two intro lookups one after the
+      // other, then assignments, then enrollment, then substitutions, then
+      // declines, and finally one session-dates RPC PER CLASS. Only three of
+      // those steps actually depend on an earlier answer, so the rest were
+      // waiting in line for nothing. Measured on prod 2026-09-07: the whole
+      // session-date job is 44.7 ms of database time for 33 classes - the
+      // database was never slow, the queue was. Three waves now:
+      //   1. everything that needs only org + term (this batch)
+      //   2. everything that needs programIds
+      //   3. substitutions, which genuinely need the assignment ids from 2
+      const [progRes, locRes, instRes, availRes, surveyRes, areaPrefRes, cycleRes, cfgRes,
+             savedSurveyIntro, savedOfferIntro] = await Promise.all([
         supabase
           .from("programs")
           // age_min/age_max added with audienceLabel: the helper answers "grades OR
@@ -465,6 +477,11 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           .eq("organization_id", org.id)
           .eq("context", "afterschool")
           .maybeSingle(),
+        // Both intros need only org.id, so they belong in this wave. They used
+        // to be two consecutive awaits AFTER it, which cost two full round-trips
+        // to fetch strings nothing else was waiting on.
+        resolveBoardSendIntro(supabase, org.id, "availability_survey"),
+        resolveBoardSendIntro(supabase, org.id, "assignment_offer"),
       ]);
       if (progRes.error) throw progRes.error;
       if (locRes.error) throw locRes.error;
@@ -480,20 +497,46 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       // priority over the fallback set just above (survey: org_survey_config;
       // offer: the edge fn's per-instructor default). Shared resolver so the four
       // board copies (survey/offer × camp/after-school) stay in one place.
-      const savedSurveyIntro = await resolveBoardSendIntro(supabase, org.id, "availability_survey");
+      // Resolved in wave 1 above; still applied here, in the same order and
+      // after the cfgRes fallback, so the precedence is unchanged.
       if (savedSurveyIntro) setOrgSurveyIntro(savedSurveyIntro);
-      const savedOfferIntro = await resolveBoardSendIntro(supabase, org.id, "assignment_offer");
       if (savedOfferIntro) setOrgOfferIntro(savedOfferIntro);
 
       const programs = (progRes.data ?? []).filter((p) => DAY_TO_CODE[dayKey(p.day_of_week)]);
       const programIds = programs.map((p) => p.id);
 
-      const assignRes = programIds.length
-        ? await supabase
-            .from("program_assignments")
-            .select("id, program_id, instructor_id, status, role, flags, distance_bonus_cents, instructor_response_at, email_sent_at, reminder_sent_at, change_request_message, flagged_reason, deadline, published_at, assigned_by, instructor:instructors(id, first_name, last_name, preferred_name, email)")
-            .in("program_id", programIds)
-        : { data: [], error: null };
+      // WAVE 2. Assignments, enrollment, declines and every class's session
+      // dates all depend on programIds and on nothing else, so they go together.
+      // They used to be four separate awaits spread across the function, three
+      // of them separated only by the code that reshapes the previous answer -
+      // which does not need the network at all.
+      const [assignRes, enrollRes, declineRes, datesRes] = programIds.length
+        ? await Promise.all([
+            supabase
+              .from("program_assignments")
+              .select("id, program_id, instructor_id, status, role, flags, distance_bonus_cents, instructor_response_at, email_sent_at, reminder_sent_at, change_request_message, flagged_reason, deadline, published_at, assigned_by, instructor:instructors(id, first_name, last_name, preferred_name, email)")
+              .in("program_id", programIds),
+            supabase
+              .from("program_enrollment")
+              .select("program_id, enrolled, seats_taken, max_capacity")
+              .in("program_id", programIds),
+            supabase
+              .from("session_declined_instructors")
+              .select("program_id, instructor_id")
+              .eq("organization_id", org.id)
+              .in("program_id", programIds),
+            // ONE request for all of them, not one per class. Fail-soft is kept:
+            // a rejected call leaves every class with no weeks rather than
+            // blanking the board, exactly as the per-class version did. The
+            // difference is that it is now all-or-nothing instead of per-class,
+            // which is the honest trade for a single round-trip - and the RPC
+            // reads through programs RLS, so it cannot return another tenant's
+            // classes even though the ids come from the browser.
+            supabase
+              .rpc("derive_program_session_dates_bulk", { p_program_ids: programIds })
+              .then((r) => r, () => ({ data: [], error: null })),
+          ])
+        : [{ data: [], error: null }, { data: [], error: null }, { data: [], error: null }, { data: [], error: null }];
       if (assignRes.error) throw assignRes.error;
 
       // seats_taken AS WELL AS enrolled, because since 20260819j they are two different
@@ -507,10 +550,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       // gate 409'd every family and the catalog said the class was full. The operator had
       // no way to see the eleven held seats, so the screen and the product disagreed with
       // nothing on screen to explain it. Both are shown now; see the cell below.
-      const enrollRes = programIds.length
-        ? await supabase.from("program_enrollment").select("program_id, enrolled, seats_taken, max_capacity").in("program_id", programIds)
-        : { data: [], error: null };
-      // THE ERROR WAS BEING DISCARDED. `data ?? []` on a failed read leaves `enrollment`
+      // Fetched in wave 2 above. THE ERROR WAS BEING DISCARDED. `data ?? []` on a failed read leaves `enrollment`
       // empty and every class silently shows a dash - which looks like "no data yet"
       // rather than "this query failed". That matters now more than it did: seats_taken
       // only exists from 20260819j, so shipping this screen to an environment without
@@ -572,31 +612,28 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       // Recorded declines for these classes: an instructor who had a change request
       // open and was then reassigned/removed. Per-program (mirrors camp's per-session).
       // Powers the picker's "previously declined" filter so we don't re-suggest them.
+      // Fetched in wave 2 above; same fail-soft (warn, keep an empty list).
       let declines = [];
-      if (programIds.length) {
-        const { data: declineRows, error: declineErr } = await supabase
-          .from("session_declined_instructors")
-          .select("program_id, instructor_id")
-          .eq("organization_id", org.id)
-          .in("program_id", programIds);
-        if (declineErr) console.warn("[AfterschoolSchedule] decline load failed:", declineErr.message);
-        else declines = declineRows ?? [];
-      }
+      if (declineRes.error) console.warn("[AfterschoolSchedule] decline load failed:", declineRes.error.message);
+      else declines = declineRes.data ?? [];
 
       // Each class's real session dates (per its school/district calendar, closures included)
-      // — used to build the week rail and resolve per-week coverage. Canonical source only.
-      // Fail-soft per class: one rejected RPC must not blank the whole board (or the
-      // list/recurring views, which don't need dates). A failed class just gets no weeks.
-      const dateResults = await Promise.all(
-        programs.map((p) =>
-          supabase.rpc("derive_program_session_dates", { p_program_id: p.id }).then((r) => r, () => ({ data: [] })),
-        ),
-      );
+      // — used to build the week rail and resolve per-week coverage. Canonical source only,
+      // now read in ONE request in wave 2 rather than one request per class.
+      //
+      // Keyed off `programs`, not off the response, so a class the RPC did not
+      // return still gets an entry. It cannot silently vanish from the board:
+      // every class starts at [] and is filled in only if the RPC named it.
       const programDates = {};
-      programs.forEach((p, i) => {
-        const d = dateResults[i]?.data;
-        programDates[p.id] = Array.isArray(d) ? d : [];
-      });
+      for (const p of programs) programDates[p.id] = [];
+      if (datesRes.error) {
+        console.warn("[AfterschoolSchedule] session dates failed:", datesRes.error.message);
+      }
+      for (const row of datesRes.data ?? []) {
+        if (row?.program_id && Array.isArray(row.session_dates)) {
+          programDates[row.program_id] = row.session_dates;
+        }
+      }
 
       setState({
         status: "ready",
