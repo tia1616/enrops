@@ -44,6 +44,24 @@
 //   - the three money writers are FAIL-CLOSED on unknown: a status nobody has
 //     reasoned about must not become approved pay on its own.
 //
+// WHERE THE RULE LIVES, AFTER JESSICA CORRECTED THE SHAPE (2026-09-07). Payroll
+// follows the SCHEDULE: a cancelled class is not on the schedule screen, not in
+// the instructor portal, and must not put a day on Payroll to confirm and pay.
+// The first cut of this fix left the row on the screen and argued with the
+// click, which is the wrong shape. So the READ side is fixed at the source -
+// v_effective_pay_lines now carries `program_status` (migration 20260907b) and
+// Payroll drops unclaimed days on classes that are not running. This module is
+// the WRITE side of the same rule: the doors into pay.
+//
+// Both halves are needed, and this is not the same check twice. The read filter
+// only hides days NOBODY claims to have taught, because a day someone did teach
+// before the class was cancelled is real money that must stay visible. A
+// self-confirm writes confirmed_by='self' AND pay_status='approved' in one go
+// (confirm-session-delivery), so an instructor with a tab open from before the
+// cancellation could otherwise CLAIM a dead class's day, and the read filter
+// would correctly keep showing it - straight back to paying for a class that
+// never met. Hence a guard on each door rather than one filter on the screen.
+//
 // WHO USES THIS, AND WHO DELIBERATELY DOES NOT:
 //   session-confirmation-cron  guards (seeds no row for a class that does not meet)
 //   admin-confirm-session      guards (never turns an unclaimed day into pay)
