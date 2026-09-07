@@ -1705,6 +1705,7 @@
     "https://esm.sh/@supabase/postgrest-js@^1.8.6?target=denonext": "https://esm.sh/@supabase/postgrest-js@1.21.4?target=denonext",
     "https://esm.sh/@supabase/realtime-js@^2.8.4?target=denonext": "https://esm.sh/@supabase/realtime-js@2.105.4?target=denonext",
     "https://esm.sh/@supabase/storage-js@^2.5.4?target=denonext": "https://esm.sh/@supabase/storage-js@2.105.4?target=denonext",
+    "https://esm.sh/@supabase/supabase-js@2": "https://esm.sh/@supabase/supabase-js@2.115.0",
     "https://esm.sh/iceberg-js@^0.8.1?target=denonext": "https://esm.sh/iceberg-js@0.8.1?target=denonext",
     "https://esm.sh/tr46@~0.0.3?target=denonext": "https://esm.sh/tr46@0.0.3?target=denonext",
     "https://esm.sh/webidl-conversions@^3.0.0?target=denonext": "https://esm.sh/webidl-conversions@3.0.1?target=denonext",
@@ -1821,6 +1822,7 @@
     "https://esm.sh/@supabase/realtime-js@2.105.4?target=denonext": "504c4a6399371a48e0d0ab6e330d139ca7a65ec82fc1b5ca768d2104ae97f559",
     "https://esm.sh/@supabase/storage-js@2.105.4/denonext/storage-js.mjs": "5bcb6fa2cc47c5bbdd6a1ad30c5ff5445307f89fb93f3663acedad705b02296a",
     "https://esm.sh/@supabase/storage-js@2.105.4?target=denonext": "eebd620b0bd9b2ef5b66920febebef22e59688b91225a1398d1399a6f1fe509c",
+    "https://esm.sh/@supabase/supabase-js@2.115.0": "f4e488ef8059a64be766b58feb4d6a18aa812038fdcf9c7c916efbdf26ab9585",
     "https://esm.sh/@supabase/supabase-js@2.39.0": "f51aeb2dbf8f67c8fa396628af45793e3513067d45705f1ea158f5c678bb0cea",
     "https://esm.sh/@supabase/supabase-js@2.39.0/denonext/supabase-js.mjs": "11e53e706626aa625a6c6dbe6a9a8a6dc6d66a0827cd43507f3a98a0a538ae3c",
     "https://esm.sh/aws4fetch@1.0.20": "72c2789ab2e7a037ed00c4230574ccc31a0c0cebc7ebd19a2c9da574e3133bc7",
@@ -1840,6 +1842,8 @@
   "workspace": {
     "packageJson": {
       "dependencies": [
+        "npm:@babel/parser@^7.29.8",
+        "npm:@babel/traverse@^7.29.8",
         "npm:@react-pdf/renderer@^4.5.1",
         "npm:@supabase/supabase-js@^2.39.0",
         "npm:@vite-pwa/assets-generator@^1.0.2",

@@ -26,6 +26,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, formatFromAddress, renderSignatureBlock, OrgBrand } from '../_shared/orgBrand.ts';
 import { isEmailAllowed, emailGuardActive } from '../_shared/emailGuard.ts';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
+import { logTransactionalSend, formatSendError } from '../_shared/sendLog.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -225,11 +226,31 @@ serve(async (req) => {
           tags: [{ name: 'type', value: 'parent_invite' }],
         }),
       });
+      // Logged both ways. A portal invite that never arrived is the failure most
+      // likely to be read as "that family ignored us", so the row has to exist on
+      // the failure path too. Keyed per parent per program: re-inviting the same
+      // family for the same class updates their row rather than stacking one per
+      // press of the button.
+      const logInvite = (send: { ok: true; id: string | null } | { ok: false; error: string }) =>
+        logTransactionalSend(admin, {
+          organizationId,
+          source: 'parent_invite',
+          contextKey: `program:${programId}:parent:${c.parentId}`,
+          email: c.email,
+          parentId: c.parentId,
+          send,
+        });
+
       if (!resp.ok) {
         const errText = await resp.text();
         console.error('Resend failed', c.email, errText);
         failed++; failedReasons.push({ email: c.email, reason: shortErr(errText) });
+        await logInvite({ ok: false, error: formatSendError(resp.status, errText) });
         continue;
+      }
+      {
+        const okBody = await resp.json().catch(() => ({}));
+        await logInvite({ ok: true, id: (okBody as { id?: string })?.id ?? null });
       }
       invited++;
     }

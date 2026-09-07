@@ -25,6 +25,7 @@
 import type { SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 import { buildWaitlistInvite, buildWaitlistLapsed } from '../_shared/waitlistEmail.ts';
+import { logTransactionalSend, formatSendError } from '../_shared/sendLog.ts';
 import { orgHour, withinSendingHours } from './welcomeWindow.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
@@ -298,12 +299,28 @@ export async function runWaitlistSweep(
           tags: [{ name: 'type', value: 'waitlist_lapsed' }],
         }),
       });
+      let lapseOutcome: { ok: true; id: string | null } | { ok: false; error: string };
       if (!resp.ok) {
-        console.error('[waitlist-sweep] lapse note failed', resp.status, await resp.text());
+        const body = await resp.text();
+        console.error('[waitlist-sweep] lapse note failed', resp.status, body);
         out.errors.push({ program_id: r.program_id, error: `lapse note ${resp.status}` });
+        lapseOutcome = { ok: false, error: formatSendError(resp.status, body) };
       } else {
         out.lapse_notices_sent += 1;
+        const okBody = await resp.json().catch(() => ({}));
+        lapseOutcome = { ok: true, id: (okBody as { id?: string })?.id ?? null };
       }
+      // The lapse note was recorded nowhere at all — this sweep runs inside the
+      // cron that logs every other email it sends. Dated so a same-day cron
+      // re-run dedupes, while a family who lapses a second time later in the
+      // term correctly gets its own row rather than overwriting the first.
+      await logTransactionalSend(supabase, {
+        organizationId: r.organization_id,
+        source: 'waitlist_lapsed',
+        contextKey: `registration:${r.registration_id}:lapsed:${new Date().toISOString().slice(0, 10)}`,
+        email: r.parent_email ?? '',
+        send: lapseOutcome,
+      });
     } catch (e) {
       console.error('[waitlist-sweep] lapse note threw', (e as Error).message);
       out.errors.push({ program_id: r.program_id, error: `lapse note: ${(e as Error).message}` });
@@ -410,12 +427,38 @@ export async function runWaitlistSweep(
           }),
         });
         if (!resp.ok) {
-          console.error('[waitlist-sweep] invite send failed', resp.status, await resp.text());
+          const body = await resp.text();
+          console.error('[waitlist-sweep] invite send failed', resp.status, body);
           out.errors.push({ program_id: programId, error: `send ${resp.status}` });
+          // Logged on the failure path too. This send is rolled back below, so
+          // the row is the only surviving trace that we tried and could not
+          // reach this family about a place that was actually open for them.
+          await logTransactionalSend(supabase, {
+            organizationId: orgId,
+            source: 'waitlist_invite',
+            contextKey: `registration:${row.registration_id}:invite:${row.invite_token}`,
+            email: row.parent_email,
+            send: { ok: false, error: formatSendError(resp.status, body) },
+          });
         } else {
           sent = true;
           out.emailed += 1;
           console.log('[waitlist-sweep] invited', { program_id: programId, to: row.parent_email });
+          // Until now the invite left only waitlist_last_offered_at — ONE
+          // timestamp on the registration, overwritten on every re-offer, so a
+          // family offered a place twice showed one offer and a removed row took
+          // its history with it. Keyed on the invite token, so each distinct
+          // offer keeps its own row.
+          {
+            const okBody = await resp.json().catch(() => ({}));
+            await logTransactionalSend(supabase, {
+              organizationId: orgId,
+              source: 'waitlist_invite',
+              contextKey: `registration:${row.registration_id}:invite:${row.invite_token}`,
+              email: row.parent_email,
+              send: { ok: true, id: (okBody as { id?: string })?.id ?? null },
+            });
+          }
           // STAMP THE HISTORY ONLY NOW, after the email actually left Resend - NOT inside
           // waitlist_offer_next. An offer whose send fails is rolled back below, and it must
           // not read as "this family was offered a place" afterwards. Targeted at the token

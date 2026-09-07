@@ -112,7 +112,7 @@ export default function DeliveryIssuesPanel({ org }) {
       // hits the partial index automation_run_recipients_failed_idx.
       const { data: failed, error: fErr } = await supabase
         .from("automation_run_recipients")
-        .select("id, context_key, parent_id, email, automation_id, error_message, attempts, last_attempt_at")
+        .select("id, context_key, parent_id, email, automation_id, source, label, error_message, attempts, last_attempt_at")
         .eq("organization_id", org.id)
         .eq("status", "failed")
         .is("resolved_at", null)
@@ -173,7 +173,15 @@ export default function DeliveryIssuesPanel({ org }) {
           id: r.id,
           familyLabel: childName ? `${childName}'s family` : parentName,
           email: r.email,
-          emailName: autoName.get(r.automation_id) || "An email",
+          // A transactional row (20260907a) has no automation to name it and
+          // carries its own stored label instead. Without this it renders as the
+          // bare "An email" — and this is the panel an operator acts from, where
+          // "a refund receipt bounced" and "a welcome bounced" are different jobs.
+          // `resendable` below is deliberately left alone: autoKey.get(undefined)
+          // misses, so a transactional failure is correctly NOT offered a resend
+          // button — re-firing a registration confirmation needs its whole Stripe
+          // context and cannot be done from here.
+          emailName: r.label || autoName.get(r.automation_id) || "An email",
           programName,
           startDate,
           reason,
