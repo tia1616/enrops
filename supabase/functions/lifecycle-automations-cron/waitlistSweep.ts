@@ -324,6 +324,18 @@ export async function runWaitlistSweep(
     } catch (e) {
       console.error('[waitlist-sweep] lapse note threw', (e as Error).message);
       out.errors.push({ program_id: r.program_id, error: `lapse note: ${(e as Error).message}` });
+      // Log the throw too. Without this a lapse note that dies on a network
+      // error is recorded NOWHERE, which is the precise gap this work exists to
+      // close — and it is the failure most worth seeing, because the family was
+      // never told their hold ran out. join-waitlist already logs its own catch;
+      // this path was the inconsistent one.
+      await logTransactionalSend(supabase, {
+        organizationId: r.organization_id,
+        source: 'waitlist_lapsed',
+        contextKey: `registration:${r.registration_id}:lapsed:${new Date().toISOString().slice(0, 10)}`,
+        email: r.parent_email ?? '',
+        send: { ok: false, error: formatSendError(undefined, (e as Error).message) },
+      });
     }
   }
 

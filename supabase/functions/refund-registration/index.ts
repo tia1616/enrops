@@ -875,7 +875,17 @@ serve(async (req: Request) => {
         await logTransactionalSend(supabase, {
           organizationId: reg.organization_id,
           source: 'refund_receipt',
-          contextKey: `refunded:${refundsCreated.map((r) => r.refund_row_id).join('_')}`,
+          // The `none:<reg>` fallback is load-bearing even though it looks like
+          // belt-and-braces. With no refund rows the key would be the CONSTANT
+          // string "refunded:", and the dedupe index is
+          // (organization_id, source, context_key) — so two such receipts in one
+          // org would collide and the second would silently overwrite the first's
+          // record. The nothing_paid gate at :365 makes that unreachable today;
+          // it is one changed early-return away from being reachable, and the
+          // failure mode is a lost receipt record on the money path.
+          contextKey: refundsCreated.length
+            ? `refunded:${refundsCreated.map((r) => r.refund_row_id).join('_')}`
+            : `refunded:none:${reg.id}`,
           email: parent.email,
           parentId: reg.parent_id ?? null,
           send: receipt.sent
