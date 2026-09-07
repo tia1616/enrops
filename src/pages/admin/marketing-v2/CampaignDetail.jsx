@@ -83,11 +83,16 @@ export default function CampaignDetail({ campaignId, org, onBack }) {
           .eq("campaign_id", campaignId)
           .eq("organization_id", org.id)
           .order("order_index", { ascending: true }),
+        // is_test = false only. These rows ARE the engagement summary — sent,
+        // opened, clicked per touchpoint. Test sends go to the operator's own
+        // inbox and stopped being capped at one per touchpoint on 2026-09-07, so
+        // counting them would report an operator's own rehearsals as reach.
         supabase
           .from("marketing_sends")
           .select("id, touchpoint_id, status, opened_at, clicked_at, sent_at")
           .eq("campaign_id", campaignId)
-          .eq("organization_id", org.id),
+          .eq("organization_id", org.id)
+          .eq("is_test", false),
       ]);
       if (cRes.error) throw cRes.error;
       if (tpRes.error) throw tpRes.error;

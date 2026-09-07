@@ -79,6 +79,16 @@ const PUBLIC_SITE_URL = (Deno.env.get("PUBLIC_SITE_URL") ?? "https://enrops.com"
 // Already-delivered statuses for dedup. Mirrors marketing-send.
 const DELIVERED_STATUSES = ["sent", "delivered", "opened", "clicked"];
 
+// Stand-in personalisation for a TEST send only. An operator's own test row is
+// bootstrapped with an email and nothing else, so the name tokens resolved to
+// empty and they read their own email with a hole in a sentence. Module scope
+// because both the token builder and the test banner name the same value - the
+// banner has to tell the operator which name was invented, and two copies of
+// "Nina" would drift. Jessica picked it on 2026-09-07.
+const SAMPLE_CHILD_FIRST = "Nina";
+const SAMPLE_CHILD_LAST = "Sample";
+const SAMPLE_PARENT = "Sample Parent";
+
 // Soft defense against test-send abuse — caps test sends per minute per user.
 const TEST_SEND_THROTTLE_PER_MINUTE = 30;
 
@@ -448,8 +458,12 @@ serve(async (req: Request) => {
   // approved_recipient_ids in one round-trip. No client-side chunking, no
   // URL-length cliff at 500+ UUIDs, and no need for the cron to ship the
   // full ID list through a fetch body.
+  // One flag, read once, used by both the recipient bootstrap below and the
+  // dedup bypass further down — rather than testing body.mode in two places and
+  // letting them drift.
+  const isTestSend = body.mode === "test";
   let recipientRows: Recipient[] = [];
-  if (body.mode === "test") {
+  if (isTestSend) {
     if (!auth.userEmail) {
       return json({ error: "test mode requires authenticated user with email" }, 400);
     }
@@ -597,6 +611,13 @@ serve(async (req: Request) => {
   // Scoped by (campaign_id, touchpoint_id) so we don't need a recipient_id
   // IN-clause — the query returns at most one row per recipient who's
   // already received this touchpoint. Single round-trip.
+  //
+  // is_test-exempt: this one INCLUDES test rows on purpose. The reporting
+  // surfaces exclude them because a rehearsal is not reach; here the question is
+  // "has this address already been shown this exact touchpoint", and for the
+  // operator's own row a test is a yes. Filtering them out would mail an
+  // operator the real campaign right after they tested it. Test sends bypass
+  // this set entirely (isTestSend below), so it never blocks a re-test.
   const alreadyDelivered = new Set<string>();
   const { data: prior, error: pErr } = await supabase
     .from("marketing_sends")
@@ -643,15 +664,37 @@ serve(async (req: Request) => {
   };
   const ready: ReadyRecipient[] = [];
   const seenEmails = new Set<string>();
-  for (const r of recipientRows) {
-    if (alreadyDelivered.has(r.id) && r.email) seenEmails.add(r.email.toLowerCase());
+  // THE OTHER HALF OF THE SAME DEDUP, and it has to be bypassed for a test too.
+  // This pre-seeds the email-level set from the SAME alreadyDelivered rows, so
+  // skipping only the recipient-id check below still left a repeat test caught
+  // here as skipped_email_deduped — proved by running two consecutive test sends
+  // against deployed staging, where the second returned sent:0 with
+  // skipped_email_deduped:1. Reading the code alone missed it.
+  //
+  // Both halves exist to stop a FAMILY being emailed twice for one touchpoint.
+  // A test has one recipient, the caller's own address, so neither applies.
+  if (!isTestSend) {
+    for (const r of recipientRows) {
+      if (alreadyDelivered.has(r.id) && r.email) seenEmails.add(r.email.toLowerCase());
+    }
   }
   for (const r of recipientRows) {
     results.attempted++;
     if (!r.email) { results.skipped_no_email++; continue; }
     const emailLc = r.email.toLowerCase();
     if (suppressedEmails.has(emailLc)) { results.skipped_suppressed++; continue; }
-    if (alreadyDelivered.has(r.id)) { results.skipped_deduped++; continue; }
+    // Dedup is a REAL-SEND protection: it stops a family receiving the same
+    // touchpoint twice. A test goes to the operator's own inbox and is the
+    // thing they use to check an edit, so applying it there turns "preview my
+    // change" into "you already previewed this today, make another change" —
+    // which is what Jeff hit on 2026-09-07 after his first test of the morning,
+    // and it is unanswerable: he could not preview the email he was trying to
+    // fix. The TODO in AICampaignBuilder asked for exactly this bypass.
+    //
+    // Safe because a test only ever has ONE recipient row: the bootstrapped
+    // _internal_admin, whose email is the caller's own (mode='test' requires an
+    // authenticated user and uses auth.userEmail). It cannot re-send to a family.
+    if (!isTestSend && alreadyDelivered.has(r.id)) { results.skipped_deduped++; continue; }
     if (seenEmails.has(emailLc)) { results.skipped_email_deduped++; continue; }
     seenEmails.add(emailLc);
 
@@ -740,9 +783,17 @@ serve(async (req: Request) => {
         safeRegistrationUrl,
         campaignTopics: extractTopics(what),
         locationNameMap,
+        isTestSend,
       });
 
-      const subject = postCleanCopy(replaceTokens(touchpoint.payload!.subject!, tokens, { html: false }));
+      // A test is labelled in the SUBJECT, not only in the body: it lands in the
+      // operator's own inbox next to real mail, and one that looks identical to
+      // what families got is the kind of thing that gets forwarded by mistake.
+      // The sample-name note rides here too, so "Nina" can never be read as a
+      // real child on their roster.
+      const subject = isTestSend
+        ? `[TEST] ${postCleanCopy(replaceTokens(touchpoint.payload!.subject!, tokens, { html: false }))}`
+        : postCleanCopy(replaceTokens(touchpoint.payload!.subject!, tokens, { html: false }));
       // Wrap Ennie's body in a minimal HTML shell: doctype, basic styling,
       // unsubscribe footer. Ennie writes the CONTENT; the shell guarantees:
       // - Consistent rendering across Outlook / Gmail / Apple Mail
@@ -752,9 +803,46 @@ serve(async (req: Request) => {
       const renderedInner = postCleanCopy(replaceTokens(touchpoint.payload!.body_html!, tokens, { html: true }));
       // Download buttons are appended to the BOTTOM of the body (they land above
       // the signature that wrapInEmailShell adds) — never a token in the body.
-      const innerHtml = renderedInner + downloadButtonsHtml;
+      // Says WHICH values were invented, so an operator checking their own test
+      // knows the personalisation they are looking at is a stand-in and that a
+      // real family sees their own child's name here.
+      // Gated on whether a sample NAME IS ACTUALLY IN THE RENDERED OUTPUT, not
+      // on isTestSend and not on the recipient row.
+      //
+      // Two things this has to survive. First, ensureAdminRecipient returns an
+      // EXISTING contact row when the operator's own address is already on their
+      // list (:988) — that row can carry a real child name, so a banner keyed off
+      // isTestSend alone would tell them their own real data was invented.
+      // Second — and this is the one my row-shaped version got wrong — a
+      // touchpoint whose copy never uses {{child_first_name}} would still have
+      // shown "Nina is shown as a sample" with no Nina anywhere in the email.
+      // Reading the TEMPLATE for the token makes the claim true by construction:
+      // the banner appears exactly when a child token was there to substitute.
+      // Deliberately the token and not the rendered word — an operator whose copy
+      // happens to name a real person "Nina" would otherwise trip a banner about
+      // a substitution that never happened.
+      const rawTemplate = `${touchpoint.payload!.subject!}\n${touchpoint.payload!.body_html!}\n${touchpoint.payload!.body_text ?? ""}`;
+      const usedSampleChild = isTestSend &&
+        !r.child_first_name?.trim() &&
+        (r.segments ?? []).includes("_internal_admin") &&
+        rawTemplate.includes("{{child_first_name}}");
+      const testBannerHtml = usedSampleChild
+        ? `<div style="background:#FBF1DC;border:1px solid #9A6A00;border-radius:6px;padding:10px 12px;margin:0 0 16px;font:13px -apple-system,BlinkMacSystemFont,sans-serif;color:#5c4000">` +
+          `<strong>This is a test.</strong> Your own contact record has no child on it, so ` +
+          `<strong>${SAMPLE_CHILD_FIRST}</strong> is shown as a sample. Each family receives their own child's name here.` +
+          `</div>`
+        : "";
+      const innerHtml = testBannerHtml + renderedInner + downloadButtonsHtml;
       const bodyHtml = wrapInEmailShell(innerHtml, tokens);
-      const bodyText = (touchpoint.payload!.body_text
+      // THE PLAINTEXT HALF GETS THE SAME BANNER. bodyText is built from
+      // payload.body_text or stripped from renderedInner — the PRE-banner HTML —
+      // so without this line a client rendering text/plain shows "Nina" with
+      // nothing saying she is invented, and the HTML-only banner is a disclosure
+      // that half the readers never see.
+      const testBannerText = usedSampleChild
+        ? `This is a test. Your own contact record has no child on it, so ${SAMPLE_CHILD_FIRST} is shown as a sample. Each family receives their own child's name here.\n\n`
+        : "";
+      const bodyText = testBannerText + (touchpoint.payload!.body_text
         ? postCleanCopy(replaceTokens(touchpoint.payload!.body_text, tokens, { html: false, multiline: true }))
         : stripHtmlToText(renderedInner)) + downloadButtonsText;
 
@@ -812,6 +900,14 @@ serve(async (req: Request) => {
         school_name: row.r.school_name ?? null,
         error_message: ok ? null : (batchResp.ok ? "no id returned for this position in batch response" : batchResp.error),
         suppressed_by_throttle: false,
+        // A test is logged, but it is NOT a send to a family and must not reach
+        // the numbers. This mattered less while the per-touchpoint dedup capped
+        // tests at one row per touchpoint forever; bypassing that dedup for
+        // mode='test' the same day means an operator iterating on copy writes a
+        // row per click (throttle 30/min). CampaignDetail aggregates every row
+        // for the campaign, so eight tests would have overstated that
+        // touchpoint's sent count by eight. Readers filter is_test = false.
+        is_test: isTestSend,
       };
     });
     const { error: insertErr } = await supabase.from("marketing_sends").insert(inserts);
@@ -1077,10 +1173,16 @@ type TokensInput = {
   // Resolved tenant email identity (shared loadOrgBrand cascade) — drives the
   // {{sender_name}}, {{sender_email}}, {{reply_to}} body tokens.
   brand: OrgBrand;
+  // TRUE only for mode='test'. The sample child name below is gated on this AND
+  // the _internal_admin segment, never on the segment alone — see the note at
+  // child_first_name. Defaults false, so any caller that forgets it gets the
+  // real-send behaviour, which is the safe direction.
+  isTestSend?: boolean;
 };
 
 async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: Map<string, string[]> }): Promise<Map<string, string>> {
   const { recipient: r, org, brand, program, recipientPrograms, recipientCamps, draftInputs, safeRegistrationUrl, campaignTopics, locationNameMap } = input;
+  const isTestSend = input.isTestSend === true;
   const tokens = new Map<string, string>();
   const isInternalAdmin = (r.segments ?? []).includes("_internal_admin");
 
@@ -1091,10 +1193,53 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
     ? (locationNameMap?.get(program.program_location_id)?.[0] ?? null)
     : null;
 
+  // SAMPLE VALUES FOR A TEST SEND ONLY.
+  //
+  // ensureAdminRecipient inserts an email and the _internal_admin segment and
+  // nothing else, so an operator's own test row has no parent name and no child.
+  // {{child_first_name}} then rendered as NOTHING and the operator read their
+  // own email with a hole in the middle of a sentence, with no way to tell
+  // whether their families would see the same. Jeff asked exactly that on
+  // 2026-09-07. {{school}} already had an admin fallback for this reason
+  // (adminSchoolFallback above); the name tokens never got the same treatment.
+  //
+  // Gated on isTestSend AND isInternalAdmin. The segment ALONE is not enough,
+  // and my first version got this wrong: resolveParents with
+  // filter.type='master_list' selects every marketing_recipients row in the org
+  // with no segment exclusion (marketing-draft-campaign:480), so the operator's
+  // own bootstrapped _internal_admin row is inside approved_recipient_ids on a
+  // real campaign. On any touchpoint they never test-sent — so dedup does not
+  // cover it — the scheduled cron send would have rendered "Nina" as a child's
+  // name in a real, unlabelled email: the banner below is gated on isTestSend,
+  // so nothing would have said it was invented. Jeff's campaign is master_list.
+  // Jessica picked "Nina" on 2026-09-07; the test email says these are samples
+  // so nobody mistakes one for a real child on their roster.
+  // The PARENT tokens are deliberately NOT seeded, and that is a reversal of my
+  // own first attempt. {{first_name}} already falls back to "there", which is
+  // exactly what a real family with no parent name on file receives — so the
+  // test is accurate as-is. Seeding it read "Hi Sample," instead of "Hi there,"
+  // on 36 of the 38 touchpoints that use this token, which is LESS
+  // representative, not more. The complaint was the missing CHILD name; only
+  // that is seeded.
   tokens.set("first_name", splitFirstName(r.parent_name) || "there");
   tokens.set("parent_name", r.parent_name?.trim() || "");
-  tokens.set("child_first_name", r.child_first_name?.trim() || "");
-  tokens.set("child_last_name", r.child_last_name?.trim() || "");
+  // REAL SENDS GET A FALLBACK TOO, and that is a separate fix in the same line.
+  // {{first_name}} has always fallen back to "there"; {{child_first_name}} fell
+  // back to empty, so a family with no child name on file received the sentence
+  // with a gap in it. One of Jeff's 127 contacts is in that state today.
+  // Jessica's wording, 2026-09-07: "your child".
+  tokens.set(
+    "child_first_name",
+    r.child_first_name?.trim() || (isTestSend && isInternalAdmin ? SAMPLE_CHILD_FIRST : "your child"),
+  );
+  // Last name has no safe generic ("your child Smith" reads wrong), so a real
+  // send with no last name still resolves to empty. Seeded for the test only for
+  // symmetry with the first name — measured as unused by all 38 touchpoints
+  // today, so this is defensive rather than load-bearing.
+  tokens.set(
+    "child_last_name",
+    r.child_last_name?.trim() || (isTestSend && isInternalAdmin ? SAMPLE_CHILD_LAST : ""),
+  );
   tokens.set("school", r.school_name?.trim() || adminSchoolFallback || "your school");
   tokens.set("city", r.city?.trim() || "");
   tokens.set("zip", r.zip?.trim() || "");
@@ -1922,9 +2067,14 @@ async function renderPreview(
   const syntheticRecipient: Recipient = {
     id: "preview",
     email: "preview@example.com",
-    parent_name: "Sample Parent",
-    child_first_name: "Sam",
-    child_last_name: "Sample",
+    // The SAME sample identity the test email uses. These were hardcoded here as
+    // "Sam" while the test send seeded nothing at all; once the test send got
+    // sample values too, two hardcoded names meant one operator could preview the
+    // same campaign two ways and meet two different children. One constant, one
+    // place - the test email's banner names it out loud, so it has to match.
+    parent_name: SAMPLE_PARENT,
+    child_first_name: SAMPLE_CHILD_FIRST,
+    child_last_name: SAMPLE_CHILD_LAST,
     school_name: loc.name,
     city: null,
     zip: null,

@@ -377,6 +377,13 @@ serve(async (req) => {
   const supabase = adminClient();
 
   // Match the send row. resend_message_id is unique per send.
+  //
+  // is_test-exempt: a test send is a real email through Resend and produces real
+  // delivery events. If the operator's own test bounces or draws a complaint,
+  // that verdict has to land on the row and reach the suppression list exactly
+  // like any other — a bad address is a bad address. Filtering test rows out
+  // here would drop those events on the floor. The reporting surfaces, not this
+  // ingest, are where a test stops counting.
   const { data: send, error: sendErr } = await supabase
     .from("marketing_sends")
     .select("id, organization_id, email, status, opened_at, clicked_at")

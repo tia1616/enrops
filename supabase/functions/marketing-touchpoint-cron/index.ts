@@ -201,7 +201,13 @@ serve(async (req: Request) => {
           .from("marketing_sends")
           .select("status")
           .eq("campaign_id", tp.campaign_id)
-          .eq("touchpoint_id", tp.id);
+          .eq("touchpoint_id", tp.id)
+          // is_test = false only. recipients_sent feeds the analytics stream as
+          // reach; an operator's own test sends are not reach. Since the
+          // per-touchpoint dedup stopped applying to tests (2026-09-07) there can
+          // be many per touchpoint, so this is the difference between a real
+          // number and one inflated by however long they spent editing.
+          .eq("is_test", false);
         const tallyRows = (tally ?? []) as Array<{ status: string }>;
         const DELIVERED = new Set(["sent", "delivered", "opened", "clicked"]);
         const recipientsSent = tallyRows.filter((r) => DELIVERED.has(r.status)).length;

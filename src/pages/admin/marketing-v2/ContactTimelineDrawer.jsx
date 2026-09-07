@@ -70,10 +70,16 @@ async function fetchFamily(contact, orgId) {
   const events = [];
   const email = low(contact.email);
 
+  // is_test = false only. A test send is the operator mailing themselves to check
+  // their own copy; it lands in marketing_sends against their own contact row, and
+  // since the per-touchpoint dedup stopped applying to tests (2026-09-07) there can
+  // be one row per click. This timeline answers "what did this family receive",
+  // so a rehearsal is not an answer to it.
   const { data: sends } = await supabase
     .from("marketing_sends")
     .select("id, rendered_subject, status, sent_at, opened_at, clicked_at, created_at")
     .eq("recipient_id", contact.id)
+    .eq("is_test", false)
     .order("created_at", { ascending: false })
     .limit(300);
   for (const s of sends ?? []) {
