@@ -1201,9 +1201,16 @@ function ImportantToday({ org, user, openHires }) {
         // into 'uncovered' (declined, no one coming) and 'awaiting' (offer still
         // out) — so cancelled/withdrawn/deleted classes can't inflate this card.
         supabase.rpc("get_sub_coverage", { p_org: org.id }),
-        // Failed lifecycle sends (RLS members_read_* scopes to this org; the
-        // partial index automation_run_recipients_failed_idx serves this). We
-        // classify client-side and count only "needs you" failures.
+        // Failed sends (RLS members_read_* scopes to this org; the partial index
+        // automation_run_recipients_failed_idx serves this). We classify
+        // client-side and count only "needs you" failures.
+        //
+        // No longer lifecycle-only: as of 20260907a this table also records
+        // family transactional email, so a refund receipt or a registration
+        // confirmation that never arrived now counts here too. Deliberate, and
+        // Jessica's call on 2026-09-07 — a receipt that did not reach a family is
+        // exactly what this card exists to surface. The card's own wording
+        // ("N families didn't get an email") was already generic and stays true.
         supabase
           .from("automation_run_recipients")
           .select("error_message, attempts")
