@@ -657,8 +657,19 @@ serve(async (req: Request) => {
   };
   const ready: ReadyRecipient[] = [];
   const seenEmails = new Set<string>();
-  for (const r of recipientRows) {
-    if (alreadyDelivered.has(r.id) && r.email) seenEmails.add(r.email.toLowerCase());
+  // THE OTHER HALF OF THE SAME DEDUP, and it has to be bypassed for a test too.
+  // This pre-seeds the email-level set from the SAME alreadyDelivered rows, so
+  // skipping only the recipient-id check below still left a repeat test caught
+  // here as skipped_email_deduped — proved by running two consecutive test sends
+  // against deployed staging, where the second returned sent:0 with
+  // skipped_email_deduped:1. Reading the code alone missed it.
+  //
+  // Both halves exist to stop a FAMILY being emailed twice for one touchpoint.
+  // A test has one recipient, the caller's own address, so neither applies.
+  if (!isTestSend) {
+    for (const r of recipientRows) {
+      if (alreadyDelivered.has(r.id) && r.email) seenEmails.add(r.email.toLowerCase());
+    }
   }
   for (const r of recipientRows) {
     results.attempted++;
