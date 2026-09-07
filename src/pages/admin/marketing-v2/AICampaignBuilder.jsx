@@ -496,7 +496,23 @@ export default function AICampaignBuilder() {
         }
         // eslint-disable-next-line no-console
         console.error("[onSendTest] edge function error", { httpStatus, msg, rawBody, error });
-        alert(`Test send failed (HTTP ${httpStatus ?? "?"}): ${msg}\n\nFull response body logged to console.`);
+        // The test send posts only campaign_id + touchpoint_id: the function reads
+        // the SAVED touchpoint, never what is on screen. So pressing it mid-edit
+        // tests a row that has no subject or body yet, and the operator got
+        // "Test send failed (HTTP 400): touchpoint payload missing subject or
+        // body_html" — an error about our storage, for something they did right.
+        // Jeff hit this on 2026-09-07 and could not tell what he had done wrong.
+        //
+        // Matched on the function's own message rather than the 400 alone: a 400
+        // covers several unrelated refusals (org mismatch, non-email touchpoint),
+        // and telling someone to save when the real problem is different would
+        // send them round a loop that cannot work.
+        const isUnsavedEdit = /missing subject or body_html/i.test(msg);
+        alert(
+          isUnsavedEdit
+            ? "Save your changes first, then send the test.\n\nThe test sends the saved version of this email, so anything you have typed since the last save is not included yet."
+            : `Test send failed: ${msg}`,
+        );
         return;
       }
       if (data?.sent > 0) {
@@ -688,7 +704,7 @@ export default function AICampaignBuilder() {
       const [cRes, tpRes, senderRes] = await Promise.all([
         supabase
           .from("marketing_campaigns")
-          .select("id, name, status, draft_inputs, approved_recipient_ids")
+          .select("id, name, status, draft_inputs, approved_recipient_ids, approved_at")
           .eq("id", campaignId)
           .eq("organization_id", org.id)
           .maybeSingle(),
@@ -724,7 +740,52 @@ export default function AICampaignBuilder() {
         scheduled_at: tp.scheduled_at,
         status: tp.status,
       }));
-      const recipientIds = campaign.approved_recipient_ids ?? [];
+      // approved_recipient_ids is written at APPROVAL time, so it is null for a
+      // draft. Reading it alone meant every reopened draft showed "0 recipients"
+      // and a red banner claiming no parents fit the operator's filter — false,
+      // and it also left the recipient list uneditable because none was loaded.
+      // Jeff hit it on 2026-09-07 with a master_list filter and 127 matching
+      // parents.
+      //
+      // So: use the approved list when there IS one (an approved campaign's
+      // audience is settled and must not silently change under the operator),
+      // and otherwise re-resolve the draft's own filter server-side. Re-resolving
+      // rather than restoring a snapshot is deliberate — see the note on
+      // mode:"resolve_audience" in marketing-draft-campaign.
+      //
+      // Fail-soft: if this errors we fall back to the old empty list, which is
+      // the behaviour before this fix rather than a broken screen.
+      let recipientIds = campaign.approved_recipient_ids ?? [];
+      let resolvedSummary = "";
+      // `!approved_at` is the SAME definition of "draft" CampaignsList uses to
+      // decide which rows get a Resume button (`campaigns.filter(c =>
+      // !c.approved_at)`), rather than a second spelling via status. Today only
+      // un-approved rows can reach here, so this changes nothing — it is here so
+      // the guarantee above ("an approved campaign still uses its approved list")
+      // is enforced by this function instead of resting on which button the
+      // operator happened to be offered.
+      if (!campaign.approved_at && recipientIds.length === 0 && campaign.draft_inputs?.who) {
+        try {
+          const { data: resolved, error: resolveErr } = await supabase.functions.invoke(
+            "marketing-draft-campaign",
+            {
+              body: {
+                organization_id: org.id,
+                inputs: campaign.draft_inputs,
+                mode: "resolve_audience",
+              },
+            },
+          );
+          if (resolveErr) throw resolveErr;
+          if (Array.isArray(resolved?.recipients?.ids)) {
+            recipientIds = resolved.recipients.ids;
+            resolvedSummary = resolved.recipients.segment_summary ?? "";
+          }
+        } catch (e) {
+          // eslint-disable-next-line no-console
+          console.error("[resumeDraft] audience re-resolve failed:", e);
+        }
+      }
       const draft = {
         campaign_id: campaign.id,
         schedule: {
@@ -739,7 +800,7 @@ export default function AICampaignBuilder() {
         recipients: {
           ids: recipientIds,
           count: recipientIds.length,
-          segment_summary: "",
+          segment_summary: resolvedSummary,
         },
         mechanical_checks: null,
         warning: null,

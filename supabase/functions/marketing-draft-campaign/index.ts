@@ -2127,6 +2127,44 @@ Deno.serve(async (req: Request) => {
   const planRefusal = await assertCommsFull(supabase, organization_id);
   if (planRefusal) return planRefusal;
 
+  // ---- Resolve-only mode: re-resolve an EXISTING draft's audience ----------
+  //
+  // WHY THIS EXISTS. The recipient list was only ever returned to the browser and
+  // never persisted. Reopening a saved draft rehydrated it from
+  // approved_recipient_ids, a column written at APPROVAL time and therefore null
+  // for a draft -- so a reopened draft showed "0 recipients" plus a red banner
+  // telling the operator that no parents fit their filter. Jeff hit exactly that
+  // on 2026-09-07 with a master_list filter and 127 matching parents, and it also
+  // left him unable to edit the recipient list, because there was none loaded.
+  //
+  // DELIBERATELY RE-RESOLVES rather than persisting a snapshot at draft time. An
+  // audience is a FILTER, not a list: a family who registered since the draft was
+  // written should count as they are now. Freezing the list at draft time is the
+  // "campaign lists go stale" defect already on the board -- the one where
+  // already-registered is checked once at approval and parents keep getting
+  // "sign up now" -- reached from a new direction.
+  //
+  // PLACED HERE ON PURPOSE: after the auth, org and plan gates above, and BEFORE
+  // the AI rate limit below. This makes no Claude call and writes no row, so
+  // re-opening a draft must not burn one of the 50 daily drafts or trip the 15s
+  // cooldown. It inserts nothing, so it cannot duplicate a campaign.
+  //
+  // It calls the SAME resolveParents the draft path uses. Re-implementing the
+  // audience rule on the client would be a second spelling of it, and the two
+  // would disagree the first time either changed.
+  if ((body as Record<string, unknown>).mode === "resolve_audience") {
+    if (inputs.who.audience !== "parents") {
+      return jsonError(`audience ${inputs.who.audience} not yet implemented`, 501);
+    }
+    const only = await resolveParents(
+      supabase,
+      organization_id,
+      inputs.who.filter as ParentsFilter,
+    );
+    if (!only.ok) return jsonError(only.error, only.status);
+    return jsonOk({ recipients: only.data });
+  }
+
   // ---- Rate limit: 15s cooldown + 50 drafts/day per org (AI only) ----
   if (skipAi) {
     // Manual drafts skip the AI rate limit entirely — no Claude call, no cost.
