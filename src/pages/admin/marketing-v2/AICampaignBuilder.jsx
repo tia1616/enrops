@@ -704,7 +704,7 @@ export default function AICampaignBuilder() {
       const [cRes, tpRes, senderRes] = await Promise.all([
         supabase
           .from("marketing_campaigns")
-          .select("id, name, status, draft_inputs, approved_recipient_ids")
+          .select("id, name, status, draft_inputs, approved_recipient_ids, approved_at")
           .eq("id", campaignId)
           .eq("organization_id", org.id)
           .maybeSingle(),
@@ -757,7 +757,14 @@ export default function AICampaignBuilder() {
       // the behaviour before this fix rather than a broken screen.
       let recipientIds = campaign.approved_recipient_ids ?? [];
       let resolvedSummary = "";
-      if (recipientIds.length === 0 && campaign.draft_inputs?.who) {
+      // `!approved_at` is the SAME definition of "draft" CampaignsList uses to
+      // decide which rows get a Resume button (`campaigns.filter(c =>
+      // !c.approved_at)`), rather than a second spelling via status. Today only
+      // un-approved rows can reach here, so this changes nothing — it is here so
+      // the guarantee above ("an approved campaign still uses its approved list")
+      // is enforced by this function instead of resting on which button the
+      // operator happened to be offered.
+      if (!campaign.approved_at && recipientIds.length === 0 && campaign.draft_inputs?.who) {
         try {
           const { data: resolved, error: resolveErr } = await supabase.functions.invoke(
             "marketing-draft-campaign",
