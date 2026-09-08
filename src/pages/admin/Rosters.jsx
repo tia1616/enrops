@@ -2225,13 +2225,28 @@ function AfterschoolRostersSection({ org, canEdit }) {
       try {
         const { data: progRows, error: pErr } = await supabase
           .from("programs")
-          .select("id, curriculum, day_of_week, start_time, end_time, max_capacity, program_location_id, first_session_date, session_count, program_locations ( name, district )")
+          .select("id, curriculum, status, day_of_week, start_time, end_time, max_capacity, program_location_id, first_session_date, session_count, program_locations ( name, district )")
           .eq("organization_id", org.id)
-          // Published only. A draft cannot have registrations, so it would list at
-          // "0 enrolled" next to a roster-email control that would send a school an
-          // empty roster for a class that is not live. Reachable since 2026-08-08,
-          // when the lean quick builder gained Save as draft.
-          .eq("status", "open")
+          // A DRAFT cannot have registrations, so it would list at "0 enrolled"
+          // next to a roster-email control that would send a school an empty
+          // roster for a class that is not live. Reachable since 2026-08-08,
+          // when the lean quick builder gained Save as draft. Archived is gone
+          // by definition. Both stay hidden.
+          //
+          // CANCELLED IS NOT HIDDEN, and that is the fix. This filtered on
+          // status='open', so cancelling a class removed it from this screen -
+          // taking its families with it. The per-family "Refund…" button on the
+          // expanded roster is the ONLY refund entry point in the product, so
+          // cancelling a class locked the operator out of refunding exactly the
+          // families the cancellation had just stranded. Jessica hit this on
+          // 2026-09-08 with two paid families and $539 owed and no way to reach
+          // them. A cancelled class is precisely when you most need its roster.
+          //
+          // 'closed' comes back too, and that was the same latent gap: a closed
+          // class is real and full of families, it has merely stopped taking
+          // registrations. One rule now - show the classes that exist for
+          // families, hide the ones that do not.
+          .not("status", "in", '("draft","archived")')
           .eq("term", term);
         if (pErr) throw pErr;
         const ids = (progRows ?? []).map((p) => p.id);
@@ -2484,8 +2499,20 @@ function ProgramRosterRow({ program: p, orgId, orgSlug, canEdit, expanded, onTog
     : null;
   const [showInvite, setShowInvite] = useState(false);
   const [messaging, setMessaging] = useState(false);
+  // Cancelled classes are listed so their families stay reachable for refunds,
+  // which means every OUTBOUND action on this row now has to ask whether the
+  // class still exists. Emailing a school the roster of a cancelled class, or
+  // inviting its families to sign in for it, would be worse than the problem
+  // that put the row here. Add/upload goes too: nobody joins a cancelled class.
+  //
+  // "Message families" is DELIBERATELY KEPT. Telling this class's families that
+  // it is not running is the single most likely thing an operator wants to do
+  // from a cancelled row - it is what Jessica did by hand before asking for the
+  // roster back. Hiding it would remove the one send that belongs here.
+  // "View / print" stays too; it is read-only.
+  const isCancelled = p.status === "cancelled";
   return (
-    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderLeft: p.enrolled > 0 ? `3px solid ${OK}` : `3px solid ${RULE}`, borderRadius: 12, padding: "12px 16px" }}>
+    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderLeft: isCancelled ? `3px solid ${MUTED}` : p.enrolled > 0 ? `3px solid ${OK}` : `3px solid ${RULE}`, borderRadius: 12, padding: "12px 16px" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
         <button
           type="button"
@@ -2494,7 +2521,12 @@ function ProgramRosterRow({ program: p, orgId, orgSlug, canEdit, expanded, onTog
         >
           <div style={{ fontSize: 14, fontWeight: 600, color: INK, lineHeight: 1.3, display: "flex", alignItems: "center", gap: 6 }}>
             <Chevron open={expanded} color={BRIGHT} />
-            <span>{p.curriculum ?? "Untitled"}</span>
+            <span style={isCancelled ? { color: MUTED } : undefined}>{p.curriculum ?? "Untitled"}</span>
+            {isCancelled && (
+              <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6, color: MUTED, background: "#f3f1ea", border: `1px solid ${RULE}`, borderRadius: 999, padding: "2px 8px" }}>
+                Cancelled
+              </span>
+            )}
           </div>
           <div style={{ fontSize: 12, color: MUTED, marginTop: 2, paddingLeft: 18 }}>{subtitle || "—"}</div>
         </button>
@@ -2505,17 +2537,22 @@ function ProgramRosterRow({ program: p, orgId, orgSlug, canEdit, expanded, onTog
             {p.max_capacity ? <span style={{ color: MUTED }}> / {p.max_capacity} seats</span> : null}
           </div>
           <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", marginTop: 6, flexWrap: "wrap" }}>
-            {canEdit && (
+            {isCancelled && (
+              <span style={{ fontSize: 11, color: MUTED, alignSelf: "center" }}>
+                Class cancelled — open the roster to refund families.
+              </span>
+            )}
+            {canEdit && !isCancelled && (
               <button type="button" onClick={onUpload} style={{ padding: "6px 12px", background: BRIGHT, color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>
                 Add / upload →
               </button>
             )}
-            {p.enrolled > 0 && !isLean && (
+            {p.enrolled > 0 && !isLean && !isCancelled && (
               <button type="button" onClick={onEmail} style={{ padding: "6px 12px", background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }} title="Send a branded PDF roster to this location's partner contacts">
                 Email roster →
               </button>
             )}
-            {canEdit && p.enrolled > 0 && (
+            {canEdit && p.enrolled > 0 && !isCancelled && (
               <button type="button" onClick={() => setShowInvite(true)} style={{ padding: "6px 12px", background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }} title="Preview and send a portal sign-in invite to this program's families.">
                 Invite families →
               </button>
