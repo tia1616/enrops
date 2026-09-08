@@ -254,6 +254,36 @@ export default function ProgramsCalendar() {
       alert(message);
       return { ok: false, message };
     }
+    // CANCELLING UNASSIGNS. Jessica, 2026-09-08: "cancel a class, withdraw the
+    // instructor... then they are open to be reassigned."
+    //
+    // Until today cancelling only set programs.status and left every assignment
+    // row 'confirmed', so the platform still believed those instructors were
+    // teaching classes that do not exist. That single omission produced four
+    // separate bugs in one day - a blocked reassignment, a reminder email chasing
+    // an instructor about a dead class, and two screens that had to be taught to
+    // ask "is this class still real?". Withdrawing here removes the cause instead
+    // of teaching each reader about it: 'withdrawn' is a status the conflict
+    // trigger, the offer paths and the portal already understand.
+    //
+    // Pay already earned is NOT affected: v_effective_pay_lines is built from
+    // session_delivery_confirmations and LEFT JOINs the assignment without
+    // filtering its status, so a day already confirmed as taught keeps its line.
+    //
+    // 'withdrawn'/'declined' are skipped so an instructor who had already turned
+    // this class down is not silently rewritten into a withdrawal by us.
+    const { error: unassignErr } = await supabase
+      .from("program_assignments")
+      .update({ status: "withdrawn" })
+      .eq("program_id", programId)
+      .not("status", "in", '("withdrawn","declined")');
+    if (unassignErr) {
+      // The class IS cancelled - that write succeeded. Say what did not happen
+      // rather than swallowing it, because the leftover is exactly the bug this
+      // removes: the instructor stays booked and cannot be reassigned elsewhere.
+      console.error("[cancelProgram] unassign failed:", unassignErr.message);
+      alert(`Class cancelled, but its instructor could not be released: ${unassignErr.message}\n\nThey may still show as booked for it. Try cancelling again, or tell us.`);
+    }
     setPrograms((prev) => prev.map((p) => (p.id === programId ? { ...p, status: "cancelled" } : p)));
     return { ok: true };
   }

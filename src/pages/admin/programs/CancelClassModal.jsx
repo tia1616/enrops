@@ -152,8 +152,13 @@ export default function CancelClassModal({ program, orgId, onConfirm, onTellFami
                 Cancelled. It's off your schedule board and any instructor's portal.
               </div>
               <div style={{ fontSize: 12, color: INK, marginTop: 6 }}>
+                {/* Say the unassignment out loud. As of 2026-09-08 cancelling
+                    also withdraws the instructor, which is a real consequence
+                    the operator needs to know about: it frees them to be booked
+                    elsewhere at that time, and it is not undone by reopening. */}
+                Its instructor has been released and can now be scheduled elsewhere at that time.
                 Nobody has been emailed and no money has moved. It still shows in Programs with a
-                Cancelled badge, and you can reopen it as a draft.
+                Cancelled badge, and you can reopen it as a draft — it will need an instructor again.
               </div>
             </div>
             {/* THE FOLLOW-THROUGH, which is the whole reason this is a panel and
