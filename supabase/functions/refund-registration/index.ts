@@ -1002,14 +1002,31 @@ serve(async (req: Request) => {
       // instead of implying the family was told.
       receipt_sent: receipt.sent,
       receipt_reason: receipt.sent ? undefined : receipt.reason,
-      // The refund SUCCEEDED; this is money still owed back to the provider,
-      // reported alongside it. Same shape of honesty as receipt_sent: the
-      // operator is told what did not happen without being told the thing that
-      // did happen failed.
-      margin_shortfalls: marginShortfalls.length > 0 ? marginShortfalls : undefined,
-      margin_owed_cents: marginShortfalls.length > 0
-        ? marginShortfalls.reduce((n, m) => n + m.margin_owed_cents, 0)
-        : undefined,
+      // THE MARGIN SHORTFALL IS DELIBERATELY NOT IN THIS RESPONSE.
+      //
+      // It was, and the drawer showed it. On 2026-09-08 Jeff read it: that
+      // enrops was short of funds, an internal Stripe fee id, and an instruction
+      // to watch a balance he has no access to. All true, none of it his. An
+      // operator CANNOT refund an application fee - only the platform can - so
+      // it named a task and handed it to the one person unable to do it, while
+      // disclosing the platform's cash position to a customer.
+      //
+      // Not merely hidden in the UI: removed from the payload, because a browser
+      // response an operator can open in devtools is not a private channel.
+      //
+      // WHERE IT LIVES INSTEAD, and this is the part that must not rot: the
+      // shortfall is already written to the `refunds` row above -
+      // `platform_fee_refunded_cents` (0 when the return failed) and
+      // `failure_reason` (Stripe's own wording, carrying the amount). That row
+      // is the durable record and it is unchanged by this. Outstanding margin is
+      // therefore queryable, which is how the 2026-09-08 total was found.
+      //
+      // WHAT IS STILL MISSING, named rather than quietly dropped: nothing
+      // ALERTS enrops. Until that exists, an operator refunding into a low
+      // balance produces a debt only a query will surface. That is a platform
+      // alert to enrops - the `refund_watch_alerts` pattern in
+      // _shared/operatorFlagAlert.ts is the sibling to copy - and it is the
+      // follow-up to this change, not part of it.
       // The two other "money moved but a later step did not" cases, reported the
       // same way rather than as failures of the refund itself.
       cancel_failed: cancelFailedReason ?? undefined,
