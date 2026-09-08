@@ -172,30 +172,39 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
         setBusy(false);
         return;
       }
-      // THE REFUND WORKED. If the platform margin could not be returned, say so
-      // without implying the refund failed - which is what the function used to
-      // do, by returning 502 and leaving the registration marked paid. An alert
-      // rather than an inline note because the drawer closes on the next line,
-      // and this must not be the thing nobody sees.
+      // THE REFUND WORKED. What follows is only for things that are still the
+      // OPERATOR'S to finish. An alert rather than an inline note because the
+      // drawer closes on the next line, and these must not be the thing nobody
+      // sees. When there is nothing for them to do the alert does not fire at
+      // all and the refund just succeeds quietly, which is the common case.
+      //
+      // (The margin shortfall used to be listed here too. It still must never
+      // imply the refund FAILED - the function used to return 502 and leave the
+      // registration marked paid, which is what sent an operator back to press
+      // Refund a second time on a real card. It does not do that any more; the
+      // shortfall is a warning on a successful refund. See below for why the
+      // operator is no longer the one warned.)
       const notes = [];
-      if (data?.margin_owed_cents > 0) {
-        // Name the fee IDs. Without them the operator knows money is owed but
-        // not which Stripe object to refund, and has to come back and ask - which
-        // is exactly what happened on 2026-09-08. The reason is Stripe's own
-        // words ("Insufficient funds in your Stripe balance..."), which is more
-        // use than any sentence we could write over the top of it.
-        const ids = (data.margin_shortfalls ?? [])
-          .map((m) => m.application_fee_id)
-          .filter(Boolean);
-        const why = (data.margin_shortfalls ?? [])[0]?.reason;
-        notes.push(
-          `$${(data.margin_owed_cents / 100).toFixed(2)} of enrops service fee could not be returned to you` +
-          (why ? ` — ${why}` : "") +
-          `\nThis is money owed back to you. It needs an application-fee refund in Stripe` +
-          (ids.length ? ` on ${ids.join(", ")}` : "") +
-          ` once the balance covers it. The family is unaffected.`,
-        );
-      }
+      // THE MARGIN SHORTFALL IS DELIBERATELY NOT SHOWN TO THE OPERATOR.
+      //
+      // It used to be, and on 2026-09-08 Jeff read it: it told him enrops was
+      // short of funds, handed him an internal Stripe fee id, and asked him to
+      // watch for a balance he cannot see. Every fact in it was true and none of
+      // it was his to act on. An operator cannot refund an application fee -
+      // only the platform can - so the message named a task, gave it to the one
+      // person who cannot do it, and disclosed the platform's cash position to a
+      // customer in the same breath.
+      //
+      // NOTHING IS LOST BY REMOVING IT. The shortfall is written to the
+      // `refunds` row before this response is built - `platform_fee_refunded_cents`
+      // and `failure_reason`, which carries Stripe's own wording and the amount.
+      // That row is the durable record and the only one that survives a closed
+      // tab. What is missing is that nobody is TOLD; that is a platform alert to
+      // enrops, not an alert to the provider, and it is the follow-up to this.
+      //
+      // The two notes below stay. Both are things the OPERATOR must act on: a
+      // seat that did not free is still on their roster, and a part-finished
+      // refund needs checking before they press the button again.
       if (data?.cancel_failed) {
         // The seat did NOT free. Say it, because the roster will still show them
         // and the operator has to finish the withdrawal by hand.

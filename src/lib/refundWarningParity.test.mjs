@@ -56,8 +56,31 @@ const successBody = fnCode.slice(i, end + 1);
 const WARNING_KEYS = [...successBody.matchAll(/^\s*(margin_[a-z_]+|cancel_failed|fee_lookup_[a-z_]+)\s*:/gm)]
   .map((m) => m[1]);
 
-ok('the success response carries warning keys', WARNING_KEYS.length >= 3,
-  `expected at least the three money-moved-but warnings, found: ${WARNING_KEYS.join(', ') || 'none'}`);
+ok('the success response carries warning keys', WARNING_KEYS.length >= 2,
+  `expected the money-moved-but warnings, found: ${WARNING_KEYS.join(', ') || 'none'}`);
+
+// AND THE MARGIN SHORTFALL MUST NOT BE ONE OF THEM - the ratchet now runs the
+// other way for this key, on purpose.
+//
+// It used to be returned and shown. On 2026-09-08 Jeff read it: enrops was short
+// of funds, here is an internal Stripe fee id, watch a balance you cannot see.
+// An operator cannot refund an application fee - only the platform can - so it
+// handed a task to the one person who cannot do it and disclosed the platform's
+// cash position to a customer. Removed from the PAYLOAD rather than hidden in
+// the UI, because a response an operator can open in devtools is not private.
+//
+// This assertion exists so that removal cannot be quietly undone: re-add
+// `margin_owed_cents` to the response and this goes red with the reason.
+//
+// It does NOT mean the shortfall is forgotten. It stays on the `refunds` row
+// (`platform_fee_refunded_cents` + `failure_reason`), which is the durable
+// record. What is still missing is an ALERT to enrops, and that is deliberately
+// a platform channel - never this response.
+const marginKeys = WARNING_KEYS.filter((k) => k.startsWith('margin_'));
+ok('the margin shortfall is NOT sent to the operator', marginKeys.length === 0,
+  `refund-registration is returning ${marginKeys.join(', ')} to the browser again.\n` +
+  `      That is enrops's own debt and the operator cannot act on it. Record it on the\n` +
+  `      refunds row and alert the platform instead.`);
 
 const uiCode = stripComments(uiSrc);
 // Require an actual READ off the response - `data.key` or `data?.key` - not the
