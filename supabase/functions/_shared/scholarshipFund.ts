@@ -19,6 +19,7 @@ export interface ScholarshipFundConfig {
   enabled: boolean;
   headline: string;
   blurb: string;
+  tax_note: string;
   preset_amounts_cents: number[];
   min_cents: number;
   max_cents: number;
@@ -32,6 +33,7 @@ export const SCHOLARSHIP_FUND_OFF: ScholarshipFundConfig = {
   enabled: false,
   headline: '',
   blurb: '',
+  tax_note: '',
   preset_amounts_cents: [],
   min_cents: 0,
   max_cents: 0,

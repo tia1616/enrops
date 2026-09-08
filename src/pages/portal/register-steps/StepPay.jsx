@@ -371,12 +371,16 @@ export default function StepPay({
             </p>
           )}
 
-          {/* Journey to STEAM LLC is not a nonprofit. Saying so here, next to
-              the ask, is both the honest place for it and the same thing the
-              j2s website's own donate page says. */}
-          <p className="mt-3 text-xs text-j2s-ink/50">
-            Donations are not tax-deductible. Every dollar goes to the scholarship fund.
-          </p>
+          {/* The tax note comes from the PROVIDER's config, never from a string
+              here. It defaults to the not-deductible wording because most
+              enrichment providers are LLCs (tenant 1 included, which is why its
+              own website says the same), but a provider that really is a
+              501(c)(3) must be able to say so - telling a nonprofit's donors
+              their gift is not deductible would be false and would cost them
+              money. Blank hides the line rather than printing an empty one. */}
+          {fund.tax_note && (
+            <p className="mt-3 text-xs text-j2s-ink/50">{fund.tax_note}</p>
+          )}
         </div>
       )}
 

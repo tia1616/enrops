@@ -1,4 +1,19 @@
-// create-checkout v14 — creates a Stripe Checkout session for already-written registrations.
+// create-checkout v15 — creates a Stripe Checkout session for already-written registrations.
+//
+// PATCH 10 (2026-09-08): scholarship-fund donations.
+//   Accepts `donation_cents` + `donation_cover_fee` and adds ONE extra Stripe
+//   line for the gift. Three things about it are deliberate:
+//     - The gift is NOT in line_items or total_cents. The price guard compares
+//       both against the registration rows, and a gift has no row to match.
+//     - Its bounds come from org_scholarship_fund (the operator's numbers), and
+//       the fee cover is recomputed server-side from that same row - the browser
+//       sends only what the family picked, never the arithmetic.
+//     - The enrops margin base stays total_cents while the Stripe-fee uplift
+//       base includes the gift, via buildChargeRouting's marginOverrideCents.
+//       Enrops takes nothing off a donation; Stripe still takes its fee on the
+//       whole charge, and on a destination org that would otherwise hit the
+//       platform balance.
+//   Refused (not silently dropped) on a payment plan and on a $0 comp order.
 //
 // PATCH 9 (2026-07-27): Stripe direct charges (migration Phase 2).
 //   Charge routing now comes from buildChargeRouting(), which reads
@@ -147,7 +162,7 @@ serve(async (req) => {
     if (donation_cents) {
       const { data: fundRow, error: fundErr } = await guardAdmin
         .from('org_scholarship_fund')
-        .select('enabled, headline, blurb, preset_amounts_cents, min_cents, max_cents, cover_fee_default, cover_fee_pct')
+        .select('enabled, headline, blurb, tax_note, preset_amounts_cents, min_cents, max_cents, cover_fee_default, cover_fee_pct')
         .eq('organization_id', giftOrgId)
         .maybeSingle();
       // Fail CLOSED on a lookup error: without the config there are no bounds,

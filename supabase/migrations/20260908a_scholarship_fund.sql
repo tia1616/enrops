@@ -40,6 +40,12 @@ create table if not exists public.org_scholarship_fund (
   -- from estimateStripeFee: that helper models a whole charge including the flat
   -- 30c, and a gift riding along on an existing charge does not add a second one.
   cover_fee_pct     numeric not null default 0.029,
+  -- The tax line shown under the ask. Config, not a string in the component:
+  -- the default is right for an LLC (tenant 1 included, which is why its own
+  -- website says the same), but a provider that really is a 501(c)(3) must be
+  -- able to say so. Telling a nonprofit's donors their gift is not deductible
+  -- would be false and would cost them money. Blank hides the line entirely.
+  tax_note          text    not null default 'Donations are not tax-deductible. Every dollar goes to the scholarship fund.',
   created_at        timestamptz not null default now(),
   updated_at        timestamptz not null default now(),
 

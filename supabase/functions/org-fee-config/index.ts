@@ -75,7 +75,7 @@ serve(async (req) => {
     // been offered the feature, and must still get its fee config back.
     const { data: fundRow, error: fundErr } = await admin
       .from('org_scholarship_fund')
-      .select('enabled, headline, blurb, preset_amounts_cents, min_cents, max_cents, cover_fee_default, cover_fee_pct')
+      .select('enabled, headline, blurb, tax_note, preset_amounts_cents, min_cents, max_cents, cover_fee_default, cover_fee_pct')
       .eq('organization_id', data.id)
       .maybeSingle();
     // A failed lookup is NOT "no fund" - it is "we do not know". Both land on
@@ -89,6 +89,7 @@ serve(async (req) => {
           enabled: true,
           headline: fundRow.headline,
           blurb: fundRow.blurb,
+          tax_note: fundRow.tax_note,
           // Presets are display-only; the AUTHORITATIVE bounds are min/max, which
           // create-checkout re-reads from this same row. Sorted so a provider who
           // types them out of order still gets an ascending row of tiles.

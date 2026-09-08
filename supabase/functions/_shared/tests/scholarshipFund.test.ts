@@ -14,6 +14,7 @@ const CFG: ScholarshipFundConfig = {
   enabled: true,
   headline: 'Help another family join',
   blurb: 'blurb',
+  tax_note: 'Donations are not tax-deductible. Every dollar goes to the scholarship fund.',
   preset_amounts_cents: [500, 1000, 2500, 5000],
   min_cents: 100,
   max_cents: 500000,

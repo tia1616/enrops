@@ -168,6 +168,26 @@ serve(async (req) => {
       const parentName = meta.parent_name || '';
       const useInstallments = meta.use_installments === 'true';
 
+      // Settle the gift FIRST, before any guard that can return or skip.
+      //
+      // This lived after sendConfirmationEmail, which sits inside
+      // `if (parentEmail && regs?.length)` - so a paid card gift whose
+      // registration lookup came back empty was charged by Stripe and left
+      // 'pending' in the ledger forever, with the money visible only in Stripe.
+      // The two ACH branches below were already written to settle before their
+      // early return; this, the common path, was the one place that was not.
+      //
+      // Settled against Stripe's OWN payment_status rather than the mere fact of
+      // a completed session: for a card those are the same thing, but an ACH
+      // debit completes days before it clears, and async_payment_succeeded /
+      // _failed below is where that lands.
+      await settleDonation(
+        admin,
+        session.id,
+        session.payment_status === 'paid' ? 'paid' : 'processing',
+        (session.payment_intent as string) || null,
+      );
+
       if (!regIds.length) {
         console.warn('Webhook: no registration_ids in metadata');
         return new Response('ok', { status: 200 });
@@ -589,17 +609,6 @@ serve(async (req) => {
           donationCents: parseInt(meta.donation_gift_cents || '0', 10) || 0,
           donationCoveredFeeCents: parseInt(meta.donation_covered_fee_cents || '0', 10) || 0,
         });
-
-        // Settle the gift against Stripe's OWN view of the payment rather than
-        // assuming a completed session means money in. For a card it does; for
-        // an ACH debit `completed` fires days before the transfer clears, and
-        // async_payment_succeeded/_failed below is where that lands.
-        await settleDonation(
-          admin,
-          session.id,
-          session.payment_status === 'paid' ? 'paid' : 'processing',
-          (session.payment_intent as string) || null,
-        );
 
         // Trigger lifecycle-automations-cron in event mode for each newly-
         // confirmed registration. If the program starts within the next 7
@@ -1757,9 +1766,15 @@ async function sendConfirmationEmail({
   // recipient, J2S included, got the Georgia fallback - a serif that is nobody's
   // brand. Using the tenant stack is both the correct multi-tenant answer and
   // closer to what each provider's own emails should look like.
-  // The gift's own receipt line, so the registration rows plus this equal the
-  // "Total paid" figure below. Sits between the two, exactly where a reader
-  // looking for the difference will look.
+  // The gift's own receipt line. Sits between the registration rows and the
+  // total, exactly where a reader looking for the difference will look.
+  //
+  // It does NOT make the receipt add up on its own. `totalCents` is
+  // session.amount_total, which for a fee_pass_through org also includes the
+  // enrops service fee - and that has no row here. That gap predates this
+  // change and affects every pass-through tenant with or without a gift; it is
+  // named rather than quietly half-fixed, because adding a fee row is a change
+  // to every family's receipt and belongs in its own pass.
   //
   // The fee cover is named on the SAME line rather than as a second row: it is
   // part of what they gave, not a charge levied on them, and splitting it out
