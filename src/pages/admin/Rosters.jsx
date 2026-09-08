@@ -99,7 +99,14 @@ export default function Rosters() {
         //    camps if needed.
         const { data: campRows, error: cErr } = await supabase
           .from("camp_sessions")
-          .select("id, curriculum_name, starts_on, ends_on, location_id, location_name, week_num, session_type, current_enrollment, start_time, end_time")
+          // `status` added 2026-09-08: this list deliberately shows every camp
+          // including cancelled ones, and the row's outbound controls had no way
+          // to know. There are 11 cancelled sessions on prod, 6 of them with
+          // registrations, so "Email roster" would send a partner school the
+          // roster of a camp that is not running. The after-school row was
+          // guarded the same day; leaving its twin on the same screen unguarded
+          // is the inconsistency, not a saving.
+          .select("id, curriculum_name, status, starts_on, ends_on, location_id, location_name, week_num, session_type, current_enrollment, start_time, end_time")
           .eq("organization_id", org.id)
           .order("starts_on", { ascending: true });
         if (cErr) throw cErr;
@@ -273,6 +280,13 @@ export default function Rosters() {
 function CampRow({ camp, onUpload, onEmail, orgId, onRosterChanged, canManage }) {
   const [expanded, setExpanded] = useState(false);
   const gap = (camp.current_enrollment ?? 0) - (camp.roster_count ?? 0);
+  // Same rule as the after-school row: this screen lists cancelled sessions so
+  // their families stay reachable, which means the OUTBOUND controls have to ask
+  // whether the camp still exists. Emailing a partner school the roster of a
+  // cancelled camp, or uploading more children into it, are both wrong.
+  // camp_sessions.status is NOT NULL (default 'active'), so no null guard is
+  // needed here - unlike programs.status, which is nullable.
+  const isCancelled = camp.status === "cancelled";
   const lastEmailedLabel = camp.last_emailed_at
     ? new Date(camp.last_emailed_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })
     : null;
@@ -281,7 +295,7 @@ function CampRow({ camp, onUpload, onEmail, orgId, onRosterChanged, canManage })
       style={{
         background: "#fff",
         border: `1px solid ${RULE}`,
-        borderLeft: camp.roster_count > 0 ? `3px solid ${OK}` : `3px solid ${RULE}`,
+        borderLeft: isCancelled ? `3px solid ${MUTED}` : camp.roster_count > 0 ? `3px solid ${OK}` : `3px solid ${RULE}`,
         borderRadius: 12,
         padding: "12px 16px",
       }}
@@ -305,7 +319,12 @@ function CampRow({ camp, onUpload, onEmail, orgId, onRosterChanged, canManage })
             {camp.roster_count > 0 && (
               <Chevron open={expanded} color={BRIGHT} />
             )}
-            <span>
+            {isCancelled && (
+              <span style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.6, color: MUTED, background: "#f3f1ea", border: `1px solid ${RULE}`, borderRadius: 999, padding: "2px 8px" }}>
+                Cancelled
+              </span>
+            )}
+            <span style={isCancelled ? { color: MUTED } : undefined}>
               {camp.curriculum_name}
               {camp.week_num && (
                 <span style={{ color: MUTED, marginLeft: 6, fontSize: 12, fontWeight: 400 }}>
@@ -332,6 +351,21 @@ function CampRow({ camp, onUpload, onEmail, orgId, onRosterChanged, canManage })
             )}
           </div>
           <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", marginTop: 6, flexWrap: "wrap" }}>
+            {/* Gated on there actually BEING families. Low enrolment is the usual
+                reason to cancel, so a cancelled camp with nobody on it is the
+                common case, and telling the operator to go and refund families
+                who do not exist sends them to an empty roster. */}
+            {isCancelled && camp.roster_count > 0 && (
+              <span style={{ fontSize: 11, color: MUTED, alignSelf: "center" }}>
+                Camp cancelled — open the roster to refund families.
+              </span>
+            )}
+            {isCancelled && !(camp.roster_count > 0) && (
+              <span style={{ fontSize: 11, color: MUTED, alignSelf: "center" }}>
+                Camp cancelled — nobody was enrolled.
+              </span>
+            )}
+            {!isCancelled && (
             <button
               type="button"
               onClick={onUpload}
@@ -349,7 +383,8 @@ function CampRow({ camp, onUpload, onEmail, orgId, onRosterChanged, canManage })
             >
               Upload roster →
             </button>
-            {camp.roster_count > 0 && (
+            )}
+            {camp.roster_count > 0 && !isCancelled && (
               <button
                 type="button"
                 onClick={onEmail}
@@ -2246,7 +2281,23 @@ function AfterschoolRostersSection({ org, canEdit }) {
           // class is real and full of families, it has merely stopped taking
           // registrations. One rule now - show the classes that exist for
           // families, hide the ones that do not.
-          .not("status", "in", '("draft","archived")')
+          // 'archived' IS UNREACHABLE and kept only defensively. programs_status_check
+          // allows exactly draft / open / closed / cancelled - there is no archived
+          // state for a program, though several existing filters in this codebase
+          // list one, which is where I copied it from without checking. So in
+          // practice this hides drafts, full stop. Left in the list because a
+          // future status is likelier to be added than removed, but the comment
+          // must not pretend it does something today. camp_sessions is a separate
+          // CHECK: active / cancelled only.
+          //
+          // NULL counts as visible. programs.status is NULLABLE (default 'open'),
+          // and a bare .not(...in...) evaluates to NULL for a null status, which
+          // PostgREST drops - so the class would vanish from this screen exactly
+          // the way a cancelled one used to. That is the bug this whole change
+          // exists to remove, so it must not be reintroduced one status over. No
+          // null-status rows exist today and both creators set it explicitly, so
+          // this is a guard rather than a repair.
+          .or('status.is.null,status.not.in.("draft","archived")')
           .eq("term", term);
         if (pErr) throw pErr;
         const ids = (progRows ?? []).map((p) => p.id);
@@ -2537,9 +2588,15 @@ function ProgramRosterRow({ program: p, orgId, orgSlug, canEdit, expanded, onTog
             {p.max_capacity ? <span style={{ color: MUTED }}> / {p.max_capacity} seats</span> : null}
           </div>
           <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", marginTop: 6, flexWrap: "wrap" }}>
-            {isCancelled && (
+            {/* See the camp row: only promise families when there are families. */}
+            {isCancelled && p.enrolled > 0 && (
               <span style={{ fontSize: 11, color: MUTED, alignSelf: "center" }}>
                 Class cancelled — open the roster to refund families.
+              </span>
+            )}
+            {isCancelled && !(p.enrolled > 0) && (
+              <span style={{ fontSize: 11, color: MUTED, alignSelf: "center" }}>
+                Class cancelled — nobody was enrolled.
               </span>
             )}
             {canEdit && !isCancelled && (
