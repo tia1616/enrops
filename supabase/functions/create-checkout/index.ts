@@ -163,9 +163,13 @@ serve(async (req) => {
     // meant the two could name different orgs - the gift bounds-checked against
     // one tenant's config and the ledger row stamped with another's. Latent
     // while every cart is single-org, and free to close.
-    const giftOrgId = (regAmtRows || []).find((r) => r.id === registration_ids[0])?.organization_id
-      ?? (regAmtRows || [])[0]?.organization_id
-      ?? null;
+    // NO fallback to another row. registrations.organization_id is nullable, so
+    // `?? regAmtRows[0].organization_id` would answer "the right row has no org"
+    // with "then use some other row's org" - bounds checked against one tenant
+    // and the ledger stamped with another, which is worse than the unordered
+    // read it replaced. Null here is the honest answer: the config lookup finds
+    // nothing, validateGift refuses, and the gift fails closed.
+    const giftOrgId = (regAmtRows || []).find((r) => r.id === registration_ids[0])?.organization_id ?? null;
     let giftCfg: ScholarshipFundConfig | null = null;
     if (donation_cents) {
       const { data: fundRow, error: fundErr } = await guardAdmin

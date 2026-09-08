@@ -57,7 +57,7 @@ serve(async (req) => {
       // family up front that this provider can't take payment yet, instead of
       // letting them fill everything in and hit a wall at the Pay step. Not
       // sensitive (it's a yes/no about whether the provider is open for money).
-      .select('id, name, fee_pass_through, platform_fee_card_pct, platform_fee_ach_pct, platform_fee_cap_cents, platform_fee_floor_cents, sibling_discount_pct, stripe_charges_enabled')
+      .select('id, fee_pass_through, platform_fee_card_pct, platform_fee_ach_pct, platform_fee_cap_cents, platform_fee_floor_cents, sibling_discount_pct, stripe_charges_enabled')
       .eq('slug', slug)
       .eq('status', 'active')
       .single();
