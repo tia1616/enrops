@@ -877,10 +877,21 @@ function fmtClock(t) {
 
 function TodayAgenda({ org }) {
   const [rows, setRows] = useState(null); // null = loading; [] = nothing today
+  // "Nothing today" and "we could not find out" are different answers, and this
+  // panel used to give the first one for both: the catch set rows to [] and the
+  // screen said "enjoy the breather". Collapsing the per-class session-date
+  // lookups into one call made that worse - before, a blip dropped one class
+  // from the agenda; now one failed call drops every after-school class at once,
+  // so a Tuesday with nine classes running could render as a day off. This flag
+  // keeps the panel honest when it does not actually know.
+  const [checkFailed, setCheckFailed] = useState(false);
 
   useEffect(() => {
     if (!org?.id) return;
     let cancelled = false;
+    // Clear the previous run's verdict, or a failure on one org would keep
+    // warning after switching to another that loaded fine.
+    setCheckFailed(false);
     (async () => {
       try {
         const today = new Date().toISOString().slice(0, 10);
@@ -955,12 +966,21 @@ function TodayAgenda({ org }) {
             // ONE request for all candidates, not one per class - the same
             // change made on the staffing board. This is the admin home, so the
             // fan-out sat directly in front of the first screen anybody sees.
-            const { data: dateRows } = await supabase
+            const { data: dateRows, error: datesErr } = await supabase
               .rpc("derive_program_session_dates_bulk", { p_program_ids: candidates.map((p) => p.id) })
-              .then((r) => r, () => ({ data: [] }));
-            // Fail-soft is UNCHANGED in direction: the old code defaulted a
-            // failed class to no dates, which excluded it from "meets today".
-            // An id missing from the response lands on the same empty default.
+              .then((r) => r, (e) => ({ data: null, error: e ?? new Error("session-dates request failed") }));
+            // An id simply MISSING from a successful response still lands on the
+            // empty default, same as the per-class version - that means the class
+            // does not meet today, which is a real answer.
+            //
+            // A FAILED CALL IS NOT THAT ANSWER. It is now one call for every
+            // candidate, so swallowing the error would silently empty the whole
+            // agenda and the panel would announce a day off. Say we could not
+            // check instead; the rows we did build (camps) still render.
+            if (datesErr) {
+              console.warn("[admin/overview] session-dates check failed:", datesErr.message ?? datesErr);
+              if (!cancelled) setCheckFailed(true);
+            }
             const datesById = new Map();
             for (const row of dateRows ?? []) {
               if (row?.program_id) datesById.set(row.program_id, row.session_dates ?? []);
@@ -1028,7 +1048,10 @@ function TodayAgenda({ org }) {
         if (!cancelled) setRows(built);
       } catch (e) {
         console.error("[admin/overview] today agenda load failed", e);
-        if (!cancelled) setRows([]);
+        // setRows([]) alone rendered "Nothing running today - enjoy the
+        // breather" after a total failure, which is the panel confidently
+        // reporting a day off it never managed to check.
+        if (!cancelled) { setCheckFailed(true); setRows([]); }
       }
     })();
     return () => { cancelled = true; };
@@ -1045,12 +1068,21 @@ function TodayAgenda({ org }) {
 
       {rows === null ? (
         <div style={{ fontSize: 13, color: MUTED }}>Loading…</div>
+      ) : checkFailed && rows.length === 0 ? (
+        <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 20, fontSize: 14, color: MUTED }}>
+          Couldn't check today's schedule just now. Refresh to try again — this doesn't mean nothing is running.
+        </div>
       ) : rows.length === 0 ? (
         <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 20, fontSize: 14, color: MUTED }}>
           Nothing running today — enjoy the breather.
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {checkFailed && (
+            <div style={{ fontSize: 12, color: CORAL, background: `${CORAL}14`, border: `1px solid ${CORAL}55`, borderRadius: 8, padding: "8px 12px" }}>
+              Some after-school classes may be missing — that check didn't finish. Refresh to try again.
+            </div>
+          )}
           {rows.map((r) => (
             <div key={r.id} style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10, padding: "11px 14px", display: "flex", gap: 14, alignItems: "flex-start" }}>
               <div style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: 12, color: MUTED, minWidth: 66, lineHeight: 1.5 }}>

@@ -529,9 +529,21 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
             // a rejected call leaves every class with no weeks rather than
             // blanking the board, exactly as the per-class version did. The
             // difference is that it is now all-or-nothing instead of per-class,
-            // which is the honest trade for a single round-trip - and the RPC
-            // reads through programs RLS, so it cannot return another tenant's
-            // classes even though the ids come from the browser.
+            // which is the honest trade for a single round-trip.
+            //
+            // TENANT ISOLATION IS NOT RLS HERE. An earlier version of this
+            // comment said the RPC "reads through programs RLS" - that stopped
+            // being true when the function became SECURITY DEFINER to avoid
+            // re-planning the program_locations policy per class, which is what
+            // made this screen slow. As definer it bypasses RLS entirely.
+            //
+            // What keeps one tenant's ids from returning another tenant's dates
+            // is the predicate INSIDE the function:
+            //   is_org_member(organization_id) OR is_platform_admin()
+            // That WHERE clause is the whole guard, not a redundant extra check
+            // on top of RLS. Do not remove it, and do not weaken it on the
+            // reasoning that the policy already covers this - it does not run.
+            // See supabase/migrations/20260907d_derive_program_session_dates_bulk.sql.
             supabase
               .rpc("derive_program_session_dates_bulk", { p_program_ids: programIds })
               .then((r) => r, () => ({ data: [], error: null })),
