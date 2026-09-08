@@ -390,6 +390,11 @@ serve(async (req: Request) => {
       //
       // 'closed' is NOT excluded - a closed class is real and simply stopped
       // taking registrations, and its instructor still needs to reply.
+      //
+      // 'archived' is UNREACHABLE and defensive only: programs_status_check
+      // allows draft / open / closed / cancelled and nothing else, so in
+      // practice this excludes cancelled classes alone. Several filters in this
+      // codebase list an archived program status; none of them can match one.
       const { data: progRows } = await supabase
         .from('programs')
         .select('id, organization_id, term')

@@ -23,6 +23,23 @@
 --   - the picker's own warning listed the harmless back-to-back clash and never
 --     mentioned the overlapping one, so the screen pointed at the wrong class.
 --
+-- 'archived' IS UNREACHABLE for a program and is matched defensively only.
+-- programs_status_check allows exactly draft / open / closed / cancelled. Several
+-- existing filters in this codebase list an archived program status; none of them
+-- can ever match one, and I copied the list from those rather than reading the
+-- constraint. In practice this clause frees instructors from CANCELLED classes.
+-- (camp_sessions is a separate CHECK: active / cancelled.)
+--
+-- KNOWN HOLE, found by the code review of this very change and deliberately not
+-- fixed here: this trigger fires only on program_assignments INSERT/UPDATE, never
+-- on a change to programs.status. So cancel -> book that instructor elsewhere at
+-- the same time -> REOPEN the class leaves two genuinely overlapping active
+-- assignments, silently. Before this change that window could not open, because
+-- cancelling did not free anybody. Closing it needs a matching trigger on
+-- programs.status, but whether reopening should be BLOCKED or merely WARNED is a
+-- product decision - blocking could strand an operator mid-reopen - so it is
+-- Jessica's call, not a guess made here.
+--
 -- SUBTRACTION AUDIT. This narrows what counts as a conflict, so: can it now
 -- allow a real double-booking? Only if an instructor is genuinely teaching a
 -- class whose program is cancelled or archived, which is a contradiction -

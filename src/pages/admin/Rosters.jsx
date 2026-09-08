@@ -2281,6 +2281,15 @@ function AfterschoolRostersSection({ org, canEdit }) {
           // class is real and full of families, it has merely stopped taking
           // registrations. One rule now - show the classes that exist for
           // families, hide the ones that do not.
+          // 'archived' IS UNREACHABLE and kept only defensively. programs_status_check
+          // allows exactly draft / open / closed / cancelled - there is no archived
+          // state for a program, though several existing filters in this codebase
+          // list one, which is where I copied it from without checking. So in
+          // practice this hides drafts, full stop. Left in the list because a
+          // future status is likelier to be added than removed, but the comment
+          // must not pretend it does something today. camp_sessions is a separate
+          // CHECK: active / cancelled only.
+          //
           // NULL counts as visible. programs.status is NULLABLE (default 'open'),
           // and a bare .not(...in...) evaluates to NULL for a null status, which
           // PostgREST drops - so the class would vanish from this screen exactly
