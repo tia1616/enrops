@@ -498,6 +498,16 @@ serve(async (req: Request) => {
       payment_intent_id: string;
       status: string;
     }> = [];
+    // Application-fee refunds that did NOT go through, on refunds that DID. The
+    // family is refunded either way; this is money still owed back to the
+    // provider. Reported as a warning on a successful response rather than
+    // aborting the refund - see the catch around applicationFees.createRefund.
+    const marginShortfalls: Array<{
+      stripe_refund_id: string | null;
+      application_fee_id: string;
+      margin_owed_cents: number;
+      reason: string;
+    }> = [];
     let remaining = amountCents;
 
     for (const slot of piSlots) {
@@ -650,14 +660,30 @@ serve(async (req: Request) => {
                 failure_reason: `family refunded, but returning the provider's ${marginRefundCents}c margin failed: ${msg}`,
               })
               .eq('id', refundRowId);
-            return json({
-              error: 'margin_refund_failed',
-              detail: 'The family was refunded, but the provider has not been credited back the platform margin. This needs a manual application-fee refund in Stripe.',
+            // DO NOT RETURN HERE. The family's money has already moved; that is
+            // the fact the database has to record. Returning 502 at this point
+            // skipped everything below - registrations.payment_status,
+            // status='cancelled', the installment pause - so the family was
+            // refunded in Stripe while the roster still showed them paid and
+            // enrolled, and the operator was shown a red error. The obvious next
+            // move from there is to press Refund again, which is a real double
+            // refund on a real card.
+            //
+            // Jessica hit exactly that on 2026-09-08: two families ($240 and
+            // $285) refunded in Stripe, both still 'paid'/'confirmed' here,
+            // both stuck behind an error message. The cause was mundane - the
+            // platform's Stripe balance was too low to return the application
+            // fee - and it must not be able to corrupt the registration record.
+            //
+            // The margin shortfall is real and is still reported, but as a
+            // WARNING on a successful refund rather than as a failure of it.
+            marginShortfalls.push({
               stripe_refund_id: stripeRefund.id,
               application_fee_id: applicationFeeId,
               margin_owed_cents: marginRefundCents,
-              refunds: refundsCreated,
-            }, 502);
+              reason: msg,
+            });
+            marginRefundApplied = 0;
           }
         }
 
@@ -938,6 +964,14 @@ serve(async (req: Request) => {
       // instead of implying the family was told.
       receipt_sent: receipt.sent,
       receipt_reason: receipt.sent ? undefined : receipt.reason,
+      // The refund SUCCEEDED; this is money still owed back to the provider,
+      // reported alongside it. Same shape of honesty as receipt_sent: the
+      // operator is told what did not happen without being told the thing that
+      // did happen failed.
+      margin_shortfalls: marginShortfalls.length > 0 ? marginShortfalls : undefined,
+      margin_owed_cents: marginShortfalls.length > 0
+        ? marginShortfalls.reduce((n, m) => n + m.margin_owed_cents, 0)
+        : undefined,
     });
   } catch (err) {
     console.error('[refund] fatal:', err);

@@ -172,6 +172,20 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
         setBusy(false);
         return;
       }
+      // THE REFUND WORKED. If the platform margin could not be returned, say so
+      // without implying the refund failed - which is what the function used to
+      // do, by returning 502 and leaving the registration marked paid. An alert
+      // rather than an inline note because the drawer closes on the next line,
+      // and this must not be the thing nobody sees.
+      if (data?.margin_owed_cents > 0) {
+        const owed = (data.margin_owed_cents / 100).toFixed(2);
+        alert(
+          `Refunded. The family has their money back.\n\n` +
+          `One thing did not go through: $${owed} of enrops service fee could not be returned to you, ` +
+          `because there wasn't enough in the Stripe balance to cover it. The family is unaffected — ` +
+          `this is money owed back to you, and it needs an application-fee refund in Stripe once the balance covers it.`,
+        );
+      }
       if (onDone) onDone({ amountCents, cancelled: seatChoice === "withdraw" });
     } catch (e) {
       console.error("[RefundDrawer] refund failed", e);
