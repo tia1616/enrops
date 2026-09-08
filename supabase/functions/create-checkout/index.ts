@@ -1,4 +1,19 @@
-// create-checkout v14 — creates a Stripe Checkout session for already-written registrations.
+// create-checkout v15 — creates a Stripe Checkout session for already-written registrations.
+//
+// PATCH 10 (2026-09-08): scholarship-fund donations.
+//   Accepts `donation_cents` + `donation_cover_fee` and adds ONE extra Stripe
+//   line for the gift. Three things about it are deliberate:
+//     - The gift is NOT in line_items or total_cents. The price guard compares
+//       both against the registration rows, and a gift has no row to match.
+//     - Its bounds come from org_scholarship_fund (the operator's numbers), and
+//       the fee cover is recomputed server-side from that same row - the browser
+//       sends only what the family picked, never the arithmetic.
+//     - The enrops margin base stays total_cents while the Stripe-fee uplift
+//       base includes the gift, via buildChargeRouting's marginOverrideCents.
+//       Enrops takes nothing off a donation; Stripe still takes its fee on the
+//       whole charge, and on a destination org that would otherwise hit the
+//       platform balance.
+//   Refused (not silently dropped) on a payment plan and on a $0 comp order.
 //
 // PATCH 9 (2026-07-27): Stripe direct charges (migration Phase 2).
 //   Charge routing now comes from buildChargeRouting(), which reads
@@ -55,6 +70,7 @@ import { passThroughLineItem, passThroughLineItemForAmount } from '../_shared/pa
 import { computePlatformFee } from '../_shared/computePlatformFee.ts';
 import { allocateFeeAcrossInstallments } from '../_shared/feeAllocation.ts';
 import { logEnrollmentEvent, ENROLLMENT_ACTIONS } from '../_shared/logEnrollmentEvent.ts';
+import { validateGift, scholarshipLineItem, ScholarshipFundConfig } from '../_shared/scholarshipFund.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
   apiVersion: '2023-10-16',
@@ -107,6 +123,14 @@ serve(async (req) => {
       use_installments,
       installment_schedule,
       payment_method,
+      // Scholarship fund. `donation_cents` is the gift the family chose; the fee
+      // cover and the charged total are computed HERE from the org's own config
+      // row, never accepted from the browser. This is the one number in the
+      // whole flow that cannot be reloaded from a server row before the charge -
+      // a family invents it at checkout - so bounds are the only guard, and they
+      // are the operator's, not the client's.
+      donation_cents,
+      donation_cover_fee,
     } = await req.json();
 
     if (!registration_ids?.length || !line_items?.length) {
@@ -122,12 +146,67 @@ serve(async (req) => {
     });
     const { data: regAmtRows, error: regAmtErr } = await guardAdmin
       .from('registrations')
-      .select('amount_cents')
+      // organization_id rides along so the scholarship-fund config can be read
+      // from the SAME rows the total is derived from - the gift is bounded by
+      // the org that owns these registrations, never by an org the client names.
+      .select('id, amount_cents, organization_id')
       .in('id', registration_ids);
     if (regAmtErr) return json({ error: 'Could not verify the order total. Please try again.' }, 500);
     const serverSum = (regAmtRows || []).reduce((s, r) => s + (r.amount_cents || 0), 0);
 
+    // --- Scholarship fund gift ------------------------------------------------
+    // Validated BEFORE the comp branch below, so a gift can never be silently
+    // dropped by an early return.
+    // Matched to registration_ids[0], NOT regAmtRows[0]: PostgREST returns
+    // `.in()` rows in no particular order, and orgIdStd further down resolves
+    // the org by registration_ids[0] explicitly. Taking an arbitrary row here
+    // meant the two could name different orgs - the gift bounds-checked against
+    // one tenant's config and the ledger row stamped with another's. Latent
+    // while every cart is single-org, and free to close.
+    // NO fallback to another row. registrations.organization_id is nullable, so
+    // `?? regAmtRows[0].organization_id` would answer "the right row has no org"
+    // with "then use some other row's org" - bounds checked against one tenant
+    // and the ledger stamped with another, which is worse than the unordered
+    // read it replaced. Null here is the honest answer: the config lookup finds
+    // nothing, validateGift refuses, and the gift fails closed.
+    const giftOrgId = (regAmtRows || []).find((r) => r.id === registration_ids[0])?.organization_id ?? null;
+    let giftCfg: ScholarshipFundConfig | null = null;
+    if (donation_cents) {
+      const { data: fundRow, error: fundErr } = await guardAdmin
+        .from('org_scholarship_fund')
+        .select('enabled, headline, blurb, tax_note, preset_amounts_cents, min_cents, max_cents, cover_fee_default, cover_fee_pct')
+        .eq('organization_id', giftOrgId)
+        .maybeSingle();
+      // Fail CLOSED on a lookup error: without the config there are no bounds,
+      // and an unbounded client-supplied amount is exactly what this gate exists
+      // to prevent. Refusing costs one retry; guessing charges a real card.
+      if (fundErr) {
+        console.error('[create-checkout] scholarship fund lookup failed:', fundErr.message);
+        return json({ error: 'Could not add your donation right now. Please try again.' }, 500);
+      }
+      giftCfg = (fundRow as ScholarshipFundConfig | null) ?? null;
+    }
+    const gift = validateGift(donation_cents, !!donation_cover_fee, giftCfg);
+    if (!gift.ok) {
+      // The reason names amounts and config, so it goes to the log, not to the
+      // family. They get a plain instruction they can act on.
+      console.warn(`[create-checkout] refused donation for org ${giftOrgId ?? '(unknown)'}: ${gift.reason}`);
+      return json({ error: 'That donation amount is not available. Please adjust it and try again.', donation_rejected: true }, 400);
+    }
+
     if (serverSum <= 0) {
+      // A gift cannot ride on a comp order: this branch deliberately creates NO
+      // Stripe session, so there is nothing to attach it to. Refuse rather than
+      // enroll-and-drop, which would take the family's intent and no money and
+      // tell them nothing. StepPay does not show the ask at a $0 total, so this
+      // is a tamper/stale-cart guard, not a path a family walks.
+      if (gift.chargedCents > 0) {
+        console.warn(`[create-checkout] donation on a $0 comp order refused (org ${giftOrgId ?? '(unknown)'})`);
+        return json({
+          error: 'Your registration is fully covered, so there is nothing to check out. Please remove the donation to finish, and thank you for offering.',
+          donation_rejected: true,
+        }, 400);
+      }
       // $0 comp / scholarship order — a 100%-off (or fully-covering) code. There is
       // no Stripe charge: enroll the family, count the redemption, and send them to
       // the success page where they get parent-portal access (magic link). We reuse
@@ -191,6 +270,21 @@ serve(async (req) => {
 
     let aggregated: AggregatedEntry[] | null = null;
     let perLine: PerLineEntry[] | null = null;
+
+    // A gift is not financed. The installments machinery splits a total across
+    // three dated charges, caps the platform fee across the whole registration
+    // and reconciles per-line schedules against it - a $25 gift entering that
+    // would be spread into three charges of $8.33, would distort the aggregated
+    // totals the schedule validation compares, and would leave two thirds of it
+    // outstanding for months. Refused server-side as well as hidden on StepPay,
+    // because a UI-only rule is not a rule.
+    if (use_installments && gift.chargedCents > 0) {
+      console.warn(`[create-checkout] donation on an installment plan refused (org ${giftOrgId ?? '(unknown)'})`);
+      return json({
+        error: 'Donations cannot be added to a payment plan yet. Please remove the donation, or pay in full to include it.',
+        donation_rejected: true,
+      }, 400);
+    }
 
     if (use_installments) {
       // Accept new shape (aggregated + per_line) OR legacy shape (installments)
@@ -588,7 +682,28 @@ serve(async (req) => {
     // are always card-only (handled above, off-session ACH debits out of scope).
     const selectedMethod: 'card' | 'us_bank_account' =
       payment_method === 'us_bank_account' ? 'us_bank_account' : 'card';
-    const routingStd = buildChargeRouting(total_cents, selectedMethod, orgConfigStd, orgIdStd);
+
+    // THE TWO FEE BASES ARE DIFFERENT, DELIBERATELY (Jessica, 2026-09-08):
+    //
+    //   enrops margin      -> total_cents ONLY. Enrops takes nothing off a gift.
+    //   Stripe-fee uplift  -> total_cents + the gift. Stripe charges its fee on
+    //                         the WHOLE charge; leaving the gift out of the base
+    //                         would make Enrops eat ~2.9% of every donation on a
+    //                         destination charge (which is what J2S is).
+    //
+    // buildChargeRouting already has the lever for exactly this shape:
+    // marginOverrideCents replaces the margin component and leaves the uplift
+    // computed on the amount passed in. Using it, rather than a second fee
+    // calculation here, is what keeps the rule in ONE place.
+    //
+    // With no gift, chargeBase === total_cents and the override equals what the
+    // function would have computed anyway, so every existing charge is
+    // byte-for-byte unchanged.
+    const chargeBaseStd = total_cents + gift.chargedCents;
+    const marginBaseStd = gift.chargedCents > 0 && orgConfigStd
+      ? computePlatformFee(total_cents, selectedMethod, orgConfigStd)
+      : undefined;
+    const routingStd = buildChargeRouting(chargeBaseStd, selectedMethod, orgConfigStd, orgIdStd, marginBaseStd);
     if (routingStd.blocked) {
       console.warn(`[create-checkout] BLOCKED (direct): ${routingStd.blocked}`);
       return json({
@@ -605,9 +720,18 @@ serve(async (req) => {
     // fee as a visible "Platform fee" line so the family covers it — computed for
     // the SAME method as application_fee_amount above, so the two always agree.
     if (orgConfigStd) {
+      // total_cents, NOT chargeBaseStd. A pass-through org's families must not
+      // be charged an enrops service fee on top of their own donation - the
+      // margin base and this line are the same number by construction.
       const feeLineStd = passThroughLineItem(total_cents, selectedMethod, orgConfigStd);
       if (feeLineStd) stripeLineItems.push(feeLineStd);
     }
+
+    // The gift line goes on LAST, after the price guard has already compared
+    // line_items against the registration rows and after the fee line is placed,
+    // so it reads at the bottom of the Stripe page the way it reads on StepPay.
+    const giftLine = scholarshipLineItem(gift, orgConfigStd?.name ?? null);
+    if (giftLine) stripeLineItems.push(giftLine);
 
     // C1: every charge carries accounting-sync metadata so external Stripe→QBO
     // connectors can categorize it. Metadata lands on payment_intent_data so it
@@ -621,6 +745,13 @@ serve(async (req) => {
         enrops_org_id: orgIdStd ?? '',
         enrops_record_type: 'registration',
         enrops_term: orgTermStd,
+        // The gift rides on THIS charge, so the charge-level copy has to carry
+        // it too. Without these a $327.72 charge containing a $25.73 donation
+        // reaches a Stripe->QBO connector labelled purely 'registration', and
+        // the whole amount books as program revenue - exactly the
+        // miscategorisation the C1 metadata above exists to prevent.
+        enrops_donation_gift_cents: gift.giftCents > 0 ? String(gift.giftCents) : '',
+        enrops_donation_covered_fee_cents: gift.coveredFeeCents > 0 ? String(gift.coveredFeeCents) : '',
       },
     };
 
@@ -640,6 +771,12 @@ serve(async (req) => {
         registration_ids: registration_ids.join(','),
         parent_email,
         parent_name: parent_name || '',
+        // Read by stripe-webhook to decide whether to look for a donation row
+        // at all, and by the receipt so its line items add up to the total.
+        // Empty string (not '0') when there is no gift, so the webhook's
+        // existing metadata parsing sees nothing new.
+        donation_gift_cents: gift.giftCents > 0 ? String(gift.giftCents) : '',
+        donation_covered_fee_cents: gift.coveredFeeCents > 0 ? String(gift.coveredFeeCents) : '',
       },
       payment_intent_data: piData,
     }, acctStd);
@@ -665,6 +802,37 @@ serve(async (req) => {
         console.error('Failed to expire unrecorded session:', expireErr);
       }
       return json({ error: 'Could not start checkout. Please try again.' }, 500);
+    }
+
+    // The gift's ledger row, written BEFORE the family reaches Stripe and
+    // settled by the webhook. Pending, because nothing has been paid yet.
+    //
+    // A failed insert EXPIRES the session rather than letting the charge go
+    // ahead. That is the safe direction: an unrecorded gift is money taken with
+    // no row to credit the fund, findable afterwards only by reading Stripe by
+    // hand. Blocking costs the family one retry.
+    if (gift.chargedCents > 0) {
+      const { error: giftErr } = await adminStd.from('donations').insert({
+        organization_id: orgIdStd,
+        gift_cents: gift.giftCents,
+        covered_fee_cents: gift.coveredFeeCents,
+        status: 'pending',
+        source: 'checkout',
+        donor_email: parent_email || null,
+        donor_name: parent_name || null,
+        registration_ids,
+        stripe_checkout_session_id: session.id,
+        stripe_charge_account_id: acctStd?.stripeAccount ?? null,
+      });
+      if (giftErr) {
+        console.error('[create-checkout] failed to record donation:', giftErr);
+        try {
+          await stripe.checkout.sessions.expire(session.id, acctStd);
+        } catch (expireErr) {
+          console.error('Failed to expire session after donation insert failure:', expireErr);
+        }
+        return json({ error: 'Could not add your donation right now. Please try again.' }, 500);
+      }
     }
 
     // intelligence: log enrollment initiated (one per registration; fail-safe, never blocks)

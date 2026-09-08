@@ -168,6 +168,26 @@ serve(async (req) => {
       const parentName = meta.parent_name || '';
       const useInstallments = meta.use_installments === 'true';
 
+      // Settle the gift FIRST, before any guard that can return or skip.
+      //
+      // This lived after sendConfirmationEmail, which sits inside
+      // `if (parentEmail && regs?.length)` - so a paid card gift whose
+      // registration lookup came back empty was charged by Stripe and left
+      // 'pending' in the ledger forever, with the money visible only in Stripe.
+      // The two ACH branches below were already written to settle before their
+      // early return; this, the common path, was the one place that was not.
+      //
+      // Settled against Stripe's OWN payment_status rather than the mere fact of
+      // a completed session: for a card those are the same thing, but an ACH
+      // debit completes days before it clears, and async_payment_succeeded /
+      // _failed below is where that lands.
+      await settleDonation(
+        admin,
+        session.id,
+        session.payment_status === 'paid' ? 'paid' : 'processing',
+        (session.payment_intent as string) || null,
+      );
+
       if (!regIds.length) {
         console.warn('Webhook: no registration_ids in metadata');
         return new Response('ok', { status: 200 });
@@ -582,6 +602,12 @@ serve(async (req) => {
           to: parentEmail, parentName, registrations: regs,
           totalCents: session.amount_total || 0, sessionId: session.id, useInstallments,
           installmentInfo,
+          // session.amount_total INCLUDES the gift, while the per-registration
+          // rows above do not. Without this the receipt shows a "Total paid"
+          // that is larger than its own line items with nothing to explain the
+          // difference - the family's first assumption is an overcharge.
+          donationCents: parseInt(meta.donation_gift_cents || '0', 10) || 0,
+          donationCoveredFeeCents: parseInt(meta.donation_covered_fee_cents || '0', 10) || 0,
         });
 
         // Trigger lifecycle-automations-cron in event mode for each newly-
@@ -625,6 +651,10 @@ serve(async (req) => {
       const session = event.data.object as Stripe.Checkout.Session;
       const meta = session.metadata || {};
       const regIds = (meta.registration_ids || '').split(',').filter(Boolean);
+      // The gift settles BEFORE the early return below. It is attached to the
+      // session, not to the registrations, so a session that somehow carries no
+      // registration ids must not strand a paid gift in 'processing'.
+      await settleDonation(admin, session.id, 'paid', (session.payment_intent as string) || null);
       if (!regIds.length) return new Response('ok', { status: 200 });
       const { data: regForOrg } = await admin.from('registrations').select('organization_id').eq('id', regIds[0]).single();
       const orgId = regForOrg?.organization_id;
@@ -649,6 +679,9 @@ serve(async (req) => {
       const session = event.data.object as Stripe.Checkout.Session;
       const meta = session.metadata || {};
       const regIds = (meta.registration_ids || '').split(',').filter(Boolean);
+      // Same reasoning as the success branch: settle the gift before any early
+      // return. A bounced transfer took no money, so the gift did not happen.
+      await settleDonation(admin, session.id, 'failed', (session.payment_intent as string) || null);
       if (!regIds.length) return new Response('ok', { status: 200 });
       const { data: regForOrg } = await admin.from('registrations').select('organization_id').eq('id', regIds[0]).single();
       const brand = await loadOrgBrand(admin, regForOrg?.organization_id);
@@ -1611,13 +1644,61 @@ async function sendOperatorAlert(
   }
 }
 
+// Move a scholarship gift to its settled state. Called from all three payment
+// outcomes; a session with no gift simply matches no row.
+//
+// FORWARD-ONLY, by filtering on the states a row may legally move FROM. Stripe
+// redelivers webhooks and does not promise order: an out-of-order retry of
+// `completed` after `async_payment_succeeded` would otherwise knock a paid gift
+// back to processing, and a redelivered `async_payment_failed` would mark a
+// settled one failed. Both would be invisible - the money is right either way,
+// only the fund's own ledger would lie.
+//
+// Never throws. A gift that fails to settle is an accounting problem to chase,
+// not a reason to fail the webhook and have Stripe retry the whole enrollment.
+async function settleDonation(
+  admin: SupabaseClient,
+  sessionId: string,
+  to: 'processing' | 'paid' | 'failed',
+  paymentIntentId: string | null,
+): Promise<void> {
+  const allowedFrom = to === 'processing' ? ['pending'] : ['pending', 'processing'];
+  const patch: Record<string, unknown> = { status: to };
+  if (paymentIntentId) patch.stripe_payment_intent_id = paymentIntentId;
+  if (to === 'paid') patch.paid_at = new Date().toISOString();
+  try {
+    const { data, error } = await admin
+      .from('donations')
+      .update(patch)
+      .eq('stripe_checkout_session_id', sessionId)
+      .in('status', allowedFrom)
+      .select('id, gift_cents');
+    if (error) {
+      // Logged where a person reads it: an operator whose fund total is short
+      // needs to be able to find out why, and console.error alone would not
+      // tell them. Non-fatal by design.
+      console.error(`[stripe-webhook] donation settle to '${to}' failed for session ${sessionId}:`, error.message);
+      return;
+    }
+    if (data?.length) {
+      console.log(`[stripe-webhook] donation ${data[0].id} (${data[0].gift_cents}c) -> ${to}`);
+    }
+  } catch (e) {
+    console.error(`[stripe-webhook] donation settle threw for session ${sessionId}:`, (e as Error).message);
+  }
+}
+
 async function sendConfirmationEmail({
   admin, brand, to, parentName, registrations, totalCents, sessionId, useInstallments, installmentInfo,
+  donationCents = 0, donationCoveredFeeCents = 0,
 }: {
   admin: SupabaseClient;
   brand: OrgBrand;
   to: string; parentName: string; registrations: any[]; totalCents: number; sessionId: string; useInstallments: boolean;
   installmentInfo: { paidToday: number; installment2Amount: number; installment2Date: string; installment3Amount: number; installment3Date: string; } | null;
+  /** The scholarship gift, if the family added one. Its own receipt line. */
+  donationCents?: number;
+  donationCoveredFeeCents?: number;
 }) {
   // Check the org's thank-you automation toggle + override. The automations row
   // is created lazily — operators who never visited the Automations tab have no
@@ -1685,6 +1766,34 @@ async function sendConfirmationEmail({
   // recipient, J2S included, got the Georgia fallback - a serif that is nobody's
   // brand. Using the tenant stack is both the correct multi-tenant answer and
   // closer to what each provider's own emails should look like.
+  // The gift's own receipt line. Sits between the registration rows and the
+  // total, exactly where a reader looking for the difference will look.
+  //
+  // It does NOT make the receipt add up on its own. `totalCents` is
+  // session.amount_total, which for a fee_pass_through org also includes the
+  // enrops service fee - and that has no row here. That gap predates this
+  // change and affects every pass-through tenant with or without a gift; it is
+  // named rather than quietly half-fixed, because adding a fee row is a change
+  // to every family's receipt and belongs in its own pass.
+  //
+  // The fee cover is named on the SAME line rather than as a second row: it is
+  // part of what they gave, not a charge levied on them, and splitting it out
+  // would read as a fee on a donation.
+  const donationRow = donationCents > 0
+    ? `<tr><td style="padding:16px;border-bottom:1px solid #EDE9FE;font-family:${brand.font_family};">
+          <div style="font-size:16px;font-weight:700;color:#1A1530;">Scholarship fund donation</div>
+          <div style="font-size:14px;color:#6b6880;margin-top:4px;">Thank you &mdash; this helps another family join.${
+            donationCoveredFeeCents > 0
+              ? ` Includes ${fmt(donationCoveredFeeCents)} you added so processing does not come out of your gift.`
+              : ''
+          }</div>
+        </td>
+        <td style="padding:16px;text-align:right;vertical-align:top;border-bottom:1px solid #EDE9FE;font-family:${brand.font_family};font-weight:700;color:#1A1530;">
+          ${fmt(donationCents + donationCoveredFeeCents)}
+        </td>
+      </tr>`
+    : '';
+
   const totalsBlock = useInstallments && installmentInfo
     ? `<tr><td colspan="2" style="padding:20px 16px;background:#F5F3FF;"><div style="font-family:${brand.font_family};font-size:15px;font-weight:700;color:${brand.secondary_color};margin-bottom:12px;">Your payment plan</div><table cellpadding="0" cellspacing="0" style="width:100%;font-family:${brand.font_family};font-size:14px;color:#1A1530;"><tr><td style="padding:6px 0;">Today (paid)</td><td style="padding:6px 0;text-align:right;font-weight:700;">${fmt(installmentInfo.paidToday)}</td></tr><tr><td style="padding:6px 0;">Installment 2 &middot; ${fmtDate(installmentInfo.installment2Date)}</td><td style="padding:6px 0;text-align:right;">${fmt(installmentInfo.installment2Amount)}</td></tr><tr><td style="padding:6px 0;">Installment 3 &middot; ${fmtDate(installmentInfo.installment3Date)}</td><td style="padding:6px 0;text-align:right;">${fmt(installmentInfo.installment3Amount)}</td></tr><tr><td style="padding:8px 0 0;border-top:1px solid #DDD8FA;font-weight:700;">Total</td><td style="padding:8px 0 0;border-top:1px solid #DDD8FA;text-align:right;font-weight:700;">${fmt(installmentInfo.paidToday + installmentInfo.installment2Amount + installmentInfo.installment3Amount)}</td></tr></table><div style="font-family:${brand.font_family};font-size:12px;color:#6b6880;margin-top:10px;">Your card on file will be charged automatically on each date. We'll email you before each charge.</div></td></tr>`
     : `<tr><td style="padding:20px 16px;font-family:${brand.font_family};font-size:18px;font-weight:700;color:#1A1530;">Total paid</td><td style="padding:20px 16px;text-align:right;font-family:${brand.font_family};font-size:24px;color:${brand.accent_color};">${fmt(totalCents)}</td></tr>`;
@@ -1718,6 +1827,7 @@ async function sendConfirmationEmail({
 
   const summaryBlock = `<table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin-bottom:24px;font-family:${brand.font_family};">
         ${regRows}
+        ${donationRow}
         ${totalsBlock}
         ${confirmationRow}
       </table>`;
