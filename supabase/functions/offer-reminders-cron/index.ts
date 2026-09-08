@@ -372,11 +372,24 @@ serve(async (req: Request) => {
     let eligibleProgramIds: string[] = [];
     if (asOrgIds.length && asTermNames.length) {
       // .in × .in is a cross-product; filter back down to exact enabled pairs.
+      // A CANCELLED CLASS MUST NOT CHASE ITS INSTRUCTOR. This query filtered on
+      // org and term only, so a published offer on a class that had since been
+      // cancelled still came back here and the instructor got a reminder email
+      // nagging them to respond to a class nobody is running. Found 2026-09-08
+      // while sweeping every reader of program_assignments that treats an
+      // assignment as live without checking whether its class still is - the
+      // same defect that had just blocked an assign in the conflict trigger.
+      //
+      // Same predicate as check_program_assignment_conflict, deliberately: one
+      // rule for "this class is not happening", spelled the same way in both
+      // places. 'closed' is NOT excluded - a closed class is real and simply
+      // stopped taking registrations, and its instructor still needs to reply.
       const { data: progRows } = await supabase
         .from('programs')
         .select('id, organization_id, term')
         .in('organization_id', asOrgIds)
-        .in('term', asTermNames);
+        .in('term', asTermNames)
+        .not('status', 'in', '("cancelled","archived")');
       eligibleProgramIds = (progRows ?? [])
         .filter((p: any) => enabledProgramKeys.has(`${p.organization_id}:${p.term}`)
           && (!scopeOrg || p.organization_id === scopeOrg)
