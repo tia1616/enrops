@@ -517,7 +517,11 @@ export default function Register() {
   // paymentMethod: 'card' | 'us_bank_account', chosen on StepPay. Passed to
   // create-checkout so it builds a single-method session with the matching fee.
   // Ignored on the installments path (always card).
-  async function handleCheckout(paymentMethod = 'card') {
+  // `gift` carries the scholarship-fund donation StepPay collected:
+  // {donation_cents, donation_cover_fee}. Defaulted so every other caller of
+  // handleCheckout (and any older StepPay in a cached bundle) keeps working and
+  // simply sends no donation.
+  async function handleCheckout(paymentMethod = 'card', gift = null) {
     setSubmitting(true);
     setError('');
     try {
@@ -587,6 +591,14 @@ export default function Register() {
         cancel_path: `/${ORG_SLUG}/register`,
         payment_method: paymentMethod,
       };
+      // Deliberately OUTSIDE line_items and total_cents. Those two are checked
+      // against the registration rows by create-checkout's price guard, and a
+      // gift has no registration row to match - adding it there would 409 every
+      // checkout that carried one.
+      if (gift?.donation_cents > 0) {
+        checkoutPayload.donation_cents = gift.donation_cents;
+        checkoutPayload.donation_cover_fee = !!gift.donation_cover_fee;
+      }
       if (useInstallments) {
         checkoutPayload.use_installments = true;
         // Bug A fix (2026-05-01): per-line schedule with correct registration_id mapping.
@@ -796,6 +808,12 @@ export default function Register() {
                 installmentSchedule={installmentSchedule?.display || null}
                 org={{ ...org, ...(feeConfig || {}) }}
                 cancellationPolicy={cancellationPolicy}
+                // Passed as its own prop rather than spread into `org`: the
+                // whole object is the config, and flattening it would put
+                // `enabled` and `headline` on an object every other reader
+                // treats as the organization. Undefined while the config is
+                // still loading, which StepPay reads as "do not ask".
+                scholarshipFund={feeConfig?.scholarship_fund}
               />
             )
           )}

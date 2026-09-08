@@ -2,6 +2,12 @@ import React, { useState } from 'react';
 import { formatMoney } from '../../../lib/pricing.js';
 import { feeOnCents, installmentFeeShares } from '../../../lib/platformFee.js';
 import { formatStartDate } from '../../../lib/programSchedule.js';
+import {
+  coverFeeCents,
+  giftWithinBounds,
+  formatGift,
+  parseGiftInput,
+} from '../../../lib/scholarshipFund.js';
 
 export default function StepPay({
   pricing,
@@ -11,6 +17,7 @@ export default function StepPay({
   installmentSchedule,
   org,
   cancellationPolicy,
+  scholarshipFund,
 }) {
   // The policy is authored as markdown and rendered properly on its own page.
   // Here it is an inline preview inside a checkout step, so the few markers a
@@ -83,6 +90,45 @@ export default function StepPay({
     ? installmentSchedule.reduce((s, i, idx) => s + i.amount_cents + feeForIndex(idx), 0)
     : chargedToday;
 
+  // --- Scholarship fund -----------------------------------------------------
+  // Shown only when the provider turned it on AND this cart can actually carry
+  // a gift. Both exclusions are enforced again in create-checkout, because a
+  // rule that only lives in a component is not a rule:
+  //   - PAYMENT PLANS: a gift is not financed across three dated charges.
+  //   - $0 CARTS: a fully-covered registration creates no Stripe session, so
+  //     there is nothing for the gift to ride on. It is also, plainly, not the
+  //     family to ask.
+  const fund = scholarshipFund?.enabled ? scholarshipFund : null;
+  const canAskForGift = !!fund && !useInstallments && displayAmount > 0;
+  const [giftCents, setGiftCents] = useState(0);
+  const [customGift, setCustomGift] = useState('');
+  const [customOpen, setCustomOpen] = useState(false);
+  const [coverFee, setCoverFee] = useState(fund?.cover_fee_default ?? false);
+
+  const giftCover = canAskForGift ? coverFeeCents(giftCents, coverFee, fund) : 0;
+  const giftCharged = canAskForGift ? giftCents + giftCover : 0;
+  // A custom amount that is typed but out of bounds must block the button and
+  // say so, rather than letting them reach Stripe and bounce off a 400.
+  const giftInvalid = canAskForGift && giftCents > 0 && !giftWithinBounds(giftCents, fund);
+  const payDisabled = submitting || giftInvalid;
+
+  function chooseGift(cents) {
+    // Tapping the selected tile clears it - the only way back to "no thanks"
+    // once a tile is picked, and people do expect a second tap to undo.
+    setGiftCents((prev) => (prev === cents ? 0 : cents));
+    setCustomOpen(false);
+    setCustomGift('');
+  }
+
+  function onCustomGiftChange(raw) {
+    setCustomGift(raw);
+    const parsed = parseGiftInput(raw);
+    // null means "not a usable amount yet" (mid-typing, or junk). Treat it as no
+    // gift rather than freezing the last valid number, so clearing the box
+    // clears the charge.
+    setGiftCents(parsed ?? 0);
+  }
+
   return (
     <div>
       <h1 className="font-titan text-3xl text-j2s-ink sm:text-4xl">
@@ -98,13 +144,23 @@ export default function StepPay({
           {useInstallments ? 'Charged today' : 'Total due today'}
         </p>
         <p className="mt-2 font-titan text-6xl">
-          {formatMoney(chargedToday)}
+          {/* The gift is part of what the card is charged, so it is part of the
+              headline figure. Showing tuition here and surprising them with a
+              larger number on Stripe is the one thing this screen must not do. */}
+          {formatMoney(chargedToday + giftCharged)}
         </p>
         {feeToday > 0 && (
           <p className="mt-2 text-sm text-white/90">
             {/* Standard fee first, then the discount as its own subtraction, so
                 the breakdown always sums to the amount charged above. */}
             {formatMoney(displayAmount)} + {formatMoney(standardFeeToday)} enrops service fee
+          </p>
+        )}
+        {giftCharged > 0 && (
+          <p className="mt-1 text-sm text-white/90">
+            {/* Named as its own addition for the same reason the fee line is:
+                every part of the headline figure has to be accounted for. */}
+            + {formatMoney(giftCharged)} scholarship fund donation
           </p>
         )}
         {bankDiscountToday > 0 && (
@@ -209,6 +265,114 @@ export default function StepPay({
         </div>
       )}
 
+      {/* Scholarship fund. Placed AFTER the payment-method choice and BEFORE
+          the policy, so it reads as an optional extra at the end of the order
+          rather than as part of the price. Nothing is preselected: a gift the
+          family did not deliberately choose is not a gift. */}
+      {canAskForGift && (
+        <div className="mt-6 rounded-2xl border-2 border-j2s-purple/20 bg-white p-5 shadow-card">
+          <p className="text-base font-bold text-j2s-ink">{fund.headline}</p>
+          <p className="mt-1 text-sm leading-relaxed text-j2s-ink/70">{fund.blurb}</p>
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            {fund.preset_amounts_cents.map((cents) => (
+              <button
+                key={cents}
+                type="button"
+                aria-pressed={giftCents === cents && !customOpen}
+                onClick={() => chooseGift(cents)}
+                className={`rounded-xl border-2 px-4 py-2 text-sm font-bold transition ${
+                  giftCents === cents && !customOpen
+                    ? 'border-j2s-purple bg-j2s-purple-soft/60 text-j2s-purple-dark'
+                    : 'border-j2s-purple/15 bg-white text-j2s-ink hover:border-j2s-purple/40'
+                }`}
+              >
+                {formatGift(cents)}
+              </button>
+            ))}
+            <button
+              type="button"
+              aria-pressed={customOpen}
+              onClick={() => {
+                // Opening the custom box clears any tile, so the two controls
+                // can never both look chosen while only one is charged.
+                setCustomOpen((open) => {
+                  if (open) { setCustomGift(''); setGiftCents(0); return false; }
+                  setGiftCents(0);
+                  return true;
+                });
+              }}
+              className={`rounded-xl border-2 px-4 py-2 text-sm font-bold transition ${
+                customOpen
+                  ? 'border-j2s-purple bg-j2s-purple-soft/60 text-j2s-purple-dark'
+                  : 'border-j2s-purple/15 bg-white text-j2s-ink hover:border-j2s-purple/40'
+              }`}
+            >
+              Another amount
+            </button>
+          </div>
+
+          {customOpen && (
+            <div className="mt-3">
+              <label htmlFor="custom-gift" className="sr-only">Donation amount in dollars</label>
+              <div className="flex items-center gap-2">
+                <span className="text-lg font-bold text-j2s-ink/60">$</span>
+                <input
+                  id="custom-gift"
+                  type="text"
+                  inputMode="decimal"
+                  value={customGift}
+                  onChange={(e) => onCustomGiftChange(e.target.value)}
+                  placeholder="25"
+                  className="w-32 rounded-xl border-2 border-j2s-purple/20 px-3 py-2 text-base focus:border-j2s-purple focus:outline-none"
+                />
+              </div>
+              {/* The message names the bound that was actually broken. "Enter a
+                  valid amount" would leave them guessing which end. */}
+              {giftInvalid && (
+                <p className="mt-2 text-sm font-bold text-j2s-orange-dark">
+                  {giftCents < fund.min_cents
+                    ? `The smallest donation is ${formatGift(fund.min_cents)}.`
+                    : `The largest donation here is ${formatGift(fund.max_cents)}. For more than that, please get in touch.`}
+                </p>
+              )}
+            </div>
+          )}
+
+          {giftCents > 0 && !giftInvalid && fund.cover_fee_pct > 0 && (
+            <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-xl bg-j2s-purple-soft/30 p-3">
+              <input
+                type="checkbox"
+                checked={coverFee}
+                onChange={(e) => setCoverFee(e.target.checked)}
+                className="mt-0.5 h-4 w-4 accent-[#6B4EFF]"
+              />
+              <span className="text-sm text-j2s-ink/80">
+                Add {formatMoney(coverFeeCents(giftCents, true, fund))} so the full{' '}
+                {formatGift(giftCents)} reaches the fund
+              </span>
+            </label>
+          )}
+
+          {giftCents > 0 && !giftInvalid && (
+            <p className="mt-3 text-sm font-bold text-j2s-purple-dark">
+              {/* Both numbers, always: the one they chose and the one they pay.
+                  With the box ticked those differ, and only saying one of them
+                  is how a receipt ends up surprising someone. */}
+              {formatGift(giftCents)} to the fund
+              {giftCover > 0 && <> &middot; {formatMoney(giftCharged)} added to your total</>}
+            </p>
+          )}
+
+          {/* Journey to STEAM LLC is not a nonprofit. Saying so here, next to
+              the ask, is both the honest place for it and the same thing the
+              j2s website's own donate page says. */}
+          <p className="mt-3 text-xs text-j2s-ink/50">
+            Donations are not tax-deductible. Every dollar goes to the scholarship fund.
+          </p>
+        </div>
+      )}
+
       {/* v4 section 6: the provider's cancellation and refund policy, shown
           BEFORE money is taken rather than buried in a Terms page. Omitted
           entirely when the provider has not published one - showing a made-up
@@ -261,12 +425,23 @@ export default function StepPay({
       </div>
 
       <button
-        onClick={() => onCheckout(effectiveMethod)}
-        disabled={submitting}
+        onClick={() =>
+          onCheckout(effectiveMethod, {
+            // Only the gift and the checkbox cross the wire. The fee cover and
+            // the charged total are recomputed server-side from the org's own
+            // config, so a tampered client can change what it ASKS for but not
+            // what the arithmetic does with it.
+            donation_cents: giftCharged > 0 ? giftCents : 0,
+            donation_cover_fee: giftCharged > 0 ? coverFee : false,
+          })
+        }
+        disabled={payDisabled}
         className={`mt-8 w-full rounded-xl px-6 py-5 text-lg font-bold text-white shadow-pop transition ${
           submitting
             ? 'cursor-wait bg-j2s-purple'
-            : 'bg-j2s-orange hover:bg-j2s-orange-dark active:translate-y-px'
+            : giftInvalid
+              ? 'cursor-not-allowed bg-j2s-purple/40'
+              : 'bg-j2s-orange hover:bg-j2s-orange-dark active:translate-y-px'
         }`}
       >
         {submitting ? (
