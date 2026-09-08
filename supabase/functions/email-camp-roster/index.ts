@@ -65,11 +65,18 @@ serve(async (req: Request) => {
         id, organization_id, location_id,
         curriculum_name, location_name, week_num, session_type,
         starts_on, ends_on, start_time, end_time, ages_min, ages_max,
-        current_enrollment
+        current_enrollment, status
       `)
       .eq('id', campSessionId)
       .maybeSingle();
     if (campErr || !camp) return json({ error: 'camp not found' }, 404);
+    // Same rule as email-program-roster: a cancelled session's roster must not
+    // reach a partner school. The Rosters row hides the button, but a hidden
+    // control binds one caller; this binds all of them. Prod carries 11
+    // cancelled camp sessions today, so this is a live shape, not a hypothetical.
+    if (camp.status === 'cancelled') {
+      return json({ error: 'this camp is cancelled; its roster is not sent to the school' }, 409);
+    }
 
     const { data: memberRow } = await supabase
       .from('org_members')

@@ -380,16 +380,22 @@ serve(async (req: Request) => {
       // assignment as live without checking whether its class still is - the
       // same defect that had just blocked an assign in the conflict trigger.
       //
-      // Same predicate as check_program_assignment_conflict, deliberately: one
-      // rule for "this class is not happening", spelled the same way in both
-      // places. 'closed' is NOT excluded - a closed class is real and simply
-      // stopped taking registrations, and its instructor still needs to reply.
+      // Same RULE as check_program_assignment_conflict - "cancelled or archived
+      // means not happening" - though not the same SQL, and the difference is
+      // NULL. programs.status is nullable; the trigger coalesces it to '' so a
+      // null-status class still counts, while a bare .not(...in...) here would
+      // evaluate to NULL and drop the row. Matched explicitly rather than left
+      // to diverge: a class with no status set is a real class and its
+      // instructor is still owed a reminder. No null-status rows exist today.
+      //
+      // 'closed' is NOT excluded - a closed class is real and simply stopped
+      // taking registrations, and its instructor still needs to reply.
       const { data: progRows } = await supabase
         .from('programs')
         .select('id, organization_id, term')
         .in('organization_id', asOrgIds)
         .in('term', asTermNames)
-        .not('status', 'in', '("cancelled","archived")');
+        .or('status.is.null,status.not.in.("cancelled","archived")');
       eligibleProgramIds = (progRows ?? [])
         .filter((p: any) => enabledProgramKeys.has(`${p.organization_id}:${p.term}`)
           && (!scopeOrg || p.organization_id === scopeOrg)
