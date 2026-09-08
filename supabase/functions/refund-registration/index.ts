@@ -498,6 +498,24 @@ serve(async (req: Request) => {
       payment_intent_id: string;
       status: string;
     }> = [];
+    // Application-fee refunds that did NOT go through, on refunds that DID. The
+    // family is refunded either way; this is money still owed back to the
+    // provider. Reported as a warning on a successful response rather than
+    // aborting the refund - see the catch around applicationFees.createRefund.
+    const marginShortfalls: Array<{
+      stripe_refund_id: string | null;
+      application_fee_id: string;
+      margin_owed_cents: number;
+      reason: string;
+    }> = [];
+    // Set when a per-PI fee lookup failed AFTER an earlier PI had already been
+    // refunded. We stop refunding further slots, but the bookkeeping below still
+    // has to record what did move.
+    let feeLookupAborted = false;
+    // Set when the family was refunded but the withdrawal write failed. The
+    // instalment pause and the receipt still have to run - a refunded family
+    // whose future instalments keep charging is the worst outcome here.
+    let cancelFailedReason: string | null = null;
     let remaining = amountCents;
 
     for (const slot of piSlots) {
@@ -564,15 +582,29 @@ serve(async (req: Request) => {
         } catch (feeErr) {
           // Refuse rather than guess: refunding the family without returning
           // the operator's margin, or returning the wrong amount, are both
-          // worse than making a human look. Nothing has been refunded yet.
+          // worse than making a human look.
+          //
+          // "Nothing has been refunded yet" was the original justification and
+          // it is only true for the FIRST payment intent. This runs per PI, so
+          // on an instalment plan slot 1 can already have been refunded when
+          // slot 2's fee lookup fails - and returning here then threw away the
+          // record of slot 1: no payment_status update, no withdrawal, no
+          // instalment pause, no receipt. Same shape as the margin bug that put
+          // two families on prod in a refunded-but-marked-paid state on
+          // 2026-09-08.
+          //
+          // So: refuse only while nothing has moved. Once money HAS moved, stop
+          // taking money out but let the bookkeeping below run, and report the
+          // shortfall as a warning on an otherwise successful refund.
           console.error('[refund] could not read charge fee details:', feeErr);
           await supabase.from('refunds')
             .update({ status: 'failed', failure_reason: 'could not read the charge fee details from Stripe' })
             .eq('id', refundRowId);
-          return json({
-            error: 'fee_lookup_failed',
-            partial: refundsCreated.length > 0 ? refundsCreated : undefined,
-          }, 502);
+          if (refundsCreated.length === 0) {
+            return json({ error: 'fee_lookup_failed' }, 502);
+          }
+          feeLookupAborted = true;
+          break;
         }
       }
 
@@ -650,14 +682,30 @@ serve(async (req: Request) => {
                 failure_reason: `family refunded, but returning the provider's ${marginRefundCents}c margin failed: ${msg}`,
               })
               .eq('id', refundRowId);
-            return json({
-              error: 'margin_refund_failed',
-              detail: 'The family was refunded, but the provider has not been credited back the platform margin. This needs a manual application-fee refund in Stripe.',
+            // DO NOT RETURN HERE. The family's money has already moved; that is
+            // the fact the database has to record. Returning 502 at this point
+            // skipped everything below - registrations.payment_status,
+            // status='cancelled', the installment pause - so the family was
+            // refunded in Stripe while the roster still showed them paid and
+            // enrolled, and the operator was shown a red error. The obvious next
+            // move from there is to press Refund again, which is a real double
+            // refund on a real card.
+            //
+            // Jessica hit exactly that on 2026-09-08: two families ($240 and
+            // $285) refunded in Stripe, both still 'paid'/'confirmed' here,
+            // both stuck behind an error message. The cause was mundane - the
+            // platform's Stripe balance was too low to return the application
+            // fee - and it must not be able to corrupt the registration record.
+            //
+            // The margin shortfall is real and is still reported, but as a
+            // WARNING on a successful refund rather than as a failure of it.
+            marginShortfalls.push({
               stripe_refund_id: stripeRefund.id,
               application_fee_id: applicationFeeId,
               margin_owed_cents: marginRefundCents,
-              refunds: refundsCreated,
-            }, 502);
+              reason: msg,
+            });
+            marginRefundApplied = 0;
           }
         }
 
@@ -738,13 +786,18 @@ serve(async (req: Request) => {
         .eq('id', registrationId);
       if (cancErr) {
         console.error('[refund] registration cancel failed:', cancErr);
-        // Refunds already went through; surface a soft error so operator
-        // knows to retry the cancel manually.
-        return json({
-          error: 'cancel_failed_after_refund',
-          refunds: refundsCreated,
-          cancel_error: cancErr.message,
-        }, 500);
+        // DO NOT RETURN. The comment here used to say "surface a soft error so
+        // operator knows to retry the cancel manually" - but returning skipped
+        // the INSTALMENT PAUSE immediately below, so a family who had just been
+        // refunded would keep being charged for the instalments still pending on
+        // the registration we failed to cancel. That is the worst outcome this
+        // function can produce, and it was the fallback path.
+        //
+        // It also skipped the refund receipt, so the family got no word from us.
+        //
+        // Same correction as the margin-refund failure above: money moved, so
+        // the bookkeeping runs and the operator is told what did not happen.
+        cancelFailedReason = cancErr.message;
       }
 
       // Pause any pending future installments. Use the existing
@@ -859,7 +912,18 @@ serve(async (req: Request) => {
           refundedCents: refundedThisCall,
           chargedCents: totalPaid,
           familyFeeCents: familyFeeOnCharge,
-          withdrawn: cancelRegistration,
+          // THE OUTCOME, NOT THE INTENT. `withdrawn` drives a sentence the
+          // FAMILY reads about whether their child is still in the class, so it
+          // has to describe what actually happened. Before the cancel failure
+          // stopped returning early this could not diverge - the function bailed
+          // before the receipt. Now it can: the withdrawal write can fail while
+          // the refund succeeds, and passing the operator's intent here would
+          // tell a parent their child's place was given up while the
+          // registration is still 'confirmed' and they are still on the roster.
+          // Null, not false: we did not keep the spot either, and claiming
+          // either way would be a guess. Null makes the receipt say nothing
+          // about the spot, which is the only honest option.
+          withdrawn: cancelRegistration ? (cancelFailedReason ? null : true) : false,
           accentColor: brand.accent_color,
         });
         if (!receipt.sent) {
@@ -938,6 +1002,18 @@ serve(async (req: Request) => {
       // instead of implying the family was told.
       receipt_sent: receipt.sent,
       receipt_reason: receipt.sent ? undefined : receipt.reason,
+      // The refund SUCCEEDED; this is money still owed back to the provider,
+      // reported alongside it. Same shape of honesty as receipt_sent: the
+      // operator is told what did not happen without being told the thing that
+      // did happen failed.
+      margin_shortfalls: marginShortfalls.length > 0 ? marginShortfalls : undefined,
+      margin_owed_cents: marginShortfalls.length > 0
+        ? marginShortfalls.reduce((n, m) => n + m.margin_owed_cents, 0)
+        : undefined,
+      // The two other "money moved but a later step did not" cases, reported the
+      // same way rather than as failures of the refund itself.
+      cancel_failed: cancelFailedReason ?? undefined,
+      fee_lookup_aborted: feeLookupAborted || undefined,
     });
   } catch (err) {
     console.error('[refund] fatal:', err);
