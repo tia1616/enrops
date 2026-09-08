@@ -177,14 +177,41 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
       // do, by returning 502 and leaving the registration marked paid. An alert
       // rather than an inline note because the drawer closes on the next line,
       // and this must not be the thing nobody sees.
+      const notes = [];
       if (data?.margin_owed_cents > 0) {
-        const owed = (data.margin_owed_cents / 100).toFixed(2);
-        alert(
-          `Refunded. The family has their money back.\n\n` +
-          `One thing did not go through: $${owed} of enrops service fee could not be returned to you, ` +
-          `because there wasn't enough in the Stripe balance to cover it. The family is unaffected — ` +
-          `this is money owed back to you, and it needs an application-fee refund in Stripe once the balance covers it.`,
+        // Name the fee IDs. Without them the operator knows money is owed but
+        // not which Stripe object to refund, and has to come back and ask - which
+        // is exactly what happened on 2026-09-08. The reason is Stripe's own
+        // words ("Insufficient funds in your Stripe balance..."), which is more
+        // use than any sentence we could write over the top of it.
+        const ids = (data.margin_shortfalls ?? [])
+          .map((m) => m.application_fee_id)
+          .filter(Boolean);
+        const why = (data.margin_shortfalls ?? [])[0]?.reason;
+        notes.push(
+          `$${(data.margin_owed_cents / 100).toFixed(2)} of enrops service fee could not be returned to you` +
+          (why ? ` — ${why}` : "") +
+          `\nThis is money owed back to you. It needs an application-fee refund in Stripe` +
+          (ids.length ? ` on ${ids.join(", ")}` : "") +
+          ` once the balance covers it. The family is unaffected.`,
         );
+      }
+      if (data?.cancel_failed) {
+        // The seat did NOT free. Say it, because the roster will still show them
+        // and the operator has to finish the withdrawal by hand.
+        notes.push(
+          `Their spot could not be freed (${data.cancel_failed}). They are still on the roster — ` +
+          `withdraw them manually. Any pending instalments have been stopped.`,
+        );
+      }
+      if (data?.fee_lookup_aborted) {
+        notes.push(
+          `Part of this payment could not be read from Stripe, so refunding stopped partway. ` +
+          `Check the amount actually refunded before trying again.`,
+        );
+      }
+      if (notes.length > 0) {
+        alert(`Refunded. The family has their money back.\n\n${notes.join("\n\n")}`);
       }
       if (onDone) onDone({ amountCents, cancelled: seatChoice === "withdraw" });
     } catch (e) {
