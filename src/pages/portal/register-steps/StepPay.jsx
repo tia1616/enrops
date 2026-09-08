@@ -105,11 +105,18 @@ export default function StepPay({
   const [customOpen, setCustomOpen] = useState(false);
   const [coverFee, setCoverFee] = useState(fund?.cover_fee_default ?? false);
 
-  const giftCover = canAskForGift ? coverFeeCents(giftCents, coverFee, fund) : 0;
-  const giftCharged = canAskForGift ? giftCents + giftCover : 0;
   // A custom amount that is typed but out of bounds must block the button and
   // say so, rather than letting them reach Stripe and bounce off a 400.
   const giftInvalid = canAskForGift && giftCents > 0 && !giftWithinBounds(giftCents, fund);
+  // VALIDITY GATES THE MONEY, not just the button. Computing the charge from
+  // `giftCents > 0` alone made the headline total quote a gift the form had
+  // already refused: typing 50c showed "+ $0.51 scholarship fund donation" and
+  // a total of $302.50 next to the message "The smallest donation is $1." and a
+  // dead Pay button. One question, one boolean - a visibility condition is not
+  // a truth condition.
+  const giftCounts = canAskForGift && giftCents > 0 && !giftInvalid;
+  const giftCover = giftCounts ? coverFeeCents(giftCents, coverFee, fund) : 0;
+  const giftCharged = giftCounts ? giftCents + giftCover : 0;
   const payDisabled = submitting || giftInvalid;
 
   function chooseGift(cents) {
@@ -339,7 +346,7 @@ export default function StepPay({
             </div>
           )}
 
-          {giftCents > 0 && !giftInvalid && fund.cover_fee_pct > 0 && (
+          {giftCounts && fund.cover_fee_pct > 0 && (
             <label className="mt-4 flex cursor-pointer items-start gap-3 rounded-xl bg-j2s-purple-soft/30 p-3">
               <input
                 type="checkbox"
@@ -354,7 +361,7 @@ export default function StepPay({
             </label>
           )}
 
-          {giftCents > 0 && !giftInvalid && (
+          {giftCounts && (
             <p className="mt-3 text-sm font-bold text-j2s-purple-dark">
               {/* Both numbers, always: the one they chose and the one they pay.
                   With the box ticked those differ, and only saying one of them
