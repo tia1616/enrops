@@ -75,13 +75,26 @@ serve(async (req: Request) => {
     const { data: program, error: progErr } = await supabase
       .from('programs')
       .select(`
-        id, organization_id, program_location_id,
+        id, organization_id, program_location_id, status,
         curriculum, term, day_of_week, start_time, end_time, room,
         first_session_date, session_count, instructor_name, max_capacity
       `)
       .eq('id', programId)
       .maybeSingle();
     if (progErr || !program) return json({ error: 'program not found' }, 404);
+    // A CANCELLED CLASS'S ROSTER MUST NOT REACH A PARTNER SCHOOL. Rosters.jsx
+    // hides the button on a cancelled row, but hiding a control is not a rule -
+    // it holds only for the one caller that happens to render it. The rule
+    // belongs here, where every caller passes. Cheap, and it means a future
+    // surface, a retry, or a replayed request cannot mail a school the roster
+    // of a class that is not running. Only 'cancelled' and 'archived' are
+    // refused: 'closed' is a real class that merely stopped taking sign-ups,
+    // and the school still needs its roster. 'archived' is unreachable today -
+    // programs_status_check allows draft / open / closed / cancelled - so this
+    // refuses cancelled classes in practice; the second arm is defensive.
+    if (program.status === 'cancelled' || program.status === 'archived') {
+      return json({ error: `this class is ${program.status}; its roster is not sent to the school` }, 409);
+    }
 
     if (!isSystemAuth) {
       const { data: memberRow } = await supabase
