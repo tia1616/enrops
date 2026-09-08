@@ -120,9 +120,16 @@ export default function StepPay({
   const payDisabled = submitting || giftInvalid;
 
   function chooseGift(cents) {
-    // Tapping the selected tile clears it - the only way back to "no thanks"
+    // Tapping the SELECTED tile clears it - the only way back to "no thanks"
     // once a tile is picked, and people do expect a second tap to undo.
-    setGiftCents((prev) => (prev === cents ? 0 : cents));
+    //
+    // "Selected" must mean the same thing here as it does on screen, which is
+    // `giftCents === cents && !customOpen`. Testing prev === cents alone made a
+    // tile that renders unselected behave as if it were: type 25 into the
+    // custom box, then click the $25 tile, and instead of selecting it the
+    // handler toggled the gift to zero. The family saw the total drop back and
+    // paid nothing to the fund believing they had given $25.
+    setGiftCents((prev) => (prev === cents && !customOpen ? 0 : cents));
     setCustomOpen(false);
     setCustomGift('');
   }
@@ -334,16 +341,22 @@ export default function StepPay({
                   className="w-32 rounded-xl border-2 border-j2s-purple/20 px-3 py-2 text-base focus:border-j2s-purple focus:outline-none"
                 />
               </div>
-              {/* The message names the bound that was actually broken. "Enter a
-                  valid amount" would leave them guessing which end. */}
-              {giftInvalid && (
-                <p className="mt-2 text-sm font-bold text-j2s-orange-dark">
-                  {giftCents < fund.min_cents
-                    ? `The smallest donation is ${formatGift(fund.min_cents)}.`
-                    : `The largest donation here is ${formatGift(fund.max_cents)}. For more than that, please get in touch.`}
-                </p>
-              )}
             </div>
+          )}
+
+          {/* OUTSIDE the custom-amount block, deliberately. This message used to
+              live inside it, so an out-of-bounds amount arriving any other way -
+              a preset the bounds refuse, a stale cached config - disabled the
+              Pay button with nothing on screen to explain it. Whenever the
+              amount is refused, the reason is visible; the message names the
+              bound that broke, because "enter a valid amount" leaves them
+              guessing which end. */}
+          {giftInvalid && (
+            <p className="mt-2 text-sm font-bold text-j2s-orange-dark">
+              {giftCents < fund.min_cents
+                ? `The smallest donation is ${formatGift(fund.min_cents)}.`
+                : `The largest donation here is ${formatGift(fund.max_cents)}. For more than that, please get in touch.`}
+            </p>
           )}
 
           {giftCounts && fund.cover_fee_pct > 0 && (

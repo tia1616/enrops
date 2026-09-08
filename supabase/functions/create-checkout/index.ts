@@ -149,7 +149,7 @@ serve(async (req) => {
       // organization_id rides along so the scholarship-fund config can be read
       // from the SAME rows the total is derived from - the gift is bounded by
       // the org that owns these registrations, never by an org the client names.
-      .select('amount_cents, organization_id')
+      .select('id, amount_cents, organization_id')
       .in('id', registration_ids);
     if (regAmtErr) return json({ error: 'Could not verify the order total. Please try again.' }, 500);
     const serverSum = (regAmtRows || []).reduce((s, r) => s + (r.amount_cents || 0), 0);
@@ -157,7 +157,15 @@ serve(async (req) => {
     // --- Scholarship fund gift ------------------------------------------------
     // Validated BEFORE the comp branch below, so a gift can never be silently
     // dropped by an early return.
-    const giftOrgId = (regAmtRows || [])[0]?.organization_id ?? null;
+    // Matched to registration_ids[0], NOT regAmtRows[0]: PostgREST returns
+    // `.in()` rows in no particular order, and orgIdStd further down resolves
+    // the org by registration_ids[0] explicitly. Taking an arbitrary row here
+    // meant the two could name different orgs - the gift bounds-checked against
+    // one tenant's config and the ledger row stamped with another's. Latent
+    // while every cart is single-org, and free to close.
+    const giftOrgId = (regAmtRows || []).find((r) => r.id === registration_ids[0])?.organization_id
+      ?? (regAmtRows || [])[0]?.organization_id
+      ?? null;
     let giftCfg: ScholarshipFundConfig | null = null;
     if (donation_cents) {
       const { data: fundRow, error: fundErr } = await guardAdmin
@@ -733,6 +741,13 @@ serve(async (req) => {
         enrops_org_id: orgIdStd ?? '',
         enrops_record_type: 'registration',
         enrops_term: orgTermStd,
+        // The gift rides on THIS charge, so the charge-level copy has to carry
+        // it too. Without these a $327.72 charge containing a $25.73 donation
+        // reaches a Stripe->QBO connector labelled purely 'registration', and
+        // the whole amount books as program revenue - exactly the
+        // miscategorisation the C1 metadata above exists to prevent.
+        enrops_donation_gift_cents: gift.giftCents > 0 ? String(gift.giftCents) : '',
+        enrops_donation_covered_fee_cents: gift.coveredFeeCents > 0 ? String(gift.coveredFeeCents) : '',
       },
     };
 

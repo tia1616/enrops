@@ -93,15 +93,22 @@ serve(async (req) => {
           // Presets are display-only; the AUTHORITATIVE bounds are min/max, which
           // create-checkout re-reads from this same row. Sorted so a provider who
           // types them out of order still gets an ascending row of tiles.
+          //
+          // FILTERED TO THE BOUNDS, not merely sorted. An offered tile that the
+          // bounds refuse is a button that disables checkout: min_cents=1000
+          // with the default $5 tile still on screen meant clicking $5 killed
+          // the Pay button with no message anywhere, and the family could not
+          // pay for their registration at all. A tile we will not accept must
+          // not be shown.
           preset_amounts_cents: (fundRow.preset_amounts_cents || [])
             .map((n: unknown) => Number(n))
-            .filter((n: number) => Number.isInteger(n) && n > 0)
+            .filter((n: number) =>
+              Number.isInteger(n) && n >= Number(fundRow.min_cents) && n <= Number(fundRow.max_cents))
             .sort((a: number, b: number) => a - b),
           min_cents: Number(fundRow.min_cents),
           max_cents: Number(fundRow.max_cents),
           cover_fee_default: !!fundRow.cover_fee_default,
           cover_fee_pct: Number(fundRow.cover_fee_pct) || 0,
-          org_name: data.name || '',
         }
       : SCHOLARSHIP_FUND_OFF;
 
