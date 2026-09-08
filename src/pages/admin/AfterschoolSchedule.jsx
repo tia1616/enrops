@@ -397,12 +397,19 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       // other, then assignments, then enrollment, then substitutions, then
       // declines, and finally one session-dates RPC PER CLASS. Only three of
       // those steps actually depend on an earlier answer, so the rest were
-      // waiting in line for nothing. Measured on prod 2026-09-07: the whole
-      // session-date job is 44.7 ms of database time for 33 classes - the
-      // database was never slow, the queue was. Three waves now:
+      // waiting in line for nothing. Three waves now:
       //   1. everything that needs only org + term (this batch)
       //   2. everything that needs programIds
       //   3. substitutions, which genuinely need the assignment ids from 2
+      //
+      // An earlier version of this comment said the session-date job was 44.7 ms
+      // of database time and that "the database was never slow, the queue was".
+      // BOTH HALVES WERE WRONG and the number came from a superuser connection,
+      // which does not evaluate RLS. As the authenticated role the same work is
+      // 2015 ms, because the program_locations policy costs ~37 ms to PLAN and
+      // was re-planned once per class. Waving the queue down was a real but
+      // secondary win; the actual fix is in
+      // supabase/migrations/20260907d_derive_program_session_dates_bulk.sql.
       const [progRes, locRes, instRes, availRes, surveyRes, areaPrefRes, cycleRes, cfgRes,
              savedSurveyIntro, savedOfferIntro] = await Promise.all([
         supabase
@@ -654,6 +661,13 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         substitutions,
         declines,
         programDates,
+        // Whether the session-date call FAILED, as opposed to legitimately
+        // returning nothing. Without it the two are indistinguishable on screen:
+        // an empty programDates makes the week rail render null, so a failed
+        // call looks exactly like a term nobody has scheduled yet. The admin
+        // home had the same ambiguity and answered it out loud; this is that
+        // fix's other half.
+        datesFailed: !!datesRes.error,
         instructors: instRes.data ?? [],
         availability: availRes.data ?? [],
         locations: locRes.data ?? [],
@@ -2296,6 +2310,15 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         <>
           {weeks.length > 0 && (
             <WeekRail weeks={weeks} signals={weekSignals} effective={effectiveWeek} onSelect={setFocusedWeekStart} />
+          )}
+          {/* No rail AND the dates call failed: say so. An empty programDates renders
+              nothing at all here, which reads as "this term has no classes scheduled"
+              — a wrong conclusion an operator could act on. Only shown when the call
+              actually errored, so a genuinely unscheduled term still says nothing. */}
+          {weeks.length === 0 && state.status === "ready" && state.datesFailed && (
+            <div style={{ fontSize: 12, color: CORAL, background: `${CORAL}14`, border: `1px solid ${CORAL}55`, borderRadius: 8, padding: "8px 12px", marginBottom: 8 }}>
+              Couldn't load the week-by-week dates just now, so the week picker is hidden. Refresh to try again — your classes and instructors below are unaffected.
+            </div>
           )}
           {effectiveWeek && weeks.find((w) => w.start === effectiveWeek)?.isBreak && (
             <div style={{ fontSize: 12, color: MUTED, background: CREAM, border: `1px solid ${RULE}`, borderRadius: 8, padding: "8px 12px", marginBottom: 4 }}>

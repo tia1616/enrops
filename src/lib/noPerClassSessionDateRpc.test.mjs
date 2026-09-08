@@ -6,9 +6,16 @@
 // but a browser only runs about six requests at a time, so 33 classes is six
 // sequential waves of network before the board can draw.
 //
-// Measured on prod 2026-09-07 with EXPLAIN ANALYZE: computing every one of those
-// 33 classes' dates costs 44.7 ms of DATABASE time. The work was never slow. The
-// queue was. derive_program_session_dates_bulk() asks the same question once.
+// The queue is only half of it, and the smaller half. Measured on prod
+// 2026-09-07 as the AUTHENTICATED role - a superuser connection reports 47 ms
+// for the same work because it never evaluates RLS, and believing that number
+// is what sent the first fix in the wrong direction - one class costs ~92 ms,
+// of which ~37 ms is PLANNING the program_locations policy. Thirty-three
+// classes re-planned it thirty-three times: ~2 s before the board could draw.
+//
+// derive_program_session_dates_bulk() asks the question once AND is SECURITY
+// DEFINER, so the policy is not re-planned per class. Both halves matter; the
+// second is the one that made the difference (2305 ms -> 176 ms).
 //
 // This is easy to undo by accident, because the per-class version is the obvious
 // thing to write and it looks correct: the page still renders, the dates are
