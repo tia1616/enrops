@@ -525,18 +525,28 @@ function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled
     // hand in four places and missing from two. Kept separate from the
     // cancelled/waitlist filters on the query above: those decide whether the
     // ROW is live, this decides whether the CHILD has a place.
-    const withPlace = (data ?? []).filter(isOnRoster);
-    // A CANCELLED REGISTRATION IS NOT "AWAITING PAYMENT" - it is finished.
-    // isAwaitingPayment answers a question about MONEY only, deliberately (see
-    // its tests); row liveness is each caller's own job, and this caller has two
-    // modes. Camps pass no excludeCancelled - "camps show everything" - so
-    // cancelled rows are in `data` here by design, and 87 of them on prod (39 on
-    // camp rosters) are unpaid, against 16 genuinely abandoned checkouts. Without
-    // this filter the new section would have been mostly wrong, telling an
-    // operator that families who cancelled - many of them refunded - had "started
-    // checkout and never paid" and were holding a seat for 24 hours.
+    // THREE BUCKETS, NOT TWO, and the third is why this is not a one-line filter.
+    //
+    // A CANCELLED REGISTRATION IS NEITHER ENROLLED NOR AWAITING PAYMENT - it is
+    // finished, and on a CAMP roster it is meant to be on screen. Camps pass no
+    // excludeCancelled ("camps show everything"), CamperEditableRow has badge
+    // copy written specifically for them ("Cancelled - Refunded", "Cancelled -
+    // Partial refund"), and 39 such rows exist on prod. Sorting only on
+    // isOnRoster / isAwaitingPayment dropped 34 cancelled-unpaid and 5
+    // cancelled-refunded camp rows off the screen altogether - and did it
+    // ARBITRARILY, because a cancelled row that happens to be PAID is still
+    // isOnRoster, so some cancelled campers stayed and others vanished according
+    // to a payment status the operator was not thinking about.
+    //
+    // So cancelled rows keep the place they have always had, in the main list
+    // with their badge, exactly as before this change. Only a LIVE registration
+    // that nobody has paid for moves to the awaiting-payment section. On a
+    // program roster excludeCancelled already removed them upstream, so this
+    // costs nothing there; it is the camp case that needs it.
+    const rows = data ?? [];
+    const withPlace = rows.filter((r) => isOnRoster(r) || isCancelledReg(r));
     setAwaitingPaymentRows(
-      sortRosterRows((data ?? []).filter((r) => isAwaitingPayment(r) && !isCancelledReg(r))),
+      sortRosterRows(rows.filter((r) => isAwaitingPayment(r) && !isCancelledReg(r))),
     );
     // Alphabetical by FIRST name, not the registration order this list showed
     // until 2026-09-01 (Jeff's ask, Jessica's call - see src/lib/rosterOrder.js).
@@ -696,8 +706,18 @@ function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled
           <div style={{ color: MUTED, fontSize: 11, marginBottom: 6 }}>
             {awaitingPaymentRows.length === 1 ? "This family" : "These families"} started
             checkout and never paid, so they are not on the roster, the seat count,
-            or the instructor&rsquo;s copy. A started checkout holds a seat for 24
-            hours, then releases it.
+            or the instructor&rsquo;s copy.
+            {/* THE SEAT-HOLD SENTENCE IS TRUE OF PROGRAMS ONLY. This component is
+                shared with camp rosters, and registration_holds_seat covers
+                after-school programs alone - migration 20260819a says so in as
+                many words: "Camps are NOT covered: camp_sessions has no capacity
+                column and camp caps live on curricula.class_size_max." Printed
+                on a camp roster it would describe a hold that does not exist,
+                and an operator waiting for a chair to free up would wait for
+                nothing. Programs get the mechanic; camps get the plain fact. */}
+            {target.column === "program_id"
+              ? " A started checkout holds a seat for 24 hours, then releases it."
+              : " Remove one to clear it from this list."}
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6, opacity: 0.85 }}>
             {awaitingPaymentRows.map((reg) => (
