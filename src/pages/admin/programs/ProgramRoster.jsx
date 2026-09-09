@@ -217,7 +217,19 @@ export default function ProgramRoster() {
       // This screen already had the rule right; it just had its own copy of it.
       // Now the one definition, so it cannot drift from the list and the portal.
       if (isOnRoster(r)) enr.push(r);
-      else pend += 1;
+      // PENDING MEANS A CHECKOUT IN FLIGHT, NOT "ANYTHING ELSE". The else-branch
+      // used to sweep up cancelled rows too and label them "pending checkouts":
+      // the query filters cancelled_at IS NULL but not status='cancelled', and
+      // prod carries 5 rows with the status and no timestamp. An operator
+      // chasing "+3 pending checkouts" would find fewer than three, or none.
+      // Same proxy-predicate mistake as the one caught in Rosters.jsx - the
+      // condition has to mean what the label claims, not merely correlate.
+      //
+      // Only the STATUS is tested, deliberately: the query above already filters
+      // cancelled_at IS NULL, and cancelled_at is not in its .select(), so
+      // reading it here would test undefined and pass for every row - a check
+      // that looks like a guard and is not one.
+      else if (r.status !== "cancelled") pend += 1;
     }
     // Alphabetical by FIRST name. This was "by last, then first — print/sign-in
     // friendly" until 2026-09-01; Jeff asked for first name across every roster
