@@ -1266,6 +1266,57 @@ export default function Finances() {
           )}
         </>
       )}
+
+      {/* REFUND LIABILITY NOTE. Outside the tab switch on purpose, so it is on
+          the page whichever tab is open, and after the shared isLean branches so
+          both navs get it. Deliberately quiet: Arielle's brief was "it does not
+          need to be prominent, it needs to be findable and to exist before the
+          question comes up".
+
+          WHY IT SAYS WHAT IT SAYS. Three sentences in the first draft were not
+          true of this product and were corrected before it shipped:
+
+          1. "the family gets the full amount back" - false wherever an operator
+             has set withdrawal_admin_fee_cents. J2S has $35 set, so this note
+             would have contradicted a button on their own refund screen.
+          2. "recovered from your next registrations" - clawback from future
+             transfers is PARKED, not built. A near-legal note must not promise
+             a mechanism that does not exist.
+          3. "held back from the enrops service fee" - only true on a DESTINATION
+             charge, where Stripe debits the platform. On a DIRECT charge
+             (Jeff, Branching Minds) chargeFeeFacts sets stripeFeeCents to 0 and
+             Stripe takes its cost from the operator's own balance, never from
+             our fee. The wording below is true on BOTH models because it names
+             where the cost LANDS rather than the mechanism that puts it there.
+
+          Legal has not reviewed this yet (Arielle's note, and she owns the full
+          refund terms it should eventually link to). */}
+      <div style={{
+        marginTop: 28, paddingTop: 14, borderTop: "1px solid #e6e6e6",
+        fontSize: 12.5, color: MUTED, lineHeight: 1.6, maxWidth: "68ch",
+      }}>
+        <div style={{ fontWeight: 600, color: INK, marginBottom: 4 }}>About refunds</div>
+        <p style={{ margin: "0 0 8px" }}>
+          When you refund a registration, the money goes back to the family from your
+          balance. If you have set a withdrawal admin fee, that amount is kept and the
+          family is refunded the rest.
+        </p>
+        <p style={{ margin: "0 0 8px" }}>
+          Refunds on your programs are your business&rsquo;s responsibility. If your
+          balance does not cover a refund, Stripe recovers the shortfall from your
+          linked bank account.
+        </p>
+        <p style={{ margin: "0 0 8px" }}>
+          Card processing costs are not returned when a payment is refunded. That cost
+          stays with your business. The enrops service fee itself is returned to you.
+        </p>
+        <p style={{ margin: 0 }}>
+          Refunds usually take 5 to 10 business days to reach the family&rsquo;s
+          statement. A refund issued within a few hours of the original payment may go
+          through as a reversal, where the original charge disappears from their
+          statement instead of a separate credit appearing.
+        </p>
+      </div>
     </PageShell>
   );
 }
