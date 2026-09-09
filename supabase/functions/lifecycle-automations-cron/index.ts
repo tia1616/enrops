@@ -914,6 +914,7 @@ async function renderLifecycleEmail(supabase: SupabaseClient, input: RenderInput
       org.slug,
       input.test_camp_session_id,
       input.test_program_id,
+      template.key,
     );
     if (real) { Object.assign(entry, real); usedRealData = true; }
   }
@@ -1059,6 +1060,10 @@ async function resolveTestEntryContent(
   orgSlug: string,
   campSessionId: string | null,
   programId: string | null,
+  // Which template is being previewed. Only the welcome mail carries the room,
+  // so the preview must carry it for exactly that one or the pane and the real
+  // send drift - the drift this resolver exists to prevent.
+  templateKey: string | null,
 ): Promise<Partial<AudienceEntry> | null> {
   const nextTermAvailable = await hasFutureProgramsForOrg(supabase, organizationId);
 
@@ -1112,10 +1117,12 @@ async function resolveTestEntryContent(
       program_end_date: sessions.length > 0 ? formatDate(sessions[sessions.length - 1]) : "",
       program_time: timeClause(prog.start_time, prog.end_time, true),
       program_day: recurringDayLabel(prog.day_of_week),
-      // {{location_name}} carries the room for FAMILY mail, which is where a
-      // parent looks for it. The no-school notice further down deliberately
-      // does not: its one vars object feeds the instructor copy too.
-      location_name: venueLabel(prog.program_locations?.name, prog.room, prog.program_locations?.room_number) ?? "",
+      // Room only for the welcome mail, matching resolveWelcomeAudience. The
+      // check-in and recap sends do not carry it (Jessica, 2026-09-09), and the
+      // no-school notice cannot: its one vars object feeds the instructor copy.
+      location_name: (templateKey === "welcome_afterschool"
+        ? venueLabel(prog.program_locations?.name, prog.room, prog.program_locations?.room_number)
+        : prog.program_locations?.name) ?? "",
       final_showcase_raw: prog.curricula?.final_showcase ?? "",
       mid_term_skills_raw: (prog.curricula?.mid_term_skills as string[] | null) ?? [],
       final_recap_skills_raw: (prog.curricula?.final_recap_skills as string[] | null) ?? [],
@@ -1419,7 +1426,7 @@ async function resolveCheckInAudience(
       id, parent_id,
       students!inner ( id, first_name ),
       parents!inner ( id, first_name, email ),
-      programs!inner ( id, curriculum, runs_own_registration, first_session_date, start_time, end_time, program_location_id, curriculum_id, room, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions, room_number ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
+      programs!inner ( id, curriculum, runs_own_registration, first_session_date, start_time, end_time, program_location_id, curriculum_id, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
     `)
     .eq("organization_id", a.organization_id)
     .eq("status", "confirmed")
@@ -1441,7 +1448,9 @@ async function resolveCheckInAudience(
       program_end_date: "",
       // programs.start_time/end_time are already human text ("3:25 PM").
       program_time: timeClause(r.programs.start_time, r.programs.end_time, true),
-      location_name: venueLabel(r.programs.program_locations?.name, r.programs.room, r.programs.program_locations?.room_number) ?? "",
+      // No room here on purpose. Jessica, 2026-09-09: only the WELCOME mail
+      // needs it. A check-in is about how the term is going, not where to go.
+      location_name: r.programs.program_locations?.name ?? "",
       abandoned_resume_url: "",
       age_turning: "",
       final_showcase_raw: r.programs.curricula?.final_showcase ?? "",
@@ -1595,7 +1604,7 @@ async function resolveRecapAudience(
   if (includeAfterschool) {
       const { data: programs, error: pErr } = await supabase
       .from("programs")
-      .select("id, curriculum, runs_own_registration, first_session_date, start_time, end_time, program_location_id, curriculum_id, room, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions, room_number ), curricula ( final_showcase, mid_term_skills, final_recap_skills )")
+      .select("id, curriculum, runs_own_registration, first_session_date, start_time, end_time, program_location_id, curriculum_id, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions ), curricula ( final_showcase, mid_term_skills, final_recap_skills )")
       .eq("organization_id", a.organization_id);
     if (pErr) throw pErr;
 
@@ -1613,7 +1622,8 @@ async function resolveRecapAudience(
       matchingProgramIds.push(p.id);
       programMeta.set(p.id, {
         curriculum: p.curriculum,
-        location_name: venueLabel(p.program_locations?.name, p.room, p.program_locations?.room_number) ?? "",
+        // Recap looks back at the term; no room needed (same call as check-in).
+        location_name: p.program_locations?.name ?? "",
         program_time: timeClause(p.start_time, p.end_time, true),
         first_session_date: p.first_session_date,
         last_session_date: (sessions as string[])[sessions.length - 1] ?? null,
