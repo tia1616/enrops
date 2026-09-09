@@ -80,6 +80,39 @@ const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
+// HOW LONG A FAMILY HAS TO FINISH PAYING - and, necessarily, how long their seat
+// is held. These are ONE number wearing two hats, and they must never drift:
+//
+//   * The seat is held by registration_holds_seat(), whose p_pending_ttl default
+//     is set to match this in migration 20260909a.
+//   * The Stripe Checkout Session is alive until `expires_at`, which is what we
+//     set here. Until it expires the family can still complete payment.
+//
+// IF THE HOLD IS SHORTER THAN THE SESSION, WE SELL A SEAT TWICE. Parent A walks
+// away; the hold lapses; Parent B buys the last chair; Parent A comes back to
+// their still-open Stripe tab an hour later and pays. Fifteen children in a
+// fourteen-seat room, and a card charged for a seat that does not exist -
+// strictly worse than the problem being fixed.
+//
+// WHY IT WAS 24 HOURS. Nobody set expires_at, so Stripe used its own 24h default
+// and the hold was matched to it (Jessica chose 24h on 2026-08-19 for exactly
+// that alignment). It worked, and it cost real enrolments: an Irvington parent
+// on 2026-09-08 was pushed onto a waitlist for a class with two genuinely empty
+// chairs, both held by dead checkouts - one of them her own, from 43 minutes
+// earlier.
+//
+// WHY 30 MINUTES AND NOT LESS. Stripe will not accept an expires_at less than 30
+// minutes out; that is the floor, not a preference. It is also comfortably longer
+// than anyone spends at a card form.
+//
+// NOT the same clock as the abandoned-registration email, which stays at 24h
+// (hours_after_pending). "This seat is sellable again" and "this family has
+// given up, write to them" are different questions and deserve different
+// answers - mailing somebody 30 minutes after they stepped away is nagging.
+const CHECKOUT_WINDOW_MINUTES = 30;
+const checkoutExpiresAt = () =>
+  Math.floor(Date.now() / 1000) + CHECKOUT_WINDOW_MINUTES * 60;
+
 const cors = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -491,6 +524,8 @@ serve(async (req) => {
         payment_method_types: ['card'],
         line_items: installmentLineItems,
         mode: 'payment',
+        // Matches the seat hold. See CHECKOUT_WINDOW_MINUTES.
+        expires_at: checkoutExpiresAt(),
         customer: customerId,
         payment_intent_data: {
           setup_future_usage: 'off_session',
@@ -763,6 +798,15 @@ serve(async (req) => {
       payment_method_types: [selectedMethod],
       line_items: stripeLineItems,
       mode: 'payment',
+      // Matches the seat hold. See CHECKOUT_WINDOW_MINUTES.
+      //
+      // ACH IS NOT SHORTENED BY THIS. expires_at governs how long the family has
+      // to SUBMIT the checkout, not how long a submitted bank transfer takes to
+      // settle. Once they submit, the registration carries
+      // ach_payment_state='processing' and registration_holds_seat holds the seat
+      // for the whole 1-3 day settlement regardless of age - which is what the
+      // Pay step promises them.
+      expires_at: checkoutExpiresAt(),
       customer_email: parent_email,
       customer_creation: 'always',
       success_url: `${base}${successPath}?session_id={CHECKOUT_SESSION_ID}`,
