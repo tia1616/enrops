@@ -89,6 +89,27 @@ export interface ResolvedIndex {
   byChild: Set<string>;
   /** `parentId|offering` — the fallback when a child cannot be named. */
   byParent: Set<string>;
+  /**
+   * `parentId|offering` where at least one resolved row could NOT be named.
+   *
+   * Without this the per-child match has a hole that points the wrong way: the
+   * child-level set only ever gains NAMED rows, so a resolved registration with
+   * no usable child name leaves `byChild` empty for that parent and offering,
+   * and a pending row that DOES name its child misses, reads as abandoned, and
+   * mails a family who already paid — the exact failure this module exists to
+   * prevent, through a side door.
+   *
+   * The obvious patch, "suppress when either set matches", is wrong: it
+   * collapses the per-child rule back to per-parent and silently kills the
+   * sibling nudge this module deliberately protects. So the child-level answer
+   * is distrusted ONLY for a parent+offering we could not fully name, where it
+   * falls back to the parent-level answer and therefore suppresses.
+   *
+   * Empty on prod today (0 of 993 resolved rows lack a usable name, checked
+   * 2026-09-09), so this changes no live decision — it closes the door before
+   * one nameless row opens it.
+   */
+  byParentUnnamed: Set<string>;
 }
 
 /**
@@ -106,6 +127,7 @@ export interface ResolvedIndex {
 export function buildResolvedIndex(resolvedRows: readonly unknown[]): ResolvedIndex {
   const byChild = new Set<string>();
   const byParent = new Set<string>();
+  const byParentUnnamed = new Set<string>();
 
   for (const raw of resolvedRows ?? []) {
     const row = raw as any;
@@ -116,9 +138,10 @@ export function buildResolvedIndex(resolvedRows: readonly unknown[]): ResolvedIn
     byParent.add(`${parentId}|${offering}`);
     const child = normalizeChildName(row?.students?.first_name);
     if (child) byChild.add(`${parentId}|${offering}|${child}`);
+    else byParentUnnamed.add(`${parentId}|${offering}`);
   }
 
-  return { byChild, byParent };
+  return { byChild, byParent, byParentUnnamed };
 }
 
 /**
@@ -133,8 +156,13 @@ export function isGenuinelyAbandoned(pendingRow: any, index: ResolvedIndex): boo
   const parentId = pendingRow?.parent_id ?? pendingRow?.parents?.id ?? null;
   if (!offering || !parentId) return false;
 
+  const parentKey = `${parentId}|${offering}`;
   const child = normalizeChildName(pendingRow?.students?.first_name);
-  return child
-    ? !index.byChild.has(`${parentId}|${offering}|${child}`)
-    : !index.byParent.has(`${parentId}|${offering}`);
+
+  // No name on this pending row, or a resolved row for the same parent and
+  // offering we could not name: either way the child-level answer cannot be
+  // trusted, so use the parent-level one, which suppresses rather than sends.
+  if (!child || index.byParentUnnamed.has(parentKey)) return !index.byParent.has(parentKey);
+
+  return !index.byChild.has(`${parentKey}|${child}`);
 }

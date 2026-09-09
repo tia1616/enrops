@@ -322,3 +322,57 @@ Deno.test("CALLER CONTRACT: the lookup still selects every non-pending status", 
     "the resolved-registration lookup must stay org-scoped — parents are shared across tenants",
   );
 });
+
+// ── The nameless-counterpart hole ───────────────────────────────────────────
+// Added 2026-09-09 during the review that took this module to prod. The
+// child-level set only ever gains NAMED rows, so a resolved registration with
+// no usable child name used to leave a hole that a NAMED pending row fell
+// straight through - the paid-family email this module exists to prevent.
+
+Deno.test("a nameless resolved row suppresses a named leftover for the same offering", () => {
+  const index = buildResolvedIndex([
+    resolvedRow({ parentId: ALLISON, programId: "prog-1", childFirstName: null }),
+  ]);
+
+  assertEquals(index.byParentUnnamed.has(`${ALLISON}|program:prog-1`), true);
+  assertEquals(
+    isGenuinelyAbandoned(
+      pendingRow({ parentId: ALLISON, programId: "prog-1", childFirstName: "Molly" }),
+      index,
+    ),
+    false,
+  );
+});
+
+Deno.test("a nameless resolved row does NOT reach across offerings", () => {
+  // Distrust is scoped to the parent+offering we could not name. A different
+  // class is still judged per child, so this must remain a real abandonment.
+  const index = buildResolvedIndex([
+    resolvedRow({ parentId: ALLISON, programId: "prog-1", childFirstName: null }),
+  ]);
+
+  assertEquals(
+    isGenuinelyAbandoned(
+      pendingRow({ parentId: ALLISON, programId: "prog-2", childFirstName: "Molly" }),
+      index,
+    ),
+    true,
+  );
+});
+
+Deno.test("the sibling nudge survives when every resolved row is named", () => {
+  // The naive fix for the hole - suppress when EITHER set matches - would break
+  // exactly this, collapsing the per-child rule back to per-parent.
+  const index = buildResolvedIndex([
+    resolvedRow({ parentId: "voorhees", programId: "prog-1", childFirstName: "Henry" }),
+  ]);
+
+  assertEquals(index.byParentUnnamed.size, 0);
+  assertEquals(
+    isGenuinelyAbandoned(
+      pendingRow({ parentId: "voorhees", programId: "prog-1", childFirstName: "Milo" }),
+      index,
+    ),
+    true,
+  );
+});
