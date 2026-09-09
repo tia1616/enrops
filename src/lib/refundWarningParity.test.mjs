@@ -82,6 +82,33 @@ ok('the margin shortfall is NOT sent to the operator', marginKeys.length === 0,
   `      That is enrops's own debt and the operator cannot act on it. Record it on the\n` +
   `      refunds row and alert the platform instead.`);
 
+// AND THE SAME FOR EVERY OTHER RESPONSE THE FUNCTION BUILDS, not just the
+// successful one. The assertion above reads the `success: true` literal alone,
+// and the function returns json() seventeen times - the preview branch, the
+// 400s, the 502s. A ratchet that guards one of seventeen doors is the "fixed it
+// in one of the N places" bug wearing a test's clothes: re-adding the shortfall
+// to the preview payload would leak exactly what 2026-09-08 removed, and the
+// check above would stay green.
+//
+// Scans the argument of every json( ... ) call. The TypeScript declaration of
+// marginShortfalls also spells `margin_owed_cents:`, which is why this walks
+// call arguments rather than grepping the file - a type is not a payload.
+const jsonPayloadKeys = [];
+for (let m = /\bjson\(\s*\{/g, hit; (hit = m.exec(fnCode)) !== null; ) {
+  let d = 0, stop = -1;
+  for (let j = fnCode.indexOf('{', hit.index); j < fnCode.length; j++) {
+    if (fnCode[j] === '{') d++;
+    else if (fnCode[j] === '}') { d--; if (d === 0) { stop = j; break; } }
+  }
+  if (stop === -1) continue;
+  jsonPayloadKeys.push(
+    ...[...fnCode.slice(hit.index, stop).matchAll(/^\s*(margin_[a-z_]+)\s*:/gm)].map((k) => k[1]),
+  );
+}
+ok('no response the function returns carries a margin key', jsonPayloadKeys.length === 0,
+  `these reach the browser in some json() response: ${[...new Set(jsonPayloadKeys)].join(', ')}.\n` +
+  `      The operator cannot refund an application fee. Log it platform-side instead.`);
+
 const uiCode = stripComments(uiSrc);
 // Require an actual READ off the response - `data.key` or `data?.key` - not the
 // bare string. humanError still carries a `case "cancel_failed_after_refund"`
