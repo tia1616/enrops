@@ -27,6 +27,7 @@ import { loadOrgBrand, formatFromAddress, renderSignatureBlock, OrgBrand } from 
 import { isEmailAllowed, emailGuardActive } from '../_shared/emailGuard.ts';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
 import { logTransactionalSend, formatSendError } from '../_shared/sendLog.ts';
+import { isOnRoster } from '../_shared/rosterOrder.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -99,7 +100,10 @@ serve(async (req) => {
     // ----- Roster parents: registrations -> students -> parents -----
     const { data: regs, error: regErr } = await admin
       .from('registrations')
-      .select('student_id')
+      // status / payment_status / ach_payment_state are SELECTED because isOnRoster
+      // reads all three. A column missing from the select arrives undefined and the
+      // predicate silently answers "not enrolled" for everyone.
+      .select('student_id, status, payment_status, ach_payment_state')
       .eq('organization_id', organizationId)
       .eq('program_id', programId)
       .neq('status', 'cancelled')
@@ -110,7 +114,21 @@ serve(async (req) => {
       // families "are not on the roster or the roster email" - this keeps that true.
       .neq('status', 'waitlist');
     if (regErr) return json({ error: `Load roster: ${regErr.message}` }, 500);
-    const studentIds = [...new Set((regs ?? []).map((r: any) => r.student_id).filter(Boolean))];
+    // AN ABANDONED CHECKOUT IS THE SAME DEAD END AS A WAITLIST ROW, and until
+    // 2026-09-09 only the waitlist half was excluded. A family who reached Stripe
+    // and never paid leaves a pending/unpaid row, which passed both filters above,
+    // so "Invite families to portal" emailed them a sign-in link to a Dashboard
+    // that lists status='confirmed' only - i.e. to an empty page. The comment
+    // directly above already argued exactly why that must not happen; it just did
+    // not cover this case.
+    //
+    // isOnRoster is the same shared rule the admin roster, the instructor portal
+    // and the emailed PDF use, so "who is in this class" has one answer across the
+    // product. It keeps confirmed-but-unpaid families (354 prod rows: hand-added,
+    // imported, comped, school pays off-platform) and ACH mid-settlement - both of
+    // those DO have a place and should be invited.
+    const enrolledRegs = (regs ?? []).filter((r: any) => isOnRoster(r));
+    const studentIds = [...new Set(enrolledRegs.map((r: any) => r.student_id).filter(Boolean))];
     if (studentIds.length === 0) {
       return json({ invited: 0, skipped_existing: 0, skipped_no_email: 0, failed: 0, total_candidates: 0,
         message: 'No families on this roster yet.' });
