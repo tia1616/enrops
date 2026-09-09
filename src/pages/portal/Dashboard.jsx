@@ -6,7 +6,7 @@ import { getTenant } from '../../lib/tenants.js';
 import { formatTermLabel } from '../../lib/terms.js';
 import { getUserRoles } from '../../lib/useUserRoles.js';
 import { renderWaiverText } from '../../lib/waiverText.js';
-import { roomDisplay } from '../../lib/roomLabel.js';
+import { venueLabel } from '../../lib/roomLabel.js';
 import { dismissalAnswerIncomplete, dismissalSummary } from '../../lib/dismissal.js';
 import { earlyReleaseLine } from '../../lib/timeText.js';
 import WaiverGate from './WaiverGate.jsx';
@@ -54,14 +54,6 @@ function fmtTime(t) {
   if (t.includes('AM') || t.includes('PM')) return t;
   const [h, m] = t.split(':').map(Number);
   return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`;
-}
-// Site name and room as ONE string, built once per enrollment and reused by
-// every card below. Four places on this page print where a class meets, and
-// building the pair at each of them is how they drifted apart the last time.
-// Either half can be missing - a site with no room typed, or (rarely) a room
-// on a class with no site row - so this returns whichever halves exist.
-function venueLabel(siteName, roomLabel) {
-  return [siteName, roomLabel].filter(Boolean).join(' · ') || null;
 }
 function timeAgo(dateStr) {
   if (!dateStr) return '';
@@ -254,7 +246,7 @@ export default function Dashboard() {
           programs(
             id, curriculum, curriculum_id, day_of_week, start_time, end_time,
             first_session_date, term, session_count, room,
-            program_locations(name, arrival_instructions, dismissal_instructions, room_number),
+            program_locations(name, parent_arrival_instructions, parent_dismissal_instructions, room_number),
             curricula(id, name, skills_overall,
               curriculum_sessions(session_number, title, description, skills_practiced, parent_engagement_question)
             )
@@ -368,14 +360,21 @@ export default function Dashboard() {
           name: pr?.curriculum || 'Class',
           // Parents kept emailing to ask which room, because the room was typed
           // on the class and read by instructors and rosters but by nothing the
-          // family could see. roomDisplay() returns a FINISHED label (it adds
-          // the word "Room" only to a bare number), so `venue` must not add it.
+          // family could see. venueLabel owns both the class-beats-site
+          // precedence and the separator, shared with the three family emails.
           venue: venueLabel(
             pr?.program_locations?.name,
-            roomDisplay(pr?.room, pr?.program_locations?.room_number),
+            pr?.room,
+            pr?.program_locations?.room_number,
           ),
-          arrival: pr?.program_locations?.arrival_instructions,
-          dismissal: pr?.program_locations?.dismissal_instructions,
+          // The PARENT-safe instructions, never the instructor-facing pair this
+          // page used to read. Those hold staff logistics and door codes - "get
+          // the orange binder from Annie", "the instructor should be here by
+          // 2:15" - and this screen was showing them to families. Every site on
+          // prod that has instructor text also has parent text (53 and 53,
+          // checked 2026-09-09), so nothing goes blank in the swap.
+          arrival: pr?.program_locations?.parent_arrival_instructions,
+          dismissal: pr?.program_locations?.parent_dismissal_instructions,
           day: pr?.day_of_week,
           startTime: pr?.start_time, endTime: pr?.end_time,
           term: pr?.term, firstDate: pr?.first_session_date,
@@ -404,12 +403,13 @@ export default function Dashboard() {
           student: r.students,
           name: cs?.curriculum_name || cur?.name || 'Camp',
           // A camp has no room of its own yet, so the SITE room is its only
-          // source - that is roomDisplay's camp case, classRoom null. The site
-          // name still comes from the denormalized location_name, which is what
-          // this surface has always shown.
+          // source - that is the camp case, class room null. The site name
+          // still comes from the denormalized location_name, which is what this
+          // surface has always shown.
           venue: venueLabel(
             cs?.location_name,
-            roomDisplay(null, cs?.program_locations?.room_number),
+            null,
+            cs?.program_locations?.room_number,
           ),
           day: null,
           startTime: cs?.start_time, endTime: cs?.end_time,

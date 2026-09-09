@@ -65,6 +65,7 @@ import {
   welcomeVerdict,
   type WelcomeWindow,
 } from "./welcomeWindow.ts";
+import { venueLabel } from "../_shared/roomLabel.ts";
 import { runWaitlistSweep } from "./waitlistSweep.ts";
 import { offeringIdOf, buildResolvedIndex, isGenuinelyAbandoned } from "./abandonedSuppression.ts";
 
@@ -1092,8 +1093,8 @@ async function resolveTestEntryContent(
   if (programId) {
     const { data: p, error } = await supabase
       .from("programs")
-      .select(`id, curriculum, day_of_week, first_session_date, start_time, end_time, program_location_id, curriculum_id,
-        program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions ),
+      .select(`id, curriculum, day_of_week, first_session_date, start_time, end_time, program_location_id, curriculum_id, room,
+        program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions, room_number ),
         curricula ( final_showcase, mid_term_skills, final_recap_skills )`)
       .eq("id", programId)
       .eq("organization_id", organizationId)
@@ -1111,7 +1112,10 @@ async function resolveTestEntryContent(
       program_end_date: sessions.length > 0 ? formatDate(sessions[sessions.length - 1]) : "",
       program_time: timeClause(prog.start_time, prog.end_time, true),
       program_day: recurringDayLabel(prog.day_of_week),
-      location_name: prog.program_locations?.name ?? "",
+      // {{location_name}} carries the room for FAMILY mail, which is where a
+      // parent looks for it. The no-school notice further down deliberately
+      // does not: its one vars object feeds the instructor copy too.
+      location_name: venueLabel(prog.program_locations?.name, prog.room, prog.program_locations?.room_number) ?? "",
       final_showcase_raw: prog.curricula?.final_showcase ?? "",
       mid_term_skills_raw: (prog.curricula?.mid_term_skills as string[] | null) ?? [],
       final_recap_skills_raw: (prog.curricula?.final_recap_skills as string[] | null) ?? [],
@@ -1166,7 +1170,7 @@ async function resolveWelcomeAudience(
         id, parent_id, registered_at,
         students!inner ( id, first_name ),
         parents!inner ( id, first_name, email ),
-        programs!inner ( id, curriculum, runs_own_registration, day_of_week, first_session_date, start_time, end_time, program_location_id, curriculum_id, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
+        programs!inner ( id, curriculum, runs_own_registration, day_of_week, first_session_date, start_time, end_time, program_location_id, curriculum_id, room, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions, room_number ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
       `;
     const afterschoolBase = () => supabase
       .from("registrations")
@@ -1250,7 +1254,7 @@ async function resolveWelcomeAudience(
         // programs.start_time/end_time are already human text ("3:25 PM"); use as-is.
         program_time: timeClause(r.programs.start_time, r.programs.end_time, true),
         program_day: recurringDayLabel(r.programs.day_of_week),
-        location_name: r.programs.program_locations?.name ?? "",
+        location_name: venueLabel(r.programs.program_locations?.name, r.programs.room, r.programs.program_locations?.room_number) ?? "",
         abandoned_resume_url: "",
         age_turning: "",
         final_showcase_raw: r.programs.curricula?.final_showcase ?? "",
@@ -1415,7 +1419,7 @@ async function resolveCheckInAudience(
       id, parent_id,
       students!inner ( id, first_name ),
       parents!inner ( id, first_name, email ),
-      programs!inner ( id, curriculum, runs_own_registration, first_session_date, start_time, end_time, program_location_id, curriculum_id, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
+      programs!inner ( id, curriculum, runs_own_registration, first_session_date, start_time, end_time, program_location_id, curriculum_id, room, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions, room_number ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
     `)
     .eq("organization_id", a.organization_id)
     .eq("status", "confirmed")
@@ -1437,7 +1441,7 @@ async function resolveCheckInAudience(
       program_end_date: "",
       // programs.start_time/end_time are already human text ("3:25 PM").
       program_time: timeClause(r.programs.start_time, r.programs.end_time, true),
-      location_name: r.programs.program_locations?.name ?? "",
+      location_name: venueLabel(r.programs.program_locations?.name, r.programs.room, r.programs.program_locations?.room_number) ?? "",
       abandoned_resume_url: "",
       age_turning: "",
       final_showcase_raw: r.programs.curricula?.final_showcase ?? "",
@@ -1591,7 +1595,7 @@ async function resolveRecapAudience(
   if (includeAfterschool) {
       const { data: programs, error: pErr } = await supabase
       .from("programs")
-      .select("id, curriculum, runs_own_registration, first_session_date, start_time, end_time, program_location_id, curriculum_id, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions ), curricula ( final_showcase, mid_term_skills, final_recap_skills )")
+      .select("id, curriculum, runs_own_registration, first_session_date, start_time, end_time, program_location_id, curriculum_id, room, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions, room_number ), curricula ( final_showcase, mid_term_skills, final_recap_skills )")
       .eq("organization_id", a.organization_id);
     if (pErr) throw pErr;
 
@@ -1609,7 +1613,7 @@ async function resolveRecapAudience(
       matchingProgramIds.push(p.id);
       programMeta.set(p.id, {
         curriculum: p.curriculum,
-        location_name: p.program_locations?.name ?? "",
+        location_name: venueLabel(p.program_locations?.name, p.room, p.program_locations?.room_number) ?? "",
         program_time: timeClause(p.start_time, p.end_time, true),
         first_session_date: p.first_session_date,
         last_session_date: (sessions as string[])[sessions.length - 1] ?? null,

@@ -7,7 +7,7 @@
 //
 // Every literal below is a value that is actually in the live J2S data.
 
-import { roomDisplay } from './roomLabel.js';
+import { roomDisplay, venueLabel } from './roomLabel.js';
 
 let pass = 0, fail = 0;
 function eq(name, actual, expected) {
@@ -39,6 +39,29 @@ eq('trims a padded site room', roomDisplay(null, '  Makerspace '), 'Makerspace')
 eq('undefined behaves like null', roomDisplay(undefined, undefined), null);
 // A number out of a jsonb payload must not crash the label.
 eq('numeric input is coerced, not thrown', roomDisplay(4, null), 'Room 4');
+
+// --- venueLabel: the site and the room as one string ----------------------
+// Four family-facing surfaces print this now, so the separator is a contract,
+// not a local styling choice.
+eq('site and class room together',
+  venueLabel('Alameda Elementary', 'Room 104', null), 'Alameda Elementary · Room 104');
+eq('a bare number still gets the word, once',
+  venueLabel('Ainsworth', '9', null), 'Ainsworth · Room 9');
+eq('falls back to the site room when the class has none',
+  venueLabel('Maplewood Elementary', null, 'Room 12'), 'Maplewood Elementary · Room 12');
+eq('class room still beats site room through venueLabel',
+  venueLabel('Happy Valley Library', 'Community Room A', 'Community Room B'),
+  'Happy Valley Library · Community Room A');
+eq('site alone when no room is typed anywhere',
+  venueLabel('Jackson', null, null), 'Jackson');
+eq('room alone when there is no site row',
+  venueLabel(null, '9', null), 'Room 9');
+eq('nothing at all is null, not a stray separator',
+  venueLabel(null, null, null), null);
+eq('a blank site name does not leave a leading separator',
+  venueLabel('   ', '9', null), 'Room 9');
+eq('a blank room does not leave a trailing separator',
+  venueLabel('Jackson', '  ', '  '), 'Jackson');
 
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'}  (${pass} passed, ${fail} failed)`);
 if (fail > 0) process.exitCode = 1;

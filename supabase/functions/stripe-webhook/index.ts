@@ -76,6 +76,7 @@ import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-
 import { loadOrgBrand, formatFromAddress, renderSignatureBlock, OrgBrand } from '../_shared/orgBrand.ts';
 import { renderPlatformFooterHtml, renderPlatformFooterText } from '../_shared/platformFooter.ts';
 import { buildIcs, googleCalendarUrl, toBase64, calendarEventsFromRegistrations } from '../_shared/calendarInvite.ts';
+import { venueLabel } from '../_shared/roomLabel.ts';
 import { applyStripeAccountStatus } from '../_shared/stripeAccountStatus.ts';
 import { mapOperatorAccountStatus } from '../_shared/operatorAccountStatus.ts';
 import { runGateCheck } from '../_shared/gateCheck.ts';
@@ -549,7 +550,7 @@ serve(async (req) => {
 
       // Confirmation email (unchanged from v16)
       const { data: regs } = await admin.from('registrations').select(
-        `id, amount_cents, programs(id, curriculum, day_of_week, start_time, end_time, first_session_date, term, program_locations(name, address, arrival_instructions, dismissal_instructions)), students(first_name, last_name)`,
+        `id, amount_cents, programs(id, curriculum, day_of_week, start_time, end_time, first_session_date, term, room, program_locations(name, address, parent_arrival_instructions, parent_dismissal_instructions, room_number)), students(first_name, last_name)`,
       ).in('id', regIds);
 
       // Tenant slug for portal URLs in the confirmation email. Never default
@@ -1723,25 +1724,33 @@ async function sendConfirmationEmail({
   const fmtDate = (iso: string) => iso ? new Date(iso + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }) : '';
   const greeting = parentName ? `Hi ${parentName.split(' ')[0]}` : 'Hi there';
 
-  const hasAnyArrival = registrations.some((r) => r.programs?.program_locations?.arrival_instructions || r.programs?.program_locations?.dismissal_instructions);
+  // PARENT-safe instructions only. This email used to print the instructor-facing
+  // pair, which is where staff logistics and door codes live ("get the orange
+  // binder from Annie", "the instructor should be here by 2:15"), and it goes to
+  // every paying family. lifecycle-automations-cron already documented this rule
+  // for the welcome mail; this sender was the one that never followed it. All 53
+  // prod sites with instructor text also have parent text, so nothing is lost.
+  const hasAnyArrival = registrations.some((r) => r.programs?.program_locations?.parent_arrival_instructions || r.programs?.program_locations?.parent_dismissal_instructions);
 
   const regRows = registrations.map((r) => {
     const p = r.programs;
     const s = r.students;
     const loc = p?.program_locations;
-    const locationName = loc?.name || '';
+    // Site AND room, through the one shared helper - so this email, the parent
+    // portal and the welcome mail cannot disagree about which room a class is in.
+    const locationName = venueLabel(loc?.name, p?.room, loc?.room_number) || '';
     const programName = p?.curriculum || 'Program';
     const timeDisplay = p?.start_time
       ? (p?.end_time ? `${p.start_time}&ndash;${p.end_time}` : p.start_time)
       : '';
     const firstDate = p?.first_session_date ? fmtDate(p.first_session_date) : 'Date TBD';
 
-    const hasArrival = !!(loc?.arrival_instructions || loc?.dismissal_instructions);
+    const hasArrival = !!(loc?.parent_arrival_instructions || loc?.parent_dismissal_instructions);
     const arrivalRow = hasArrival
       ? (() => {
           const parts: string[] = [];
-          if (loc.arrival_instructions) parts.push(`<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:${brand.primary_color};margin-bottom:4px;">Arrival</div><div style="font-size:13px;color:#1A1530;line-height:1.6;">${loc.arrival_instructions}</div>`);
-          if (loc.dismissal_instructions) parts.push(`<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:${brand.primary_color};margin:${loc.arrival_instructions ? '12px 0 4px' : '0 0 4px'};">Dismissal</div><div style="font-size:13px;color:#1A1530;line-height:1.6;">${loc.dismissal_instructions}</div>`);
+          if (loc.parent_arrival_instructions) parts.push(`<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:${brand.primary_color};margin-bottom:4px;">Arrival</div><div style="font-size:13px;color:#1A1530;line-height:1.6;">${loc.parent_arrival_instructions}</div>`);
+          if (loc.parent_dismissal_instructions) parts.push(`<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:${brand.primary_color};margin:${loc.parent_arrival_instructions ? '12px 0 4px' : '0 0 4px'};">Dismissal</div><div style="font-size:13px;color:#1A1530;line-height:1.6;">${loc.parent_dismissal_instructions}</div>`);
           return `<tr><td colspan="2" style="padding:0 16px 16px;"><table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;"><tr><td style="padding:10px 12px;background:#F9F8FE;border-radius:8px;border-left:3px solid ${brand.primary_color};font-family:${brand.font_family};">${parts.join('')}</td></tr></table></td></tr>`;
         })()
       : '';

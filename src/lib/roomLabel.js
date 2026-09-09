@@ -49,3 +49,21 @@ export function roomDisplay(classRoom, siteRoom) {
   if (!room) return null;
   return /^\d/.test(room) ? `Room ${room}` : room;
 }
+
+// WHERE THE CLASS MEETS, as one string: the site and the room together.
+//
+// Added 2026-09-09, when the room finally reached families. Four surfaces have
+// to say this now - the parent portal, the payment confirmation, the welcome
+// mail and the message-families notice - and each was about to join the pair
+// itself. That is the same mistake roomDisplay was created to end, one level up:
+// the room agreed everywhere and the SEPARATOR did not. Taking the three raw
+// values (not a finished room label) is deliberate - a caller cannot forget the
+// class-beats-site precedence if it never gets to apply it.
+//
+// Either half can be missing. A site with no room typed returns just the site;
+// a room with no site row returns just the room. Both absent is null, so a
+// caller can test one value to decide whether to print anything at all.
+export function venueLabel(siteName, classRoom, siteRoom) {
+  const site = String(siteName ?? "").trim();
+  return [site, roomDisplay(classRoom, siteRoom)].filter(Boolean).join(" · ") || null;
+}
