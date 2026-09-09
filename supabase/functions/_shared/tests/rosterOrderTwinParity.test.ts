@@ -120,3 +120,39 @@ Deno.test('the shared rule still folds case and still puts blanks last', () => {
   assertEquals(edgeCmp(S('Kai', 'Tran', 'x'), S('Kai', 'Tran', 'x')), 0);
   assertEquals(webCmp(S('Kai', 'Tran', 'x'), S('Kai', 'Tran', 'x')), 0);
 });
+
+// ── MEMBERSHIP, not order ───────────────────────────────────────────────────
+// isOnRoster crossed the same browser/Deno line the comparator did, and for the
+// same reason: the admin roster list and the instructor portal (browser) must
+// agree with the emailed PDF (Deno) about WHO is in the class, not merely about
+// what order to print them in. A drift here is worse than a drift in the sort -
+// the paper roster and the screen would list different children.
+Deno.test('the two copies agree on who is on a roster', async () => {
+  const { isOnRoster: edgeOn, isAwaitingPayment: edgeAwait } = await import('../rosterOrder.ts');
+  const { isOnRoster: webOn, isAwaitingPayment: webAwait } = await import(WEB.href);
+
+  const CASES: Array<[string, unknown]> = [
+    ['paid + confirmed', { status: 'confirmed', payment_status: 'paid' }],
+    ['confirmed but unpaid - most of the roster', { status: 'confirmed', payment_status: 'unpaid' }],
+    ['paid, not yet confirmed', { status: 'pending', payment_status: 'paid' }],
+    ['abandoned checkout', { status: 'pending', payment_status: 'unpaid' }],
+    ['bank transfer clearing', { status: 'pending', payment_status: 'unpaid', ach_payment_state: 'processing' }],
+    ['bank transfer failed', { status: 'pending', payment_status: 'unpaid', ach_payment_state: 'failed' }],
+    ['refunded but confirmed', { status: 'confirmed', payment_status: 'refunded' }],
+    ['ach column not selected', { status: 'pending', payment_status: 'unpaid' }],
+    ['no payment fields at all', { id: 'x' }],
+    ['null', null],
+    ['undefined', undefined],
+  ];
+
+  for (const [label, row] of CASES) {
+    assertEquals(edgeOn(row as never), webOn(row), `isOnRoster disagrees on: ${label}`);
+    assertEquals(edgeAwait(row as never), webAwait(row), `isAwaitingPayment disagrees on: ${label}`);
+  }
+
+  // A loop over two functions that both return undefined would pass while
+  // proving nothing (same trap the sort cases above call out). Pin the two
+  // answers that carry the money.
+  assertEquals(edgeOn({ status: 'confirmed', payment_status: 'unpaid' } as never), true);
+  assertEquals(edgeOn({ status: 'pending', payment_status: 'unpaid' } as never), false);
+});

@@ -16,7 +16,7 @@ import {
 import PortalSwitcher from "../../components/PortalSwitcher.jsx";
 import { displayFirstName } from "../../lib/instructorName";
 import { roomDisplay } from "../../lib/roomLabel.js";
-import { sortRosterRows } from "../../lib/rosterOrder.js";
+import { sortRosterRows, isOnRoster } from "../../lib/rosterOrder.js";
 import { avatarUrl } from "../../lib/avatars";
 import InstructorAvailabilityForm from "./InstructorAvailabilityForm.jsx";
 import AfterschoolAvailabilityForm from "./AfterschoolAvailabilityForm.jsx";
@@ -4036,7 +4036,7 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
         const { data, error } = await supabase
           .from("registrations")
           .select(`
-            id, status, payment_status, registered_at, notes,
+            id, status, payment_status, ach_payment_state, registered_at, notes,
             authorized_pickup_contacts, photo_release_consent, custom_field_values,
             student:students (
               id, first_name, last_name, grade, birthdate, pronouns, homeroom_teacher,
@@ -4066,12 +4066,24 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
           setRows([]);
           return;
         }
+        // A CHILD NOBODY HAS PAID FOR IS NOT IN THIS CLASS. The emailed PDF has
+        // filtered on paid-or-confirmed since it was written; this screen never
+        // did, so the two disagreed - in the one place the comment below
+        // promises they match. An instructor standing in the room would count
+        // heads against a name that was only ever an abandoned checkout, then
+        // go looking for a child who was never coming.
+        //
+        // isOnRoster is that same rule, now shared (src/lib/rosterOrder.js and
+        // its Deno twin, which email-program-roster imports). Deliberately AFTER
+        // the cancelled/waitlist filters in the query rather than folded into
+        // them: those say the row is dead, this says the child has no place.
+        const withPlace = (data ?? []).filter(isOnRoster);
         // Alphabetical by FIRST name, not the registration order this showed
         // until 2026-09-01. Jeff asked for it specifically "including instructor
         // portal", and this is the screen an instructor reads standing in front
         // of the class, so it must match the emailed PDF exactly - both now go
         // through src/lib/rosterOrder.js and its Deno twin.
-        setRows(sortRosterRows(data));
+        setRows(sortRosterRows(withPlace));
 
         // Pull the structured contacts (guardians / authorized pickup / do-not-
         // release / etc.) for these students. Instructors DO receive do_not_release

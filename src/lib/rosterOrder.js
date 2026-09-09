@@ -93,3 +93,57 @@ export function compareRosterRows(a, b) {
 export function sortRosterRows(rows) {
   return [...(rows ?? [])].sort(compareRosterRows);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WHO IS ON A ROSTER AT ALL. Order was shared here first; membership was not,
+// and it drifted the same way order had.
+//
+// Jessica, 2026-09-09, looking at an Irvington roster: "if they haven't paid
+// they shouldn't be on the roster!" A parent reached the Stripe page, never
+// completed it, and her child rendered as an ordinary roster row - identical to
+// the twelve children who had paid. The school then went looking for a fee to
+// pay against a registration that, to them, plainly existed.
+//
+// THE RULE WAS ALREADY DECIDED - four times, in four hand-written copies:
+//   program_enrollment.enrolled (SQL), email-program-roster (the PDF an
+//   instructor carries), ProgramRoster.jsx and Rosters.jsx's own seat COUNT all
+//   spell "payment_status = 'paid' OR status = 'confirmed'". Two surfaces never
+//   got the memo: the Rosters.jsx roster LIST and the instructor portal's
+//   RosterSection. So the count said 12, the screen listed 14, and the emailed
+//   PDF - which does filter - disagreed with the portal screen it is explicitly
+//   commented to match. This function is that rule, once. See xiv in the
+//   recurring-findings list: a fact that appears in two places is computed in one.
+//
+// WHY status='confirmed' KEEPS AN UNPAID ROW. It is not a loophole, it is most
+// of the roster: 354 non-cancelled prod rows are confirmed-and-unpaid. Those are
+// the children an operator added by hand, imported from a spreadsheet, comped,
+// or whose school pays off-platform. Filtering on payment ALONE would empty real
+// classrooms. `confirmed` is an operator saying "this child is in the class",
+// and that outranks whether money moved through Stripe.
+//
+// WHY ACH IS IN HERE WITH ZERO ROWS TO ITS NAME. A bank transfer sits
+// pending/unpaid for 1-3 business days while it clears, and the Pay step
+// promises the family their seat is held meanwhile - registration_holds_seat()
+// already honours that for capacity. Prod and staging both have zero
+// ach_payment_state rows today, so this clause changes no current row on either
+// environment; it is here so the FIRST family who ever pays by bank transfer
+// does not vanish off their instructor's roster for three days. A fix that is
+// only correct because a feature is unused is not correct.
+//
+// NOT a substitute for the cancelled/waitlist filters each caller already has:
+// this answers "has this child got a place", not "is this row live at all".
+export function isOnRoster(reg) {
+  if (!reg) return false;
+  return (
+    reg.payment_status === "paid" ||
+    reg.status === "confirmed" ||
+    reg.ach_payment_state === "processing"
+  );
+}
+
+// The complement, for the surfaces that COUNT what they are hiding rather than
+// dropping it silently. A roster that quietly shrinks from 14 to 12 is its own
+// support ticket; "2 unpaid, not shown" is an answer.
+export function isAwaitingPayment(reg) {
+  return !!reg && !isOnRoster(reg);
+}
