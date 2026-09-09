@@ -24,6 +24,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
+import { venueLabel } from '../_shared/roomLabel.ts';
 import {
   groupRecipientsByAddress,
   sendFamilyEmails,
@@ -69,7 +70,10 @@ function fmtTime(t: string | null | undefined): string {
 
 function describeProgram(p: Record<string, any>): string {
   const parts: string[] = [];
-  if (p?.program_locations?.name) parts.push(p.program_locations.name);
+  // Site and room together, so a family reading "where and when" here gets the
+  // same answer as the portal and the payment confirmation.
+  const where = venueLabel(p?.program_locations?.name, p?.room, p?.program_locations?.room_number);
+  if (where) parts.push(where);
   if (p?.day_of_week) parts.push(DAY_LABELS[String(p.day_of_week).toLowerCase()] ?? p.day_of_week);
   if (p?.start_time) parts.push(fmtTime(p.start_time));
   return parts.join(' · ');
@@ -166,7 +170,7 @@ serve(async (req: Request) => {
     // admin somewhere.
     const { data: program, error: pErr } = await supabase
       .from('programs')
-      .select('id, curriculum, day_of_week, start_time, term, organization_id, program_locations (id, name)')
+      .select('id, curriculum, day_of_week, start_time, term, organization_id, room, program_locations (id, name, room_number)')
       .eq('id', programId)
       .eq('organization_id', orgId)
       .maybeSingle();
@@ -313,7 +317,11 @@ serve(async (req: Request) => {
         program_day: (program as any).day_of_week
           ? (DAY_LABELS[String((program as any).day_of_week).toLowerCase()] ?? (program as any).day_of_week)
           : '',
-        program_location: (program as any).program_locations?.name ?? '',
+        program_location: venueLabel(
+          (program as any).program_locations?.name,
+          (program as any).room,
+          (program as any).program_locations?.room_number,
+        ) ?? '',
         org_name: brand.org_name,
       },
       from: fromAddress,
