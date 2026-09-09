@@ -68,6 +68,7 @@ import {
 import { venueLabel } from "../_shared/roomLabel.ts";
 import { runWaitlistSweep } from "./waitlistSweep.ts";
 import { offeringIdOf, buildResolvedIndex, isGenuinelyAbandoned } from "./abandonedSuppression.ts";
+import { abandonedResumeUrl } from "./abandonedResumeUrl.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -2423,10 +2424,33 @@ async function resolveAbandonedAudience(supabase: SupabaseClient, a: AutomationR
       program_start_date: "",
       program_end_date: "",
       location_name: r.programs?.program_locations?.name ?? r.camp_sessions?.location_name ?? "",
-      // Multi-tenant safe — slug comes from the org row joined on automations,
-      // never hardcoded. Points to the existing tenant register page; when the
-      // resume route ships, the URL pattern doesn't change.
-      abandoned_resume_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register?resume_reg=${r.id}`,
+      // "FINISH REGISTERING →" HAS TO LAND SOMEWHERE. Until 2026-09-09 this was
+      // `/register?resume_reg=<registration id>`, and:
+      //
+      //   * NOTHING in the codebase reads `resume_reg`. The resume route the old
+      //     comment here was waiting on ("when the resume route ships, the URL
+      //     pattern doesn't change") was never built.
+      //   * Register.jsx bounces any visit without `?program=` straight back to
+      //     the catalog - deliberately, because browser-back from Stripe strips
+      //     the query string.
+      //
+      // So the recovery email - the one mechanism whose entire job is bringing a
+      // family back to the checkout they abandoned - dropped them at the top of
+      // the class list with nothing filled in and no clue which class they had
+      // been signing up for. 36 of these went out between 2026-06-07 and
+      // 2026-09-01 before anyone opened the link.
+      //
+      // A REGISTRATION ID MUST NOT BE THE CREDENTIAL. Resuming properly means
+      // rehydrating a child's name, birth date, allergies and emergency contacts,
+      // and a bare row id in an email link would hand all of that to anyone who
+      // has the URL. That is why the waitlist flow mints waitlist_invite_token
+      // rather than passing its row id. Real resume is a token feature; it is not
+      // this fix, and the id is dropped here rather than left implying otherwise.
+      //
+      // Program vs camp, and every not-a-usable-id case, live in
+      // ./abandonedResumeUrl.ts so they have tests rather than a hope - same
+      // arrangement as abandonedSuppression beside it.
+      abandoned_resume_url: abandonedResumeUrl(PUBLIC_SITE_URL, a.org.slug, r),
       age_turning: "",
       final_showcase_raw: "",
       mid_term_skills_raw: [],
