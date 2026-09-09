@@ -601,8 +601,10 @@ serve(async (req: Request) => {
           // 2026-09-08.
           //
           // So: refuse only while nothing has moved. Once money HAS moved, stop
-          // taking money out but let the bookkeeping below run, and report the
-          // shortfall as a warning on an otherwise successful refund.
+          // taking money out but let the bookkeeping below run, and report it as
+          // a warning on an otherwise successful refund - `fee_lookup_aborted`,
+          // which the operator DOES still get. Not to be confused with the
+          // margin shortfall, which deliberately no longer reaches them.
           console.error('[refund] could not read charge fee details:', feeErr);
           await supabase.from('refunds')
             .update({ status: 'failed', failure_reason: 'could not read the charge fee details from Stripe' })
