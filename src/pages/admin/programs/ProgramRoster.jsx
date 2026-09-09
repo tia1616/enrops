@@ -16,7 +16,7 @@ import { Link, useParams, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import { dismissalSummary } from "../../../lib/dismissal.js";
 import { roomDisplay } from "../../../lib/roomLabel.js";
-import { sortRosterRows } from "../../../lib/rosterOrder.js";
+import { sortRosterRows, isOnRoster } from "../../../lib/rosterOrder.js";
 import { WAITLIST_STATUS } from "../../../lib/waitlistState.js";
 import { usePermissions } from "../../../lib/permissions.js";
 import WaitingList from "../../../components/WaitingList.jsx";
@@ -140,7 +140,7 @@ export default function ProgramRoster() {
         const { data: regRows, error: rErr } = await supabase
           .from("registrations")
           .select(`
-            id, status, payment_status, authorized_pickup_contacts, custom_field_values,
+            id, status, payment_status, ach_payment_state, authorized_pickup_contacts, custom_field_values,
             photo_release_consent, photo_release_consent_at, registered_at,
             student:students (
               id, first_name, last_name, grade, pronouns, birthdate,
@@ -214,7 +214,9 @@ export default function ProgramRoster() {
     const enr = [];
     let pend = 0;
     for (const r of rows) {
-      if (r.payment_status === "paid" || r.status === "confirmed") enr.push(r);
+      // This screen already had the rule right; it just had its own copy of it.
+      // Now the one definition, so it cannot drift from the list and the portal.
+      if (isOnRoster(r)) enr.push(r);
       else pend += 1;
     }
     // Alphabetical by FIRST name. This was "by last, then first — print/sign-in

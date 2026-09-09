@@ -56,3 +56,40 @@ export function compareRosterRows(a: RosterRow, b: RosterRow): number {
 export function sortRosterRows<T extends RosterRow>(rows: T[] | null | undefined): T[] {
   return [...(rows ?? [])].sort(compareRosterRows);
 }
+
+// WHO IS ON A ROSTER AT ALL - twin of isOnRoster in src/lib/rosterOrder.js; the
+// full reasoning lives there. Four surfaces had hand-written copies of this rule
+// and two more had none, so the seat count said 12 while the screen listed 14.
+//
+//   paid              -> money arrived.
+//   confirmed         -> an operator says the child is in the class. 354 prod
+//                        rows are confirmed-and-unpaid (hand-added, imported,
+//                        comped, school pays off-platform); filtering on payment
+//                        alone would empty real classrooms.
+//   ach 'processing'  -> a bank transfer clearing. Zero rows on either
+//                        environment today, so this clause moves nothing now; it
+//                        is here so the first such family is not dropped off an
+//                        instructor's roster for the three days it settles,
+//                        which is already how registration_holds_seat() treats
+//                        them for capacity.
+//
+// Does NOT replace the cancelled/waitlist filters callers already apply: this
+// answers "has this child got a place", not "is this row live at all".
+export interface RosterMembershipRow {
+  status?: unknown;
+  payment_status?: unknown;
+  ach_payment_state?: unknown;
+}
+
+export function isOnRoster(reg: RosterMembershipRow | null | undefined): boolean {
+  if (!reg) return false;
+  return (
+    reg.payment_status === 'paid' ||
+    reg.status === 'confirmed' ||
+    reg.ach_payment_state === 'processing'
+  );
+}
+
+export function isAwaitingPayment(reg: RosterMembershipRow | null | undefined): boolean {
+  return !!reg && !isOnRoster(reg);
+}

@@ -10,7 +10,7 @@
 // an invisible character - which reads as a random order to the instructor
 // holding the sheet.
 
-import { sortRosterRows, compareRosterRows } from './rosterOrder.js';
+import { sortRosterRows, compareRosterRows, isOnRoster, isAwaitingPayment } from './rosterOrder.js';
 
 let pass = 0, fail = 0;
 function eq(name, actual, expected) {
@@ -149,6 +149,70 @@ eq('sortRosterRows returns a new array and leaves the input alone',
 // The waitlist (waitlist_position) and contacts (sort_order) keep their own
 // meaningful sequences. Nothing to assert here beyond the note: if a future
 // change routes either of those through this comparator, that is the bug.
+
+// --- WHO IS ON THE ROSTER AT ALL ------------------------------------------
+// Every shape below is a real prod or staging row shape, counted 2026-09-09.
+// The two that decide whether this is right or catastrophic are the 354-row
+// confirmed-and-unpaid case (hand-added / imported / comped / school pays
+// off-platform - these are MOST of the roster and must stay) and the ACH case
+// (zero rows on either environment today, so nothing but a test defends it).
+
+const reg = (status, payment_status, ach_payment_state = null) => ({ status, payment_status, ach_payment_state });
+
+eq('paid and confirmed - the ordinary case, 530 non-cancelled prod rows',
+  isOnRoster(reg('confirmed', 'paid')), true);
+eq('CONFIRMED BUT UNPAID STAYS - 354 prod rows: hand-added, imported, comped, school pays',
+  isOnRoster(reg('confirmed', 'unpaid')), true);
+eq('paid but not yet confirmed still has a place - ZERO prod rows today, so only this test defends it',
+  isOnRoster(reg('pending', 'paid')), true);
+eq('ABANDONED CHECKOUT IS NOT ON THE ROSTER - the 16 prod rows this change hides',
+  isOnRoster(reg('pending', 'unpaid')), false);
+eq('a bank transfer still clearing keeps its place (zero rows today; this test is the only thing holding it)',
+  isOnRoster(reg('pending', 'unpaid', 'processing')), true);
+eq('an ACH transfer that FAILED does not keep a place',
+  isOnRoster(reg('pending', 'unpaid', 'failed')), false);
+eq('refunded but still confirmed stays - the operator decides who is in the room, not the money',
+  isOnRoster(reg('confirmed', 'refunded')), true);
+eq('partially refunded and confirmed stays',
+  isOnRoster(reg('confirmed', 'partial')), true);
+
+// NOT this function's job: cancelled and waitlist are filtered by each caller's
+// own query. Pinned so nobody "fixes" isOnRoster by folding them in and quietly
+// changes what those four callers already exclude for their own reasons.
+eq('a cancelled-but-paid row is still ON by this rule (callers drop it themselves)',
+  isOnRoster(reg('cancelled', 'paid')), true);
+
+eq('null and undefined are not on any roster',
+  [isOnRoster(null), isOnRoster(undefined)], [false, false]);
+eq('a row missing the payment fields entirely is not on the roster (fails closed)',
+  isOnRoster({ id: 'x' }), false);
+
+// THE SELECT-MISMATCH TRAP (recurring finding vi): if a caller forgets
+// ach_payment_state in its .select(), the column arrives undefined and the ACH
+// clause silently never fires. Pinned here so the failure is at least
+// documented and fails CLOSED; the real defence is the four selects.
+eq('an ACH row whose caller forgot to select the column reads as not-on-roster',
+  isOnRoster({ status: 'pending', payment_status: 'unpaid' }), false);
+
+// THE CANCELLED LEAK, caught in self-review before this shipped. isAwaitingPayment
+// answers a question about MONEY, so a CANCELLED-and-unpaid row is "awaiting
+// payment" by this predicate and must be excluded by the CALLER. 87 prod rows are
+// cancelled-and-unpaid (39 of them on camp rosters, which render cancelled
+// registrations on purpose) against 16 genuinely abandoned checkouts - so a caller
+// that forgets this filter builds a section that is mostly wrong, telling an
+// operator that refunded families "started checkout and never paid".
+// Rosters.jsx does the excluding, via isCancelledReg. Pinned here so the shared
+// contract stays explicit rather than remembered.
+eq('a cancelled unpaid row reads as awaiting payment - the CALLER must exclude it',
+  isAwaitingPayment(reg('cancelled', 'unpaid')), true);
+eq('...and it is not on the roster either, so it cannot leak into the enrolled list',
+  isOnRoster(reg('cancelled', 'unpaid')), false);
+
+eq('isAwaitingPayment is the exact complement',
+  [isAwaitingPayment(reg('pending', 'unpaid')), isAwaitingPayment(reg('confirmed', 'unpaid'))],
+  [true, false]);
+eq('isAwaitingPayment on a missing row is false - nothing is not a family',
+  [isAwaitingPayment(null), isAwaitingPayment(undefined)], [false, false]);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

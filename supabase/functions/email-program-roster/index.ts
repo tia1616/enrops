@@ -21,7 +21,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { PDFDocument, StandardFonts, rgb } from 'https://esm.sh/pdf-lib@1.17.1';
 import { loadOrgBrand, renderSignatureBlock, formatFromAddress } from '../_shared/orgBrand.ts';
 import { roomDisplay } from '../_shared/roomLabel.ts';
-import { sortRosterRows } from '../_shared/rosterOrder.ts';
+import { sortRosterRows, isOnRoster } from '../_shared/rosterOrder.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -194,7 +194,7 @@ serve(async (req: Request) => {
     const { data: regs, error: regErr } = await supabase
       .from('registrations')
       .select(`
-        id, status, payment_status, authorized_pickup_contacts, registered_at,
+        id, status, payment_status, ach_payment_state, authorized_pickup_contacts, registered_at,
         student:students ( id, first_name, last_name, grade, birthdate, pronouns,
                            homeroom_teacher,
                            emergency_contact_name, emergency_contact_phone ),
@@ -209,7 +209,10 @@ serve(async (req: Request) => {
     // it and the screen they checked it against must not disagree. Until
     // 2026-09-01 this was a verbatim second copy of a last-name-first sort.
     const students = sortRosterRows(
-      (regs ?? []).filter((r: any) => r.student && (r.payment_status === 'paid' || r.status === 'confirmed')),
+      // This PDF was the surface that already got membership right, and its
+      // hand-written copy of the rule is what the screens are now matched to.
+      // Calling the shared function keeps that true in both directions.
+      (regs ?? []).filter((r: any) => r.student && isOnRoster(r)),
     );
 
     // Instructor(s): mirror the camp pattern (camp_assignments) — afterschool
