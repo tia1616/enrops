@@ -16,7 +16,7 @@ import { Link, useParams, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import { dismissalSummary } from "../../../lib/dismissal.js";
 import { roomDisplay } from "../../../lib/roomLabel.js";
-import { sortRosterRows } from "../../../lib/rosterOrder.js";
+import { sortRosterRows, isOnRoster } from "../../../lib/rosterOrder.js";
 import { WAITLIST_STATUS } from "../../../lib/waitlistState.js";
 import { usePermissions } from "../../../lib/permissions.js";
 import WaitingList from "../../../components/WaitingList.jsx";
@@ -140,7 +140,7 @@ export default function ProgramRoster() {
         const { data: regRows, error: rErr } = await supabase
           .from("registrations")
           .select(`
-            id, status, payment_status, authorized_pickup_contacts, custom_field_values,
+            id, status, payment_status, ach_payment_state, authorized_pickup_contacts, custom_field_values,
             photo_release_consent, photo_release_consent_at, registered_at,
             student:students (
               id, first_name, last_name, grade, pronouns, birthdate,
@@ -214,8 +214,22 @@ export default function ProgramRoster() {
     const enr = [];
     let pend = 0;
     for (const r of rows) {
-      if (r.payment_status === "paid" || r.status === "confirmed") enr.push(r);
-      else pend += 1;
+      // This screen already had the rule right; it just had its own copy of it.
+      // Now the one definition, so it cannot drift from the list and the portal.
+      if (isOnRoster(r)) enr.push(r);
+      // PENDING MEANS A CHECKOUT IN FLIGHT, NOT "ANYTHING ELSE". The else-branch
+      // used to sweep up cancelled rows too and label them "pending checkouts":
+      // the query filters cancelled_at IS NULL but not status='cancelled', and
+      // prod carries 5 rows with the status and no timestamp. An operator
+      // chasing "+3 pending checkouts" would find fewer than three, or none.
+      // Same proxy-predicate mistake as the one caught in Rosters.jsx - the
+      // condition has to mean what the label claims, not merely correlate.
+      //
+      // Only the STATUS is tested, deliberately: the query above already filters
+      // cancelled_at IS NULL, and cancelled_at is not in its .select(), so
+      // reading it here would test undefined and pass for every row - a check
+      // that looks like a guard and is not one.
+      else if (r.status !== "cancelled") pend += 1;
     }
     // Alphabetical by FIRST name. This was "by last, then first — print/sign-in
     // friendly" until 2026-09-01; Jeff asked for first name across every roster
@@ -412,6 +426,7 @@ export default function ProgramRoster() {
           onClose={() => setShowInvite(false)}
         />
       )}
+
     </div>
   );
 }

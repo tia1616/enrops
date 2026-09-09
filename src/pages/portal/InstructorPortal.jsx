@@ -16,7 +16,7 @@ import {
 import PortalSwitcher from "../../components/PortalSwitcher.jsx";
 import { displayFirstName } from "../../lib/instructorName";
 import { roomDisplay } from "../../lib/roomLabel.js";
-import { sortRosterRows } from "../../lib/rosterOrder.js";
+import { sortRosterRows, isOnRoster } from "../../lib/rosterOrder.js";
 import { avatarUrl } from "../../lib/avatars";
 import InstructorAvailabilityForm from "./InstructorAvailabilityForm.jsx";
 import AfterschoolAvailabilityForm from "./AfterschoolAvailabilityForm.jsx";
@@ -3857,6 +3857,10 @@ const prettyDay = (dateStr) =>
 
 function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = "camper", instructorId, organizationId, sessionDates = [], lockedDate = null }) {
   const [rows, setRows] = useState(null); // null = loading
+  // Live rows the query returned BEFORE the paid-or-confirmed filter. Only ever
+  // used to distinguish "nobody registered" from "everybody who registered
+  // abandoned checkout" in the empty state - never rendered as a roster.
+  const [allRowCount, setAllRowCount] = useState(null);
   const [contactsByStudent, setContactsByStudent] = useState({}); // { [student_id]: [student_contacts row] }
   const [err, setErr] = useState("");
 
@@ -4036,7 +4040,7 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
         const { data, error } = await supabase
           .from("registrations")
           .select(`
-            id, status, payment_status, registered_at, notes,
+            id, status, payment_status, ach_payment_state, registered_at, notes,
             authorized_pickup_contacts, photo_release_consent, custom_field_values,
             student:students (
               id, first_name, last_name, grade, birthdate, pronouns, homeroom_teacher,
@@ -4064,14 +4068,35 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
           console.error("[RosterSection] load failed", error);
           setErr("Couldn't load the roster. Refresh to try again.");
           setRows([]);
+          // Clear alongside rows: a stale count from a previous successful load
+          // would make the empty state claim hidden unpaid children in a roster
+          // that simply failed to load.
+          setAllRowCount(null);
           return;
         }
+        // A CHILD NOBODY HAS PAID FOR IS NOT IN THIS CLASS. The emailed PDF has
+        // filtered on paid-or-confirmed since it was written; this screen never
+        // did, so the two disagreed - in the one place the comment below
+        // promises they match. An instructor standing in the room would count
+        // heads against a name that was only ever an abandoned checkout, then
+        // go looking for a child who was never coming.
+        //
+        // isOnRoster is that same rule, now shared (src/lib/rosterOrder.js and
+        // its Deno twin, which email-program-roster imports). Deliberately AFTER
+        // the cancelled/waitlist filters in the query rather than folded into
+        // them: those say the row is dead, this says the child has no place.
+        const withPlace = (data ?? []).filter(isOnRoster);
+        // How many live rows the query returned before the payment filter, so
+        // the empty state can tell "nobody has registered" apart from "everyone
+        // who registered abandoned checkout". Never rendered as a roster - the
+        // whole point is that these children are not in the room.
+        setAllRowCount((data ?? []).length);
         // Alphabetical by FIRST name, not the registration order this showed
         // until 2026-09-01. Jeff asked for it specifically "including instructor
         // portal", and this is the screen an instructor reads standing in front
         // of the class, so it must match the emailed PDF exactly - both now go
         // through src/lib/rosterOrder.js and its Deno twin.
-        setRows(sortRosterRows(data));
+        setRows(sortRosterRows(withPlace));
 
         // Pull the structured contacts (guardians / authorized pickup / do-not-
         // release / etc.) for these students. Instructors DO receive do_not_release
@@ -4095,6 +4120,7 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
           console.error("[RosterSection] load failed", e);
           setErr("Couldn't load the roster.");
           setRows([]);
+          setAllRowCount(null);
         }
       }
     })();
@@ -4103,6 +4129,17 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
 
   const aggregateCount = typeof enrollment === "number" ? enrollment : null;
   const startTxt = startsOn ? fmtShort(startsOn) : null;
+  // "THE ROSTER IS COMING LATER" AND "THE ROSTER IS EMPTY" ARE DIFFERENT
+  // SENTENCES, and until the paid-or-confirmed filter landed only the first was
+  // reachable: an empty `rows` meant the class had no registrations at all.
+  // Now a class can have registrations and still show none, because every one
+  // of them is an abandoned checkout - and in that state telling an instructor
+  // the roster "lands here closer to your start date" is simply false. It is
+  // here; nobody paid. Tracked separately from rows.length so the empty branch
+  // below can say which kind of empty this is.
+  const hiddenUnpaid = allRowCount !== null && rows !== null
+    ? Math.max(0, allRowCount - rows.length)
+    : 0;
 
   return (
     <Section title="Roster">
@@ -4117,7 +4154,27 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
           <div style={{ color: MUTED, fontSize: 13 }}>Loading roster…</div>
         )}
 
-        {rows !== null && rows.length === 0 && !err && (
+        {/* EMPTY BECAUSE EVERYONE ABANDONED CHECKOUT. Its own branch, because the
+            one below it promises a roster that is still on its way, and here it
+            has already arrived - it is empty, and it will stay empty until
+            somebody pays. Newly reachable as of the paid-or-confirmed filter;
+            before that these children were listed, with every safety field blank
+            because the checkout never collected them.
+            Deliberately says nothing about payment: who has and has not paid is
+            the operator's business, not the instructor's, and an instructor can
+            do nothing with the number anyway. They need one fact - there is
+            nobody to teach yet. */}
+        {rows !== null && rows.length === 0 && hiddenUnpaid > 0 && !err && (
+          <div style={{ color: INK, fontSize: 14, lineHeight: 1.5 }}>
+            <div>Nobody is enrolled in this class yet.</div>
+            <div style={{ color: MUTED, fontSize: 13, marginTop: 6 }}>
+              Names, ages, allergies and emergency contacts appear here as families
+              complete their registration.
+            </div>
+          </div>
+        )}
+
+        {rows !== null && rows.length === 0 && hiddenUnpaid === 0 && !err && (
           <div style={{ color: INK, fontSize: 14, lineHeight: 1.5 }}>
             {aggregateCount !== null ? (
               <div>

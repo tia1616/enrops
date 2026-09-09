@@ -25,8 +25,9 @@ import {
 import { parseRegFields } from "../../lib/registrationFields.js";
 import { sortRosterPrograms, filterRosterPrograms } from "./rosterSearch.js";
 // rosterSearch orders the LIST OF CLASSES; rosterOrder orders the CHILDREN
-// inside one of them. Two different questions, hence two modules.
-import { sortRosterRows } from "../../lib/rosterOrder.js";
+// inside one of them, and says which of them belong there at all. Two
+// different questions, hence two modules.
+import { sortRosterRows, isOnRoster } from "../../lib/rosterOrder.js";
 import { usePermissions } from "../../lib/permissions.js";
 import { requireWritten, isWriteRefused } from "../../lib/writeGuard.js";
 import { WAITLIST_STATUS } from "../../lib/waitlistState.js";
@@ -426,6 +427,16 @@ function CampRow({ camp, onUpload, onEmail, orgId, onRosterChanged, canManage })
   );
 }
 
+// A REGISTRATION ROW THAT IS NO LONGER LIVE. Was written out inline inside
+// CamperEditableRow and needed a second time by the awaiting-payment split, so
+// it is one function rather than two spellings (gate H).
+//
+// BOTH halves matter. `status='cancelled'` and a non-null `cancelled_at` do not
+// always travel together: prod carries 5 rows with the status and no timestamp,
+// which is exactly why the query's `.is("cancelled_at", null)` filter alone does
+// not catch them.
+const isCancelledReg = (r) => !!r?.cancelled_at || r?.status === "cancelled";
+
 // target = { column: 'camp_session_id' | 'program_id', id }. Shared by the
 // camp roster and the afterschool program roster so both edit through one
 // implementation. excludeCancelled hides cancelled registrations (programs do;
@@ -460,6 +471,7 @@ function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled
       .select(`
         id, status, notes, authorized_pickup_contacts, photo_release_consent, custom_field_values,
         payment_status, amount_cents, stripe_payment_intent_id, organization_id, cancelled_at,
+        ach_payment_state,
         student:students (
           id, first_name, last_name, grade, birthdate, pronouns,
           allergies, dietary_restrictions, medical_notes, medical_conditions,
@@ -485,12 +497,43 @@ function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled
       setCampers([]);
       return;
     }
+    // A CHILD WHOSE CHECKOUT NEVER COMPLETED IS NOT ON THE ROSTER. Until
+    // 2026-09-09 this list applied no payment test at all, so an abandoned
+    // Stripe session rendered as an ordinary roster row - same weight, same
+    // controls, indistinguishable from a paid child except that its button read
+    // "Remove" instead of "Refund". That is how an Irvington class showed 14
+    // children against a seat count of 12, and how a school went hunting for a
+    // fee to pay on a registration that had never been paid for.
+    //
+    // isOnRoster is the same rule the seat count below, the per-program roster,
+    // the instructor portal and the emailed PDF all use - it was written out by
+    // hand in four places and missing from two. Kept separate from the
+    // cancelled/waitlist filters on the query above: those decide whether the
+    // ROW is live, this decides whether the CHILD has a place.
+    // A CHILD NOBODY HAS PAID FOR IS SIMPLY NOT HERE. No section, no count, no
+    // names. Jessica, 2026-09-09, on an earlier version of this that listed them
+    // below the roster: "why display pending at all, with names and all... I
+    // don't see why it's useful." She is right, and it is not what other
+    // enrichment platforms do - an incomplete checkout belongs in an
+    // abandoned-cart report, not on the roster beside real children and their
+    // allergy notes. The abandoned-registration automation is what chases these
+    // families, and the seat releases itself; neither job needs a roster row.
+    //
+    // CANCELLED IS A DIFFERENT ANSWER FROM UNPAID and keeps its place. Camps
+    // pass no excludeCancelled ("camps show everything") and CamperEditableRow
+    // has badge copy written for exactly these rows ("Cancelled - Refunded",
+    // "Cancelled - Partial refund"); 39 of them are on prod. An earlier version
+    // of this filter dropped them and did it arbitrarily, since a cancelled row
+    // that happened to be PAID still passed isOnRoster - so some cancelled
+    // campers stayed and others vanished on a payment status nobody was looking
+    // at. They render exactly as they always have.
+    const withPlace = (data ?? []).filter((r) => isOnRoster(r) || isCancelledReg(r));
     // Alphabetical by FIRST name, not the registration order this list showed
     // until 2026-09-01 (Jeff's ask, Jessica's call - see src/lib/rosterOrder.js).
     // The .order() above stays as the query's own deterministic base order; this
     // row shape does NOT select registered_at, so the shared comparator's last
     // tiebreak is the registration id.
-    setCampers(sortRosterRows(data));
+    setCampers(sortRosterRows(withPlace));
 
     // Structured contacts (guardians / pickup / do-not-release). do_not_release is
     // RLS-gated to org editors, so view-only users just don't receive those rows.
@@ -609,6 +652,7 @@ function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled
           ))}
         </div>
       )}
+
     </div>
   );
 }
@@ -660,7 +704,7 @@ function CamperEditableRow({ registration, contacts = [], contactsLoaded = false
   // A registration has money on it once it's paid or carries a Stripe charge.
   // Those can't be hard-deleted (Remove refuses them) — they're refunded instead.
   const hasPayment = registration.payment_status === "paid" || !!registration.stripe_payment_intent_id;
-  const isCancelled = !!registration.cancelled_at || registration.status === "cancelled";
+  const isCancelled = isCancelledReg(registration);
   const payStatus = registration.payment_status;
   // Small status pill: cancelled regs still show on camp rosters, so label them.
   const badge = isCancelled
@@ -2306,12 +2350,15 @@ function AfterschoolRostersSection({ org, canEdit }) {
         if (ids.length > 0) {
           const { data: regs } = await supabase
             .from("registrations")
-            .select("program_id, status, payment_status")
+            .select("program_id, status, payment_status, ach_payment_state")
             .in("program_id", ids)
             .neq("status", WAITLIST_STATUS)
             .is("cancelled_at", null);
           for (const r of regs ?? []) {
-            if (r.payment_status === "paid" || r.status === "confirmed") {
+            // Was a fourth hand-written copy of "paid or confirmed". This count
+            // and the roster list it labels must move together or the screen
+            // contradicts itself again, so both now call the one function.
+            if (isOnRoster(r)) {
               counts.set(r.program_id, (counts.get(r.program_id) ?? 0) + 1);
             }
           }
@@ -2341,16 +2388,18 @@ function AfterschoolRostersSection({ org, canEdit }) {
     return () => { cancelled = true; };
   }, [org?.id, term]);
 
-  // Re-count one program's enrolled (paid OR confirmed) after an edit/import.
+  // Re-count one program's enrolled after an edit/import. Same isOnRoster rule
+  // as the initial count above and the roster list itself - three readers, one
+  // definition, so a re-count after an edit cannot disagree with the first load.
   function refreshProgramCount(programId, bump = 0) {
     supabase
       .from("registrations")
-      .select("status, payment_status")
+      .select("status, payment_status, ach_payment_state")
       .eq("program_id", programId)
       .neq("status", WAITLIST_STATUS)
       .is("cancelled_at", null)
       .then(({ data }) => {
-        const n = (data ?? []).filter((r) => r.payment_status === "paid" || r.status === "confirmed").length;
+        const n = (data ?? []).filter(isOnRoster).length;
         setPrograms((ps) => (ps ?? []).map((p) => p.id === programId ? { ...p, enrolled: n, refresh_token: (p.refresh_token || 0) + bump } : p));
       });
   }
