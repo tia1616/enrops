@@ -4159,14 +4159,17 @@ function RosterSection({ campSessionId, programId, enrollment, startsOn, noun = 
             has already arrived - it is empty, and it will stay empty until
             somebody pays. Newly reachable as of the paid-or-confirmed filter;
             before that these children were listed, with every safety field blank
-            because the checkout never collected them. */}
+            because the checkout never collected them.
+            Deliberately says nothing about payment: who has and has not paid is
+            the operator's business, not the instructor's, and an instructor can
+            do nothing with the number anyway. They need one fact - there is
+            nobody to teach yet. */}
         {rows !== null && rows.length === 0 && hiddenUnpaid > 0 && !err && (
           <div style={{ color: INK, fontSize: 14, lineHeight: 1.5 }}>
             <div>Nobody is enrolled in this class yet.</div>
             <div style={{ color: MUTED, fontSize: 13, marginTop: 6 }}>
-              {hiddenUnpaid === 1 ? "One family has" : `${hiddenUnpaid} families have`} started
-              signing up without finishing payment, so they are not on your roster.
-              Your admin can see them.
+              Names, ages, allergies and emergency contacts appear here as families
+              complete their registration.
             </div>
           </div>
         )}

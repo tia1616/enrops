@@ -89,7 +89,3 @@ export function isOnRoster(reg: RosterMembershipRow | null | undefined): boolean
     reg.ach_payment_state === 'processing'
   );
 }
-
-export function isAwaitingPayment(reg: RosterMembershipRow | null | undefined): boolean {
-  return !!reg && !isOnRoster(reg);
-}

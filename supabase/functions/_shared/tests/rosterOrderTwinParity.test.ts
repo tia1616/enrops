@@ -128,8 +128,8 @@ Deno.test('the shared rule still folds case and still puts blanks last', () => {
 // what order to print them in. A drift here is worse than a drift in the sort -
 // the paper roster and the screen would list different children.
 Deno.test('the two copies agree on who is on a roster', async () => {
-  const { isOnRoster: edgeOn, isAwaitingPayment: edgeAwait } = await import('../rosterOrder.ts');
-  const { isOnRoster: webOn, isAwaitingPayment: webAwait } = await import(WEB.href);
+  const { isOnRoster: edgeOn } = await import('../rosterOrder.ts');
+  const { isOnRoster: webOn } = await import(WEB.href);
 
   const CASES: Array<[string, unknown]> = [
     ['paid + confirmed', { status: 'confirmed', payment_status: 'paid' }],
@@ -147,7 +147,6 @@ Deno.test('the two copies agree on who is on a roster', async () => {
 
   for (const [label, row] of CASES) {
     assertEquals(edgeOn(row as never), webOn(row), `isOnRoster disagrees on: ${label}`);
-    assertEquals(edgeAwait(row as never), webAwait(row), `isAwaitingPayment disagrees on: ${label}`);
   }
 
   // A loop over two functions that both return undefined would pass while

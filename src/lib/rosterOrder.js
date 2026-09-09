@@ -141,9 +141,3 @@ export function isOnRoster(reg) {
   );
 }
 
-// The complement, for the surfaces that COUNT what they are hiding rather than
-// dropping it silently. A roster that quietly shrinks from 14 to 12 is its own
-// support ticket; "2 unpaid, not shown" is an answer.
-export function isAwaitingPayment(reg) {
-  return !!reg && !isOnRoster(reg);
-}
