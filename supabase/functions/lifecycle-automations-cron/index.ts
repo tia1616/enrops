@@ -67,6 +67,7 @@ import {
 } from "./welcomeWindow.ts";
 import { venueLabel } from "../_shared/roomLabel.ts";
 import { runWaitlistSweep } from "./waitlistSweep.ts";
+import { offeringIdOf, buildResolvedIndex, isGenuinelyAbandoned } from "./abandonedSuppression.ts";
 import { abandonedResumeUrl } from "./abandonedResumeUrl.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -2344,11 +2345,21 @@ function makeReviewEntry(p: {
 }
 
 // ─── Abandoned registration ─────────────────────────────────────────────────
+//
+// A stale `pending` row is not proof of an abandoned signup: a parent who drops
+// off at checkout and then comes back and registers properly leaves the first
+// attempt behind forever, and this resolver used to mail those parents "you
+// almost signed up" after they had already paid. The rule for telling a real
+// abandonment from that leftover — and the reasoning behind matching per child
+// on a normalised name rather than on student_id — lives in
+// ./abandonedSuppression.ts, which is unit-tested there.
+//
+// Verified against prod before shipping: of 12 pending rows, 8 are leftovers
+// this suppresses and 4 are genuine abandonments that still get the nudge.
 async function resolveAbandonedAudience(supabase: SupabaseClient, a: AutomationRow): Promise<AudienceEntry[]> {
   const hours = pickNumber(a.timing_override?.hours_after_pending, a.template.default_timing?.hours_after_pending, 24);
   const cutoff = new Date(Date.now() - hours * 3600000).toISOString();
   const oldestAcceptable = new Date(Date.now() - 7 * 24 * 3600000).toISOString();
-  const nextTermAvailable = await hasFutureProgramsForOrg(supabase, a.organization_id);
 
   // Don't chase pending registrations older than 7 days — those are rotten leads.
   const { data, error } = await supabase
@@ -2367,8 +2378,42 @@ async function resolveAbandonedAudience(supabase: SupabaseClient, a: AutomationR
 
   if (error) throw error;
 
-  return (data ?? [])
-    .filter((r: any) => r.parents?.email)
+  // Needs a reachable parent AND an offering to compare against. The offering
+  // check drops nothing today (prod and staging both hold zero registrations
+  // attached to neither a program nor a camp session) — it is here so that a
+  // row we cannot match is never mailed on the assumption it is unfinished.
+  const pending = (data ?? []).filter((r: any) => r.parents?.email && offeringIdOf(r));
+
+  // Dormant-safe: no stale pending rows means no further queries. Most ticks
+  // land here — every enabled org runs this daily and the window is usually
+  // empty — so nothing below may execute before this return.
+  if (pending.length === 0) return [];
+
+  // Only needed to render the cross-sell block on an entry we are actually
+  // going to build, so it sits below the dormant return rather than above it.
+  const nextTermAvailable = await hasFutureProgramsForOrg(supabase, a.organization_id);
+
+  // Which of these parents already resolved this offering? Scoped to the
+  // parents actually in play (a handful) rather than the org's whole
+  // registration history, so this stays cheap as a tenant grows.
+  const parentIds = Array.from(new Set(pending.map((r: any) => r.parents.id)));
+  const { data: resolvedRows, error: resolvedErr } = await supabase
+    .from("registrations")
+    .select("parent_id, program_id, camp_session_id, students ( first_name )")
+    .eq("organization_id", a.organization_id)
+    .in("parent_id", parentIds)
+    .neq("status", "pending");
+
+  // Fail CLOSED. If we cannot prove who already converted we must not guess:
+  // sending is the irreversible half, and a wrongly-sent "you never finished"
+  // to a family that paid is exactly the damage this resolver exists to avoid.
+  // Throwing skips this automation for the tick and the cron retries.
+  if (resolvedErr) throw resolvedErr;
+
+  const resolvedIndex = buildResolvedIndex(resolvedRows ?? []);
+
+  return pending
+    .filter((r: any) => isGenuinelyAbandoned(r, resolvedIndex))
     .map((r: any) => ({
       context_key: `registration:${r.id}`,
       parent_id: r.parents.id,
