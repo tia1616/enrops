@@ -500,8 +500,15 @@ serve(async (req: Request) => {
     }> = [];
     // Application-fee refunds that did NOT go through, on refunds that DID. The
     // family is refunded either way; this is money still owed back to the
-    // provider. Reported as a warning on a successful response rather than
-    // aborting the refund - see the catch around applicationFees.createRefund.
+    // provider, and the refund is NOT aborted over it - see the catch around
+    // applicationFees.createRefund.
+    //
+    // NOT in the response any more, and deliberately: the operator cannot refund
+    // an application fee, so telling them names a task for the one person unable
+    // to do it (see the response builder at the end of this file). The durable
+    // record is the `refunds` row. This array is what the platform-side log below
+    // reads, so enrops can see a shortfall without running a query - keep it
+    // populated even though no caller receives it.
     const marginShortfalls: Array<{
       stripe_refund_id: string | null;
       application_fee_id: string;
@@ -697,8 +704,9 @@ serve(async (req: Request) => {
             // platform's Stripe balance was too low to return the application
             // fee - and it must not be able to corrupt the registration record.
             //
-            // The margin shortfall is real and is still reported, but as a
-            // WARNING on a successful refund rather than as a failure of it.
+            // The margin shortfall is real and is still RECORDED - on the
+            // `refunds` row below, and in the platform-side log after the walk.
+            // It is not returned to the operator; see the response builder.
             marginShortfalls.push({
               stripe_refund_id: stripeRefund.id,
               application_fee_id: applicationFeeId,
@@ -974,6 +982,30 @@ serve(async (req: Request) => {
     } catch (receiptErr) {
       console.error('[refund] receipt failed (refund itself is fine):', receiptErr);
       receipt = { sent: false, reason: (receiptErr as Error).message };
+    }
+
+    // PLATFORM-SIDE record of margin we could not return. This is the half of
+    // the 2026-09-08 change that faces US rather than the operator: the popup
+    // that told Jeff about the platform's balance is gone, and without this the
+    // only way to find a shortfall is to know to go looking in the `refunds`
+    // table. console.error puts it in the function logs, which enrops can read
+    // and an operator cannot, so the audience is right in a way the response
+    // never was.
+    //
+    // NOT the alert. A log is discoverable, not delivered; nobody is paged by
+    // it. The real channel is _shared/operatorFlagAlert.ts + the
+    // refund_watch_alerts setting, and that is still the follow-up. This exists
+    // so the window between the two is not silent.
+    if (marginShortfalls.length > 0) {
+      const owed = marginShortfalls.reduce((n, m) => n + m.margin_owed_cents, 0);
+      console.error(
+        `[refund] MARGIN NOT RETURNED: ${owed}c owed to org ${reg.organization_id} ` +
+          `across ${marginShortfalls.length} refund(s). Needs a manual application-fee ` +
+          `refund in Stripe once the platform balance covers it. ` +
+          marginShortfalls
+            .map((m) => `${m.application_fee_id}=${m.margin_owed_cents}c (${m.reason})`)
+            .join('; '),
+      );
     }
 
     // v4 section 8 items 3-4, the review ask and the referral ask, USED TO FIRE
