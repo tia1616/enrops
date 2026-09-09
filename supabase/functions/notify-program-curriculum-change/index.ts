@@ -44,6 +44,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 import { groupFamilyRecipients, rowsToRegistrationShape } from '../_shared/familyRecipients.ts';
+import { venueLabel } from '../_shared/roomLabel.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -79,9 +80,14 @@ function fmtTime(t: string | null | undefined): string {
   return mm === 0 ? `${h12}${ampm}` : `${h12}:${String(mm).padStart(2, '0')}${ampm}`;
 }
 
+// This is the second copy of the same sentence a family reads about the same
+// class - notify-program-families has the other. They must agree, so both go
+// through venueLabel; a room here and no room there is the divergence the
+// shared helper exists to prevent.
 function describeProgram(p: any): string {
   const parts: string[] = [];
-  if (p.program_locations?.name) parts.push(p.program_locations.name);
+  const where = venueLabel(p.program_locations?.name, p.room, p.program_locations?.room_number);
+  if (where) parts.push(where);
   if (p.day_of_week) parts.push(DAY_LABELS[p.day_of_week.toLowerCase()] ?? p.day_of_week);
   if (p.start_time) parts.push(fmtTime(p.start_time));
   return parts.join(' · ');
@@ -178,8 +184,8 @@ serve(async (req: Request) => {
       .from('programs')
       .select(`
         id, organization_id, curriculum, curriculum_id,
-        day_of_week, start_time, end_time,
-        program_locations (id, name)
+        day_of_week, start_time, end_time, room,
+        program_locations (id, name, room_number)
       `)
       .eq('id', programId)
       .maybeSingle();
@@ -224,7 +230,11 @@ serve(async (req: Request) => {
     const programDay = program.day_of_week
       ? (DAY_LABELS[program.day_of_week.toLowerCase()] ?? program.day_of_week)
       : 'weekly';
-    const programLocation = (program as any).program_locations?.name ?? 'your school';
+    const programLocation = venueLabel(
+      (program as any).program_locations?.name,
+      (program as any).room,
+      (program as any).program_locations?.room_number,
+    ) ?? 'your school';
 
     // ── Load registrations + parents (for family fan-out). ───────────────
     // Per the prompt: every non-cancelled registration on this program.

@@ -6,6 +6,7 @@ import { getTenant } from '../../lib/tenants.js';
 import { formatTermLabel } from '../../lib/terms.js';
 import { getUserRoles } from '../../lib/useUserRoles.js';
 import { renderWaiverText } from '../../lib/waiverText.js';
+import { venueLabel } from '../../lib/roomLabel.js';
 import { dismissalAnswerIncomplete, dismissalSummary } from '../../lib/dismissal.js';
 import { earlyReleaseLine } from '../../lib/timeText.js';
 import WaiverGate from './WaiverGate.jsx';
@@ -244,8 +245,8 @@ export default function Dashboard() {
           students(id, first_name, last_name, dismissal_method, aftercare_provider),
           programs(
             id, curriculum, curriculum_id, day_of_week, start_time, end_time,
-            first_session_date, term, session_count,
-            program_locations(name, arrival_instructions, dismissal_instructions),
+            first_session_date, term, session_count, room,
+            program_locations(name, parent_arrival_instructions, parent_dismissal_instructions, room_number),
             curricula(id, name, skills_overall,
               curriculum_sessions(session_number, title, description, skills_practiced, parent_engagement_question)
             )
@@ -270,6 +271,7 @@ export default function Dashboard() {
           camp_sessions(
             id, curriculum_name, curriculum_id, location_name,
             starts_on, ends_on, start_time, end_time, session_type, week_num,
+            program_locations(room_number),
             curricula(id, name, skills_overall,
               curriculum_sessions(session_number, title, description, skills_practiced, parent_engagement_question)
             )
@@ -356,9 +358,23 @@ export default function Dashboard() {
           id: r.id, type: 'afterschool',
           student: r.students,
           name: pr?.curriculum || 'Class',
-          location: pr?.program_locations?.name,
-          arrival: pr?.program_locations?.arrival_instructions,
-          dismissal: pr?.program_locations?.dismissal_instructions,
+          // Parents kept emailing to ask which room, because the room was typed
+          // on the class and read by instructors and rosters but by nothing the
+          // family could see. venueLabel owns both the class-beats-site
+          // precedence and the separator, shared with the three family emails.
+          venue: venueLabel(
+            pr?.program_locations?.name,
+            pr?.room,
+            pr?.program_locations?.room_number,
+          ),
+          // The PARENT-safe instructions, never the instructor-facing pair this
+          // page used to read. Those hold staff logistics and door codes - "get
+          // the orange binder from Annie", "the instructor should be here by
+          // 2:15" - and this screen was showing them to families. Every site on
+          // prod that has instructor text also has parent text (53 and 53,
+          // checked 2026-09-09), so nothing goes blank in the swap.
+          arrival: pr?.program_locations?.parent_arrival_instructions,
+          dismissal: pr?.program_locations?.parent_dismissal_instructions,
           day: pr?.day_of_week,
           startTime: pr?.start_time, endTime: pr?.end_time,
           term: pr?.term, firstDate: pr?.first_session_date,
@@ -386,7 +402,15 @@ export default function Dashboard() {
           id: r.id, type: 'camp',
           student: r.students,
           name: cs?.curriculum_name || cur?.name || 'Camp',
-          location: cs?.location_name,
+          // A camp has no room of its own yet, so the SITE room is its only
+          // source - that is the camp case, class room null. The site name
+          // still comes from the denormalized location_name, which is what this
+          // surface has always shown.
+          venue: venueLabel(
+            cs?.location_name,
+            null,
+            cs?.program_locations?.room_number,
+          ),
           day: null,
           startTime: cs?.start_time, endTime: cs?.end_time,
           term: 'SU26', firstDate: cs?.starts_on, lastDate: cs?.ends_on,
@@ -726,7 +750,7 @@ function TodayCard({ enrollment: e }) {
           <span className="shrink-0 rounded-full bg-j2s-green/10 px-2.5 py-1 text-xs font-bold text-j2s-green-dark">Today</span>
         </div>
         <p className="mt-1 text-sm text-j2s-ink/60">
-          {e.student?.first_name} &middot; {e.name}{e.location ? ` at ${e.location}` : ''}
+          {e.student?.first_name} &middot; {e.name}{e.venue ? ` at ${e.venue}` : ''}
         </p>
         {s?.description && <p className="mt-3 text-sm leading-relaxed text-j2s-ink/70">{s.description}</p>}
         {s?.skills_practiced?.length > 0 && (
@@ -776,7 +800,7 @@ function ScheduleTab({ enrollments }) {
           </SectionLabel>
           <p className="mt-0.5 text-xs text-j2s-ink/60">
             {e.day}s {fmtTime(e.startTime)}{e.endTime ? `–${fmtTime(e.endTime)}` : ''}
-            {e.location ? ` at ${e.location}` : ''}
+            {e.venue ? ` at ${e.venue}` : ''}
           </p>
 
           {(e.sessionSchedule?.length > 0 || e.sessionDates.length > 0) ? (
@@ -884,7 +908,7 @@ function ScheduleTab({ enrollments }) {
             <div key={e.id} className="rounded-2xl border border-j2s-purple/10 bg-white p-4 shadow-card">
               <p className="text-sm font-semibold text-j2s-ink">{e.name}</p>
               <p className="mt-0.5 text-xs text-j2s-ink/50">
-                {e.student?.first_name}{e.location ? ` · ${e.location}` : ''}
+                {e.student?.first_name}{e.venue ? ` · ${e.venue}` : ''}
                 {e.firstDate && e.lastDate ? ` · ${fmtDateShort(e.firstDate)}–${fmtDateShort(e.lastDate)}` : ''}
                 {e.startTime ? ` · ${fmtTime(e.startTime)}–${fmtTime(e.endTime)}` : ''}
               </p>
@@ -973,7 +997,7 @@ function ClassCard({ enrollment: e, expanded, onToggle }) {
       <div className="p-4">
         <p className="font-semibold text-j2s-purple">{e.name}</p>
         <div className="mt-1 space-y-0.5 text-sm text-j2s-ink/60">
-          {e.location && <p>at {e.location}</p>}
+          {e.venue && <p>at {e.venue}</p>}
           {e.day && <p>{e.day}s, {fmtTime(e.startTime)}{e.endTime ? `–${fmtTime(e.endTime)}` : ''}</p>}
           {!e.day && e.startTime && <p>{fmtTime(e.startTime)}{e.endTime ? `–${fmtTime(e.endTime)}` : ''}</p>}
           {/* Date range from actual session dates */}

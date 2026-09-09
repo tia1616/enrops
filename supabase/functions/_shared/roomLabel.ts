@@ -22,3 +22,16 @@ export function roomDisplay(
   if (!room) return null;
   return /^\d/.test(room) ? `Room ${room}` : room;
 }
+
+// WHERE THE CLASS MEETS, as one string - see the .js twin for the full reasoning.
+// Takes the three RAW values rather than a finished room label so that no caller
+// can forget the class-beats-site precedence. Either half may be missing; both
+// absent is null, so one test decides whether to print anything.
+export function venueLabel(
+  siteName: string | null | undefined,
+  classRoom: string | null | undefined,
+  siteRoom: string | null | undefined,
+): string | null {
+  const site = String(siteName ?? "").trim();
+  return [site, roomDisplay(classRoom, siteRoom)].filter(Boolean).join(" · ") || null;
+}
