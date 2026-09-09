@@ -6,6 +6,7 @@ import { getTenant } from '../../lib/tenants.js';
 import { formatTermLabel } from '../../lib/terms.js';
 import { getUserRoles } from '../../lib/useUserRoles.js';
 import { renderWaiverText } from '../../lib/waiverText.js';
+import { roomDisplay } from '../../lib/roomLabel.js';
 import { dismissalAnswerIncomplete, dismissalSummary } from '../../lib/dismissal.js';
 import { earlyReleaseLine } from '../../lib/timeText.js';
 import WaiverGate from './WaiverGate.jsx';
@@ -53,6 +54,14 @@ function fmtTime(t) {
   if (t.includes('AM') || t.includes('PM')) return t;
   const [h, m] = t.split(':').map(Number);
   return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`;
+}
+// Site name and room as ONE string, built once per enrollment and reused by
+// every card below. Four places on this page print where a class meets, and
+// building the pair at each of them is how they drifted apart the last time.
+// Either half can be missing - a site with no room typed, or (rarely) a room
+// on a class with no site row - so this returns whichever halves exist.
+function venueLabel(siteName, roomLabel) {
+  return [siteName, roomLabel].filter(Boolean).join(' · ') || null;
 }
 function timeAgo(dateStr) {
   if (!dateStr) return '';
@@ -244,8 +253,8 @@ export default function Dashboard() {
           students(id, first_name, last_name, dismissal_method, aftercare_provider),
           programs(
             id, curriculum, curriculum_id, day_of_week, start_time, end_time,
-            first_session_date, term, session_count,
-            program_locations(name, arrival_instructions, dismissal_instructions),
+            first_session_date, term, session_count, room,
+            program_locations(name, arrival_instructions, dismissal_instructions, room_number),
             curricula(id, name, skills_overall,
               curriculum_sessions(session_number, title, description, skills_practiced, parent_engagement_question)
             )
@@ -270,6 +279,7 @@ export default function Dashboard() {
           camp_sessions(
             id, curriculum_name, curriculum_id, location_name,
             starts_on, ends_on, start_time, end_time, session_type, week_num,
+            program_locations(room_number),
             curricula(id, name, skills_overall,
               curriculum_sessions(session_number, title, description, skills_practiced, parent_engagement_question)
             )
@@ -356,7 +366,14 @@ export default function Dashboard() {
           id: r.id, type: 'afterschool',
           student: r.students,
           name: pr?.curriculum || 'Class',
-          location: pr?.program_locations?.name,
+          // Parents kept emailing to ask which room, because the room was typed
+          // on the class and read by instructors and rosters but by nothing the
+          // family could see. roomDisplay() returns a FINISHED label (it adds
+          // the word "Room" only to a bare number), so `venue` must not add it.
+          venue: venueLabel(
+            pr?.program_locations?.name,
+            roomDisplay(pr?.room, pr?.program_locations?.room_number),
+          ),
           arrival: pr?.program_locations?.arrival_instructions,
           dismissal: pr?.program_locations?.dismissal_instructions,
           day: pr?.day_of_week,
@@ -386,7 +403,14 @@ export default function Dashboard() {
           id: r.id, type: 'camp',
           student: r.students,
           name: cs?.curriculum_name || cur?.name || 'Camp',
-          location: cs?.location_name,
+          // A camp has no room of its own yet, so the SITE room is its only
+          // source - that is roomDisplay's camp case, classRoom null. The site
+          // name still comes from the denormalized location_name, which is what
+          // this surface has always shown.
+          venue: venueLabel(
+            cs?.location_name,
+            roomDisplay(null, cs?.program_locations?.room_number),
+          ),
           day: null,
           startTime: cs?.start_time, endTime: cs?.end_time,
           term: 'SU26', firstDate: cs?.starts_on, lastDate: cs?.ends_on,
@@ -726,7 +750,7 @@ function TodayCard({ enrollment: e }) {
           <span className="shrink-0 rounded-full bg-j2s-green/10 px-2.5 py-1 text-xs font-bold text-j2s-green-dark">Today</span>
         </div>
         <p className="mt-1 text-sm text-j2s-ink/60">
-          {e.student?.first_name} &middot; {e.name}{e.location ? ` at ${e.location}` : ''}
+          {e.student?.first_name} &middot; {e.name}{e.venue ? ` at ${e.venue}` : ''}
         </p>
         {s?.description && <p className="mt-3 text-sm leading-relaxed text-j2s-ink/70">{s.description}</p>}
         {s?.skills_practiced?.length > 0 && (
@@ -776,7 +800,7 @@ function ScheduleTab({ enrollments }) {
           </SectionLabel>
           <p className="mt-0.5 text-xs text-j2s-ink/60">
             {e.day}s {fmtTime(e.startTime)}{e.endTime ? `–${fmtTime(e.endTime)}` : ''}
-            {e.location ? ` at ${e.location}` : ''}
+            {e.venue ? ` at ${e.venue}` : ''}
           </p>
 
           {(e.sessionSchedule?.length > 0 || e.sessionDates.length > 0) ? (
@@ -884,7 +908,7 @@ function ScheduleTab({ enrollments }) {
             <div key={e.id} className="rounded-2xl border border-j2s-purple/10 bg-white p-4 shadow-card">
               <p className="text-sm font-semibold text-j2s-ink">{e.name}</p>
               <p className="mt-0.5 text-xs text-j2s-ink/50">
-                {e.student?.first_name}{e.location ? ` · ${e.location}` : ''}
+                {e.student?.first_name}{e.venue ? ` · ${e.venue}` : ''}
                 {e.firstDate && e.lastDate ? ` · ${fmtDateShort(e.firstDate)}–${fmtDateShort(e.lastDate)}` : ''}
                 {e.startTime ? ` · ${fmtTime(e.startTime)}–${fmtTime(e.endTime)}` : ''}
               </p>
@@ -973,7 +997,7 @@ function ClassCard({ enrollment: e, expanded, onToggle }) {
       <div className="p-4">
         <p className="font-semibold text-j2s-purple">{e.name}</p>
         <div className="mt-1 space-y-0.5 text-sm text-j2s-ink/60">
-          {e.location && <p>at {e.location}</p>}
+          {e.venue && <p>at {e.venue}</p>}
           {e.day && <p>{e.day}s, {fmtTime(e.startTime)}{e.endTime ? `–${fmtTime(e.endTime)}` : ''}</p>}
           {!e.day && e.startTime && <p>{fmtTime(e.startTime)}{e.endTime ? `–${fmtTime(e.endTime)}` : ''}</p>}
           {/* Date range from actual session dates */}
