@@ -80,19 +80,25 @@ const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 
-// HOW LONG A FAMILY HAS TO FINISH PAYING - and, necessarily, how long their seat
-// is held. These are ONE number wearing two hats, and they must never drift:
+// HOW LONG A FAMILY HAS TO FINISH PAYING. The seat is held for LONGER than this,
+// on purpose, and the gap is load-bearing:
 //
+//   * This value is the Stripe Checkout Session's `expires_at`. Until it passes,
+//     the family can still complete payment.
 //   * The seat is held by registration_holds_seat(), whose p_pending_ttl default
-//     is set to match this in migration 20260909a.
-//   * The Stripe Checkout Session is alive until `expires_at`, which is what we
-//     set here. Until it expires the family can still complete payment.
+//     is 45 minutes (migration 20260909b).
 //
-// IF THE HOLD IS SHORTER THAN THE SESSION, WE SELL A SEAT TWICE. Parent A walks
-// away; the hold lapses; Parent B buys the last chair; Parent A comes back to
-// their still-open Stripe tab an hour later and pays. Fifteen children in a
-// fourteen-seat room, and a card charged for a seat that does not exist -
-// strictly worse than the problem being fixed.
+// THE HOLD MUST OUTLIVE THE SESSION - equal is not good enough. The two clocks
+// do not start together and a third decides the outcome: create-registration
+// writes the row (registered_at = now()) about two seconds BEFORE this function
+// creates the session, and the row only becomes 'confirmed' when the webhook
+// lands. Set both to 30 and the hold lapses first, so a family can pay for a
+// chair already back on sale: parent A pays at T+29:50, parent B's
+// create-registration sees it free, then A's webhook confirms. Fifteen children
+// in a fourteen-seat room and a card charged for a seat that does not exist.
+// The 15-minute surplus covers that skew and a late webhook.
+//
+// INVARIANT: registration_holds_seat's default > CHECKOUT_WINDOW_MINUTES.
 //
 // WHY IT WAS 24 HOURS. Nobody set expires_at, so Stripe used its own 24h default
 // and the hold was matched to it (Jessica chose 24h on 2026-08-19 for exactly
@@ -103,7 +109,8 @@ const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 //
 // WHY 30 MINUTES AND NOT LESS. Stripe will not accept an expires_at less than 30
 // minutes out; that is the floor, not a preference. It is also comfortably longer
-// than anyone spends at a card form.
+// than anyone spends at a card form. Because it is a floor, the slack described
+// above has to be added to the HOLD rather than taken off the session.
 //
 // NOT the same clock as the abandoned-registration email, which stays at 24h
 // (hours_after_pending). "This seat is sellable again" and "this family has
