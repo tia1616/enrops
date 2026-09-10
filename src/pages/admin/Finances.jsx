@@ -34,6 +34,7 @@ import { pixelStripeConnected } from "../../lib/metaPixel.js";
 import EnnieTip from "../../components/EnnieTip.jsx";
 import { STRIPE_CONNECT_ESTIMATE_SENTENCE } from "../../lib/stripeConnectEstimate.js";
 import { describeOrgSaveFailure } from "../../lib/orgSaveErrors.js";
+import { fetchOrgTerms } from "../../lib/terms.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -1623,7 +1624,7 @@ function ActivityTab({ org }) {
   // see both fees named; J2S keeps its original wording.
   const isLean = org?.instructor_pay_model === "enrops_platform";
   const feeCfg = org;
-  const [terms, setTerms] = useState([]);            // [{ term, anchor }]
+  const [terms, setTerms] = useState([]);            // org_terms rows: { term, starts_on, ends_on, status, is_default }
   const [period, setPeriod] = useState(null);        // { kind:'term'|'30d'|'year'|'all', term?, label }
   const [summary, setSummary] = useState(null);      // null=loading, undefined=error
   const [sumErr, setSumErr] = useState("");
@@ -1635,29 +1636,45 @@ function ActivityTab({ org }) {
   const [stripeBusy, setStripeBusy] = useState(false);
   const [stripeErr, setStripeErr] = useState("");
 
-  // Term list + sensible default (nearest upcoming/current term, else latest).
+  // Term list + default, from the SHARED org_terms helper.
+  //
+  // WHAT THIS USED TO DO, AND WHY IT LANDED ON THE WRONG TERM. It inferred the
+  // list straight from `programs` and then picked
+  // `dated.find(t => t.anchor >= today)` — the first term that has NOT STARTED.
+  // The comment above it claimed "nearest upcoming/current", but that test can
+  // never select a term that is currently running, so the money page jumped to
+  // the next term the moment the current one's first class happened — exactly
+  // when an operator starts wanting to look at the current term's money.
+  // Reported by Jessica 2026-09-10: Money opened on WI27 while FA26 was running
+  // (J2S FA26 runs 31 Aug - 16 Dec; WI27 starts 20 Feb 2027 and won the test).
+  //
+  // Jeff was spared only by accident — his WI27 and SP27 have no session dates,
+  // so they were filtered out of `dated` and it fell back to FA26. He would have
+  // hit it the day he scheduled winter, so this was never a J2S-only quirk.
+  //
+  // WHY THE SHARED HELPER RATHER THAN A BETTER PREDICATE HERE. `org_terms`
+  // already answers exactly this question — it marks one term is_default: in
+  // progress today, else next starting, else most recent past — and Schedule,
+  // ProgramsCalendar, AdminOverview and SurveyResponses all read it. Fixing the
+  // comparison in place would have made this the second correct-but-separate
+  // spelling of one rule, which is how they drift.
+  //
+  // Its rows are already ordered chronologically (nulls last), so the dropdown
+  // below no longer depends on Map insertion order. `anchor` is gone from the
+  // shape because nothing else read it.
   useEffect(() => {
     if (!org?.id) return;
     let alive = true;
     (async () => {
-      const { data } = await supabase
-        .from("programs")
-        .select("term, first_session_date")
-        .eq("organization_id", org.id)
-        .not("term", "is", null);
+      const { terms: rows, defaultTerm } = await fetchOrgTerms(org.id);
       if (!alive) return;
-      const byTerm = new Map();
-      for (const p of data ?? []) {
-        const ex = byTerm.get(p.term);
-        if (!byTerm.has(p.term)) byTerm.set(p.term, p.first_session_date ?? null);
-        else if (p.first_session_date && (ex == null || p.first_session_date < ex)) byTerm.set(p.term, p.first_session_date);
-      }
-      const list = [...byTerm.entries()].map(([term, anchor]) => ({ term, anchor }));
-      setTerms(list);
-      const today = new Date().toISOString().slice(0, 10);
-      const dated = list.filter((t) => t.anchor).sort((a, b) => (a.anchor < b.anchor ? -1 : 1));
-      const def = dated.find((t) => t.anchor >= today) || dated[dated.length - 1] || list[0];
-      setPeriod(def ? { kind: "term", term: def.term, label: def.term } : { kind: "all", label: "All time" });
+      setTerms(rows);
+      // defaultTerm is null only when the org has no terms at all; fetchOrgTerms
+      // also returns empty on error, and "All time" is the right thing to show
+      // in both cases rather than an empty term filter.
+      setPeriod(defaultTerm
+        ? { kind: "term", term: defaultTerm, label: defaultTerm }
+        : { kind: "all", label: "All time" });
     })();
     return () => { alive = false; };
   }, [org?.id]);
