@@ -92,6 +92,7 @@ import { isEmailAllowed } from '../_shared/emailGuard.ts';
 import { sendRefundReceipt } from '../_shared/refundReceipt.ts';
 import { logTransactionalSend, formatSendError } from '../_shared/sendLog.ts';
 import { maybeAlertOperatorFlagged } from '../_shared/operatorFlagAlert.ts';
+import { alertMarginShortfall } from '../_shared/marginShortfallAlert.ts';
 
 // Per-environment site origin, same convention as the webhook. Only used to
 // link the refund watch screen in the internal alert.
@@ -506,10 +507,16 @@ serve(async (req: Request) => {
     // NOT in the response any more, and deliberately: the operator cannot refund
     // an application fee, so telling them names a task for the one person unable
     // to do it (see the response builder at the end of this file). The durable
-    // record is the `refunds` row. This array is what the platform-side log below
-    // reads, so enrops can see a shortfall without running a query - keep it
-    // populated even though no caller receives it.
+    // record is the `refunds` row. This array is what the platform-side log and
+    // the enrops alert below read, so a shortfall reaches a human without
+    // anybody running a query - keep it populated even though no caller
+    // receives it.
+    //
+    // refund_row_id is carried because the alert throttles on it: one email per
+    // refund row, so a retry cannot double-send and a multi-instalment refund
+    // that fails on two slots announces both rather than collapsing them.
     const marginShortfalls: Array<{
+      refund_row_id: string;
       stripe_refund_id: string | null;
       application_fee_id: string;
       margin_owed_cents: number;
@@ -710,6 +717,7 @@ serve(async (req: Request) => {
             // `refunds` row below, and in the platform-side log after the walk.
             // It is not returned to the operator; see the response builder.
             marginShortfalls.push({
+              refund_row_id: refundRowId,
               stripe_refund_id: stripeRefund.id,
               application_fee_id: applicationFeeId,
               margin_owed_cents: marginRefundCents,
@@ -994,10 +1002,9 @@ serve(async (req: Request) => {
     // and an operator cannot, so the audience is right in a way the response
     // never was.
     //
-    // NOT the alert. A log is discoverable, not delivered; nobody is paged by
-    // it. The real channel is _shared/operatorFlagAlert.ts + the
-    // refund_watch_alerts setting, and that is still the follow-up. This exists
-    // so the window between the two is not silent.
+    // The log stays even though the alert below now exists: it costs nothing,
+    // it survives an email that never sends, and it is the only record if the
+    // recipient is misconfigured.
     if (marginShortfalls.length > 0) {
       const owed = marginShortfalls.reduce((n, m) => n + m.margin_owed_cents, 0);
       console.error(
@@ -1008,6 +1015,35 @@ serve(async (req: Request) => {
             .map((m) => `${m.application_fee_id}=${m.margin_owed_cents}c (${m.reason})`)
             .join('; '),
       );
+
+      // AND NOW SOMEBODY IS ACTUALLY TOLD. Grouped by refund row because that
+      // is the alert's throttle key: a refund that failed on two instalment
+      // slots is two debts against two Stripe fee objects and must not collapse
+      // into one email that names only the first.
+      //
+      // Awaited but never allowed to throw - alertMarginShortfall swallows its
+      // own errors. The family already has their money.
+      const byRow = new Map<string, typeof marginShortfalls>();
+      for (const m of marginShortfalls) {
+        const list = byRow.get(m.refund_row_id) ?? [];
+        list.push(m);
+        byRow.set(m.refund_row_id, list);
+      }
+      for (const [rowId, group] of byRow) {
+        await alertMarginShortfall(supabase, {
+          refundRowId: rowId,
+          organizationId: reg.organization_id,
+          registrationId: reg.id,
+          items: group.map((m) => ({
+            applicationFeeId: m.application_fee_id,
+            owedCents: m.margin_owed_cents,
+            reason: m.reason,
+          })),
+          resendApiKey: RESEND_API_KEY,
+          siteUrl: PUBLIC_SITE_URL,
+          isAllowed: isEmailAllowed,
+        });
+      }
     }
 
     // v4 section 8 items 3-4, the review ask and the referral ask, USED TO FIRE

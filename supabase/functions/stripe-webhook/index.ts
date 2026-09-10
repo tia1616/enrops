@@ -91,6 +91,7 @@ import { sendRefundReceipt } from '../_shared/refundReceipt.ts';
 import { isEmailAllowed } from '../_shared/emailGuard.ts';
 import { logTransactionalSend, formatSendError } from '../_shared/sendLog.ts';
 import { maybeAlertOperatorFlagged } from '../_shared/operatorFlagAlert.ts';
+import { alertMarginShortfall } from '../_shared/marginShortfallAlert.ts';
 import {
   settlementForCheckoutCompleted,
   SETTLEMENT_ON_ASYNC_SUCCESS,
@@ -1108,6 +1109,12 @@ async function recordExternalRefund(
 
   // ── fire the prorated application-fee refund (v4 section 2 + 3) ───────────
   let feeRefunded = 0;
+  // Hoisted ONLY so the catch can name the debt in the alert. Both are declared
+  // inside the try otherwise, and a catch cannot see them - which is why the
+  // first version of the alert did not compile. Deliberately not reused for
+  // anything else: the try's own `facts` and `owed` remain the values in play.
+  let alertFeeId: string | null = null;
+  let alertOwedCents = 0;
   try {
     const proration = await loadProration(admin, {
       organization_id: reg.organization_id,
@@ -1131,6 +1138,9 @@ async function recordExternalRefund(
           remainingFraction: proration.fraction,
         })
       : 0;
+    // Captured for the catch's alert, before anything below can throw.
+    alertFeeId = facts.applicationFeeId;
+    alertOwedCents = owed;
 
     // ALREADY DONE? Ask Stripe, don't infer. A fee refund we issued carries the
     // Stripe refund id and registration it covered, so a retry can see its own
@@ -1209,6 +1219,27 @@ async function recordExternalRefund(
     await admin.from('refunds')
       .update({ failure_reason: `refund recorded from Stripe, but returning the platform fee failed: ${msg}` })
       .eq('id', refundRowId);
+
+    // AND TELL SOMEBODY. This is the SECOND path that can fail this way, and
+    // until 2026-09-10 both of them only wrote the failure down. refund-
+    // registration is the one that bit us on 2026-09-08; this one is reached
+    // when the refund is issued in the Stripe dashboard rather than in enrops,
+    // which is exactly the route somebody takes when the app is not to hand.
+    // Alerting only the other path would leave the quieter half silent.
+    //
+    // owed is the amount we tried and failed to return. It is in scope here and
+    // is the same number the other path reports.
+    await alertMarginShortfall(admin, {
+      refundRowId,
+      organizationId: reg.organization_id,
+      registrationId: reg.id,
+      items: alertFeeId
+        ? [{ applicationFeeId: alertFeeId, owedCents: alertOwedCents, reason: msg }]
+        : [],
+      resendApiKey: RESEND_API_KEY,
+      siteUrl: PUBLIC_SITE_URL,
+      isAllowed: isEmailAllowed,
+    });
   }
 
   // ── advance payment_status, same rule as refund-registration ──────────────
