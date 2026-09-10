@@ -56,8 +56,41 @@ export function renderShortfallAlert(args: {
   items: ShortfallItem[];
   registrationId: string;
   siteUrl: string;
+  /** We know a fee return failed but not how much, nor against which fee. */
+  amountUnknown?: boolean;
 }): { subject: string; text: string } {
   const { orgName, owedCents, items, registrationId, siteUrl } = args;
+
+  // The unknown-amount variant deliberately does NOT say "$0.00" anywhere. A
+  // zero would read as "nothing owed" and get filed, which is worse than the
+  // silence it replaces. It asks for a reconciliation instead of naming an
+  // amount to refund, because naming one we cannot compute is how somebody
+  // refunds the wrong number.
+  if (args.amountUnknown === true) {
+    return {
+      subject: `Action needed: a service fee return failed for ${orgName}, amount unknown`,
+      text: [
+        `We refunded a family, and returning the enrops service fee to ${orgName} failed.`,
+        '',
+        'We could NOT read the fee details from Stripe, so we do not know how much is owed',
+        'or which application fee it sits on. There may be nothing owed. There may be several dollars.',
+        '',
+        'This needs a human to reconcile it in the enrops Stripe account:',
+        `  find the payment for registration ${registrationId}`,
+        '  open its Application fee and compare what was collected against what has been refunded',
+        '  if a margin is still held, refund that amount off the APPLICATION FEE, NOT as a transfer',
+        '',
+        'The family is unaffected. They have their money.',
+        '',
+        `${siteUrl}/admin/finances`,
+        '',
+        'The provider has NOT been told, and should not be: they cannot refund an application fee.',
+        '',
+        'enrops',
+      ].join('\n'),
+    };
+  }
+
   const lines = [
     `We refunded a family, but could not return ${money(owedCents)} of enrops service fee to ${orgName}.`,
     '',
@@ -106,11 +139,19 @@ export async function alertMarginShortfall(
     siteUrl: string;
     /** Passed in, not imported, so no send path here can quietly skip it. */
     isAllowed: (address: string) => boolean;
+    /**
+     * True when we could not even READ the fee facts, so a debt may exist and
+     * its size is unknown. Distinct from "no fee, nothing owed": that case is
+     * items:[] with this false, and correctly sends nothing. Without this flag
+     * a Stripe outage during readChargeFeeFacts produced silence, which is the
+     * failure this whole module exists to remove.
+     */
+    amountUnknown?: boolean;
   },
 ): Promise<ShortfallAlertResult> {
   try {
     const items = args.items.filter((i) => i.owedCents > 0);
-    if (items.length === 0) return { sent: false, reason: 'nothing owed' };
+    if (items.length === 0 && args.amountUnknown !== true) return { sent: false, reason: 'nothing owed' };
     const owedCents = items.reduce((n, i) => n + i.owedCents, 0);
 
     const { data: cfgRow } = await admin
@@ -156,55 +197,90 @@ export async function alertMarginShortfall(
       return { sent: false, reason: 'claim failed' };
     }
 
-    const { data: orgRow } = await admin
-      .from('organizations').select('name').eq('id', args.organizationId).maybeSingle();
-    const orgName = (orgRow as { name?: string } | null)?.name ?? 'an operator';
+    // FROM HERE THE CLAIM IS A DEBT OF OUR OWN: it says this shortfall has been
+    // announced, and UNIQUE(refund_id) means nothing will ever announce it
+    // again. So every exit between here and a confirmed send MUST release it.
+    //
+    // The first version released only on `!resp.ok`, which is an HTTP error
+    // RESPONSE. It missed the commonest failure of all: `fetch` REJECTING on a
+    // DNS failure, connection reset or timeout. That path skipped the release
+    // entirely, and the row was left asserting an email that never went - a
+    // silent debt with paperwork, which is the exact thing this module exists
+    // to prevent. `finally` covers a throw, an early return and a bad status
+    // alike, so the release cannot be missed by adding an exit later.
+    let sent = false;
+    try {
+      const { data: orgRow } = await admin
+        .from('organizations').select('name').eq('id', args.organizationId).maybeSingle();
+      const orgName = (orgRow as { name?: string } | null)?.name ?? 'an operator';
 
-    const platform = await loadOrgBrand(admin, null);
-    const { subject, text } = renderShortfallAlert({
-      orgName,
-      owedCents,
-      items,
-      registrationId: args.registrationId,
-      siteUrl: args.siteUrl,
-    });
+      const platform = await loadOrgBrand(admin, null);
+      const { subject, text } = renderShortfallAlert({
+        orgName,
+        owedCents,
+        items,
+        registrationId: args.registrationId,
+        siteUrl: args.siteUrl,
+        amountUnknown: args.amountUnknown === true,
+      });
 
-    const body = JSON.stringify({
-      from: formatFromAddress(platform),
-      to,
-      subject,
-      text,
-      tags: [{ name: 'type', value: 'margin_shortfall_alert' }],
-    });
-    const send = () => fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${args.resendApiKey}` },
-      body,
-    });
+      const body = JSON.stringify({
+        from: formatFromAddress(platform),
+        to,
+        subject,
+        text,
+        tags: [{ name: 'type', value: 'margin_shortfall_alert' }],
+      });
+      const send = () => fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${args.resendApiKey}` },
+        body,
+      });
 
-    // Retry BEFORE releasing, same reasoning as the flag alert: releasing does
-    // not undo the damage, and unlike a refund-rate crossing there is no "next
-    // refund this month" to try again. If this send is lost the debt is silent
-    // again, which is the exact failure being fixed.
-    let resp = await send();
-    if (!resp.ok && resp.status >= 500) {
-      console.warn(`[margin alert] resend ${resp.status}, retrying once`);
-      await new Promise((r) => setTimeout(r, 1000));
-      resp = await send();
+      // Retry before giving up, same reasoning as the flag alert: unlike a
+      // refund-rate crossing there is no "next refund this month" to try again,
+      // so a lost send means the debt is silent. Retries a THROW as well as a
+      // 5xx, because a dropped connection is just as transient as a 502.
+      let resp: Response;
+      try {
+        resp = await send();
+        if (!resp.ok && resp.status >= 500) {
+          console.warn(`[margin alert] resend ${resp.status}, retrying once`);
+          await new Promise((r) => setTimeout(r, 1000));
+          resp = await send();
+        }
+      } catch (netErr) {
+        console.warn(`[margin alert] resend threw (${(netErr as Error).message}), retrying once`);
+        await new Promise((r) => setTimeout(r, 1000));
+        resp = await send(); // a second throw falls to the outer catch; finally still releases
+      }
+      if (!resp.ok) {
+        console.error(
+          `[margin alert] SEND FAILED after retry (${resp.status}). ${owedCents}c is owed to org ` +
+          `${args.organizationId} and NOBODY HAS BEEN TOLD: ${await resp.text()}`,
+        );
+        return { sent: false, reason: `resend ${resp.status}` };
+      }
+
+      sent = true;
+      console.log(`[margin alert] ${owedCents}c owed to ${orgName} reported to ${to}`);
+      return { sent: true };
+    } finally {
+      if (!sent) {
+        // Release, so a later path can still announce this. Guarded because a
+        // throw HERE would replace the real error with a misleading one, and
+        // because the shout below is the last line of defence either way.
+        try {
+          await admin.from('margin_shortfall_alerts').delete().eq('refund_id', args.refundRowId);
+        } catch (relErr) {
+          console.error('[margin alert] could not release the claim; this shortfall is now permanently unannounceable:', relErr);
+        }
+        console.error(
+          `[margin alert] NOT SENT. ${owedCents}c owed to org ${args.organizationId} on refund ` +
+          `${args.refundRowId} and nobody has been told.`,
+        );
+      }
     }
-    if (!resp.ok) {
-      // Release the claim so a later path can still announce it, and shout,
-      // because right now nothing else will.
-      await admin.from('margin_shortfall_alerts').delete().eq('refund_id', args.refundRowId);
-      console.error(
-        `[margin alert] SEND FAILED after retry (${resp.status}). ${owedCents}c is owed to org ` +
-        `${args.organizationId} and NOBODY HAS BEEN TOLD: ${await resp.text()}`,
-      );
-      return { sent: false, reason: `resend ${resp.status}` };
-    }
-
-    console.log(`[margin alert] ${owedCents}c owed to ${orgName} reported to ${to}`);
-    return { sent: true };
   } catch (err) {
     console.error('[margin alert] error (the refund itself is unaffected):', err);
     return { sent: false, reason: (err as Error).message };

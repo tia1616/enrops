@@ -1115,6 +1115,12 @@ async function recordExternalRefund(
   // anything else: the try's own `facts` and `owed` remain the values in play.
   let alertFeeId: string | null = null;
   let alertOwedCents = 0;
+  // Did we manage to READ the fee facts at all? Distinguishes "this charge has
+  // no application fee, nothing is owed" (facts read, alertFeeId null) from "we
+  // could not ask Stripe, so a debt may exist and we cannot size it" (facts not
+  // read). Both leave alertFeeId null, and treating them the same way is what
+  // made a Stripe outage produce silence.
+  let alertFactsRead = false;
   try {
     const proration = await loadProration(admin, {
       organization_id: reg.organization_id,
@@ -1122,6 +1128,7 @@ async function recordExternalRefund(
       camp_session_id: reg.camp_session_id,
     });
     const facts = await readChargeFeeFacts(stripe, input.paymentIntentId, input.chargeAccountId);
+    alertFactsRead = true;
 
     // Legacy own-platform destination orgs (stripe_fee_payer != 'tenant') carry
     // no uplift and no third party to make whole, so they get no fee refund —
@@ -1259,6 +1266,9 @@ async function recordExternalRefund(
       items: alertFeeId
         ? [{ applicationFeeId: alertFeeId, owedCents: alertOwedCents, reason: msg }]
         : [],
+      // Only when we never got the facts. If we DID read them and there is no
+      // fee, nothing is owed and the alert correctly stays quiet.
+      amountUnknown: !alertFactsRead,
       resendApiKey: RESEND_API_KEY,
       siteUrl: PUBLIC_SITE_URL,
       isAllowed: isEmailAllowed,
