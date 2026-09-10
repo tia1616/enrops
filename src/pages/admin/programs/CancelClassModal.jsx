@@ -17,9 +17,16 @@
 //      the instructor portal (shipped separately, live on prod).
 //
 // NO MONEY AND NO EMAIL, and the panel says so out loud. A refund is
-// irreversible and has to reconcile against the Squarespace export by SKU, so it
-// stays a separate deliberate act. An automatic email would be a message nobody
-// wrote and nobody approved.
+// irreversible and has to be reconciled against the live registration - its own
+// installments, and the SIBLING LEGS of a year-long bundle, which are separate
+// registrations the refund does not touch - so it stays a separate deliberate
+// act. An automatic email would be a message nobody wrote and nobody approved.
+//
+// The reason above used to read "reconcile against the Squarespace export by
+// SKU". Corrected 2026-09-09: Squarespace was SUMMER CAMPS ONLY and is no longer
+// a source of truth for anything. The conclusion did not change - a refund is
+// still its own decision - but the old wording sent whoever read it to a system
+// that has none of this data in it.
 //
 // WAITING FAMILIES ARE NOT HISTORY. Delete refuses outright when anyone is
 // queued, because nothing on that screen could tell them. Cancel ALLOWS it - low
