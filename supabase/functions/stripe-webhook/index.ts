@@ -1139,8 +1139,17 @@ async function recordExternalRefund(
         })
       : 0;
     // Captured for the catch's alert, before anything below can throw.
+    //
+    // alertOwedCents is deliberately NOT set here. The try also contains the
+    // `refunds` UPDATE below, so a fee refund that SUCCEEDED followed by a
+    // failed database write lands in the same catch. Setting the debt eagerly
+    // here would email "we could not return $X" about money we had just
+    // returned, and the reader's correct next action - refund it in Stripe -
+    // would be a SECOND application-fee refund. A false alarm on this channel
+    // costs real money, so the debt is armed only for the window in which it is
+    // genuinely outstanding: set immediately before the attempt, cleared the
+    // instant it succeeds.
     alertFeeId = facts.applicationFeeId;
-    alertOwedCents = owed;
 
     // ALREADY DONE? Ask Stripe, don't infer. A fee refund we issued carries the
     // Stripe refund id and registration it covered, so a retry can see its own
@@ -1165,6 +1174,9 @@ async function recordExternalRefund(
       // the platform on both charge models. The idempotency key still guards
       // two deliveries racing within the same instant; the metadata check above
       // is what guards a retry minutes or hours later.
+      // ARM the debt: from here until the call returns, this money is genuinely
+      // outstanding and a throw means nobody has been paid back.
+      alertOwedCents = owed;
       try {
         const feeRefund = await stripe.applicationFees.createRefund(
           facts.applicationFeeId,
@@ -1178,6 +1190,10 @@ async function recordExternalRefund(
           { idempotencyKey: `appfee_ext_${input.stripeRefundId}_${reg.id}` },
         );
         feeRefunded = feeRefund.amount ?? owed;
+        // DISARM: the money is back. Anything that throws after this line is a
+        // bookkeeping failure, not an unpaid debt, and must not be emailed as
+        // one.
+        alertOwedCents = 0;
       } catch (keyErr) {
         // An idempotency-key conflict is PROOF that a call with this exact key
         // already went through - only the amount has since drifted, because
@@ -1197,6 +1213,13 @@ async function recordExternalRefund(
         // no money is at risk - only this one record is incomplete.
         // Unreachable for anything created after tagging shipped, and prod has
         // no pre-tagging refunds at all.
+        // DISARM before throwing. This branch is reached only when the fee WAS
+        // returned - that is what an idempotency-key conflict proves - so the
+        // shortfall alert must not fire. It would tell the reader to refund a
+        // fee that has already been refunded. What this case needs is a human
+        // reconciling one incomplete RECORD, which the throw and the
+        // failure_reason below both say.
+        alertOwedCents = 0;
         throw new Error(
           `the platform fee was already returned by an untagged earlier call, so its exact amount ` +
           `could not be attributed to this refund. Reconcile ${facts.applicationFeeId} by hand.`,
