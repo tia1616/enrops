@@ -22,7 +22,7 @@ import { PDFDocument, StandardFonts, rgb } from 'https://esm.sh/pdf-lib@1.17.1';
 import { loadOrgBrand, renderSignatureBlock, formatFromAddress } from '../_shared/orgBrand.ts';
 import { roomDisplay } from '../_shared/roomLabel.ts';
 import { sortRosterRows, isOnRoster } from '../_shared/rosterOrder.ts';
-import { ROSTER_COLUMNS } from './rosterColumns.ts';
+import { ROSTER_COLUMNS, ROSTER_PAGE_WIDTH, ROSTER_MARGIN_X } from './rosterColumns.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -206,9 +206,14 @@ serve(async (req: Request) => {
     //   birthdate, pronouns  -> selected but never rendered, ever.
     //   authorized_pickup_contacts  -> selected but never read; pickup
     //     arrangements are an instructor-side fact, not a partner-side one.
-    // The three fields that remain are exactly what isOnRoster() needs
-    // (status / payment_status / ach_payment_state), what sortRosterRows() needs
-    // (student.first_name / last_name) and what the table prints.
+    // EVERYTHING THAT REMAINS IS LOAD-BEARING - do not trim further without
+    // reading compareRosterRows(). It needs student.first_name and
+    // student.last_name, and then falls back to `registered_at` and the
+    // registration `id` as tiebreakers; drop either and two children with the
+    // same name order non-deterministically, so the 7-day roster and the
+    // day-of roster for one class can disagree for no reason a school can see.
+    // isOnRoster() needs status / payment_status / ach_payment_state, and the
+    // table prints grade and homeroom_teacher.
     const { data: regs, error: regErr } = await supabase
       .from('registrations')
       .select(`
@@ -420,7 +425,10 @@ async function buildRosterPdf(params: {
   const muted = hexToRgb(MUTED);
   const border = hexToRgb(BORDER);
 
-  const PAGE_W = 792, PAGE_H = 612, MARGIN_X = 40, HEADER_H = 72, FOOTER_H = 24;
+  // Width and left/right margin come from rosterColumns.ts, which is where the
+  // column widths are checked against them - two copies of 792 could drift apart
+  // and the test would stay green while the last column printed off the page.
+  const PAGE_W = ROSTER_PAGE_WIDTH, PAGE_H = 612, MARGIN_X = ROSTER_MARGIN_X, HEADER_H = 72, FOOTER_H = 24;
 
   let logoImage: any = null;
   let logoDims: { width: number; height: number } | null = null;

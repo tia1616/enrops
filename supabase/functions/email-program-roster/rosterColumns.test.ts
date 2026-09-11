@@ -7,6 +7,7 @@ import { assert, assertEquals } from 'https://deno.land/std@0.177.0/testing/asse
 import {
   ROSTER_COLUMNS,
   ROSTER_TABLE_WIDTH,
+  ROSTER_PRINTABLE_WIDTH,
   FORBIDDEN_ROSTER_KEYS,
 } from './rosterColumns.ts';
 
@@ -27,15 +28,28 @@ Deno.test('no family contact or medical field can reach a partner school', () =>
 });
 
 Deno.test('column widths still total the width the page was laid out around', () => {
-  // The header bar, the footer rule and the continuation-page geometry are all
-  // drawn against this number. Changing the columns without re-balancing them
-  // leaves the table narrower than its own header.
+  // The header rule and the per-row rule are drawn across this number. Changing
+  // the columns without re-balancing them leaves the table a different width from
+  // the rules drawn under its own header.
   const total = ROSTER_COLUMNS.reduce((sum, c) => sum + c.width, 0);
   assertEquals(
     total,
     ROSTER_TABLE_WIDTH,
-    `columns total ${total} but the page is laid out for ${ROSTER_TABLE_WIDTH}; ` +
+    `columns total ${total} but the table is laid out for ${ROSTER_TABLE_WIDTH}; ` +
       `re-balance the widths rather than moving the page.`,
+  );
+});
+
+Deno.test('the table actually fits on the page it is printed on', () => {
+  // The assertion above only compares the columns to a number written beside
+  // them, so on its own it cannot see the page at all: change the page size or a
+  // margin and it stays green while the last column runs off the paper. This one
+  // checks the thing that actually goes wrong.
+  const total = ROSTER_COLUMNS.reduce((sum, c) => sum + c.width, 0);
+  assert(
+    total <= ROSTER_PRINTABLE_WIDTH,
+    `columns total ${total}pt but only ${ROSTER_PRINTABLE_WIDTH}pt fits between ` +
+      `the margins; the last column would be printed off the edge of the page.`,
   );
 });
 

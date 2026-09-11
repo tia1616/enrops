@@ -30,9 +30,22 @@ export interface RosterColumn {
 }
 
 /**
- * The total table width the page was laid out around. Kept fixed so the header,
- * the footer rule, the continuation-page geometry and the landscape page size do
- * not have to move whenever the column list changes.
+ * Page geometry, exported so the column widths can be checked against the page
+ * they have to fit on rather than against a number written beside them. Landscape
+ * US Letter; index.ts imports these rather than declaring its own copies.
+ */
+export const ROSTER_PAGE_WIDTH = 792;
+export const ROSTER_MARGIN_X = 40;
+
+/** The widest a table can be and still sit inside both margins. */
+export const ROSTER_PRINTABLE_WIDTH = ROSTER_PAGE_WIDTH - 2 * ROSTER_MARGIN_X;
+
+/**
+ * The total table width the page was laid out around. Deliberately narrower than
+ * the printable width — the table does not run full-bleed to the right margin —
+ * so it is a chosen number, not a derived one. Kept fixed so the header rule, the
+ * per-row rule and the continuation-page geometry do not move whenever the column
+ * list changes.
  */
 export const ROSTER_TABLE_WIDTH = 692;
 
