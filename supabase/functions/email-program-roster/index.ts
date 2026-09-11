@@ -22,6 +22,7 @@ import { PDFDocument, StandardFonts, rgb } from 'https://esm.sh/pdf-lib@1.17.1';
 import { loadOrgBrand, renderSignatureBlock, formatFromAddress } from '../_shared/orgBrand.ts';
 import { roomDisplay } from '../_shared/roomLabel.ts';
 import { sortRosterRows, isOnRoster } from '../_shared/rosterOrder.ts';
+import { ROSTER_COLUMNS } from './rosterColumns.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -191,14 +192,28 @@ serve(async (req: Request) => {
     }
 
     // ── Load ENROLLED registrations (matches the roster view) ──────────────
+    // ONLY WHAT THE PARTNER'S ROSTER PRINTS. A school needs to know which child
+    // to release and to whom we are: name, grade, homeroom. It does not need the
+    // family's contact details, and this function has no other use for them, so
+    // they are not fetched at all rather than fetched and then left off the page.
+    // Not fetching is the part that holds: a future column added to the PDF can
+    // only print what is in this select, so the next person cannot reintroduce
+    // parent phone numbers by editing COLS alone.
+    //
+    // What was deliberately dropped 2026-09-11, and why it is safe:
+    //   parent (name/email/phone), emergency_contact_*  -> printed on this PDF
+    //     until today; see COLS below. Read nowhere else in this file.
+    //   birthdate, pronouns  -> selected but never rendered, ever.
+    //   authorized_pickup_contacts  -> selected but never read; pickup
+    //     arrangements are an instructor-side fact, not a partner-side one.
+    // The three fields that remain are exactly what isOnRoster() needs
+    // (status / payment_status / ach_payment_state), what sortRosterRows() needs
+    // (student.first_name / last_name) and what the table prints.
     const { data: regs, error: regErr } = await supabase
       .from('registrations')
       .select(`
-        id, status, payment_status, ach_payment_state, authorized_pickup_contacts, registered_at,
-        student:students ( id, first_name, last_name, grade, birthdate, pronouns,
-                           homeroom_teacher,
-                           emergency_contact_name, emergency_contact_phone ),
-        parent:parents ( id, first_name, last_name, email, phone )
+        id, status, payment_status, ach_payment_state, registered_at,
+        student:students ( id, first_name, last_name, grade, homeroom_teacher )
       `)
       .eq('program_id', program.id)
       .is('cancelled_at', null)
@@ -422,20 +437,11 @@ async function buildRosterPdf(params: {
     } catch (_e) { /* text-only header */ }
   }
 
-  const COLS = [
-    { key: 'name', label: 'Student', width: 120 },
-    { key: 'grade', label: 'Grade', width: 40 },
-    // Homeroom takes the slot the allergy column used to hold, at the same
-    // width, so the table total is unchanged and no other column shifts.
-    // The school's front office needs homeroom to release a child to us;
-    // allergy/EpiPen stays on the admin roster screen and the instructor's
-    // view, and is deliberately not in the copy that leaves for the partner.
-    { key: 'homeroom', label: 'Homeroom', width: 110 },
-    { key: 'parent', label: 'Parent', width: 100 },
-    { key: 'parent_phone', label: 'Parent phone', width: 88 },
-    { key: 'parent_email', label: 'Parent email', width: 122 },
-    { key: 'ec', label: 'Emergency contact', width: 112 },
-  ];
+  // The column list is a privacy boundary, not a layout choice, so it lives in
+  // rosterColumns.ts with a test that fails if a family contact or medical field
+  // is ever added back. See that file for why the recipients could not be
+  // narrowed instead.
+  const COLS = ROSTER_COLUMNS;
   const TABLE_W = COLS.reduce((s, c) => s + c.width, 0);
   const ROW_H = 26;
 
@@ -511,15 +517,12 @@ async function buildRosterPdf(params: {
     for (const reg of students) {
       if (y - ROW_H < FOOTER_H + 16) { page = doc.addPage([PAGE_W, PAGE_H]); pages.push(page); y = drawContinuationHeader(page); }
       const s = reg.student ?? {};
-      const p2 = reg.parent ?? {};
       const name = `${s.first_name ?? ''} ${s.last_name ?? ''}`.trim() || 'Unnamed';
       const grade = s.grade == null ? '' : (s.grade === 0 ? 'K' : String(s.grade));
       const homeroom = (s.homeroom_teacher ?? '').trim() || '—';
-      const parentName = `${p2.first_name ?? ''} ${p2.last_name ?? ''}`.trim() || '—';
-      const ec = s.emergency_contact_name ? `${s.emergency_contact_name}${s.emergency_contact_phone ? ` · ${s.emergency_contact_phone}` : ''}` : '—';
 
       page.drawLine({ start: { x: MARGIN_X, y: y - 0.5 }, end: { x: MARGIN_X + TABLE_W, y: y - 0.5 }, thickness: 0.5, color: rgb(border.r, border.g, border.b) });
-      const values: Record<string, string> = { name, grade, homeroom, parent: parentName, parent_phone: p2.phone ?? '', parent_email: p2.email ?? '', ec };
+      const values: Record<string, string> = { name, grade, homeroom };
       let xc = MARGIN_X;
       for (const col of COLS) {
         page.drawText(truncate(values[col.key] ?? '', col.width, font, 9), { x: xc + 4, y: y - 13, size: 9, font, color: rgb(ink.r, ink.g, ink.b) });
