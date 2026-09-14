@@ -357,7 +357,20 @@ serve(async (req: Request) => {
             if (k === 'program_id' || k === 'student_id' || k === 'parent_id' || k === 'organization_id') continue;
             if (k === 'registered_at') continue; // preserve original date
             if (k === 'payment_status') continue; // never CSV-supplied; see above
-            if ((k === 'photo_release_consent' || k === 'photo_release_consent_at') && photo === null) continue;
+            // STATUS GOES WITH CONSENT, because it is derived from it and from
+            // nothing else (`regStatus = consent ? 'confirmed' : 'pending'`). So
+            // when the sheet is silent on photos it is silent on status too, and
+            // writing the default would be the same class of clobber.
+            //
+            // Skipping status here is also what keeps the consent skip SAFE. The
+            // DB CHECK photo_release_required_when_confirmed forbids
+            // status='confirmed' with photo_release_consent=false. Skip only the
+            // consent and you still write status='confirmed' over a declining
+            // family's row, the CHECK fires, and the whole row fails with
+            // `registration_update_failed` - a silent consent reversal traded for
+            // a broken import. Found by walking the 25 declining prod families
+            // through this branch before shipping it, not by reading the diff.
+            if ((k === 'status' || k === 'photo_release_consent' || k === 'photo_release_consent_at') && photo === null) continue;
             // Don't downgrade an already-confirmed (enrolled) registration to
             // pending just because this row lacked photo data.
             if (k === 'status' && existingReg.status === 'confirmed' && v === 'pending') continue;
