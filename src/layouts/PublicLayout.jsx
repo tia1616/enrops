@@ -56,6 +56,19 @@ export default function PublicLayout() {
         // view (see lib/supportContact.js). Selected HERE because this one row is
         // the Outlet context every parent-facing page reads, so the dashboard and
         // the catalogue cannot end up naming two different inboxes.
+        //
+        // DEPLOY-ORDER CONTRACT - THE MIGRATION GOES FIRST, ALWAYS.
+        // Selecting a column an environment does not have is not a degraded
+        // read, it is a 400: PostgREST answers 42703 "column
+        // public_org_directory.support_email does not exist" (measured against
+        // prod on 2026-09-14, while the control select returned 200). The
+        // handler below turns ANY error into loadState 'not_found', so shipping
+        // this file to an environment whose view lacks the column takes EVERY
+        // tenant page down for EVERY visitor - catalogue, registration and
+        // dashboard alike - not just the support line. Apply
+        // 20260914a_public_org_directory_support_email.sql to that environment
+        // before this build reaches it. The same rule binds anyone adding the
+        // next column here.
         .select('id, slug, name, logo_url, status, active_registration_term, instructor_pay_model, stripe_charges_enabled, support_email')
         .eq('slug', slug)
         .maybeSingle();
