@@ -34,6 +34,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
+import { parseGrade } from '../_shared/parseGrade.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -156,6 +157,15 @@ serve(async (req: Request) => {
       updated: 0,
       skipped: 0,
       pending: 0, // added but not enrolled (no photo release)
+      // COUNTED, NOT REFUSED. Grade became required at registration on
+      // 2026-09-04, and this importer is deliberately the door around that -
+      // grades.js names it as the way an operator adds a child the form turned
+      // away. Blocking a row for a missing grade would wall the escape hatch,
+      // which is the pattern this codebase has removed three times. So the
+      // import proceeds and says how many rows arrived without one; the CSV
+      // review screen flags them BEFORE this point, which is where an operator
+      // can still do something about it.
+      no_grade: 0,
       errors: [] as Array<{ row_index: number; error: string }>,
     };
 
@@ -236,6 +246,11 @@ serve(async (req: Request) => {
           if (existingStudent) studentId = existingStudent.id;
         }
 
+        // Parsed once, so the row is counted on the same value that gets stored
+        // rather than on a second reading of the cell that could disagree.
+        const parsedGrade = parseGrade(r.grade);
+        if (parsedGrade === null) results.no_grade++;
+
         const studentFields = {
           parent_id: parentId,
           organization_id: orgId,
@@ -243,7 +258,7 @@ serve(async (req: Request) => {
           // students.last_name is NOT NULL — never write null. Empty string is
           // the safe fallback for single-word names so the row imports.
           last_name: studentLast || '',
-          grade: parseGrade(r.grade),
+          grade: parsedGrade,
           birthdate: parseDate(r.birthdate),
           pronouns: emptyToNull(r.pronouns),
           allergies: emptyToNull(r.allergies),
@@ -313,10 +328,36 @@ serve(async (req: Request) => {
           .maybeSingle();
 
         if (existingReg) {
+          // WHAT AN UPDATE MAY WRITE, and the rule is: only what this CSV row
+          // actually said. Everything in `regFields` is either a value off the
+          // sheet or a DEFAULT FOR A NEW ROW, and the defaults are constants -
+          // never null - so the `v !== null` filter below does not stop them.
+          // A re-upload therefore used to stamp its defaults over live state.
+          // Two of those were real damage, measured on prod 2026-09-14:
+          //
+          //   payment_status: 'unpaid' - written unconditionally over 583 PAID
+          //   registrations. Re-uploading a roster to correct a spelling would
+          //   have marked those families unpaid. The CSV has no payment column
+          //   at all, so an update can never have anything to say here; 'unpaid'
+          //   is only ever right for a row being created.
+          //
+          //   photo_release_consent - `consent` collapses a missing column to
+          //   true, so a sheet that simply does not mention photos would have
+          //   flipped all 25 families who DECLINED into consenting, and reset
+          //   954 consent timestamps to the moment of the upload. That is a
+          //   consent record, and re-writing one from an absent column is worse
+          //   than the unpaid flag.
+          //
+          // `photo === null` is the distinction that makes this safe: parseBool
+          // returns null for a missing or unreadable cell, so it separates "the
+          // sheet said nothing" from "the sheet said no". The INSERT path below
+          // is untouched and still defaults a new row to consenting.
           const updateFields: Record<string, unknown> = {};
           for (const [k, v] of Object.entries(regFields)) {
             if (k === 'program_id' || k === 'student_id' || k === 'parent_id' || k === 'organization_id') continue;
             if (k === 'registered_at') continue; // preserve original date
+            if (k === 'payment_status') continue; // never CSV-supplied; see above
+            if ((k === 'photo_release_consent' || k === 'photo_release_consent_at') && photo === null) continue;
             // Don't downgrade an already-confirmed (enrolled) registration to
             // pending just because this row lacked photo data.
             if (k === 'status' && existingReg.status === 'confirmed' && v === 'pending') continue;
@@ -390,13 +431,9 @@ function splitName(v: unknown): { first: string; last: string } {
   return { first: toks.slice(0, -1).join(' '), last: toks[toks.length - 1] };
 }
 
-function parseGrade(v: unknown): number | null {
-  if (v === null || v === undefined || v === '') return null;
-  const n = parseInt(String(v).replace(/[^\d-]/g, ''), 10);
-  if (Number.isNaN(n)) return null;
-  if (n < -1 || n > 16) return null; // K=0, pre-K=-1
-  return n;
-}
+// parseGrade moved to _shared/parseGrade.ts on 2026-09-14. It lived here AND in
+// admin-import-camp-roster, identically, and identically wrong: both threw away
+// "K". One rule, one place - see that file for why.
 
 function parseDate(v: unknown): string | null {
   if (!v) return null;

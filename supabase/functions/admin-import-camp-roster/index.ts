@@ -48,6 +48,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
+import { parseGrade } from '../_shared/parseGrade.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -390,13 +391,10 @@ function splitName(v: unknown): { first: string; last: string } {
   return { first: toks.slice(0, -1).join(' '), last: toks[toks.length - 1] };
 }
 
-function parseGrade(v: unknown): number | null {
-  if (v === null || v === undefined || v === '') return null;
-  const n = parseInt(String(v).replace(/[^\d-]/g, ''), 10);
-  if (Number.isNaN(n)) return null;
-  if (n < -1 || n > 16) return null; // sanity bounds (K=0, pre-K=-1)
-  return n;
-}
+// parseGrade moved to _shared/parseGrade.ts on 2026-09-14. This copy and the
+// program importer's were identical and identically wrong - both turned "K"
+// into null, so the commonest value on a primary-school roster imported as no
+// grade. One rule, one place; see that file.
 
 function parseDate(v: unknown): string | null {
   if (!v) return null;

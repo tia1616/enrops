@@ -1845,6 +1845,14 @@ function CsvPanel({ target, csvHeaders, csvRows, mapping, reDetect, reviewRows, 
   const noun = target?.noun === "student" ? "student" : "camper";
   const nounCap = noun.charAt(0).toUpperCase() + noun.slice(1);
   const validCount = (reviewRows || []).filter((r) => (r.student_first_name || "").trim()).length;
+  // Rows that will import with no grade. Counted only among rows that will
+  // actually import, so a blank trailing line in the sheet is not reported as a
+  // missing grade. Told here rather than refused at the server: this importer is
+  // the operator's way around the registration form's grade requirement, and the
+  // Grade box for each row is right there to fill in.
+  const missingGradeCount = (reviewRows || [])
+    .filter((r) => (r.student_first_name || "").trim())
+    .filter((r) => !String(r.grade ?? "").trim()).length;
 
   return (
     <div>
@@ -1869,6 +1877,15 @@ function CsvPanel({ target, csvHeaders, csvRows, mapping, reDetect, reviewRows, 
           <strong>{result.imported} added</strong>
           {result.updated > 0 && <>, <strong>{result.updated} updated</strong></>}
           {result.skipped > 0 && <>, <strong style={{ color: AMBER }}>{result.skipped} skipped</strong></>}.
+          {/* Reported after the fact as well as before it: the review screen
+              catches this for a CSV, but the one-at-a-time Add panel posts to
+              the same function and never shows that screen. */}
+          {result.no_grade > 0 && (
+            <div style={{ marginTop: 6, color: AMBER, fontWeight: 600 }}>
+              {result.no_grade} {result.no_grade === 1 ? "child has" : "children have"} no grade recorded.
+              You can set {result.no_grade === 1 ? "it" : "them"} on the roster below.
+            </div>
+          )}
           {result.errors && result.errors.length > 0 && (
             <details style={{ marginTop: 6 }}>
               <summary style={{ cursor: "pointer", color: MUTED }}>Why {result.errors.length} skipped</summary>
@@ -1888,6 +1905,27 @@ function CsvPanel({ target, csvHeaders, csvRows, mapping, reDetect, reviewRows, 
           <div style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 6 }}>
             Review {validCount} {validCount === 1 ? noun : `${noun}s`} — edit anything that looks off, then import
           </div>
+
+          {/* SAYS SO BEFORE THE IMPORT, not after, because this is the last
+              screen where the Grade box is still editable. Grade is required of
+              families at registration as of 2026-09-04, and this importer is
+              deliberately exempt - so a sheet with no grade column quietly
+              produced the roster gap that requirement exists to close.
+
+              Amber and a sentence, not a red block and a disabled button: an
+              operator importing a school's own list may genuinely not have
+              grades, and walling them out of their own roster is worse than a
+              missing column. "K" is spelled out because the importer reads it
+              now and the operator has no way to know that. */}
+          {missingGradeCount > 0 && (
+            <div style={{ background: `${AMBER}14`, border: `1px solid ${AMBER}55`, color: INK, padding: "8px 10px", borderRadius: 6, fontSize: 12.5, marginBottom: 8, lineHeight: 1.5 }}>
+              <strong>{missingGradeCount} of {validCount} {validCount === 1 ? "row has" : "rows have"} no grade.</strong>{" "}
+              You can still import — grade is optional here — but the roster and
+              the partner-school list will show a gap for {missingGradeCount === 1 ? "that child" : "those children"}.
+              Fill the Grade boxes below to fix it now. <strong>K</strong> and{" "}
+              <strong>Pre-K</strong> are understood, as well as numbers.
+            </div>
+          )}
 
           <div style={{ maxHeight: 360, overflowY: "auto", border: `1px solid ${RULE}`, borderRadius: 8, padding: 8, marginBottom: 10, display: "flex", flexDirection: "column", gap: 8 }}>
             {reviewRows.map((r, i) => {
