@@ -233,10 +233,14 @@ export default function AutomationsTab() {
             total_runs: 0,
             total_sent: 0,
             total_time_saved: 0,
+            audience_sum: 0,
+            sends_listed: 0,
           };
         }
         stats[r.automation_id].total_runs += 1;
         stats[r.automation_id].total_time_saved += r.time_saved_minutes || 0;
+        // Kept as the FALLBACK only (see the block below), never as the headline.
+        stats[r.automation_id].audience_sum += r.audience_size || 0;
       });
 
       // THE SEND COUNT COMES FROM THE RECIPIENT ROWS, NOT FROM audience_size.
@@ -275,11 +279,26 @@ export default function AutomationsTab() {
         ),
       );
       for (const { id, count } of counts) {
-        // A failed count leaves the chip off rather than showing 0, because "0
-        // sends" and "we could not count" are different claims.
+        // A failed count leaves the chip as it was rather than forcing 0, because
+        // "0 sends" and "we could not count" are different claims.
         if (count === null) continue;
-        if (!stats[id]) stats[id] = { last_fired: null, total_runs: 0, total_sent: 0, total_time_saved: 0 };
-        stats[id].total_sent = count;
+        if (!stats[id]) {
+          stats[id] = { last_fired: null, total_runs: 0, total_sent: 0, total_time_saved: 0, audience_sum: 0, sends_listed: 0 };
+        }
+        // sends_listed is what the drawer can actually list, and it alone gates
+        // the "See sends" button.
+        stats[id].sends_listed = count;
+        // ZERO RECIPIENT ROWS DOES NOT MEAN ZERO SENDS. partner_roster invokes
+        // email-program-roster, which records in roster_email_sends and never in
+        // automation_run_recipients, and there audience_size IS sent+failed
+        // rather than "in scope" - so for that path the old number was already
+        // true. Measured on prod: J2S's "Class roster to partner" has 13 sent
+        // runs, audience 22 and 220 credited minutes against 0 recipient rows,
+        // so forcing 0 here deleted a chip that was correct. Prefer the
+        // per-recipient count wherever it exists (that is the number that was
+        // inflated); fall back to audience_size only when there is no
+        // per-recipient record at all.
+        stats[id].total_sent = count > 0 ? count : (stats[id].audience_sum || 0);
       }
       setRunStats(stats);
 
@@ -636,7 +655,7 @@ export default function AutomationsTab() {
                         four, and the drawer would then contradict the card next
                         to it. Gating on the count means the button appears only
                         when there is something true to show. */}
-                    {auto?.id && stats?.total_sent > 0 && (
+                    {auto?.id && stats?.sends_listed > 0 && (
                       <button
                         type="button"
                         onClick={() => setSendsFor({ id: auto.id, title: tpl.display_name })}
@@ -650,10 +669,16 @@ export default function AutomationsTab() {
                         See sends →
                       </button>
                     )}
+                    {/* The two halves come from different tables now (sends from
+                        the recipient rows, minutes from the runs), so the
+                        time-saved half is only claimed when there are minutes to
+                        claim. Otherwise this read "Saved you 0+ min - 5 sends",
+                        which denies the work in the same breath as counting it. */}
                     {stats?.total_sent > 0 && (
                       <Chip color={OK} bg="#ecf6ec">
-                        ⏱ {formatTimeSaved(stats.total_time_saved)}
-                        {" · "}
+                        {stats.total_time_saved > 0 && (
+                          <>⏱ {formatTimeSaved(stats.total_time_saved)}{" · "}</>
+                        )}
                         {stats.total_sent} {stats.total_sent === 1 ? "send" : "sends"}
                       </Chip>
                     )}
