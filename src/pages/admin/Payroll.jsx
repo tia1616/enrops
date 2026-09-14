@@ -1519,6 +1519,12 @@ function formatPayError(data, status) {
       hint: 'Go to Money > Payments in the admin portal and finish Stripe Connect onboarding before paying instructors.',
     };
   }
+  if (errCode === 'sessions_already_paid') {
+    return {
+      headline: 'Some of these days have already been paid.',
+      hint: detail || 'Refresh the page and check which days are still outstanding before paying again.',
+    };
+  }
   if (errCode === 'payout_already_in_flight') {
     return {
       // Said "instructor + camp" on a page that pays classes far more often than

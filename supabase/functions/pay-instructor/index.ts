@@ -363,10 +363,67 @@ serve(async (req: Request) => {
       // it protects, it cannot be orphaned that way.
     }
 
-    // ── pre-insert payout row (status=pending) ────────────────────────────
-    // Unique partial index on (instructor_id, camp_session_id) WHERE
-    // status IN ('pending','succeeded') is the double-pay guard.
     const confirmationIds = eligible.map((r) => r.confirmation_id);
+
+    // ── re-pay guard that does not depend on the confirmations stamp ──────
+    // REQUIRED BY the index narrowing at the top of this file, and added in the
+    // same change (2026-09-14). Read this before ever widening either one.
+    //
+    // The normal defence against paying a day twice is that a paid day carries
+    // instructor_payout_id and therefore drops out of `eligible`. But the write
+    // that stamps it (search "confirmations update failed") is explicitly
+    // NON-FATAL: money has already moved by then, so a failure there is logged
+    // and swallowed. In that window the days look unpaid forever.
+    //
+    // The old program index covered 'succeeded' as well as 'pending', so it
+    // happened to backstop exactly this: a second payout for the same
+    // instructor+program was refused whether or not the stamp landed. Narrowing
+    // it to 'pending' — which is what makes weekly payouts possible at all —
+    // takes that backstop away, and would let one failed stamp turn into a
+    // second real transfer for days already paid.
+    //
+    // So guard on the record that is written RELIABLY: the payout row itself
+    // lists the confirmations it covered, and it is inserted before any money
+    // moves. Overlap means those exact days already belong to a payout. This is
+    // strictly more precise than the index ever was — it blocks re-paying the
+    // same days while leaving next week free, which is the whole point.
+    {
+      const priorBase = supabase
+        .from('instructor_payouts')
+        .select('id, status, session_confirmation_ids')
+        .eq('instructor_id', effectiveInstructorId)
+        .in('status', ['pending', 'succeeded']);
+      const { data: priorPayouts, error: priorErr } = kind === 'camp'
+        ? await priorBase.eq('camp_session_id', campSessionId)
+        : await priorBase.eq('program_id', programId);
+      if (priorErr) {
+        // Fail CLOSED. Not being able to read the prior payouts means we cannot
+        // tell whether this would be a second payment for the same days, and
+        // guessing wrong spends real money that cannot be pulled back.
+        console.error('[pay-instructor] prior payout lookup failed:', priorErr);
+        return json({ error: 'lookup_failed' }, 500);
+      }
+      const alreadyCovered = new Set(
+        (priorPayouts ?? []).flatMap(
+          (p) => (p as { session_confirmation_ids: string[] | null }).session_confirmation_ids ?? [],
+        ),
+      );
+      const overlap = confirmationIds.filter((id) => alreadyCovered.has(id));
+      if (overlap.length > 0) {
+        return json({
+          error: 'sessions_already_paid',
+          detail:
+            `${overlap.length} of these ${confirmationIds.length} day(s) are already on an earlier payout. ` +
+            'Refresh the page — if they still show as unpaid, the payout landed but the days were not marked, ' +
+            'and that needs fixing before paying again.',
+        }, 409);
+      }
+    }
+
+    // ── pre-insert payout row (status=pending) ────────────────────────────
+    // The unique partial indexes (see the file header) stop two concurrent
+    // clicks; the overlap check above stops a repeat of an already-settled
+    // payout. Both are needed — neither covers the other's case.
     const { data: rowData, error: insErr } = await supabase
       .from('instructor_payouts')
       .insert({
