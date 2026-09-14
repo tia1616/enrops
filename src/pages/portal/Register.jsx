@@ -392,7 +392,6 @@ export default function Register() {
   // has already typed.
   const advanceBlocker = advanceProblem({
     step,
-    isLean,
     activeChild,
     parent: cart.parent,
     regFields,

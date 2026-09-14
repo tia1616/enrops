@@ -15,6 +15,10 @@ import { supabase } from "../../lib/supabase";
 import {
   dismissalSummary, offeredChoices, needsAftercareProvider, needsAuthorizedPickup,
 } from "../../lib/dismissal.js";
+// The ONE grade vocabulary. ProgramRoster and AfterschoolSchedule still carry
+// their own copies of this function and are tracked for repointing in
+// lib/grades.js; adding a fifth here is what that note exists to prevent.
+import { gradeLabel } from "../../lib/grades.js";
 // The care editor below saves through the same RPC, the same validation and the
 // same payload builder as the two parent-facing screens. Only the dress differs.
 import {
@@ -732,6 +736,29 @@ function CamperEditableRow({ registration, contacts = [], contactsLoaded = false
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 13, fontWeight: 600, color: INK }}>
               {displayName}
+              {/* GRADE, which this row has been fetching and throwing away.
+                  Jeff, 2026-09-14: "Would it be possible to have a grade show
+                  up in the class rosters when we do a drop down with student
+                  info." It was already in the RosterEditor select and already
+                  rendered by the OTHER roster surface
+                  (programs/ProgramRoster.jsx, beside the name in the same way),
+                  so an operator saw a child's grade on one screen and not on
+                  the one they open from Rosters. Same fact, same place on the
+                  row, so the two surfaces read alike.
+
+                  BEFORE the date, not after: an instructor scanning a roster is
+                  grouping by grade, and the birth date is the rarely-read one.
+
+                  `!= null` rather than truthiness, because Kindergarten is 0 -
+                  the same trap the registration guard documents. gradeLabel
+                  renders it "K" and comes from lib/grades.js rather than a
+                  local copy; that module exists because this vocabulary had
+                  been written four times and the copies disagreed. */}
+              {s.grade != null && (
+                <span style={{ color: MUTED, fontSize: 11, marginLeft: 6, fontWeight: 500 }}>
+                  · Grade {gradeLabel(s.grade)}
+                </span>
+              )}
               {s.birthdate && (
                 <span style={{ color: MUTED, fontSize: 11, marginLeft: 6, fontWeight: 500 }}>
                   · DOB {s.birthdate}
