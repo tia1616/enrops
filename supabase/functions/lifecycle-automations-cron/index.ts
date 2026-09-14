@@ -1801,25 +1801,25 @@ async function runPartnerRosterAutomation(
 
   if (pErr) throw pErr;
 
-  if (!programs || programs.length === 0) {
-    await supabase.from("automation_runs").insert({
-      automation_id: a.id,
-      organization_id: a.organization_id,
-      audience_size: 0,
-      status: "skipped_no_audience",
-    });
-    return { audience: 0, sent: 0, failed: 0, skipped: 0 };
-  }
+  // NO EARLY RETURN HERE. It used to return the moment no class started today or
+  // in seven days, which is most days of a term - and phase 2 (the roster-changed
+  // re-send, below) would then never run on exactly the days it exists for. The
+  // two phases have independent candidate sets, so phase 1 having nothing to do
+  // says nothing about phase 2.
+  const dayOnePrograms: any[] = programs ?? [];
 
   // Idempotency: check which programs already had a roster sent today
-  const programIds = programs.map((p: any) => p.id);
-  const { data: sentToday } = await supabase
-    .from("roster_email_sends")
-    .select("program_id")
-    .in("program_id", programIds)
-    .gte("sent_at", `${todayStr}T00:00:00+00:00`)
-    .eq("status", "sent");
-  const alreadySent = new Set((sentToday ?? []).map((r: any) => r.program_id));
+  const programIds = dayOnePrograms.map((p: any) => p.id);
+  const alreadySent = new Set<string>();
+  if (programIds.length > 0) {
+    const { data: sentToday } = await supabase
+      .from("roster_email_sends")
+      .select("program_id")
+      .in("program_id", programIds)
+      .gte("sent_at", `${todayStr}T00:00:00+00:00`)
+      .eq("status", "sent");
+    for (const r of sentToday ?? []) alreadySent.add(r.program_id);
+  }
 
   let sent = 0;
   let failed = 0;
@@ -1870,7 +1870,7 @@ async function runPartnerRosterAutomation(
     }
   }
 
-  for (const prog of programs as any[]) {
+  for (const prog of dayOnePrograms) {
     if (alreadySent.has(prog.id)) {
       skippedCount++;
       continue;
@@ -1903,7 +1903,7 @@ async function runPartnerRosterAutomation(
     audience_size: totalAudience,
     status: finalStatus,
     time_saved_minutes: timeSavedMinutes,
-    error_message: failed > 0 ? `${failed} of ${programs.length} roster sends failed` : null,
+    error_message: failed > 0 ? `${failed} roster send${failed === 1 ? "" : "s"} failed` : null,
   });
 
   if (sent > 0) {
@@ -1918,7 +1918,7 @@ async function runPartnerRosterAutomation(
     });
   }
 
-  return { programs_found: programs.length, sent, failed, skipped: skippedCount, time_saved_minutes: timeSavedMinutes };
+  return { programs_found: dayOnePrograms.length, sent, failed, skipped: skippedCount, time_saved_minutes: timeSavedMinutes };
 }
 
 // ─── Phase 2 of partner_roster: re-send when the roster itself has changed ───
@@ -1966,34 +1966,67 @@ async function runRosterChangeResends(
 
   // What each school was last actually told, and whether anything went today.
   // Ordered newest-first so the first row seen per program is the latest send.
+  // Only the newest send per program is read, so the cap is bounded by the
+  // number of candidate classes rather than by their whole send history: a class
+  // whose baseline fell off the end would read as unarmed and go quiet, which is
+  // safe but silently stops the feature. Ordered newest-first and capped well
+  // above the realistic number of candidate classes.
   const { data: sends } = await supabase
     .from("roster_email_sends")
     .select("program_id, sent_at, roster_student_ids")
     .in("program_id", programIds)
     .eq("status", "sent")
-    .order("sent_at", { ascending: false });
+    .order("sent_at", { ascending: false })
+    .limit(5000);
   const lastSend = new Map<string, any>();
   const sentToday = new Set<string>();
+  // Compared as INSTANTS, not as strings. A lexicographic compare against
+  // `${todayStr}T00:00:00` silently yields nothing the moment the serialization
+  // uses a space separator instead of "T", because " " sorts below "T" - and a
+  // guard that quietly never matches is worse than no guard. Phase 1 dodges this
+  // by filtering server-side; this loop cannot, so it parses.
+  const startOfTodayMs = Date.parse(`${todayStr}T00:00:00Z`);
   for (const s of sends ?? []) {
-    if (s.program_id && !lastSend.has(s.program_id)) lastSend.set(s.program_id, s);
-    if (s.program_id && typeof s.sent_at === "string" && s.sent_at >= `${todayStr}T00:00:00`) sentToday.add(s.program_id);
+    if (!s.program_id) continue;
+    if (!lastSend.has(s.program_id)) lastSend.set(s.program_id, s);
+    const sentMs = s.sent_at ? Date.parse(s.sent_at) : NaN;
+    if (!Number.isNaN(sentMs) && sentMs >= startOfTodayMs) sentToday.add(s.program_id);
   }
 
   // The current roster for every candidate, in ONE query rather than one per
   // class. `cancelled_at is null` mirrors email-program-roster's own roster
   // query, so this compares like with like; membership itself is decided by the
   // shared isOnRoster, never re-spelled here.
-  const { data: regs } = await supabase
-    .from("registrations")
-    .select("program_id, status, payment_status, ach_payment_state, student:students ( id )")
-    .in("program_id", programIds)
-    .is("cancelled_at", null);
+  //
+  // PAGED, because an unbounded select is capped at 1000 rows and the truncation
+  // is silent. Losing rows here does not fail loudly: the missing children read
+  // as having been DROPPED, so the school would be emailed a roster that is
+  // short of real pupils and that wrong set would be stored as the new baseline.
+  // Under the cap today (80 active registrations across J2S's 7 candidate
+  // classes, 24 across Ukulele's 2) but the artefact of getting it wrong is a
+  // third party holding an incorrect list of children.
   const byProgram = new Map<string, any[]>();
-  for (const r of regs ?? []) {
-    if (!r.program_id) continue;
-    const list = byProgram.get(r.program_id) ?? [];
-    list.push(r);
-    byProgram.set(r.program_id, list);
+  const REG_PAGE = 1000;
+  for (let from = 0; ; from += REG_PAGE) {
+    const { data: regs, error: rErr } = await supabase
+      .from("registrations")
+      .select("program_id, status, payment_status, ach_payment_state, student:students ( id )")
+      .in("program_id", programIds)
+      .is("cancelled_at", null)
+      .order("id", { ascending: true })
+      .range(from, from + REG_PAGE - 1);
+    if (rErr) {
+      // Fail CLOSED: a partial roster must never be mailed to a school.
+      console.error("[partner-roster] registration page failed, abandoning change-resend:", rErr);
+      return out;
+    }
+    for (const r of regs ?? []) {
+      if (!r.program_id) continue;
+      const list = byProgram.get(r.program_id) ?? [];
+      list.push(r);
+      byProgram.set(r.program_id, list);
+    }
+    if (!regs || regs.length < REG_PAGE) break;
   }
 
   for (const prog of programs as any[]) {
