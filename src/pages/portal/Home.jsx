@@ -3,6 +3,7 @@ import { Link, useNavigate, useSearchParams, useOutletContext, useLocation } fro
 import { supabase } from '../../lib/supabase.js';
 import { useCart } from '../../context/CartContext.jsx';
 import { isEmbedContext } from '../../layouts/PublicLayout.jsx';
+import { supportEmailOf } from '../../lib/supportContact.js';
 import {
   formatMoney,
   formatEarlyBirdDate,
@@ -161,6 +162,9 @@ function LeanDescription({ text }) {
 export default function Home() {
   const { org } = useOutletContext();
   const ORG_SLUG = org.slug;
+  // This provider's own address, or null. Never another provider's, which is
+  // what the hardcoded mailto below used to be. See lib/supportContact.js.
+  const supportEmail = supportEmailOf(org);
   const navigate = useNavigate();
   const embedLocation = useLocation();
   // Embedded in the operator's own site (iframe): drop the big hero and the page
@@ -1446,16 +1450,28 @@ export default function Home() {
               </div>
             )}
 
+            {/* "reach out to us" was a hardcoded mailto to
+                support@journeytosteam.com on a page every provider's families
+                browse, so a parent looking at one company's catalogue was
+                offered a different company's inbox. It is the provider's own
+                address now, and nothing at all when they have not set one -
+                "Check back soon" still reads correctly on its own. */}
             {selectedSchool && programsAtSchool.length === 0 && (
               <div className="mt-8 rounded-xl bg-j2s-purple-soft p-6 text-center text-j2s-ink/70">
-                No open programs at this school yet. Check back soon or{' '}
-                <a
-                  href="mailto:support@journeytosteam.com"
-                  className="font-semibold text-j2s-purple hover:underline"
-                >
-                  reach out to us
-                </a>
-                .
+                {supportEmail ? (
+                  <>
+                    No open programs at this school yet. Check back soon or{' '}
+                    <a
+                      href={`mailto:${supportEmail}`}
+                      className="font-semibold text-j2s-purple hover:underline"
+                    >
+                      reach out to us
+                    </a>
+                    .
+                  </>
+                ) : (
+                  <>No open programs at this school yet. Check back soon.</>
+                )}
               </div>
             )}
           </div>

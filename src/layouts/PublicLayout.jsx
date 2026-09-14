@@ -52,7 +52,11 @@ export default function PublicLayout() {
       setPolicyTypes(new Set());
       const { data, error } = await supabase
         .from('public_org_directory')
-        .select('id, slug, name, logo_url, status, active_registration_term, instructor_pay_model, stripe_charges_enabled')
+        // support_email: the provider's own "email us" address, resolved in the
+        // view (see lib/supportContact.js). Selected HERE because this one row is
+        // the Outlet context every parent-facing page reads, so the dashboard and
+        // the catalogue cannot end up naming two different inboxes.
+        .select('id, slug, name, logo_url, status, active_registration_term, instructor_pay_model, stripe_charges_enabled, support_email')
         .eq('slug', slug)
         .maybeSingle();
       if (cancelled) return;

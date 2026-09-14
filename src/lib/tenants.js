@@ -18,8 +18,20 @@ export const TENANTS = {
     },
     displayFont: '"Titan One"',
     bodyFont: '"Nunito Sans"',
-    supportEmail: 'support@journeytosteam.com',
-    supportPhone: '(971) 258-2178',
+    // REMOVED 2026-09-14: supportEmail + supportPhone.
+    //
+    // supportEmail was the parent portal's "email us" address, and because this
+    // map holds only j2s, getTenant() returned null for every other provider and
+    // Dashboard.jsx fell through to a hardcoded 'jessica@enrops.com'. Two
+    // Ukulele Project families emailed the platform owner as a result (9/14 and
+    // 8/19). The address now comes from public_org_directory.support_email -
+    // the provider's own - via lib/supportContact.js. supportPhone had no reader
+    // at all and went with it rather than sitting here looking authoritative.
+    //
+    // They are DELETED rather than left in place because a dead config field is
+    // a trap: editing this line would have changed nothing, silently. If a
+    // per-tenant support contact is ever wanted beyond the resolved address, it
+    // belongs on the org row, not in code.
     waiverFamily: 'j2s', // to match against waivers.name
   },
 };
@@ -73,7 +85,15 @@ export function getTenant(slug) {
 // front of it.
 //
 // STILL HARDCODED, DELIBERATELY: the TENANTS map above. It holds J2S's name,
-// tagline, colours, fonts and support contacts, and getTenant() returns null for
-// every other provider. Unpicking it touches the parent dashboard and every
-// brand consumer at once, so it is parked as its own pass rather than bolted
-// onto this one. It is on the board under "Parked, deliberately".
+// tagline, colours and fonts, and getTenant() returns null for every other
+// provider. Unpicking it touches every brand consumer at once, so it is parked
+// as its own pass rather than bolted onto this one. It is on the board under
+// "Parked, deliberately".
+//
+// NOTE, 2026-09-14: the support contacts left this map (see above), and the
+// parent dashboard was their last reader - so getTenant() and TENANTS now have
+// ZERO callers anywhere in src. The file is kept rather than deleted because the
+// parked brand pass is where that decision belongs, and because the J2S colours
+// and fonts here still document what the J2S-branded shell renders. Do not wire
+// a new reader to it: anything per-provider must come from the org row, which is
+// the whole point of the removal above.
