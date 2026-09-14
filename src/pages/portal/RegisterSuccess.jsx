@@ -404,10 +404,15 @@ export default function RegisterSuccess() {
           support@enrops.com" sent them to the platform instead, contradicting
           the confirmation email, whose reply-to is already the provider's own
           address.
-          Deliberately not a mailto: the public org record doesn't carry the
-          provider's email, and inventing one risks a bounce. Replying to the
-          confirmation lands with them either way, which is the outcome that
-          matters.
+          Deliberately not a mailto. That used to be because the public org
+          record carried no provider email at all; as of 2026-09-14 it does
+          (public_org_directory.support_email - see lib/supportContact.js), so
+          the reason is now the SECOND half of the original one and not the
+          first: replying to the confirmation already lands with the provider,
+          which is the outcome that matters, and a family who has just been sent
+          an email does not need a second address to copy out. If this page ever
+          does want one, read it with supportEmailOf(org) rather than inventing
+          one - never a platform address.
 
           Omitted entirely for comp rather than reworded. There is no confirmation
           email to reply to, so the sentence cannot be made true — and the block

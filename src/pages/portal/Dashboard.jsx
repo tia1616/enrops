@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { Link, useNavigate, useOutletContext } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 import { useAuth } from '../../context/AuthContext.jsx';
-import { getTenant } from '../../lib/tenants.js';
+import { supportEmailOf } from '../../lib/supportContact.js';
 import { formatTermLabel } from '../../lib/terms.js';
 import { getUserRoles } from '../../lib/useUserRoles.js';
 import { renderWaiverText } from '../../lib/waiverText.js';
@@ -150,8 +150,14 @@ export default function Dashboard() {
   // org, so in practice slug is always present — the guard below is the
   // backstop, not a fallback tenant.
   const slug = org?.slug || null;
-  const tenant = slug ? getTenant(slug) : null;
-  const supportEmail = tenant?.supportEmail || 'jessica@enrops.com';
+  // The PROVIDER's address, resolved in public_org_directory - never the
+  // platform's. This used to be `getTenant(slug)?.supportEmail ||
+  // 'jessica@enrops.com'`, and since the TENANTS map holds only j2s, every other
+  // provider's families were told to email the platform owner. Two of them did.
+  // See lib/supportContact.js for the full account. null is a legitimate answer
+  // and each render site below drops its contact clause rather than inventing an
+  // address.
+  const supportEmail = supportEmailOf(org);
 
   const [parent, setParent] = useState(null);
   const [enrollments, setEnrollments] = useState([]);
@@ -563,9 +569,14 @@ export default function Dashboard() {
     return (
       <div className="mx-auto max-w-xl px-4 py-12 text-center">
         <h2 className="font-titan text-2xl text-j2s-purple">Check your email to access your dashboard</h2>
-        <p className="mt-3 text-j2s-ink/70">If you just registered, we sent a sign-in link to your inbox — click it to see your child&rsquo;s schedule and details. Still stuck? Email us and we&rsquo;ll sort it out right away.</p>
+        {/* "Still stuck? Email us" only when there is somebody to email. With no
+            address on file the sentence would promise a route that does not
+            exist, so the offer goes with the link rather than dangling. */}
+        <p className="mt-3 text-j2s-ink/70">If you just registered, we sent a sign-in link to your inbox — click it to see your child&rsquo;s schedule and details.{supportEmail ? ' Still stuck? Email us and we’ll sort it out right away.' : ''}</p>
         <Link to={`/${slug}`} className="mt-6 inline-block rounded-lg bg-j2s-purple px-6 py-3 font-bold text-white transition hover:bg-j2s-purple-dark">Browse programs</Link>
-        <p className="mt-4 text-sm text-j2s-ink/60"><a href={`mailto:${supportEmail}`} className="font-semibold text-j2s-purple hover:underline">Email {supportEmail}</a></p>
+        {supportEmail && (
+          <p className="mt-4 text-sm text-j2s-ink/60"><a href={`mailto:${supportEmail}`} className="font-semibold text-j2s-purple hover:underline">Email {supportEmail}</a></p>
+        )}
         <p className="mt-6 text-sm text-j2s-ink/60">
           Are you an instructor?{' '}
           <Link to={`/${slug}/instructor`} className="font-semibold text-j2s-purple hover:underline">Go to the instructor portal →</Link>
@@ -577,8 +588,12 @@ export default function Dashboard() {
     return (
       <div className="mx-auto max-w-xl px-4 py-12 text-center">
         <h2 className="font-titan text-2xl text-j2s-purple">Something went wrong</h2>
-        <p className="mt-3 text-j2s-ink/70">We had trouble loading your dashboard. Please try refreshing, or email us if the problem continues.</p>
-        <a href={`mailto:${supportEmail}`} className="mt-4 inline-block font-bold text-j2s-purple underline">{supportEmail}</a>
+        {/* Refreshing is the advice that always holds; the email clause is only
+            true when an address resolved. */}
+        <p className="mt-3 text-j2s-ink/70">We had trouble loading your dashboard. Please try refreshing{supportEmail ? ', or email us if the problem continues.' : '.'}</p>
+        {supportEmail && (
+          <a href={`mailto:${supportEmail}`} className="mt-4 inline-block font-bold text-j2s-purple underline">{supportEmail}</a>
+        )}
       </div>
     );
   }
@@ -1072,12 +1087,16 @@ function SettingsTab({ prefs, savingPrefs, prefsSaved, onToggle, supportEmail })
         </div>
         {prefsSaved && <p className="mt-2 text-sm font-medium text-green-600">Saved!</p>}
       </div>
-      <div className="rounded-2xl border border-j2s-purple/10 bg-white p-5 text-center shadow-card">
-        <p className="text-sm text-j2s-ink/50">
-          Questions? Email{' '}
-          <a href={`mailto:${supportEmail}`} className="font-semibold text-j2s-purple hover:underline">{supportEmail}</a>
-        </p>
-      </div>
+      {/* The whole card goes when there is no address. A "Questions?" panel with
+          nowhere to send them is furniture, not help. */}
+      {supportEmail && (
+        <div className="rounded-2xl border border-j2s-purple/10 bg-white p-5 text-center shadow-card">
+          <p className="text-sm text-j2s-ink/50">
+            Questions? Email{' '}
+            <a href={`mailto:${supportEmail}`} className="font-semibold text-j2s-purple hover:underline">{supportEmail}</a>
+          </p>
+        </div>
+      )}
     </div>
   );
 }
