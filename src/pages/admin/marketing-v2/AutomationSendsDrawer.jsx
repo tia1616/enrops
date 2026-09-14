@@ -140,9 +140,15 @@ export default function AutomationSendsDrawer({ automationId, title, orgId, onCl
           <p style={{ color: "#b53737", fontSize: 13, background: "#fbeae9", padding: "8px 10px", borderRadius: 6 }}>{err}</p>
         )}
 
+        {/* The button that opens this is gated on there being rows, so an empty
+            drawer means they went away between the count and the read, or the
+            send was recorded somewhere other than automation_run_recipients.
+            Either way, claiming "nothing was sent" would be a stronger statement
+            than we can make: the card behind this may well say "Last sent". */}
         {rows !== null && !err && rows.length === 0 && (
           <p style={{ color: MUTED, fontSize: 13, marginTop: 14 }}>
-            This automation has not sent anything yet. When it does, every email shows here with who it went to and whether it arrived.
+            We don&rsquo;t have a per-recipient record for this automation. If the card says it
+            has sent, it went out through a path that doesn&rsquo;t log who received it.
           </p>
         )}
 

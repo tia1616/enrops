@@ -624,9 +624,19 @@ export default function AutomationsTab() {
                     {/* "Last sent 4 days ago" was as far as this screen went, and
                         it is the sentence Jeff could not get past: it says
                         something happened without saying to whom, or whether it
-                        arrived. Only offered once the automation HAS fired, so it
-                        is never a control that opens an empty drawer. */}
-                    {auto?.id && stats?.last_fired && (
+                        arrived.
+
+                        GATED ON RECIPIENT ROWS, NOT ON last_fired. Four prod
+                        automations have fired recently and recorded ZERO
+                        recipient rows - J2S's "Class roster to partner" (20 runs)
+                        and "Instructor birthday", Ukulele's roster send, and Yoga
+                        Playgrounds' Welcome. Some of those send through a path
+                        that logs elsewhere; Yoga Playgrounds' simply never had an
+                        audience. Gating on last_fired would put a button on all
+                        four, and the drawer would then contradict the card next
+                        to it. Gating on the count means the button appears only
+                        when there is something true to show. */}
+                    {auto?.id && stats?.total_sent > 0 && (
                       <button
                         type="button"
                         onClick={() => setSendsFor({ id: auto.id, title: tpl.display_name })}
