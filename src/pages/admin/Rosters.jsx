@@ -18,7 +18,13 @@ import {
 // The ONE grade vocabulary. ProgramRoster and AfterschoolSchedule still carry
 // their own copies of this function and are tracked for repointing in
 // lib/grades.js; adding a fifth here is what that note exists to prevent.
-import { gradeLabel } from "../../lib/grades.js";
+//
+// GRADE_OPTIONS is the admin spelling of the list - value "0" labelled "K", not
+// the digit. Jessica, 2026-09-14: "kindergarten should be K not 0". The manual
+// add-a-student panel further down this file still takes grade as free text
+// ("K, 1, 2..."), which is the fourth spelling and is on the board; this editor
+// deliberately does not copy it.
+import { GRADE_OPTIONS, gradeLabel, isUnset } from "../../lib/grades.js";
 // The care editor below saves through the same RPC, the same validation and the
 // same payload builder as the two parent-facing screens. Only the dress differs.
 import {
@@ -1171,6 +1177,17 @@ function CamperEditForm({ registration, orgId, canEdit = false, onCancel, onSave
   const [form, setForm] = useState({
     first_name: s.first_name ?? "",
     last_name: s.last_name ?? "",
+    // SEEDED FROM THE ROW, and that is the whole safety of adding a written
+    // field to this form: an uninitialised `grade` would read as "" on a save
+    // nobody meant as a grade edit and null the column for every child whose
+    // details were touched for any other reason. That is the whole-row-write
+    // defect this form's own comment warns about two screens down.
+    //
+    // String(), because a <select> compares its value as a string and the
+    // column is an integer - and Kindergarten is 0, so `s.grade || ""` would
+    // turn the youngest cohort into a blank. `== null` catches null and
+    // undefined and nothing else.
+    grade: s.grade == null ? "" : String(s.grade),
     birthdate: s.birthdate ?? "",
     allergies: s.allergies ?? "",
     medical_notes: s.medical_notes ?? "",
@@ -1220,6 +1237,16 @@ function CamperEditForm({ registration, orgId, canEdit = false, onCancel, onSave
         emergency_contact_phone: emptyOrNull(form.emergency_contact_phone),
         special_needs_accommodations: emptyOrNull(form.special_needs_accommodations),
         homeroom_teacher: emptyOrNull(form.homeroom_teacher),
+        // NOT emptyOrNull, which returns the STRING it was given. students.grade
+        // is an integer column, so this converts or nulls: isUnset is the same
+        // "not stated" rule the registration guard and the range check use, so
+        // all three agree about what a blank grade is. Number() after it, never
+        // instead of it - `Number("")` is 0, which would silently enrol every
+        // cleared grade into Kindergarten.
+        //
+        // Clearing IS allowed. A grade set by mistake has to be removable, and
+        // the registration form requires one only at signup, not forever.
+        grade: isUnset(form.grade) ? null : Number(form.grade),
       };
       const regFields = {
         authorized_pickup_contacts: emptyOrNull(form.authorized_pickup_contacts),
@@ -1352,6 +1379,30 @@ function CamperEditForm({ registration, orgId, canEdit = false, onCancel, onSave
         </Lbl>
         <Lbl label="Student last name">
           <Inp value={form.last_name} onChange={(v) => update("last_name", v)} placeholder="Required" />
+        </Lbl>
+        {/* BEFORE the birth date, mirroring the row this form opens from, so the
+            two read in the same order. A select rather than the free-text box
+            the add-a-student panel uses: grade is a closed list, and typing it
+            is how "K" and "0" and "Kinder" all end up in one column.
+
+            "Not recorded" rather than an empty first option: a blank row in a
+            dropdown reads as a rendering fault, and this one is a real, common
+            and legitimate state - it is what every child registered before the
+            field existed still holds. */}
+        <Lbl label="Grade">
+          <select
+            value={form.grade}
+            onChange={(e) => update("grade", e.target.value)}
+            style={{
+              width: "100%", padding: "5px 8px", border: `1px solid ${RULE}`, borderRadius: 5,
+              fontSize: 13, fontFamily: "inherit", color: INK, background: "#fff",
+            }}
+          >
+            <option value="">Not recorded</option>
+            {GRADE_OPTIONS.map((g) => (
+              <option key={g.value} value={g.value}>{g.label}</option>
+            ))}
+          </select>
         </Lbl>
         <Lbl label="Date of birth">
           <input
