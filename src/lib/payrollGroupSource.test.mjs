@@ -131,5 +131,42 @@ ok(/origIds\.length\s*===\s*1/.test(code),
 ok(/g\.rows\.find\(\s*\(\s*r\s*\)\s*=>\s*r\.source\s*===/.test(code),
   'the distance bonus still samples a REGULAR row from g.rows, not g.source');
 
+// 5 - THE GAS BONUS RIDES THE LAST CLASS (2026-09-14).
+//
+// program_assignments.distance_bonus_cents is gas money for a whole term's driving.
+// It used to pay on the first payout carrying any regular day, so on an 8-week
+// after-school term it went out in week 1, before nearly all of the driving. It now
+// pays on the assignment's FINAL session, decided by v_effective_pay_lines.
+// is_final_session so that this page and pay-instructor read one definition.
+//
+// BOTH money sites are pinned, because they answer different questions and have
+// drifted from each other before: the week card (what this week is worth) and the
+// pay modal (what will actually move if you click now). A gate on one and not the
+// other is exactly the modal-over-promises failure the file already documents.
+//
+// Anchored on the ASSIGNMENT, not on the identifier appearing somewhere: the whole
+// point of the note above item 3 is that a bare identifier search passes while the
+// line that uses it has been reverted.
+// NOTE for the next person editing these: the stripper above replaces every string
+// literal with '', so a regex here must never spell out 'regular'. And the character
+// class has to be [^;]* not [^)]* - the arrow parameter `(r)` closes a paren long
+// before the predicate does, which is how the first draft of these three failed.
+ok(/finalRegularRow\s*=\s*g\.rows\.find\([^;]*?r\.is_final_session\s*===\s*true/.test(code),
+  'the week-card gas bonus samples a row with is_final_session === true');
+ok(/distanceBonusCents\s*=\s*\(\s*finalRegularRow\b/.test(code),
+  'distanceBonusCents is assigned from finalRegularRow, not from any regular row');
+ok(/\bbonusRow\s*=\s*eligibleRows\.find\([^;]*?r\.is_final_session\s*===\s*true/.test(code),
+  'the pay modal gas bonus samples a row with is_final_session === true');
+
+// The "bonus paid" chip must KEEP its broad sample. It is informational, and once the
+// bonus is paid its rows carry a payout id; narrowing it to the final session (the
+// obvious way to write this change with one variable instead of two) would have taken
+// the chip out with the money. Separate variables, separate assertions.
+ok(/anyRegularRow\s*=\s*g\.rows\.find\([^;]*?\)\s*;/.test(code)
+   && !/anyRegularRow\s*=\s*g\.rows\.find\([^;]*?is_final_session/.test(code),
+  'the bonus-paid chip still samples ANY regular row, not just the final session');
+ok(/distanceBonusPaid\s*=\s*anyRegularRow\?\.distance_bonus_paid_at/.test(code),
+  'distanceBonusPaid is still read from the broad sample');
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

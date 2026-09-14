@@ -336,9 +336,22 @@ export default function Payroll() {
           // nobody was ever shorted, and there are zero mixed groups on either
           // environment today — but it is money, and the row that decides it was
           // never meant to be a property of the group.
+          //
+          // `is_final_session` (2026-09-14): the gas bonus rides the LAST class
+          // the instructor teaches for this program, not the first payout that
+          // happened to carry a regular day. The column comes from the view so
+          // this card, the pay modal below and pay-instructor itself all read
+          // ONE definition of "final" — the alternative is three spellings of a
+          // schedule rule that already lives in derive_program_session_dates.
+          //
+          // TWO samples, not one. The money is sampled from the FINAL session;
+          // the "bonus paid" chip below is sampled from ANY regular row, which
+          // is what it always did and must keep doing (see its own note). A
+          // single narrowed sample would have quietly taken the chip with it.
           const anyRegularRow = g.rows.find((r) => r.source === 'regular');
-          const distanceBonusCents = (anyRegularRow && anyRegularRow.distance_bonus_paid_at === null)
-            ? (anyRegularRow.distance_bonus_cents_if_regular ?? 0)
+          const finalRegularRow = g.rows.find((r) => r.source === 'regular' && r.is_final_session === true);
+          const distanceBonusCents = (finalRegularRow && finalRegularRow.distance_bonus_paid_at === null)
+            ? (finalRegularRow.distance_bonus_cents_if_regular ?? 0)
             : 0;
           // Informational chip. Sampled across ALL rows on purpose: once the
           // bonus is paid its rows carry a payout id and leave eligibleRows, so
@@ -424,7 +437,12 @@ export default function Payroll() {
           // regular day that was withheld, unconfirmed or already paid contribute
           // a bonus the server would refuse — the modal promising a bigger total
           // than the payout it was about to make.
-          const bonusRow = eligibleRows.find((r) => r.source === 'regular');
+          //
+          // Carries the same is_final_session gate the server now applies, for
+          // the same reason the rest of this comment exists: the modal must
+          // quote what pay-instructor will actually move. Without it, every
+          // week 1 through 7 would offer a gas bonus the server declines.
+          const bonusRow = eligibleRows.find((r) => r.source === 'regular' && r.is_final_session === true);
           const payableBonusCents = (bonusRow && bonusRow.distance_bonus_paid_at === null)
             ? (bonusRow.distance_bonus_cents_if_regular ?? 0)
             : 0;
@@ -1503,7 +1521,11 @@ function formatPayError(data, status) {
   }
   if (errCode === 'payout_already_in_flight') {
     return {
-      headline: 'A payout for this instructor + camp is already in progress.',
+      // Said "instructor + camp" on a page that pays classes far more often than
+      // camps, so an after-school payout error named the wrong kind of thing
+      // entirely. The server's `detail` already distinguishes them; the headline
+      // just needs to stop guessing.
+      headline: 'A payout for this instructor is already in progress.',
       hint: detail || 'Refresh the page and check the current status before retrying.',
     };
   }
