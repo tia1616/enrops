@@ -68,6 +68,9 @@ import {
 import { venueLabel } from "../_shared/roomLabel.ts";
 import { runWaitlistSweep } from "./waitlistSweep.ts";
 import { offeringIdOf, buildResolvedIndex, isGenuinelyAbandoned } from "./abandonedSuppression.ts";
+import { rosterStudentIds, rosterChanged, shouldResendRoster } from "./rosterChange.ts";
+// The membership rule itself, shared with the PDF the school receives.
+import { isOnRoster } from "../_shared/rosterOrder.ts";
 import { abandonedResumeUrl } from "./abandonedResumeUrl.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -1822,29 +1825,27 @@ async function runPartnerRosterAutomation(
   let failed = 0;
   let skippedCount = 0;
 
-  for (const prog of programs as any[]) {
-    if (alreadySent.has(prog.id)) {
-      skippedCount++;
-      continue;
-    }
-
+  // Who this school's roster goes to. Pulled out so the day-one phase and the
+  // roster-changed phase below resolve recipients exactly the same way - two
+  // spellings of "who gets the roster" is the divergence this file keeps paying
+  // for. Returns null when there is nobody to send to.
+  async function resolveRosterRecipients(prog: any): Promise<string[] | null> {
     const partnerId = prog.program_locations?.partner_id;
-    if (!partnerId) { skippedCount++; continue; }
-
-    // Resolve partner_contacts for this partner
+    if (!partnerId) return null;
     const { data: contacts } = await supabase
       .from("partner_contacts")
       .select("id")
       .eq("partner_id", partnerId)
       .eq("organization_id", a.organization_id);
-
     const contactIds = (contacts ?? []).map((c: any) => c.id);
-    if (contactIds.length === 0 && !prog.program_locations?.contact_email) {
-      skippedCount++;
-      continue;
-    }
+    if (contactIds.length === 0 && !prog.program_locations?.contact_email) return null;
+    return contactIds;
+  }
 
-    // Invoke email-program-roster with service-role auth
+  // Invoke email-program-roster with service-role auth. That function is the one
+  // place a roster is built and sent, and it is what records roster_student_ids,
+  // so the change check below stays armed no matter which phase sent it.
+  async function sendRoster(prog: any, contactIds: string[]): Promise<boolean> {
     try {
       const resp = await fetch(`${SUPABASE_URL}/functions/v1/email-program-roster`, {
         method: "POST",
@@ -1859,19 +1860,38 @@ async function runPartnerRosterAutomation(
           mode: "send",
         }),
       });
-
-      if (resp.ok) {
-        sent++;
-      } else {
-        const errBody = await resp.text().catch(() => "");
-        console.error(`[partner-roster] send failed for program ${prog.id}: ${errBody.slice(0, 300)}`);
-        failed++;
-      }
+      if (resp.ok) return true;
+      const errBody = await resp.text().catch(() => "");
+      console.error(`[partner-roster] send failed for program ${prog.id}: ${errBody.slice(0, 300)}`);
+      return false;
     } catch (err) {
       console.error(`[partner-roster] invoke failed for program ${prog.id}:`, err);
-      failed++;
+      return false;
     }
   }
+
+  for (const prog of programs as any[]) {
+    if (alreadySent.has(prog.id)) {
+      skippedCount++;
+      continue;
+    }
+
+    const contactIds = await resolveRosterRecipients(prog);
+    if (contactIds === null) { skippedCount++; continue; }
+
+    if (await sendRoster(prog, contactIds)) sent++; else failed++;
+  }
+
+  // ─── Phase 2: the school's copy has gone stale ────────────────────────────
+  // Jessica, 2026-09-14: "we only need the automation that sends them after
+  // start date when sth changes", and "only dropped or added students trigger
+  // sends". Phase 1 above covers the two fixed dates; after day one nothing used
+  // to reach the school again, so a child who enrolled in week two never
+  // appeared on the list the school takes attendance from.
+  const changeResult = await runRosterChangeResends(supabase, a, todayStr, resolveRosterRecipients, sendRoster);
+  sent += changeResult.sent;
+  failed += changeResult.failed;
+  skippedCount += changeResult.skipped;
 
   // Track the automation run
   const totalAudience = sent + failed;
@@ -1899,6 +1919,125 @@ async function runPartnerRosterAutomation(
   }
 
   return { programs_found: programs.length, sent, failed, skipped: skippedCount, time_saved_minutes: timeSavedMinutes };
+}
+
+// ─── Phase 2 of partner_roster: re-send when the roster itself has changed ───
+// Runs for classes that have ALREADY STARTED (phase 1 owns the two fixed dates)
+// and are still running. Sends only when the set of children has changed since
+// the last roster that school was actually sent.
+//
+// THE ORDER OF THE CHECKS IS DELIBERATE. The membership comparison is cheap and
+// the session-date resolution is not - derive_program_session_dates is the
+// function behind the 4-second /admin/programs page, about 190ms per class - so
+// dates are resolved ONLY for the handful of classes that changed that day,
+// never for all of them.
+//
+// AND IT MUST BE THE SINGLE-PROGRAM FUNCTION. derive_program_session_dates_bulk
+// looks like the right tool and is a trap here: it is SECURITY DEFINER gated on
+// `is_org_member(...) OR is_platform_admin()`, both of which are FALSE for this
+// cron's service-role connection, so it returns zero rows silently and every
+// class would read as "no dates" and go quiet. Verified on prod 2026-09-14: the
+// bulk function returns 0 rows for a program id the single-argument function
+// resolves 13 session dates for.
+async function runRosterChangeResends(
+  supabase: SupabaseClient,
+  a: AutomationRow,
+  todayStr: string,
+  resolveRosterRecipients: (prog: any) => Promise<string[] | null>,
+  sendRoster: (prog: any, contactIds: string[]) => Promise<boolean>,
+): Promise<{ sent: number; failed: number; skipped: number }> {
+  const out = { sent: 0, failed: 0, skipped: 0 };
+
+  // Same shape as phase 1's query, with the date window inverted: started
+  // already. `status = 'open'` keeps drafts and cancelled classes out, exactly
+  // as phase 1 does.
+  const { data: programs, error: pErr } = await supabase
+    .from("programs")
+    .select(`id, organization_id, first_session_date, program_locations!inner ( id, partner_id, contact_email )`)
+    .eq("organization_id", a.organization_id)
+    .eq("status", "open")
+    .eq("runs_own_registration", false)
+    .not("program_locations.partner_id", "is", null)
+    .lt("first_session_date", todayStr);
+  if (pErr) { console.error("[partner-roster] change-resend program query failed:", pErr); return out; }
+  if (!programs || programs.length === 0) return out;
+
+  const programIds = programs.map((p: any) => p.id);
+
+  // What each school was last actually told, and whether anything went today.
+  // Ordered newest-first so the first row seen per program is the latest send.
+  const { data: sends } = await supabase
+    .from("roster_email_sends")
+    .select("program_id, sent_at, roster_student_ids")
+    .in("program_id", programIds)
+    .eq("status", "sent")
+    .order("sent_at", { ascending: false });
+  const lastSend = new Map<string, any>();
+  const sentToday = new Set<string>();
+  for (const s of sends ?? []) {
+    if (s.program_id && !lastSend.has(s.program_id)) lastSend.set(s.program_id, s);
+    if (s.program_id && typeof s.sent_at === "string" && s.sent_at >= `${todayStr}T00:00:00`) sentToday.add(s.program_id);
+  }
+
+  // The current roster for every candidate, in ONE query rather than one per
+  // class. `cancelled_at is null` mirrors email-program-roster's own roster
+  // query, so this compares like with like; membership itself is decided by the
+  // shared isOnRoster, never re-spelled here.
+  const { data: regs } = await supabase
+    .from("registrations")
+    .select("program_id, status, payment_status, ach_payment_state, student:students ( id )")
+    .in("program_id", programIds)
+    .is("cancelled_at", null);
+  const byProgram = new Map<string, any[]>();
+  for (const r of regs ?? []) {
+    if (!r.program_id) continue;
+    const list = byProgram.get(r.program_id) ?? [];
+    list.push(r);
+    byProgram.set(r.program_id, list);
+  }
+
+  for (const prog of programs as any[]) {
+    const currentIds = rosterStudentIds(byProgram.get(prog.id) ?? [], isOnRoster);
+    const previousIds = lastSend.get(prog.id)?.roster_student_ids ?? null;
+
+    // Cheap refusals first, so nothing expensive runs for a class that cannot
+    // send anyway. A class with no baseline or no change stops here.
+    if (sentToday.has(prog.id) || !Array.isArray(previousIds) || !rosterChanged(previousIds, currentIds)) {
+      out.skipped++;
+      continue;
+    }
+
+    const contactIds = await resolveRosterRecipients(prog);
+    if (contactIds === null) { out.skipped++; continue; }
+
+    // Only now, for a class that genuinely changed, is it worth resolving dates.
+    let lastSessionDate: string | null = null;
+    const { data: dates, error: dErr } = await supabase.rpc("derive_program_session_dates", { p_program_id: prog.id });
+    if (dErr) {
+      console.error(`[partner-roster] session dates failed for program ${prog.id}:`, dErr);
+    } else if (Array.isArray(dates) && dates.length > 0) {
+      lastSessionDate = dates[dates.length - 1];
+    }
+
+    const verdict = shouldResendRoster({
+      alreadySentToday: sentToday.has(prog.id),
+      previousIds,
+      currentIds,
+      lastSessionDate,
+      today: todayStr,
+      hasRecipients: true,
+      });
+    if (!verdict.send) {
+      console.log(`[partner-roster] no re-send for program ${prog.id}: ${verdict.reason}`);
+      out.skipped++;
+      continue;
+    }
+
+    console.log(`[partner-roster] roster changed for program ${prog.id}: ${previousIds.length} -> ${currentIds.length} children`);
+    if (await sendRoster(prog, contactIds)) out.sent++; else out.failed++;
+  }
+
+  return out;
 }
 
 async function resolveBirthdayAudience(

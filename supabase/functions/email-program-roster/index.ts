@@ -337,6 +337,22 @@ serve(async (req: Request) => {
       status,
       failure_reason: failureReason,
       roster_camper_count: students.length,
+      // WHO was on the roster we just sent them. The partner_roster automation
+      // compares this with the current roster to notice that the school's copy
+      // has gone stale, so EVERY send has to record it - including this one,
+      // which is the manual "Email roster" path. A class is only armed for the
+      // change check once a send has stamped this, so leaving it off here would
+      // mean a roster sent by hand never arms.
+      //
+      // Read off `students`, which is already the printed roster: it has been
+      // through isOnRoster and the shared sort. Note `students` holds
+      // REGISTRATION rows with a nested student (sortRosterRows returns what it
+      // was given), so the id has to come from `.student.id`. Using the
+      // registration id would report a change when a child is cancelled and
+      // re-registered - the same child, a new row - which is not what
+      // "dropped or added students" means. Sorted and de-duplicated separately
+      // so display order cannot upset the comparison.
+      roster_student_ids: [...new Set(students.map((s: any) => s?.student?.id).filter(Boolean))].sort(),
     });
 
     return json({
