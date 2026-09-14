@@ -2654,9 +2654,23 @@ function AfterschoolAssignmentCard({ assignment, coInstructors = [], schedule = 
         </div>
       )}
 
+      {/* THE AFTER-SCHOOL gas line, and the browser twin of distanceBonusNote()
+          in supabase/functions/_shared/offerCopy.ts. Deno and Vite cannot share a
+          module across that boundary, so this is a deliberate copy on the same
+          terms as _shared/waiverText.ts / src/lib/waiverText.js: if you reword
+          one, reword the other.
+
+          It says WHEN because as of 2026-09-14 the gas bonus pays on the LAST
+          class of the program, not the first payout. "+ $50 distance bonus" with
+          no timing is true but misleading to someone who then sees week one's pay
+          land without it.
+
+          The two camp cards in this file (AssignmentCard, AssignmentDetailView)
+          deliberately still read "+ $X distance bonus": a camp's gas rides its
+          single end-of-camp payout, which this change did not touch. */}
       {assignment.distance_bonus_cents ? (
         <div style={{ fontSize: 13, color: PURPLE, fontWeight: 600 }}>
-          + {dollars(assignment.distance_bonus_cents)} distance bonus
+          + {dollars(assignment.distance_bonus_cents)} distance bonus, paid with your last class
         </div>
       ) : null}
 

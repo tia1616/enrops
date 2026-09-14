@@ -15,7 +15,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
-import { AVAILABILITY_OVERRIDE_NOTE_HTML, AVAILABILITY_OVERRIDE_NOTE_TEXT, hasAvailabilityOverride } from '../_shared/offerCopy.ts';
+import { AVAILABILITY_OVERRIDE_NOTE_HTML, AVAILABILITY_OVERRIDE_NOTE_TEXT, hasAvailabilityOverride, distanceBonusNote } from '../_shared/offerCopy.ts';
 import { loadOrgBrand, renderSignatureBlock, formatFromAddress, resolveTestRecipient, NO_TENANT_INBOX_MESSAGE } from '../_shared/orgBrand.ts';
 import { roomDisplay } from '../_shared/roomLabel.ts';
 
@@ -295,7 +295,7 @@ function renderHtml({ org, primary, firstName, termDisplay, classes, portalUrl, 
     const ab = arriveBy(p.start_time);
     const hardship = Array.isArray(a.flags) && (a.flags.includes('location_override') || a.flags.includes('location_low_pref'));
     const bonus = a.distance_bonus_cents
-      ? `<div style="margin-top:6px;font-size:13px;color:${primary};font-weight:600;">Includes a ${dollars(a.distance_bonus_cents)} bonus${hardship ? `<div style="font-size:12px;color:${MUTED};font-weight:400;">Thanks for covering an area outside your preference.</div>` : ''}</div>`
+      ? `<div style="margin-top:6px;font-size:13px;color:${primary};font-weight:600;">${distanceBonusNote(dollars(a.distance_bonus_cents))}${hardship ? `<div style="font-size:12px;color:${MUTED};font-weight:400;">Thanks for covering an area outside your preference.</div>` : ''}</div>`
       : '';
     // The operator assigned this against the availability the instructor gave us
     // (a day they marked off, hours that don't cover it, or no survey at all).
@@ -353,7 +353,7 @@ function renderText({ org, firstName, termDisplay, classes, portalUrl, deadline,
     // the room. Same shared label, so the two halves cannot disagree.
     const room = roomDisplay(p.room, loc?.room_number);
     lines.push(`  ${loc?.name ?? ''}${room ? ` · ${room}` : ''}${loc?.area ? ` · ${loc.area}` : ''}${ab ? ` · arrive by ${ab}` : ''}`);
-    if (a.distance_bonus_cents) lines.push(`  Includes a ${dollars(a.distance_bonus_cents)} bonus`);
+    if (a.distance_bonus_cents) lines.push(`  ${distanceBonusNote(dollars(a.distance_bonus_cents))}`);
     // Same note as the HTML half. Plain-text readers get the same explanation.
     if (hasAvailabilityOverride(a.flags)) lines.push(`  ${AVAILABILITY_OVERRIDE_NOTE_TEXT}`);
     lines.push('');

@@ -33,7 +33,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
-import { AVAILABILITY_OVERRIDE_NOTE_HTML, AVAILABILITY_OVERRIDE_NOTE_TEXT, hasAvailabilityOverride } from '../_shared/offerCopy.ts';
+import { AVAILABILITY_OVERRIDE_NOTE_HTML, AVAILABILITY_OVERRIDE_NOTE_TEXT, hasAvailabilityOverride, distanceBonusNote } from '../_shared/offerCopy.ts';
 import { roomDisplay } from '../_shared/roomLabel.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
@@ -749,7 +749,7 @@ function buildProgramReminderHtml({ branding, firstName, classes, termDisplay, p
     const venue = renderVenueDetailsHtml(loc, p.room);
     const hardship = Array.isArray(a.flags) && (a.flags.includes('location_override') || a.flags.includes('location_low_pref'));
     const bonus = a.distance_bonus_cents
-      ? `<div style="margin-top:6px;font-size:13px;color:${primary};font-weight:600;">Includes a ${dollars(a.distance_bonus_cents)} bonus${hardship ? `<div style="font-size:12px;color:${MUTED};font-weight:400;">Thanks for covering an area outside your preference.</div>` : ''}</div>`
+      ? `<div style="margin-top:6px;font-size:13px;color:${primary};font-weight:600;">${distanceBonusNote(dollars(a.distance_bonus_cents))}${hardship ? `<div style="font-size:12px;color:${MUTED};font-weight:400;">Thanks for covering an area outside your preference.</div>` : ''}</div>`
       : '';
     // Mirrors send-afterschool-offers: the reminder repeats the class detail, so it
     // has to repeat WHY we asked, or the nudge reads as ignoring their survey.
@@ -783,7 +783,7 @@ function buildProgramReminderText({ firstName, classes, termDisplay, portalUrl, 
     lines.push(`  ${dayLabel(p.day_of_week)} ${p.start_time ?? ''}–${p.end_time ?? ''} · all term`);
     lines.push(`  ${loc?.name ?? ''}${loc?.area ? ` · ${loc.area}` : ''}${ab ? ` · arrive by ${ab}` : ''}`);
     for (const v of renderVenueDetailsText(loc, p.room)) lines.push(v);
-    if (a.distance_bonus_cents) lines.push(`  Includes a ${dollars(a.distance_bonus_cents)} bonus`);
+    if (a.distance_bonus_cents) lines.push(`  ${distanceBonusNote(dollars(a.distance_bonus_cents))}`);
     if (hasAvailabilityOverride(a.flags)) lines.push(`  ${AVAILABILITY_OVERRIDE_NOTE_TEXT}`);
   }
   lines.push('');
