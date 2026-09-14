@@ -78,6 +78,17 @@ verify_jwt = true
 [functions.send-afterschool-offers]
 verify_jwt = true
 
+# Added 2026-09-14 after I broke it. This function had NO block, and a block is
+# the only thing that makes a deploy restore the setting: deploying with
+# --no-verify-jwt flips the remote value to false, and deploying again WITHOUT
+# the flag does not put it back -- the CLI only writes verify_jwt when config
+# says so. Its two siblings above and below recovered on the redeploy because
+# they have blocks; this one silently stayed public until it was checked against
+# prod. It is cron-invoked, and pg_cron sends the service-role key in the
+# Authorization header, so JWT verification is satisfied and correct here.
+[functions.offer-reminders-cron]
+verify_jwt = true
+
 [functions.send-afterschool-patch-offer]
 verify_jwt = true
 
