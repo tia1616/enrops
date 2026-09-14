@@ -24,6 +24,7 @@ import AudienceSwitcher from "./AudienceSwitcher.jsx";
 import AutomationEditor from "./AutomationEditor.jsx";
 import SenderSetupNotice from "./SenderSetupNotice.jsx";
 import DeliveryIssuesPanel from "./DeliveryIssuesPanel.jsx";
+import AutomationSendsDrawer from "./AutomationSendsDrawer.jsx";
 import {
   automationIsSending,
   entitlementsFor,
@@ -128,6 +129,8 @@ export default function AutomationsTab() {
   const audienceCfg = AUTO_AUDIENCE[audience];
 
   const [editingTpl, setEditingTpl] = useState(null);
+  // { id, title } of the automation whose send history is open, or null.
+  const [sendsFor, setSendsFor] = useState(null);
   const [orgLogoUrl, setOrgLogoUrl] = useState(null);
   const [orgSenderName, setOrgSenderName] = useState(null);
   const [orgPrimaryColor, setOrgPrimaryColor] = useState(null);
@@ -233,9 +236,51 @@ export default function AutomationsTab() {
           };
         }
         stats[r.automation_id].total_runs += 1;
-        stats[r.automation_id].total_sent += r.audience_size || 0;
         stats[r.automation_id].total_time_saved += r.time_saved_minutes || 0;
       });
+
+      // THE SEND COUNT COMES FROM THE RECIPIENT ROWS, NOT FROM audience_size.
+      //
+      // It used to read `sum(automation_runs.audience_size)`, which is how many
+      // people were IN SCOPE each time the cron looked, not how many were
+      // emailed. The cron runs daily and idempotency (the unique context_key)
+      // suppresses repeats, so the same family is re-counted on every tick while
+      // receiving exactly one email. Measured on prod 2026-09-14: J2S's
+      // "Welcome - afterschool" card read **82,641 sends against 157 actual
+      // recipient rows** (1,643 runs), and Jeff's abandoned-registration card
+      // read 27 against 5. The number was not slightly off, it was meaningless.
+      //
+      // total_time_saved is NOT affected and is left alone: time_saved_minutes
+      // is only written on runs that actually sent (40 of those 1,643), so it
+      // already tracks real sends. Checked before touching it.
+      //
+      // Counting the recipient rows also makes this chip and the "See sends"
+      // drawer agree BY CONSTRUCTION, because they now read the same table. Two
+      // sources for one number is what produced the wrong one.
+      // COUNTED WITH head+exact, NOT by fetching the rows and taking .length.
+      // PostgREST caps an unbounded select at 1000: J2S already holds 1,365 of
+      // these rows, so counting client-side would have quietly reported 1000 and
+      // replaced one wrong number with another, with nothing on screen to say so.
+      // A head request returns the count in Content-Range and transfers no rows.
+      // One request per automation, and an org has a handful.
+      const autos = autoRes.data ?? [];
+      const counts = await Promise.all(
+        autos.map((a) =>
+          supabase
+            .from("automation_run_recipients")
+            .select("id", { count: "exact", head: true })
+            .eq("organization_id", org.id)
+            .eq("automation_id", a.id)
+            .then(({ count, error }) => ({ id: a.id, count: error ? null : (count ?? 0) })),
+        ),
+      );
+      for (const { id, count } of counts) {
+        // A failed count leaves the chip off rather than showing 0, because "0
+        // sends" and "we could not count" are different claims.
+        if (count === null) continue;
+        if (!stats[id]) stats[id] = { last_fired: null, total_runs: 0, total_sent: 0, total_time_saved: 0 };
+        stats[id].total_sent = count;
+      }
       setRunStats(stats);
 
       // 'active' is the only stripe_account_status that means payments flow.
@@ -576,6 +621,25 @@ export default function AutomationsTab() {
                         Last sent {relativeTime(stats.last_fired)}
                       </Chip>
                     )}
+                    {/* "Last sent 4 days ago" was as far as this screen went, and
+                        it is the sentence Jeff could not get past: it says
+                        something happened without saying to whom, or whether it
+                        arrived. Only offered once the automation HAS fired, so it
+                        is never a control that opens an empty drawer. */}
+                    {auto?.id && stats?.last_fired && (
+                      <button
+                        type="button"
+                        onClick={() => setSendsFor({ id: auto.id, title: tpl.display_name })}
+                        style={{
+                          background: "transparent", border: `1px solid ${RULE}`, color: PURPLE,
+                          padding: "3px 10px", borderRadius: 999, fontSize: 12, fontWeight: 600,
+                          fontFamily: "inherit", cursor: "pointer", lineHeight: 1.4,
+                        }}
+                        title="See who this automation emailed, and whether it arrived"
+                      >
+                        See sends →
+                      </button>
+                    )}
                     {stats?.total_sent > 0 && (
                       <Chip color={OK} bg="#ecf6ec">
                         ⏱ {formatTimeSaved(stats.total_time_saved)}
@@ -737,6 +801,18 @@ export default function AutomationsTab() {
             </section>
           );
         })
+      )}
+
+      {/* Rendered once at the top level rather than per row: it is a full-screen
+          overlay, so nesting it inside a <li> would tie its stacking context to
+          that row. `sendsFor` carries the id, so one instance serves every card. */}
+      {sendsFor && (
+        <AutomationSendsDrawer
+          automationId={sendsFor.id}
+          title={sendsFor.title}
+          orgId={org.id}
+          onClose={() => setSendsFor(null)}
+        />
       )}
     </div>
   );
