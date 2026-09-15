@@ -26,17 +26,28 @@
 // Multi-tenant gate: org.instructor_pay_enabled MUST be true (locked via
 // trigger so only platform admin can flip it).
 //
-// Idempotency: a UNIQUE PARTIAL INDEX on
+// Idempotency: UNIQUE PARTIAL INDEXES prevent the double-pay race —
 // (instructor_id, camp_session_id) WHERE status IN ('pending','succeeded')
-// prevents the double-pay race. Concurrent clicks → second INSERT fails
-// with 23505 → we return 409 cleanly. Stripe-side idempotency key is
-// `payout_${payoutId}` so retries against either platform stay safe.
+// for camps, and (instructor_id, program_id) WHERE status='pending' for
+// programs. Concurrent clicks → second INSERT fails with 23505 → we return
+// 409 cleanly. Stripe-side idempotency key is `payout_${payoutId}` so
+// retries against either platform stay safe.
+//
+// The program index covers only 'pending' ON PURPOSE (2026-09-14). It used
+// to include 'succeeded' like the camp one, which capped an after-school
+// class at ONE payout for all time: a camp pays once at the end of the week,
+// but a program pays WEEKLY across an 8-week term, so week 2 could never be
+// inserted and payroll reported "already in progress" about a payout that had
+// settled days earlier. Double-pay is not what this index guards — `eligible`
+// below only ever picks up rows with instructor_payout_id === null, so a day
+// already paid cannot be paid twice regardless. The index guards the race,
+// and 'pending' alone is enough for that.
 //
 // Resolver-aware: we read from v_effective_pay_lines, which already
 // resolves sub vs regular and exposes effective_instructor_id, effective_
 // tier, source. Distance bonus is paid ONLY when source='regular' AND
-// distance_bonus_paid_at IS NULL AND there's at least one eligible row
-// (subs don't earn distance bonus).
+// the row is the assignment's FINAL session (is_final_session) AND
+// distance_bonus_paid_at IS NULL (subs don't earn distance bonus).
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
@@ -88,6 +99,7 @@ interface PayLineRow {
   program_assignment_status: string | null;
   distance_bonus_cents_if_regular: number | null;
   distance_bonus_paid_at: string | null;
+  is_final_session: boolean | null;
   organization_id: string;
 }
 
@@ -217,7 +229,7 @@ serve(async (req: Request) => {
         instructor_payout_id, confirmed_by,
         camp_assignment_id, camp_assignment_status,
         program_assignment_id, program_assignment_status,
-        distance_bonus_cents_if_regular, distance_bonus_paid_at,
+        distance_bonus_cents_if_regular, distance_bonus_paid_at, is_final_session,
         organization_id
       `)
       .eq('effective_instructor_id', effectiveInstructorId);
@@ -253,28 +265,42 @@ serve(async (req: Request) => {
     }
 
     // ── distance bonus eligibility ────────────────────────────────────────
-    // Pay distance bonus when: source='regular' AND there's at least one
-    // eligible row from this assignment (regular instructor actually taught
-    // something) AND distance_bonus_paid_at IS NULL AND
+    // Pay distance bonus when: source='regular' AND the row is the assignment's
+    // FINAL session AND distance_bonus_paid_at IS NULL AND
     // distance_bonus_cents > 0.
-    // Pick the bonus from any eligible row in the group (they all share the
-    // same parent assignment and thus the same bonus value). The parent
-    // assignment id we mark afterward depends on kind.
-    const firstRegular = eligible.find((r) => r.source === 'regular');
+    //
+    // is_final_session is the change of 2026-09-14. Before it, the gate was
+    // "any eligible regular row", which on an 8-week after-school term paid the
+    // gas money in week 1 — the operator attaches gas for the whole term's
+    // driving and it went out before almost any of that driving happened. It
+    // now rides the LAST class that instructor teaches for the program.
+    //
+    // The column lives in v_effective_pay_lines, not here, because Payroll.jsx
+    // has to promise exactly what this function will move. Every past drift
+    // between the two was a modal quoting a total the server then refused; one
+    // column read by both is the only shape that cannot drift. Camp rows are
+    // TRUE unconditionally, so camps are unchanged — their single payout has
+    // always been their last.
+    //
+    // `=== true` and not a truthy test: the column is nullable on the wire and
+    // NULL means "could not derive the schedule", which must not pay.
+    const bonusRow = eligible.find(
+      (r) => r.source === 'regular' && r.is_final_session === true,
+    );
     let distanceBonusCents = 0;
     let includesDistanceBonus = false;
     let campAssignmentIdForBonus: string | null = null;
     let programAssignmentIdForBonus: string | null = null;
     if (
-      firstRegular &&
-      firstRegular.distance_bonus_paid_at === null &&
-      firstRegular.distance_bonus_cents_if_regular !== null &&
-      firstRegular.distance_bonus_cents_if_regular > 0
+      bonusRow &&
+      bonusRow.distance_bonus_paid_at === null &&
+      bonusRow.distance_bonus_cents_if_regular !== null &&
+      bonusRow.distance_bonus_cents_if_regular > 0
     ) {
-      distanceBonusCents = firstRegular.distance_bonus_cents_if_regular;
+      distanceBonusCents = bonusRow.distance_bonus_cents_if_regular;
       includesDistanceBonus = true;
-      campAssignmentIdForBonus    = firstRegular.camp_assignment_id;
-      programAssignmentIdForBonus = firstRegular.program_assignment_id;
+      campAssignmentIdForBonus    = bonusRow.camp_assignment_id;
+      programAssignmentIdForBonus = bonusRow.program_assignment_id;
     }
 
     // ── sum ───────────────────────────────────────────────────────────────
@@ -337,10 +363,67 @@ serve(async (req: Request) => {
       // it protects, it cannot be orphaned that way.
     }
 
-    // ── pre-insert payout row (status=pending) ────────────────────────────
-    // Unique partial index on (instructor_id, camp_session_id) WHERE
-    // status IN ('pending','succeeded') is the double-pay guard.
     const confirmationIds = eligible.map((r) => r.confirmation_id);
+
+    // ── re-pay guard that does not depend on the confirmations stamp ──────
+    // REQUIRED BY the index narrowing at the top of this file, and added in the
+    // same change (2026-09-14). Read this before ever widening either one.
+    //
+    // The normal defence against paying a day twice is that a paid day carries
+    // instructor_payout_id and therefore drops out of `eligible`. But the write
+    // that stamps it (search "confirmations update failed") is explicitly
+    // NON-FATAL: money has already moved by then, so a failure there is logged
+    // and swallowed. In that window the days look unpaid forever.
+    //
+    // The old program index covered 'succeeded' as well as 'pending', so it
+    // happened to backstop exactly this: a second payout for the same
+    // instructor+program was refused whether or not the stamp landed. Narrowing
+    // it to 'pending' — which is what makes weekly payouts possible at all —
+    // takes that backstop away, and would let one failed stamp turn into a
+    // second real transfer for days already paid.
+    //
+    // So guard on the record that is written RELIABLY: the payout row itself
+    // lists the confirmations it covered, and it is inserted before any money
+    // moves. Overlap means those exact days already belong to a payout. This is
+    // strictly more precise than the index ever was — it blocks re-paying the
+    // same days while leaving next week free, which is the whole point.
+    {
+      const priorBase = supabase
+        .from('instructor_payouts')
+        .select('id, status, session_confirmation_ids')
+        .eq('instructor_id', effectiveInstructorId)
+        .in('status', ['pending', 'succeeded']);
+      const { data: priorPayouts, error: priorErr } = kind === 'camp'
+        ? await priorBase.eq('camp_session_id', campSessionId)
+        : await priorBase.eq('program_id', programId);
+      if (priorErr) {
+        // Fail CLOSED. Not being able to read the prior payouts means we cannot
+        // tell whether this would be a second payment for the same days, and
+        // guessing wrong spends real money that cannot be pulled back.
+        console.error('[pay-instructor] prior payout lookup failed:', priorErr);
+        return json({ error: 'lookup_failed' }, 500);
+      }
+      const alreadyCovered = new Set(
+        (priorPayouts ?? []).flatMap(
+          (p) => (p as { session_confirmation_ids: string[] | null }).session_confirmation_ids ?? [],
+        ),
+      );
+      const overlap = confirmationIds.filter((id) => alreadyCovered.has(id));
+      if (overlap.length > 0) {
+        return json({
+          error: 'sessions_already_paid',
+          detail:
+            `${overlap.length} of these ${confirmationIds.length} day(s) are already on an earlier payout. ` +
+            'Refresh the page — if they still show as unpaid, the payout landed but the days were not marked, ' +
+            'and that needs fixing before paying again.',
+        }, 409);
+      }
+    }
+
+    // ── pre-insert payout row (status=pending) ────────────────────────────
+    // The unique partial indexes (see the file header) stop two concurrent
+    // clicks; the overlap check above stops a repeat of an already-settled
+    // payout. Both are needed — neither covers the other's case.
     const { data: rowData, error: insErr } = await supabase
       .from('instructor_payouts')
       .insert({
@@ -362,12 +445,15 @@ serve(async (req: Request) => {
     if (insErr || !rowData) {
       const code = (insErr as { code?: string } | null)?.code;
       if (code === '23505') {
-        // Unique partial index hit — one guard for camp, parallel guard for program.
+        // Unique partial index hit — one guard for camp, parallel guard for
+        // program. The wording differs because the indexes differ: the camp one
+        // also covers 'succeeded', the program one covers 'pending' only, so a
+        // program 23505 genuinely IS a payout in flight right now.
         return json({
           error: 'payout_already_in_flight',
           detail: kind === 'camp'
             ? 'A pending or succeeded payout already exists for this instructor on this camp. Refresh and try again.'
-            : 'A pending or succeeded payout already exists for this instructor on this program. Refresh and try again.',
+            : 'A payout for this instructor on this class is being sent right now. Refresh and try again.',
         }, 409);
       }
       console.error('[pay-instructor] payout row insert failed:', insErr);
