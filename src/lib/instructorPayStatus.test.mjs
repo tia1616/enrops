@@ -73,6 +73,38 @@ ok("'paid' does not share a colour tone with 'approved'", () => {
   assert.notEqual(friendlyPayStatus('paid').tone, friendlyPayStatus('approved').tone);
 });
 
+// 2b — a withheld day that nets NOTHING must not tell anyone to chase it.
+// Withholding normally zeroes the day (amount $80, adjustment -$80), so "Held --
+// contact admin" on $0 invites a message about money that was never owed. Every
+// branch has to be true in the state that selects it:
+//   withheld, $0   -> "Not paid"                  true: nothing was paid, nothing owed
+//   withheld, $80  -> "Held -- contact admin"     true: money is genuinely held
+ok('a withheld day that nets zero does not say contact admin', () => {
+  const z = friendlyPayStatus('withheld', 0);
+  assert.equal(z.label, 'Not paid');
+  assert.notEqual(z.tone, friendlyPayStatus('withheld', 8000).tone, 'a $0 card must not read as alarming as a held one');
+});
+
+ok('a withheld day with REAL money still says contact admin', () => {
+  assert.equal(friendlyPayStatus('withheld', 8000).label, 'Held — contact admin');
+  assert.equal(friendlyPayStatus('withheld', -500).label, 'Held — contact admin');
+});
+
+ok('omitting the amount keeps the conservative wording', () => {
+  // Wrong in the direction that costs a question, never in the direction that
+  // stops someone chasing money they are owed.
+  assert.equal(friendlyPayStatus('withheld').label, 'Held — contact admin');
+  assert.equal(friendlyPayStatus('withheld', undefined).label, 'Held — contact admin');
+  assert.equal(friendlyPayStatus('withheld', null).label, 'Held — contact admin');
+});
+
+ok('the zero rule applies ONLY to withheld', () => {
+  // A $0 card that is paid, approved or processing keeps its own word.
+  assert.equal(friendlyPayStatus('paid', 0).label, 'Paid');
+  assert.equal(friendlyPayStatus('approved', 0).label, 'Approved for payout');
+  assert.equal(friendlyPayStatus('pending', 0).label, 'Processing');
+});
+
 // 3 — no silent default. This is the property that makes gate 1 meaningful: if
 // unknown statuses fell back to a word, a missing status would never be visible.
 ok('an unknown status returns null rather than borrowing a word', () => {
@@ -194,6 +226,28 @@ ok('every tone has a colour in InstructorPortal TONE_COLOR', () => {
   const coloured = [...block[1].matchAll(/^\s*(\w+)\s*:/gm)].map((m) => m[1]);
   const missing = PAY_TONES.filter((t) => !coloured.includes(t));
   assert.deepEqual(missing, [], `tones with no colour: ${missing.join(', ')}`);
+});
+
+// The behavioural cases above cannot see the CALL SITE. Drop the amount there and
+// every one of them still passes while the screen silently goes back to telling
+// people to contact an admin about $0 -- a test passing for the wrong reason.
+ok('PayEntryCard passes the card amount to friendlyPayStatus', () => {
+  const here = fileURLToPath(new URL('.', import.meta.url));
+  const src = readFileSync(join(here, '..', 'pages', 'portal', 'InstructorPortal.jsx'), 'utf8');
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+  assert.ok(/friendlyPayStatus\(\s*status\s*,\s*grand\s*\)/.test(code),
+    'friendlyPayStatus must receive the card amount, or a $0 withheld card reads "contact admin" again');
+});
+
+// Found by looking at the rendered card, not by reading code: dollars() returns ""
+// for zero, so a fully-withheld card showed "Base: $80" with a BLANK total beside
+// "Not paid" -- which reads as a figure that failed to load.
+ok('the card total renders $0 rather than blank', () => {
+  const here = fileURLToPath(new URL('.', import.meta.url));
+  const src = readFileSync(join(here, '..', 'pages', 'portal', 'InstructorPortal.jsx'), 'utf8');
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+  assert.ok(/\{dollars\(grand\)\s*\|\|\s*"\$0"\}/.test(code),
+    'the card amount must fall back to $0; dollars() renders zero as an empty string');
 });
 
 ok('the old silently-defaulting helpers are gone from the page', () => {

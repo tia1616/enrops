@@ -5169,7 +5169,11 @@ function PayEntryCard({ entry }) {
   // friendlyPayStatus returns null for a status it has never been told about. Show
   // the raw value rather than defaulting: a `default:` branch is exactly what let
   // 'paid' masquerade as "Processing" for the whole life of payouts.
-  const friendly = friendlyPayStatus(status);
+  // `grand` is passed because a withheld day that nets nothing should not tell an
+  // instructor to contact anyone about it -- see friendlyPayStatus. It is the same
+  // number rendered as the card's amount, so the badge and the figure beside it
+  // cannot disagree.
+  const friendly = friendlyPayStatus(status, grand);
   const statusLabel = friendly?.label ?? status;
   const statusColor = friendly ? TONE_COLOR[friendly.tone] : MUTED;
 
@@ -5196,7 +5200,13 @@ function PayEntryCard({ entry }) {
         </div>
         <div style={{ textAlign: "right", minWidth: 120 }}>
           <div style={{ fontSize: 18, fontWeight: 700, color: INK }}>
-            {dollars(grand)}
+            {/* dollars() returns "" for zero, which is right where it hides an
+                absent bonus line but wrong for THE TOTAL: a fully-withheld card
+                rendered its amount as blank, so it read "Base: $80" with no total
+                beside it -- like the figure had failed to load, and half-implying
+                the $80 was owed. Only reachable since a $0 card started saying
+                "Not paid" instead of "Held", which is how it was found. */}
+            {dollars(grand) || "$0"}
           </div>
           <div
             style={{
@@ -5257,6 +5267,9 @@ const TONE_COLOR = {
   good: OK_GREEN,
   paid: "#1f6f4a",
   bad: CORAL,
+  // "Not paid" on a zero card is a statement of fact, not a problem to chase, so
+  // it reads in the muted grey rather than the coral used for money actually held.
+  off: MUTED,
 };
 
 function emptyTotals() {
