@@ -95,7 +95,7 @@ const KNOWN_UNPINNED = new Set([
   'import-partners-write', 'link-instructor',
   'marketing-delete-draft', 'marketing-touchpoint-cron', 'match-afterschool',
   'match-instructors', 'notify-instructor-removed',
-  'offer-message-reply', 'offer-reminders-cron', 'pay-instructor',
+  'offer-message-reply', 'pay-instructor',
   'polish-skills', 'refund-registration', 'replay-digest',
   'request-resume-onboarding', 'respond-to-assignment', 'respond-to-sub-offer',
   // The four offer senders came OFF this list on 2026-08-18: a parity sweep found
@@ -107,6 +107,15 @@ const KNOWN_UNPINNED = new Set([
   // 2026-08-13 shape exactly. Their live setting was read from the API on BOTH
   // projects before pinning - true on staging and true on prod - so config.toml
   // now records what is already deployed. The ratchet tightens by two more.
+  //
+  // offer-reminders-cron came OFF on 2026-09-15, and the way it got pinned is the
+  // reason this check exists. Deploying it with --no-verify-jwt flipped the live
+  // setting to false, and deploying again WITHOUT the flag did not put it back:
+  // the CLI only writes verify_jwt when config declares it, and this function had
+  // no entry. "I redeployed it" therefore looked like a fix and left it public
+  // until it was diffed against prod. Pinned true (read off BOTH projects first,
+  // and an unauthenticated POST now returns 401 on each). The ratchet tightens by
+  // one more.
   'send-afterschool-survey', 'send-availability-survey',
   'stripe-connect-onboard', 'stripe-oauth-disconnect', 'stripe-oauth-start',
   'submit-acknowledgments', 'submit-agreement', 'submit-feedback',
