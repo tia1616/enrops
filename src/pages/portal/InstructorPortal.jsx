@@ -5119,8 +5119,9 @@ function PayTotalsCard({ totals }) {
           three $0 tiles to find the one number that matters, and an instructor with
           nothing held should never see the words "On hold" at all. The visible tiles
           still sum to Total earned, because a hidden one is zero by definition.
-          auto-fit rather than a fixed column count: this screen is used on a phone,
-          and four fixed columns put $1,234.56 on two lines. */}
+          auto-fit rather than a fixed column count because instructors read this on
+          a phone: at 375px it lays the tiles out 2x2 (verified on staging) instead
+          of squeezing four into one row. */}
       {STAGE_TILES.some((t) => totals.byStage[t.key] !== 0) && (
         <div style={{
           display: "grid",
