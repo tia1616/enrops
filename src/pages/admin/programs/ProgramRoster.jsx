@@ -58,6 +58,16 @@ function fmtTime(t) {
   return m === 0 ? `${hr12}${ampm}` : `${hr12}:${String(m).padStart(2, "0")}${ampm}`;
 }
 
+// THE ONLY TWO DOORS into this page, each with the words its own link must say.
+// One map, so a destination can never be rendered under another one's label.
+// Anything not listed -- a hand-crafted ?from, or a link added later that forgets
+// to register here -- falls back to Programs and is labelled Programs.
+const BACK_DOORS = {
+  "/admin/rosters": "← Back to rosters",
+  "/admin/programs": "← Back to programs",
+};
+const DEFAULT_DOOR = "/admin/programs";
+
 function gradeLabel(g) {
   if (g == null) return "";
   return g === 0 ? "K" : String(g);
@@ -313,15 +323,22 @@ export default function ProgramRoster() {
   // state does not survive any of those -- the back link would silently revert to
   // Programs exactly for the person who stayed on the page longest.
   //
-  // Read through safeReturnPath because it is a URL parameter and therefore
-  // attacker-supplied by definition; it already rejects absolute URLs, //host and
-  // backslash tricks and is tested. The fallback is today's behaviour, so any
-  // other entry point, and any tampered value, lands exactly where it does now.
+  // WHAT ACTUALLY CLOSES THE REDIRECT is the BACK_DOORS allowlist below: ?from is
+  // compared for exact membership, so "https://evil.example" is not a door and
+  // never becomes one. safeReturnPath is kept in front of it as belt and braces --
+  // it costs one line, and if anyone later loosens the exact match to a prefix or
+  // a startsWith, the guard is already in the path rather than needing to be
+  // remembered. Do not read it as the thing doing the work.
   const [searchParams] = useSearchParams();
-  const backTo = safeReturnPath(searchParams.get("from"), "/admin/programs");
-  // The label must be true in the state that selects it -- a link that says
-  // "programs" and lands on rosters is the same defect wearing the other hat.
-  const backLabel = backTo.startsWith("/admin/rosters") ? "← Back to rosters" : "← Back to programs";
+  // Destination and label come from ONE map, so they cannot disagree. The first
+  // version of this computed them as two separate expressions -- an allow-anything
+  // path plus a startsWith on "rosters" -- and /code-review caught that
+  // ?from=/admin/finances rendered "Back to programs" pointing at Finances: a link
+  // that says one destination and delivers another, which is the defect this whole
+  // change exists to remove, reintroduced by the fix for it.
+  const requested = safeReturnPath(searchParams.get("from"), DEFAULT_DOOR);
+  const backTo = Object.prototype.hasOwnProperty.call(BACK_DOORS, requested) ? requested : DEFAULT_DOOR;
+  const backLabel = BACK_DOORS[backTo];
 
   // ---- Render ----
 

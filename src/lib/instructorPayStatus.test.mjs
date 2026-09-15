@@ -33,6 +33,7 @@ import { fileURLToPath } from 'node:url';
 import {
   PAY_STATUSES,
   PART_PAID,
+  PAY_TONES,
   groupPayStatus,
   friendlyPayStatus,
   payStage,
@@ -179,6 +180,20 @@ ok('InstructorPortal tiles cover exactly the buckets emptyStages makes', () => {
   assert.ok(block, 'STAGE_TILES not found in InstructorPortal.jsx');
   const tiled = [...block[1].matchAll(/key:\s*"([a-z]+)"/g)].map((m) => m[1]).sort();
   assert.deepEqual(tiled, Object.keys(emptyStages()).sort());
+});
+
+// 7 — the OTHER pair of maps that must agree, and the one /code-review caught on
+// 2026-09-15: every tone this module returns needs a colour in the page's palette.
+// A missing one is invisible -- `color: undefined` and `background: "undefined1F"`
+// are not valid CSS, so the badge simply renders unstyled and nothing errors.
+ok('every tone has a colour in InstructorPortal TONE_COLOR', () => {
+  const here = fileURLToPath(new URL('.', import.meta.url));
+  const src = readFileSync(join(here, '..', 'pages', 'portal', 'InstructorPortal.jsx'), 'utf8');
+  const block = src.match(/const TONE_COLOR = \{([\s\S]*?)\};/);
+  assert.ok(block, 'TONE_COLOR not found in InstructorPortal.jsx');
+  const coloured = [...block[1].matchAll(/^\s*(\w+)\s*:/gm)].map((m) => m[1]);
+  const missing = PAY_TONES.filter((t) => !coloured.includes(t));
+  assert.deepEqual(missing, [], `tones with no colour: ${missing.join(', ')}`);
 });
 
 ok('the old silently-defaulting helpers are gone from the page', () => {

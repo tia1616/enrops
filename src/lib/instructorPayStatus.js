@@ -100,6 +100,18 @@ export function friendlyPayStatus(status) {
 }
 
 /**
+ * Every tone this module can hand back. The page owning the palette must have a
+ * colour for each, and instructorPayStatus.test.mjs holds the two together.
+ *
+ * Exported because a tone with no colour fails SILENTLY and invisibly: the badge
+ * renders `color: undefined` and `background: "undefined1F"`, which is not valid
+ * CSS, so nothing throws and nothing logs -- an unstyled badge is the only sign.
+ * That is a second pair of maps that must agree, which is the exact shape of the
+ * bug this file was written to fix, so it gets a gate rather than a convention.
+ */
+export const PAY_TONES = [...new Set(Object.values(LABELS).map((l) => l.tone))];
+
+/**
  * Which total a row's money belongs under. The four buckets are disjoint and cover
  * every status, so the buckets always sum to the headline total.
  *

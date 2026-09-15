@@ -38,9 +38,19 @@ const ok = (name, fn) => {
   catch (e) { fail++; console.error(`FAIL  ${name}\n      ${e.message}`); }
 };
 
+// Mirrors ProgramRoster.jsx: one map, exact membership, everything else falls back.
+// Asserted against the real source at the bottom of this file so the two cannot
+// drift apart.
+const BACK_DOORS = {
+  '/admin/rosters': '← Back to rosters',
+  '/admin/programs': '← Back to programs',
+};
 const FALLBACK = '/admin/programs';
-const backTo = (from) => safeReturnPath(from, FALLBACK);
-const backLabel = (to) => (to.startsWith('/admin/rosters') ? '← Back to rosters' : '← Back to programs');
+const backTo = (from) => {
+  const requested = safeReturnPath(from, FALLBACK);
+  return Object.prototype.hasOwnProperty.call(BACK_DOORS, requested) ? requested : FALLBACK;
+};
+const backLabel = (to) => BACK_DOORS[to];
 
 // The two real doors.
 ok('opened from Rosters, Back returns to Rosters', () => {
@@ -56,12 +66,41 @@ ok('opened from the Programs calendar, Back still returns to Programs', () => {
 
 // Gate E: the label must be true in the state that selects it. A link reading
 // "programs" that lands on rosters is the same defect, reversed.
+// This assertion USED to iterate only the two doors, null, '' and two off-site
+// values -- so it never exercised a third same-site path and passed while
+// ?from=/admin/finances rendered "Back to programs" pointing at Finances.
+// /code-review found that on 2026-09-15. The list below is the fix: every input
+// class, including same-site paths that are not doors.
 ok('the label always matches the destination', () => {
-  for (const from of ['/admin/rosters', '/admin/programs', null, '', 'https://evil.example', '//evil.example']) {
+  const inputs = [
+    '/admin/rosters', '/admin/programs',          // the two real doors
+    '/admin/finances', '/admin/contacts',          // same-site, NOT a door
+    '/admin/rostersXYZ', '/admin/rosters/extra',   // prefix lookalikes
+    '/admin/rosters?site=jackson',                 // a door with a query string
+    null, '', '   ',                               // absent or empty
+    'https://evil.example', '//evil.example',      // off-site
+  ];
+  for (const from of inputs) {
     const to = backTo(from);
     const said = backLabel(to);
-    assert.equal(said === '← Back to rosters', to.startsWith('/admin/rosters'),
+    assert.ok(to in BACK_DOORS, `destination "${to}" is not a known door (from=${JSON.stringify(from)})`);
+    assert.equal(said, BACK_DOORS[to],
       `label "${said}" disagrees with destination "${to}" for from=${JSON.stringify(from)}`);
+  }
+});
+
+ok('a same-site path that is not a door falls back to Programs', () => {
+  // The finding itself, pinned. Before the fix this returned /admin/finances
+  // under a "Back to programs" label.
+  assert.equal(backTo('/admin/finances'), '/admin/programs');
+  assert.equal(backLabel(backTo('/admin/finances')), '← Back to programs');
+});
+
+ok('a prefix lookalike is not treated as the Rosters door', () => {
+  // startsWith('/admin/rosters') matched these and sent people to routes that
+  // do not exist, labelled "Back to rosters".
+  for (const near of ['/admin/rostersXYZ', '/admin/rosters/extra', '/admin/rosters?site=jackson']) {
+    assert.equal(backTo(near), '/admin/programs', `${near} should not be the rosters door`);
   }
 });
 
@@ -94,10 +133,20 @@ ok('the roster page reads ?from through the guard, with the Programs fallback', 
   const src = readFileSync(join(here, '..', 'pages', 'admin', 'programs', 'ProgramRoster.jsx'), 'utf8');
   const code = src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
 
-  assert.ok(/safeReturnPath\(\s*searchParams\.get\(["']from["']\)\s*,\s*["']\/admin\/programs["']\s*\)/.test(code),
-    'must read ?from through safeReturnPath with the /admin/programs fallback');
+  assert.ok(/safeReturnPath\(\s*searchParams\.get\(["']from["']\)\s*,\s*DEFAULT_DOOR\s*\)/.test(code),
+    'must read ?from through safeReturnPath');
+  assert.ok(/hasOwnProperty\.call\(BACK_DOORS,\s*requested\)/.test(code),
+    'the destination must be an EXACT member of BACK_DOORS, not a prefix or startsWith match');
+  assert.ok(/backLabel\s*=\s*BACK_DOORS\[backTo\]/.test(code),
+    'the label must be read from the same map as the destination, never computed separately');
   assert.ok(!/to="\/admin\/programs"/.test(code),
     'a hardcoded back-to-programs link is back; every one must use the computed target');
+
+  // The doors this test reasons about must be the doors the page actually has.
+  const doors = [...(code.match(/const BACK_DOORS = \{([\s\S]*?)\};/)?.[1] ?? '')
+    .matchAll(/["']([^"']+)["']\s*:/g)].map((m) => m[1]).sort();
+  assert.deepEqual(doors, Object.keys(BACK_DOORS).sort(),
+    'BACK_DOORS in ProgramRoster.jsx has drifted from the set this test checks');
 });
 
 ok('the Rosters list passes its own door in the link', () => {
