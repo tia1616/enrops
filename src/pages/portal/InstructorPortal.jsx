@@ -36,7 +36,7 @@ import {
   distanceBonusStage,
   emptyStages,
 } from "../../lib/instructorPayStatus.js";
-import { earlyReleaseLine } from "../../lib/timeText.js";
+import { earlyReleaseLine, formatTimeText } from "../../lib/timeText.js";
 import { linkifyText } from "../../lib/linkifyText.jsx";
 import { WAITLIST_STATUS } from "../../lib/waitlistState.js";
 import PwaInstallButton from "../../components/pwa/PwaInstallButton.jsx";
@@ -71,13 +71,14 @@ function fmtShort(date) {
   return new Date(`${date}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function fmtTime(t) {
-  if (!t) return "";
-  const [h, m] = t.split(":").map(Number);
-  const hr12 = ((h + 11) % 12) + 1;
-  const ampm = h >= 12 ? "pm" : "am";
-  return m === 0 ? `${hr12}${ampm}` : `${hr12}:${String(m).padStart(2, "0")}${ampm}`;
-}
+// fmtTime lived here and split on ":" with no guard, so it assumed a 24-hour
+// clock. camp_sessions.start_time is a Postgres `time` and really is 24-hour, so
+// the camp screens were fine -- but programs.start_time is TEXT and the corpus is
+// 12-hour ("2:35 PM"), which made Number("35 PM") NaN and printed "2:NaNam" to
+// every instructor on every after-school class. Removed in favour of
+// formatTimeText from lib/timeText.js, which handles both and whose own header
+// asks new code to import it rather than add another copy. Proven equivalent on
+// all 1440 possible 24-hour times before the swap, so camp display is unchanged.
 
 function titleCase(s) {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : "";
@@ -2422,7 +2423,7 @@ function AssignmentCard({ assignment, coInstructors = [], messages = [], busy, o
           </div>
           <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.4 }}>
             Week {s.week_num} · {fmtShort(s.starts_on)} – {fmtShort(s.ends_on)}<br />
-            {s.location_name} · {titleCase(s.session_type)} {fmtTime(s.start_time)}–{fmtTime(s.end_time)}
+            {s.location_name} · {titleCase(s.session_type)} {formatTimeText(s.start_time)}–{formatTimeText(s.end_time)}
           </div>
         </div>
         <span style={{ fontSize: 11, color: statusColor, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right", maxWidth: 130, flexShrink: 0, lineHeight: 1.35 }}>
@@ -3263,7 +3264,7 @@ function AssignmentDetailView({ assignment, instructor, coInstructors = [], onBa
         </h1>
         <div style={{ fontSize: 13, color: MUTED, marginTop: 6, lineHeight: 1.5 }}>
           Week {s.week_num} · {fmt(s.starts_on)} – {fmt(s.ends_on)}<br />
-          {s.location_name} · {titleCase(s.session_type)} {fmtTime(s.start_time)}–{fmtTime(s.end_time)}<br />
+          {s.location_name} · {titleCase(s.session_type)} {formatTimeText(s.start_time)}–{formatTimeText(s.end_time)}<br />
           {role} instructor
           {(s.ages_min || s.ages_max) ? ` · ages ${s.ages_min ?? "?"}–${s.ages_max ?? "?"}` : ""}
         </div>
@@ -4962,7 +4963,7 @@ function PayView({ instructorId, onBack, stripePayEnabled }) {
               const assn = progAssnByProgram.get(r.program_id);
               const when = [
                 asDayName(prog.day_of_week),
-                [prog.start_time, prog.end_time].filter(Boolean).map(fmtTime).join("–"),
+                [prog.start_time, prog.end_time].filter(Boolean).map(formatTimeText).join("–"),
               ].filter(Boolean).join(" · ");
               grouped.set(key, {
                 key, kind: "program",
