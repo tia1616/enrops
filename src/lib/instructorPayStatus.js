@@ -38,6 +38,14 @@ export const PAY_STATUSES = ['pending', 'approved', 'adjusted', 'withheld', 'pai
 // one has been paid. See groupPayStatus.
 export const PART_PAID = 'part_paid';
 
+// Synthetic, never stored: withheld AND netting nothing. Withholding a day normally
+// zeroes it (amount $80, adjustment -$80), so the common case is a day that simply
+// was not paid rather than money sitting in limbo -- and the card already prints the
+// recorded reason ("sub") underneath, so the badge does not need to guess a cause.
+// Only reachable through friendlyPayStatus, which is the one place that sees both
+// the status and the money.
+export const ZERO_HELD = 'withheld_zero';
+
 // Least-advanced first. Used ONLY to headline a group in which nothing has been
 // paid yet, so that a held or still-processing day is never hidden behind a more
 // advanced sibling. This is the original precedence order from the function this
@@ -86,6 +94,9 @@ const LABELS = {
   paid: { label: 'Paid', tone: 'paid' },
   [PART_PAID]: { label: 'Part paid', tone: 'info' },
   withheld: { label: 'Held — contact admin', tone: 'bad' },
+  // Deliberately not alarming and deliberately not a cause: the day was not paid,
+  // and the reason line under the card says why.
+  [ZERO_HELD]: { label: 'Not paid', tone: 'off' },
 };
 
 /**
@@ -94,8 +105,19 @@ const LABELS = {
  * added to the database without being added here is visible instead of silently
  * wearing some other status's word. Colour is returned as a `tone` key rather than a
  * hex value so the palette stays in the page that owns it.
+ *
+ * `netCents` is the money the group actually comes to, and it only changes ONE
+ * answer: a withheld day is normally zeroed (amount $80, adjustment -$80), so
+ * "Held -- contact admin" invites a message about money that was never owed. When
+ * there is genuinely money being held back, that wording is right and stays.
+ *
+ * Omitting netCents keeps the "contact admin" wording. That is the conservative
+ * direction: being told to ask about money that turns out to be nothing costs a
+ * question, while being told "Not paid" over money actually held would stop
+ * someone chasing what they are owed.
  */
-export function friendlyPayStatus(status) {
+export function friendlyPayStatus(status, netCents) {
+  if (status === 'withheld' && netCents === 0) return LABELS[ZERO_HELD];
   return LABELS[status] ?? null;
 }
 
