@@ -1,15 +1,68 @@
 # Supabase project config — primarily codifies per-function verify_jwt so
 # deploys can't silently flip a webhook to require-JWT (which breaks Stripe/
 # Checkr) or expose an authed endpoint. Values mirror PROD's live settings
-# (verified 2026-06-08). Functions not listed default to verify_jwt = true.
+# (verified 2026-06-08).
+#
+# "FUNCTIONS NOT LISTED DEFAULT TO verify_jwt = true" WAS TRUE AND IS NOT A
+# SAFETY NET, which cost a real incident on 2026-08-13 (staging only, caught and
+# reverted the same minute). The default applies when a function is FIRST
+# created. On a redeploy the CLI simply omits the field for any function it has
+# no config entry for, and the API keeps whatever the last deploy set — so a
+# single `--no-verify-jwt` deploy turns verification off PERMANENTLY, and
+# redeploying "correctly" without the flag does not put it back. Five authed
+# onboarding endpoints sat with the gateway wide open until they were pinned
+# here explicitly.
+#
+# THE SECTION BELOW IS NOT COMPLETE, AND SAYING SO IS THE POINT. It pins the
+# five functions the incident touched. Roughly 73 of 105 function directories
+# still have no entry — including submit-agreement, submit-acknowledgments and
+# get-legal-document, and including pay-instructor, refund-registration,
+# export-finances, admin-invite, admin-set-member-role, admin-remove-member,
+# stripe-oauth-start and stripe-oauth-disconnect. The note at
+# stripe-oauth-disconnect below ("must NEVER be public — it detaches the account
+# a business gets paid through") rests on the very default this incident proved
+# is not a safety net. An earlier draft of this header claimed the file was now
+# exhaustive; it is not, and a config that reads as covered when it is not is
+# worse than one that admits the gap.
+#
+# So: if you add an authed function, list it — and pinning the rest is real work
+# that is written down rather than done here. It needs care, not a loop:
+# backup-storage-objects MUST stay verify_jwt = false (it authenticates with a
+# Vault secret and is the only off-site backup of signed agreements and BGC
+# PDFs), so pinning it true would silently kill it. The right shape is a test
+# that lists supabase/functions/* and fails on anything unlisted, added at the
+# same time as the pins.
+#
+# The one-line check that any given line here is telling the truth is a request
+# with no Authorization header — the gateway answers
+# `UNAUTHORIZED_NO_AUTH_HEADER` when verification is on, and the function's own
+# error when it is off.
 project_id = "enrops"
 
-# ── verify_jwt = true (pinned rather than left to the default) ──
+# ── verify_jwt = true (authed endpoints, pinned rather than assumed) ──
+# These take a signed-in user's JWT. Each also does its own auth check, which is
+# why the outage above was not a data breach — but that check is defence in
+# depth, not the gate, and it must not be the only thing standing there.
+[functions.update-onboarding-step]
+verify_jwt = true
+
+[functions.reconcile-onboarding-gate]
+verify_jwt = true
+
+[functions.submit-training]
+verify_jwt = true
+
+[functions.admin-upload-background-check]
+verify_jwt = true
+
+[functions.refresh-stripe-status]
+verify_jwt = true
+
 # The four offer senders. PINNED 2026-08-18 after a parity sweep found all four
 # deployed as verify_jwt = FALSE on staging while PROD had them TRUE — the exact
 # drift that makes a staging test meaningless, since the platform gate a tester
 # exercises is not the one prod applies. Staging was tightened to match prod
-# (never the reverse: prod is correct here, and loosening it would put an
+# (never the reverse: prod is the correct setting, and loosening it would put an
 # unauthenticated caller in front of a bulk email send).
 #
 # Each one takes an admin's JWT and re-checks org_members owner/admin itself, so
@@ -25,10 +78,49 @@ verify_jwt = true
 [functions.send-afterschool-offers]
 verify_jwt = true
 
+# Added 2026-09-14 after I broke it. This function had NO block, and a block is
+# the only thing that makes a deploy restore the setting: deploying with
+# --no-verify-jwt flips the remote value to false, and deploying again WITHOUT
+# the flag does not put it back -- the CLI only writes verify_jwt when config
+# says so. Its two siblings above and below recovered on the redeploy because
+# they have blocks; this one silently stayed public until it was checked against
+# prod. It is cron-invoked, and pg_cron sends the service-role key in the
+# Authorization header, so JWT verification is satisfied and correct here.
+[functions.offer-reminders-cron]
+verify_jwt = true
+
 [functions.send-afterschool-patch-offer]
 verify_jwt = true
 
+# PINNED 2026-08-19. Both are edited by the waitlist branch and had no entry here
+# at all, so a plain CLI redeploy would have taken whatever the default is rather
+# than a setting anyone had decided. Checked in the live API before pinning, not
+# assumed: invite-parents and notify-program-curriculum-change are BOTH
+# verify_jwt = true on staging AND prod today, so this records reality and the
+# risk was drift rather than an outage. Both take an operator's JWT.
+[functions.invite-parents]
+verify_jwt = true
+
+[functions.notify-program-curriculum-change]
+verify_jwt = true
+
+# Same reasoning as the two above, pinned on the day it was created rather than
+# after a redeploy drifted it. This one takes an operator's JWT and authorises
+# owner/admin/staff itself before touching anything, so a missing JWT must be a
+# 401 and never an anonymous send to a class's families.
+[functions.notify-program-families]
+verify_jwt = true
+
 # ── verify_jwt = false (public / webhook / cron entrypoints) ──
+[functions.backup-storage-objects]
+# PINNED FIRST, because the header above singles this one out as the highest-risk
+# unlisted function and then — in its first draft — did not actually list it. It
+# authenticates with a Vault secret rather than a JWT and is the only off-site
+# backup of signed contractor agreements and background-check PDFs, so a deploy
+# that flipped it to verify_jwt = true would kill the backups silently: nothing
+# fails visibly, the job just 401s forever. Documenting a risk is not closing it.
+verify_jwt = false
+
 [functions.stripe-webhook]
 verify_jwt = false
 
@@ -51,6 +143,16 @@ verify_jwt = false
 verify_jwt = false
 
 [functions.create-registration]
+verify_jwt = false
+
+# Public: a family joining a waitlist has no account yet, same as registration.
+# Takes no payment. Everything client-supplied is re-resolved server-side.
+[functions.join-waitlist]
+verify_jwt = false
+
+# An invited family has no account - the token in the emailed link IS the credential,
+# so this cannot require a JWT.
+[functions.waitlist-accept]
 verify_jwt = false
 
 [functions.sync-operator-stripe-status]
