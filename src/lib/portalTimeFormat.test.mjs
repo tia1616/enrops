@@ -28,14 +28,16 @@
 //   2. InstructorPortal.jsx defines NO local time formatter -- it must import the
 //      shared one, so there is no copy left to feed a program time into
 //
-// WHAT THIS DOES NOT CHECK. It does not prove other screens are safe. Four more
-// local copies exist (admin/Schedule.jsx and admin/SchedulePrint.jsx are 24-hour
-// only; both were traced on 2026-09-15 to camp_sessions, whose start_time is a
-// Postgres `time`, so they are correct TODAY and would break the day either is
-// pointed at a program). admin/ProgramRoster.jsx and portal/Dashboard.jsx have
-// their own 12-hour branches. Retiring those four in favour of timeText.js is a
-// separate change; this file guards the portal only, and says so rather than
-// implying more.
+//   3. the three camp screens that used to hold 24-hour-only copies still hold
+//      none: admin/Schedule.jsx (board + the schedule EMAIL) and
+//      admin/SchedulePrint.jsx
+//
+// WHAT THIS DOES NOT CHECK. Two local copies remain, both with their own 12-hour
+// branches and therefore not of this bug class: admin/ProgramRoster.jsx and
+// portal/Dashboard.jsx. InstructorPortal's own fmtTimePretty also stays, because
+// its two call sites render a ":00" time as "2pm" where formatTimeText renders
+// "2:00pm"; collapsing it is a display change nobody asked for. None of the three
+// can produce NaN, which is what this file is about.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -106,6 +108,31 @@ ok('InstructorPortal.jsx defines no local time formatter', () => {
       `${name} splits a time with no 12-hour branch and no NaN guard`);
   }
 });
+
+// 3 — the camp screens. These read camp_sessions, whose start_time is a Postgres
+// `time`, so their old 24-hour-only formatters were correct for today's data and
+// wrong only in waiting. Each is pinned so the copy cannot come back.
+for (const rel of [
+  ['pages', 'admin', 'Schedule.jsx'],
+  ['pages', 'admin', 'SchedulePrint.jsx'],
+]) {
+  const name = rel[rel.length - 1];
+  ok(`${name} defines no local time formatter`, () => {
+    const here = fileURLToPath(new URL('.', import.meta.url));
+    const code = readFileSync(join(here, '..', ...rel), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, ' ')
+      .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+
+    assert.ok(/\bformatTimeText\b/.test(code), 'must use formatTimeText');
+    // Any function whose body splits a time on ":" and maps Number is the shape
+    // that NaNs on "2:35 PM". Named generously so a rename does not dodge it.
+    const locals = [...code.matchAll(/function\s+(\w*[Ff]mt\w*[Tt]ime\w*)\s*\(([\s\S]*?)\n\}/g)];
+    for (const [, fn, body] of locals) {
+      assert.ok(!/split\(["']:["']\)/.test(body) || /Number\.isNaN/.test(body) || /[ap]m/i.test(body),
+        `${fn} splits a time with no 12-hour branch and no NaN guard - import formatTimeText instead`);
+    }
+  });
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
