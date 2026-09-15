@@ -5200,7 +5200,13 @@ function PayEntryCard({ entry }) {
         </div>
         <div style={{ textAlign: "right", minWidth: 120 }}>
           <div style={{ fontSize: 18, fontWeight: 700, color: INK }}>
-            {dollars(grand)}
+            {/* dollars() returns "" for zero, which is right where it hides an
+                absent bonus line but wrong for THE TOTAL: a fully-withheld card
+                rendered its amount as blank, so it read "Base: $80" with no total
+                beside it -- like the figure had failed to load, and half-implying
+                the $80 was owed. Only reachable since a $0 card started saying
+                "Not paid" instead of "Held", which is how it was found. */}
+            {dollars(grand) || "$0"}
           </div>
           <div
             style={{

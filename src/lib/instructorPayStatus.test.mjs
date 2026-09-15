@@ -239,6 +239,17 @@ ok('PayEntryCard passes the card amount to friendlyPayStatus', () => {
     'friendlyPayStatus must receive the card amount, or a $0 withheld card reads "contact admin" again');
 });
 
+// Found by looking at the rendered card, not by reading code: dollars() returns ""
+// for zero, so a fully-withheld card showed "Base: $80" with a BLANK total beside
+// "Not paid" -- which reads as a figure that failed to load.
+ok('the card total renders $0 rather than blank', () => {
+  const here = fileURLToPath(new URL('.', import.meta.url));
+  const src = readFileSync(join(here, '..', 'pages', 'portal', 'InstructorPortal.jsx'), 'utf8');
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+  assert.ok(/\{dollars\(grand\)\s*\|\|\s*"\$0"\}/.test(code),
+    'the card amount must fall back to $0; dollars() renders zero as an empty string');
+});
+
 ok('the old silently-defaulting helpers are gone from the page', () => {
   const here = fileURLToPath(new URL('.', import.meta.url));
   const src = readFileSync(join(here, '..', 'pages', 'portal', 'InstructorPortal.jsx'), 'utf8');
