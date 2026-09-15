@@ -12,7 +12,8 @@
 // students" endpoint. Read-only view — no edits here.
 
 import { useEffect, useMemo, useState } from "react";
-import { Link, useParams, useOutletContext } from "react-router-dom";
+import { Link, useParams, useOutletContext, useSearchParams } from "react-router-dom";
+import { safeReturnPath } from "../../../lib/returnPath.js";
 import { supabase } from "../../../lib/supabase.js";
 import { dismissalSummary } from "../../../lib/dismissal.js";
 import { roomDisplay } from "../../../lib/roomLabel.js";
@@ -300,6 +301,28 @@ export default function ProgramRoster() {
   // Invite this program's families into the parent portal (preview-then-send modal).
   const [showInvite, setShowInvite] = useState(false);
 
+  // WHERE "BACK" GOES. This page has two front doors -- Rosters (/admin/rosters)
+  // and the Programs calendar -- and the link used to be hardcoded to Programs for
+  // both. Jeff, 2026-09-15: "the only option to go back takes you back to programs
+  // then I have to click rosters again... I've never needed to go from a class
+  // roster back to all programs." Working a site roster meant paying that detour
+  // on every class.
+  //
+  // The door is carried in the URL rather than in router state on purpose: this is
+  // the PRINTABLE roster, so it gets refreshed, printed and bookmarked, and router
+  // state does not survive any of those -- the back link would silently revert to
+  // Programs exactly for the person who stayed on the page longest.
+  //
+  // Read through safeReturnPath because it is a URL parameter and therefore
+  // attacker-supplied by definition; it already rejects absolute URLs, //host and
+  // backslash tricks and is tested. The fallback is today's behaviour, so any
+  // other entry point, and any tampered value, lands exactly where it does now.
+  const [searchParams] = useSearchParams();
+  const backTo = safeReturnPath(searchParams.get("from"), "/admin/programs");
+  // The label must be true in the state that selects it -- a link that says
+  // "programs" and lands on rosters is the same defect wearing the other hat.
+  const backLabel = backTo.startsWith("/admin/rosters") ? "← Back to rosters" : "← Back to programs";
+
   // ---- Render ----
 
   if (loading) {
@@ -308,7 +331,7 @@ export default function ProgramRoster() {
   if (error === "notfound") {
     return (
       <div style={{ padding: 40 }}>
-        <Link to="/admin/programs" style={backLink}>← Back to programs</Link>
+        <Link to={backTo} style={backLink}>{backLabel}</Link>
         <div style={{ marginTop: 16, color: MUTED }}>That program isn't in your account.</div>
       </div>
     );
@@ -316,7 +339,7 @@ export default function ProgramRoster() {
   if (error) {
     return (
       <div style={{ padding: 40 }}>
-        <Link to="/admin/programs" style={backLink}>← Back to programs</Link>
+        <Link to={backTo} style={backLink}>{backLabel}</Link>
         <div style={{ marginTop: 16, color: RED }}>Couldn't load the roster: {error}</div>
       </div>
     );
@@ -339,7 +362,7 @@ export default function ProgramRoster() {
   return (
     <div style={{ maxWidth: 880, margin: "0 auto" }}>
       <div className="roster-noprint">
-        <Link to="/admin/programs" style={backLink}>← Back to programs</Link>
+        <Link to={backTo} style={backLink}>{backLabel}</Link>
       </div>
 
       {/* Header */}
