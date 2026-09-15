@@ -16,7 +16,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, renderSignatureBlock, formatFromAddress } from '../_shared/orgBrand.ts';
-import { AVAILABILITY_OVERRIDE_NOTE_HTML, AVAILABILITY_OVERRIDE_NOTE_TEXT, hasAvailabilityOverride } from '../_shared/offerCopy.ts';
+import { AVAILABILITY_OVERRIDE_NOTE_HTML, AVAILABILITY_OVERRIDE_NOTE_TEXT, hasAvailabilityOverride, distanceBonusNote } from '../_shared/offerCopy.ts';
 import { roomDisplay } from '../_shared/roomLabel.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
@@ -363,7 +363,7 @@ function renderPatchHtml({ termDisplay, org, primary, instructor, classes, porta
     const loc = p.program_location_id ? locationById.get(p.program_location_id as string) : undefined;
     const venue = renderVenueDetailsHtml(loc, p.room as string | null);
     const bonus = a.distance_bonus_cents ? `
-      <div style="margin-top:6px;font-size:13px;color:${primary};font-weight:600;">Includes a ${dollars(a.distance_bonus_cents as number)} distance bonus</div>` : '';
+      <div style="margin-top:6px;font-size:13px;color:${primary};font-weight:600;">${distanceBonusNote(dollars(a.distance_bonus_cents as number))}</div>` : '';
     // Mirrors send-afterschool-offers and offer-reminders-cron: a resent offer
     // still has to say why we asked against their stated availability.
     const availNote = hasAvailabilityOverride(a.flags)
@@ -434,7 +434,7 @@ function renderPatchText({ termDisplay, org, instructor, classes, portalUrl, dea
     lines.push(`  ${when} · all term`);
     if (loc && loc.name) lines.push(`  ${loc.name as string}`);
     for (const v of renderVenueDetailsText(loc, p.room as string | null)) lines.push(v);
-    if (a.distance_bonus_cents) lines.push(`  Includes a ${dollars(a.distance_bonus_cents as number)} distance bonus`);
+    if (a.distance_bonus_cents) lines.push(`  ${distanceBonusNote(dollars(a.distance_bonus_cents as number))}`);
     if (hasAvailabilityOverride(a.flags)) lines.push(`  ${AVAILABILITY_OVERRIDE_NOTE_TEXT}`);
     lines.push('');
   }
