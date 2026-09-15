@@ -19,6 +19,7 @@ import AssignSubModal from "./AssignSubModal";
 import AfterschoolSchedule from "./AfterschoolSchedule";
 import ClassScheduleView from "./ClassScheduleView.jsx";
 import NeedsCoverBanner from "../../components/NeedsCoverBanner.jsx";
+import { formatTimeText } from "../../lib/timeText.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -140,16 +141,18 @@ function addDaysIso(isoDate, n) {
   return `${y}-${mo}-${da}`;
 }
 
-function fmtTime(t) {
-  if (!t) return "";
-  const [h, m] = t.split(":").map(Number);
-  const hr12 = ((h + 11) % 12) + 1;
-  return m === 0 ? `${hr12}` : `${hr12}:${String(m).padStart(2, "0")}`;
-}
-
+// THIS ONE CHANGES WHAT THE BOARD SAYS, deliberately. The formatter that lived
+// here printed no meridiem at all -- a session became "9-12", which reads the same
+// for a morning camp and an evening one. formatTimeText prints "9am-12pm".
+//
+// It was replaced rather than repaired because it was a fifth copy of a rule that
+// has produced the same NaN bug three times: it splits on ":" with no guard, so
+// the day anyone points this board at a program (programs.start_time is TEXT,
+// "2:35 PM") it prints "2:NaN". It reads camp_sessions today, whose start_time is
+// a Postgres `time`, which is the only reason it has been correct.
 function fmtTimeRange(start, end) {
   if (!start || !end) return "";
-  return `${fmtTime(start)}–${fmtTime(end)}`;
+  return `${formatTimeText(start)}–${formatTimeText(end)}`;
 }
 
 function titleCase(s) {
@@ -4681,13 +4684,9 @@ function emailFmtDateLong(dateStr) {
   return new Date(`${dateStr}T00:00:00`).toLocaleDateString("en-US", { month: "long", day: "numeric" });
 }
 
-function emailFmtTime(t) {
-  if (!t) return "";
-  const [h, m] = t.split(":").map(Number);
-  const hr12 = ((h + 11) % 12) + 1;
-  const ampm = h >= 12 ? "pm" : "am";
-  return m === 0 ? `${hr12}${ampm}` : `${hr12}:${String(m).padStart(2, "0")}${ampm}`;
-}
+// emailFmtTime lived here and was a sixth copy of the same rule. Removed in
+// favour of formatTimeText, proven identical on all 1440 possible 24-hour times,
+// so the email this builds is byte-for-byte unchanged.
 
 function emailClassDaysSummary(days) {
   if (!Array.isArray(days) || days.length === 0) return "";
@@ -4741,7 +4740,7 @@ function renderCampRowHtml(camp, locationsById, primary) {
         <div style="font-size:15px;font-weight:700;color:${text};line-height:1.3;">${emailEscape(s.curriculum_name ?? "Camp")}${role}</div>
         <div style="font-size:13px;color:${muted};margin-top:4px;line-height:1.4;">
           Week ${s.week_num} · ${emailFmtDateLong(s.starts_on)} – ${emailFmtDateLong(s.ends_on)} · ${emailClassDaysSummary(s.class_days)}<br />
-          ${emailEscape(s.location_name ?? "")} · ${titleCase(s.session_type)} ${emailFmtTime(s.start_time)}–${emailFmtTime(s.end_time)}
+          ${emailEscape(s.location_name ?? "")} · ${titleCase(s.session_type)} ${formatTimeText(s.start_time)}–${formatTimeText(s.end_time)}
         </div>
         ${venue}
         ${bonus}

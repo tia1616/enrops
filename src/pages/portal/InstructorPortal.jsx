@@ -29,7 +29,14 @@ import { loadTrainingConfig } from "../../lib/instructorTrainingConfig.js";
 import { readInvokeError } from "../../lib/onboardingFetch.js";
 import { scheduleCountLine } from "../../lib/scheduleCountLine.js";
 import { attendanceSaveMessage } from "../../lib/studentCare.js";
-import { earlyReleaseLine } from "../../lib/timeText.js";
+import {
+  groupPayStatus,
+  friendlyPayStatus,
+  payStage,
+  distanceBonusStage,
+  emptyStages,
+} from "../../lib/instructorPayStatus.js";
+import { earlyReleaseLine, formatTimeText } from "../../lib/timeText.js";
 import { linkifyText } from "../../lib/linkifyText.jsx";
 import { WAITLIST_STATUS } from "../../lib/waitlistState.js";
 import PwaInstallButton from "../../components/pwa/PwaInstallButton.jsx";
@@ -64,13 +71,14 @@ function fmtShort(date) {
   return new Date(`${date}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function fmtTime(t) {
-  if (!t) return "";
-  const [h, m] = t.split(":").map(Number);
-  const hr12 = ((h + 11) % 12) + 1;
-  const ampm = h >= 12 ? "pm" : "am";
-  return m === 0 ? `${hr12}${ampm}` : `${hr12}:${String(m).padStart(2, "0")}${ampm}`;
-}
+// fmtTime lived here and split on ":" with no guard, so it assumed a 24-hour
+// clock. camp_sessions.start_time is a Postgres `time` and really is 24-hour, so
+// the camp screens were fine -- but programs.start_time is TEXT and the corpus is
+// 12-hour ("2:35 PM"), which made Number("35 PM") NaN and printed "2:NaNam" to
+// every instructor on every after-school class. Removed in favour of
+// formatTimeText from lib/timeText.js, which handles both and whose own header
+// asks new code to import it rather than add another copy. Proven equivalent on
+// all 1440 possible 24-hour times before the swap, so camp display is unchanged.
 
 function titleCase(s) {
   return s ? s.charAt(0).toUpperCase() + s.slice(1) : "";
@@ -2415,7 +2423,7 @@ function AssignmentCard({ assignment, coInstructors = [], messages = [], busy, o
           </div>
           <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.4 }}>
             Week {s.week_num} · {fmtShort(s.starts_on)} – {fmtShort(s.ends_on)}<br />
-            {s.location_name} · {titleCase(s.session_type)} {fmtTime(s.start_time)}–{fmtTime(s.end_time)}
+            {s.location_name} · {titleCase(s.session_type)} {formatTimeText(s.start_time)}–{formatTimeText(s.end_time)}
           </div>
         </div>
         <span style={{ fontSize: 11, color: statusColor, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, textAlign: "right", maxWidth: 130, flexShrink: 0, lineHeight: 1.35 }}>
@@ -2654,9 +2662,23 @@ function AfterschoolAssignmentCard({ assignment, coInstructors = [], schedule = 
         </div>
       )}
 
+      {/* THE AFTER-SCHOOL gas line, and the browser twin of distanceBonusNote()
+          in supabase/functions/_shared/offerCopy.ts. Deno and Vite cannot share a
+          module across that boundary, so this is a deliberate copy on the same
+          terms as _shared/waiverText.ts / src/lib/waiverText.js: if you reword
+          one, reword the other.
+
+          It says WHEN because as of 2026-09-14 the gas bonus pays on the LAST
+          class of the program, not the first payout. "+ $50 distance bonus" with
+          no timing is true but misleading to someone who then sees week one's pay
+          land without it.
+
+          The two camp cards in this file (AssignmentCard, AssignmentDetailView)
+          deliberately still read "+ $X distance bonus": a camp's gas rides its
+          single end-of-camp payout, which this change did not touch. */}
       {assignment.distance_bonus_cents ? (
         <div style={{ fontSize: 13, color: PURPLE, fontWeight: 600 }}>
-          + {dollars(assignment.distance_bonus_cents)} distance bonus
+          + {dollars(assignment.distance_bonus_cents)} distance bonus, paid with your last class
         </div>
       ) : null}
 
@@ -3242,7 +3264,7 @@ function AssignmentDetailView({ assignment, instructor, coInstructors = [], onBa
         </h1>
         <div style={{ fontSize: 13, color: MUTED, marginTop: 6, lineHeight: 1.5 }}>
           Week {s.week_num} · {fmt(s.starts_on)} – {fmt(s.ends_on)}<br />
-          {s.location_name} · {titleCase(s.session_type)} {fmtTime(s.start_time)}–{fmtTime(s.end_time)}<br />
+          {s.location_name} · {titleCase(s.session_type)} {formatTimeText(s.start_time)}–{formatTimeText(s.end_time)}<br />
           {role} instructor
           {(s.ages_min || s.ages_max) ? ` · ages ${s.ages_min ?? "?"}–${s.ages_max ?? "?"}` : ""}
         </div>
@@ -4844,11 +4866,10 @@ function DocLinkRow({ doc }) {
 // (instructor_id = private.current_instructor_id()). We pass the
 // explicit .eq() too as defense-in-depth.
 //
-// Status copy is user-friendly, not the raw enum:
-//   pending  -> "Processing"
-//   approved -> "Approved for payout"
-//   adjusted -> "Adjusted"
-//   withheld -> "Held — contact admin"
+// Status copy is user-friendly, not the raw enum. The wording, the group rule and
+// the totals bucketing all live in src/lib/instructorPayStatus.js, which is where
+// the list of statuses is kept honest against the database CHECK constraint -- do
+// not re-spell any of them here.
 function PayView({ instructorId, onBack, stripePayEnabled }) {
   const [data, setData] = useState(null); // null = loading
   const [err, setErr] = useState("");
@@ -4891,7 +4912,7 @@ function PayView({ instructorId, onBack, stripePayEnabled }) {
             ? supabase.from("camp_sessions").select("id, curriculum_name, starts_on, ends_on, location_name, week_num").in("id", campSessionIds)
             : NONE,
           campSessionIds.length
-            ? supabase.from("camp_assignments").select("camp_session_id, role, distance_bonus_cents").eq("instructor_id", instructorId).in("camp_session_id", campSessionIds)
+            ? supabase.from("camp_assignments").select("camp_session_id, role, distance_bonus_cents, distance_bonus_paid_at").eq("instructor_id", instructorId).in("camp_session_id", campSessionIds)
             : NONE,
           programIds.length
             // Location NAME via program_locations_public, not the base table.
@@ -4905,7 +4926,7 @@ function PayView({ instructorId, onBack, stripePayEnabled }) {
             ? supabase.from("programs").select("id, curriculum, day_of_week, start_time, end_time, program_locations:program_locations_public(name)").in("id", programIds)
             : NONE,
           programIds.length
-            ? supabase.from("program_assignments").select("program_id, role, distance_bonus_cents").eq("instructor_id", instructorId).in("program_id", programIds)
+            ? supabase.from("program_assignments").select("program_id, role, distance_bonus_cents, distance_bonus_paid_at").eq("instructor_id", instructorId).in("program_id", programIds)
             : NONE,
         ]);
 
@@ -4932,6 +4953,7 @@ function PayView({ instructorId, onBack, stripePayEnabled }) {
                 locationName: sess.location_name ?? null,
                 role: assn?.role ?? null,
                 distance_bonus_cents: assn?.distance_bonus_cents ?? 0,
+                distance_bonus_paid_at: assn?.distance_bonus_paid_at ?? null,
                 confirmations: [],
                 sortDate: sess.starts_on ?? r.session_date,
               });
@@ -4941,7 +4963,7 @@ function PayView({ instructorId, onBack, stripePayEnabled }) {
               const assn = progAssnByProgram.get(r.program_id);
               const when = [
                 asDayName(prog.day_of_week),
-                [prog.start_time, prog.end_time].filter(Boolean).map(fmtTime).join("–"),
+                [prog.start_time, prog.end_time].filter(Boolean).map(formatTimeText).join("–"),
               ].filter(Boolean).join(" · ");
               grouped.set(key, {
                 key, kind: "program",
@@ -4951,6 +4973,7 @@ function PayView({ instructorId, onBack, stripePayEnabled }) {
                 locationName: prog.program_locations?.name ?? null,
                 role: assn?.role ?? null,
                 distance_bonus_cents: assn?.distance_bonus_cents ?? 0,
+                distance_bonus_paid_at: assn?.distance_bonus_paid_at ?? null,
                 confirmations: [],
                 sortDate: r.session_date, // rows are date-desc, so first = most recent
               });
@@ -4975,20 +4998,24 @@ function PayView({ instructorId, onBack, stripePayEnabled }) {
             acc.bonus += bonus;
             acc.distance += distance;
             acc.grand += grand;
-            // Stage-by-status totals.
+            // Stage-by-status totals. The buckets are disjoint and cover every
+            // status, so they always sum to `grand` -- worth preserving if you add
+            // one. Before 2026-09-15 there was no 'paid' bucket, so every settled
+            // session landed in 'processing' and an instructor's own screen told
+            // them money already in their bank was still on its way.
             for (const r of c.confirmations) {
-              const stage = r.pay_status === "approved" ? "approved"
-                : r.pay_status === "withheld" ? "held"
-                : "processing";
-              acc.byStage[stage] += (r.pay_amount_cents ?? 0) + (r.pay_adjustment_cents ?? 0);
+              acc.byStage[payStage(r.pay_status)] +=
+                (r.pay_amount_cents ?? 0) + (r.pay_adjustment_cents ?? 0);
             }
-            // Distance bonus follows the worst-case status of any confirmation.
-            const worst = worstPayStatus(c.confirmations.map((r) => r.pay_status));
-            const stage = worst === "approved" ? "approved" : worst === "withheld" ? "held" : "processing";
-            acc.byStage[stage] += distance;
+            // The distance bonus is NOT inferred from the day rows -- it carries its
+            // own paid stamp, and for a camp it rides a single payout while the days
+            // settle separately, so the two legitimately disagree.
+            acc.byStage[
+              distanceBonusStage(c.distance_bonus_paid_at, groupPayStatus(c.confirmations.map((r) => r.pay_status)))
+            ] += distance;
             return acc;
           },
-          { base: 0, bonus: 0, distance: 0, grand: 0, byStage: { approved: 0, processing: 0, held: 0 } }
+          { base: 0, bonus: 0, distance: 0, grand: 0, byStage: emptyStages() }
         );
 
         if (!cancelled) setData({ entries, totals });
@@ -5089,20 +5116,39 @@ function PayTotalsCard({ totals }) {
       <div style={{ fontSize: 32, fontWeight: 700, marginTop: 2, letterSpacing: -0.5 }}>
         {dollars(totals.grand)}
       </div>
-      <div style={{
-        display: "grid",
-        gridTemplateColumns: "repeat(3, 1fr)",
-        gap: 10,
-        marginTop: 14,
-        fontSize: 11,
-      }}>
-        <StageBlock label="Processing" amount={totals.byStage.processing} />
-        <StageBlock label="Approved" amount={totals.byStage.approved} />
-        <StageBlock label="On hold" amount={totals.byStage.held} />
-      </div>
+      {/* Only the buckets that hold money. A fully-paid instructor should not read
+          three $0 tiles to find the one number that matters, and an instructor with
+          nothing held should never see the words "On hold" at all. The visible tiles
+          still sum to Total earned, because a hidden one is zero by definition.
+          auto-fit rather than a fixed column count because instructors read this on
+          a phone: at 375px it lays the tiles out 2x2 (verified on staging) instead
+          of squeezing four into one row. */}
+      {STAGE_TILES.some((t) => totals.byStage[t.key] !== 0) && (
+        <div style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(96px, 1fr))",
+          gap: 10,
+          marginTop: 14,
+          fontSize: 11,
+        }}>
+          {STAGE_TILES.filter((t) => totals.byStage[t.key] !== 0).map((t) => (
+            <StageBlock key={t.key} label={t.label} amount={totals.byStage[t.key]} />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
+
+// Money flows left to right; "On hold" is the exception and sits last. Keys must
+// match emptyStages() -- instructorPayStatus.test.mjs asserts they do, so a bucket
+// added there without a tile here fails the suite rather than going unseen.
+const STAGE_TILES = [
+  { key: "processing", label: "Processing" },
+  { key: "approved", label: "Approved" },
+  { key: "paid", label: "Paid" },
+  { key: "held", label: "On hold" },
+];
 
 function StageBlock({ label, amount }) {
   return (
@@ -5119,8 +5165,13 @@ function PayEntryCard({ entry }) {
   const bonus = confs.reduce((acc, r) => acc + (r.pay_adjustment_cents ?? 0), 0);
   const distance = entry.distance_bonus_cents ?? 0;
   const grand = base + bonus + distance;
-  const worst = worstPayStatus(confs.map((r) => r.pay_status));
-  const friendlyStatus = friendlyPayStatus(worst);
+  const status = groupPayStatus(confs.map((r) => r.pay_status));
+  // friendlyPayStatus returns null for a status it has never been told about. Show
+  // the raw value rather than defaulting: a `default:` branch is exactly what let
+  // 'paid' masquerade as "Processing" for the whole life of payouts.
+  const friendly = friendlyPayStatus(status);
+  const statusLabel = friendly?.label ?? status;
+  const statusColor = friendly ? TONE_COLOR[friendly.tone] : MUTED;
 
   return (
     <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: "14px 18px" }}>
@@ -5157,12 +5208,12 @@ function PayEntryCard({ entry }) {
               fontWeight: 700,
               textTransform: "uppercase",
               letterSpacing: 0.5,
-              color: friendlyStatus.color,
-              background: `${friendlyStatus.color}1F`,
-              border: `1px solid ${friendlyStatus.color}55`,
+              color: statusColor,
+              background: `${statusColor}1F`,
+              border: `1px solid ${statusColor}55`,
             }}
           >
-            {friendlyStatus.label}
+            {statusLabel}
           </div>
         </div>
       </div>
@@ -5195,26 +5246,19 @@ function PayEntryCard({ entry }) {
   );
 }
 
-function worstPayStatus(statuses) {
-  const order = ["withheld", "adjusted", "pending", "approved"];
-  for (const s of order) if (statuses.includes(s)) return s;
-  return statuses[0] ?? "pending";
-}
-
-function friendlyPayStatus(s) {
-  switch (s) {
-    case "approved":
-      return { label: "Approved for payout", color: OK_GREEN };
-    case "adjusted":
-      return { label: "Adjusted", color: VIOLET };
-    case "withheld":
-      return { label: "Held — contact admin", color: CORAL };
-    case "pending":
-    default:
-      return { label: "Processing", color: "#b67e00" };
-  }
-}
+// The wording and the grouping rule moved to src/lib/instructorPayStatus.js so they
+// could be tested; only the palette stays here, where the rest of the palette lives.
+// `paid` is deliberately a different green from `good` (approved): "money is coming"
+// and "money has arrived" are the two states an instructor most needs to tell apart,
+// and they sat under one word until 2026-09-15.
+const TONE_COLOR = {
+  wait: "#b67e00",
+  info: VIOLET,
+  good: OK_GREEN,
+  paid: "#1f6f4a",
+  bad: CORAL,
+};
 
 function emptyTotals() {
-  return { base: 0, bonus: 0, distance: 0, grand: 0, byStage: { approved: 0, processing: 0, held: 0 } };
+  return { base: 0, bonus: 0, distance: 0, grand: 0, byStage: emptyStages() };
 }

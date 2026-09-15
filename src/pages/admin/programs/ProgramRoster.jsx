@@ -12,7 +12,8 @@
 // students" endpoint. Read-only view — no edits here.
 
 import { useEffect, useMemo, useState } from "react";
-import { Link, useParams, useOutletContext } from "react-router-dom";
+import { Link, useParams, useOutletContext, useSearchParams } from "react-router-dom";
+import { safeReturnPath } from "../../../lib/returnPath.js";
 import { supabase } from "../../../lib/supabase.js";
 import { dismissalSummary } from "../../../lib/dismissal.js";
 import { roomDisplay } from "../../../lib/roomLabel.js";
@@ -56,6 +57,16 @@ function fmtTime(t) {
   const ampm = h >= 12 ? "pm" : "am";
   return m === 0 ? `${hr12}${ampm}` : `${hr12}:${String(m).padStart(2, "0")}${ampm}`;
 }
+
+// THE ONLY TWO DOORS into this page, each with the words its own link must say.
+// One map, so a destination can never be rendered under another one's label.
+// Anything not listed -- a hand-crafted ?from, or a link added later that forgets
+// to register here -- falls back to Programs and is labelled Programs.
+const BACK_DOORS = {
+  "/admin/rosters": "← Back to rosters",
+  "/admin/programs": "← Back to programs",
+};
+const DEFAULT_DOOR = "/admin/programs";
 
 function gradeLabel(g) {
   if (g == null) return "";
@@ -300,6 +311,35 @@ export default function ProgramRoster() {
   // Invite this program's families into the parent portal (preview-then-send modal).
   const [showInvite, setShowInvite] = useState(false);
 
+  // WHERE "BACK" GOES. This page has two front doors -- Rosters (/admin/rosters)
+  // and the Programs calendar -- and the link used to be hardcoded to Programs for
+  // both. Jeff, 2026-09-15: "the only option to go back takes you back to programs
+  // then I have to click rosters again... I've never needed to go from a class
+  // roster back to all programs." Working a site roster meant paying that detour
+  // on every class.
+  //
+  // The door is carried in the URL rather than in router state on purpose: this is
+  // the PRINTABLE roster, so it gets refreshed, printed and bookmarked, and router
+  // state does not survive any of those -- the back link would silently revert to
+  // Programs exactly for the person who stayed on the page longest.
+  //
+  // WHAT ACTUALLY CLOSES THE REDIRECT is the BACK_DOORS allowlist below: ?from is
+  // compared for exact membership, so "https://evil.example" is not a door and
+  // never becomes one. safeReturnPath is kept in front of it as belt and braces --
+  // it costs one line, and if anyone later loosens the exact match to a prefix or
+  // a startsWith, the guard is already in the path rather than needing to be
+  // remembered. Do not read it as the thing doing the work.
+  const [searchParams] = useSearchParams();
+  // Destination and label come from ONE map, so they cannot disagree. The first
+  // version of this computed them as two separate expressions -- an allow-anything
+  // path plus a startsWith on "rosters" -- and /code-review caught that
+  // ?from=/admin/finances rendered "Back to programs" pointing at Finances: a link
+  // that says one destination and delivers another, which is the defect this whole
+  // change exists to remove, reintroduced by the fix for it.
+  const requested = safeReturnPath(searchParams.get("from"), DEFAULT_DOOR);
+  const backTo = Object.prototype.hasOwnProperty.call(BACK_DOORS, requested) ? requested : DEFAULT_DOOR;
+  const backLabel = BACK_DOORS[backTo];
+
   // ---- Render ----
 
   if (loading) {
@@ -308,7 +348,7 @@ export default function ProgramRoster() {
   if (error === "notfound") {
     return (
       <div style={{ padding: 40 }}>
-        <Link to="/admin/programs" style={backLink}>← Back to programs</Link>
+        <Link to={backTo} style={backLink}>{backLabel}</Link>
         <div style={{ marginTop: 16, color: MUTED }}>That program isn't in your account.</div>
       </div>
     );
@@ -316,7 +356,7 @@ export default function ProgramRoster() {
   if (error) {
     return (
       <div style={{ padding: 40 }}>
-        <Link to="/admin/programs" style={backLink}>← Back to programs</Link>
+        <Link to={backTo} style={backLink}>{backLabel}</Link>
         <div style={{ marginTop: 16, color: RED }}>Couldn't load the roster: {error}</div>
       </div>
     );
@@ -339,7 +379,7 @@ export default function ProgramRoster() {
   return (
     <div style={{ maxWidth: 880, margin: "0 auto" }}>
       <div className="roster-noprint">
-        <Link to="/admin/programs" style={backLink}>← Back to programs</Link>
+        <Link to={backTo} style={backLink}>{backLabel}</Link>
       </div>
 
       {/* Header */}

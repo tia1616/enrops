@@ -9,6 +9,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Link, useOutletContext, useSearchParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
+import { formatTimeText } from "../../lib/timeText.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -37,17 +38,16 @@ function fmtShort(dateStr) {
   return new Date(`${dateStr}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-function fmtTime(t) {
-  if (!t) return "";
-  const [h, m] = t.split(":").map(Number);
-  const hr12 = ((h + 11) % 12) + 1;
-  const ampm = h < 12 ? "am" : "pm";
-  return m === 0 ? `${hr12}${ampm}` : `${hr12}:${String(m).padStart(2, "0")}${ampm}`;
-}
-
+// This page prints CAMP sessions, whose start_time is a Postgres `time`, so the
+// local 24-hour-only formatter that used to live here was correct for the data it
+// actually gets. It was removed anyway: it was a copy of a rule that has now
+// produced the same NaN bug three times whenever a copy met a program time
+// (programs.start_time is TEXT and 12-hour, "2:35 PM"). formatTimeText handles
+// both, and was proven to match the removed function on all 1440 possible
+// 24-hour times, so nothing this page prints changes.
 function fmtTimeRange(start, end) {
   if (!start || !end) return "";
-  return `${fmtTime(start)}–${fmtTime(end)}`;
+  return `${formatTimeText(start)}–${formatTimeText(end)}`;
 }
 
 function classDaysSummary(class_days) {

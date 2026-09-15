@@ -2792,7 +2792,12 @@ function ProgramRosterRow({ program: p, orgId, orgSlug, canEdit, expanded, onTog
                 Message families →
               </button>
             )}
-            <Link to={`/admin/programs/${p.id}/roster`} style={{ padding: "6px 12px", background: "transparent", color: MUTED, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 12, fontWeight: 600, textDecoration: "none" }} title="Open the printable roster">
+            {/* ?from tells the roster which door it was opened through, so its back
+                link returns HERE instead of to Programs. The roster page validates
+                it and falls back to Programs, which is where the Programs calendar's
+                own link still lands. Jeff, 2026-09-15: going roster to roster meant
+                Programs then Rosters again, every time. */}
+            <Link to={`/admin/programs/${p.id}/roster?from=%2Fadmin%2Frosters`} style={{ padding: "6px 12px", background: "transparent", color: MUTED, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 12, fontWeight: 600, textDecoration: "none" }} title="Open the printable roster">
               View / print →
             </Link>
           </div>
