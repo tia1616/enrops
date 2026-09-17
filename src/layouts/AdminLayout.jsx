@@ -14,6 +14,7 @@ import { getPermissions } from "../lib/permissions";
 import { canManageInstructors } from "../lib/entitlements.js";
 import PortalSwitcher from "../components/PortalSwitcher.jsx";
 import RouteFallback from "../components/RouteFallback.jsx";
+import TabStrip from "../components/TabStrip.jsx";
 import { setOrgGroup } from "../lib/analytics";
 import { PLATFORM_LEGAL_LINKS } from "../lib/policies.js";
 import {
@@ -948,7 +949,7 @@ export default function AdminLayout() {
           ) : (
           <>
           {showSectionTabs && (
-            <div style={{ display: "flex", gap: 4, borderBottom: `1px solid ${RULE}`, marginBottom: 22 }}>
+            <TabStrip style={{ gap: 4, borderBottom: `1px solid ${RULE}`, marginBottom: 22 }}>
               {activeTabSection.tabs.filter((t) => !t.gate || perm.can(t.gate)).map((t) => {
                 const tabActive =
                   location.pathname === t.to || location.pathname.startsWith(t.to + "/");
@@ -964,6 +965,10 @@ export default function AdminLayout() {
                   <Link
                     key={t.to}
                     to={t.to}
+                    // Read by TabStrip to scroll the current tab into view, so
+                    // landing on a page whose tab is off the right edge of a
+                    // phone still shows you where you are.
+                    data-tab-active={tabActive ? "true" : undefined}
                     style={{
                       padding: "8px 14px",
                       borderBottom: tabActive ? `2px solid ${BRIGHT}` : "2px solid transparent",
@@ -973,13 +978,17 @@ export default function AdminLayout() {
                       textDecoration: "none",
                       position: "relative",
                       top: 1,
+                      // The label must stay on one line. Wrapping is what turns
+                      // a strip that merely needs scrolling into a two-row
+                      // jumble ("Class / schedule") on a phone.
+                      whiteSpace: "nowrap",
                     }}
                   >
                     {t.label}
                   </Link>
                 );
               })}
-            </div>
+            </TabStrip>
           )}
           {/* Admin pages are lazy-loaded per route (see App.jsx). This inner
               Suspense keeps the sidebar, header and tab strip on screen while

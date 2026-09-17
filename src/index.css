@@ -109,3 +109,26 @@
     transform: none;
   }
 }
+
+/* TabStrip (src/components/TabStrip.jsx). Two rules that cannot be inline
+   styles, so they live here rather than in a <style> tag the component would
+   re-render per instance.
+
+   1. The scrollbar is hidden because the edge fade IS the affordance. A
+      persistent Windows scrollbar under a 3-tab row reads as a broken rule,
+      and on desktop the strip does not overflow at all so there is nothing to
+      scroll with a mouse anyway.
+   2. Tabs must not shrink. flex children default to flex-shrink:1, so without
+      this a nowrap row squashes five tabs into five columns of "Class..."
+      instead of overflowing honestly and scrolling. Set here rather than at the
+      two call sites so a third strip cannot forget it. */
+.tab-strip-scroller {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.tab-strip-scroller::-webkit-scrollbar {
+  display: none;
+}
+.tab-strip-scroller > * {
+  flex-shrink: 0;
+}

@@ -12,6 +12,7 @@
 import { Link, useOutletContext } from "react-router-dom";
 import { PURPLE, BRIGHT, INK, MUTED, RULE } from "../marketing/tokens.jsx";
 import { canReachCommsTab } from "../../../lib/entitlements.js";
+import TabStrip from "../../../components/TabStrip.jsx";
 
 // Reads the org off the outlet context rather than taking it as a prop, on
 // purpose: this strip renders from four different pages, and a caller that
@@ -22,15 +23,14 @@ export default function FamilyCommsTabs({ active, onReset }) {
   const can = (tab) => canReachCommsTab(org, tab);
 
   return (
-    <div
+    <TabStrip
+      role="tablist"
+      label="Comms surfaces"
       style={{
-        display: "flex",
         gap: 0,
         borderBottom: `1px solid ${RULE}`,
         marginBottom: 24,
       }}
-      role="tablist"
-      aria-label="Comms surfaces"
     >
       {/* Contacts leads — the CRM spine (your people) is the section home, per
           Mailchimp/HubSpot norm. This is where the Families/Instructors/Partners
@@ -58,7 +58,7 @@ export default function FamilyCommsTabs({ active, onReset }) {
           Templates
         </TabLink>
       )}
-    </div>
+    </TabStrip>
   );
 }
 
@@ -69,6 +69,10 @@ function TabLink({ to, active, children, onClick }) {
       onClick={onClick}
       role="tab"
       aria-selected={active}
+      // Read by TabStrip to scroll the current tab into view. Without it,
+      // opening Templates on a phone showed a strip lit on a tab you could not
+      // see, because Templates sits off the right edge at 375px.
+      data-tab-active={active ? "true" : undefined}
       style={{
         padding: "12px 20px",
         textDecoration: "none",
@@ -78,6 +82,7 @@ function TabLink({ to, active, children, onClick }) {
         borderBottom: active ? `2px solid ${BRIGHT}` : "2px solid transparent",
         marginBottom: -1,
         transition: "color 120ms",
+        whiteSpace: "nowrap",
       }}
     >
       {children}
