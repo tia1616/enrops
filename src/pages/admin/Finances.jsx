@@ -2068,7 +2068,10 @@ function RefundsTab({ org }) {
     (async () => {
       const { data, error } = await supabase
         .from("refunds")
-        .select("id, amount_cents, reason, status, cancelled_registration, created_at, succeeded_at, refunded_by_user_id, platform_fee_refunded_cents, registration:registrations(student:students(first_name, last_name))")
+        // DEPLOY ORDER: fee_return_outcome must exist on the database BEFORE
+        // this ships, or every refund on this page fails to load. Migration
+        // 20260917a, applied to staging and prod in the same pass.
+        .select("id, amount_cents, reason, status, cancelled_registration, created_at, succeeded_at, refunded_by_user_id, platform_fee_refunded_cents, fee_return_outcome, registration:registrations(student:students(first_name, last_name))")
         .eq("organization_id", org.id)
         .order("created_at", { ascending: false })
         .limit(200);
@@ -2140,9 +2143,27 @@ function RefundsTab({ org }) {
                 {r.status === "pending" && <span style={{ marginLeft: 8, fontSize: 10, color: AMBER, fontWeight: 700, textTransform: "uppercase" }}>Pending</span>}
                 {!r.refunded_by_user_id && <span style={{ marginLeft: 8, fontSize: 10, color: PURPLE, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, border: `1px solid ${PURPLE}`, borderRadius: 4, padding: "1px 5px" }}>Stripe dashboard</span>}
                 {r.reason && <span style={{ display: "block", color: MUTED, fontSize: 11.5, marginTop: 2 }}>{reasonOf(r)}</span>}
-                {r.status === "succeeded" && r.platform_fee_refunded_cents > 0 && (
+                {/* Money layer blocker 1, checkbox 5: every attempt says what
+                    happened, not just the ones that returned money. Before
+                    this, a fee return that FAILED rendered exactly like one
+                    that was never owed - nothing at all - which is how three
+                    failures on 8 September went unnoticed until somebody
+                    audited the database by hand. Rows written before
+                    2026-09-17 carry no outcome and keep the old wording, which
+                    is honest: we genuinely do not know which they were. */}
+                {r.status === "succeeded" && r.fee_return_outcome === "failed" && (
+                  <span style={{ display: "block", color: RED, fontSize: 11.5, marginTop: 2, fontWeight: 600 }}>
+                    We could not return the enrops service fee on this refund. You are still owed it.
+                  </span>
+                )}
+                {r.status === "succeeded" && r.fee_return_outcome === "nothing_owed" && (
                   <span style={{ display: "block", color: MUTED, fontSize: 11.5, marginTop: 2 }}>
-                    {fmtCents(r.platform_fee_refunded_cents)} of the enrops fee returned to you
+                    No enrops service fee to return on this one
+                  </span>
+                )}
+                {r.status === "succeeded" && r.fee_return_outcome !== "failed" && r.platform_fee_refunded_cents > 0 && (
+                  <span style={{ display: "block", color: MUTED, fontSize: 11.5, marginTop: 2 }}>
+                    {fmtCents(r.platform_fee_refunded_cents)} of the enrops service fee returned to you
                   </span>
                 )}
               </span>

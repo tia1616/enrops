@@ -86,6 +86,7 @@ import { findAuthUserByEmail } from '../_shared/findAuthUserByEmail.ts';
 import { computeMarginRefund } from '../_shared/refundFeeSplit.ts';
 import { loadProration } from '../_shared/refundFeeProration.ts';
 import { readChargeFeeFacts, FEE_REFUND_SOURCE_KEY, FEE_REFUND_REGISTRATION_KEY } from '../_shared/chargeFeeFacts.ts';
+import { feeReturnOutcome } from '../_shared/feeReturnOutcome.ts';
 import { allocateRefundAcrossRegistrations } from '../_shared/refundAllocation.ts';
 import { sendRefundReceipt } from '../_shared/refundReceipt.ts';
 import { isEmailAllowed } from '../_shared/emailGuard.ts';
@@ -1085,7 +1086,14 @@ async function recordExternalRefund(
       if (input.settled) {
         await admin
           .from('refunds')
-          .update({ status: 'succeeded', succeeded_at: input.succeededAt, failure_reason: null })
+          // fee_return_outcome is cleared WITH failure_reason, never left
+          // behind it. The two are written together everywhere else, and a row
+          // that kept a stale 'failed' after its explanation was cleared would
+          // show an operator a red "you are still owed this" with nothing
+          // saying why. NULL is the honest state for a row being re-settled:
+          // the fee attempt below runs in this same pass and writes the real
+          // outcome, and if it throws first, "no outcome recorded" is true.
+          .update({ status: 'succeeded', succeeded_at: input.succeededAt, failure_reason: null, fee_return_outcome: null })
           .eq('id', found)
           .neq('status', 'succeeded');
       }
@@ -1235,7 +1243,18 @@ async function recordExternalRefund(
     }
 
     await admin.from('refunds')
-      .update({ platform_fee_refunded_cents: feeRefunded })
+      .update({
+        platform_fee_refunded_cents: feeRefunded,
+        // Money layer blocker 1, checkbox 5. Same helper the in-app path uses,
+        // so a refund started in Stripe and the same refund started in enrops
+        // are labelled identically on the money page.
+        fee_return_outcome: feeReturnOutcome({
+          owedCents: owed,
+          applicationFeeId: facts.applicationFeeId,
+          returnedCents: feeRefunded,
+          failed: false,
+        }),
+      })
       .eq('id', refundRowId);
   } catch (feeErr) {
     // The family already has their money — Stripe did that before telling us.
@@ -1246,8 +1265,26 @@ async function recordExternalRefund(
     console.error(
       `[charge.refunded] recorded ${input.stripeRefundId} but the platform-fee refund FAILED for registration ${reg.id}: ${msg}`,
     );
+    // fee_return_outcome rides the SAME invariant the alert does, rather than
+    // a second signal that could disagree with it: alertOwedCents is armed only
+    // for the window in which the money is genuinely outstanding, and is
+    // disarmed the instant the fee comes back. So a catch with it still armed
+    // is a real failure, and a catch with it disarmed is a bookkeeping failure
+    // AFTER the money moved - the refunds UPDATE above is inside this try, and
+    // so is the idempotency-conflict branch, which reaches here only when the
+    // fee WAS returned.
+    //
+    // In that second case the outcome is deliberately left NULL rather than
+    // written as 'failed'. Labelling returned money as failed is what would
+    // send somebody to refund the fee a second time, which is the exact class
+    // of mistake this column exists to prevent. NULL reads as an incomplete
+    // record, which is what it is, and failure_reason below says why.
+    const outcomeUpdate = alertOwedCents > 0 ? { fee_return_outcome: 'failed' as const } : {};
     await admin.from('refunds')
-      .update({ failure_reason: `refund recorded from Stripe, but returning the platform fee failed: ${msg}` })
+      .update({
+        failure_reason: `refund recorded from Stripe, but returning the platform fee failed: ${msg}`,
+        ...outcomeUpdate,
+      })
       .eq('id', refundRowId);
 
     // AND TELL SOMEBODY. This is the SECOND path that can fail this way, and
