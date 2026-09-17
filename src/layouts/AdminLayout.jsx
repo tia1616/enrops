@@ -149,12 +149,15 @@ const NAV = [
 ];
 
 // Lean registration operators (instructor_pay_model === 'enrops_platform') run a
-// registration-only surface — no instructors, curriculum library, or comms yet.
-// Trim the sidebar to Programs . Money . Comms . Settings and hide the paid /
-// curriculum surfaces. (This line used to read "Home . Programs . Finances .
-// Discounts . Settings" and was wrong on three counts by 14 Aug: Home is in
+// registration-only surface — no curriculum library, and instructors only when
+// the PLAN says so. Trim the sidebar to Programs . Money . Comms . Team .
+// Settings and hide the paid / curriculum surfaces. (This line has been wrong
+// twice before, so keep it honest: it once read "Home . Programs . Finances .
+// Discounts . Settings", which was wrong on three counts by 14 Aug — Home is in
 // HIDE_TOP below, Comms is no longer hidden, and Discounts went back to being a
-// Money tab rather than a top-level item of its own.)
+// Money tab rather than a top-level item of its own — and it omitted Team until
+// 17 Sep. Instructors sits between Programs and Money for the orgs entitled to
+// it; it is not listed above because it is a plan question, not a nav-shape one.)
 // Locations (the /admin/schools surface) is a TAB
 // under Programs for lean ops — they pick a venue every time they build a class,
 // so it belongs beside the programs it serves and not in Settings, where it
@@ -182,13 +185,21 @@ function shapeNavForOrg(nav, org) {
                                      // here"), so there is no dashboard to give
                                      // them. Programs is their home; /admin
                                      // redirects there (see AdminOverview).
-    "/admin/team",                   // Extra admin seats. The checklist lists
-                                     // "full seats" as a PRO unlock, and free is
-                                     // registration + parent portal only — a
-                                     // solo operator has nobody to invite, so
-                                     // this is clutter until they upgrade. The
-                                     // ROUTE still works, so any org that
-                                     // already has a second admin keeps it.
+    // Team is NO LONGER hidden here. It used to be, on the premise that "a solo
+    // operator has nobody to invite, so this is clutter until they upgrade" —
+    // and that premise is simply false. Sarah Ahl signed up on 2026-09-17 to
+    // trial one fall program and needed her sister in the account on day one;
+    // a lean org is a SMALL business, not a one-person one. Hiding the item
+    // while leaving the route live meant the only way in was a URL nobody
+    // would guess, which is not a tier, it is a dead end.
+    //
+    // Showing it also CLOSES a hole. The route guard below is built from this
+    // same trimmed array, so while Team was absent from it, `blockedItem` could
+    // never match /admin/team and a staff or viewer member of a lean org could
+    // open the Team page by typing the URL — the item's own `gate: "team"`
+    // (owner/admin) had nothing to act on. Putting the item back puts the route
+    // back under its gate. Same lesson as /admin/payouts on the Money section:
+    // an item dropped from the array is a gate dropped with it.
     "/admin/schools",                // Locations -> now a tab under
                                      // Programs (see the tabs block below), so
                                      // it stays off the top-level sidebar.
