@@ -348,6 +348,34 @@ export default function AdminLayout() {
   // Mobile menu. Desktop ignores this entirely — the sidebar is always shown
   // there and the button that toggles this is display:none above 900px.
   const [navOpen, setNavOpen] = useState(false);
+  // The dropdown hangs off the bottom of the mobile bar, so it has to know how
+  // tall the bar is. MEASURED rather than hardcoded: the bar's height moves with
+  // the org name wrapping, the font, and the browser's own text-size setting, and
+  // a stale constant would either overlap the bar or float below it.
+  // A CALLBACK ref into state, not a plain useRef, and the difference is not
+  // cosmetic: this component returns early while auth is loading, so on first
+  // render the bar does not exist. A useRef + [] effect therefore ran once
+  // against null and never again, silently leaving the height unpublished and
+  // the dropdown living on its CSS fallback - which happened to be right at
+  // 64px, which is exactly how a bug like this survives being looked at. Ref as
+  // state re-runs the effect at the moment the node attaches.
+  const [mobileBarEl, setMobileBarEl] = useState(null);
+  useEffect(() => {
+    const el = mobileBarEl;
+    if (!el) return undefined;
+    const set = () => {
+      const h = Math.round(el.getBoundingClientRect().height);
+      // Height is 0 on desktop, where the bar is display:none - don't publish
+      // that, or the CSS fallback (64px) is lost and a later narrow render
+      // would briefly put the panel under the bar at top:0.
+      if (h > 0) document.documentElement.style.setProperty("--admin-bar-h", `${h}px`);
+    };
+    set();
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(set) : null;
+    ro?.observe(el);
+    window.addEventListener("resize", set);
+    return () => { ro?.disconnect(); window.removeEventListener("resize", set); };
+  }, [mobileBarEl]);
   // Tapping a destination should take you there, not leave the menu covering
   // the page you just asked for.
   useEffect(() => { setNavOpen(false); }, [location.pathname]);
@@ -663,8 +691,11 @@ export default function AdminLayout() {
           The active-item accent moves from a left border (meaningless in a row) to
           the white pill + colour it already carries. */}
       <style>{`
-        /* Desktop keeps the sidebar; the mobile bar only exists under 900px. */
+        /* Desktop keeps the sidebar; the mobile bar only exists under 900px.
+           The scrim likewise - on desktop the sidebar is always open and there
+           is nothing to dismiss. */
         [data-admin-mobilebar] { display: none; }
+        [data-admin-scrim] { display: none; }
 
         @media (max-width: ${ADMIN_MOBILE_MAX}px) {
           [data-admin-grid] { grid-template-columns: 1fr !important; }
@@ -689,17 +720,46 @@ export default function AdminLayout() {
             z-index: 40;
           }
 
-          /* Closed by default; the button reveals it as a full-width panel. */
+          /* Closed by default; the button reveals it as a DROPDOWN.
+             It used to open in the document flow (position: static), which put
+             it at the top of the PAGE rather than under the button you just
+             pressed. Measured: scrolled 2174px down, tapping Menu rendered a
+             774px panel at viewport top -2109 - the whole menu was off-screen
+             above, and you had to scroll two thousand pixels back up to use the
+             thing you had just opened. Jessica hit this on her phone.
+             Fixed under the bar instead, so it opens where you are, wherever
+             that is. z-index sits BELOW the bar's 40 so the bar - and its close
+             button - stay on top of the panel. */
           [data-admin-sidebar] {
             display: none !important;
           }
           [data-admin-sidebar][data-open="true"] {
             display: flex !important;
-            position: static !important;
+            position: fixed !important;
+            top: var(--admin-bar-h, 64px) !important;
+            left: 0 !important;
+            right: 0 !important;
+            /* Never taller than what is left of the screen, and it scrolls
+               inside itself - a tenant with every nav section expanded has more
+               items than a short phone has room for. */
             height: auto !important;
+            max-height: calc(100vh - var(--admin-bar-h, 64px)) !important;
+            overflow-y: auto !important;
+            z-index: 39 !important;
             padding: 8px 0 14px !important;
             border-right: none !important;
             border-bottom: 1px solid ${RULE} !important;
+            box-shadow: 0 10px 24px rgba(28, 0, 79, 0.18) !important;
+          }
+          /* Tap anywhere off the menu to dismiss it - the norm everywhere, and
+             without it the only way out is to find the button again. Sits under
+             the panel and over the page. */
+          [data-admin-scrim] {
+            display: block !important;
+            position: fixed !important;
+            inset: 0 !important;
+            background: rgba(28, 0, 79, 0.28);
+            z-index: 38 !important;
           }
           /* The wordmark and org name already sit in the bar above. */
           [data-admin-sidebar] > div:first-child { display: none !important; }
@@ -742,7 +802,7 @@ export default function AdminLayout() {
       `}</style>
       {/* Mobile bar: wordmark, who you're signed in as, and the menu button.
           Hidden entirely on desktop, where the sidebar is always visible. */}
-      <div data-admin-mobilebar>
+      <div data-admin-mobilebar ref={setMobileBarEl}>
         <div style={{ minWidth: 0 }}>
           <EnropsWordmark height={22} />
           <div style={{ fontSize: 11.5, color: MUTED, marginTop: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -787,6 +847,18 @@ export default function AdminLayout() {
           for page furniture under a full-height sticky sidebar; it is simply not
           "at the bottom of the viewport", and the grow here is effectively inert.
           Do not "fix" that by shrinking the grid - the sidebar would overflow it. */}
+      {/* Dismiss layer for the phone menu. Rendered only while the menu is open,
+          and CSS hides it entirely above the breakpoint, where the sidebar is
+          permanent and there is nothing to dismiss. aria-hidden + no tab stop:
+          a keyboard user closes with the button, which keeps its own focus. */}
+      {navOpen && (
+        <div
+          data-admin-scrim
+          aria-hidden="true"
+          onClick={() => setNavOpen(false)}
+        />
+      )}
+
       <div data-admin-grid style={{ display: "grid", gridTemplateColumns: "240px 1fr", flex: "1 0 auto" }}>
         {/* Sidebar */}
         <aside data-admin-sidebar id="admin-nav" data-open={navOpen ? "true" : "false"} style={{
