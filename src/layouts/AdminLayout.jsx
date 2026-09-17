@@ -15,6 +15,7 @@ import { canManageInstructors } from "../lib/entitlements.js";
 import PortalSwitcher from "../components/PortalSwitcher.jsx";
 import RouteFallback from "../components/RouteFallback.jsx";
 import TabStrip from "../components/TabStrip.jsx";
+import { ADMIN_MOBILE_MAX } from "../lib/adminViewport.js";
 import { setOrgGroup } from "../lib/analytics";
 import { PLATFORM_LEGAL_LINKS } from "../lib/policies.js";
 import {
@@ -665,7 +666,7 @@ export default function AdminLayout() {
         /* Desktop keeps the sidebar; the mobile bar only exists under 900px. */
         [data-admin-mobilebar] { display: none; }
 
-        @media (max-width: 900px) {
+        @media (max-width: ${ADMIN_MOBILE_MAX}px) {
           [data-admin-grid] { grid-template-columns: 1fr !important; }
 
           /* A menu button, not a scrolling strip.

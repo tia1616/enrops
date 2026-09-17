@@ -17,6 +17,8 @@ import AssignSubModal from "./AssignSubModal";
 import HatGuide from "../../components/HatGuide";
 import NeedsCoverBanner from "../../components/NeedsCoverBanner.jsx";
 import ScheduleStepBar from "../../components/ScheduleStepBar.jsx";
+import TabStrip from "../../components/TabStrip.jsx";
+import { useAdminNarrow } from "../../lib/adminViewport.js";
 import { resolveBoardSendIntro } from "../../lib/boardSendCopy.js";
 import { classifyOther } from "../../lib/scheduleConflicts.js";
 import { programScheduleSummary } from "../../lib/programSchedule.js";
@@ -82,6 +84,14 @@ function fmtDateShort(iso) {
 function todayIso() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// Today's column code ("mon".."fri"), or null at the weekend. Used to open the
+// phone day picker on today rather than always on Monday. Null on Saturday and
+// Sunday because DAYS is Mon-Fri, so there is no column for it.
+function todayDayCode() {
+  const code = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][new Date().getDay()];
+  return DAYS.some((d) => d.code === code) ? code : null;
 }
 
 // "2026-11-12" -> "Nov 12" (parsed at local noon so it never slips a day).
@@ -339,6 +349,15 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   // falls back to the tenant's alert_email if this is missing).
   const testRecipient = user?.email;
   const [state, setState] = useState({ status: "loading" });
+  // PHONE: ONE DAY COLUMN AT A TIME. Five columns at 375px gave each about
+  // 60px - the day headers ran together into "MondaySeTuesdayWednesday" and
+  // every card truncated to five or six characters. See the note on the day
+  // strip further down for why fewer-days-plus-a-picker is the shape.
+  const narrow = useAdminNarrow();
+  // Open on today when there is a today to open on - what every calendar does.
+  // todayDayCode() is null at the weekend, when Monday is the sensible landing.
+  const [activeDayCode, setActiveDayCode] = useState(() => todayDayCode() ?? DAYS[0].code);
+  const visibleDays = narrow ? DAYS.filter((d) => d.code === activeDayCode) : DAYS;
   const [searchText, setSearchText] = useState("");
   const [selectedLocations, setSelectedLocations] = useState(() => new Set());
   const [selectedStatuses, setSelectedStatuses] = useState(() => new Set());
@@ -2330,8 +2349,65 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
               Off this week (break/closure): <strong style={{ color: INK }}>{weekSignals.get(effectiveWeek).closures.join(", ")}</strong>
             </div>
           )}
-          <div style={{ display: "grid", gridTemplateColumns: `repeat(5, minmax(0, 1fr))`, gap: 12, alignItems: "start" }}>
-          {DAYS.map((d, i) => {
+          {/* THE DAY PICKER, phone only.
+              Five day columns do not fit a phone and nothing serious pretends
+              otherwise: Deputy's mobile app moves a day at a time, Google
+              Calendar added a 3-day view that exists only on phones, and
+              FullCalendar - which most of this category is built on - ships Day
+              as a first-class view beside Week. Fewer days plus a way to move
+              between them is the settled answer, so that is what this is.
+              Desktop still gets all five columns, untouched. */}
+          {narrow && (
+            <TabStrip role="tablist" label="Day of the week" style={{ gap: 6, marginBottom: 12 }}>
+              {DAYS.map((d) => {
+                const on = d.code === activeDayCode;
+                const count = (grid.get(d.code) ?? []).length;
+                return (
+                  <button
+                    key={d.code}
+                    type="button"
+                    role="tab"
+                    aria-selected={on}
+                    data-tab-active={on ? "true" : undefined}
+                    onClick={() => setActiveDayCode(d.code)}
+                    style={{
+                      // 44px is the minimum comfortable touch target - the same
+                      // floor the shell's menu button uses.
+                      minHeight: 44,
+                      // 9px, not 14: at 14 the five chips came to 379px in a
+                      // 347px box, so Friday sat behind the fade on first load.
+                      // The strip would have scrolled to it, but a five-item
+                      // picker that ALMOST fits should just fit - measured at
+                      // 9px it does, with room to spare.
+                      padding: "8px 9px",
+                      borderRadius: 999,
+                      border: `1px solid ${on ? PURPLE : RULE}`,
+                      background: on ? PURPLE : "#fff",
+                      color: on ? "#fff" : INK,
+                      fontFamily: "inherit",
+                      fontSize: 14,
+                      fontWeight: on ? 700 : 500,
+                      cursor: "pointer",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {d.short}
+                    {/* The count is what makes this a picker rather than five
+                        identical buttons: it says where the work is before you
+                        tap. Muted on the unselected chips so it reads as a
+                        detail, not five competing numbers. */}
+                    <span style={{ marginLeft: 6, fontWeight: 500, color: on ? "#ffffffcc" : MUTED }}>{count}</span>
+                  </button>
+                );
+              })}
+            </TabStrip>
+          )}
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(${visibleDays.length}, minmax(0, 1fr))`, gap: 12, alignItems: "start" }}>
+          {visibleDays.map((d) => {
+            // The index MUST come from the full DAYS list, not from visibleDays:
+            // it is the offset from Monday used to date the column, so indexing
+            // into the filtered list would date every phone column as Monday.
+            const i = DAYS.indexOf(d);
             const items = grid.get(d.code) ?? [];
             // In a specific week each column is a real calendar day — show its date.
             // In the "Every week" overview there's no single date, so fall back to a count.
@@ -2902,6 +2978,20 @@ function InstructorLoadStrip({ instructors, loadCount, availByInstr, selectedIns
 }
 
 function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowClick }) {
+  // PHONE: STACKED CARDS, NOT A SIX-COLUMN TABLE.
+  //
+  // Measured at 375px before this: 636px of table squeezed into 346px, columns
+  // landing at 111/104/78/84/100/158, every row 162-173px tall because each
+  // cell wrapped into its own narrow strip - and THREE columns off the right
+  // edge behind a sideways scroll, one of them Instructor. On the instructor
+  // schedule, on a phone, you could not see who was teaching.
+  //
+  // The fix is the standard responsive-table move every tool in this category
+  // makes: below the breakpoint the row stops being a row and becomes a card,
+  // each field on its own line, full width. Same data, same order, same day
+  // grouping - it is the LAYOUT that changes, so nothing here can disagree with
+  // the desktop table about what it is showing.
+  const narrow = useAdminNarrow();
   const byDay = new Map(DAYS.map((d) => [d.code, []]));
   for (const p of programs) {
     const code = DAY_TO_CODE[dayKey(p.day_of_week)];
@@ -2913,30 +3003,43 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
     return <div style={{ background: "#fff", border: `1px dashed ${RULE}`, borderRadius: 12, padding: 24, textAlign: "center", color: MUTED }}>No classes match your filters.</div>;
   }
   const th = { fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.5, color: MUTED, fontWeight: 700, textAlign: "left", padding: "10px 14px", borderBottom: `1px solid ${RULE}` };
-  const td = { padding: "11px 14px", borderTop: "1px solid #f0eee6", fontSize: 13.5, verticalAlign: "middle" };
+  const tdDesktop = { padding: "11px 14px", borderTop: "1px solid #f0eee6", fontSize: 13.5, verticalAlign: "middle" };
+  // As a card, a cell is a line: no cell borders (the card's own border is the
+  // boundary now) and no 14px side padding (the card supplies it once).
+  const td = narrow
+    ? { display: "block", padding: "2px 0", fontSize: 13.5 }
+    : tdDesktop;
   const widths = ["24%", "19%", "19%", "9%", "16%", "13%"];
   return (
     <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, overflow: "hidden" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
-        <colgroup>{widths.map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
-        <thead>
-          <tr>
-            <th style={th}>Class</th>
-            <th style={th}>School · Area</th>
-            <th style={th}>When</th>
-            <th style={th}>Enrolled</th>
-            <th style={th}>Instructor</th>
-            <th style={th}>Status</th>
-          </tr>
-        </thead>
-        <tbody>
+      <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: narrow ? "auto" : "fixed", display: narrow ? "block" : "table" }}>
+        {/* The fixed column widths are the whole problem on a phone - they are
+            what forced 636px into 346px - so they only exist on desktop. */}
+        {!narrow && <colgroup>{widths.map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>}
+        {/* No header row on a phone: the cards carry their own meaning, and a
+            header for columns that no longer exist would be a lie. The one
+            field that is not self-describing out of a column ("12 / 20") gets
+            its own inline label below. */}
+        {!narrow && (
+          <thead>
+            <tr>
+              <th style={th}>Class</th>
+              <th style={th}>School · Area</th>
+              <th style={th}>When</th>
+              <th style={th}>Enrolled</th>
+              <th style={th}>Instructor</th>
+              <th style={th}>Status</th>
+            </tr>
+          </thead>
+        )}
+        <tbody style={narrow ? { display: "block" } : undefined}>
           {DAYS.map((d) => {
             const items = byDay.get(d.code) ?? [];
             if (items.length === 0) return null;
             return (
               <React.Fragment key={d.code}>
-                <tr>
-                  <td colSpan={6} style={{ background: CREAM, padding: "7px 14px", fontSize: 12, fontWeight: 700, color: PURPLE, borderTop: `1px solid ${RULE}` }}>
+                <tr style={narrow ? { display: "block" } : undefined}>
+                  <td colSpan={6} style={{ background: CREAM, padding: "7px 14px", fontSize: 12, fontWeight: 700, color: PURPLE, borderTop: `1px solid ${RULE}`, ...(narrow ? { display: "block" } : null) }}>
                     {d.label} <span style={{ color: MUTED, fontWeight: 500 }}>· {items.length} class{items.length === 1 ? "" : "es"}</span>
                   </td>
                 </tr>
@@ -2948,8 +3051,26 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
                   const who = lead ? ((lead.instructor_preferred || lead.instructor_first || "Instructor") + (lead.instructor_last ? ` ${lead.instructor_last}` : "")) : null;
                   const enr = enrollment?.[p.id];
                   return (
-                    <tr key={p.id} onClick={() => onRowClick(p)} style={{ cursor: "pointer" }}>
-                      <td style={{ ...td, overflow: "hidden", textOverflow: "ellipsis" }}>
+                    <tr
+                      key={p.id}
+                      onClick={() => onRowClick(p)}
+                      style={{
+                        cursor: "pointer",
+                        ...(narrow ? {
+                          display: "block",
+                          border: `1px solid ${RULE}`,
+                          borderRadius: 10,
+                          padding: "12px 14px",
+                          margin: "10px 14px",
+                        } : null),
+                      }}
+                    >
+                      {/* overflow:hidden + ellipsis is a FIXED-COLUMN behaviour -
+                          it exists to stop a long class name blowing out a 24%
+                          column. As a card there is no column to protect and the
+                          full name fits on two lines, so clipping it would hide
+                          the one field the operator is scanning for. */}
+                      <td style={narrow ? td : { ...td, overflow: "hidden", textOverflow: "ellipsis" }}>
                         <div style={{ fontWeight: 700, color: INK }}>{p.curriculum || "Class"}</div>
                         {/* The guard allowed ONE end to be set but the line printed
                             both, so a range with no top rendered "Grades 2–" with a
@@ -2995,6 +3116,10 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
                           (20260819j), and it needed somewhere to be visible.
                           Copy approved by Jessica 2026-08-20. */}
                       <td style={td}>{enr ? <>
+                        {/* "12 / 20" means Enrolled only because a column header
+                            above it says so. As a card that header is gone, so
+                            the label comes with the number. */}
+                        {narrow && <span style={{ color: MUTED }}>Enrolled </span>}
                         <span style={{ fontWeight: 600, color: INK }}>{enr.enrolled}</span><span style={{ color: MUTED }}> / {enr.max ?? "—"}</span>
                         {enr.seatsTaken > enr.enrolled && (
                           <div style={{ fontSize: 11.5, color: MUTED }}>
