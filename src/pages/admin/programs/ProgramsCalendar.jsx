@@ -780,7 +780,17 @@ export default function ProgramsCalendar() {
             const e = enrollment[r.program_id] ??= { paid: 0, unpaid: 0, pending: 0, waiting: 0 };
             if (r.payment_status === "paid") e.paid++;
             else if (r.status === "confirmed") e.unpaid++;
-            else e.pending++;
+            // THE LABEL NOW NAMES SOMETHING, SO THE BRANCH HAS TO MEAN IT.
+            // This was a bare `else`: anything not paid and not confirmed. The
+            // query filters `cancelled_at IS NULL` but not `status='cancelled'`,
+            // and the two have come apart in prod data before - which is why the
+            // class roster added exactly this guard when it put a noun on its own
+            // copy of this number. A cancelled registration is not an unfinished
+            // one; an operator clicking into a class to chase them must find the
+            // number they were shown. Zero such rows exist on prod today; the
+            // guard is what keeps the sentence true tomorrow, not a fix for a
+            // live miscount.
+            else if (r.status !== "cancelled") e.pending++;
           }
 
           // WAITING FAMILIES, COUNTED SEPARATELY AND ON PURPOSE.
@@ -1110,7 +1120,21 @@ export default function ProgramsCalendar() {
               </span>
             )}
           </div>
-          {totals.pending > 0 && <div style={{ color: MUTED }}>+{totals.pending} pending</div>}
+          {/* "+9 pending" told Jeff nothing - he asked what it meant, and the
+              answer (nine families started registering and never came back) was in
+              none of those words. The count itself was never wrong: it has never
+              been in `enrolled`, in the fill bar, or in a seat. What was wrong was
+              a label that reads like a seat awaiting approval, sitting one gap
+              away from the enrolled number. Now it names the thing and says which
+              side of the line it is on, in one pass. The noun is defended in
+              enrollmentSummary.js - "checkout" is truer today and false the first
+              time a roster import lands one of these without a Stripe session. */}
+          {totals.pending > 0 && (
+            <div style={{ color: MUTED }}>
+              +{totals.pending} unfinished registration{totals.pending === 1 ? "" : "s"}
+              <span style={{ fontSize: 12, marginLeft: 6 }}>· not enrolled</span>
+            </div>
+          )}
           {/* Shown on the same terms as pending: only when there is one, same quiet
               colour, because neither is a seat. Its own <div> rather than appended to
               the pending one, so a term with families waiting and no pending checkouts

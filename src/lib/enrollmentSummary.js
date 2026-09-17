@@ -31,18 +31,33 @@ export function enrolledSeats(enr) {
 }
 
 /**
- * The quiet line under the count: "12 paid · 2 on installments · +1 pending · 6 waiting".
+ * The quiet line under the count: "12 paid · 2 on installments · +1 unfinished
+ * registration · 6 waiting".
  *
  * Each part appears only when it is non-zero, so a full and settled class shows
  * just "14 paid" rather than three zeroes. Order is deliberate: the two that ARE
  * seats first, then the two that are not, with waiting last because it is the
  * only one describing people who are not in the class at all.
+ *
+ * "unfinished registration", not "pending". Jeff asked what "+9 pending" meant on
+ * his own programs page, 2026-09-17, and the honest answer - nine families started
+ * registering and never finished - was nowhere in the word. "Pending" reads like a
+ * seat awaiting someone's approval, which is the one thing it is not.
+ *
+ * NOT "unfinished checkout", which is what this said first and what the roster
+ * screen said for a year. That word is true of every one of these rows on prod
+ * today and false of a row this product can create on any afternoon:
+ * `admin-import-program-roster` writes status='pending' for an imported child
+ * whose photo release is an explicit "no" - a registration with no Stripe session
+ * behind it at all. "Checkout" would send an operator hunting a payment that never
+ * existed, when the thing to chase is a consent form. "Registration" is true of
+ * both, and still answers the question Jeff actually asked.
  */
 export function enrollmentBreakdown(enr) {
   const parts = [];
   if (n(enr?.paid) > 0) parts.push(`${n(enr.paid)} paid`);
   if (n(enr?.unpaid) > 0) parts.push(`${n(enr.unpaid)} on installments`);
-  if (n(enr?.pending) > 0) parts.push(`+${n(enr.pending)} pending`);
+  if (n(enr?.pending) > 0) parts.push(`+${n(enr.pending)} unfinished registration${n(enr.pending) === 1 ? "" : "s"}`);
   if (n(enr?.waiting) > 0) parts.push(`${n(enr.waiting)} waiting`);
   return parts.join(" · ");
 }

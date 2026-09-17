@@ -393,8 +393,14 @@ export default function ProgramRoster() {
             <strong>{enrolled.length}</strong> enrolled
             {program?.max_capacity ? <span style={{ color: MUTED }}> / {program.max_capacity} seats</span> : null}
             {program?.instructor_name ? <span style={{ color: MUTED }}> · Instructor: {program.instructor_name}</span> : null}
+            {/* "unfinished registration", not "pending checkout": the programs
+                page this screen is reached from now uses that phrase for the same
+                number, and one number read on two screens should not carry two
+                nouns. "Checkout" was the wrong half to keep - this bucket also
+                holds an imported child blocked on photo release, who has no Stripe
+                session to go looking for. */}
             {pendingCount > 0 && (
-              <span style={{ color: MUTED, marginLeft: 8 }}>(+{pendingCount} pending checkout{pendingCount === 1 ? "" : "s"}, not counted)</span>
+              <span style={{ color: MUTED, marginLeft: 8 }}>(+{pendingCount} unfinished registration{pendingCount === 1 ? "" : "s"}, not counted)</span>
             )}
           </div>
         </div>
