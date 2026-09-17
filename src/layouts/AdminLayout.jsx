@@ -743,7 +743,18 @@ export default function AdminLayout() {
                inside itself - a tenant with every nav section expanded has more
                items than a short phone has room for. */
             height: auto !important;
+            /* dvh, with vh first as the fallback - the pattern this repo
+               already uses in PwaInstallButton.jsx and for the same reason.
+               On iOS, 100vh is the viewport with the browser chrome HIDDEN, so
+               a panel sized by it ends 80-100px below what you can actually
+               see: the panel scrolls internally, but its own box bottom is
+               off-screen, so the last entries (Settings, Team, Sign out) can
+               never be reached while the URL bar is showing. 100dvh tracks the
+               visible viewport and is ignored by anything that does not know
+               it. Jessica is an iPhone user and this is the menu she asked for,
+               so this is the one unit that must not be guessed. */
             max-height: calc(100vh - var(--admin-bar-h, 64px)) !important;
+            max-height: calc(100dvh - var(--admin-bar-h, 64px)) !important;
             overflow-y: auto !important;
             z-index: 39 !important;
             padding: 8px 0 14px !important;
@@ -908,6 +919,16 @@ export default function AdminLayout() {
                 <Link
                   key={item.to}
                   to={item.soon ? location.pathname : navLandingTo(item, org, perm)}
+                  // Close on TAP, not only on a route change. The effect that
+                  // closes this menu keys on location.pathname, so tapping the
+                  // entry for the page you are already on - or a "soon" item,
+                  // which deliberately links to the current path - changed no
+                  // path, fired no effect, and left the menu and its scrim
+                  // sitting over the screen. Reproduced on /admin/programs:
+                  // tap Programs, path unchanged, data-open still "true". On a
+                  // phone the menu hides the page, so re-tapping where you
+                  // already are is a normal thing to do, and it read as dead.
+                  onClick={() => setNavOpen(false)}
                   style={{
                     display: "flex",
                     alignItems: "center",
