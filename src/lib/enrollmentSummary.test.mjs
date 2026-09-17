@@ -40,10 +40,20 @@ ok('never returns NaN for a half-loaded shape',
 // --- the line an operator reads ---------------------------------------------
 eq('all four, in order',
   enrollmentBreakdown(E(12, 2, 1, 6)),
-  '12 paid · 2 on installments · +1 pending · 6 waiting');
+  '12 paid · 2 on installments · +1 unfinished registration · 6 waiting');
 eq('waiting appears with no pending',
   enrollmentBreakdown(E(14, 0, 0, 3)), '14 paid · 3 waiting');
-eq('pending keeps its plus sign', enrollmentBreakdown(E(3, 0, 2)), '3 paid · +2 pending');
+eq('pending keeps its plus sign', enrollmentBreakdown(E(3, 0, 2)), '3 paid · +2 unfinished registrations');
+// One is singular. The word carries the meaning now, so it has to read like
+// English at 1 as well as at 9 - Jeff's was 9, the class rows are mostly 1.
+eq('one unfinished registration is singular', enrollmentBreakdown(E(3, 0, 1)), '3 paid · +1 unfinished registration');
+// The word "pending" is what Jeff could not read. It must not come back to this
+// line by way of someone restoring the shorter string.
+ok('the line never says the bare word "pending"', !/pending/.test(enrollmentBreakdown(E(12, 2, 4, 6))));
+// Nor may it say "checkout". This bucket also holds a roster-imported child
+// blocked on photo release, who never had a Stripe session - that noun would
+// send an operator looking for a payment that does not exist.
+ok('the line never claims a checkout', !/checkout/i.test(enrollmentBreakdown(E(12, 2, 4, 6))));
 eq('a settled class says only what is true', enrollmentBreakdown(E(14)), '14 paid');
 eq('zeros produce no line at all', enrollmentBreakdown(E()), '');
 eq('undefined produces no line', enrollmentBreakdown(undefined), '');
