@@ -14,6 +14,8 @@ import { fetchOrgTerms } from "../../lib/terms.js";
 import { resolveBoardSendIntro } from "../../lib/boardSendCopy.js";
 import HatGuide from "../../components/HatGuide";
 import Chevron from "../../components/Chevron.jsx";
+import TabStrip from "../../components/TabStrip.jsx";
+import { useAdminNarrow } from "../../lib/adminViewport.js";
 import NotifyRemovalModal from "./NotifyRemovalModal";
 import AssignSubModal from "./AssignSubModal";
 import AfterschoolSchedule from "./AfterschoolSchedule";
@@ -256,6 +258,15 @@ function todayIso() {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${d.getFullYear()}-${m}-${day}`;
+}
+
+// Which weekday it is locally, or null at the weekend. Used to open the phone
+// day view on today rather than always on Monday - what every calendar does.
+// Null on Saturday and Sunday because WEEKDAYS is Mon-Fri, so there is no
+// column for it and Monday is the sensible landing.
+function todayWeekday() {
+  const name = WEEKDAY_NAMES[new Date().getDay()];
+  return WEEKDAYS.includes(name) ? name : null;
 }
 
 function classDaysOverlap(a, b) {
@@ -3350,34 +3361,116 @@ function WeeklyGrid({ week, items, cycleType, recentlyUpdated, subsByKey, getVal
 
   const colorByLocation = useMemo(() => locationColorMap(sorted), [sorted]);
 
+  // PHONE: ONE DAY AT A TIME, not five squashed columns.
+  //
+  // Five day columns at 375px gave each one about 60px: the day headers ran
+  // together into "MondaySeTuesdayWednesday" and every card truncated to five
+  // or six characters ("Alamed", "NEEDS INSTRUC"). Nobody ships that. Deputy's
+  // mobile app pairs its week view with arrows that move one day at a time;
+  // Google Calendar added a 3-day view that exists only on phones and says
+  // plainly that seven columns "become frustrating in a narrow window";
+  // FullCalendar, which most of these products are built on, ships Day as a
+  // first-class view beside Week for the same reason. Fewer days plus a way to
+  // move between them is the settled answer, so it is the one used here.
+  //
+  // Desktop is untouched: visibleDays is all five and every grid below still
+  // says repeat(5).
+  const narrow = useAdminNarrow();
+  // Open on today when the operator is looking at a week that contains it -
+  // what every calendar does. todayWeekday() is null at the weekend, when
+  // Monday is the sensible landing.
+  const [activeDay, setActiveDay] = useState(() => todayWeekday() ?? WEEKDAYS[0]);
+  const visibleDays = narrow ? [activeDay] : WEEKDAYS;
+
+  // On a phone, a class that does not meet the chosen day would render as a
+  // column of em-dash placeholders - a screen of nothing between the rows that
+  // do have a card. A day view shows that day, so rows with nothing on it are
+  // dropped. Desktop keeps every row, because there the placeholder carries
+  // real meaning: it is the gap in a week you can see across.
+  const visibleRows = useMemo(() => {
+    if (!narrow) return sorted;
+    return sorted.filter((e) => {
+      const days = Array.isArray(e.session.class_days) ? e.session.class_days : WEEKDAYS;
+      return days.includes(activeDay);
+    });
+  }, [narrow, sorted, activeDay]);
+
   return (
     <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: 14 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12, gap: 10, flexWrap: "wrap" }}>
         <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: INK }}>
           Week {week?.num} <span style={{ fontWeight: 400, color: MUTED, fontSize: 13 }}>· {fmtShort(week?.starts_on)} – {fmtShort(week?.ends_on)}</span>
         </h2>
-        <div style={{ fontSize: 12, color: MUTED }}>{items.length} {unitLabel(cycleType, items.length)} shown · drag an instructor chip onto another card to reassign</div>
+        {/* The drag hint is desktop-only because dragging is: on a phone you
+            reassign by tapping the instructor chip, and telling someone to drag
+            on a touch screen sends them looking for something that isn't there. */}
+        <div style={{ fontSize: 12, color: MUTED }}>
+          {narrow
+            ? `${visibleRows.length} ${unitLabel(cycleType, visibleRows.length)} on ${DAY_LABEL_FULL[activeDay]}`
+            : `${items.length} ${unitLabel(cycleType, items.length)} shown · drag an instructor chip onto another card to reassign`}
+        </div>
       </div>
 
-      {/* Day headers */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 10, marginBottom: 8 }}>
-        {WEEKDAYS.map((d) => (
-          <div key={d} style={{
-            fontSize: 11,
-            fontWeight: 700,
-            color: MUTED,
-            textTransform: "uppercase",
-            letterSpacing: 0.6,
-            paddingBottom: 4,
-            borderBottom: `1px solid ${RULE}`,
-          }}>
-            {DAY_LABEL_FULL[d]}
-          </div>
-        ))}
-      </div>
+      {/* Day headers. On a phone these become the control that picks the day,
+          in the scrolling strip the admin tab rows already use - so a tenant
+          running weekend classes gets a strip that scrolls rather than five
+          days crushed to fit. */}
+      {narrow ? (
+        <TabStrip role="tablist" label="Day of the week" style={{ gap: 6, marginBottom: 12 }}>
+          {WEEKDAYS.map((d) => {
+            const on = d === activeDay;
+            return (
+              <button
+                key={d}
+                type="button"
+                role="tab"
+                aria-selected={on}
+                data-tab-active={on ? "true" : undefined}
+                onClick={() => setActiveDay(d)}
+                style={{
+                  // 44px is the minimum comfortable touch target, same as the
+                  // shell's menu button.
+                  minHeight: 44,
+                  padding: "8px 14px",
+                  borderRadius: 999,
+                  // BRIGHT, not VIOLET: VIOLET (#8C88FF) is the separator tint
+                  // and does not carry white text - it lands around 3:1. BRIGHT
+                  // is the admin's primary-action indigo and clears 4.5:1.
+                  border: `1px solid ${on ? BRIGHT : RULE}`,
+                  background: on ? BRIGHT : "#fff",
+                  color: on ? "#fff" : INK,
+                  fontFamily: "inherit",
+                  fontSize: 14,
+                  fontWeight: on ? 700 : 500,
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {DAY_SHORT[d]}
+              </button>
+            );
+          })}
+        </TabStrip>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 10, marginBottom: 8 }}>
+          {WEEKDAYS.map((d) => (
+            <div key={d} style={{
+              fontSize: 11,
+              fontWeight: 700,
+              color: MUTED,
+              textTransform: "uppercase",
+              letterSpacing: 0.6,
+              paddingBottom: 4,
+              borderBottom: `1px solid ${RULE}`,
+            }}>
+              {DAY_LABEL_FULL[d]}
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Rows */}
-      {sorted.length === 0 ? (
+      {visibleRows.length === 0 ? (
         <div style={{
           minHeight: 80,
           border: `1px dashed ${RULE}`,
@@ -3387,11 +3480,19 @@ function WeeklyGrid({ week, items, cycleType, recentlyUpdated, subsByKey, getVal
           justifyContent: "center",
           color: MUTED,
           fontSize: 14,
-        }}>—</div>
+          padding: "0 12px",
+          textAlign: "center",
+        }}>
+          {/* An em-dash is fine for an empty WEEK - you can see the whole week
+              and read it as "nothing here". Filtered to one day it is not: the
+              operator picked Tuesday and needs to be told Tuesday is empty,
+              not shown a dash they have to interpret. */}
+          {narrow && sorted.length > 0 ? `Nothing on ${DAY_LABEL_FULL[activeDay]}` : "—"}
+        </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {sorted.map((e, idx) => {
-            const prevLoc = idx > 0 ? sorted[idx - 1].session.location_name : null;
+          {visibleRows.map((e, idx) => {
+            const prevLoc = idx > 0 ? visibleRows[idx - 1].session.location_name : null;
             const newGroup = idx > 0 && prevLoc !== e.session.location_name;
             const days = Array.isArray(e.session.class_days) ? e.session.class_days : WEEKDAYS;
             return (
@@ -3403,8 +3504,12 @@ function WeeklyGrid({ week, items, cycleType, recentlyUpdated, subsByKey, getVal
                     margin: "4px 0",
                   }} />
                 )}
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 10 }}>
-                  {WEEKDAYS.map((d) => days.includes(d) ? (
+                {/* WEEKDAYS.indexOf(d), NOT visibleDays.indexOf(d), everywhere a
+                    date is derived below: the offset is from the start of the
+                    WEEK, so indexing into the filtered list would date every
+                    card as Monday on a phone. */}
+                <div style={{ display: "grid", gridTemplateColumns: `repeat(${visibleDays.length}, minmax(0, 1fr))`, gap: 10 }}>
+                  {visibleDays.map((d) => days.includes(d) ? (
                     <ProgramCard
                       key={d}
                       item={e}
@@ -3425,6 +3530,9 @@ function WeeklyGrid({ week, items, cycleType, recentlyUpdated, subsByKey, getVal
                       onChangeRequestClick={onChangeRequestClick}
                     />
                   ) : (
+                    // Unreachable on a phone - visibleRows has already dropped
+                    // every row with nothing on the chosen day - but kept for
+                    // the desktop week, where the gap is the point.
                     <div key={d} style={{
                       minHeight: 80,
                       border: `1px dashed ${RULE}`,

@@ -17,6 +17,8 @@ import AssignSubModal from "./AssignSubModal";
 import HatGuide from "../../components/HatGuide";
 import NeedsCoverBanner from "../../components/NeedsCoverBanner.jsx";
 import ScheduleStepBar from "../../components/ScheduleStepBar.jsx";
+import TabStrip from "../../components/TabStrip.jsx";
+import { useAdminNarrow } from "../../lib/adminViewport.js";
 import { resolveBoardSendIntro } from "../../lib/boardSendCopy.js";
 import { classifyOther } from "../../lib/scheduleConflicts.js";
 import { programScheduleSummary } from "../../lib/programSchedule.js";
@@ -82,6 +84,14 @@ function fmtDateShort(iso) {
 function todayIso() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// Today's column code ("mon".."fri"), or null at the weekend. Used to open the
+// phone day picker on today rather than always on Monday. Null on Saturday and
+// Sunday because DAYS is Mon-Fri, so there is no column for it.
+function todayDayCode() {
+  const code = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][new Date().getDay()];
+  return DAYS.some((d) => d.code === code) ? code : null;
 }
 
 // "2026-11-12" -> "Nov 12" (parsed at local noon so it never slips a day).
@@ -339,6 +349,15 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   // falls back to the tenant's alert_email if this is missing).
   const testRecipient = user?.email;
   const [state, setState] = useState({ status: "loading" });
+  // PHONE: ONE DAY COLUMN AT A TIME. Five columns at 375px gave each about
+  // 60px - the day headers ran together into "MondaySeTuesdayWednesday" and
+  // every card truncated to five or six characters. See the note on the day
+  // strip further down for why fewer-days-plus-a-picker is the shape.
+  const narrow = useAdminNarrow();
+  // Open on today when there is a today to open on - what every calendar does.
+  // todayDayCode() is null at the weekend, when Monday is the sensible landing.
+  const [activeDayCode, setActiveDayCode] = useState(() => todayDayCode() ?? DAYS[0].code);
+  const visibleDays = narrow ? DAYS.filter((d) => d.code === activeDayCode) : DAYS;
   const [searchText, setSearchText] = useState("");
   const [selectedLocations, setSelectedLocations] = useState(() => new Set());
   const [selectedStatuses, setSelectedStatuses] = useState(() => new Set());
@@ -392,7 +411,26 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     if (!org?.id || !term) return;
     setState({ status: "loading" });
     try {
-      const [progRes, locRes, instRes, availRes, surveyRes, areaPrefRes, cycleRes, cfgRes] = await Promise.all([
+      // WAVE 1 of three. This loader used to run about thirteen sequential
+      // network round-trips: this batch, then two intro lookups one after the
+      // other, then assignments, then enrollment, then substitutions, then
+      // declines, and finally one session-dates RPC PER CLASS. Only three of
+      // those steps actually depend on an earlier answer, so the rest were
+      // waiting in line for nothing. Three waves now:
+      //   1. everything that needs only org + term (this batch)
+      //   2. everything that needs programIds
+      //   3. substitutions, which genuinely need the assignment ids from 2
+      //
+      // An earlier version of this comment said the session-date job was 44.7 ms
+      // of database time and that "the database was never slow, the queue was".
+      // BOTH HALVES WERE WRONG and the number came from a superuser connection,
+      // which does not evaluate RLS. As the authenticated role the same work is
+      // 2015 ms, because the program_locations policy costs ~37 ms to PLAN and
+      // was re-planned once per class. Waving the queue down was a real but
+      // secondary win; the actual fix is in
+      // supabase/migrations/20260907d_derive_program_session_dates_bulk.sql.
+      const [progRes, locRes, instRes, availRes, surveyRes, areaPrefRes, cycleRes, cfgRes,
+             savedSurveyIntro, savedOfferIntro] = await Promise.all([
         supabase
           .from("programs")
           // age_min/age_max added with audienceLabel: the helper answers "grades OR
@@ -465,6 +503,11 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           .eq("organization_id", org.id)
           .eq("context", "afterschool")
           .maybeSingle(),
+        // Both intros need only org.id, so they belong in this wave. They used
+        // to be two consecutive awaits AFTER it, which cost two full round-trips
+        // to fetch strings nothing else was waiting on.
+        resolveBoardSendIntro(supabase, org.id, "availability_survey"),
+        resolveBoardSendIntro(supabase, org.id, "assignment_offer"),
       ]);
       if (progRes.error) throw progRes.error;
       if (locRes.error) throw locRes.error;
@@ -480,20 +523,58 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       // priority over the fallback set just above (survey: org_survey_config;
       // offer: the edge fn's per-instructor default). Shared resolver so the four
       // board copies (survey/offer × camp/after-school) stay in one place.
-      const savedSurveyIntro = await resolveBoardSendIntro(supabase, org.id, "availability_survey");
+      // Resolved in wave 1 above; still applied here, in the same order and
+      // after the cfgRes fallback, so the precedence is unchanged.
       if (savedSurveyIntro) setOrgSurveyIntro(savedSurveyIntro);
-      const savedOfferIntro = await resolveBoardSendIntro(supabase, org.id, "assignment_offer");
       if (savedOfferIntro) setOrgOfferIntro(savedOfferIntro);
 
       const programs = (progRes.data ?? []).filter((p) => DAY_TO_CODE[dayKey(p.day_of_week)]);
       const programIds = programs.map((p) => p.id);
 
-      const assignRes = programIds.length
-        ? await supabase
-            .from("program_assignments")
-            .select("id, program_id, instructor_id, status, role, flags, distance_bonus_cents, instructor_response_at, email_sent_at, reminder_sent_at, change_request_message, flagged_reason, deadline, published_at, assigned_by, instructor:instructors(id, first_name, last_name, preferred_name, email)")
-            .in("program_id", programIds)
-        : { data: [], error: null };
+      // WAVE 2. Assignments, enrollment, declines and every class's session
+      // dates all depend on programIds and on nothing else, so they go together.
+      // They used to be four separate awaits spread across the function, three
+      // of them separated only by the code that reshapes the previous answer -
+      // which does not need the network at all.
+      const [assignRes, enrollRes, declineRes, datesRes] = programIds.length
+        ? await Promise.all([
+            supabase
+              .from("program_assignments")
+              .select("id, program_id, instructor_id, status, role, flags, distance_bonus_cents, instructor_response_at, email_sent_at, reminder_sent_at, change_request_message, flagged_reason, deadline, published_at, assigned_by, instructor:instructors(id, first_name, last_name, preferred_name, email)")
+              .in("program_id", programIds),
+            supabase
+              .from("program_enrollment")
+              .select("program_id, enrolled, seats_taken, max_capacity")
+              .in("program_id", programIds),
+            supabase
+              .from("session_declined_instructors")
+              .select("program_id, instructor_id")
+              .eq("organization_id", org.id)
+              .in("program_id", programIds),
+            // ONE request for all of them, not one per class. Fail-soft is kept:
+            // a rejected call leaves every class with no weeks rather than
+            // blanking the board, exactly as the per-class version did. The
+            // difference is that it is now all-or-nothing instead of per-class,
+            // which is the honest trade for a single round-trip.
+            //
+            // TENANT ISOLATION IS NOT RLS HERE. An earlier version of this
+            // comment said the RPC "reads through programs RLS" - that stopped
+            // being true when the function became SECURITY DEFINER to avoid
+            // re-planning the program_locations policy per class, which is what
+            // made this screen slow. As definer it bypasses RLS entirely.
+            //
+            // What keeps one tenant's ids from returning another tenant's dates
+            // is the predicate INSIDE the function:
+            //   is_org_member(organization_id) OR is_platform_admin()
+            // That WHERE clause is the whole guard, not a redundant extra check
+            // on top of RLS. Do not remove it, and do not weaken it on the
+            // reasoning that the policy already covers this - it does not run.
+            // See supabase/migrations/20260907d_derive_program_session_dates_bulk.sql.
+            supabase
+              .rpc("derive_program_session_dates_bulk", { p_program_ids: programIds })
+              .then((r) => r, () => ({ data: [], error: null })),
+          ])
+        : [{ data: [], error: null }, { data: [], error: null }, { data: [], error: null }, { data: [], error: null }];
       if (assignRes.error) throw assignRes.error;
 
       // seats_taken AS WELL AS enrolled, because since 20260819j they are two different
@@ -507,10 +588,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       // gate 409'd every family and the catalog said the class was full. The operator had
       // no way to see the eleven held seats, so the screen and the product disagreed with
       // nothing on screen to explain it. Both are shown now; see the cell below.
-      const enrollRes = programIds.length
-        ? await supabase.from("program_enrollment").select("program_id, enrolled, seats_taken, max_capacity").in("program_id", programIds)
-        : { data: [], error: null };
-      // THE ERROR WAS BEING DISCARDED. `data ?? []` on a failed read leaves `enrollment`
+      // Fetched in wave 2 above. THE ERROR WAS BEING DISCARDED. `data ?? []` on a failed read leaves `enrollment`
       // empty and every class silently shows a dash - which looks like "no data yet"
       // rather than "this query failed". That matters now more than it did: seats_taken
       // only exists from 20260819j, so shipping this screen to an environment without
@@ -572,31 +650,28 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       // Recorded declines for these classes: an instructor who had a change request
       // open and was then reassigned/removed. Per-program (mirrors camp's per-session).
       // Powers the picker's "previously declined" filter so we don't re-suggest them.
+      // Fetched in wave 2 above; same fail-soft (warn, keep an empty list).
       let declines = [];
-      if (programIds.length) {
-        const { data: declineRows, error: declineErr } = await supabase
-          .from("session_declined_instructors")
-          .select("program_id, instructor_id")
-          .eq("organization_id", org.id)
-          .in("program_id", programIds);
-        if (declineErr) console.warn("[AfterschoolSchedule] decline load failed:", declineErr.message);
-        else declines = declineRows ?? [];
-      }
+      if (declineRes.error) console.warn("[AfterschoolSchedule] decline load failed:", declineRes.error.message);
+      else declines = declineRes.data ?? [];
 
       // Each class's real session dates (per its school/district calendar, closures included)
-      // — used to build the week rail and resolve per-week coverage. Canonical source only.
-      // Fail-soft per class: one rejected RPC must not blank the whole board (or the
-      // list/recurring views, which don't need dates). A failed class just gets no weeks.
-      const dateResults = await Promise.all(
-        programs.map((p) =>
-          supabase.rpc("derive_program_session_dates", { p_program_id: p.id }).then((r) => r, () => ({ data: [] })),
-        ),
-      );
+      // — used to build the week rail and resolve per-week coverage. Canonical source only,
+      // now read in ONE request in wave 2 rather than one request per class.
+      //
+      // Keyed off `programs`, not off the response, so a class the RPC did not
+      // return still gets an entry. It cannot silently vanish from the board:
+      // every class starts at [] and is filled in only if the RPC named it.
       const programDates = {};
-      programs.forEach((p, i) => {
-        const d = dateResults[i]?.data;
-        programDates[p.id] = Array.isArray(d) ? d : [];
-      });
+      for (const p of programs) programDates[p.id] = [];
+      if (datesRes.error) {
+        console.warn("[AfterschoolSchedule] session dates failed:", datesRes.error.message);
+      }
+      for (const row of datesRes.data ?? []) {
+        if (row?.program_id && Array.isArray(row.session_dates)) {
+          programDates[row.program_id] = row.session_dates;
+        }
+      }
 
       setState({
         status: "ready",
@@ -605,6 +680,13 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         substitutions,
         declines,
         programDates,
+        // Whether the session-date call FAILED, as opposed to legitimately
+        // returning nothing. Without it the two are indistinguishable on screen:
+        // an empty programDates makes the week rail render null, so a failed
+        // call looks exactly like a term nobody has scheduled yet. The admin
+        // home had the same ambiguity and answered it out loud; this is that
+        // fix's other half.
+        datesFailed: !!datesRes.error,
         instructors: instRes.data ?? [],
         availability: availRes.data ?? [],
         locations: locRes.data ?? [],
@@ -2248,6 +2330,15 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           {weeks.length > 0 && (
             <WeekRail weeks={weeks} signals={weekSignals} effective={effectiveWeek} onSelect={setFocusedWeekStart} />
           )}
+          {/* No rail AND the dates call failed: say so. An empty programDates renders
+              nothing at all here, which reads as "this term has no classes scheduled"
+              — a wrong conclusion an operator could act on. Only shown when the call
+              actually errored, so a genuinely unscheduled term still says nothing. */}
+          {weeks.length === 0 && state.status === "ready" && state.datesFailed && (
+            <div style={{ fontSize: 12, color: CORAL, background: `${CORAL}14`, border: `1px solid ${CORAL}55`, borderRadius: 8, padding: "8px 12px", marginBottom: 8 }}>
+              Couldn't load the week-by-week dates just now, so the week picker is hidden. Refresh to try again — your classes and instructors below are unaffected.
+            </div>
+          )}
           {effectiveWeek && weeks.find((w) => w.start === effectiveWeek)?.isBreak && (
             <div style={{ fontSize: 12, color: MUTED, background: CREAM, border: `1px solid ${RULE}`, borderRadius: 8, padding: "8px 12px", marginBottom: 4 }}>
               No classes this week — <strong style={{ color: INK }}>term break</strong>.
@@ -2258,8 +2349,65 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
               Off this week (break/closure): <strong style={{ color: INK }}>{weekSignals.get(effectiveWeek).closures.join(", ")}</strong>
             </div>
           )}
-          <div style={{ display: "grid", gridTemplateColumns: `repeat(5, minmax(0, 1fr))`, gap: 12, alignItems: "start" }}>
-          {DAYS.map((d, i) => {
+          {/* THE DAY PICKER, phone only.
+              Five day columns do not fit a phone and nothing serious pretends
+              otherwise: Deputy's mobile app moves a day at a time, Google
+              Calendar added a 3-day view that exists only on phones, and
+              FullCalendar - which most of this category is built on - ships Day
+              as a first-class view beside Week. Fewer days plus a way to move
+              between them is the settled answer, so that is what this is.
+              Desktop still gets all five columns, untouched. */}
+          {narrow && (
+            <TabStrip role="tablist" label="Day of the week" style={{ gap: 6, marginBottom: 12 }}>
+              {DAYS.map((d) => {
+                const on = d.code === activeDayCode;
+                const count = (grid.get(d.code) ?? []).length;
+                return (
+                  <button
+                    key={d.code}
+                    type="button"
+                    role="tab"
+                    aria-selected={on}
+                    data-tab-active={on ? "true" : undefined}
+                    onClick={() => setActiveDayCode(d.code)}
+                    style={{
+                      // 44px is the minimum comfortable touch target - the same
+                      // floor the shell's menu button uses.
+                      minHeight: 44,
+                      // 9px, not 14: at 14 the five chips came to 379px in a
+                      // 347px box, so Friday sat behind the fade on first load.
+                      // The strip would have scrolled to it, but a five-item
+                      // picker that ALMOST fits should just fit - measured at
+                      // 9px it does, with room to spare.
+                      padding: "8px 9px",
+                      borderRadius: 999,
+                      border: `1px solid ${on ? PURPLE : RULE}`,
+                      background: on ? PURPLE : "#fff",
+                      color: on ? "#fff" : INK,
+                      fontFamily: "inherit",
+                      fontSize: 14,
+                      fontWeight: on ? 700 : 500,
+                      cursor: "pointer",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {d.short}
+                    {/* The count is what makes this a picker rather than five
+                        identical buttons: it says where the work is before you
+                        tap. Muted on the unselected chips so it reads as a
+                        detail, not five competing numbers. */}
+                    <span style={{ marginLeft: 6, fontWeight: 500, color: on ? "#ffffffcc" : MUTED }}>{count}</span>
+                  </button>
+                );
+              })}
+            </TabStrip>
+          )}
+          <div style={{ display: "grid", gridTemplateColumns: `repeat(${visibleDays.length}, minmax(0, 1fr))`, gap: 12, alignItems: "start" }}>
+          {visibleDays.map((d) => {
+            // The index MUST come from the full DAYS list, not from visibleDays:
+            // it is the offset from Monday used to date the column, so indexing
+            // into the filtered list would date every phone column as Monday.
+            const i = DAYS.indexOf(d);
             const items = grid.get(d.code) ?? [];
             // In a specific week each column is a real calendar day — show its date.
             // In the "Every week" overview there's no single date, so fall back to a count.
@@ -2830,6 +2978,20 @@ function InstructorLoadStrip({ instructors, loadCount, availByInstr, selectedIns
 }
 
 function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowClick }) {
+  // PHONE: STACKED CARDS, NOT A SIX-COLUMN TABLE.
+  //
+  // Measured at 375px before this: 636px of table squeezed into 346px, columns
+  // landing at 111/104/78/84/100/158, every row 162-173px tall because each
+  // cell wrapped into its own narrow strip - and THREE columns off the right
+  // edge behind a sideways scroll, one of them Instructor. On the instructor
+  // schedule, on a phone, you could not see who was teaching.
+  //
+  // The fix is the standard responsive-table move every tool in this category
+  // makes: below the breakpoint the row stops being a row and becomes a card,
+  // each field on its own line, full width. Same data, same order, same day
+  // grouping - it is the LAYOUT that changes, so nothing here can disagree with
+  // the desktop table about what it is showing.
+  const narrow = useAdminNarrow();
   const byDay = new Map(DAYS.map((d) => [d.code, []]));
   for (const p of programs) {
     const code = DAY_TO_CODE[dayKey(p.day_of_week)];
@@ -2841,30 +3003,43 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
     return <div style={{ background: "#fff", border: `1px dashed ${RULE}`, borderRadius: 12, padding: 24, textAlign: "center", color: MUTED }}>No classes match your filters.</div>;
   }
   const th = { fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.5, color: MUTED, fontWeight: 700, textAlign: "left", padding: "10px 14px", borderBottom: `1px solid ${RULE}` };
-  const td = { padding: "11px 14px", borderTop: "1px solid #f0eee6", fontSize: 13.5, verticalAlign: "middle" };
+  const tdDesktop = { padding: "11px 14px", borderTop: "1px solid #f0eee6", fontSize: 13.5, verticalAlign: "middle" };
+  // As a card, a cell is a line: no cell borders (the card's own border is the
+  // boundary now) and no 14px side padding (the card supplies it once).
+  const td = narrow
+    ? { display: "block", padding: "2px 0", fontSize: 13.5 }
+    : tdDesktop;
   const widths = ["24%", "19%", "19%", "9%", "16%", "13%"];
   return (
     <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, overflow: "hidden" }}>
-      <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
-        <colgroup>{widths.map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
-        <thead>
-          <tr>
-            <th style={th}>Class</th>
-            <th style={th}>School · Area</th>
-            <th style={th}>When</th>
-            <th style={th}>Enrolled</th>
-            <th style={th}>Instructor</th>
-            <th style={th}>Status</th>
-          </tr>
-        </thead>
-        <tbody>
+      <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: narrow ? "auto" : "fixed", display: narrow ? "block" : "table" }}>
+        {/* The fixed column widths are the whole problem on a phone - they are
+            what forced 636px into 346px - so they only exist on desktop. */}
+        {!narrow && <colgroup>{widths.map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>}
+        {/* No header row on a phone: the cards carry their own meaning, and a
+            header for columns that no longer exist would be a lie. The one
+            field that is not self-describing out of a column ("12 / 20") gets
+            its own inline label below. */}
+        {!narrow && (
+          <thead>
+            <tr>
+              <th style={th}>Class</th>
+              <th style={th}>School · Area</th>
+              <th style={th}>When</th>
+              <th style={th}>Enrolled</th>
+              <th style={th}>Instructor</th>
+              <th style={th}>Status</th>
+            </tr>
+          </thead>
+        )}
+        <tbody style={narrow ? { display: "block" } : undefined}>
           {DAYS.map((d) => {
             const items = byDay.get(d.code) ?? [];
             if (items.length === 0) return null;
             return (
               <React.Fragment key={d.code}>
-                <tr>
-                  <td colSpan={6} style={{ background: CREAM, padding: "7px 14px", fontSize: 12, fontWeight: 700, color: PURPLE, borderTop: `1px solid ${RULE}` }}>
+                <tr style={narrow ? { display: "block" } : undefined}>
+                  <td colSpan={6} style={{ background: CREAM, padding: "7px 14px", fontSize: 12, fontWeight: 700, color: PURPLE, borderTop: `1px solid ${RULE}`, ...(narrow ? { display: "block" } : null) }}>
                     {d.label} <span style={{ color: MUTED, fontWeight: 500 }}>· {items.length} class{items.length === 1 ? "" : "es"}</span>
                   </td>
                 </tr>
@@ -2876,8 +3051,26 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
                   const who = lead ? ((lead.instructor_preferred || lead.instructor_first || "Instructor") + (lead.instructor_last ? ` ${lead.instructor_last}` : "")) : null;
                   const enr = enrollment?.[p.id];
                   return (
-                    <tr key={p.id} onClick={() => onRowClick(p)} style={{ cursor: "pointer" }}>
-                      <td style={{ ...td, overflow: "hidden", textOverflow: "ellipsis" }}>
+                    <tr
+                      key={p.id}
+                      onClick={() => onRowClick(p)}
+                      style={{
+                        cursor: "pointer",
+                        ...(narrow ? {
+                          display: "block",
+                          border: `1px solid ${RULE}`,
+                          borderRadius: 10,
+                          padding: "12px 14px",
+                          margin: "10px 14px",
+                        } : null),
+                      }}
+                    >
+                      {/* overflow:hidden + ellipsis is a FIXED-COLUMN behaviour -
+                          it exists to stop a long class name blowing out a 24%
+                          column. As a card there is no column to protect and the
+                          full name fits on two lines, so clipping it would hide
+                          the one field the operator is scanning for. */}
+                      <td style={narrow ? td : { ...td, overflow: "hidden", textOverflow: "ellipsis" }}>
                         <div style={{ fontWeight: 700, color: INK }}>{p.curriculum || "Class"}</div>
                         {/* The guard allowed ONE end to be set but the line printed
                             both, so a range with no top rendered "Grades 2–" with a
@@ -2923,6 +3116,10 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
                           (20260819j), and it needed somewhere to be visible.
                           Copy approved by Jessica 2026-08-20. */}
                       <td style={td}>{enr ? <>
+                        {/* "12 / 20" means Enrolled only because a column header
+                            above it says so. As a card that header is gone, so
+                            the label comes with the number. */}
+                        {narrow && <span style={{ color: MUTED }}>Enrolled </span>}
                         <span style={{ fontWeight: 600, color: INK }}>{enr.enrolled}</span><span style={{ color: MUTED }}> / {enr.max ?? "—"}</span>
                         {enr.seatsTaken > enr.enrolled && (
                           <div style={{ fontSize: 11.5, color: MUTED }}>
