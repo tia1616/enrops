@@ -753,6 +753,11 @@ export default function Register() {
               pricing={pricing}
               orgName={org?.name || ''}
               installmentSchedule={installmentSchedule?.display || null}
+              // Same two props the Pay step gets, and for the same reason: the
+              // cart now shows the all-in price, so it needs the fee config and
+              // the per-registration splits to compute exactly what Pay will.
+              installmentSplits={installmentSchedule?.perLineSplits || null}
+              org={{ ...org, ...(feeConfig || {}) }}
               onPromoApply={async (code) => {
                 setPromoInput(code);
                 const { data } = await supabase
