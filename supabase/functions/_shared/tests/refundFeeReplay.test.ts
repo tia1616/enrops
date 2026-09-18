@@ -21,37 +21,40 @@
 //
 // WHAT THIS FILE CANNOT DO, stated so nobody reads more into a green run.
 // A true replay needs Stripe's real application_fee_amount and the balance
-// transaction's real fee for each historical charge. There is no Stripe key on
-// this machine. So the fixtures below are LITERAL cents, written down once and
-// checked against the fee model by a single canary test — not recomputed on
-// every run from the same module they are meant to be testing.
+// transaction's real fee for each historical charge. As of 18 September those
+// ARE readable - see the reconciliation below - but this file still runs with
+// no network, against facts written down from them.
 //
-// AND THE FIXTURES ONLY ANCHOR ON ROWS THAT ACTUALLY RECONCILE. Checked all
-// ten September rows against one percent of the refunded amount: SIX match
-// exactly and FOUR do not. Only matching rows are used below.
+// SETTLED 2026-09-18, AND ALL FOUR RECONCILE. The four rows this file used to
+// list as unexplained were read off the live charges, read-only, once the
+// Stripe key had payments permission. None of them was a refund defect. Every
+// one was the same mistake in the CHECK, not in the code: comparing the return
+// against refunds.amount_cents. The money layer says so in as many words - do
+// not reconcile against the refund amount, reconcile against the original
+// charge - and doing that makes all four exact.
 //
-//   Amit Rasin     24000 -> 240   match      Nehemiah Kalu 20500 -> 205  match
-//   Murphy Yolland 28500 -> 285   match      Addie Schmitt 10069 -> 101  match
-//   Heidi Nelson   11079 -> 111   match      Everett Myers  2500 ->  25  match
+//   Laura Lillison   appfee 1142, Stripe took 771  -> 371. LINK, 2.6% + 30c.
+//                    The 86c gap is the UPLIFT over-charging the provider,
+//                    which runs the other way and is section 4's problem.
+//   Leila Banks      appfee  420, Stripe took 319  -> 101. Installment 1 of a
+//                    29900 registration: 299 allocated over [9968, 9966, 9966]
+//                    is [101, 99, 99], remainder on charge 1.
+//   Wallace Fritsch  appfee  420, Stripe took 319  -> margin 101, and the
+//                    refund was PARTIAL: 101 x 6468/9968 = 65.5 -> 66.
+//   Esme Rosenau     direct + pass-through. 30199 paid = 29900 class + 299 fee.
+//                    A direct charge carries no uplift, so the whole 299 is
+//                    margin and the whole 299 came back.
 //
-//   Laura Lillison 28500 -> 371   OFF BY +86, the gap already on record
-//   Leila Banks     9968 -> 101   OFF BY +1
-//   Wallace Fritsch 6468 ->  66   OFF BY +1
-//   Esme Rosenau   30199 -> 299   OFF BY -3
-//
-// The three small ones are most likely the margin being taken on the CHARGE
-// while the row records the REFUND, which differ on a partial refund and on a
-// pass-through total (Esme's 30199 is a 29900 class plus a 299 fee, and 299 is
-// exactly one percent of 29900). That is a reading of the shape, NOT a
-// verified explanation, and none of it can be settled without the charges.
-// So this file locks BEHAVIOUR. It does not reconcile history, and a green run
-// must not be read as though it had.
+// The fixtures below are still LITERAL cents, written down once and checked
+// against the fee model by a single canary test - not recomputed on every run
+// from the same module they are meant to be testing.
 
 import { assertEquals } from 'https://deno.land/std@0.208.0/assert/mod.ts';
 import { computeMarginRefund } from '../refundFeeSplit.ts';
 import { readChargeFeeFacts } from '../chargeFeeFacts.ts';
 import { estimateStripeFee } from '../estimateStripeFee.ts';
 import { feeReturnOutcome, type FeeReturnOutcome } from '../feeReturnOutcome.ts';
+import { allocateFeeAcrossInstallments } from '../feeAllocation.ts';
 
 // ── fixtures: literal cents, from the two live charge models ───────────────
 //
@@ -476,6 +479,110 @@ Deno.test('blocker1/DoD: the three failures are exactly the $7.12 settled by han
   for (const f of failures) {
     assertEquals(f.returnedCents, 0, f.who);
   }
+});
+
+// ── 7. The four that did not reconcile, reconciled ────────────────────────
+//
+// Every number below was read off the LIVE charge on 18 September 2026, not
+// inferred: charge amount, application_fee_amount, and the balance
+// transaction's own `fee`. Each one is then put back through the real
+// functions. This is the half of section 6 that the seventeen outcomes do not
+// cover - the outcomes say WHICH WORD, these say HOW MUCH.
+
+Deno.test('recon: Laura Lillison - the gap is Link pricing, and it runs the other way', () => {
+  // ch_3UBlovEEGKl6BPRF0GEyWkRU: amount 28500, application fee 1142, and the
+  // balance transaction's fee is 771 - not the 857 the code assumed, because
+  // payment_method_details.card.brand is 'link' and Link bills 2.6% + 30c.
+  const REAL_STRIPE_FEE = 771;
+  const APP_FEE = 1142;
+
+  assertEquals(
+    computeMarginRefund({
+      applicationFeeCents: APP_FEE,
+      stripeFeeCents: REAL_STRIPE_FEE,
+      chargeAmountCents: 28500,
+      refundAmountCents: 28500,
+    }),
+    371, // exactly what prod returned
+  );
+
+  // AND THE FINDING, asserted so it cannot be forgotten. estimateStripeFee
+  // assumes every card is 2.9% + 30c. On a destination charge with
+  // stripe_fee_payer='tenant' that estimate is what enrops RECOVERS from the
+  // provider, so on a Link payment enrops takes more than Stripe charged -
+  // 86c here, out of J2S's payout. The refund was never wrong; the uplift is.
+  // Section 4's fee engine inherits this, and it matters more from ship day,
+  // when the same estimate sits inside a price a family reads.
+  const estimated = estimateStripeFee(28500, 'card');
+  assertEquals(estimated, 857);
+  assertEquals(estimated - REAL_STRIPE_FEE, 86);
+});
+
+Deno.test('recon: Leila Banks - the +1 is the installment remainder, not an error', () => {
+  // ch_3UDPamEEGKl6BPRF0kykSSee: installment 1 of 3 on a 29900 registration.
+  // Application fee 420, real Stripe fee 319 (plain Visa, so the estimate is
+  // exact). Margin = 420 - 319 = 101, and 101 is not 1% of the 9968 charge -
+  // it is the registration's 299 allocated across the real schedule.
+  const SCHEDULE = [9968, 9966, 9966]; // read from prod's installments rows
+  assertEquals(SCHEDULE.reduce((a, b) => a + b, 0), 29900);
+  assertEquals(allocateFeeAcrossInstallments(299, SCHEDULE), [101, 99, 99]);
+
+  assertEquals(estimateStripeFee(9968, 'card'), 319); // matches Stripe exactly
+  assertEquals(
+    computeMarginRefund({
+      applicationFeeCents: 420,
+      stripeFeeCents: 319,
+      chargeAmountCents: 9968,
+      refundAmountCents: 9968,
+    }),
+    101,
+  );
+});
+
+Deno.test('recon: Wallace Fritsch - a PARTIAL refund returns a proportionate margin', () => {
+  // ch_3U5ZKlEEGKl6BPRF0PvUQAr6: same shape as Leila (installment 1 of 29900,
+  // app fee 420, Stripe 319, margin 101) but Stripe shows amount_refunded 6468
+  // against a 9968 charge and `refunded: false`. 101 x 6468/9968 = 65.53.
+  assertEquals(
+    computeMarginRefund({
+      applicationFeeCents: 420,
+      stripeFeeCents: 319,
+      chargeAmountCents: 9968,
+      refundAmountCents: 6468,
+    }),
+    66,
+  );
+  // The control: the SAME charge refunded in full returns the whole margin. If
+  // these two ever agree, proration has stopped happening.
+  assertEquals(
+    computeMarginRefund({
+      applicationFeeCents: 420,
+      stripeFeeCents: 319,
+      chargeAmountCents: 9968,
+      refundAmountCents: 9968,
+    }),
+    101,
+  );
+});
+
+Deno.test('recon: Esme Rosenau - a direct pass-through charge is margin all the way down', () => {
+  // The Ukulele Project is DIRECT with fee_pass_through on: the family paid
+  // 30199 = a 29900 class plus a 299 enrops service fee, and Stripe's own cost
+  // came out of Jeff's balance, not ours. So there is no uplift inside the
+  // application fee and every cent of it is margin.
+  assertEquals(
+    computeMarginRefund({
+      applicationFeeCents: 299,
+      stripeFeeCents: 0, // operator-borne on a direct charge
+      chargeAmountCents: 30199,
+      refundAmountCents: 30199,
+    }),
+    299,
+  );
+  // 299 is one percent of the CLASS, not of what the family paid. Pinned,
+  // because reading it against 30199 is what made this row look wrong.
+  assertEquals(Math.round(29900 * 0.01), 299);
+  assertEquals(Math.round(30199 * 0.01), 302);
 });
 
 // THE ROUTE, not just the word. Written after watching the seventeen-row test
