@@ -6,6 +6,7 @@
 import { useEffect, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
+import { useAdminNarrow, tapTarget } from "../../../lib/adminViewport.js";
 import { CAPABILITY_ICONS, deriveOrgStatesForCurriculum, isCapabilityUnlocked, CapabilityDetailModal } from "./capabilityHelpers.jsx";
 
 const PURPLE = "#1C004F";   // deep plum — headings
@@ -277,6 +278,9 @@ export default function CurriculaList() {
 }
 
 function CurriculumCard({ curriculum: c, flagCount = 0, hasDoc = false, scheduledCount = 0, capabilities = [], onCapabilityClick, onDelete, deleting = false }) {
+  // PHONE: this card's three controls are all under the 44px touch minimum -
+  // measured, Upload doc 34, Edit details 36, and the delete 28. See tapTarget.
+  const narrow = useAdminNarrow();
   // Camp curricula use ages; afterschool uses grades. Show whichever is populated.
   const ageLabel = c.age_range_min != null && c.age_range_max != null
     ? `Ages ${c.age_range_min}–${c.age_range_max}`
@@ -324,7 +328,7 @@ function CurriculumCard({ curriculum: c, flagCount = 0, hasDoc = false, schedule
       </div>
       <div style={{ marginTop: 12, display: "flex", gap: 8, alignItems: "center" }}>
         {cta.map((item, i) => (
-          <Link key={i} to={item.to} style={item.primary ? cardCtaPrimary : cardCtaSecondary}>{item.label}</Link>
+          <Link key={i} to={item.to} style={{ ...(item.primary ? cardCtaPrimary : cardCtaSecondary), ...tapTarget(narrow) }}>{item.label}</Link>
         ))}
         {onDelete && (
           <button
@@ -342,6 +346,13 @@ function CurriculumCard({ curriculum: c, flagCount = 0, hasDoc = false, schedule
               padding: "6px 8px",
               opacity: deleting ? 0.5 : 0.7,
               lineHeight: 1,
+              // This is a DELETE, and it measured 28px on a phone - the
+              // smallest control on the card, sitting right beside two links
+              // at 34 and 36. Widened as well as heightened: a bare emoji is
+              // about 16px across, so height alone would still leave a thumb
+              // aiming at a sliver.
+              ...tapTarget(narrow),
+              ...(narrow ? { minWidth: 44 } : null),
             }}
           >
             {deleting ? "…" : "🗑"}

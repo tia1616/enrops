@@ -27,6 +27,7 @@ import ContactTimelineDrawer from "./ContactTimelineDrawer.jsx";
 import AudienceSwitcher from "./AudienceSwitcher.jsx";
 import { entitlementsFor } from "../../../lib/entitlements.js";
 import { useCommsAudience } from "../../../lib/useCommsAudience.js";
+import { useAdminNarrow, cardRow, cardCell, cardLabel, pagePad, tapTarget } from "../../../lib/adminViewport.js";
 
 // Comms is the single CRM hub for all three audiences. Instructors + Partners
 // get a light, consistent "your people" contacts list here (name / email /
@@ -198,9 +199,12 @@ export default function ContactsTab() {
   // rewriting the URL when it asked for something else, both live in
   // lib/useCommsAudience so the three Comms tabs cannot drift apart.
   const { audience, allowedAudiences, selectAudience } = useCommsAudience(org);
+  // The shell already owns the side gutter on a phone; this page must not add a
+  // second one. See pagePad - 32px here cost a quarter of a 375px screen.
+  const narrow = useAdminNarrow();
 
   return (
-    <div style={{ padding: "24px 32px" }}>
+    <div style={{ padding: pagePad(narrow) }}>
       <div>
         <FamilyCommsTabs active="contacts" />
         <AudienceSwitcher active={audience} onSelect={selectAudience} label="Contact audience" audiences={allowedAudiences} />
@@ -334,6 +338,15 @@ function pagerBtn(disabled) {
 }
 
 function ContactsList({ orgId, refreshKey }) {
+  // PHONE: STACKED CARDS, NOT A SIX-COLUMN TABLE. Measured at 375px: 908px of
+  // table inside a 247px box, so Area and Tags and both action buttons sat off
+  // the right edge behind a sideways scroll. listCell's whiteSpace:nowrap is
+  // what forced that width, which is why the card cell overrides it.
+  const narrow = useAdminNarrow();
+  // Loading / error / empty share one shape, so they are built once here rather
+  // than repeated inline three times and drifting apart.
+  const stateRow = narrow ? { display: "block" } : undefined;
+  const stateCell = (color) => ({ padding: 16, color, fontSize: 13, ...(narrow ? { display: "block" } : null) });
   const [q, setQ] = useState("");
   const [tag, setTag] = useState(""); // "" = all tags
   const [page, setPage] = useState(0);
@@ -470,30 +483,46 @@ function ContactsList({ orgId, refreshKey }) {
       </div>
 
       <div style={{ overflowX: "auto", border: `1px solid ${RULE}`, borderRadius: 6 }}>
-        <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12.5 }}>
-          <thead>
-            <tr>
-              {["Email", "Parent", "Child", "Area", "Tags"].map((h) => (
-                <th key={h} style={{ position: "sticky", top: 0, zIndex: 2, background: CREAM, textAlign: "left", padding: "8px 10px", color: MUTED, fontWeight: 700, fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.4, whiteSpace: "nowrap", borderBottom: `1px solid ${RULE}` }}>{h}</th>
-              ))}
-              <th style={{ position: "sticky", top: 0, right: 0, zIndex: 3, background: CREAM, borderBottom: `1px solid ${RULE}`, borderLeft: `1px solid ${RULE}` }} />
+        <table style={{ borderCollapse: "collapse", width: "100%", fontSize: 12.5, ...(narrow ? { display: "block" } : null) }}>
+          {/* No header row on a phone - the row has become a card and a header
+              for columns that no longer exist would be a lie. The two fields
+              that stop being self-describing without it, Parent and Child (two
+              bare names one above the other), get their own inline labels. */}
+          {!narrow && (
+            <thead>
+              <tr>
+                {["Email", "Parent", "Child", "Area", "Tags"].map((h) => (
+                  <th key={h} style={{ position: "sticky", top: 0, zIndex: 2, background: CREAM, textAlign: "left", padding: "8px 10px", color: MUTED, fontWeight: 700, fontSize: 10.5, textTransform: "uppercase", letterSpacing: 0.4, whiteSpace: "nowrap", borderBottom: `1px solid ${RULE}` }}>{h}</th>
+                ))}
+                <th style={{ position: "sticky", top: 0, right: 0, zIndex: 3, background: CREAM, borderBottom: `1px solid ${RULE}`, borderLeft: `1px solid ${RULE}` }} />
 
-            </tr>
-          </thead>
-          <tbody>
+              </tr>
+            </thead>
+          )}
+          <tbody style={narrow ? { display: "block" } : undefined}>
             {rows === null ? (
-              <tr><td colSpan={6} style={{ padding: 16, color: MUTED, fontSize: 13 }}>Loading…</td></tr>
+              /* These three state rows need the same block treatment as the data
+                 rows: a table-row left inside a display:block tbody lays out in
+                 a shrink-to-fit anonymous table instead of filling the width.
+                 Measured at 375px - the empty state rendered 276px wide inside a
+                 312px table. It reads worst on the ERROR row, where a failure
+                 message in a narrow box beside full-width cards looks like a
+                 layout glitch rather than the page telling you something broke. */
+              <tr style={stateRow}><td colSpan={6} style={stateCell(MUTED)}>Loading…</td></tr>
             ) : err ? (
-              <tr><td colSpan={6} style={{ padding: 16, color: RED, fontSize: 13 }}>Couldn&apos;t load contacts: {err}</td></tr>
+              <tr style={stateRow}><td colSpan={6} style={stateCell(RED)}>Couldn&apos;t load contacts: {err}</td></tr>
             ) : rows.length === 0 ? (
-              <tr><td colSpan={6} style={{ padding: 16, color: MUTED, fontSize: 13 }}>No contacts match{tag ? ` the tag “${tag}”` : ""}{q ? ` “${q}”` : ""}.</td></tr>
+              <tr style={stateRow}><td colSpan={6} style={stateCell(MUTED)}>No contacts match{tag ? ` the tag “${tag}”` : ""}{q ? ` “${q}”` : ""}.</td></tr>
             ) : rows.map((r) => (
-              <tr key={r.id}>
-                <td style={listCell}><strong>{r.email}</strong></td>
-                <td style={listCell}>{r.parent_name || <span style={{ color: MUTED }}>—</span>}</td>
-                <td style={listCell}>{[r.child_first_name, r.child_last_name].filter(Boolean).join(" ") || <span style={{ color: MUTED }}>—</span>}</td>
-                <td style={listCell}>{r.geo_segment || <span style={{ color: MUTED }}>—</span>}</td>
-                <td style={listCell}>
+              <tr key={r.id} style={narrow ? cardRow : undefined}>
+                {/* An email is long and is the one field that MUST wrap rather
+                    than widen the card - listCell's nowrap is what made this
+                    table 908px inside a 247px phone in the first place. */}
+                <td style={narrow ? { ...cardCell, whiteSpace: "normal", overflowWrap: "anywhere" } : listCell}><strong>{r.email}</strong></td>
+                <td style={narrow ? cardCell : listCell}>{narrow && <span style={cardLabel}>Parent </span>}{r.parent_name || <span style={{ color: MUTED }}>—</span>}</td>
+                <td style={narrow ? cardCell : listCell}>{narrow && <span style={cardLabel}>Child </span>}{[r.child_first_name, r.child_last_name].filter(Boolean).join(" ") || <span style={{ color: MUTED }}>—</span>}</td>
+                <td style={narrow ? cardCell : listCell}>{r.geo_segment || <span style={{ color: MUTED }}>—</span>}</td>
+                <td style={narrow ? cardCell : listCell}>
                   {(r.tags ?? []).length === 0 ? <span style={{ color: MUTED }}>—</span> : (
                     <span style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
                       {r.tags.map((t) => (
@@ -502,9 +531,17 @@ function ContactsList({ orgId, refreshKey }) {
                     </span>
                   )}
                 </td>
-                <td style={{ ...listCell, textAlign: "right", whiteSpace: "nowrap", position: "sticky", right: 0, zIndex: 1, background: "#fff", borderLeft: `1px solid ${RULE}` }}>
-                  <button type="button" onClick={() => setActivityRow(r)} style={{ padding: "3px 10px", marginRight: 6, background: "#fff", color: BRIGHT, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 11.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>Activity</button>
-                  <button type="button" onClick={() => setEditId(r.id)} style={{ padding: "3px 10px", background: "#fff", color: PURPLE, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 11.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>Edit</button>
+                {/* The actions column is STICKY-RIGHT on desktop, which is how
+                    it survived a wide table. On a card there is no sideways
+                    scroll to pin against, so it un-sticks and the two buttons
+                    grow to a 44px touch target - at 3px of padding they were
+                    about 22px tall, half the comfortable minimum, on the one
+                    surface where they are tapped with a thumb. */}
+                <td style={narrow
+                  ? { ...cardCell, display: "flex", gap: 8, paddingTop: 10 }
+                  : { ...listCell, textAlign: "right", whiteSpace: "nowrap", position: "sticky", right: 0, zIndex: 1, background: "#fff", borderLeft: `1px solid ${RULE}` }}>
+                  <button type="button" onClick={() => setActivityRow(r)} style={{ padding: "3px 10px", marginRight: narrow ? 0 : 6, background: "#fff", color: BRIGHT, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: narrow ? 13 : 11.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", ...tapTarget(narrow), ...(narrow ? { paddingLeft: 14, paddingRight: 14 } : null) }}>Activity</button>
+                  <button type="button" onClick={() => setEditId(r.id)} style={{ padding: "3px 10px", background: "#fff", color: PURPLE, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: narrow ? 13 : 11.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", ...tapTarget(narrow), ...(narrow ? { paddingLeft: 14, paddingRight: 14 } : null) }}>Edit</button>
                 </td>
               </tr>
             ))}

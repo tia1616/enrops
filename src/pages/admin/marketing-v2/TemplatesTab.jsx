@@ -27,6 +27,7 @@
 
 import { useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
+import { useAdminNarrow, pagePad } from "../../../lib/adminViewport.js";
 import { supabase } from "../../../lib/supabase.js";
 import { BRIGHT, INK, MUTED, RULE } from "../marketing/tokens.jsx";
 import FamilyCommsTabs from "./FamilyCommsTabs.jsx";
@@ -143,6 +144,9 @@ function fmtDate(iso) {
 
 export default function TemplatesTab() {
   const { org } = useOutletContext() ?? {};
+  // The shell already owns the side gutter on a phone; this page must not add a
+  // second one. See pagePad - the same 32px sat on all four Comms pages.
+  const narrow = useAdminNarrow();
 
   // Audience rides in the URL (?audience=) so it survives refresh + deep links
   // and matches Comms>Contacts. Default (no param) = families, so the campaign
@@ -205,7 +209,7 @@ export default function TemplatesTab() {
   });
 
   return (
-    <div style={{ maxWidth: 900, margin: "0 auto", padding: "24px 32px" }}>
+    <div style={{ maxWidth: 900, margin: "0 auto", padding: pagePad(narrow) }}>
       <FamilyCommsTabs active="templates" />
       <AudienceSwitcher active={audience} onSelect={selectAudience} label="Template audience" audiences={allowedAudiences} />
 

@@ -8,6 +8,7 @@
 import { useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase";
+import { useAdminNarrow, tapTarget } from "../../../lib/adminViewport.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -21,6 +22,10 @@ const RULE = "#e2dfd5";
 
 export default function TeamPage() {
   const { user, org, orgMember } = useOutletContext() ?? {};
+  // PHONE: the member list is a 1fr + 430px grid, which cannot fit a 347px
+  // phone - measured, the email column collapsed to 0px and the row ran off
+  // the right edge. Rows stack below the breakpoint; so does the invite form.
+  const narrow = useAdminNarrow();
   const [members, setMembers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
@@ -225,7 +230,7 @@ export default function TeamPage() {
                 setInviteError(null);
                 setInviteSuccess(null);
               }}
-              style={primaryBtn()}
+              style={primaryBtn(false, narrow)}
             >
               Invite teammate
             </button>
@@ -234,7 +239,11 @@ export default function TeamPage() {
               <div style={{ fontWeight: 600, color: INK, marginBottom: 10 }}>
                 Invite someone to this workspace
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 140px auto auto", gap: 8, alignItems: "center" }}>
+              {/* The invite form: an email field, a role, and two buttons. Four
+                  across is fine on a desktop and unusable on a phone - the
+                  email input ends up narrower than the address going into it.
+                  Stacks below the breakpoint. */}
+              <div style={{ display: "grid", gridTemplateColumns: narrow ? "1fr" : "1fr 140px auto auto", gap: 8, alignItems: narrow ? "stretch" : "center" }}>
                 <input
                   type="email"
                   value={inviteEmail}
@@ -254,7 +263,7 @@ export default function TeamPage() {
                   <option value="viewer">Viewer</option>
                   {canMintOwner && <option value="owner">Owner</option>}
                 </select>
-                <button type="submit" disabled={sending} style={primaryBtn(sending)}>
+                <button type="submit" disabled={sending} style={primaryBtn(sending, narrow)}>
                   {sending ? "Sending…" : "Send invite"}
                 </button>
                 <button
@@ -301,24 +310,30 @@ export default function TeamPage() {
           overflow: "hidden",
         }}
       >
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr 150px 130px 150px",
-            padding: "10px 16px",
-            background: CREAM,
-            fontSize: 11,
-            fontWeight: 600,
-            color: MUTED,
-            textTransform: "uppercase",
-            letterSpacing: 0.4,
-          }}
-        >
-          <div>Email</div>
-          <div>Role</div>
-          <div>Joined</div>
-          <div />
-        </div>
+        {/* Column headers only exist where there are columns. On a phone the
+            row stacks, so this strip would be four labels sitting above fields
+            they no longer line up with - Role and Joined carry their own labels
+            down there instead. */}
+        {!narrow && (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 150px 130px 150px",
+              padding: "10px 16px",
+              background: CREAM,
+              fontSize: 11,
+              fontWeight: 600,
+              color: MUTED,
+              textTransform: "uppercase",
+              letterSpacing: 0.4,
+            }}
+          >
+            <div>Email</div>
+            <div>Role</div>
+            <div>Joined</div>
+            <div />
+          </div>
+        )}
         {loading ? (
           <div style={{ padding: 18, color: MUTED, fontSize: 14 }}>Loading…</div>
         ) : members.length === 0 ? (
@@ -332,13 +347,23 @@ export default function TeamPage() {
                 <div
                   style={{
                     display: "grid",
-                    gridTemplateColumns: "1fr 150px 130px 150px",
+                    // 1fr + 430px of fixed columns cannot fit a 347px phone -
+                    // measured, the email column collapsed to 0px and the row
+                    // ran 430px wide, off the right edge. Stacks below the
+                    // breakpoint.
+                    gridTemplateColumns: narrow ? "1fr" : "1fr 150px 130px 150px",
+                    gap: narrow ? 8 : 0,
                     padding: "12px 16px",
-                    alignItems: "center",
+                    alignItems: narrow ? "stretch" : "center",
                     fontSize: 14,
                   }}
                 >
-                  <div style={{ color: INK }}>
+                  {/* An email address is one long unbreakable token, so with
+                      nowhere to wrap it pushes whatever follows off the screen -
+                      measured, the "you" marker sat 14px past the right edge at
+                      375px. overflowWrap lets it break mid-address, which is
+                      the same thing the Comms contact card does. */}
+                  <div style={{ color: INK, overflowWrap: "anywhere" }}>
                     {m.email ?? <span style={{ color: MUTED }}>(no email on file)</span>}
                     {m.is_caller && (
                       <span style={{ color: MUTED, fontSize: 12, marginLeft: 8 }}>you</span>
@@ -365,10 +390,13 @@ export default function TeamPage() {
                   </div>
 
                   <div style={{ color: MUTED, fontSize: 13 }}>
+                    {/* A bare date under a stacked email means nothing without
+                        the column header that is gone on a phone. */}
+                    {narrow && "Joined "}
                     {m.accepted_at ? formatDate(m.accepted_at) : "—"}
                   </div>
 
-                  <div style={{ textAlign: "right" }}>
+                  <div style={{ textAlign: narrow ? "left" : "right" }}>
                     {editable && (
                       confirmRemoveId === m.id ? (
                         <span style={{ fontSize: 13 }}>
@@ -377,14 +405,14 @@ export default function TeamPage() {
                             type="button"
                             disabled={isBusy}
                             onClick={() => removeMember(m)}
-                            style={linkBtn(CORAL)}
+                            style={linkBtn(CORAL, narrow)}
                           >
                             {isBusy ? "Removing…" : "Yes"}
                           </button>
                           <button
                             type="button"
                             onClick={() => setConfirmRemoveId(null)}
-                            style={linkBtn(MUTED)}
+                            style={linkBtn(MUTED, narrow)}
                           >
                             Cancel
                           </button>
@@ -394,7 +422,7 @@ export default function TeamPage() {
                           type="button"
                           disabled={isBusy}
                           onClick={() => { setRowError(null); setConfirmRemoveId(m.id); }}
-                          style={linkBtn(CORAL)}
+                          style={linkBtn(CORAL, narrow)}
                         >
                           Remove
                         </button>
@@ -426,7 +454,7 @@ function formatDate(iso) {
   }
 }
 
-function primaryBtn(disabled = false) {
+function primaryBtn(disabled = false, narrow = false) {
   return {
     display: "inline-block",
     padding: "9px 16px",
@@ -438,6 +466,9 @@ function primaryBtn(disabled = false) {
     fontSize: 14,
     cursor: disabled ? "default" : "pointer",
     fontFamily: "inherit",
+    // 39px measured - five short of the minimum. Not destructive like Remove,
+    // but it is the button that starts the only job on this page.
+    ...tapTarget(narrow),
   };
 }
 
@@ -491,7 +522,12 @@ function roleBadge(role) {
 }
 
 // Minimal text button for inline row actions (Remove / Yes / Cancel).
-function linkBtn(color) {
+// `narrow` is a parameter rather than something each call site remembers,
+// because all three uses are Remove / Yes / Cancel - the destructive control and
+// its confirmation. Measured at 375px on staging: Remove was 24px, smaller than
+// the 28px delete on Offerings, and the smallest destructive control in the
+// admin. Every caller gets the touch minimum or none does.
+function linkBtn(color, narrow = false) {
   return {
     background: "transparent",
     border: "none",
@@ -501,5 +537,6 @@ function linkBtn(color) {
     cursor: "pointer",
     padding: "2px 6px",
     fontFamily: "inherit",
+    ...tapTarget(narrow),
   };
 }

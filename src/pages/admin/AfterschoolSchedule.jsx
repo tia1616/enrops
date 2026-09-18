@@ -18,7 +18,7 @@ import HatGuide from "../../components/HatGuide";
 import NeedsCoverBanner from "../../components/NeedsCoverBanner.jsx";
 import ScheduleStepBar from "../../components/ScheduleStepBar.jsx";
 import TabStrip from "../../components/TabStrip.jsx";
-import { useAdminNarrow } from "../../lib/adminViewport.js";
+import { useAdminNarrow, cardRow, cardCell } from "../../lib/adminViewport.js";
 import { resolveBoardSendIntro } from "../../lib/boardSendCopy.js";
 import { classifyOther } from "../../lib/scheduleConflicts.js";
 import { programScheduleSummary } from "../../lib/programSchedule.js";
@@ -3006,9 +3006,7 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
   const tdDesktop = { padding: "11px 14px", borderTop: "1px solid #f0eee6", fontSize: 13.5, verticalAlign: "middle" };
   // As a card, a cell is a line: no cell borders (the card's own border is the
   // boundary now) and no 14px side padding (the card supplies it once).
-  const td = narrow
-    ? { display: "block", padding: "2px 0", fontSize: 13.5 }
-    : tdDesktop;
+  const td = narrow ? { ...cardCell, fontSize: 13.5 } : tdDesktop;
   const widths = ["24%", "19%", "19%", "9%", "16%", "13%"];
   return (
     <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, overflow: "hidden" }}>
@@ -3056,13 +3054,7 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
                       onClick={() => onRowClick(p)}
                       style={{
                         cursor: "pointer",
-                        ...(narrow ? {
-                          display: "block",
-                          border: `1px solid ${RULE}`,
-                          borderRadius: 10,
-                          padding: "12px 14px",
-                          margin: "10px 14px",
-                        } : null),
+                        ...(narrow ? cardRow : null),
                       }}
                     >
                       {/* overflow:hidden + ellipsis is a FIXED-COLUMN behaviour -
