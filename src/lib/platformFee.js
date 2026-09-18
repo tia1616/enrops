@@ -33,8 +33,21 @@ export function feeOnCents(cents, cfg, opts = {}) {
   if (!(rate > 0) || !(cents > 0)) return 0;
 
   const floor = Number(cfg.platform_fee_floor_cents) || 0;
-  // A cap of 0 or null means "no cap", matching how the server treats it.
-  const capRaw = Number(cfg.platform_fee_cap_cents);
+  // TWO CEILINGS, ONE PER RAIL, mirroring _shared/computePlatformFee.ts.
+  // platform_fee_cap_cents is the card ceiling and the default;
+  // platform_fee_ach_cap_cents overrides it for bank, and null there means
+  // "no bank-specific ceiling" - which is every org today.
+  //
+  // These numbers arrive ALREADY RESOLVED from org-fee-config: if the org's
+  // negotiated terms have an end date and it has passed, that function has
+  // substituted the platform defaults before sending. The expiry rule lives in
+  // _shared/feeConfig.ts and deliberately has no second copy here - a family
+  // must never be quoted from a different reading of the calendar than the one
+  // that charges their card.
+  const rawCap = opts.isBank && cfg.platform_fee_ach_cap_cents != null
+    ? cfg.platform_fee_ach_cap_cents
+    : cfg.platform_fee_cap_cents;
+  const capRaw = Number(rawCap);
   const cap = capRaw > 0 ? capRaw : Infinity;
 
   return Math.min(Math.max(Math.round(cents * rate), floor), cap);

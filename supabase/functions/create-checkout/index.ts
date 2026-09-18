@@ -68,6 +68,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { buildChargeRouting, ConnectOrgConfig } from '../_shared/connectChargeParams.ts';
 import { passThroughLineItemForAmount } from '../_shared/passThroughFee.ts';
 import { cartFeeCents, allocateCartFeeByLine } from '../_shared/cartFee.ts';
+import { withResolvedFee, loadPlatformFeeDefaults } from '../_shared/feeConfig.ts';
 import { allocateFeeAcrossInstallments } from '../_shared/feeAllocation.ts';
 import { logEnrollmentEvent, ENROLLMENT_ACTIONS } from '../_shared/logEnrollmentEvent.ts';
 import { validateGift, scholarshipLineItem, ScholarshipFundConfig } from '../_shared/scholarshipFund.ts';
@@ -436,6 +437,8 @@ serve(async (req) => {
             platform_fee_card_pct,
             platform_fee_ach_pct,
             platform_fee_cap_cents,
+            platform_fee_ach_cap_cents,
+            platform_fee_override_until,
             platform_fee_floor_cents,
             fee_pass_through,
             stripe_fee_payer,
@@ -447,7 +450,16 @@ serve(async (req) => {
         .eq('id', registration_ids[0])
         .single();
       const orgId = regForOrg?.organization_id || null;
-      const orgConfig = (regForOrg?.organizations ?? null) as ConnectOrgConfig | null;
+      // The org may be on negotiated terms with an END DATE. resolveFeeConfig
+      // substitutes the platform defaults once that date has passed, and is a
+      // no-op for every org today (all override_until are NULL). A NEW checkout
+      // is correctly priced at TODAY's terms - the plan-in-flight case is
+      // process-installments, which deliberately resolves as of the plan's
+      // start instead. See _shared/feeConfig.ts.
+      const orgConfigRaw = (regForOrg?.organizations ?? null) as ConnectOrgConfig | null;
+      const orgConfig = orgConfigRaw
+        ? withResolvedFee(orgConfigRaw, await loadPlatformFeeDefaults(guardAdmin))
+        : null;
       const orgTerm = (regForOrg?.organizations as { active_registration_term?: string | null } | null)?.active_registration_term ?? '';
 
       // Same payment gate as the one-time path below. The installments branch
@@ -752,6 +764,8 @@ serve(async (req) => {
           platform_fee_card_pct,
           platform_fee_ach_pct,
           platform_fee_cap_cents,
+          platform_fee_ach_cap_cents,
+          platform_fee_override_until,
           platform_fee_floor_cents,
           fee_pass_through,
           stripe_fee_payer,
@@ -763,7 +777,16 @@ serve(async (req) => {
       .eq('id', registration_ids[0])
       .single();
     const orgIdStd = regForOrgStd?.organization_id || null;
-    const orgConfigStd = (regForOrgStd?.organizations ?? null) as ConnectOrgConfig | null;
+    // The org may be on negotiated terms with an END DATE. resolveFeeConfig
+    // substitutes the platform defaults once that date has passed, and is a
+    // no-op for every org today (all override_until are NULL). A NEW checkout
+    // is correctly priced at TODAY's terms - the plan-in-flight case is
+    // process-installments, which deliberately resolves as of the plan's
+    // start instead. See _shared/feeConfig.ts.
+    const orgConfigStdRaw = (regForOrgStd?.organizations ?? null) as ConnectOrgConfig | null;
+    const orgConfigStd = orgConfigStdRaw
+      ? withResolvedFee(orgConfigStdRaw, await loadPlatformFeeDefaults(guardAdmin))
+      : null;
     const orgTermStd = (regForOrgStd?.organizations as { active_registration_term?: string | null } | null)?.active_registration_term ?? '';
 
     // ── PAYMENT GATE: no Stripe, no charge ────────────────────────────────

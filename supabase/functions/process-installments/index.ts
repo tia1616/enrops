@@ -77,6 +77,7 @@ import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { buildChargeRouting, ConnectOrgConfig } from '../_shared/connectChargeParams.ts';
 import { allocateCartFeeByLine } from '../_shared/cartFee.ts';
+import { withResolvedFee, loadPlatformFeeDefaults } from '../_shared/feeConfig.ts';
 import { loadOrgBrand, formatFromAddress, OrgBrand } from '../_shared/orgBrand.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
@@ -248,7 +249,8 @@ serve(async (req) => {
         id, name,
         stripe_account_id, stripe_charges_enabled,
         statement_descriptor_suffix,
-        platform_fee_card_pct, platform_fee_ach_pct, platform_fee_cap_cents, platform_fee_floor_cents,
+        platform_fee_card_pct, platform_fee_ach_pct, platform_fee_cap_cents, platform_fee_ach_cap_cents,
+        platform_fee_override_until, platform_fee_floor_cents,
         fee_pass_through, stripe_fee_payer, instructor_pay_model, stripe_charge_model
       `)
       .in('id', orgIds);
@@ -263,6 +265,8 @@ serve(async (req) => {
         platform_fee_card_pct: org.platform_fee_card_pct,
         platform_fee_ach_pct: org.platform_fee_ach_pct,
         platform_fee_cap_cents: org.platform_fee_cap_cents,
+        platform_fee_ach_cap_cents: org.platform_fee_ach_cap_cents,
+        platform_fee_override_until: org.platform_fee_override_until,
         platform_fee_floor_cents: org.platform_fee_floor_cents,
         fee_pass_through: org.fee_pass_through,
         stripe_fee_payer: org.stripe_fee_payer,
@@ -514,7 +518,7 @@ async function processGroup(
 
   const { data: allInstRows, error: instErr } = await admin
     .from('installments')
-    .select('id, registration_id, installment_number, amount_cents')
+    .select('id, registration_id, installment_number, amount_cents, created_at')
     .in('registration_id', cartRegIds);
 
   // Fail CLOSED on any of the three reads. Without them the fee can only be

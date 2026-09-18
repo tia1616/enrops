@@ -45,9 +45,20 @@ const CONFIGS: Array<[string, Record<string, unknown>]> = [
     platform_fee_card_pct: 0.02, platform_fee_ach_pct: 0.005,
     platform_fee_floor_cents: null, platform_fee_cap_cents: 500,
   }],
-  ["the money layer's target: 3% / 2%, $1.99 floor, $14.99 cap", {
+  ["the money layer's target: 3% / 2%, $1.99 floor, $14.99 card / $9.99 bank", {
     platform_fee_card_pct: 0.03, platform_fee_ach_pct: 0.02,
     platform_fee_floor_cents: 199, platform_fee_cap_cents: 1499,
+    platform_fee_ach_cap_cents: 999,
+  }],
+  ['A BANK CEILING WITH NO CARD CEILING, which must not make card free', {
+    platform_fee_card_pct: 0.03, platform_fee_ach_pct: 0.02,
+    platform_fee_floor_cents: 199, platform_fee_cap_cents: null,
+    platform_fee_ach_cap_cents: 999,
+  }],
+  ['a bank ceiling ABOVE the card one - odd, but it must not leak across', {
+    platform_fee_card_pct: 0.03, platform_fee_ach_pct: 0.02,
+    platform_fee_floor_cents: null, platform_fee_cap_cents: 500,
+    platform_fee_ach_cap_cents: 5000,
   }],
   ['THE SHAPE THAT DIVERGED: no cap at all', {
     platform_fee_card_pct: 0.03, platform_fee_ach_pct: 0.02,
@@ -192,4 +203,22 @@ Deno.test('twin parity: and the pair actually computes the doc\'s number', () =>
   assertEquals(webFee(24000, target, { isBank: false }), 720);
   // "Six children at $228 shows $6.84 six times, not $41.04 once."
   assertEquals(webCartFee(new Array(6).fill(22800), target, { isBank: false }), 4104);
+});
+
+// The second ceiling, pinned on the BROWSER copy specifically. The server copy
+// has its own test; this one exists because the browser is what a family reads,
+// and a bank ceiling it did not know about would quote a fee nobody charges.
+Deno.test('twin parity: the browser knows about the bank ceiling', () => {
+  const target = {
+    platform_fee_card_pct: 0.03, platform_fee_ach_pct: 0.02,
+    platform_fee_floor_cents: 199, platform_fee_cap_cents: 1499,
+    platform_fee_ach_cap_cents: 999,
+    fee_pass_through: true,
+  };
+  // $1,200 camp: card hits $14.99, bank hits $9.99.
+  assertEquals(webFee(120000, target, { isBank: false }), 1499);
+  assertEquals(webFee(120000, target, { isBank: true }), 999);
+  // And with no bank ceiling set - every org today - bank uses the card one.
+  const noBankCap = { ...target, platform_fee_ach_cap_cents: null };
+  assertEquals(webFee(120000, noBankCap, { isBank: true }), 1499);
 });

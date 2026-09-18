@@ -30,8 +30,9 @@ export type PaymentMethodType = 'card' | 'us_bank_account';
 export interface PlatformFeeConfig {
   platform_fee_card_pct: number;     // fraction, e.g. 0.03 = 3%
   platform_fee_ach_pct: number;      // fraction, e.g. 0.005 = 0.5%
-  platform_fee_cap_cents?: number | null;   // max fee per LINE; null/absent/0 = no cap
-  platform_fee_floor_cents?: number | null; // min fee per LINE; null/absent = no floor
+  platform_fee_cap_cents?: number | null;   // max fee per LINE on CARD, and the default; null/absent/0 = no cap
+  platform_fee_ach_cap_cents?: number | null; // max fee per LINE on BANK; null/absent = use the card cap
+  platform_fee_floor_cents?: number | null; // min fee per LINE, both rails; null/absent = no floor
 }
 
 export function computePlatformFee(
@@ -65,7 +66,19 @@ export function computePlatformFee(
   // one config row. Nothing on prod has a null cap today, which is the only
   // reason this never surfaced; the new pricing writes these columns, so it
   // would have.
-  const rawCap = org.platform_fee_cap_cents;
+  // TWO CEILINGS, ONE PER RAIL. Money layer section 4: "$14.99 card maximum,
+  // $9.99 bank maximum". platform_fee_cap_cents is the card ceiling and the
+  // default; platform_fee_ach_cap_cents overrides it for bank, and a null
+  // there means "no bank-specific ceiling, use the same one" - which is every
+  // org today, so this is byte-for-byte unchanged for all of them.
+  //
+  // The bank ceiling is deliberately NOT allowed to raise the card one by
+  // accident: it is consulted only on the bank rail. A config with a bank
+  // ceiling above the card ceiling is strange but not dangerous, and refusing
+  // it here would be a rule invented in code rather than taken from the doc.
+  const rawCap = paymentMethodType === 'card'
+    ? org.platform_fee_cap_cents
+    : (org.platform_fee_ach_cap_cents ?? org.platform_fee_cap_cents);
   const cap =
     Number.isFinite(rawCap as number) && (rawCap as number) > 0
       ? (rawCap as number)
