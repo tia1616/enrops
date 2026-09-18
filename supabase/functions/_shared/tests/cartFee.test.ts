@@ -200,3 +200,45 @@ Deno.test('installments: the caller\'s array is not re-ordered under it', () => 
 Deno.test('installments: an empty schedule is an empty map, not a throw', () => {
   assertEquals(allocateCartFeeByLine([], 'card', NEW_PRICING).size, 0);
 });
+
+// THE TRAP, written down because create-checkout can be handed a schedule that
+// falls into it. Found by /self-code-review on 2026-09-18, after the per-line
+// change had already gone to staging.
+//
+// allocateCartFeeByLine groups by registrationId and trusts it completely - it
+// has no way not to. create-checkout's LEGACY schedule shape carries no
+// attribution and stamps every charge with registration_ids[0], so handing it
+// here reads a whole multi-child cart as ONE registration and gives it one
+// floor and one ceiling: exactly the cart-level clamp the per-line work
+// removes, coming back through a stale browser bundle.
+//
+// The caller now refuses to use those ids (scheduleAttributesLines) and takes
+// the fee TOTAL from the server's own registration rows instead. This test
+// pins WHY, so nobody later "simplifies" that branch away.
+Deno.test('installments: FINDING - one registration id for a whole cart collapses to one ceiling', () => {
+  const realAttribution = [
+    row('a1', 'regA', 1, 8000), row('a2', 'regA', 2, 8000), row('a3', 'regA', 3, 8000),
+    row('b1', 'regB', 1, 8000), row('b2', 'regB', 2, 8000), row('b3', 'regB', 3, 8000),
+  ];
+  // The same six charges, with the legacy placeholder id on every one.
+  const placeholderAttribution = realAttribution.map((r) => ({ ...r, registrationId: 'regA' }));
+
+  const sum = (m: Map<string, number>) => [...m.values()].reduce((s, v) => s + v, 0);
+
+  // Two $240 registrations owe $7.20 each: $14.40.
+  assertEquals(sum(allocateCartFeeByLine(realAttribution, 'card', NEW_PRICING)), 1440);
+  // Read as one registration of $480, it owes 3% = $14.40 too - under the
+  // ceiling the two agree, which is why this is easy to miss. Push it over:
+  const big = realAttribution.map((r) => ({ ...r, amountCents: 40000 }));
+  const bigPlaceholder = big.map((r) => ({ ...r, registrationId: 'regA' }));
+  // Two $1,200 registrations: each hits the $14.99 ceiling, so $29.98.
+  assertEquals(sum(allocateCartFeeByLine(big, 'card', NEW_PRICING)), 2998);
+  // Collapsed into one, the whole $2,400 basket hits ONE ceiling.
+  assertEquals(sum(allocateCartFeeByLine(bigPlaceholder, 'card', NEW_PRICING)), 1499);
+  // And the difference is real money, in enrops's disfavour, every time.
+  assertEquals(2998 - 1499, 1499);
+
+  // The small case is stated too, so the test says plainly that a placeholder
+  // id is not harmless just because it sometimes agrees.
+  assertEquals(sum(allocateCartFeeByLine(placeholderAttribution, 'card', NEW_PRICING)), 1440);
+});

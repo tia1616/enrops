@@ -68,6 +68,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { buildChargeRouting, ConnectOrgConfig } from '../_shared/connectChargeParams.ts';
 import { passThroughLineItemForAmount } from '../_shared/passThroughFee.ts';
 import { cartFeeCents, allocateCartFeeByLine } from '../_shared/cartFee.ts';
+import { allocateFeeAcrossInstallments } from '../_shared/feeAllocation.ts';
 import { logEnrollmentEvent, ENROLLMENT_ACTIONS } from '../_shared/logEnrollmentEvent.ts';
 import { validateGift, scholarshipLineItem, ScholarshipFundConfig } from '../_shared/scholarshipFund.ts';
 
@@ -309,6 +310,15 @@ serve(async (req) => {
 
     let aggregated: AggregatedEntry[] | null = null;
     let perLine: PerLineEntry[] | null = null;
+    // Does perLine carry REAL per-registration attribution, or was it
+    // manufactured? Only the v12+ shape sends a registration id per entry. The
+    // legacy shape has none and stamps every charge with registration_ids[0],
+    // which is a placeholder, not a fact - see that branch below. The fee is
+    // charged per registration, so it must know which of the two it is holding:
+    // trusting the legacy ids would read a whole multi-child cart as ONE
+    // registration and hand it one floor and one ceiling, which is the exact
+    // defect this work removes.
+    let scheduleAttributesLines = false;
 
     // A gift is not financed. The installments machinery splits a total across
     // three dated charges, caps the platform fee across the whole registration
@@ -354,6 +364,10 @@ serve(async (req) => {
         if (Math.abs(aggregatedTotal - total_cents) > 1) {
           return json({ error: `aggregated total ${aggregatedTotal} != total_cents ${total_cents}` }, 400);
         }
+        // Every entry carries its OWN registration_id, and the per-line sums
+        // were just checked against the aggregated ones, so the fee can be
+        // charged per registration straight off this schedule.
+        scheduleAttributesLines = true;
       } else if (installment_schedule?.installments?.length) {
         // LEGACY shape — convert to new internal format
         const sched = installment_schedule.installments;
@@ -365,7 +379,12 @@ serve(async (req) => {
           amount_cents: s.amount_cents,
           due_date: s.due_date,
         }));
-        // Legacy: all installments under registration_ids[0]
+        // Legacy: all installments under registration_ids[0]. That id is a
+        // PLACEHOLDER so downstream code has something to key on - it is not a
+        // claim that this money belongs to that registration, and on a
+        // multi-child cart it is simply false. scheduleAttributesLines stays
+        // false, and the fee is computed from the server's registration rows
+        // instead of from this schedule.
         perLine = sched.map((s: any) => ({
           installment_number: s.number || s.installment_number,
           registration_id: s.registration_id || registration_ids[0],
@@ -454,36 +473,64 @@ serve(async (req) => {
       // ceilings while paying up front pays one. What changes is the unit the
       // ceiling belongs to: the registration, not the basket it arrived in.
       //
-      // perLine, not [c1, c2, c3]. The aggregated entries are cart-level sums
-      // and carry no registration id, so they cannot answer "whose fee is
-      // this". perLine is validated against aggregated a few lines above, so
-      // using it here is not trusting a second, looser number.
-      const perLineShares = orgConfig && perLine
-        ? allocateCartFeeByLine(
-          perLine.map((p, i) => ({
-            // No id of its own on the wire, so index IS the identity - stable
-            // because the map below reads the same array in the same order.
-            id: String(i),
-            registrationId: p.registration_id,
-            installmentNumber: p.installment_number,
-            amountCents: p.amount_cents,
+      // TWO SCHEDULE SHAPES, and only one of them can say whose money is whose.
+      //
+      // v12+ sends a registration_id per entry and its per-line sums are checked
+      // against the aggregated ones above, so the fee is charged per
+      // registration straight off it.
+      //
+      // The LEGACY shape carries no attribution at all and stamps every charge
+      // with registration_ids[0]. Reading those ids would collapse a whole
+      // multi-child cart into one registration and give it one floor and one
+      // ceiling - the precise defect this change removes, reintroduced through
+      // the back door by a stale browser bundle. So the legacy path gets its fee
+      // TOTAL from the server's own registration rows (correct per line, and it
+      // never trusted the client's schedule anyway) and then spreads it across
+      // the three charges. The distribution across charges is approximate there
+      // because nothing in that payload can make it exact; the total is right,
+      // which is the half that decides what anyone is charged.
+      const installmentFeeShares = (() => {
+        if (!orgConfig) return [0, 0, 0];
+
+        if (scheduleAttributesLines && perLine) {
+          const shares = allocateCartFeeByLine(
+            perLine.map((p, i) => ({
+              // No id of its own on the wire, so index IS the identity - stable
+              // because the reducer below reads the same array in the same order.
+              id: String(i),
+              registrationId: p.registration_id,
+              installmentNumber: p.installment_number,
+              amountCents: p.amount_cents,
+            })),
+            'card',
+            orgConfig,
+          );
+          // Charge N's margin is the sum of every line's share of charge N.
+          const shareForInstallment = (n: number) =>
+            perLine!.reduce(
+              (sum, p, i) => (p.installment_number === n ? sum + (shares.get(String(i)) ?? 0) : sum),
+              0,
+            );
+          return [
+            shareForInstallment(c1.installment_number),
+            shareForInstallment(c2.installment_number),
+            shareForInstallment(c3.installment_number),
+          ];
+        }
+
+        const legacyFee = cartFeeCents(
+          (regAmtRows || []).map((r) => ({
+            registrationId: r.id as string,
+            amountCents: (r.amount_cents as number) || 0,
           })),
           'card',
           orgConfig,
-        )
-        : new Map<string, number>();
-
-      // Charge N's margin is the sum of every line's share of charge N.
-      const shareForInstallment = (n: number) =>
-        (perLine ?? []).reduce(
-          (sum, p, i) => (p.installment_number === n ? sum + (perLineShares.get(String(i)) ?? 0) : sum),
-          0,
         );
-      const installmentFeeShares = [
-        shareForInstallment(c1.installment_number),
-        shareForInstallment(c2.installment_number),
-        shareForInstallment(c3.installment_number),
-      ];
+        return allocateFeeAcrossInstallments(
+          legacyFee,
+          [c1.amount_cents, c2.amount_cents, c3.amount_cents],
+        );
+      })();
       const firstFeeShare = installmentFeeShares[0];
 
       // Connect overlay + which account the API calls are made against. The
