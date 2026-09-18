@@ -2158,10 +2158,20 @@ function RefundsTab({ org }) {
                     application fee, only the platform can, so that line handed
                     him a task he has no button for. The state stays visible -
                     it is his money and he should see that it has not landed -
-                    but the next move is ours, and the line says so. */}
+                    but the next move is ours, and the line says so.
+
+                    AND IT SPEAKS ABOUT THE ATTEMPT, NOT ABOUT TODAY. A draft
+                    of this read "has not come back yet", which is a claim
+                    about the present that nothing keeps true. When a shortfall
+                    is settled by hand in Stripe - which is how all three of
+                    8 September's were - no code writes fee_return_outcome
+                    back, so the row stays 'failed' while the money is long
+                    since returned, and a present-tense line would become a
+                    standing lie on the operator's own money page. The column
+                    records what happened when we TRIED; so does this. */}
                 {r.status === "succeeded" && r.fee_return_outcome === "failed" && (
                   <span style={{ display: "block", color: RED, fontSize: 11.5, marginTop: 2, fontWeight: 600 }}>
-                    The enrops service fee on this refund has not come back yet. We are on it, and there is nothing for you to do
+                    The enrops service fee on this refund did not come back when we tried. That one is ours to chase, not yours
                   </span>
                 )}
                 {r.status === "succeeded" && r.fee_return_outcome === "nothing_owed" && (

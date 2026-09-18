@@ -1089,8 +1089,8 @@ async function recordExternalRefund(
           // fee_return_outcome is cleared WITH failure_reason, never left
           // behind it. The two are written together everywhere else, and a row
           // that kept a stale 'failed' after its explanation was cleared would
-          // show an operator a red "you are still owed this" with nothing
-          // saying why. NULL is the honest state for a row being re-settled:
+          // show an operator a red line about a fee that did not come back,
+          // with nothing saying why. NULL is the honest state for a re-settle:
           // the fee attempt below runs in this same pass and writes the real
           // outcome, and if it throws first, "no outcome recorded" is true.
           .update({ status: 'succeeded', succeeded_at: input.succeededAt, failure_reason: null, fee_return_outcome: null })
