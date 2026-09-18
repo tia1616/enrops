@@ -2151,9 +2151,17 @@ function RefundsTab({ org }) {
                     audited the database by hand. Rows written before
                     2026-09-17 carry no outcome and keep the old wording, which
                     is honest: we genuinely do not know which they were. */}
+                {/* WORDING IS DELIBERATE, and an earlier draft got it wrong.
+                    "You are still owed it" reinstated the message REMOVED from
+                    RefundDrawer.jsx on 9 Sept after Jeff read it and asked what
+                    he was supposed to do: an operator cannot refund an
+                    application fee, only the platform can, so that line handed
+                    him a task he has no button for. The state stays visible -
+                    it is his money and he should see that it has not landed -
+                    but the next move is ours, and the line says so. */}
                 {r.status === "succeeded" && r.fee_return_outcome === "failed" && (
                   <span style={{ display: "block", color: RED, fontSize: 11.5, marginTop: 2, fontWeight: 600 }}>
-                    We could not return the enrops service fee on this refund. You are still owed it.
+                    The enrops service fee on this refund has not come back yet. We are on it, and there is nothing for you to do
                   </span>
                 )}
                 {r.status === "succeeded" && r.fee_return_outcome === "nothing_owed" && (

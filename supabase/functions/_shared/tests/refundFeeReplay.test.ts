@@ -51,6 +51,7 @@ import { assertEquals } from 'https://deno.land/std@0.208.0/assert/mod.ts';
 import { computeMarginRefund } from '../refundFeeSplit.ts';
 import { readChargeFeeFacts } from '../chargeFeeFacts.ts';
 import { estimateStripeFee } from '../estimateStripeFee.ts';
+import { feeReturnOutcome, type FeeReturnOutcome } from '../feeReturnOutcome.ts';
 
 // ── fixtures: literal cents, from the two live charge models ───────────────
 //
@@ -359,4 +360,177 @@ Deno.test('blocker1/5: FINDING - zero is ambiguous between nothing-owed and neve
     refundAmountCents: 24000,
   });
   assertEquals(nothingOwed, everythingConsumed); // both 0, different meanings
+});
+
+// ── 6. The definition of done: all seventeen September refunds ─────────────
+//
+// The money layer (17 Sept 2026) section 6 sets one bar for blocker 1: "run
+// the 17 September refunds through it and get 17 correct outcomes." Not six.
+// The doc counted seventeen in September and so does production: the query
+//
+//   select ... from refunds where created_at >= '2026-09-01'
+//                            and created_at <  '2026-10-01'
+//
+// returns exactly seventeen rows, read off the prod ledger on 18 Sept 2026.
+// Every one of them is below, with the outcome word it should carry.
+//
+// WHAT THIS PROVES AND WHAT IT DOES NOT. It proves feeReturnOutcome labels
+// every shape that actually occurred, which is the checkbox: a word per
+// attempt instead of a number to be inferred from. It does NOT reconcile the
+// margin arithmetic - four of these rows returned an amount that is not one
+// percent of what was refunded, and settling those needs each charge's real
+// application fee and balance transaction from Stripe. That is section 6's
+// other paragraph, it is a live-mode read-only job, and it is tracked
+// separately. A green run here is not a claim about those four amounts.
+//
+// THE THREE FAILURES ARE RECORDED AS THEY HAPPENED, NOT AS THEY ENDED.
+// Lillison, Marlett and Schmitt each show a non-zero platform_fee_refunded_cents
+// on prod today (371, 240, 101) because Jessica settled them by hand in Stripe
+// on 9 September. At the moment of the attempt, nothing came back and the call
+// threw. The attempt is what the column records, so the expected word is
+// 'failed' - and that is the whole point: had this column existed on 8
+// September, three rows would have said 'failed' on screen instead of hiding
+// behind a zero and a hand audit.
+
+interface SeptemberRow {
+  who: string;
+  day: string;
+  /** refunds.amount_cents on prod */
+  refundedCents: number;
+  /** what the attempt actually returned, at the time */
+  returnedCents: number;
+  /** what was owed at the time */
+  owedCents: number;
+  applicationFeeId: string | null;
+  failed: boolean;
+  expect: FeeReturnOutcome;
+}
+
+// Read from prod 2026-09-18. Ordered by created_at, Pacific.
+const SEPTEMBER_2026: SeptemberRow[] = [
+  // Twelve that returned the fee.
+  { who: 'Wallace Fritsch', day: '09-01', refundedCents: 6468, returnedCents: 66, owedCents: 66, applicationFeeId: 'fee_1', failed: false, expect: 'returned' },
+  { who: 'Esme Rosenau', day: '09-01', refundedCents: 30199, returnedCents: 299, owedCents: 299, applicationFeeId: 'fee_2', failed: false, expect: 'returned' },
+  { who: 'Nehemiah Kalu', day: '09-03', refundedCents: 20500, returnedCents: 205, owedCents: 205, applicationFeeId: 'fee_3', failed: false, expect: 'returned' },
+  { who: 'Murphy Yolland', day: '09-07', refundedCents: 28500, returnedCents: 285, owedCents: 285, applicationFeeId: 'fee_4', failed: false, expect: 'returned' },
+  { who: 'Amit Rasin', day: '09-08', refundedCents: 24000, returnedCents: 240, owedCents: 240, applicationFeeId: 'fee_5', failed: false, expect: 'returned' },
+  // Leila Banks is the reversal case: Stripe labelled this one Reversed and
+  // the fee still came back. Section 6's "handles the reversal case" tick.
+  { who: 'Leila Banks', day: '09-08', refundedCents: 9968, returnedCents: 101, owedCents: 101, applicationFeeId: 'fee_6', failed: false, expect: 'returned' },
+  { who: 'Mia Simpson', day: '09-10', refundedCents: 28500, returnedCents: 285, owedCents: 285, applicationFeeId: 'fee_12', failed: false, expect: 'returned' },
+  { who: 'Rosie Wittmayer', day: '09-13', refundedCents: 30199, returnedCents: 299, owedCents: 299, applicationFeeId: 'fee_13', failed: false, expect: 'returned' },
+  { who: 'Margot Burke', day: '09-13', refundedCents: 10069, returnedCents: 101, owedCents: 101, applicationFeeId: 'fee_14', failed: false, expect: 'returned' },
+  { who: 'Clara Calcagno', day: '09-13', refundedCents: 30199, returnedCents: 299, owedCents: 299, applicationFeeId: 'fee_15', failed: false, expect: 'returned' },
+  { who: 'Heidi Nelson', day: '09-14', refundedCents: 11079, returnedCents: 111, owedCents: 111, applicationFeeId: 'fee_16', failed: false, expect: 'returned' },
+  { who: 'Everett Myers', day: '09-15', refundedCents: 2500, returnedCents: 25, owedCents: 25, applicationFeeId: 'fee_17', failed: false, expect: 'returned' },
+
+  // Two that correctly returned nothing: registered in June, before the fee
+  // existed, so the charge carries no application fee to give back.
+  { who: 'Lochlan Dillard', day: '09-08', refundedCents: 24000, returnedCents: 0, owedCents: 0, applicationFeeId: null, failed: false, expect: 'nothing_owed' },
+  { who: 'Adalyn Snowley', day: '09-08', refundedCents: 24000, returnedCents: 0, owedCents: 0, applicationFeeId: null, failed: false, expect: 'nothing_owed' },
+
+  // Three that failed on an empty platform balance. 371 + 240 + 101 = 712,
+  // exactly the $7.12 settled by hand on 9 September.
+  { who: 'Laura Lillison', day: '09-08', refundedCents: 28500, returnedCents: 0, owedCents: 371, applicationFeeId: 'fee_9', failed: true, expect: 'failed' },
+  { who: 'Morgan Marlett', day: '09-08', refundedCents: 24000, returnedCents: 0, owedCents: 240, applicationFeeId: 'fee_10', failed: true, expect: 'failed' },
+  { who: 'Addie Schmitt', day: '09-08', refundedCents: 10069, returnedCents: 0, owedCents: 101, applicationFeeId: 'fee_11', failed: true, expect: 'failed' },
+];
+
+Deno.test('blocker1/DoD: seventeen September refunds, seventeen correct outcomes', () => {
+  // The count is asserted first and on its own. If somebody adds a row to the
+  // table without adding it to prod, or drops one, this fails before any
+  // outcome is checked - because "17 correct outcomes" is a claim about
+  // seventeen refunds, not about however many happen to be listed here.
+  assertEquals(SEPTEMBER_2026.length, 17, 'prod recorded 17 refunds in September 2026');
+
+  const got: string[] = [];
+  for (const row of SEPTEMBER_2026) {
+    const outcome = feeReturnOutcome({
+      owedCents: row.owedCents,
+      applicationFeeId: row.applicationFeeId,
+      returnedCents: row.returnedCents,
+      failed: row.failed,
+    });
+    assertEquals(outcome, row.expect, `${row.day} ${row.who}`);
+    got.push(outcome);
+  }
+
+  // The shape of the month, asserted as a whole. Counting the words is what
+  // catches a change that flips several rows the same way at once - which a
+  // per-row assertion in a loop would report as one failure and hide the rest.
+  assertEquals(got.filter((o) => o === 'returned').length, 12);
+  assertEquals(got.filter((o) => o === 'nothing_owed').length, 2);
+  assertEquals(got.filter((o) => o === 'failed').length, 3);
+});
+
+// The $7.12, pinned to the three rows that produced it. This is the number
+// that took a hand audit of production to find, and the reason the column
+// exists; if the three 'failed' rows ever stop summing to it, the table above
+// has drifted from what happened.
+Deno.test('blocker1/DoD: the three failures are exactly the $7.12 settled by hand', () => {
+  const failures = SEPTEMBER_2026.filter((r) => r.expect === 'failed');
+  assertEquals(failures.length, 3);
+  assertEquals(failures.reduce((sum, r) => sum + r.owedCents, 0), 712);
+  // Every one of them owed money and returned none. A 'failed' row that
+  // returned something would mean the classifier, not the balance, was wrong.
+  for (const f of failures) {
+    assertEquals(f.returnedCents, 0, f.who);
+  }
+});
+
+// THE ROUTE, not just the word. Written after watching the seventeen-row test
+// stay GREEN through a mutation that deleted feeReturnOutcome's `if
+// (facts.failed)` branch entirely.
+//
+// Why it survived: all three September failures owed money against a real
+// ApplicationFee, so they reach 'failed' down the LAST line of the function as
+// well as the throw check. Two routes to the same word, and the table could
+// not tell which one it was walking. That is the same trap as the balance
+// transaction one above - a fixture that agrees with the code for the wrong
+// reason.
+//
+// The shape below is the one that only the throw check catches: an attempt
+// that threw before it learned what was owed, so owedCents arrives as 0 with
+// no fee id. Asked in the wrong order this reads 'nothing_owed' and a real
+// shortfall is filed as "no fee was due". It is not hypothetical - the
+// 19 August refund on prod threw inside the Stripe call ("Cannot reverse
+// transfer on charge ch_3TWKp8... because it does not have an associated
+// transfer") and left platform_fee_refunded_cents NULL, knowing nothing about
+// the margin.
+Deno.test('blocker1/DoD: an attempt that threw before it learned the amount is still failed', () => {
+  assertEquals(
+    feeReturnOutcome({ owedCents: 0, applicationFeeId: null, returnedCents: 0, failed: true }),
+    'failed',
+  );
+  // The same facts with no throw are the legitimate zero. If these two ever
+  // agree, the column is back to meaning two things.
+  assertEquals(
+    feeReturnOutcome({ owedCents: 0, applicationFeeId: null, returnedCents: 0, failed: false }),
+    'nothing_owed',
+  );
+});
+
+// THE NEGATIVE CONTROL, and it is the one that earns the suite. Every
+// assertion above would still pass if feeReturnOutcome were replaced by a
+// lookup that returned row.expect. This asserts the thing the old code could
+// NOT do: tell the two zeroes apart. Both rows below returned nothing; only
+// one of them is a problem, and the word has to differ.
+Deno.test('blocker1/DoD: the two zeroes get different words', () => {
+  const neverOwed = SEPTEMBER_2026.find((r) => r.who === 'Lochlan Dillard')!;
+  const triedAndFailed = SEPTEMBER_2026.find((r) => r.who === 'Laura Lillison')!;
+
+  const classify = (r: SeptemberRow) =>
+    feeReturnOutcome({
+      owedCents: r.owedCents,
+      applicationFeeId: r.applicationFeeId,
+      returnedCents: r.returnedCents,
+      failed: r.failed,
+    });
+
+  assertEquals(neverOwed.returnedCents, triedAndFailed.returnedCents); // both 0
+  assertEquals(classify(neverOwed), 'nothing_owed');
+  assertEquals(classify(triedAndFailed), 'failed');
+  // Stated as an inequality too, because that is the actual requirement: not
+  // which words, but that a zero stops being one word.
+  assertEquals(classify(neverOwed) === classify(triedAndFailed), false);
 });
