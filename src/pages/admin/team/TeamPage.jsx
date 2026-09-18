@@ -8,6 +8,7 @@
 import { useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase";
+import { useAdminNarrow } from "../../../lib/adminViewport.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -21,6 +22,10 @@ const RULE = "#e2dfd5";
 
 export default function TeamPage() {
   const { user, org, orgMember } = useOutletContext() ?? {};
+  // PHONE: the member list is a 1fr + 430px grid, which cannot fit a 347px
+  // phone - measured, the email column collapsed to 0px and the row ran off
+  // the right edge. Rows stack below the breakpoint; so does the invite form.
+  const narrow = useAdminNarrow();
   const [members, setMembers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
@@ -234,7 +239,11 @@ export default function TeamPage() {
               <div style={{ fontWeight: 600, color: INK, marginBottom: 10 }}>
                 Invite someone to this workspace
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 140px auto auto", gap: 8, alignItems: "center" }}>
+              {/* The invite form: an email field, a role, and two buttons. Four
+                  across is fine on a desktop and unusable on a phone - the
+                  email input ends up narrower than the address going into it.
+                  Stacks below the breakpoint. */}
+              <div style={{ display: "grid", gridTemplateColumns: narrow ? "1fr" : "1fr 140px auto auto", gap: 8, alignItems: narrow ? "stretch" : "center" }}>
                 <input
                   type="email"
                   value={inviteEmail}
@@ -301,24 +310,30 @@ export default function TeamPage() {
           overflow: "hidden",
         }}
       >
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "1fr 150px 130px 150px",
-            padding: "10px 16px",
-            background: CREAM,
-            fontSize: 11,
-            fontWeight: 600,
-            color: MUTED,
-            textTransform: "uppercase",
-            letterSpacing: 0.4,
-          }}
-        >
-          <div>Email</div>
-          <div>Role</div>
-          <div>Joined</div>
-          <div />
-        </div>
+        {/* Column headers only exist where there are columns. On a phone the
+            row stacks, so this strip would be four labels sitting above fields
+            they no longer line up with - Role and Joined carry their own labels
+            down there instead. */}
+        {!narrow && (
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 150px 130px 150px",
+              padding: "10px 16px",
+              background: CREAM,
+              fontSize: 11,
+              fontWeight: 600,
+              color: MUTED,
+              textTransform: "uppercase",
+              letterSpacing: 0.4,
+            }}
+          >
+            <div>Email</div>
+            <div>Role</div>
+            <div>Joined</div>
+            <div />
+          </div>
+        )}
         {loading ? (
           <div style={{ padding: 18, color: MUTED, fontSize: 14 }}>Loading…</div>
         ) : members.length === 0 ? (
@@ -332,13 +347,23 @@ export default function TeamPage() {
                 <div
                   style={{
                     display: "grid",
-                    gridTemplateColumns: "1fr 150px 130px 150px",
+                    // 1fr + 430px of fixed columns cannot fit a 347px phone -
+                    // measured, the email column collapsed to 0px and the row
+                    // ran 430px wide, off the right edge. Stacks below the
+                    // breakpoint.
+                    gridTemplateColumns: narrow ? "1fr" : "1fr 150px 130px 150px",
+                    gap: narrow ? 8 : 0,
                     padding: "12px 16px",
-                    alignItems: "center",
+                    alignItems: narrow ? "stretch" : "center",
                     fontSize: 14,
                   }}
                 >
-                  <div style={{ color: INK }}>
+                  {/* An email address is one long unbreakable token, so with
+                      nowhere to wrap it pushes whatever follows off the screen -
+                      measured, the "you" marker sat 14px past the right edge at
+                      375px. overflowWrap lets it break mid-address, which is
+                      the same thing the Comms contact card does. */}
+                  <div style={{ color: INK, overflowWrap: "anywhere" }}>
                     {m.email ?? <span style={{ color: MUTED }}>(no email on file)</span>}
                     {m.is_caller && (
                       <span style={{ color: MUTED, fontSize: 12, marginLeft: 8 }}>you</span>
@@ -365,10 +390,13 @@ export default function TeamPage() {
                   </div>
 
                   <div style={{ color: MUTED, fontSize: 13 }}>
+                    {/* A bare date under a stacked email means nothing without
+                        the column header that is gone on a phone. */}
+                    {narrow && "Joined "}
                     {m.accepted_at ? formatDate(m.accepted_at) : "—"}
                   </div>
 
-                  <div style={{ textAlign: "right" }}>
+                  <div style={{ textAlign: narrow ? "left" : "right" }}>
                     {editable && (
                       confirmRemoveId === m.id ? (
                         <span style={{ fontSize: 13 }}>

@@ -18,6 +18,7 @@
 import { useEffect, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
+import { useAdminNarrow, pagePad } from "../../../lib/adminViewport.js";
 import { PURPLE, INK, MUTED, RULE, OK, INFO, WARN } from "../marketing/tokens.jsx";
 import FamilyCommsTabs from "./FamilyCommsTabs.jsx";
 import AudienceSwitcher from "./AudienceSwitcher.jsx";
@@ -120,6 +121,10 @@ const REVIEW_LINK_PLACEHOLDER = "your-review-link-here";
 
 export default function AutomationsTab() {
   const { user, org } = useOutletContext();
+  // The shell already owns the side gutter on a phone; this page must not add a
+  // second one. See pagePad - the 32px here cost a quarter of a 375px screen on
+  // the Comms tab next door, and all four Comms pages carried the same number.
+  const narrow = useAdminNarrow();
 
   // Audience filter rides in the URL (?audience=) so it survives refresh + deep
   // links and matches Comms>Contacts / >Templates. The clamp to what this org may
@@ -397,7 +402,7 @@ export default function AutomationsTab() {
 
   if (loading) {
     return (
-      <div style={{ maxWidth: 900, margin: "0 auto", padding: "24px 32px" }}>
+      <div style={{ maxWidth: 900, margin: "0 auto", padding: pagePad(narrow) }}>
         <FamilyCommsTabs active="automations" />
         <div style={{ color: MUTED, padding: 24 }}>Loading automations…</div>
       </div>
@@ -422,7 +427,7 @@ export default function AutomationsTab() {
   });
 
   return (
-    <div style={{ maxWidth: 900, margin: "0 auto", padding: "24px 32px" }}>
+    <div style={{ maxWidth: 900, margin: "0 auto", padding: pagePad(narrow) }}>
       {/* Celebration animation keyframes — used on the row chip when an
           operator flips an automation from Off → On. Defined here once
           rather than per-Chip so React reconciler keeps the animation

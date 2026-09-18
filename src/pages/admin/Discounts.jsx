@@ -19,6 +19,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
 import { usePermissions } from "../../lib/permissions.js";
+import { useAdminNarrow } from "../../lib/adminViewport.js";
 import EnnieTip from "../../components/EnnieTip.jsx";
 
 const PURPLE = "#1C004F";
@@ -108,6 +109,9 @@ const blankDraft = () => ({
 
 export default function Discounts() {
   const { user, org } = useOutletContext();
+  // PHONE: the promo-code list is a five-column grid, which at 347px gave each
+  // column 27-37px. Stacks below the breakpoint.
+  const narrow = useAdminNarrow();
   // Registration-only operators: sibling discounts and promo codes, no
   // term-wide early-bird pricing (later tier).
   const isLean = org?.instructor_pay_model === "enrops_platform";
@@ -374,7 +378,12 @@ export default function Discounts() {
               ? `${c.starts_at ? fmtDate(toDateInput(c.starts_at)) : "now"} – ${c.expires_at ? fmtDate(toDateInput(c.expires_at)) : "no end"}`
               : "No date limit";
             return (
-              <div key={c.id} style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr 1fr 1.2fr auto", gap: 10, alignItems: "center", padding: "12px 16px", borderTop: i ? `1px solid ${RULE}` : "none" }}>
+              // Five columns on a 347px phone gave each about 27-37px -
+              // measured - so the code, its value and its usage all wrapped
+              // into unreadable slivers. Stacks below the breakpoint; every
+              // field already says what it is ("3 used", "10% off"), so no
+              // labels are needed, unlike the tables elsewhere in this pass.
+              <div key={c.id} style={{ display: "grid", gridTemplateColumns: narrow ? "1fr" : "1.4fr 1fr 1fr 1.2fr auto", gap: narrow ? 6 : 10, alignItems: narrow ? "start" : "center", padding: "12px 16px", borderTop: i ? `1px solid ${RULE}` : "none" }}>
                 <div>
                   <div style={{ fontSize: 15, fontWeight: 700, color: INK, letterSpacing: 0.3 }}>{c.code}</div>
                   <div style={{ fontSize: 12, color: MUTED }}>{scopeLabel}</div>

@@ -9,6 +9,7 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import Ennie from "../Ennie.jsx";
+import { useAdminNarrow, tapTarget } from "../../lib/adminViewport.js";
 
 const PURPLE = "#1C004F";
 const RULE = "#e2dfd5";
@@ -46,6 +47,9 @@ function isSafeHref(u) {
 }
 
 export default function AnnouncementBanner() {
+  // The dismiss control is 16x22 - the smallest thing in the admin, and the
+  // only way off a banner that covers a third of a phone screen.
+  const narrow = useAdminNarrow();
   const [announcement, setAnnouncement] = useState(null);
 
   useEffect(() => {
@@ -146,6 +150,12 @@ export default function AnnouncementBanner() {
           lineHeight: 1,
           cursor: "pointer",
           padding: 2,
+          // Measured at 375px: 16x22, the smallest control in the admin, and it
+          // is the ONLY way to get a banner off a phone screen that the banner
+          // is taking a third of. tapTarget adds the height; minWidth adds the
+          // rest, because a bare "x" glyph is about 10px across.
+          ...tapTarget(narrow),
+          ...(narrow ? { minWidth: 44 } : null),
         }}
       >
         ×
