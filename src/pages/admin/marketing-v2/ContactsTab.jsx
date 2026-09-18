@@ -343,6 +343,10 @@ function ContactsList({ orgId, refreshKey }) {
   // the right edge behind a sideways scroll. listCell's whiteSpace:nowrap is
   // what forced that width, which is why the card cell overrides it.
   const narrow = useAdminNarrow();
+  // Loading / error / empty share one shape, so they are built once here rather
+  // than repeated inline three times and drifting apart.
+  const stateRow = narrow ? { display: "block" } : undefined;
+  const stateCell = (color) => ({ padding: 16, color, fontSize: 13, ...(narrow ? { display: "block" } : null) });
   const [q, setQ] = useState("");
   const [tag, setTag] = useState(""); // "" = all tags
   const [page, setPage] = useState(0);
@@ -497,11 +501,18 @@ function ContactsList({ orgId, refreshKey }) {
           )}
           <tbody style={narrow ? { display: "block" } : undefined}>
             {rows === null ? (
-              <tr><td colSpan={6} style={{ padding: 16, color: MUTED, fontSize: 13 }}>Loading…</td></tr>
+              /* These three state rows need the same block treatment as the data
+                 rows: a table-row left inside a display:block tbody lays out in
+                 a shrink-to-fit anonymous table instead of filling the width.
+                 Measured at 375px - the empty state rendered 276px wide inside a
+                 312px table. It reads worst on the ERROR row, where a failure
+                 message in a narrow box beside full-width cards looks like a
+                 layout glitch rather than the page telling you something broke. */
+              <tr style={stateRow}><td colSpan={6} style={stateCell(MUTED)}>Loading…</td></tr>
             ) : err ? (
-              <tr><td colSpan={6} style={{ padding: 16, color: RED, fontSize: 13 }}>Couldn&apos;t load contacts: {err}</td></tr>
+              <tr style={stateRow}><td colSpan={6} style={stateCell(RED)}>Couldn&apos;t load contacts: {err}</td></tr>
             ) : rows.length === 0 ? (
-              <tr><td colSpan={6} style={{ padding: 16, color: MUTED, fontSize: 13 }}>No contacts match{tag ? ` the tag “${tag}”` : ""}{q ? ` “${q}”` : ""}.</td></tr>
+              <tr style={stateRow}><td colSpan={6} style={stateCell(MUTED)}>No contacts match{tag ? ` the tag “${tag}”` : ""}{q ? ` “${q}”` : ""}.</td></tr>
             ) : rows.map((r) => (
               <tr key={r.id} style={narrow ? cardRow : undefined}>
                 {/* An email is long and is the one field that MUST wrap rather
