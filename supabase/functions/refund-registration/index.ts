@@ -87,6 +87,7 @@ import { logEnrollmentEvent, ENROLLMENT_ACTIONS } from '../_shared/logEnrollment
 import { computeMarginRefund } from '../_shared/refundFeeSplit.ts';
 import { loadProration } from '../_shared/refundFeeProration.ts';
 import { readChargeFeeFacts } from '../_shared/chargeFeeFacts.ts';
+import { feeReturnOutcome } from '../_shared/feeReturnOutcome.ts';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 import { isEmailAllowed } from '../_shared/emailGuard.ts';
 import { sendRefundReceipt } from '../_shared/refundReceipt.ts';
@@ -675,6 +676,11 @@ serve(async (req: Request) => {
         // Its own idempotency key, so a retry of this function cannot double-
         // refund the fee even though the charge refund above already succeeded.
         let marginRefundApplied = 0;
+        // Money layer blocker 1, checkbox 5. Recorded rather than inferred:
+        // a 0 in platform_fee_refunded_cents cannot tell "no margin existed"
+        // from "we tried and could not", and that is what hid the three
+        // 8 September failures until somebody audited prod by hand.
+        let feeAttemptFailed = false;
         if (marginRefundCents > 0 && applicationFeeId) {
           try {
             const feeRefund = await stripe.applicationFees.createRefund(
@@ -724,6 +730,7 @@ serve(async (req: Request) => {
               reason: msg,
             });
             marginRefundApplied = 0;
+            feeAttemptFailed = true;
           }
         }
 
@@ -735,6 +742,12 @@ serve(async (req: Request) => {
             status: 'succeeded',
             succeeded_at: succeededAt,
             platform_fee_refunded_cents: marginRefundApplied,
+            fee_return_outcome: feeReturnOutcome({
+              owedCents: marginRefundCents,
+              applicationFeeId,
+              returnedCents: marginRefundApplied,
+              failed: feeAttemptFailed,
+            }),
           })
           .eq('id', refundRowId);
         if (updErr) {

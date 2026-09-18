@@ -2068,7 +2068,10 @@ function RefundsTab({ org }) {
     (async () => {
       const { data, error } = await supabase
         .from("refunds")
-        .select("id, amount_cents, reason, status, cancelled_registration, created_at, succeeded_at, refunded_by_user_id, platform_fee_refunded_cents, registration:registrations(student:students(first_name, last_name))")
+        // DEPLOY ORDER: fee_return_outcome must exist on the database BEFORE
+        // this ships, or every refund on this page fails to load. Migration
+        // 20260917a, applied to staging and prod in the same pass.
+        .select("id, amount_cents, reason, status, cancelled_registration, created_at, succeeded_at, refunded_by_user_id, platform_fee_refunded_cents, fee_return_outcome, registration:registrations(student:students(first_name, last_name))")
         .eq("organization_id", org.id)
         .order("created_at", { ascending: false })
         .limit(200);
@@ -2140,9 +2143,45 @@ function RefundsTab({ org }) {
                 {r.status === "pending" && <span style={{ marginLeft: 8, fontSize: 10, color: AMBER, fontWeight: 700, textTransform: "uppercase" }}>Pending</span>}
                 {!r.refunded_by_user_id && <span style={{ marginLeft: 8, fontSize: 10, color: PURPLE, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, border: `1px solid ${PURPLE}`, borderRadius: 4, padding: "1px 5px" }}>Stripe dashboard</span>}
                 {r.reason && <span style={{ display: "block", color: MUTED, fontSize: 11.5, marginTop: 2 }}>{reasonOf(r)}</span>}
-                {r.status === "succeeded" && r.platform_fee_refunded_cents > 0 && (
+                {/* Money layer blocker 1, checkbox 5: every attempt says what
+                    happened, not just the ones that returned money. Before
+                    this, a fee return that FAILED rendered exactly like one
+                    that was never owed - nothing at all - which is how three
+                    failures on 8 September went unnoticed until somebody
+                    audited the database by hand. Rows written before
+                    2026-09-17 carry no outcome and keep the old wording, which
+                    is honest: we genuinely do not know which they were. */}
+                {/* WORDING IS DELIBERATE, and an earlier draft got it wrong.
+                    "You are still owed it" reinstated the message REMOVED from
+                    RefundDrawer.jsx on 9 Sept after Jeff read it and asked what
+                    he was supposed to do: an operator cannot refund an
+                    application fee, only the platform can, so that line handed
+                    him a task he has no button for. The state stays visible -
+                    it is his money and he should see that it has not landed -
+                    but the next move is ours, and the line says so.
+
+                    AND IT SPEAKS ABOUT THE ATTEMPT, NOT ABOUT TODAY. A draft
+                    of this read "has not come back yet", which is a claim
+                    about the present that nothing keeps true. When a shortfall
+                    is settled by hand in Stripe - which is how all three of
+                    8 September's were - no code writes fee_return_outcome
+                    back, so the row stays 'failed' while the money is long
+                    since returned, and a present-tense line would become a
+                    standing lie on the operator's own money page. The column
+                    records what happened when we TRIED; so does this. */}
+                {r.status === "succeeded" && r.fee_return_outcome === "failed" && (
+                  <span style={{ display: "block", color: RED, fontSize: 11.5, marginTop: 2, fontWeight: 600 }}>
+                    The enrops service fee on this refund did not come back when we tried. That one is ours to chase, not yours
+                  </span>
+                )}
+                {r.status === "succeeded" && r.fee_return_outcome === "nothing_owed" && (
                   <span style={{ display: "block", color: MUTED, fontSize: 11.5, marginTop: 2 }}>
-                    {fmtCents(r.platform_fee_refunded_cents)} of the enrops fee returned to you
+                    No enrops service fee to return on this one
+                  </span>
+                )}
+                {r.status === "succeeded" && r.fee_return_outcome !== "failed" && r.platform_fee_refunded_cents > 0 && (
+                  <span style={{ display: "block", color: MUTED, fontSize: 11.5, marginTop: 2 }}>
+                    {fmtCents(r.platform_fee_refunded_cents)} of the enrops service fee returned to you
                   </span>
                 )}
               </span>
