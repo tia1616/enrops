@@ -1,7 +1,7 @@
 // feeConfig — the end date on a negotiated rate, and which way it errs.
 
 import { assertEquals } from 'https://deno.land/std@0.208.0/assert/mod.ts';
-import { resolveFeeConfig } from '../feeConfig.ts';
+import { resolveFeeConfig, withResolvedFee } from '../feeConfig.ts';
 import { computePlatformFee } from '../computePlatformFee.ts';
 
 // Jeff's actual terms: 1% through 31 December 2030.
@@ -164,6 +164,63 @@ Deno.test('bank is still shown as a DISCOUNT: it is never dearer than card', () 
     const bank = computePlatformFee(price, 'us_bank_account', lapsed);
     assertEquals(bank <= card, true, `${price}: bank ${bank} > card ${card}`);
   }
+});
+
+// ── asOf, which is how a plan in flight is protected ──────────────────────
+//
+// process-installments passes the plan's START date rather than today, so an
+// expiry cannot land between charge 1 and charge 3. These pin the mechanism it
+// relies on. Added after /self-code-review found the behaviour shipped with no
+// test at all - and, worse, found the wiring in process-installments had
+// silently failed to apply while the commit message claimed it was there.
+
+Deno.test('asOf: a plan that STARTED before the expiry keeps its rate to the end', () => {
+  // The family agreed on 1 Dec 2030. Charge 3 falls in April 2031, after the
+  // terms lapse. Resolved as of the start, every charge is still 1%.
+  const planStart = at('2030-12-01T00:00:00Z');
+  const got = withResolvedFee(JEFF, DEFAULTS, planStart);
+  assertEquals(got.platform_fee_card_pct, 0.01);
+  assertEquals(computePlatformFee(24000, 'card', got), 240);
+
+  // And the same org, asked about a NEW checkout on the same April day, is on
+  // the new pricing. Both answers are correct; they are different questions.
+  const newCheckout = withResolvedFee(JEFF, DEFAULTS, at('2031-04-01T00:00:00Z'));
+  assertEquals(newCheckout.platform_fee_card_pct, 0.03);
+  assertEquals(computePlatformFee(24000, 'card', newCheckout), 720);
+});
+
+Deno.test('asOf: the family is never billed more mid-plan than they agreed', () => {
+  // The consequence, in money. A $240 registration on a three-charge plan
+  // started before the expiry: every charge carries the same fee.
+  const planStart = at('2030-12-01T00:00:00Z');
+  const cfg = withResolvedFee(JEFF, DEFAULTS, planStart);
+  const perCharge = computePlatformFee(8000, 'card', cfg);
+  assertEquals(perCharge, 80);
+  // Under today's-date resolution, charges 2 and 3 would have been 3% instead.
+  const ifResolvedToday = withResolvedFee(JEFF, DEFAULTS, at('2031-04-01T00:00:00Z'));
+  assertEquals(computePlatformFee(8000, 'card', ifResolvedToday), 240);
+  assertEquals(perCharge < 240, true); // the gap this exists to close
+});
+
+Deno.test('withResolvedFee leaves every NON-fee field alone', () => {
+  // It is handed a whole ConnectOrgConfig by both charge paths, and routing
+  // depends on the fields it must not touch.
+  const org = {
+    ...JEFF,
+    stripe_account_id: 'acct_123',
+    stripe_charge_model: 'direct',
+    stripe_fee_payer: 'tenant',
+    fee_pass_through: true,
+    name: 'The Ukulele Project',
+  };
+  const got = withResolvedFee(org, DEFAULTS, at('2031-06-01T00:00:00Z'));
+  assertEquals(got.stripe_account_id, 'acct_123');
+  assertEquals(got.stripe_charge_model, 'direct');
+  assertEquals(got.stripe_fee_payer, 'tenant');
+  assertEquals(got.fee_pass_through, true);
+  assertEquals(got.name, 'The Ukulele Project');
+  // ...while the fee half DID move.
+  assertEquals(got.platform_fee_card_pct, 0.03);
 });
 
 // ── the doc's worked price table, end to end ──────────────────────────────

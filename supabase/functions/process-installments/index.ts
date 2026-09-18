@@ -564,9 +564,48 @@ async function processGroup(
   // group; groupRegIds IS the cart. Ordering within a registration is by
   // installment number so the leftover cent lands on charge 1, matching
   // checkout - allocateCartFeeByLine owns that rule now.
-  type FeeRow = { id: string; registration_id: string; installment_number: number; amount_cents: number };
+  type FeeRow = {
+    id: string; registration_id: string; installment_number: number;
+    amount_cents: number; created_at?: string | null;
+  };
   const cartRows = ((allInstRows ?? []) as unknown) as FeeRow[];
-  const shareByRow = orgConfig
+
+  // AS OF THE PLAN'S START, NOT TODAY. Money layer section 4: "Existing plans
+  // finish as agreed", and section 11: "Nothing changes on an existing payment
+  // plan."
+  //
+  // This matters now in a way it did not before. The fee has always been
+  // computed against LIVE org config at charge time - documented at the top of
+  // this file as a v1 risk, and harmless while nobody ever edited a rate. An
+  // END DATE makes that edit happen by itself, on a schedule: the day an
+  // organisation's negotiated terms lapse, a family already two charges into a
+  // three-charge plan would be billed the new rate for the rest of it, having
+  // agreed to the old one on screen.
+  //
+  // A plan's three rows are written together at checkout - verified on prod,
+  // where one plan's rows share a created_at to the microsecond - so the
+  // earliest of them IS when the family agreed. Resolving the expiry against
+  // that date means an expiry can never land mid-plan.
+  //
+  // WHAT THIS DOES NOT FIX, so nobody reads more into it: only the end DATE is
+  // evaluated as of the plan's start. The org's own columns are still read
+  // live, so somebody editing a rate by hand today still reprices charges 2
+  // and 3 - exactly the v1 risk noted at the top of this file. That needs a
+  // per-plan snapshot of the numbers and is a bigger change than this one. The
+  // end date is handled because the end date is the part that now moves on its
+  // own, with nobody watching.
+  //
+  // Falls back to now() when created_at is missing, which is the old behaviour.
+  const planStartedAt = cartRows
+    .map((r) => (r.created_at ? Date.parse(r.created_at) : NaN))
+    .filter((t) => Number.isFinite(t))
+    .reduce((min, t) => (t < min ? t : min), Infinity);
+  const feeAsOf = Number.isFinite(planStartedAt) ? new Date(planStartedAt) : new Date();
+  const orgFeeConfig = orgConfig
+    ? withResolvedFee(orgConfig, await loadPlatformFeeDefaults(admin), feeAsOf)
+    : null;
+
+  const shareByRow = orgFeeConfig
     ? allocateCartFeeByLine(
       cartRows.map((r) => ({
         id: r.id,
@@ -575,7 +614,7 @@ async function processGroup(
         amountCents: r.amount_cents,
       })),
       'card',
-      orgConfig,
+      orgFeeConfig,
     )
     : new Map<string, number>(cartRows.map((r) => [r.id, 0]));
 
@@ -673,9 +712,12 @@ async function processGroup(
 
   // Route by the recorded account, not the org's current model. For a plan on
   // the platform this is byte-for-byte the destination path (J2S included).
-  const routingOrg: ConnectOrgConfig | null = orgConfig
+  // orgFeeConfig, not orgConfig: buildChargeRouting computes the Stripe-fee
+  // uplift from these same numbers, so routing and the margin above must be
+  // built from ONE config or the application fee and the shares disagree.
+  const routingOrg: ConnectOrgConfig | null = orgFeeConfig
     ? {
-      ...orgConfig,
+      ...orgFeeConfig,
       stripe_charge_model: recordedAcct ? 'direct' : 'destination',
       ...(recordedAcct ? { stripe_account_id: recordedAcct } : {}),
     }
