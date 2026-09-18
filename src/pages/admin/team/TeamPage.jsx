@@ -8,7 +8,7 @@
 import { useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase";
-import { useAdminNarrow } from "../../../lib/adminViewport.js";
+import { useAdminNarrow, tapTarget } from "../../../lib/adminViewport.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -230,7 +230,7 @@ export default function TeamPage() {
                 setInviteError(null);
                 setInviteSuccess(null);
               }}
-              style={primaryBtn()}
+              style={primaryBtn(false, narrow)}
             >
               Invite teammate
             </button>
@@ -263,7 +263,7 @@ export default function TeamPage() {
                   <option value="viewer">Viewer</option>
                   {canMintOwner && <option value="owner">Owner</option>}
                 </select>
-                <button type="submit" disabled={sending} style={primaryBtn(sending)}>
+                <button type="submit" disabled={sending} style={primaryBtn(sending, narrow)}>
                   {sending ? "Sending…" : "Send invite"}
                 </button>
                 <button
@@ -405,14 +405,14 @@ export default function TeamPage() {
                             type="button"
                             disabled={isBusy}
                             onClick={() => removeMember(m)}
-                            style={linkBtn(CORAL)}
+                            style={linkBtn(CORAL, narrow)}
                           >
                             {isBusy ? "Removing…" : "Yes"}
                           </button>
                           <button
                             type="button"
                             onClick={() => setConfirmRemoveId(null)}
-                            style={linkBtn(MUTED)}
+                            style={linkBtn(MUTED, narrow)}
                           >
                             Cancel
                           </button>
@@ -422,7 +422,7 @@ export default function TeamPage() {
                           type="button"
                           disabled={isBusy}
                           onClick={() => { setRowError(null); setConfirmRemoveId(m.id); }}
-                          style={linkBtn(CORAL)}
+                          style={linkBtn(CORAL, narrow)}
                         >
                           Remove
                         </button>
@@ -454,7 +454,7 @@ function formatDate(iso) {
   }
 }
 
-function primaryBtn(disabled = false) {
+function primaryBtn(disabled = false, narrow = false) {
   return {
     display: "inline-block",
     padding: "9px 16px",
@@ -466,6 +466,9 @@ function primaryBtn(disabled = false) {
     fontSize: 14,
     cursor: disabled ? "default" : "pointer",
     fontFamily: "inherit",
+    // 39px measured - five short of the minimum. Not destructive like Remove,
+    // but it is the button that starts the only job on this page.
+    ...tapTarget(narrow),
   };
 }
 
@@ -519,7 +522,12 @@ function roleBadge(role) {
 }
 
 // Minimal text button for inline row actions (Remove / Yes / Cancel).
-function linkBtn(color) {
+// `narrow` is a parameter rather than something each call site remembers,
+// because all three uses are Remove / Yes / Cancel - the destructive control and
+// its confirmation. Measured at 375px on staging: Remove was 24px, smaller than
+// the 28px delete on Offerings, and the smallest destructive control in the
+// admin. Every caller gets the touch minimum or none does.
+function linkBtn(color, narrow = false) {
   return {
     background: "transparent",
     border: "none",
@@ -529,5 +537,6 @@ function linkBtn(color) {
     cursor: "pointer",
     padding: "2px 6px",
     fontFamily: "inherit",
+    ...tapTarget(narrow),
   };
 }
