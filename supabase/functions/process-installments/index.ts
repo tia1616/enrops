@@ -76,8 +76,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { buildChargeRouting, ConnectOrgConfig } from '../_shared/connectChargeParams.ts';
-import { computePlatformFee } from '../_shared/computePlatformFee.ts';
-import { allocateFeeAcrossInstallments } from '../_shared/feeAllocation.ts';
+import { allocateCartFeeByLine } from '../_shared/cartFee.ts';
 import { loadOrgBrand, formatFromAddress, OrgBrand } from '../_shared/orgBrand.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
@@ -544,26 +543,37 @@ async function processGroup(
     return;
   }
 
-  // Cap across the WHOLE CART, not per registration — because that is what the
-  // single pay-in-full charge does (create-checkout hands computePlatformFee
-  // the cart's total_cents) and what create-checkout's installment allocation
-  // does. Capping per registration here instead would make charge 1 and charges
-  // 2/3 disagree on a multi-child cart: 2 children at $240 would pay $2.67 on
-  // charge 1 and $4.80 on each of the next two.
+  // The fee is PER REGISTRATION LINE, split across that registration's own
+  // installments. Money layer section 4: "applied to the line, not the cart"
+  // and "No cart-level maximum."
+  //
+  // THIS REVERSES WHAT WAS HERE, and the old comment's worry is worth keeping
+  // in view rather than deleting. It said capping per registration would make
+  // charge 1 and charges 2/3 disagree on a multi-child cart. That was true of
+  // the shape it had - a cart fee split across a flat list of every row - but
+  // it is not true of this one. Each registration's fee is split across only
+  // its own charges, so charge 1 and charges 2/3 of a given registration agree
+  // by construction, and neither of them depends on what else was in the cart.
+  // The agreement problem did not move; it went away.
   //
   // A cart's registrations share a Stripe Customer, so they land in this same
-  // group; groupRegIds IS the cart. Rows are ordered by installment number then
-  // registration so the leftover cent lands on charge 1, matching checkout.
+  // group; groupRegIds IS the cart. Ordering within a registration is by
+  // installment number so the leftover cent lands on charge 1, matching
+  // checkout - allocateCartFeeByLine owns that rule now.
   type FeeRow = { id: string; registration_id: string; installment_number: number; amount_cents: number };
-  const cartRows = (((allInstRows ?? []) as unknown) as FeeRow[]).slice().sort(
-    (a, b) => a.installment_number - b.installment_number ||
-      a.registration_id.localeCompare(b.registration_id),
-  );
-  const cartTotal = cartRows.reduce((s, r) => s + r.amount_cents, 0);
-  const cartFee = orgConfig ? computePlatformFee(cartTotal, 'card', orgConfig) : 0;
-  const cartShares = allocateFeeAcrossInstallments(cartFee, cartRows.map((r) => r.amount_cents));
-  const shareByRow = new Map<string, number>();
-  cartRows.forEach((r, i) => shareByRow.set(r.id, cartShares[i]));
+  const cartRows = ((allInstRows ?? []) as unknown) as FeeRow[];
+  const shareByRow = orgConfig
+    ? allocateCartFeeByLine(
+      cartRows.map((r) => ({
+        id: r.id,
+        registrationId: r.registration_id,
+        installmentNumber: r.installment_number,
+        amountCents: r.amount_cents,
+      })),
+      'card',
+      orgConfig,
+    )
+    : new Map<string, number>(cartRows.map((r) => [r.id, 0]));
 
   // This charge's margin = the sum of the shares of the rows it covers. Every
   // active row MUST be in shareByRow: the reload selected by registration id,

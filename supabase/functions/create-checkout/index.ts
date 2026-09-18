@@ -66,9 +66,8 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { buildChargeRouting, ConnectOrgConfig } from '../_shared/connectChargeParams.ts';
-import { passThroughLineItem, passThroughLineItemForAmount } from '../_shared/passThroughFee.ts';
-import { computePlatformFee } from '../_shared/computePlatformFee.ts';
-import { allocateFeeAcrossInstallments } from '../_shared/feeAllocation.ts';
+import { passThroughLineItemForAmount } from '../_shared/passThroughFee.ts';
+import { cartFeeCents, allocateCartFeeByLine } from '../_shared/cartFee.ts';
 import { logEnrollmentEvent, ENROLLMENT_ACTIONS } from '../_shared/logEnrollmentEvent.ts';
 import { validateGift, scholarshipLineItem, ScholarshipFundConfig } from '../_shared/scholarshipFund.ts';
 
@@ -446,18 +445,45 @@ serve(async (req) => {
         }, 409);
       }
 
-      // The platform fee is capped PER REGISTRATION, not per charge: compute it
-      // once against the whole total, then split it across the three
-      // installments. Otherwise a $500 program split three ways costs the
-      // family 3 x the per-charge fee while paying up front hits the single
-      // $7.99 cap — penalising exactly the families who need the plan.
-      // Below the cap this changes nothing (3% of $240 = 3 x 3% of $80).
-      const installmentFeeShares = orgConfig
-        ? allocateFeeAcrossInstallments(
-          computePlatformFee(total_cents, 'card', orgConfig),
-          [c1.amount_cents, c2.amount_cents, c3.amount_cents],
+      // The fee is computed PER REGISTRATION LINE and split across that
+      // registration's own three charges. Money layer section 4: "applied to
+      // the line, not the cart."
+      //
+      // It is still not computed per CHARGE - that was the original defect and
+      // it stays fixed. A $500 program split three ways must not pay three
+      // ceilings while paying up front pays one. What changes is the unit the
+      // ceiling belongs to: the registration, not the basket it arrived in.
+      //
+      // perLine, not [c1, c2, c3]. The aggregated entries are cart-level sums
+      // and carry no registration id, so they cannot answer "whose fee is
+      // this". perLine is validated against aggregated a few lines above, so
+      // using it here is not trusting a second, looser number.
+      const perLineShares = orgConfig && perLine
+        ? allocateCartFeeByLine(
+          perLine.map((p, i) => ({
+            // No id of its own on the wire, so index IS the identity - stable
+            // because the map below reads the same array in the same order.
+            id: String(i),
+            registrationId: p.registration_id,
+            installmentNumber: p.installment_number,
+            amountCents: p.amount_cents,
+          })),
+          'card',
+          orgConfig,
         )
-        : [0, 0, 0];
+        : new Map<string, number>();
+
+      // Charge N's margin is the sum of every line's share of charge N.
+      const shareForInstallment = (n: number) =>
+        (perLine ?? []).reduce(
+          (sum, p, i) => (p.installment_number === n ? sum + (perLineShares.get(String(i)) ?? 0) : sum),
+          0,
+        );
+      const installmentFeeShares = [
+        shareForInstallment(c1.installment_number),
+        shareForInstallment(c2.installment_number),
+        shareForInstallment(c3.installment_number),
+      ];
       const firstFeeShare = installmentFeeShares[0];
 
       // Connect overlay + which account the API calls are made against. The
@@ -742,9 +768,31 @@ serve(async (req) => {
     // function would have computed anyway, so every existing charge is
     // byte-for-byte unchanged.
     const chargeBaseStd = total_cents + gift.chargedCents;
-    const marginBaseStd = gift.chargedCents > 0 && orgConfigStd
-      ? computePlatformFee(total_cents, selectedMethod, orgConfigStd)
-      : undefined;
+
+    // THE MARGIN IS NOW ALWAYS AN OVERRIDE, and that is the change.
+    //
+    // buildChargeRouting derives the margin from the amount it is handed, and
+    // an amount cannot express a per-line fee: six children at $228 and one
+    // child at $1,368 are the same number to it, and section 4 says they owe
+    // very different fees. So the fee is computed from the LINES and passed
+    // in. Previously the override existed only to keep a donation out of the
+    // margin base; that is still true and now rides along inside the same
+    // number instead of being a second code path.
+    //
+    // regAmtRows, not line_items. These are the amounts the SERVER holds for
+    // these registrations - line_items is the client's copy, and while the
+    // price guard above proves the two agree in TOTAL, it does not prove they
+    // agree line by line, which is exactly what a per-line fee depends on. A
+    // client that moved $100 from one line to another would pass the guard and
+    // change what it owes.
+    const cartLinesStd = (regAmtRows || []).map((r) => ({
+      registrationId: r.id as string,
+      amountCents: (r.amount_cents as number) || 0,
+    }));
+    const cartFeeStd = orgConfigStd
+      ? cartFeeCents(cartLinesStd, selectedMethod, orgConfigStd)
+      : 0;
+    const marginBaseStd = orgConfigStd ? cartFeeStd : undefined;
     const routingStd = buildChargeRouting(chargeBaseStd, selectedMethod, orgConfigStd, orgIdStd, marginBaseStd);
     if (routingStd.blocked) {
       console.warn(`[create-checkout] BLOCKED (direct): ${routingStd.blocked}`);
@@ -762,10 +810,17 @@ serve(async (req) => {
     // fee as a visible "Platform fee" line so the family covers it — computed for
     // the SAME method as application_fee_amount above, so the two always agree.
     if (orgConfigStd) {
-      // total_cents, NOT chargeBaseStd. A pass-through org's families must not
-      // be charged an enrops service fee on top of their own donation - the
-      // margin base and this line are the same number by construction.
-      const feeLineStd = passThroughLineItem(total_cents, selectedMethod, orgConfigStd);
+      // cartFeeStd, NOT a fee recomputed from an amount. It is the same number
+      // handed to buildChargeRouting above, so the line the family pays and
+      // the fee enrops keeps are the SAME VALUE, not two calculations that
+      // happen to agree. That was already the intent; it is now structural.
+      //
+      // And it still excludes the gift, for the reason the old comment gave: a
+      // pass-through org's families must not be charged an enrops service fee
+      // on top of their own donation. cartLinesStd is registrations only.
+      const feeLineStd = orgConfigStd.fee_pass_through
+        ? passThroughLineItemForAmount(cartFeeStd)
+        : null;
       if (feeLineStd) stripeLineItems.push(feeLineStd);
     }
 

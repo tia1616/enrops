@@ -16,7 +16,18 @@ export type PassThroughConfig = PlatformFeeConfig & {
   fee_pass_through?: boolean | null;
 };
 
-// Cents to ADD to what the family pays. 0 when the operator absorbs the fee.
+// ONE REGISTRATION'S base, never a cart total. The fee is charged per
+// registration line (money layer section 4), so handing either of the two
+// functions below a cart sum collects one ceiling on a basket of six children
+// and one $1.99 floor on a basket of three drop-ins. A caller holding more than
+// one registration uses _shared/cartFee.ts to get the number, then
+// passThroughLineItemForAmount to render it - which is what create-checkout
+// does, and why nothing in production calls passThroughLineItem today. Kept
+// because the wording assertions in passThroughFee.test.ts are the only guard
+// on the family-facing copy below, and they need a line item to read.
+
+// Cents to ADD to what the family pays for ONE registration. 0 when the
+// operator absorbs the fee.
 export function passThroughFeeCents(
   baseCents: number,
   paymentMethod: PaymentMethodType,

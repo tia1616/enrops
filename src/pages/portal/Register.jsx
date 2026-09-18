@@ -806,6 +806,13 @@ export default function Register() {
                 onCheckout={handleCheckout}
                 paymentPlan={cart.payment_plan}
                 installmentSchedule={installmentSchedule?.display || null}
+                // The per-registration splits behind that display schedule.
+                // The fee is charged per registration line, so the Pay step
+                // needs to know which amounts belong to which child - the
+                // aggregated `display` entries are cart-level sums and cannot
+                // say. Same array handleCheckout turns into per_line below, so
+                // the quote and the charge are built from one schedule.
+                installmentSplits={installmentSchedule?.perLineSplits || null}
                 org={{ ...org, ...(feeConfig || {}) }}
                 cancellationPolicy={cancellationPolicy}
                 // Passed as its own prop rather than spread into `org`: the
