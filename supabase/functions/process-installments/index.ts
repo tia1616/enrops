@@ -76,8 +76,8 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { buildChargeRouting, ConnectOrgConfig } from '../_shared/connectChargeParams.ts';
-import { computePlatformFee } from '../_shared/computePlatformFee.ts';
-import { allocateFeeAcrossInstallments } from '../_shared/feeAllocation.ts';
+import { allocateCartFeeByLine } from '../_shared/cartFee.ts';
+import { withResolvedFee, loadPlatformFeeDefaults } from '../_shared/feeConfig.ts';
 import { loadOrgBrand, formatFromAddress, OrgBrand } from '../_shared/orgBrand.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
@@ -249,7 +249,8 @@ serve(async (req) => {
         id, name,
         stripe_account_id, stripe_charges_enabled,
         statement_descriptor_suffix,
-        platform_fee_card_pct, platform_fee_ach_pct, platform_fee_cap_cents, platform_fee_floor_cents,
+        platform_fee_card_pct, platform_fee_ach_pct, platform_fee_cap_cents, platform_fee_ach_cap_cents,
+        platform_fee_override_until, platform_fee_floor_cents,
         fee_pass_through, stripe_fee_payer, instructor_pay_model, stripe_charge_model
       `)
       .in('id', orgIds);
@@ -264,6 +265,8 @@ serve(async (req) => {
         platform_fee_card_pct: org.platform_fee_card_pct,
         platform_fee_ach_pct: org.platform_fee_ach_pct,
         platform_fee_cap_cents: org.platform_fee_cap_cents,
+        platform_fee_ach_cap_cents: org.platform_fee_ach_cap_cents,
+        platform_fee_override_until: org.platform_fee_override_until,
         platform_fee_floor_cents: org.platform_fee_floor_cents,
         fee_pass_through: org.fee_pass_through,
         stripe_fee_payer: org.stripe_fee_payer,
@@ -515,7 +518,7 @@ async function processGroup(
 
   const { data: allInstRows, error: instErr } = await admin
     .from('installments')
-    .select('id, registration_id, installment_number, amount_cents')
+    .select('id, registration_id, installment_number, amount_cents, created_at')
     .in('registration_id', cartRegIds);
 
   // Fail CLOSED on any of the three reads. Without them the fee can only be
@@ -544,26 +547,76 @@ async function processGroup(
     return;
   }
 
-  // Cap across the WHOLE CART, not per registration — because that is what the
-  // single pay-in-full charge does (create-checkout hands computePlatformFee
-  // the cart's total_cents) and what create-checkout's installment allocation
-  // does. Capping per registration here instead would make charge 1 and charges
-  // 2/3 disagree on a multi-child cart: 2 children at $240 would pay $2.67 on
-  // charge 1 and $4.80 on each of the next two.
+  // The fee is PER REGISTRATION LINE, split across that registration's own
+  // installments. Money layer section 4: "applied to the line, not the cart"
+  // and "No cart-level maximum."
+  //
+  // THIS REVERSES WHAT WAS HERE, and the old comment's worry is worth keeping
+  // in view rather than deleting. It said capping per registration would make
+  // charge 1 and charges 2/3 disagree on a multi-child cart. That was true of
+  // the shape it had - a cart fee split across a flat list of every row - but
+  // it is not true of this one. Each registration's fee is split across only
+  // its own charges, so charge 1 and charges 2/3 of a given registration agree
+  // by construction, and neither of them depends on what else was in the cart.
+  // The agreement problem did not move; it went away.
   //
   // A cart's registrations share a Stripe Customer, so they land in this same
-  // group; groupRegIds IS the cart. Rows are ordered by installment number then
-  // registration so the leftover cent lands on charge 1, matching checkout.
-  type FeeRow = { id: string; registration_id: string; installment_number: number; amount_cents: number };
-  const cartRows = (((allInstRows ?? []) as unknown) as FeeRow[]).slice().sort(
-    (a, b) => a.installment_number - b.installment_number ||
-      a.registration_id.localeCompare(b.registration_id),
-  );
-  const cartTotal = cartRows.reduce((s, r) => s + r.amount_cents, 0);
-  const cartFee = orgConfig ? computePlatformFee(cartTotal, 'card', orgConfig) : 0;
-  const cartShares = allocateFeeAcrossInstallments(cartFee, cartRows.map((r) => r.amount_cents));
-  const shareByRow = new Map<string, number>();
-  cartRows.forEach((r, i) => shareByRow.set(r.id, cartShares[i]));
+  // group; groupRegIds IS the cart. Ordering within a registration is by
+  // installment number so the leftover cent lands on charge 1, matching
+  // checkout - allocateCartFeeByLine owns that rule now.
+  type FeeRow = {
+    id: string; registration_id: string; installment_number: number;
+    amount_cents: number; created_at?: string | null;
+  };
+  const cartRows = ((allInstRows ?? []) as unknown) as FeeRow[];
+
+  // AS OF THE PLAN'S START, NOT TODAY. Money layer section 4: "Existing plans
+  // finish as agreed", and section 11: "Nothing changes on an existing payment
+  // plan."
+  //
+  // This matters now in a way it did not before. The fee has always been
+  // computed against LIVE org config at charge time - documented at the top of
+  // this file as a v1 risk, and harmless while nobody ever edited a rate. An
+  // END DATE makes that edit happen by itself, on a schedule: the day an
+  // organisation's negotiated terms lapse, a family already two charges into a
+  // three-charge plan would be billed the new rate for the rest of it, having
+  // agreed to the old one on screen.
+  //
+  // A plan's three rows are written together at checkout - verified on prod,
+  // where one plan's rows share a created_at to the microsecond - so the
+  // earliest of them IS when the family agreed. Resolving the expiry against
+  // that date means an expiry can never land mid-plan.
+  //
+  // WHAT THIS DOES NOT FIX, so nobody reads more into it: only the end DATE is
+  // evaluated as of the plan's start. The org's own columns are still read
+  // live, so somebody editing a rate by hand today still reprices charges 2
+  // and 3 - exactly the v1 risk noted at the top of this file. That needs a
+  // per-plan snapshot of the numbers and is a bigger change than this one. The
+  // end date is handled because the end date is the part that now moves on its
+  // own, with nobody watching.
+  //
+  // Falls back to now() when created_at is missing, which is the old behaviour.
+  const planStartedAt = cartRows
+    .map((r) => (r.created_at ? Date.parse(r.created_at) : NaN))
+    .filter((t) => Number.isFinite(t))
+    .reduce((min, t) => (t < min ? t : min), Infinity);
+  const feeAsOf = Number.isFinite(planStartedAt) ? new Date(planStartedAt) : new Date();
+  const orgFeeConfig = orgConfig
+    ? withResolvedFee(orgConfig, await loadPlatformFeeDefaults(admin), feeAsOf)
+    : null;
+
+  const shareByRow = orgFeeConfig
+    ? allocateCartFeeByLine(
+      cartRows.map((r) => ({
+        id: r.id,
+        registrationId: r.registration_id,
+        installmentNumber: r.installment_number,
+        amountCents: r.amount_cents,
+      })),
+      'card',
+      orgFeeConfig,
+    )
+    : new Map<string, number>(cartRows.map((r) => [r.id, 0]));
 
   // This charge's margin = the sum of the shares of the rows it covers. Every
   // active row MUST be in shareByRow: the reload selected by registration id,
@@ -659,9 +712,12 @@ async function processGroup(
 
   // Route by the recorded account, not the org's current model. For a plan on
   // the platform this is byte-for-byte the destination path (J2S included).
-  const routingOrg: ConnectOrgConfig | null = orgConfig
+  // orgFeeConfig, not orgConfig: buildChargeRouting computes the Stripe-fee
+  // uplift from these same numbers, so routing and the margin above must be
+  // built from ONE config or the application fee and the shares disagree.
+  const routingOrg: ConnectOrgConfig | null = orgFeeConfig
     ? {
-      ...orgConfig,
+      ...orgFeeConfig,
       stripe_charge_model: recordedAcct ? 'direct' : 'destination',
       ...(recordedAcct ? { stripe_account_id: recordedAcct } : {}),
     }

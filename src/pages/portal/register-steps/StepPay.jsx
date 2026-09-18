@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { formatMoney } from '../../../lib/pricing.js';
-import { feeOnCents, installmentFeeShares } from '../../../lib/platformFee.js';
+import { cartFeeOnLines, cartInstallmentFeeShares } from '../../../lib/platformFee.js';
 import { formatStartDate } from '../../../lib/programSchedule.js';
 import {
   coverFeeCents,
@@ -15,6 +15,7 @@ export default function StepPay({
   onCheckout,
   paymentPlan,
   installmentSchedule,
+  installmentSplits,
   org,
   cancellationPolicy,
   scholarshipFund,
@@ -53,9 +54,9 @@ export default function StepPay({
   // excludes fee columns). Absorb orgs add 0.
   // Same helper the class card uses, so the figure a family saw before they
   // started is the figure they're asked to pay. See src/lib/platformFee.js —
-  // it mirrors the server's computePlatformFee clamp exactly.
-  const feeOn = (cents) => feeOnCents(cents, org, { isBank });
-
+  // it mirrors the server's cartFee.ts clamp exactly, and
+  // cartFeeTwinParity.test.ts runs both over the same matrix.
+  //
   // ACH is presented as a DISCOUNT off the standard price, never as a cheaper
   // fee for a different payment method.
   //
@@ -64,27 +65,47 @@ export default function StepPay({
   // law. Offering a discount for paying another way is expressly permitted — and
   // it is the same money either way. So the CARD fee is the standard fee, always
   // shown as such, and choosing bank shows what it saves you.
-  const standardFeeOn = (cents) => feeOnCents(cents, org, { isBank: false });
-  const charged = (cents) => cents + feeOn(cents);
 
-  // Payment plans: the fee is capped per REGISTRATION, so it is computed once
-  // against the whole total and split across the three charges — never
-  // recomputed per installment, which would collect the cap up to three times.
-  // Same allocation the server uses, so these figures are the figures Stripe
-  // charges. Installments are card-only, hence no isBank here.
-  const planShares = useInstallments
-    ? installmentFeeShares(installmentSchedule.map((i) => i.amount_cents), org)
+  // THE CART IS THE SUM OF ITS LINES, never one fee on the total. Money layer
+  // section 4: "applied to the line, not the cart", "No cart-level maximum."
+  // Two children at $228 owe $6.84 each, and three $25 drop-ins owe the $1.99
+  // floor three times - both of which a fee on the cart total gets wrong, in
+  // opposite directions. pricing.lines carries the per-registration amounts
+  // the Review step already priced, so nothing new has to be derived here.
+  const cartLineAmounts = (pricing?.lines || []).map((l) => l.amount_cents);
+  const cartFeeFor = (bank) => cartFeeOnLines(cartLineAmounts, org, { isBank: bank });
+
+  // Payment plans: each registration's fee split across THAT registration's
+  // own three charges — never recomputed per installment (which would collect
+  // the ceiling up to three times) and no longer pooled across the cart
+  // (which collected one ceiling for the whole basket). Same allocation the
+  // server uses, so these figures are the figures Stripe charges.
+  // Installments are card-only, hence no isBank here.
+  //
+  // line_index is the registration key: at this point in the flow the
+  // registrations do not exist yet and have no ids, but the fee only needs to
+  // know which amounts belong together, and the index does that.
+  const planRows = useInstallments && installmentSplits
+    ? installmentSplits.flatMap(({ line_index, splits }) =>
+      splits
+        .map((amount_cents, i) => ({
+          registration_id: `line-${line_index}`,
+          installment_number: i + 1,
+          amount_cents,
+        }))
+        .filter((r) => r.amount_cents > 0))
     : [];
+  const planShares = useInstallments ? cartInstallmentFeeShares(planRows, org) : [];
   const planStandardShares = planShares; // card-only; standard === effective
-  const feeForIndex = (i) => (useInstallments ? planShares[i] : 0);
+  const feeForIndex = (i) => (useInstallments ? (planShares[i] || 0) : 0);
   const chargedForIndex = (i) => installmentSchedule[i].amount_cents + feeForIndex(i);
 
-  const feeToday = useInstallments ? feeForIndex(0) : feeOn(displayAmount);
-  const chargedToday = useInstallments ? chargedForIndex(0) : charged(displayAmount);
+  const feeToday = useInstallments ? feeForIndex(0) : cartFeeFor(isBank);
+  const chargedToday = useInstallments ? chargedForIndex(0) : displayAmount + feeToday;
   // The standard (card) fee, and what paying by bank takes off it. Never
   // negative: if a config ever made ACH the dearer method, we show no discount
   // rather than inventing a card penalty.
-  const standardFeeToday = useInstallments ? planStandardShares[0] : standardFeeOn(displayAmount);
+  const standardFeeToday = useInstallments ? (planStandardShares[0] || 0) : cartFeeFor(false);
   const bankDiscountToday = Math.max(0, standardFeeToday - feeToday);
   const grandTotal = useInstallments
     ? installmentSchedule.reduce((s, i, idx) => s + i.amount_cents + feeForIndex(idx), 0)
@@ -268,9 +289,9 @@ export default function StepPay({
                 {/* Stated as a saving on THIS option, not as a penalty on the
                     card option. Computed from the same figures as the total, so
                     it can never promise a discount that doesn't materialise. */}
-                {standardFeeOn(displayAmount) - feeOnCents(displayAmount, org, { isBank: true }) > 0 && (
+                {cartFeeFor(false) - cartFeeFor(true) > 0 && (
                   <span className="mt-1 block text-xs font-bold text-j2s-purple">
-                    Save {formatMoney(standardFeeOn(displayAmount) - feeOnCents(displayAmount, org, { isBank: true }))}
+                    Save {formatMoney(cartFeeFor(false) - cartFeeFor(true))}
                   </span>
                 )}
               </span>

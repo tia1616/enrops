@@ -66,8 +66,9 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { buildChargeRouting, ConnectOrgConfig } from '../_shared/connectChargeParams.ts';
-import { passThroughLineItem, passThroughLineItemForAmount } from '../_shared/passThroughFee.ts';
-import { computePlatformFee } from '../_shared/computePlatformFee.ts';
+import { passThroughLineItemForAmount } from '../_shared/passThroughFee.ts';
+import { cartFeeCents, allocateCartFeeByLine } from '../_shared/cartFee.ts';
+import { withResolvedFee, loadPlatformFeeDefaults } from '../_shared/feeConfig.ts';
 import { allocateFeeAcrossInstallments } from '../_shared/feeAllocation.ts';
 import { logEnrollmentEvent, ENROLLMENT_ACTIONS } from '../_shared/logEnrollmentEvent.ts';
 import { validateGift, scholarshipLineItem, ScholarshipFundConfig } from '../_shared/scholarshipFund.ts';
@@ -310,6 +311,15 @@ serve(async (req) => {
 
     let aggregated: AggregatedEntry[] | null = null;
     let perLine: PerLineEntry[] | null = null;
+    // Does perLine carry REAL per-registration attribution, or was it
+    // manufactured? Only the v12+ shape sends a registration id per entry. The
+    // legacy shape has none and stamps every charge with registration_ids[0],
+    // which is a placeholder, not a fact - see that branch below. The fee is
+    // charged per registration, so it must know which of the two it is holding:
+    // trusting the legacy ids would read a whole multi-child cart as ONE
+    // registration and hand it one floor and one ceiling, which is the exact
+    // defect this work removes.
+    let scheduleAttributesLines = false;
 
     // A gift is not financed. The installments machinery splits a total across
     // three dated charges, caps the platform fee across the whole registration
@@ -355,6 +365,10 @@ serve(async (req) => {
         if (Math.abs(aggregatedTotal - total_cents) > 1) {
           return json({ error: `aggregated total ${aggregatedTotal} != total_cents ${total_cents}` }, 400);
         }
+        // Every entry carries its OWN registration_id, and the per-line sums
+        // were just checked against the aggregated ones, so the fee can be
+        // charged per registration straight off this schedule.
+        scheduleAttributesLines = true;
       } else if (installment_schedule?.installments?.length) {
         // LEGACY shape — convert to new internal format
         const sched = installment_schedule.installments;
@@ -366,7 +380,12 @@ serve(async (req) => {
           amount_cents: s.amount_cents,
           due_date: s.due_date,
         }));
-        // Legacy: all installments under registration_ids[0]
+        // Legacy: all installments under registration_ids[0]. That id is a
+        // PLACEHOLDER so downstream code has something to key on - it is not a
+        // claim that this money belongs to that registration, and on a
+        // multi-child cart it is simply false. scheduleAttributesLines stays
+        // false, and the fee is computed from the server's registration rows
+        // instead of from this schedule.
         perLine = sched.map((s: any) => ({
           installment_number: s.number || s.installment_number,
           registration_id: s.registration_id || registration_ids[0],
@@ -418,6 +437,8 @@ serve(async (req) => {
             platform_fee_card_pct,
             platform_fee_ach_pct,
             platform_fee_cap_cents,
+            platform_fee_ach_cap_cents,
+            platform_fee_override_until,
             platform_fee_floor_cents,
             fee_pass_through,
             stripe_fee_payer,
@@ -429,7 +450,16 @@ serve(async (req) => {
         .eq('id', registration_ids[0])
         .single();
       const orgId = regForOrg?.organization_id || null;
-      const orgConfig = (regForOrg?.organizations ?? null) as ConnectOrgConfig | null;
+      // The org may be on negotiated terms with an END DATE. resolveFeeConfig
+      // substitutes the platform defaults once that date has passed, and is a
+      // no-op for every org today (all override_until are NULL). A NEW checkout
+      // is correctly priced at TODAY's terms - the plan-in-flight case is
+      // process-installments, which deliberately resolves as of the plan's
+      // start instead. See _shared/feeConfig.ts.
+      const orgConfigRaw = (regForOrg?.organizations ?? null) as ConnectOrgConfig | null;
+      const orgConfig = orgConfigRaw
+        ? withResolvedFee(orgConfigRaw, await loadPlatformFeeDefaults(guardAdmin))
+        : null;
       const orgTerm = (regForOrg?.organizations as { active_registration_term?: string | null } | null)?.active_registration_term ?? '';
 
       // Same payment gate as the one-time path below. The installments branch
@@ -446,18 +476,73 @@ serve(async (req) => {
         }, 409);
       }
 
-      // The platform fee is capped PER REGISTRATION, not per charge: compute it
-      // once against the whole total, then split it across the three
-      // installments. Otherwise a $500 program split three ways costs the
-      // family 3 x the per-charge fee while paying up front hits the single
-      // $7.99 cap — penalising exactly the families who need the plan.
-      // Below the cap this changes nothing (3% of $240 = 3 x 3% of $80).
-      const installmentFeeShares = orgConfig
-        ? allocateFeeAcrossInstallments(
-          computePlatformFee(total_cents, 'card', orgConfig),
+      // The fee is computed PER REGISTRATION LINE and split across that
+      // registration's own three charges. Money layer section 4: "applied to
+      // the line, not the cart."
+      //
+      // It is still not computed per CHARGE - that was the original defect and
+      // it stays fixed. A $500 program split three ways must not pay three
+      // ceilings while paying up front pays one. What changes is the unit the
+      // ceiling belongs to: the registration, not the basket it arrived in.
+      //
+      // TWO SCHEDULE SHAPES, and only one of them can say whose money is whose.
+      //
+      // v12+ sends a registration_id per entry and its per-line sums are checked
+      // against the aggregated ones above, so the fee is charged per
+      // registration straight off it.
+      //
+      // The LEGACY shape carries no attribution at all and stamps every charge
+      // with registration_ids[0]. Reading those ids would collapse a whole
+      // multi-child cart into one registration and give it one floor and one
+      // ceiling - the precise defect this change removes, reintroduced through
+      // the back door by a stale browser bundle. So the legacy path gets its fee
+      // TOTAL from the server's own registration rows (correct per line, and it
+      // never trusted the client's schedule anyway) and then spreads it across
+      // the three charges. The distribution across charges is approximate there
+      // because nothing in that payload can make it exact; the total is right,
+      // which is the half that decides what anyone is charged.
+      const installmentFeeShares = (() => {
+        if (!orgConfig) return [0, 0, 0];
+
+        if (scheduleAttributesLines && perLine) {
+          const shares = allocateCartFeeByLine(
+            perLine.map((p, i) => ({
+              // No id of its own on the wire, so index IS the identity - stable
+              // because the reducer below reads the same array in the same order.
+              id: String(i),
+              registrationId: p.registration_id,
+              installmentNumber: p.installment_number,
+              amountCents: p.amount_cents,
+            })),
+            'card',
+            orgConfig,
+          );
+          // Charge N's margin is the sum of every line's share of charge N.
+          const shareForInstallment = (n: number) =>
+            perLine!.reduce(
+              (sum, p, i) => (p.installment_number === n ? sum + (shares.get(String(i)) ?? 0) : sum),
+              0,
+            );
+          return [
+            shareForInstallment(c1.installment_number),
+            shareForInstallment(c2.installment_number),
+            shareForInstallment(c3.installment_number),
+          ];
+        }
+
+        const legacyFee = cartFeeCents(
+          (regAmtRows || []).map((r) => ({
+            registrationId: r.id as string,
+            amountCents: (r.amount_cents as number) || 0,
+          })),
+          'card',
+          orgConfig,
+        );
+        return allocateFeeAcrossInstallments(
+          legacyFee,
           [c1.amount_cents, c2.amount_cents, c3.amount_cents],
-        )
-        : [0, 0, 0];
+        );
+      })();
       const firstFeeShare = installmentFeeShares[0];
 
       // Connect overlay + which account the API calls are made against. The
@@ -679,6 +764,8 @@ serve(async (req) => {
           platform_fee_card_pct,
           platform_fee_ach_pct,
           platform_fee_cap_cents,
+          platform_fee_ach_cap_cents,
+          platform_fee_override_until,
           platform_fee_floor_cents,
           fee_pass_through,
           stripe_fee_payer,
@@ -690,7 +777,16 @@ serve(async (req) => {
       .eq('id', registration_ids[0])
       .single();
     const orgIdStd = regForOrgStd?.organization_id || null;
-    const orgConfigStd = (regForOrgStd?.organizations ?? null) as ConnectOrgConfig | null;
+    // The org may be on negotiated terms with an END DATE. resolveFeeConfig
+    // substitutes the platform defaults once that date has passed, and is a
+    // no-op for every org today (all override_until are NULL). A NEW checkout
+    // is correctly priced at TODAY's terms - the plan-in-flight case is
+    // process-installments, which deliberately resolves as of the plan's
+    // start instead. See _shared/feeConfig.ts.
+    const orgConfigStdRaw = (regForOrgStd?.organizations ?? null) as ConnectOrgConfig | null;
+    const orgConfigStd = orgConfigStdRaw
+      ? withResolvedFee(orgConfigStdRaw, await loadPlatformFeeDefaults(guardAdmin))
+      : null;
     const orgTermStd = (regForOrgStd?.organizations as { active_registration_term?: string | null } | null)?.active_registration_term ?? '';
 
     // ── PAYMENT GATE: no Stripe, no charge ────────────────────────────────
@@ -742,9 +838,31 @@ serve(async (req) => {
     // function would have computed anyway, so every existing charge is
     // byte-for-byte unchanged.
     const chargeBaseStd = total_cents + gift.chargedCents;
-    const marginBaseStd = gift.chargedCents > 0 && orgConfigStd
-      ? computePlatformFee(total_cents, selectedMethod, orgConfigStd)
-      : undefined;
+
+    // THE MARGIN IS NOW ALWAYS AN OVERRIDE, and that is the change.
+    //
+    // buildChargeRouting derives the margin from the amount it is handed, and
+    // an amount cannot express a per-line fee: six children at $228 and one
+    // child at $1,368 are the same number to it, and section 4 says they owe
+    // very different fees. So the fee is computed from the LINES and passed
+    // in. Previously the override existed only to keep a donation out of the
+    // margin base; that is still true and now rides along inside the same
+    // number instead of being a second code path.
+    //
+    // regAmtRows, not line_items. These are the amounts the SERVER holds for
+    // these registrations - line_items is the client's copy, and while the
+    // price guard above proves the two agree in TOTAL, it does not prove they
+    // agree line by line, which is exactly what a per-line fee depends on. A
+    // client that moved $100 from one line to another would pass the guard and
+    // change what it owes.
+    const cartLinesStd = (regAmtRows || []).map((r) => ({
+      registrationId: r.id as string,
+      amountCents: (r.amount_cents as number) || 0,
+    }));
+    const cartFeeStd = orgConfigStd
+      ? cartFeeCents(cartLinesStd, selectedMethod, orgConfigStd)
+      : 0;
+    const marginBaseStd = orgConfigStd ? cartFeeStd : undefined;
     const routingStd = buildChargeRouting(chargeBaseStd, selectedMethod, orgConfigStd, orgIdStd, marginBaseStd);
     if (routingStd.blocked) {
       console.warn(`[create-checkout] BLOCKED (direct): ${routingStd.blocked}`);
@@ -762,10 +880,17 @@ serve(async (req) => {
     // fee as a visible "Platform fee" line so the family covers it — computed for
     // the SAME method as application_fee_amount above, so the two always agree.
     if (orgConfigStd) {
-      // total_cents, NOT chargeBaseStd. A pass-through org's families must not
-      // be charged an enrops service fee on top of their own donation - the
-      // margin base and this line are the same number by construction.
-      const feeLineStd = passThroughLineItem(total_cents, selectedMethod, orgConfigStd);
+      // cartFeeStd, NOT a fee recomputed from an amount. It is the same number
+      // handed to buildChargeRouting above, so the line the family pays and
+      // the fee enrops keeps are the SAME VALUE, not two calculations that
+      // happen to agree. That was already the intent; it is now structural.
+      //
+      // And it still excludes the gift, for the reason the old comment gave: a
+      // pass-through org's families must not be charged an enrops service fee
+      // on top of their own donation. cartLinesStd is registrations only.
+      const feeLineStd = orgConfigStd.fee_pass_through
+        ? passThroughLineItemForAmount(cartFeeStd)
+        : null;
       if (feeLineStd) stripeLineItems.push(feeLineStd);
     }
 

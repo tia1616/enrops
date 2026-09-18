@@ -184,6 +184,7 @@ export default function Finances() {
         platform_fee_card_pct,
         platform_fee_ach_pct,
         platform_fee_cap_cents,
+        platform_fee_ach_cap_cents,
         platform_fee_floor_cents,
         fee_pass_through,
         statement_descriptor_suffix,
@@ -2810,6 +2811,21 @@ function FeeReadout({ config }) {
   const cap = config.platform_fee_cap_cents;
   const hasFloor = typeof floor === "number" && floor > 0;
   const noCap = cap >= 100000000;
+  // THE BANK RAIL CAN HAVE ITS OWN CEILING. Money layer section 4 sets $14.99
+  // on card and $9.99 on bank, so one "Per registration" figure can no longer
+  // speak for both. platform_fee_ach_cap_cents null means "no bank-specific
+  // ceiling, use the card one" - which is every org today, so this reads
+  // exactly as it did until somebody sets one.
+  //
+  // Same fallback rule as _shared/computePlatformFee.ts and
+  // src/lib/platformFee.js. Third copy, and it is a READ-ONLY display rather
+  // than a charge, but it still has to agree with them or an operator is shown
+  // a ceiling their families do not pay.
+  const achCapRaw = config.platform_fee_ach_cap_cents;
+  const achCap = typeof achCapRaw === "number" && achCapRaw > 0 ? achCapRaw : cap;
+  const capsDiffer = achCap !== cap;
+  const noAchCap = achCap >= 100000000;
+
   // Show the per-registration bounds as a range when a floor is set (the current
   // 3% / $1.99 / $7.99 model), else fall back to just the cap for legacy orgs.
   const rangeValue = hasFloor
@@ -2818,11 +2834,22 @@ function FeeReadout({ config }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
       <FeeStat label="Card" value={fmtPct(config.platform_fee_card_pct)} />
-      <FeeStat label="Bank transfer" value={fmtPct(config.platform_fee_ach_pct)} note="(when supported)" />
+      <FeeStat
+        label="Bank transfer"
+        value={fmtPct(config.platform_fee_ach_pct)}
+        note={capsDiffer
+          ? `max ${noAchCap ? "no cap" : fmtCents(achCap)} · when supported`
+          : "(when supported)"}
+      />
       <FeeStat
         label="Per registration"
         value={rangeValue}
-        note={hasFloor ? "min–max" : "cap"}
+        // Says WHICH rail the ceiling belongs to as soon as the two differ.
+        // "Per registration" itself is now literally true: since 2026-09-18 the
+        // floor and ceiling apply to the registration line, not to the cart.
+        note={capsDiffer
+          ? (hasFloor ? "min–max on card" : "cap on card")
+          : (hasFloor ? "min–max" : "cap")}
       />
     </div>
   );

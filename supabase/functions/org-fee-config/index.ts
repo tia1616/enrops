@@ -15,6 +15,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { SCHOLARSHIP_FUND_OFF } from '../_shared/scholarshipFund.ts';
+import { resolveFeeConfig } from '../_shared/feeConfig.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -57,7 +58,7 @@ serve(async (req) => {
       // family up front that this provider can't take payment yet, instead of
       // letting them fill everything in and hit a wall at the Pay step. Not
       // sensitive (it's a yes/no about whether the provider is open for money).
-      .select('id, fee_pass_through, platform_fee_card_pct, platform_fee_ach_pct, platform_fee_cap_cents, platform_fee_floor_cents, sibling_discount_pct, stripe_charges_enabled')
+      .select('id, fee_pass_through, platform_fee_card_pct, platform_fee_ach_pct, platform_fee_cap_cents, platform_fee_ach_cap_cents, platform_fee_override_until, platform_fee_floor_cents, sibling_discount_pct, stripe_charges_enabled')
       .eq('slug', slug)
       .eq('status', 'active')
       .single();
@@ -112,16 +113,49 @@ serve(async (req) => {
         }
       : SCHOLARSHIP_FUND_OFF;
 
+    // THE EXPIRY IS RESOLVED HERE, NOT IN THE BROWSER. An organisation on
+    // negotiated terms carries an end date; once it passes, platform default
+    // pricing applies. This function sends the numbers that are ALREADY in
+    // force, so src/lib/platformFee.js never has to read a calendar. A second
+    // copy of that rule in the browser would be a second place to get it
+    // wrong, in front of a parent, at the last step of a checkout.
+    //
+    // Defaults are read with the service role, and platform_settings is
+    // admin-only under RLS, so this is the only way the anon flow can see
+    // them - which is correct: the family is shown a price, not a policy.
+    const { data: defaultsRow } = await admin
+      .from('platform_settings')
+      .select('value')
+      .eq('key', 'default_fee_config')
+      .maybeSingle();
+
+    // A missing or unreadable defaults row leaves the org on its OWN terms -
+    // see resolveFeeConfig. It never invents a price.
+    const fee = resolveFeeConfig(
+      {
+        platform_fee_card_pct: Number(data.platform_fee_card_pct) || 0,
+        platform_fee_ach_pct: Number(data.platform_fee_ach_pct) || 0,
+        platform_fee_cap_cents: data.platform_fee_cap_cents == null ? null : Number(data.platform_fee_cap_cents),
+        platform_fee_ach_cap_cents: data.platform_fee_ach_cap_cents == null ? null : Number(data.platform_fee_ach_cap_cents),
+        platform_fee_floor_cents: data.platform_fee_floor_cents == null ? null : Number(data.platform_fee_floor_cents),
+        platform_fee_override_until: data.platform_fee_override_until ?? null,
+      },
+      (defaultsRow?.value ?? null) as Record<string, unknown> | null,
+    );
+
     // Return BOTH method rates so the family-facing "Platform fee" line matches
     // whichever method the family selects on StepPay (card vs bank transfer).
     return json({
       fee_pass_through: !!data.fee_pass_through,
-      platform_fee_card_pct: Number(data.platform_fee_card_pct) || 0,
-      platform_fee_ach_pct: Number(data.platform_fee_ach_pct) || 0,
-      platform_fee_cap_cents: Number(data.platform_fee_cap_cents) || 0,
+      platform_fee_card_pct: fee.platform_fee_card_pct || 0,
+      platform_fee_ach_pct: fee.platform_fee_ach_pct || 0,
+      platform_fee_cap_cents: fee.platform_fee_cap_cents ?? 0,
+      // The BANK ceiling. null means "no bank-specific ceiling, use the card
+      // one", which the browser twin reads the same way the server does.
+      platform_fee_ach_cap_cents: fee.platform_fee_ach_cap_cents ?? null,
       // Min fee per transaction; null = no floor. Sent so StepPay's displayed fee
       // matches the server-charged fee (computePlatformFee applies the same floor).
-      platform_fee_floor_cents: data.platform_fee_floor_cents == null ? null : Number(data.platform_fee_floor_cents),
+      platform_fee_floor_cents: fee.platform_fee_floor_cents ?? null,
       // Sibling discount % so the review screen matches the server-authoritative
       // charge (create-registration reads the same org config). null = off.
       sibling_discount_pct: data.sibling_discount_pct == null ? null : Number(data.sibling_discount_pct),

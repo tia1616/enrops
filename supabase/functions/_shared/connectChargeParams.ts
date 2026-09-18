@@ -21,6 +21,12 @@ export interface ConnectOrgConfig extends PlatformFeeConfig {
   statement_descriptor_suffix: string | null;
   name: string | null;
   fee_pass_through?: boolean | null;
+  // Last date this org's OWN fee columns apply; after it, platform defaults.
+  // Carried here only so callers can hand the whole row to resolveFeeConfig -
+  // nothing in this file reads it, and nothing should: the expiry rule lives in
+  // _shared/feeConfig.ts, and the config reaching buildChargeRouting is already
+  // resolved.
+  platform_fee_override_until?: string | null;
   // Which Stripe Connect charge type this org's payments use.
   //   'destination' (the default, and every org that existed before 2026-07-27):
   //     the charge is created on the PLATFORM and transferred out. Enrops is
