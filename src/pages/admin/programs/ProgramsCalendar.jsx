@@ -3809,6 +3809,13 @@ const toggleBtnActive = {
 
 const summaryBar = {
   display: "flex",
+  // Without this the four counts are one un-wrapping row: on a 430px phone each
+  // item shrank past its own text and the overflow printed on top of its
+  // neighbour - "2 programs" and "(0 paid . 4 on installments)" were rendered
+  // over each other in Jessica's screenshot. Flex items only shrink to
+  // min-content and then wrap, so this costs desktop nothing (there is room for
+  // one row) and gives the phone as many rows as it needs.
+  flexWrap: "wrap",
   gap: 18,
   alignItems: "center",
   padding: "10px 14px",
