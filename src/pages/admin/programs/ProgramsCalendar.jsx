@@ -955,12 +955,36 @@ export default function ProgramsCalendar() {
           every cell on screen. !important because the row styles are inline. */}
       <style>{`
         @media (max-width: 900px) {
+          /* ONE COLUMN, not two. This rule used to say "1fr auto", and the row
+             has SIX children - so the long class title landed in the "auto"
+             track, took its own max-content width, and starved the "1fr" to
+             ZERO. Measured on Jeff's phone and reproduced at 375px: the track
+             computed to 0px, so the date rendered in a zero-width column and
+             spilled on top of the title, and "2:35pm" drew over the Expand
+             button. The row was unreadable while the page reported no overflow
+             at all, which is why an audit that only checked for sideways scroll
+             passed it.
+
+             A phone gets one field per line. "auto" cannot starve a sibling
+             that is not there.
+
+             NOTE: this whole block is a JS template literal, so a backtick in a
+             comment ends the string. Quote CSS keywords, never backtick them -
+             the freeIdentifiers test caught exactly that here. */
           [data-program-row] {
-            grid-template-columns: 1fr auto !important;
-            gap: 4px 12px !important;
+            grid-template-columns: 1fr !important;
+            gap: 6px 0 !important;
             padding: 12px 14px !important;
             align-items: start !important;
           }
+          /* The class name is what an operator scans for, and stacked there is
+             no left column to run an eye down - so it leads, ahead of the date
+             that leads on desktop. Second child = curriculum + school + teacher. */
+          [data-program-row] > *:nth-child(2) { order: -1; }
+          /* Right-alignment is a COLUMN behaviour: it lines the enrolment count
+             up against the edge of a table. Stacked full-width it just strands
+             each value on the far side of the screen from its label. */
+          [data-program-row] > * { text-align: left !important; }
         }
       `}</style>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, flexWrap: "wrap", gap: 12 }}>
