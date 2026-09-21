@@ -139,6 +139,57 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
     return () => { alive = false; };
   }, []);
 
+  // ONE MESSAGE, SEVERAL CLASSES.
+  //
+  // Jeff sent "Help Us Bring More Friends" to TWELVE classes in one sitting,
+  // 175 emails, by pasting it twelve times - 23 of his 33 sends in eight days
+  // were the same message re-entered class by class. Jackrabbit does this with
+  // checkboxes on the class list feeding one composer.
+  //
+  // It is orchestrated HERE rather than in the edge function, deliberately. One
+  // call per class keeps every existing reader correct: each class still gets
+  // its own audit row with its own honest counts, its own Sent tab entry, and
+  // its own {{program_name}} / {{program_day}} resolved to the class the family
+  // is actually in. A function that took a list of classes would have had to
+  // invent an answer to "which class is this family's" for the 13% of J2S
+  // families in more than one, and would have made every count ambiguous.
+  const [otherClassIds, setOtherClassIds] = useState(() => new Set());
+  const [classList, setClassList] = useState(null);     // null = loading
+  const [classPickerOpen, setClassPickerOpen] = useState(false);
+  const [progress, setProgress] = useState(null);       // { done, total, name }
+
+  const selectedClassIds = useMemo(
+    () => [program?.id, ...otherClassIds].filter(Boolean),
+    [program?.id, otherClassIds],
+  );
+
+  // The other classes this message could also go to. Mirrors the Rosters list
+  // rather than inventing a second rule: drafts are hidden (they cannot have
+  // registrations), cancelled and closed classes are shown, because a cancelled
+  // class is precisely when its families most need telling.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const { data, error } = await supabase
+        .from("programs")
+        .select("id, curriculum, term, day_of_week, status, program_locations ( name )")
+        .eq("organization_id", orgId)
+        .neq("status", "draft");
+      if (!alive) return;
+      if (error) { setClassList([]); return; }
+      // Same TERM as the class they opened. Messaging this term's families and
+      // next spring's in one send is almost never what someone means, and the
+      // term is the line operators already think in.
+      const here = (data ?? []).find((p) => p.id === program?.id);
+      setClassList(
+        (data ?? [])
+          .filter((p) => p.id !== program?.id && p.term === here?.term)
+          .sort((a, b) => (a.curriculum ?? "").localeCompare(b.curriculum ?? "")),
+      );
+    })();
+    return () => { alive = false; };
+  }, [orgId, program?.id]);
+
   const call = useCallback(async (payload) => {
     const { data: { session } } = await supabase.auth.getSession();
     const token = session?.access_token;
@@ -153,6 +204,8 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
           apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
         },
         body: JSON.stringify({
+          // Defaults to the class this was opened from; a caller sending to
+          // several passes its own program_id per call.
           program_id: program?.id,
           organization_id: orgId,
           include_waitlist: includeWaitlist,
@@ -176,16 +229,48 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
     setPreviewError("");
     (async () => {
       try {
-        const { status, json } = await call({ mode: "preview" });
-        if (!alive) return;
-        if (status !== 200) {
-          setPreviewError(json?.error === "forbidden"
-            ? "You don't have permission to message this class's families."
-            : "Couldn't work out who would receive this. Refresh and try again.");
-          setPreview({ recipients: [], unreachable: [], recipient_count: 0, unreachable_count: 0 });
-          return;
+        // One preview per selected class, then merged. Sequential rather than
+        // parallel: twelve simultaneous requests is a burst against a function
+        // that runs a SECURITY DEFINER query per call, and the operator is
+        // looking at a list, not racing a clock.
+        const perClass = [];
+        for (const pid of selectedClassIds) {
+          const { status, json } = await call({ mode: "preview", program_id: pid });
+          if (!alive) return;
+          if (status !== 200) {
+            setPreviewError(json?.error === "forbidden"
+              ? "You don't have permission to message this class's families."
+              : "Couldn't work out who would receive this. Refresh and try again.");
+            setPreview({ recipients: [], unreachable: [], recipient_count: 0, unreachable_count: 0 });
+            return;
+          }
+          perClass.push({ programId: pid, json });
         }
-        setPreview(json);
+        if (!alive) return;
+        // MERGED, NOT CONCATENATED. A family in two of the selected classes is
+        // ONE recipient - 67 of 500 J2S families are in more than one class, up
+        // to four, so concatenating would tell 13% of them the same thing
+        // repeatedly. Which class each family is counted under is decided at
+        // send time by the order below; here they are simply one row.
+        const byAddress = new Map();
+        const unreachable = [];
+        for (const { programId, json } of perClass) {
+          for (const r of json.recipients ?? []) {
+            const key = `${r.email}|${r.parent_id ?? ""}`;
+            if (!byAddress.has(key)) byAddress.set(key, { ...r, programIds: [] });
+            byAddress.get(key).programIds.push(programId);
+          }
+          for (const u of json.unreachable ?? []) unreachable.push(u);
+        }
+        const recipients = [...byAddress.values()];
+        setPreview({
+          program: perClass[0]?.json?.program,
+          recipients,
+          unreachable,
+          recipient_count: recipients.length,
+          unreachable_count: unreachable.length,
+          per_class: perClass.map((p) => ({ programId: p.programId, count: p.json.recipient_count })),
+        });
       } catch (e) {
         if (alive) {
           setPreviewError(e.message ?? "Couldn't load the recipient list.");
@@ -194,7 +279,10 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
       }
     })();
     return () => { alive = false; };
-  }, [call]);
+    // selectedClassIds joins `call` as a dependency for the same reason the
+    // audience toggles did: it changes WHO the list is, so a stale list would
+    // be a count that no longer belongs to the classes as they sit ticked.
+  }, [call, selectedClassIds]);
 
   // A TEST IS NOT A SEND, and the difference is enforced on the server: it
   // writes no audit row, does not arm the duplicate guard, and goes to exactly
@@ -248,7 +336,9 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
     // a data problem the operator cannot fix from here; "you unticked everyone"
     // is a thing they just did and can undo.
     if ((preview?.recipient_count ?? 0) === 0) {
-      setError("Nobody in this class has an email address we can send to.");
+      setError(selectedClassIds.length > 1
+        ? "Nobody in these classes has an email address we can send to."
+        : "Nobody in this class has an email address we can send to.");
       return;
     }
     if (count === 0) {
@@ -256,42 +346,104 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
       return;
     }
     setPhase("sending");
+    // ALREADY EMAILED IN THIS BATCH, carried forward from class to class.
+    //
+    // This is the whole dedupe, and it reuses the exclusion the picker already
+    // sends rather than inventing a second mechanism. A family in Monday and
+    // Tuesday is emailed by Monday, then excluded from Tuesday - so they hear
+    // it once, and the class named in their email is one they are really in.
+    // The alternative, one email per class, would have told 67 J2S families the
+    // same thing two to four times.
+    const alreadyEmailed = new Set();
+    const perClass = [];
     try {
-      const { status, json } = await call({
+      for (let i = 0; i < selectedClassIds.length; i++) {
+        const pid = selectedClassIds[i];
+        const label = pid === program?.id
+          ? (program?.curriculum || "this class")
+          : (classList?.find((c) => c.id === pid)?.curriculum || "a class");
+        setProgress({ done: i, total: selectedClassIds.length, name: label });
+
+        const { status, json } = await call({
+          mode: "send",
+          program_id: pid,
+          // Sent as the households LEFT OUT rather than the ones selected, so
+          // the default - an empty array - means everybody. A caller that
+          // forgets the field emails the whole class, which is the pre-existing
+          // behaviour; sending the inverse would mean a dropped field silently
+          // emails nobody.
+          exclude_parent_ids: [...new Set([...excluded, ...alreadyEmailed])],
+          subject: subject.trim(),
+          body_html: bodyHtml,
+          // The operator's copy rides the FIRST class only. One message, one
+          // copy - twelve copies of their own send is the same noise a BCC per
+          // family would have been.
+          copy_to: i === 0 && copyToMe && myEmail.trim() ? myEmail.trim() : undefined,
+          confirm_duplicate: confirmDuplicate,
+        });
+
+        if (status === 409 && json?.error === "duplicate_send") {
+          // Only reachable on the first class: every later one has a different
+          // program_id, and the guard is per class. Stopping here leaves the
+          // batch untouched rather than half-sent.
+          setDuplicate(json);
+          setPhase("compose");
+          setProgress(null);
+          return;
+        }
+        if (status !== 200) {
+          // NOT "nothing was sent" - we do not know that, and with several
+          // classes we know the opposite for the ones already done. The server
+          // emails the families BEFORE several of the things that can fail
+          // afterwards, so asserting a clean failure is the sentence that makes
+          // an operator press Send again and mail people twice.
+          setError((json?.message || json?.error
+            || "Something went wrong before this finished.")
+            + (perClass.length
+              ? ` ${perClass.length} of ${selectedClassIds.length} classes had already been sent. Check the Sent tab before trying again.`
+              : " Check the Sent tab before trying again - some families may already have it."));
+          setPhase("compose");
+          setProgress(null);
+          return;
+        }
+
+        // Only households that were ACTUALLY emailed are carried forward. A
+        // family whose send failed must stay eligible for the next class rather
+        // than being silently skipped everywhere because one attempt bounced.
+        for (const r of json.results ?? []) {
+          if (r.status === "sent" && r.parent_id) alreadyEmailed.add(r.parent_id);
+        }
+        perClass.push({ programId: pid, label, ...json });
+      }
+
+      setProgress(null);
+      // Aggregated, and the per-class rows are kept so the panel can name the
+      // ones that failed rather than reporting one number for twelve sends.
+      setResult({
         mode: "send",
-        // Sent as the households LEFT OUT rather than the ones selected, so the
-        // default - an empty array - means everybody. A caller that forgets the
-        // field emails the whole class, which is the pre-existing behaviour;
-        // sending the inverse would mean a dropped field silently emails nobody.
-        exclude_parent_ids: [...excluded],
-        subject: subject.trim(),
-        body_html: bodyHtml,
-        copy_to: copyToMe && myEmail.trim() ? myEmail.trim() : undefined,
-        confirm_duplicate: confirmDuplicate,
+        classes: perClass,
+        status: perClass.every((p) => p.status === "sent") ? "sent"
+          : perClass.every((p) => p.status === "failed" || p.status === "no_recipients") ? "failed" : "partial",
+        sent: perClass.reduce((n, p) => n + (p.sent ?? 0), 0),
+        households_sent: alreadyEmailed.size,
+        failed: perClass.reduce((n, p) => n + (p.failed ?? 0), 0),
+        unreachable_count: perClass.reduce((n, p) => n + (p.unreachable_count ?? 0), 0),
+        copy: perClass[0]?.copy ?? null,
+        audit_recorded: perClass.every((p) => p.audit_recorded !== false),
+        // Tagged with the class, because across several classes the SAME
+        // address can appear twice - a family whose send failed stays eligible
+        // for the next class, by design - and "these did not go" listing one
+        // address twice with no class beside it is a list an operator cannot
+        // act on. It also stops two rows colliding on the same React key.
+        results: perClass.flatMap((p) => (p.results ?? []).map((r) => ({ ...r, class_label: p.label }))),
       });
-      if (status === 409 && json?.error === "duplicate_send") {
-        setDuplicate(json);
-        setPhase("compose");
-        return;
-      }
-      if (status !== 200) {
-        // NOT "nothing was sent" - we do not know that. The server emails the
-        // families BEFORE several of the things that can fail afterwards, so
-        // asserting a clean failure is the sentence that makes an operator
-        // press Send again and mail the whole class twice. Say what is true
-        // (it did not finish) and point at the record that can settle it.
-        setError(json?.message || json?.error
-          || "Something went wrong before this finished. Check the Sent tab before trying again - some families may already have it.");
-        setPhase("compose");
-        return;
-      }
-      setResult(json);
       setPhase("done");
     } catch (e) {
-      // Same reasoning: a dropped connection tells us nothing about what the
-      // server did with the request it already received.
-      setError(e.message
-        ?? "The connection dropped before this finished. Check the Sent tab before trying again - some families may already have it.");
+      setProgress(null);
+      setError((e.message ?? "The connection dropped before this finished.")
+        + (perClass.length
+          ? ` ${perClass.length} of ${selectedClassIds.length} classes had already been sent. Check the Sent tab before trying again.`
+          : " Check the Sent tab before trying again - some families may already have it."));
       setPhase("compose");
     }
   }
@@ -305,10 +457,14 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
     for (const r of preview?.recipients ?? []) {
       const key = r.parent_id || r.email;
       if (!byFamily.has(key)) {
-        byFamily.set(key, { key, name: r.name, children: r.children, audiences: r.audiences ?? [], emails: [] });
+        byFamily.set(key, { key, name: r.name, children: r.children, audiences: r.audiences ?? [], emails: [], classIds: [] });
       }
       const h = byFamily.get(key);
       h.emails.push(r.email);
+      // Which of the selected classes this family sits in. Shown when it is
+      // more than one, so an operator can see WHY they appear once in a list
+      // that covers several classes rather than wondering what was dropped.
+      for (const pid of r.programIds ?? []) if (!h.classIds.includes(pid)) h.classIds.push(pid);
       // The account holder's name wins; a guardian-only household keeps theirs.
       if (r.kinds?.includes("parent") && r.name) h.name = r.name;
       for (const a of r.audiences ?? []) if (!h.audiences.includes(a)) h.audiences.push(a);
@@ -437,8 +593,11 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
                 {(result.results).filter((r) => r.status === "failed").map((r) => (
                   // overflowWrap, because an email address is one unbroken word
                   // and a long one runs out of a 375px phone. Seen on staging.
-                  <div key={r.email} style={{ fontSize: 12, color: INK, overflowWrap: "anywhere" }}>
+                  <div key={`${r.class_label ?? ""}|${r.email}`} style={{ fontSize: 12, color: INK, overflowWrap: "anywhere" }}>
                     {r.name || r.email} <span style={{ color: MUTED }}>({r.email})</span>
+                    {selectedClassIds.length > 1 && r.class_label && (
+                      <span style={{ color: MUTED }}> · {r.class_label}</span>
+                    )}
                   </div>
                 ))}
               </div>
@@ -469,6 +628,47 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
                   onChange={(e) => setIncludeCancelled(e.target.checked)} />
                 Also include families who have left or been refunded
               </label>
+
+              {/* SEND IT TO OTHER CLASSES TOO. Collapsed by default: the common
+                  case is one class, and a list of every class in the term above
+                  the message box would bury it. */}
+              {!!classList?.length && (
+                <div style={{ marginTop: 8, borderTop: `1px solid ${RULE}`, paddingTop: 8 }}>
+                  <button type="button" onClick={() => setClassPickerOpen((v) => !v)} disabled={sending}
+                    style={{ background: "transparent", border: "none", padding: 0, color: BRIGHT, fontSize: 12.5, fontFamily: "inherit", cursor: sending ? "not-allowed" : "pointer", fontWeight: 600 }}>
+                    {classPickerOpen ? "Hide other classes" : `Also send to other classes${otherClassIds.size ? ` (${otherClassIds.size} added)` : ""}`}
+                  </button>
+                  {classPickerOpen && (
+                    <div style={{ marginTop: 6, maxHeight: 150, overflowY: "auto", border: `1px solid ${RULE}`, borderRadius: 6 }}>
+                      {classList.map((c) => (
+                        <label key={c.id} style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 8px", fontSize: 12, borderBottom: `1px solid ${RULE}`, cursor: sending ? "not-allowed" : "pointer" }}>
+                          <input type="checkbox" disabled={sending} checked={otherClassIds.has(c.id)}
+                            onChange={() => setOtherClassIds((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(c.id)) next.delete(c.id); else next.add(c.id);
+                              return next;
+                            })} />
+                          <span style={{ color: INK, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {c.curriculum}
+                            <span style={{ color: MUTED }}>
+                              {c.program_locations?.name ? ` · ${c.program_locations.name}` : ""}
+                              {c.day_of_week ? ` · ${c.day_of_week}` : ""}
+                              {c.status === "cancelled" ? " · cancelled" : ""}
+                            </span>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                  {/* Said once, plainly, because it is the question an operator
+                      asks the moment they tick a second class. */}
+                  {otherClassIds.size > 0 && (
+                    <div style={{ fontSize: 11, color: MUTED, marginTop: 6 }}>
+                      A family in more than one of these classes gets this once, not once per class.
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div style={{ marginTop: 10, fontSize: 13, color: INK }}>
                 {preview === null ? (
@@ -511,6 +711,9 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
                           <span style={{ color: MUTED }}> · {r.children}</span>
                           {r.emails.length > 1 && (
                             <span style={{ color: MUTED }}> · {r.emails.length} addresses</span>
+                          )}
+                          {r.classIds?.length > 1 && (
+                            <span style={{ color: MUTED }}> · in {r.classIds.length} of these classes</span>
                           )}
                         </span>
                       </span>
@@ -647,7 +850,16 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
                   whole class twice. The edge function guards this too. */}
               <button type="button" onClick={() => send()} disabled={sending || count === 0 || preview === null}
                 style={{ padding: "8px 16px", background: BRIGHT, color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: (sending || count === 0) ? "not-allowed" : "pointer", opacity: (sending || count === 0 || preview === null) ? 0.5 : 1 }}>
-                {sending ? `Sending to ${count}…` : `Send to ${count} ${count === 1 ? "family" : "families"}`}
+                {/* The progress names the CLASS, not a percentage. A send to
+                    twelve classes is minutes of one sequential POST per family
+                    with nothing else moving on screen, and "sending…" for that
+                    long is what makes somebody reach for the button again. */}
+                {sending
+                  ? (progress && progress.total > 1
+                    ? `Sending ${progress.done + 1} of ${progress.total}: ${progress.name}…`
+                    : `Sending to ${count}…`)
+                  : `Send to ${count} ${count === 1 ? "family" : "families"}`
+                    + (selectedClassIds.length > 1 ? ` across ${selectedClassIds.length} classes` : "")}
               </button>
             </div>
           </>
