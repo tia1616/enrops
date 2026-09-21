@@ -72,10 +72,20 @@ export default function FamiliesPayNote({ priceCents, feeConfig, style }) {
   const familiesPay = totalWithFee(priceCents, feeConfig);
   const fee = feeOnCents(priceCents, feeConfig);
 
+  // textTransform and letterSpacing are reset HERE, not at the call sites.
+  // The inline edit panel on the schedule wraps each field in a label styled
+  // uppercase for its little field captions, and that cascades: the note
+  // rendered as FAMILIES PAY $240.00. YOU COVER THE ENROPS SERVICE FEE - a
+  // whole sentence shouting. Caught by looking at the panel rather than
+  // trusting that a shared component looks the same everywhere. Fixed in the
+  // component so no future caller can shout it either.
   const base = {
     marginTop: 8,
     fontSize: 13,
     lineHeight: 1.5,
+    textTransform: 'none',
+    letterSpacing: 'normal',
+    fontWeight: 400,
     ...(style || {}),
   };
 
