@@ -86,6 +86,7 @@ import { findAuthUserByEmail } from '../_shared/findAuthUserByEmail.ts';
 import { computeMarginRefund } from '../_shared/refundFeeSplit.ts';
 import { loadProration } from '../_shared/refundFeeProration.ts';
 import { readChargeFeeFacts, FEE_REFUND_SOURCE_KEY, FEE_REFUND_REGISTRATION_KEY } from '../_shared/chargeFeeFacts.ts';
+import { runUpliftTrueUpForOrg } from '../_shared/upliftTrueUp.ts';
 import { feeReturnOutcome } from '../_shared/feeReturnOutcome.ts';
 import { allocateRefundAcrossRegistrations } from '../_shared/refundAllocation.ts';
 import { sendRefundReceipt } from '../_shared/refundReceipt.ts';
@@ -202,6 +203,25 @@ serve(async (req) => {
       // Look up org and load full brand context (FROM, colors, logo, alert email).
       const { data: regForOrg } = await admin.from('registrations').select('organization_id').eq('id', regIds[0]).single();
       const orgId = regForOrg?.organization_id;
+
+      // Give back any part of the Stripe-fee uplift we over-recovered. The
+      // application fee was sized from an ESTIMATE before the family chose how
+      // to pay, and some rails (Link funded by a bank, today) cost less than the
+      // card rate we quoted. See _shared/upliftTrueUp.ts. Never throws, so it
+      // cannot cost this family their confirmation, and skipped entirely unless
+      // the charge was a destination charge on an org that bears processing.
+      //
+      // Only once the money is actually IN: an ACH debit completes this session
+      // days before it settles, and comes back through async_payment_succeeded.
+      if (session.payment_status === 'paid') {
+        await runUpliftTrueUpForOrg(admin, stripe, {
+          organizationId: orgId,
+          paymentIntentId: (session.payment_intent as string) || '',
+          chargeAccountId: (event.account as string | null) ?? null,
+          label: 'checkout.session.completed',
+        });
+      }
+
       const brand = await loadOrgBrand(admin, orgId);
       // The tenant's OWN inbox, or null. NOT brand.alert_email: every alert
       // below names a paying family (their registration IDs, their name, their
@@ -752,6 +772,16 @@ serve(async (req) => {
         ...SETTLEMENT_ON_ASYNC_SUCCESS,
         stripe_payment_intent_id: session.payment_intent as string,
       }).in('id', regIds);
+
+      // The bank debit has now settled, so the balance transaction finally
+      // carries Stripe's real fee. This is the ONLY point an ACH charge can be
+      // trued up - see the twin call in checkout.session.completed above.
+      await runUpliftTrueUpForOrg(admin, stripe, {
+        organizationId: orgId,
+        paymentIntentId: (session.payment_intent as string) || '',
+        chargeAccountId: (event.account as string | null) ?? null,
+        label: 'checkout.session.async_payment_succeeded',
+      });
       for (const regId of regIds) {
         await logEnrollmentEvent(admin, {
           actionType: ENROLLMENT_ACTIONS.PAYMENT_COMPLETED,
