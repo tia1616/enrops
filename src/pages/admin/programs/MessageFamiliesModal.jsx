@@ -57,6 +57,13 @@ const RED = "#b53737";
 const AMBER = "#a16207";
 const OK_GREEN = "#3a7c3a";
 
+// How long a fetched recipient list stays good for. Long enough that ticking a
+// dozen classes costs a dozen queries and not seventy-eight; short enough that
+// a count an operator reads is one they can still act on. Without an expiry the
+// list froze at first fetch, so drafting, taking a phone call and sending
+// twenty minutes later counted a roster that had since changed.
+const PREVIEW_CACHE_MS = 60_000;
+
 // Every placeholder the edge function fills, said in plain words and grouped the
 // way an operator thinks about them. Not a jargon list: the palette shows
 // "The parent's first name", never "{parent_first_name} interpolation".
@@ -178,6 +185,15 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
   // Preview responses by (class, audience). Keyed rather than cleared, so a
   // stale entry is unreachable by construction.
   const previewCache = useRef(new Map());
+  // WHICH MESSAGE the batch state above belongs to.
+  //
+  // Without this the resume was tied to the PANEL, not to the message. After a
+  // batch stopped partway, an operator who corrected the wording and pressed
+  // Send again had classes 1 and 2 skipped - they HAD been sent, but they had
+  // been sent the OLD message - and the households in them stayed excluded from
+  // every later class too, while the result panel reported a clean batch. A
+  // resume is only a resume while it is the same message.
+  const batchMessageKey = useRef(null);
 
   const selectedClassIds = useMemo(
     () => [program?.id, ...otherClassIds].filter(Boolean),
@@ -264,7 +280,10 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
           // remember to invalidate, so a stale entry cannot be served.
           const cacheKey = `${pid}|${includeWaitlist}|${includeCancelled}`;
           const hit = previewCache.current.get(cacheKey);
-          if (hit) { perClass.push({ programId: pid, json: hit }); continue; }
+          if (hit && Date.now() - hit.at < PREVIEW_CACHE_MS) {
+            perClass.push({ programId: pid, json: hit.json });
+            continue;
+          }
 
           const { status, json } = await call({ mode: "preview", program_id: pid });
           if (!alive) return;
@@ -275,7 +294,7 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
             setPreview({ recipients: [], unreachable: [], recipient_count: 0, unreachable_count: 0 });
             return;
           }
-          previewCache.current.set(cacheKey, json);
+          previewCache.current.set(cacheKey, { json, at: Date.now() });
           perClass.push({ programId: pid, json });
         }
         if (!alive) return;
@@ -386,6 +405,20 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
       setError("Every family is unticked, so there is nobody to send to.");
       return;
     }
+    // A DIFFERENT MESSAGE IS A DIFFERENT BATCH. Edit the subject or the body
+    // after a batch stopped partway and everything starts again: the classes
+    // already sent received the OLD wording, so skipping them would silently
+    // deny them the correction the operator just wrote. Only an unchanged
+    // message resumes.
+    const messageKey = [subject.trim(), bodyHtml].join("\n--\n");
+    if (batchMessageKey.current !== messageKey) {
+      batchMessageKey.current = messageKey;
+      sentClassIds.current = new Set();
+      emailedHouseholds.current = new Set();
+      sentResults.current = [];
+      duplicateForRef.current = null;
+    }
+
     setPhase("sending");
     // ALREADY EMAILED IN THIS BATCH, carried forward from class to class AND
     // across a resume. This is the whole dedupe, and it reuses the exclusion
