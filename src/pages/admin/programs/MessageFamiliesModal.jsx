@@ -333,13 +333,16 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
                   {result.unreachable_count} {result.unreachable_count === 1 ? "family has" : "families have"} no email address on file, so they were not included.
                 </div>
               )}
-              {/* The copy is reported separately and never as a failed send: the
-                  families already have their email either way. */}
+              {/* The copy is reported separately, and says NOTHING about the
+                  families. It read "The families were emailed, but your copy
+                  did not go" until a staging run produced that sentence under a
+                  heading that said 0 sent, 1 failed - the copy branch asserting
+                  an outcome it does not know. The line above owns that fact. */}
               {result?.copy && (
                 <div style={{ fontSize: 12, color: result.copy.status === "sent" ? MUTED : AMBER, marginTop: 6 }}>
                   {result.copy.status === "sent"
                     ? `A copy was sent to you at ${result.copy.to}.`
-                    : `The families were emailed, but your copy to ${result.copy.to} did not go.`}
+                    : `Your copy to ${result.copy.to} did not go.`}
                 </div>
               )}
               {result?.audit_recorded === false && (
@@ -352,7 +355,9 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
               <div style={{ marginTop: 10 }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: RED, marginBottom: 4 }}>These did not go:</div>
                 {(result.results).filter((r) => r.status === "failed").map((r) => (
-                  <div key={r.email} style={{ fontSize: 12, color: INK }}>
+                  // overflowWrap, because an email address is one unbroken word
+                  // and a long one runs out of a 375px phone. Seen on staging.
+                  <div key={r.email} style={{ fontSize: 12, color: INK, overflowWrap: "anywhere" }}>
                     {r.name || r.email} <span style={{ color: MUTED }}>({r.email})</span>
                   </div>
                 ))}
@@ -621,7 +626,7 @@ function SentMessages({ programId, orgId }) {
                   <div style={{ marginTop: 10 }}>
                     <div style={{ fontSize: 11.5, fontWeight: 700, color: RED }}>Did not arrive:</div>
                     {failed.map((r) => (
-                      <div key={r.email} style={{ fontSize: 11.5, color: INK }}>
+                      <div key={r.email} style={{ fontSize: 11.5, color: INK, overflowWrap: "anywhere" }}>
                         {r.name || r.email} <span style={{ color: MUTED }}>({r.email})</span>
                       </div>
                     ))}
