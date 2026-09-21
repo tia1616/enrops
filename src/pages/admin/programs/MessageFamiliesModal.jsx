@@ -212,14 +212,25 @@ export default function MessageFamiliesModal({ programs, orgId, onClose }) {
   // The classes to send to, in the order the operator picked them. Order
   // matters: a family in two of them is emailed by the FIRST and excluded from
   // the rest, so it decides which class their copy is about.
+  //
+  // KEYED ON THE IDS, NOT THE ARRAY. Memoising on the `programs` reference made
+  // identity depend on who rendered last: ProgramsCalendar passes an inline
+  // `programs={[program]}`, so every parent re-render minted a new array,
+  // invalidated this, and re-ran the preview effect - which starts by setting
+  // the list to null. The recipient list an operator was reading flashed back
+  // to "Working out who would receive this..." at random, on the one panel
+  // whose whole job is counting recipients before a send. A string of ids
+  // changes when the SELECTION changes and not before.
+  const classIdKey = (programs ?? []).map((p) => p?.id).filter(Boolean).join(",");
   const selectedClassIds = useMemo(
-    () => (programs ?? []).map((p) => p?.id).filter(Boolean),
-    [programs],
+    () => (classIdKey ? classIdKey.split(",") : []),
+    [classIdKey],
   );
-  const labelFor = useCallback(
-    (pid) => (programs ?? []).find((p) => p?.id === pid)?.curriculum || "this class",
-    [programs],
-  );
+  // Deliberately NOT memoised: it is called inside the send loop and sits in no
+  // dependency array, so a stable identity would buy nothing and re-introduce
+  // the array-reference dependency this just removed.
+  const labelFor = (pid) =>
+    (programs ?? []).find((p) => p?.id === pid)?.curriculum || "this class";
 
   const call = useCallback(async (payload) => {
     const { data: { session } } = await supabase.auth.getSession();

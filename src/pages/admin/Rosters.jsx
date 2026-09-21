@@ -2418,6 +2418,22 @@ function AfterschoolRostersSection({ org, canEdit }) {
   const [messagingPrograms, setMessagingPrograms] = useState(null);
   const [query, setQuery] = useState("");
 
+  // A TICK FOLLOWS ITS CLASS. The checkbox only exists while a class has
+  // families, but nothing used to remove the id when a count fell to zero - so
+  // emptying a ticked class's roster left it selected and invisible, the button
+  // kept counting it, and the send wrote that class a Sent-tab entry for a
+  // message nobody received. Pruned wherever the counts change, and `prev` is
+  // returned unchanged when there is nothing to drop so this cannot loop.
+  useEffect(() => {
+    if (!programs) return;
+    setPicked((prev) => {
+      if (prev.size === 0) return prev;
+      const messageable = new Set(programs.filter((p) => p.enrolled > 0).map((p) => p.id));
+      const next = new Set([...prev].filter((id) => messageable.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [programs]);
+
   useEffect(() => {
     if (!org?.id) return;
     let cancelled = false;
@@ -2654,12 +2670,18 @@ function AfterschoolRostersSection({ org, canEdit }) {
           common case and that is where the hand already is. Both open the SAME
           composer, so this is one place to write a message reached from the two
           natural places, not two tools. */}
-      {canEdit && programs !== null && visible.some((p) => p.enrolled > 0) && (
+      {/* A LIVE SELECTION ALWAYS KEEPS ITS CONTROLS. This was gated on the
+          VISIBLE list having somebody to message, so searching for a school
+          whose only class is empty took the button, the Clear link and the
+          "ticked but hidden" note away while the ticks were still held - which
+          reads as "my selection was lost", and the next thing an operator does
+          is change term, which really does discard it. */}
+      {canEdit && programs !== null && (picked.size > 0 || visible.some((p) => p.enrolled > 0)) && (
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
           <button
             type="button"
             disabled={picked.size === 0}
-            onClick={() => setMessagingPrograms(
+            onClick={() => {
               // Built from the WHOLE term's list, not the filtered view. Ticks
               // deliberately survive the search box - searching "Mario", ticking
               // three, then searching "Pokemon" and ticking two more is a real
@@ -2668,8 +2690,18 @@ function AfterschoolRostersSection({ org, canEdit }) {
               // while the button still counted it.
               // In list order, because that order decides which class a family
               // in several of them hears about.
-              (programs ?? []).filter((p) => picked.has(p.id)).map((p) => ({ id: p.id, curriculum: p.curriculum })),
-            )}
+              const chosen = (programs ?? [])
+                .filter((p) => picked.has(p.id))
+                .map((p) => ({ id: p.id, curriculum: p.curriculum }));
+              // NOTHING LEFT TO WRITE TO. The prune above makes this very hard
+              // to reach, but opening a composer titled "This class" that says
+              // 0 families and refuses to send, with nothing explaining why, is
+              // the kind of dead end this panel exists to avoid. Drop the stale
+              // ticks instead; the button returns to its "tick classes below"
+              // state, which says what to do next.
+              if (chosen.length === 0) { setPicked(new Set()); return; }
+              setMessagingPrograms(chosen);
+            }}
             style={{
               padding: "7px 14px", background: picked.size ? BRIGHT : "transparent",
               color: picked.size ? "#fff" : MUTED,
