@@ -64,6 +64,42 @@ Deno.test('the $1.99 minimum on a tiny line is NOT treated as an error', () => {
   assertEquals(typeof got.anomaly, 'string');
 });
 
+// THE BANK-DISCOUNT ARRANGEMENT, as arithmetic rather than as layout.
+//
+// A family paying by bank is charged the BANK fee. Printing "fee $4.80" then
+// "discount -$2.40" would make the rows sum to LESS than Total paid - the
+// exact defect this work removes, reintroduced by the line meant to be
+// generous. So the fee row shows the CARD fee and the discount brings it down
+// to what was actually charged.
+Deno.test('bank discount: fee row is the CARD fee, and the receipt still reconciles', () => {
+  // A $240 registration at an org charging 3% card / 1% bank.
+  const regs = 24000;
+  const bankFeePaid = 240;   // 1% - what they were actually charged
+  const cardFee = 720;       // 3% - what a card would have cost
+  const discount = cardFee - bankFeePaid;
+
+  // What the webhook derives from the charge is the BANK fee.
+  const derived = receiptFeeCents({
+    amountTotalCents: regs + bankFeePaid,
+    registrationSubtotalCents: regs,
+  });
+  assertEquals(derived.feeCents, bankFeePaid);
+  assertEquals(derived.anomaly, null);
+
+  // And the printed rows reconcile to the total the family was charged.
+  const feeRowShown = derived.feeCents + discount; // the card fee
+  assertEquals(feeRowShown, cardFee);
+  assertEquals(regs + feeRowShown - discount, regs + bankFeePaid);
+});
+
+Deno.test('no discount means the fee row is simply what was paid', () => {
+  // Every org whose two rates are equal - J2S and Jeff today.
+  const derived = receiptFeeCents({ amountTotalCents: 24240, registrationSubtotalCents: 24000 });
+  const discount = 0;
+  assertEquals(derived.feeCents + discount, 240);
+  assertEquals(24000 + (derived.feeCents + discount) - discount, 24240);
+});
+
 Deno.test('THE POINT: line items plus the fee always equal the total shown', () => {
   // The defect this closes, asserted as the invariant rather than a number:
   // whatever the inputs, what the receipt prints must reconcile.

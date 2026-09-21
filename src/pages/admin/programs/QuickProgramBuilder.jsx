@@ -1420,6 +1420,22 @@ export default function QuickProgramBuilder() {
             Consistent with the Programs page, which withholds the same three
             controls for the same reason: a link that can't take money is worth
             nothing until it can. */}
+        {/* THE PRICE TO ADVERTISE, said at the moment they are handed a link
+            to share. Money layer section 4's onboarding row: "Advertise the
+            price families pay, shown under your price."
+            It belongs HERE rather than in a checklist somewhere: this is the
+            one screen where an operator is about to copy something into a
+            flyer, a newsletter or a text, and those are precisely the surfaces
+            enrops cannot correct afterwards. Repeats the figure from under the
+            price field on purpose - the two moments are minutes and several
+            screens apart. */}
+        {!notConnected && (
+          <FamiliesPayNote
+            priceCents={priceValid ? priceCents : null}
+            feeConfig={feeConfig}
+            style={{ marginBottom: 16, color: INK }}
+          />
+        )}
         {!notConnected && (
           <div style={{ marginBottom: 24 }}>
             <ShareProgram
