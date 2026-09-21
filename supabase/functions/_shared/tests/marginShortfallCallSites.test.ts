@@ -24,6 +24,24 @@ const FUNCTIONS = [
   '../../stripe-webhook/index.ts',
 ];
 
+/**
+ * Fee-refunding code that deliberately does NOT alert, with the reason.
+ *
+ * The ratchet below originally scanned only `<function>/index.ts` and skipped
+ * _shared entirely, so a shared helper could start refunding application fees
+ * and never be named. upliftTrueUp was the first to do exactly that and passed
+ * straight through on 2026-09-21. The hole is closed; the exemption is written
+ * down instead, so the next one is a decision rather than a gap.
+ */
+const NO_ALERT_ON_PURPOSE: Record<string, string> = {
+  '../upliftTrueUp.ts':
+    'Returns an over-recovered Stripe-fee uplift, which is bounded at a few cents ' +
+    'per charge (measured: $5.36 across 100 production charges) and self-heals - ' +
+    'refundFeeSplit hands the same money back in full if the registration is ever ' +
+    'refunded. An email per occurrence would be noise on a debt smaller than the ' +
+    'cost of reading it. It logs at error level instead.',
+};
+
 Deno.test('every function that refunds an application fee also alerts on failure', () => {
   const missing: string[] = [];
   for (const rel of FUNCTIONS) {
@@ -52,11 +70,28 @@ Deno.test('the ratchet catches a THIRD fee-refunding function appearing', () => 
     }
     if (/applicationFees\.createRefund/.test(stripComments(src))) all.push(`../../${dir.name}/index.ts`);
   }
+  // _shared modules too. Skipping them is how upliftTrueUp started refunding
+  // application fees without this ratchet ever naming it.
+  for (const f of Deno.readDirSync(new URL('../', import.meta.url))) {
+    if (!f.isFile || !f.name.endsWith('.ts')) continue;
+    if (/applicationFees\.createRefund/.test(stripComments(read(`../${f.name}`)))) {
+      all.push(`../${f.name}`);
+    }
+  }
   assertEquals(
     all.sort(),
-    [...FUNCTIONS].sort(),
-    'a function started refunding application fees and is not in this test\'s list. Wire it to alertMarginShortfall and add it here.',
+    [...FUNCTIONS, ...Object.keys(NO_ALERT_ON_PURPOSE)].sort(),
+    'something started refunding application fees and is not in this test\'s lists. Either wire ' +
+    'it to alertMarginShortfall and add it to FUNCTIONS, or add it to NO_ALERT_ON_PURPOSE with a reason.',
   );
+});
+
+Deno.test('an exemption without a stated reason is not an exemption', () => {
+  // The whole value of NO_ALERT_ON_PURPOSE is that somebody had to write down
+  // why. An empty string would turn it back into the silent skip it replaced.
+  for (const [path, reason] of Object.entries(NO_ALERT_ON_PURPOSE)) {
+    assert(reason.trim().length > 40, `${path} is exempt from the margin alert with no real reason given`);
+  }
 });
 
 Deno.test('the alert is armed only while the debt is genuinely outstanding', () => {

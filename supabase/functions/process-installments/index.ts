@@ -76,6 +76,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { buildChargeRouting, ConnectOrgConfig } from '../_shared/connectChargeParams.ts';
+import { runUpliftTrueUp } from '../_shared/upliftTrueUp.ts';
 import { allocateCartFeeByLine } from '../_shared/cartFee.ts';
 import { withResolvedFee, loadPlatformFeeDefaults } from '../_shared/feeConfig.ts';
 import { loadOrgBrand, formatFromAddress, OrgBrand } from '../_shared/orgBrand.ts';
@@ -875,6 +876,18 @@ async function processGroup(
     summary.charged_rows += activeRows.length;
     summary.details.push(`PAID group ${idempotencyKey}: ${paymentIntent.id} ($${(totalAmount / 100).toFixed(2)} across ${activeRows.length} rows)`);
     console.log(`Successfully charged group ${idempotencyKey}: ${paymentIntent.id}`);
+
+    // Installments 2 and 3 carry the same Stripe-fee uplift as the first
+    // charge, sized from the same estimate, so they can over-recover in the
+    // same way - a card on file can be a Link credential funded by a bank.
+    // Same helper as the checkout path; never throws, so it cannot turn a
+    // collected installment into a failed one.
+    await runUpliftTrueUp(stripe, {
+      paymentIntentId: paymentIntent.id,
+      chargeAccountId: recordedAcct,
+      orgBearsStripeFee: orgConfig?.stripe_fee_payer === 'tenant',
+      label: `installment ${installmentNumber}`,
+    });
   } else {
     console.warn(`PaymentIntent ${paymentIntent.id} status=${paymentIntent.status} for group ${idempotencyKey}`);
     await admin.from('installments').update({

@@ -39,6 +39,8 @@
 // when the charge it came from lives on a connected account. Only the charge
 // read is account-scoped.
 
+import type { PaymentMethodType } from './computePlatformFee.ts';
+
 interface StripeLike {
   paymentIntents: {
     retrieve(id: string, params?: unknown, options?: unknown): Promise<unknown>;
@@ -61,6 +63,20 @@ export interface ChargeFeeFacts {
   stripeFeeCents: number;
   /** Application fee already refunded, in cents - the idempotency ceiling. */
   alreadyRefundedFeeCents: number;
+  /**
+   * The rail the charge ACTUALLY settled on, from payment_method_details.type.
+   *
+   * Read rather than assumed because the uplift was sized before the family
+   * chose - see _shared/upliftTrueUp.ts.
+   *
+   * NULL when Stripe reports a type we do not model, and callers must treat
+   * that as "do nothing" rather than defaulting. Defaulting to 'card' looks
+   * conservative and is not: 'card' carries much the larger estimate, so on an
+   * unrecognised rail that actually cost very little, `estimate - actual` would
+   * compute a large over-recovery that never existed and pay it out of Enrops's
+   * margin.
+   */
+  chargePaymentMethodType: PaymentMethodType | null;
   /**
    * Fee refunds already issued against this ApplicationFee, with their metadata.
    *
@@ -113,6 +129,7 @@ export async function readChargeFeeFacts(
       application_fee_amount?: number | null;
       application_fee?: { id?: string } | string | null;
       balance_transaction?: { fee?: number } | string | null;
+      payment_method_details?: { type?: string } | null;
     } | null;
   }).latest_charge ?? null;
 
@@ -147,6 +164,17 @@ export async function readChargeFeeFacts(
     chargeAmountCents: charge?.amount ?? 0,
     // Direct: Stripe's fee hit the OPERATOR, not us. Never subtract it.
     stripeFeeCents: chargeAccountId ? 0 : (bt?.fee ?? 0),
+    // An ALLOW-LIST, not a default. These are the only two rails Enrops offers
+    // and the only two estimateStripeFee prices, so they are the only two whose
+    // estimate we can honestly reconstruct. A Link payment - however it is
+    // funded - reports type 'card', which is exactly why the true-up compares
+    // against the real fee instead of trusting this.
+    chargePaymentMethodType:
+      charge?.payment_method_details?.type === 'us_bank_account'
+        ? 'us_bank_account'
+        : charge?.payment_method_details?.type === 'card'
+        ? 'card'
+        : null,
     alreadyRefundedFeeCents,
     feeRefunds,
   };
