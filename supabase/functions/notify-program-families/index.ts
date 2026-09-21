@@ -531,7 +531,16 @@ serve(async (req: Request) => {
     // a class of 29. One copy, sent once, after the families - and deliberately
     // AFTER the audit row, so a failure to copy the operator can never be
     // mistaken for, or interfere with, the send that already happened.
+    //
+    // ITS OWN try/catch, AND THAT IS THE WHOLE POINT. Everything from here on
+    // runs AFTER 29 families already have their email. Left inside the
+    // handler's outer catch, a thrown lookup here returns a 500, the modal says
+    // "Couldn't send. Nothing was sent.", and the operator sends the class a
+    // second copy - a real double-send caused by a failure to email the
+    // OPERATOR. Nothing after the send may ever change what the send is
+    // reported as.
     let copySent: { to: string; status: string } | null = null;
+    try {
     if (body.copy_to?.trim()) {
       const { data: callerRow } = await supabase
         .from('org_members')
@@ -571,6 +580,12 @@ serve(async (req: Request) => {
         });
         copySent = { to: resolved.email, status: copyResult?.status ?? 'failed' };
       }
+    }
+    } catch (copyErr) {
+      // Logged and reported as a failed COPY. The families' outcome below is
+      // computed from `tally` and is unaffected.
+      console.error('[notify-program-families] copy to operator failed:', copyErr);
+      copySent = { to: body.copy_to?.trim() ?? '', status: 'failed' };
     }
 
     return json({

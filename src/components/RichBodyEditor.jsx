@@ -43,6 +43,13 @@ const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
 
+// Module-level so the default below has a STABLE identity. `fields = []` as an
+// inline default mints a new array on every render, which churns the memo that
+// builds the label map and re-runs the effect that writes the DOM - harmless
+// only until something else changes `value` mid-edit, at which point the box is
+// rewritten under the operator and the caret jumps to the start.
+const NO_FIELDS = [];
+
 const linkInputStyle = {
   width: "100%", boxSizing: "border-box", marginTop: 4, padding: "8px 10px",
   fontSize: 13, border: `1px solid ${RULE}`, borderRadius: 6, fontFamily: "inherit",
@@ -108,7 +115,7 @@ export default function RichBodyEditor({
   onChange,
   rows = 8,
   placeholder = "",
-  fields = [],
+  fields = NO_FIELDS,
   showPreview = true,
   helpText = null,
   allowLink = true,
@@ -174,8 +181,54 @@ export default function RichBodyEditor({
     onChange(html);
   }
 
+  /**
+   * Shrink the saved selection so it excludes leading and trailing whitespace.
+   *
+   * THIS IS WHAT MAKES UN-BOLDING WORK, and without it the Bold button is a
+   * one-way door. Double-clicking a word selects the word AND its trailing
+   * space - every browser does this - and that space sits OUTSIDE the
+   * <strong>. The browser reads a selection that is partly bold and partly not
+   * as "not bold", so pressing B APPLIES bold instead of removing it, turning
+   * <strong>cancelled</strong> into <b>cancelled </b>: still bold, and now
+   * swallowing the space. Jessica, 2026-09-21: "i can't cut and paste bold
+   * words and then unbold them in the editor."
+   *
+   * Trimming also stops a link or a bold run from ending in a space, which is
+   * what produced `<strong>WILL </strong>` earlier in this build.
+   */
+  function trimSavedRangeWhitespace() {
+    const range = savedRange.current;
+    if (!range || range.collapsed) return;
+    const { startContainer, endContainer } = range;
+    let { startOffset, endOffset } = range;
+    const isText = (n) => n && n.nodeType === 3;
+    const ws = /\s/;
+    while (isText(endContainer) && endOffset > 0 && ws.test(endContainer.textContent[endOffset - 1])) endOffset--;
+    while (isText(startContainer) && startOffset < (startContainer.textContent?.length ?? 0)
+      && ws.test(startContainer.textContent[startOffset])) startOffset++;
+    try {
+      const next = document.createRange();
+      next.setStart(startContainer, startOffset);
+      next.setEnd(endContainer, endOffset);
+      // An all-whitespace selection trims to nothing; keep the original rather
+      // than handing execCommand a collapsed range, which would toggle the
+      // caret's state and silently format the NEXT thing typed.
+      if (!next.collapsed) savedRange.current = next;
+    } catch {
+      // Offsets can go out of range across element boundaries; the untrimmed
+      // selection is still usable, so prefer it over throwing.
+    }
+  }
+
   function exec(command, arg) {
+    // Block-level commands act on whole lines, so trimming the inline selection
+    // would be meaningless for them.
+    if (command === "bold" || command === "italic") trimSavedRangeWhitespace();
     restoreSelection();
+    // Tags, not inline styles: <b>/<i> survive our whitelist and every email
+    // client, whereas a <span style> would be stripped on the way out and the
+    // operator's formatting would vanish between the editor and the inbox.
+    try { document.execCommand("styleWithCSS", false, false); } catch { /* not supported, tags are the default */ }
     document.execCommand(command, false, arg);
     rememberSelection();
     emit();
@@ -192,6 +245,9 @@ export default function RichBodyEditor({
 
   function openLinkPanel() {
     rememberSelection();
+    // Trimmed for the same reason bold is: a link that ends in a space renders
+    // with an underlined gap after the words.
+    trimSavedRangeWhitespace();
     // Pre-fill from the highlighted words, the way Mailchimp does.
     setLinkPanel({ text: (savedRange.current?.toString() ?? "").trim(), url: "" });
   }

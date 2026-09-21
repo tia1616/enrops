@@ -46,7 +46,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "../../../lib/supabase.js";
 import RichBodyEditor from "../../../components/RichBodyEditor.jsx";
-import { stripHtml } from "../marketing-v2/bodyEditorUtils.js";
+import { sanitizeRichHtml, stripHtml } from "../marketing-v2/bodyEditorUtils.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -260,14 +260,23 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
         return;
       }
       if (status !== 200) {
-        setError(json?.message || json?.error || "Couldn't send. Nothing was sent.");
+        // NOT "nothing was sent" - we do not know that. The server emails the
+        // families BEFORE several of the things that can fail afterwards, so
+        // asserting a clean failure is the sentence that makes an operator
+        // press Send again and mail the whole class twice. Say what is true
+        // (it did not finish) and point at the record that can settle it.
+        setError(json?.message || json?.error
+          || "Something went wrong before this finished. Check the Sent tab before trying again - some families may already have it.");
         setPhase("compose");
         return;
       }
       setResult(json);
       setPhase("done");
     } catch (e) {
-      setError(e.message ?? "Couldn't send. Nothing was sent.");
+      // Same reasoning: a dropped connection tells us nothing about what the
+      // server did with the request it already received.
+      setError(e.message
+        ?? "The connection dropped before this finished. Check the Sent tab before trying again - some families may already have it.");
       setPhase("compose");
     }
   }
@@ -496,10 +505,15 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
                   {testResult.message}
                 </div>
               )}
-              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: INK, marginTop: 9 }}>
-                <input type="checkbox" checked={copyToMe} disabled={sending}
+              {/* Disabled with no address rather than silently sending no copy.
+                  Ticked-but-blank used to drop `copy_to` on the floor: the
+                  families were emailed, no copy was sent, and the result panel
+                  said nothing either way because there was no copy to report. */}
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: myEmail.trim() ? INK : MUTED, marginTop: 9 }}>
+                <input type="checkbox" checked={copyToMe && !!myEmail.trim()} disabled={sending || !myEmail.trim()}
                   onChange={(e) => setCopyToMe(e.target.checked)} />
                 Email me a copy when this goes
+                {!myEmail.trim() && <span style={{ fontSize: 11 }}>(add an address above first)</span>}
               </label>
             </div>
 
@@ -622,8 +636,15 @@ function SentMessages({ programId, orgId }) {
                 {/* The message as it was written. `body_html` is only ever
                     produced by our own editor, which sanitises link targets;
                     older rows have none and fall back to the plain half. */}
+                {/* SANITIZED AT RENDER, not trusted because the editor cleaned
+                    it on the way in. The edge function stores body_html as it
+                    receives it, so anyone able to call that function - every
+                    admin and staff member of this org - can put arbitrary
+                    markup in this column without going near the editor. This
+                    div is the only thing standing between that and an admin's
+                    own session, so it does the check itself. */}
                 {m.body_html
-                  ? <div style={{ fontSize: 12.5, color: INK, lineHeight: 1.5 }} dangerouslySetInnerHTML={{ __html: m.body_html }} />
+                  ? <div style={{ fontSize: 12.5, color: INK, lineHeight: 1.5 }} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(m.body_html) }} />
                   : <div style={{ fontSize: 12.5, color: INK, whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{m.body_text}</div>}
 
                 {failed.length > 0 && (
