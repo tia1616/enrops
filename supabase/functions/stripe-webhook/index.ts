@@ -89,6 +89,7 @@ import { readChargeFeeFacts, FEE_REFUND_SOURCE_KEY, FEE_REFUND_REGISTRATION_KEY 
 import { feeReturnOutcome } from '../_shared/feeReturnOutcome.ts';
 import { allocateRefundAcrossRegistrations } from '../_shared/refundAllocation.ts';
 import { sendRefundReceipt } from '../_shared/refundReceipt.ts';
+import { receiptFeeCents } from '../_shared/receiptFee.ts';
 import { isEmailAllowed } from '../_shared/emailGuard.ts';
 import { logTransactionalSend, formatSendError } from '../_shared/sendLog.ts';
 import { maybeAlertOperatorFlagged } from '../_shared/operatorFlagAlert.ts';
@@ -600,11 +601,45 @@ serve(async (req) => {
           }
         }
 
+        // THE ENROPS SERVICE FEE, AS A RECEIPT LINE. Money layer section 4:
+        // the receipt shows "Program price, enrops service fee, bank payment
+        // discount if used, total paid".
+        //
+        // DERIVED FROM WHAT WAS CHARGED, NOT RECOMPUTED. A receipt is a record
+        // of what happened, not a fresh calculation of what should have
+        // happened - recomputing could print a fee different from the one the
+        // family was actually charged, which is the one thing a receipt may
+        // never do. It also needs no config lookup and no card-vs-bank branch:
+        // whatever rail they used, this is the figure they paid.
+        //
+        // WHAT THE RESIDUAL ASSUMES. session.amount_total is the registration
+        // rows plus the pass-through fee line plus the gift. Subtract the rows
+        // and the gift and what remains is the fee. If a future release adds
+        // another Stripe line item to this session, it would land in this
+        // number and be labelled a service fee - so anything added there has
+        // to be subtracted here too. The warn below is what makes that
+        // discoverable rather than silent.
+        //
+        // An org that absorbs the fee leaves a residual of 0 and no row.
+        const receiptFee = receiptFeeCents({
+          amountTotalCents: session.amount_total || 0,
+          registrationSubtotalCents: (regs || []).reduce(
+            (s: number, r: { amount_cents?: number }) => s + (r.amount_cents || 0), 0,
+          ),
+          giftTotalCents: (parseInt(meta.donation_gift_cents || '0', 10) || 0)
+            + (parseInt(meta.donation_covered_fee_cents || '0', 10) || 0),
+        });
+        if (receiptFee.anomaly) {
+          console.warn(`[stripe-webhook] receipt fee on session ${session.id}: ${receiptFee.anomaly}`);
+        }
+        const enropsFeeCents = receiptFee.feeCents;
+
         await sendConfirmationEmail({
           admin, brand,
           to: parentEmail, parentName, registrations: regs,
           totalCents: session.amount_total || 0, sessionId: session.id, useInstallments,
           installmentInfo,
+          enropsFeeCents,
           // session.amount_total INCLUDES the gift, while the per-registration
           // rows above do not. Without this the receipt shows a "Total paid"
           // that is larger than its own line items with nothing to explain the
@@ -1792,7 +1827,7 @@ async function settleDonation(
 
 async function sendConfirmationEmail({
   admin, brand, to, parentName, registrations, totalCents, sessionId, useInstallments, installmentInfo,
-  donationCents = 0, donationCoveredFeeCents = 0,
+  donationCents = 0, donationCoveredFeeCents = 0, enropsFeeCents = 0,
 }: {
   admin: SupabaseClient;
   brand: OrgBrand;
@@ -1801,6 +1836,11 @@ async function sendConfirmationEmail({
   /** The scholarship gift, if the family added one. Its own receipt line. */
   donationCents?: number;
   donationCoveredFeeCents?: number;
+  /**
+   * The enrops service fee the family paid, derived at the call site from what
+   * was actually charged. 0 for an org that absorbs it, and then no row shows.
+   */
+  enropsFeeCents?: number;
 }) {
   // Check the org's thank-you automation toggle + override. The automations row
   // is created lazily — operators who never visited the Automations tab have no
@@ -1879,12 +1919,11 @@ async function sendConfirmationEmail({
   // The gift's own receipt line. Sits between the registration rows and the
   // total, exactly where a reader looking for the difference will look.
   //
-  // It does NOT make the receipt add up on its own. `totalCents` is
-  // session.amount_total, which for a fee_pass_through org also includes the
-  // enrops service fee - and that has no row here. That gap predates this
-  // change and affects every pass-through tenant with or without a gift; it is
-  // named rather than quietly half-fixed, because adding a fee row is a change
-  // to every family's receipt and belongs in its own pass.
+  // THAT GAP IS NOW CLOSED - see feeRow below. This used to read "it does NOT
+  // make the receipt add up on its own", because totalCents is
+  // session.amount_total and the enrops service fee inside it had no row. The
+  // note said adding one was a change to every family's receipt and belonged
+  // in its own pass. This is that pass (money layer section 4, 21 Sept).
   //
   // The fee cover is named on the SAME line rather than as a second row: it is
   // part of what they gave, not a charge levied on them, and splitting it out
@@ -1900,6 +1939,29 @@ async function sendConfirmationEmail({
         </td>
         <td style="padding:16px;text-align:right;vertical-align:top;border-bottom:1px solid #EDE9FE;font-family:${brand.font_family};font-weight:700;color:#1A1530;">
           ${fmt(donationCents + donationCoveredFeeCents)}
+        </td>
+      </tr>`
+    : '';
+
+  // The enrops service fee, between the registration rows and the total, which
+  // is where a reader looking for the difference will look - the same place
+  // and the same reasoning as the gift row above.
+  //
+  // Named "enrops service fee", never "processing fee" or "card fee". That
+  // wording is legal, not cosmetic: this is enrops's own charge taken as a
+  // Stripe application fee, not a markup on the card transaction, and
+  // "processing" is the word that makes a reader file it as a card surcharge.
+  // Same rule as the checkout line item in _shared/passThroughFee.ts.
+  //
+  // No row at all when it is zero, which is every org that absorbs the fee -
+  // their families see exactly the receipt they see today.
+  const feeRow = enropsFeeCents > 0
+    ? `<tr><td style="padding:16px;border-bottom:1px solid #EDE9FE;font-family:${brand.font_family};">
+          <div style="font-size:16px;font-weight:700;color:#1A1530;">enrops service fee</div>
+          <div style="font-size:14px;color:#6b6880;margin-top:4px;">Covers your online registration. Refunded if your registration is refunded.</div>
+        </td>
+        <td style="padding:16px;text-align:right;vertical-align:top;border-bottom:1px solid #EDE9FE;font-family:${brand.font_family};font-weight:700;color:#1A1530;">
+          ${fmt(enropsFeeCents)}
         </td>
       </tr>`
     : '';
@@ -1937,6 +1999,7 @@ async function sendConfirmationEmail({
 
   const summaryBlock = `<table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin-bottom:24px;font-family:${brand.font_family};">
         ${regRows}
+        ${feeRow}
         ${donationRow}
         ${totalsBlock}
         ${confirmationRow}
