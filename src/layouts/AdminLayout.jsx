@@ -55,14 +55,28 @@ const NAV = [
     to: "/admin/programs", label: "Programs",
     tabs: [
       // A tenant is one type: they run registration through Enrops (term programs)
-      // OR they upload their own schedule. Show both tabs; disable the one that
-      // doesn't apply with a why (Enrops house style: disabled + coaching note).
-      { to: "/admin/programs", label: "Scheduled programs", regOnly: true,
+      // OR they upload their own schedule. The one that doesn't apply is HIDDEN —
+      // see tabApplies at the render site. (This used to say "shown disabled with
+      // a why"; that stopped being true when the greyed-out tab was dropped, and
+      // the `offReason` strings below are now read by nothing. Left in place
+      // rather than deleted in a mobile fix — they are the copy to reuse if a
+      // coaching note ever comes back.)
+      // `shortLabel` is the phone spelling, used ONLY under ADMIN_MOBILE_MAX (the
+      // swap is CSS, in the <style> block below). Programs is the only section
+      // whose strip needs it. Measured at a 430px viewport (the widest common
+      // phone; narrower phones are worse, not better): the usable strip is 402px
+      // and this section wants 503px on the full nav, 645px on the lean one — so
+      // two of five tabs were visible and the rest were a swipe nobody knew to
+      // make. Instructors (341), Money (343) and Comms (411) already fit or as
+      // near as makes no difference, and are left alone.
+      // The long label is what a desktop operator reads and what every doc and
+      // coaching note calls it, so it stays the canonical `label`.
+      { to: "/admin/programs", label: "Scheduled programs", shortLabel: "Scheduled", regOnly: true,
         offReason: "You bring your own registration — use Class schedule instead." },
-      { to: "/admin/class-schedule", label: "Class schedule", outsideRegOnly: true,
+      { to: "/admin/class-schedule", label: "Class schedule", shortLabel: "Schedule", outsideRegOnly: true,
         offReason: "You run registration through Enrops — your classes are under Scheduled programs." },
-      { to: "/admin/rosters", label: "Class rosters" },
-      { to: "/admin/class-reports", label: "Class Reports", gate: "reports" }, // owner/admin/staff — custody/safety log, hidden from viewer
+      { to: "/admin/rosters", label: "Class rosters", shortLabel: "Rosters" },
+      { to: "/admin/class-reports", label: "Class Reports", shortLabel: "Reports", gate: "reports" }, // owner/admin/staff — custody/safety log, hidden from viewer
       { to: "/admin/curricula", label: "Offerings" },
     ],
   },
@@ -242,7 +256,7 @@ function shapeNavForOrg(nav, org) {
           // tab of Locations, 3 levels deep). It's a scheduling INPUT, so it
           // belongs beside the programs it shapes. navItemActive lights Programs
           // on /admin/calendars via this tab.
-          { to: "/admin/calendars", label: "School calendar" },
+          { to: "/admin/calendars", label: "School calendar", shortLabel: "Calendar" },
           { to: "/admin/schools", label: "Locations" },
         ],
       });
@@ -697,8 +711,17 @@ export default function AdminLayout() {
         [data-admin-mobilebar] { display: none; }
         [data-admin-scrim] { display: none; }
 
+        /* The phone spelling of a tab label is in the DOM on every width and
+           hidden on desktop, so the swap is pure CSS and survives a rotate with
+           no resize listener. A tab only renders the "full" span when it HAS a
+           short counterpart, so hiding it can never empty a tab. */
+        [data-tab-label="short"] { display: none; }
+
         @media (max-width: ${ADMIN_MOBILE_MAX}px) {
           [data-admin-grid] { grid-template-columns: 1fr !important; }
+
+          [data-tab-label="full"] { display: none !important; }
+          [data-tab-label="short"] { display: inline !important; }
 
           /* A menu button, not a scrolling strip.
              The first pass at mobile turned the sidebar into a horizontally
@@ -1078,7 +1101,12 @@ export default function AdminLayout() {
                       whiteSpace: "nowrap",
                     }}
                   >
-                    {t.label}
+                    {t.shortLabel ? (
+                      <>
+                        <span data-tab-label="full">{t.label}</span>
+                        <span data-tab-label="short">{t.shortLabel}</span>
+                      </>
+                    ) : t.label}
                   </Link>
                 );
               })}
