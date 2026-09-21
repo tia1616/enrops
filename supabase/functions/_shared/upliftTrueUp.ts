@@ -36,7 +36,14 @@
 // back here it shows up in `alreadyRefundedFeeCents`, and refundFeeSplit's
 // `marginRemaining = marginTotal - alreadyRefunded` subtracts it right back out.
 // A true-up followed by a full refund returns exactly the margin, never twice.
-// Asserted in tests/upliftTrueUp.test.ts.
+//
+// THE OTHER ORDER NEEDED A GUARD, and code review is what found it. When the
+// REFUND lands first, its fee refund already contains the over-recovery, and
+// nothing in the arithmetic above would stop us paying the same cents again on
+// a late webhook delivery - Stripe redelivers a failed event for up to three
+// days, which is ample time for a family to cancel. So any pre-existing fee
+// refund that is not our own tag means the refund path got here first, and the
+// true-up stands down. Both orders asserted in tests/upliftTrueUp.test.ts.
 
 import { PaymentMethodType } from './computePlatformFee.ts';
 import { estimateStripeFee } from './estimateStripeFee.ts';
@@ -216,6 +223,23 @@ export async function runUpliftTrueUp(
     if (existing) {
       console.log(`${tag} ${paymentIntentId} already trued up (${existing.amount}c)`);
       return { returnedCents: existing.amount, reason: 'already trued up' };
+    }
+
+    // A REFUND ALREADY GAVE IT BACK. refundFeeSplit computes the refundable
+    // margin as `applicationFee - REAL stripe fee`, so the over-recovery is
+    // inside every fee refund it issues. If any fee refund exists and none of
+    // them is ours, the refund path got here first and truing up now would
+    // return the same cents twice.
+    //
+    // Reachable: Stripe redelivers a failed checkout.session.completed for up
+    // to three days, which is ample time for a family to cancel. Ordering is
+    // not guaranteed, so this cannot be reasoned away by "the charge comes
+    // first".
+    if (facts.alreadyRefundedFeeCents > 0) {
+      console.log(
+        `${tag} ${paymentIntentId}: ${facts.alreadyRefundedFeeCents}c of the fee was already refunded, which includes the over-recovery; not truing up`,
+      );
+      return { returnedCents: 0, reason: 'already returned by a refund' };
     }
 
     const owed = upliftOverRecoveryCents({
