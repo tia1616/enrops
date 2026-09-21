@@ -19,6 +19,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import ShareProgram from "../../../components/ShareProgram.jsx";
+import FamiliesPayNote, { useOrgFeeConfig } from "../../../components/FamiliesPayNote.jsx";
 import ProgramSteps from "../../../components/ProgramSteps.jsx";
 import { STRIPE_CONNECT_ESTIMATE_SENTENCE } from "../../../lib/stripeConnectEstimate.js";
 import EnnieTip from "../../../components/EnnieTip.jsx";
@@ -113,6 +114,10 @@ export default function QuickProgramBuilder() {
   // at their defaults, quietly switching on a question the operator had turned
   // off.
   const { org, setOrg } = useOutletContext();
+  // What a family is charged for the price typed below. Same endpoint the
+  // registration flow asks, so the operator and the family cannot be shown
+  // different numbers. See src/components/FamiliesPayNote.jsx.
+  const feeConfig = useOrgFeeConfig(org?.slug);
   const navigate = useNavigate();
 
   const [name, setName] = useState("");
@@ -1415,6 +1420,22 @@ export default function QuickProgramBuilder() {
             Consistent with the Programs page, which withholds the same three
             controls for the same reason: a link that can't take money is worth
             nothing until it can. */}
+        {/* THE PRICE TO ADVERTISE, said at the moment they are handed a link
+            to share. Money layer section 4's onboarding row: "Advertise the
+            price families pay, shown under your price."
+            It belongs HERE rather than in a checklist somewhere: this is the
+            one screen where an operator is about to copy something into a
+            flyer, a newsletter or a text, and those are precisely the surfaces
+            enrops cannot correct afterwards. Repeats the figure from under the
+            price field on purpose - the two moments are minutes and several
+            screens apart. */}
+        {!notConnected && (
+          <FamiliesPayNote
+            priceCents={priceValid ? priceCents : null}
+            feeConfig={feeConfig}
+            style={{ marginBottom: 16, color: INK }}
+          />
+        )}
         {!notConnected && (
           <div style={{ marginBottom: 24 }}>
             <ShareProgram
@@ -1788,6 +1809,14 @@ export default function QuickProgramBuilder() {
                 placeholder="0.00"
               />
             </div>
+            {/* priceValid, not priceCents alone: an in-progress "12." parses to
+                1200 and would flash a confident "families pay $12.36" at a
+                half-typed number. */}
+            <FamiliesPayNote
+              priceCents={priceValid ? priceCents : null}
+              feeConfig={feeConfig}
+              style={{ color: INK }}
+            />
           </div>
           <div>
             <label style={labelStyle} htmlFor="qpb-spots">Spots</label>

@@ -1275,10 +1275,31 @@ export default function Home() {
                       : null;
                     // VIP comparison: sum of standard (non-early-bird) prices across 3 terms,
                     // since different terms may have different session_count.
-                    const standardTotal = vipEligible
-                      ? standardPriceFor(p) + standardPriceFor(bundle.winter) + standardPriceFor(bundle.spring)
-                      : standardPriceFor(p) * 3;
-                    const vipSavings = standardTotal - VIP_TOTAL_CENTS;
+                    //
+                    // ALL-IN, because this is the price a family sees FIRST and
+                    // the one they decide on. Money layer section 4: the
+                    // listing shows the all-in card total. The single-class
+                    // card above already did; this VIP block and the term
+                    // price below still quoted the bare programme price, so a
+                    // family comparing "$720 total" against a cart saying
+                    // $727.20 met the fee as a surprise one screen later - the
+                    // same defect, one surface along.
+                    //
+                    // A VIP bundle is THREE registrations, so it carries three
+                    // fees; the per-term figure carries one. totalWithFee
+                    // returns the bare price unchanged for an operator who
+                    // absorbs the fee, which is J2S today.
+                    const vipTermAllIn = totalWithFee(VIP_PRICE_PER_TERM_CENTS, feeConfig);
+                    const vipTotalAllIn = vipTermAllIn * 3;
+                    // The SAVING is compared like against like: both sides
+                    // all-in, or the discount would quietly shrink by the fee
+                    // difference and misstate what the bundle actually saves.
+                    const standardTotalAllIn = vipEligible
+                      ? totalWithFee(standardPriceFor(p), feeConfig)
+                        + totalWithFee(standardPriceFor(bundle.winter), feeConfig)
+                        + totalWithFee(standardPriceFor(bundle.spring), feeConfig)
+                      : totalWithFee(standardPriceFor(p), feeConfig) * 3;
+                    const vipSavingsAllIn = standardTotalAllIn - vipTotalAllIn;
                     return (
                       <div
                         key={p.id}
@@ -1322,15 +1343,15 @@ export default function Home() {
                               </p>
                               {/* #5: $240/term headline size */}
                               <p className="mt-2 font-titan text-2xl text-j2s-ink">
-                                {formatMoney(VIP_PRICE_PER_TERM_CENTS).replace('.00', '')}
+                                {formatMoney(vipTermAllIn).replace('.00', '')}
                                 <span className="text-base font-nunito text-j2s-ink/60">/term</span>
                               </p>
                               <p className="mt-1 text-sm text-j2s-ink/70">
-                                {formatMoney(VIP_TOTAL_CENTS)} total
+                                {formatMoney(vipTotalAllIn)} total
                               </p>
                               {/* #4: "Save up to" badge */}
                               <span className="mt-2 inline-block rounded-full bg-j2s-orange px-3 py-1 text-xs font-bold text-white">
-                                Save up to {formatMoney(vipSavings).replace('.00', '')}
+                                Save up to {formatMoney(vipSavingsAllIn).replace('.00', '')}
                               </span>
                               {/* #8: Early-bird on both cards */}
                               {fallShowsEarlyBird && fallEarlyBirdLabel && (
@@ -1399,18 +1420,22 @@ export default function Home() {
                                 : (vipEligible ? 'This term only' : 'This term')}
                             </p>
                             <div className="mt-2">
+                              {/* All-in on BOTH numbers, including the struck
+                                  one. Showing an all-in price crossed out
+                                  against a bare one would invent a discount
+                                  that is partly the fee. */}
                               {fallShowsEarlyBird ? (
                                 <>
                                   <p className="font-titan text-3xl text-j2s-orange-dark">
-                                    {formatMoney(fallPricing.base_cents)}
+                                    {formatMoney(totalWithFee(fallPricing.base_cents, feeConfig))}
                                   </p>
                                   <p className="text-xs text-j2s-ink/60 line-through">
-                                    {formatMoney(fallPricing.standard_cents)}
+                                    {formatMoney(totalWithFee(fallPricing.standard_cents, feeConfig))}
                                   </p>
                                 </>
                               ) : (
                                 <p className="font-titan text-3xl text-j2s-purple">
-                                  {formatMoney(fallPricing.base_cents)}
+                                  {formatMoney(totalWithFee(fallPricing.base_cents, feeConfig))}
                                 </p>
                               )}
                             </div>

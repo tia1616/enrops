@@ -18,6 +18,7 @@ import ProgramPrereqEmptyState from "./ProgramPrereqEmptyState.jsx";
 import AddSchoolModal from "../schools/AddSchoolModal.jsx";
 import ShareProgram from "../../../components/ShareProgram.jsx";
 import CancellationPolicyInline from "../../../components/CancellationPolicyInline.jsx";
+import FamiliesPayNote, { useOrgFeeConfig } from "../../../components/FamiliesPayNote.jsx";
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib/programText.js";
 import { isUnset, rangeBackwards, rangeBackwardsMessage } from "../../../lib/grades.js";
@@ -1538,6 +1539,10 @@ function Step3PriceAndOpen({
   publishBlocked,
 }) {
   const isPartner = formData.runs_own_registration;
+  // What a family will actually be charged for this price, so the operator has
+  // the number to put on a flyer. Same endpoint the registration flow asks, so
+  // the two cannot disagree. See src/components/FamiliesPayNote.jsx.
+  const feeConfig = useOrgFeeConfig(orgSlug);
 
   // Dollars display — formData.price_cents is the canonical store.
   const dollars = formData.price_cents == null ? "" : (formData.price_cents / 100).toFixed(2);
@@ -1697,6 +1702,7 @@ function Step3PriceAndOpen({
               placeholder="0.00"
             />
           </div>
+          <FamiliesPayNote priceCents={formData.price_cents} feeConfig={feeConfig} style={{ color: INK }} />
           <div style={{ marginTop: 6, fontSize: 13, color: MUTED, lineHeight: 1.5 }}>
             Set to 0 for a free program. You can add early-bird discounts and
             promo codes after this is created — they usually boost sign-ups.

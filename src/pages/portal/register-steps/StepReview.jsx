@@ -1,5 +1,18 @@
 import React, { useState } from 'react';
 import { formatMoney, INSTALLMENT_MIN_CENTS } from '../../../lib/pricing.js';
+// THE PRICE ON THIS SCREEN MUST BE THE PRICE THEY PAY. Money layer section 4:
+// the listing, the detail page and the CART all show the all-in card total.
+// Until 2026-09-18 this screen showed the bare programme price and the fee
+// appeared for the first time one click later, on the Pay step - which is the
+// exact shape the doc argues against: Baymard attributes 48% of cart
+// abandonment to unexpected costs, and StubHub measured shoppers 45% less
+// likely to complete when fees arrived at the final step.
+//
+// CARD, not bank. Card is the listed price; paying by bank is shown as a
+// discount on the Pay step once a method has actually been chosen. Framing it
+// the other way round would be a card SURCHARGE, which is restricted by card
+// network rules and by state law.
+import { cartFeeOnLines, cartInstallmentFeeShares } from '../../../lib/platformFee.js';
 import { programScheduleSummary, formatStartDate, formatDayLabel } from '../../../lib/programSchedule.js';
 import { dismissalSummary } from '../../../lib/dismissal.js';
 import { gradeFitProblem } from '../../../lib/grades.js';
@@ -17,6 +30,9 @@ export default function StepReview({
   cart,
   pricing,
   installmentSchedule,
+  // The per-registration splits behind that schedule, so the plan preview can
+  // price each child's fee on its own line the way the charge will.
+  installmentSplits,
   onPromoApply,
   onPromoClear,
   onTogglePaymentPlan,
@@ -25,7 +41,45 @@ export default function StepReview({
   // screen still renders if it is ever mounted without an org loaded - the
   // message falls back to a generic phrasing instead of printing a blank.
   orgName = '',
+  // Fee config from org-fee-config, already resolved. Defaulted to an empty
+  // object so an org still loading shows the plain price rather than a blank
+  // or a NaN - the fee helpers return 0 for a config they cannot read, which
+  // is the same thing an absorb org shows.
+  org = {},
 }) {
+  // The fee, per registration line, exactly as the Pay step and the server
+  // will compute it - same helper, same per-line rule, so the two screens
+  // cannot disagree about what this cart costs.
+  const cartLineAmounts = (pricing?.lines || []).map((l) => l.amount_cents);
+  const reviewFeeCents = cartFeeOnLines(cartLineAmounts, org, { isBank: false });
+  const bankSavingCents = Math.max(
+    0,
+    reviewFeeCents - cartFeeOnLines(cartLineAmounts, org, { isBank: true }),
+  );
+
+  // Per-charge fee for the payment-plan preview, split per registration across
+  // that registration's own charges. line_index keys it: no registration exists
+  // yet at this point in the flow, and the fee only needs to know which amounts
+  // belong together.
+  const planFeeShares = installmentSplits
+    ? cartInstallmentFeeShares(
+      installmentSplits.flatMap(({ line_index, splits }) =>
+        splits
+          .map((amount_cents, i) => ({
+            registration_id: `line-${line_index}`,
+            installment_number: i + 1,
+            amount_cents,
+          }))
+          .filter((r) => r.amount_cents > 0)),
+      org,
+    )
+    : [];
+  // The plan preview reads by index; a missing share is 0, never undefined,
+  // so a schedule this screen cannot price still renders the bare amounts
+  // rather than "$NaN".
+  const planChargeCents = (i) =>
+    (installmentSchedule?.[i]?.amount_cents ?? 0) + (planFeeShares[i] || 0);
+
   const [promoField, setPromoField] = useState(cart.promo?.code || '');
   const [validating, setValidating] = useState(false);
 
@@ -246,12 +300,16 @@ export default function StepReview({
             />
             <div>
               <p className="font-bold text-j2s-ink">Pay in 3 installments</p>
+              {/* Each charge shown INCLUDING its share of the fee, because
+                  that is the figure that will appear on the card statement.
+                  A plan costs the same fee as paying in full; it is split
+                  across the charges, never collected three times. */}
               <p className="mt-1 text-sm text-j2s-ink/70">
-                Pay {formatMoney(installmentSchedule[0].amount_cents)} today and
+                Pay {formatMoney(planChargeCents(0))} today and
                 we'll automatically charge your card{' '}
-                {formatMoney(installmentSchedule[1].amount_cents)} on{' '}
+                {formatMoney(planChargeCents(1))} on{' '}
                 {formatStartDate(installmentSchedule[1].due_date)} and{' '}
-                {formatMoney(installmentSchedule[2].amount_cents)} on{' '}
+                {formatMoney(planChargeCents(2))} on{' '}
                 {formatStartDate(installmentSchedule[2].due_date)}.
               </p>
               {cart.payment_plan && (
@@ -261,7 +319,7 @@ export default function StepReview({
                       Today
                     </p>
                     <p className="font-titan text-lg text-j2s-ink">
-                      {formatMoney(installmentSchedule[0].amount_cents)}
+                      {formatMoney(planChargeCents(0))}
                     </p>
                   </div>
                   <div className="rounded-lg bg-j2s-purple-soft/50 px-3 py-2">
@@ -269,7 +327,7 @@ export default function StepReview({
                       {formatStartDate(installmentSchedule[1].due_date)}
                     </p>
                     <p className="font-titan text-lg text-j2s-ink">
-                      {formatMoney(installmentSchedule[1].amount_cents)}
+                      {formatMoney(planChargeCents(1))}
                     </p>
                   </div>
                   <div className="rounded-lg bg-j2s-purple-soft/50 px-3 py-2">
@@ -277,7 +335,7 @@ export default function StepReview({
                       {formatStartDate(installmentSchedule[2].due_date)}
                     </p>
                     <p className="font-titan text-lg text-j2s-ink">
-                      {formatMoney(installmentSchedule[2].amount_cents)}
+                      {formatMoney(planChargeCents(2))}
                     </p>
                   </div>
                 </div>
@@ -310,14 +368,34 @@ export default function StepReview({
               </span>
             </div>
           )}
+          {/* Itemised rather than folded silently into the total. The doc's own
+              receipt spec lists the fee as its own line, and a Subtotal sitting
+              above a larger Total with nothing to explain the gap reads as a
+              mistake. Renders only when there is a fee: an operator who absorbs
+              it - J2S today - sees exactly the screen they see now. */}
+          {reviewFeeCents > 0 && (
+            <div className="flex justify-between">
+              <span className="text-white/70">enrops service fee</span>
+              <span>{formatMoney(reviewFeeCents)}</span>
+            </div>
+          )}
         </div>
         <div className="mt-4 border-t border-white/10 pt-4">
           <div className="flex items-center justify-between">
             <span className="font-titan text-xl">Total</span>
             <span className="font-titan text-3xl text-j2s-orange">
-              {formatMoney(pricing.total_cents)}
+              {formatMoney(pricing.total_cents + reviewFeeCents)}
             </span>
           </div>
+          {/* Only when bank ACTUALLY saves something. Every org on the old 1%
+              terms has the same rate on both rails, so promising a saving
+              there would be a promise the next screen does not keep - and the
+              amount is named rather than implied, for the same reason. */}
+          {bankSavingCents > 0 && (
+            <p className="mt-2 text-xs text-white/60">
+              Pay by bank on the next step and save {formatMoney(bankSavingCents)}.
+            </p>
+          )}
         </div>
       </div>
     </div>

@@ -25,6 +25,8 @@
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
+import { advertisedPriceLabel, advertisedSavingLabel, type AdvertisedFeeConfig } from "../_shared/advertisedPrice.ts";
+import { resolveFeeConfig, loadPlatformFeeDefaults } from "../_shared/feeConfig.ts";
 import { loadOrgBrand, formatFromAddress, renderSignatureBlock, type OrgBrand } from "../_shared/orgBrand.ts";
 import { listUnsubscribeHeaders } from "../_shared/listUnsubscribe.ts";
 import { assertCommsFull } from "../_shared/entitlements.ts";
@@ -417,10 +419,26 @@ serve(async (req: Request) => {
   // ---- Load org ----
   const { data: org, error: oErr } = await supabase
     .from("organizations")
-    .select("id, name, slug, brand_voice, logo_url, vip_offering, active_registration_term, mailing_address, registration_close_days_before, org_branding(primary_color)")
+    // fee columns ride along so every price token below can be the ALL-IN
+    // price a family actually pays. Money layer section 4: everything enrops
+    // generates - marketing emails included - quotes the price families pay.
+    // platform_fee_override_until is here because the rates are only correct
+    // once resolveFeeConfig has applied it; reading the raw columns would
+    // advertise a rate that may have lapsed.
+    .select("id, name, slug, brand_voice, logo_url, vip_offering, active_registration_term, mailing_address, registration_close_days_before, fee_pass_through, platform_fee_card_pct, platform_fee_ach_pct, platform_fee_cap_cents, platform_fee_ach_cap_cents, platform_fee_floor_cents, platform_fee_override_until, org_branding(primary_color)")
     .eq("id", campaign.organization_id)
     .single<Org>();
   if (oErr || !org) return json({ error: `organization not found: ${oErr?.message ?? "unknown"}` }, 404);
+
+  // Resolve the fee ONCE for the whole send, not per recipient: it is the same
+  // answer for every parent on the campaign, and doing it per recipient would
+  // be one settings read per email. resolveFeeConfig applies the negotiated
+  // rate's end date, so what gets advertised is what a family would be quoted
+  // today rather than a rate that may have lapsed.
+  const feeOrg: AdvertisedFeeConfig = {
+    ...resolveFeeConfig(org as unknown as Parameters<typeof resolveFeeConfig>[0], await loadPlatformFeeDefaults(supabase)),
+    fee_pass_through: (org as unknown as { fee_pass_through?: boolean | null }).fee_pass_through ?? false,
+  };
 
   // Email identity comes from the ONE shared source of truth (loadOrgBrand) —
   // the same cascade transactional email uses. Always resolves: a tenant's own
@@ -773,6 +791,7 @@ serve(async (req: Request) => {
       const tokens = await buildTokensForRecipient({
         recipient: r,
         org,
+        feeOrg,
         brand,
         program: program ?? null,
         recipientPrograms,
@@ -1155,6 +1174,14 @@ function resolveRecipientCamps(r: Recipient, picked: CampRow[]): CampRow[] {
 type TokensInput = {
   recipient: Recipient;
   org: Org;
+  /**
+   * The org's fee config with its end date already applied, resolved ONCE per
+   * send rather than per recipient. Every advertised price token is built from
+   * this, so a campaign quotes the price a family actually pays. null, or
+   * fee_pass_through false, means the advertised price is the base price -
+   * which is what an operator who absorbs the fee shows.
+   */
+  feeOrg: AdvertisedFeeConfig | null;
   program: ProgramRow | null;
   // All picked programs at THIS recipient's school. Drives the {{curriculum}}
   // list-join for multi-program schools. Single-program schools: length 1.
@@ -1181,6 +1208,7 @@ type TokensInput = {
 };
 
 async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: Map<string, string[]> }): Promise<Map<string, string>> {
+  const feeOrg = input.feeOrg;
   const { recipient: r, org, brand, program, recipientPrograms, recipientCamps, draftInputs, safeRegistrationUrl, campaignTopics, locationNameMap } = input;
   const isTestSend = input.isTestSend === true;
   const tokens = new Map<string, string>();
@@ -1366,13 +1394,22 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
       buildProgramDetails(allPrograms, org.registration_close_days_before),
     );
     tokens.set("session_count", program.session_count != null ? String(program.session_count) : "");
-    tokens.set("regular_price", program.price_cents ? `$${(program.price_cents / 100).toFixed(0)}` : "");
-    tokens.set("early_bird_price", program.early_bird_price_cents ? `$${(program.early_bird_price_cents / 100).toFixed(0)}` : "");
+    // ALL-IN. These tokens are the only way a price reaches a marketing email -
+    // the copywriter is forbidden from writing dollar amounts inline - so this
+    // is the one place that decides what a family is quoted.
+    tokens.set("regular_price", advertisedPriceLabel(program.price_cents, feeOrg));
+    tokens.set("early_bird_price", advertisedPriceLabel(program.early_bird_price_cents, feeOrg));
     tokens.set("early_bird_deadline", program.early_bird_deadline ? formatHumanDate(program.early_bird_deadline) : "");
-    tokens.set("savings",
-      program.early_bird_price_cents && program.price_cents
-        ? `$${((program.price_cents - program.early_bird_price_cents) / 100).toFixed(0)}`
-        : "");
+    // Like for like: both sides all-in, or the advertised saving moves by the
+    // difference between two fees and states a discount nobody gets.
+    tokens.set("savings", advertisedSavingLabel(program.price_cents, program.early_bird_price_cents, feeOrg));
+    // vip_price is left BARE on purpose. A VIP bundle is three registrations
+    // and therefore three fees, and this column holds only the full-year
+    // total - the per-term figure it would have to be split into is not here,
+    // and inventing one would advertise a price no cart produces. No program
+    // in production has this column set (checked 21 Sept), so nothing is
+    // quoted from it today; it needs the per-term price before it can be
+    // advertised all-in.
     tokens.set("vip_price", program.vip_price_cents ? `$${(program.vip_price_cents / 100).toFixed(0)}` : "");
   } else if ((recipientCamps?.length ?? 0) > 0) {
     // Camps mode — per-area camp tokens.
@@ -1430,9 +1467,7 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
     tokens.set("early_bird_price", sameEb && ebPrices[0] != null ? `$${(ebPrices[0] / 100).toFixed(0)}` : "");
 
     tokens.set("savings",
-      samePrice && sameEb && campPrices[0] != null && ebPrices[0] != null
-        ? `$${((campPrices[0] - ebPrices[0]) / 100).toFixed(0)}`
-        : "");
+      samePrice && sameEb ? advertisedSavingLabel(campPrices[0], ebPrices[0], feeOrg) : "");
 
     const deadlines = camps.map((c) => c.early_bird_deadline);
     const allDeadlined = deadlines.length > 0 && deadlines.every((d) => d != null);
@@ -1974,6 +2009,16 @@ async function renderPreview(
   downloadButtonsText: string,
   locationId: string,
 ): Promise<Response> {
+  // The preview prices exactly as the send does. Resolved here rather than
+  // passed in because renderPreview is reached by its own route - but it is
+  // the SAME function and the same org row, so an operator approving copy sees
+  // the number their families will receive. Two different answers here would
+  // be the worst kind of bug: invisible until after the send.
+  const feeOrg: AdvertisedFeeConfig = {
+    ...resolveFeeConfig(org as unknown as Parameters<typeof resolveFeeConfig>[0], await loadPlatformFeeDefaults(supabase)),
+    fee_pass_through: (org as unknown as { fee_pass_through?: boolean | null }).fee_pass_through ?? false,
+  };
+
   // Load the picked programs (campaign-wide) so per-school token resolution
   // can find the program at this location.
   const draftInputs = (campaign.draft_inputs ?? {}) as Record<string, unknown>;
@@ -2095,6 +2140,9 @@ async function renderPreview(
   const tokens = await buildTokensForRecipient({
     recipient: syntheticRecipient,
     org,
+    // The PREVIEW must price exactly as the send does, or an operator approves
+    // copy quoting one number and families receive another.
+    feeOrg,
     brand,
     program: programAtLocation ?? null,
     recipientPrograms: programsAtLocation,
