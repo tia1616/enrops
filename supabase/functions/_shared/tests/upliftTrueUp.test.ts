@@ -288,19 +288,20 @@ Deno.test('THE SECOND DELIVERY refunds nothing', async () => {
   assertEquals(stripe.created.length, 0); // but moves nothing
 });
 
-Deno.test('a fee refund from a REFUND is not mistaken for a true-up', async () => {
-  // The refund path tags its fee refunds with its own keys. An untagged or
-  // differently-tagged refund must not read as "already trued up".
-  const stripe = linkByBankStripe({
-    feeRefunds: [{ id: 'fr_1', amount: 285, metadata: { enrops_source_refund_id: 're_x' } }],
-  });
-  const got = await runUpliftTrueUp(stripe, {
-    paymentIntentId: 'pi_link',
-    chargeAccountId: null,
-    orgBearsStripeFee: true,
-  });
-  assertEquals(got.returnedCents, 86);
-  assertEquals(stripe.created.length, 1);
+Deno.test('a fee refund from a REFUND blocks the true-up, and is never read as one', () => {
+  // This test used to assert the OPPOSITE - that a refund's fee refund should
+  // be ignored and the true-up should proceed. Code review showed that pays the
+  // over-recovery twice, because refundFeeSplit already included it. The
+  // behaviour is now asserted by the two "already returned by a refund" tests
+  // below; what remains true here, and still worth pinning, is that the two
+  // tags are never confused for one another.
+  assertEquals(
+    findExistingTrueUp(
+      [{ id: 'fr_1', amount: 285, metadata: { enrops_source_refund_id: 're_x' } }],
+      'pi_link',
+    ),
+    null,
+  );
 });
 
 Deno.test('a direct charge is not even read from Stripe', async () => {
@@ -421,6 +422,46 @@ Deno.test('FAIL SAFE: a charge with no payment method details at all', async () 
     });
   const got = await runUpliftTrueUp(stripe, {
     paymentIntentId: 'pi_nodetails',
+    chargeAccountId: null,
+    orgBearsStripeFee: true,
+  });
+  assertEquals(got.returnedCents, 0);
+  assertEquals(stripe.created.length, 0);
+});
+
+Deno.test('FAIL SAFE: a refund got here first, so the excess is NOT returned twice', async () => {
+  // Found by code review. refundFeeSplit computes the refundable margin from
+  // Stripe's REAL fee, so the 86c over-recovery is already inside any fee
+  // refund it issued. Stripe redelivers a failed checkout.session.completed
+  // for up to three days - ample time for a family to cancel first - so the
+  // charge event genuinely can arrive after the refund.
+  const refundedMargin = 371; // 1142 - 771, the whole recoverable amount
+  const stripe = linkByBankStripe({
+    feeRefunds: [
+      { id: 'fr_refund', amount: refundedMargin, metadata: { enrops_source_refund_id: 're_x' } },
+    ],
+  });
+  const got = await runUpliftTrueUp(stripe, {
+    paymentIntentId: 'pi_link',
+    chargeAccountId: null,
+    orgBearsStripeFee: true,
+  });
+  assertEquals(got.returnedCents, 0);
+  assertEquals(got.reason, 'already returned by a refund');
+  assertEquals(stripe.created.length, 0);
+});
+
+Deno.test('a PARTIAL fee refund also blocks the true-up rather than topping it up', async () => {
+  // Same reasoning, and deliberately not clever: a partial refund returned a
+  // PROPORTION of a margin that already contained the over-recovery. Working
+  // out what is left over is arithmetic nobody can check against Stripe, and
+  // the whole amount at stake is cents. Do nothing and leave it to the refund
+  // path, which is where the money reconciles.
+  const stripe = linkByBankStripe({
+    feeRefunds: [{ id: 'fr_partial', amount: 40, metadata: { enrops_source_refund_id: 're_y' } }],
+  });
+  const got = await runUpliftTrueUp(stripe, {
+    paymentIntentId: 'pi_link',
     chargeAccountId: null,
     orgBearsStripeFee: true,
   });

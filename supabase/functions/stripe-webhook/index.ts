@@ -204,24 +204,6 @@ serve(async (req) => {
       const { data: regForOrg } = await admin.from('registrations').select('organization_id').eq('id', regIds[0]).single();
       const orgId = regForOrg?.organization_id;
 
-      // Give back any part of the Stripe-fee uplift we over-recovered. The
-      // application fee was sized from an ESTIMATE before the family chose how
-      // to pay, and some rails (Link funded by a bank, today) cost less than the
-      // card rate we quoted. See _shared/upliftTrueUp.ts. Never throws, so it
-      // cannot cost this family their confirmation, and skipped entirely unless
-      // the charge was a destination charge on an org that bears processing.
-      //
-      // Only once the money is actually IN: an ACH debit completes this session
-      // days before it settles, and comes back through async_payment_succeeded.
-      if (session.payment_status === 'paid') {
-        await runUpliftTrueUpForOrg(admin, stripe, {
-          organizationId: orgId,
-          paymentIntentId: (session.payment_intent as string) || '',
-          chargeAccountId: (event.account as string | null) ?? null,
-          label: 'checkout.session.completed',
-        });
-      }
-
       const brand = await loadOrgBrand(admin, orgId);
       // The tenant's OWN inbox, or null. NOT brand.alert_email: every alert
       // below names a paying family (their registration IDs, their name, their
@@ -755,6 +737,32 @@ serve(async (req) => {
           console.error('Auto-create parent account failed:', accountErr);
         }
       }
+
+      // Give back any part of the Stripe-fee uplift we over-recovered. The
+      // application fee was sized from an ESTIMATE before the family chose how
+      // to pay, and some rails (Link funded by a bank, today) cost less than the
+      // card rate we quoted. See _shared/upliftTrueUp.ts.
+      //
+      // DEAD LAST, and that placement is the point. It is worth cents, and it
+      // makes two blocking Stripe calls. Not throwing is not the same as not
+      // HANGING: ahead of the settlement UPDATE it could burn the webhook's
+      // budget, and a timed-out delivery is redelivered - which, with two
+      // endpoints currently registered on this URL, is how a family ends up
+      // with duplicate confirmation emails over $0.86. Everything a family or
+      // an operator can see has already happened by here, and there is no
+      // early return between the settlement above and this line, so every
+      // charge that settles still reaches it.
+      //
+      // Only once the money is actually IN: an ACH debit completes this session
+      // days before it settles, and comes back through async_payment_succeeded.
+      if (session.payment_status === 'paid') {
+        await runUpliftTrueUpForOrg(admin, stripe, {
+          organizationId: orgId,
+          paymentIntentId: (session.payment_intent as string) || '',
+          chargeAccountId: (event.account as string | null) ?? null,
+          label: 'checkout.session.completed',
+        });
+      }
     } else if (event.type === 'checkout.session.async_payment_succeeded') {
       // ACH/bank transfer cleared (3-5 days after checkout). Flip the
       // optimistically-confirmed registrations to paid and log the money-in.
@@ -773,15 +781,6 @@ serve(async (req) => {
         stripe_payment_intent_id: session.payment_intent as string,
       }).in('id', regIds);
 
-      // The bank debit has now settled, so the balance transaction finally
-      // carries Stripe's real fee. This is the ONLY point an ACH charge can be
-      // trued up - see the twin call in checkout.session.completed above.
-      await runUpliftTrueUpForOrg(admin, stripe, {
-        organizationId: orgId,
-        paymentIntentId: (session.payment_intent as string) || '',
-        chargeAccountId: (event.account as string | null) ?? null,
-        label: 'checkout.session.async_payment_succeeded',
-      });
       for (const regId of regIds) {
         await logEnrollmentEvent(admin, {
           actionType: ENROLLMENT_ACTIONS.PAYMENT_COMPLETED,
@@ -791,6 +790,18 @@ serve(async (req) => {
           dedupeKey: `payment_completed:${event.id}:${regId}`,
         });
       }
+
+      // The bank debit has now settled, so the balance transaction finally
+      // carries Stripe's real fee. This is the ONLY point an ACH charge can be
+      // trued up - see the twin call in checkout.session.completed above, which
+      // is last in its branch for the same reason: cents must never sit in
+      // front of settlement on the money path.
+      await runUpliftTrueUpForOrg(admin, stripe, {
+        organizationId: orgId,
+        paymentIntentId: (session.payment_intent as string) || '',
+        chargeAccountId: (event.account as string | null) ?? null,
+        label: 'checkout.session.async_payment_succeeded',
+      });
     } else if (event.type === 'checkout.session.async_payment_failed') {
       // ACH/bank transfer bounced (e.g. NSF). The seat was held optimistically;
       // mark the payment failed and alert the operator to follow up. We leave
