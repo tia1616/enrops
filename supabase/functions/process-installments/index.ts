@@ -77,6 +77,7 @@ import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { buildChargeRouting, ConnectOrgConfig } from '../_shared/connectChargeParams.ts';
 import { runUpliftTrueUp } from '../_shared/upliftTrueUp.ts';
+import { UPLIFT_METADATA_KEY } from '../_shared/chargeFeeFacts.ts';
 import { allocateCartFeeByLine } from '../_shared/cartFee.ts';
 import { withResolvedFee, loadPlatformFeeDefaults } from '../_shared/feeConfig.ts';
 import { loadOrgBrand, formatFromAddress, OrgBrand } from '../_shared/orgBrand.ts';
@@ -793,6 +794,11 @@ async function processGroup(
           installment_number: String(installmentNumber),
           installment_row_ids: sortedRowIds.join(','),
           row_count: String(activeRows.length),
+          // What this charge's application fee recovered towards Stripe's
+          // processing cost. Recorded because it cannot be recomputed later:
+          // the uplift is sized on totalAmount, while the charge is
+          // totalAmount + passFee. Read back by _shared/upliftTrueUp.ts.
+          [UPLIFT_METADATA_KEY]: String(routing.upliftCents),
         },
         ...connectParams,
       },

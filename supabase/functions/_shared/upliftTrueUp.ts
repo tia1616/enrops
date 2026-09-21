@@ -18,10 +18,24 @@
 // 99 - is billed at card rates and was already correct.)
 //
 // THE FIX IS DELIBERATELY NOT ABOUT LINK. Nothing here knows what Link is. We
-// compare the estimate the uplift was sized from against the fee Stripe really
-// took, and hand back the difference. Any rail Stripe prices below the card
-// rate - today's, or one introduced next year - corrects itself with no code
-// change.
+// compare the uplift we recovered against the fee Stripe really took, and hand
+// back the difference. Any rail Stripe prices below the card rate - today's, or
+// one introduced next year - corrects itself with no code change.
+//
+// THE UPLIFT IS READ, NOT REBUILT, and getting that wrong was a real bug caught
+// in review. The first version recomputed estimateStripeFee from the charge
+// total. That is not the same number: the uplift is sized on the registration
+// total, while the charge Stripe bills ALSO carries the pass-through fee line
+// when the provider passes the fee on to families. Rebuilding it from the
+// charge therefore overstates the uplift, and the difference comes out of
+// Enrops's margin - about 26c on a $300 registration at a 3% pass-through. It
+// was dormant on production only because the one connected destination org does
+// not pass the fee on, and it would have armed itself on the day that flipped.
+//
+// So buildChargeRouting now reports the uplift it actually put in the fee, and
+// every caller writes it onto the charge as `enrops_uplift_cents`. A charge
+// with no such metadata is left alone: predating the change is not a reason to
+// guess. Measured off the charge is a guess; written down at creation is a fact.
 //
 // ONE DIRECTION ONLY. When Stripe's real fee is HIGHER than the estimate (an
 // international card, say), we absorb it and take nothing more. That is the
@@ -45,18 +59,27 @@
 // refund that is not our own tag means the refund path got here first, and the
 // true-up stands down. Both orders asserted in tests/upliftTrueUp.test.ts.
 
-import { PaymentMethodType } from './computePlatformFee.ts';
-import { estimateStripeFee } from './estimateStripeFee.ts';
 import { ChargeFeeFacts, readChargeFeeFacts } from './chargeFeeFacts.ts';
 
 /** Metadata key tagging a fee refund as an uplift true-up, for idempotency. */
 export const UPLIFT_TRUEUP_KEY = 'enrops_uplift_trueup';
 
+/**
+ * PaymentIntent metadata key carrying the uplift that went into the
+ * application fee, written at charge creation by every caller of
+ * buildChargeRouting. See THE UPLIFT IS READ, NOT REBUILT in the header.
+ *
+ * Re-exported from chargeFeeFacts, which is where it is READ, so that writers
+ * and reader can never drift apart.
+ */
+export { UPLIFT_METADATA_KEY } from './chargeFeeFacts.ts';
+
 export interface UpliftTrueUpInput {
-  /** The charge's total in cents - the amount the uplift was sized from. */
-  chargeAmountCents: number;
-  /** The rail the charge actually settled on, READ off the charge. */
-  paymentMethodType: PaymentMethodType;
+  /**
+   * The uplift that actually went into the application fee, in cents, as
+   * recorded on the charge at creation. Never recomputed - see the header.
+   */
+  recordedUpliftCents: number | null;
   /** Stripe's real fee from the balance transaction, in cents. */
   actualStripeFeeCents: number;
   /** application_fee_amount actually taken on the charge, in cents. */
@@ -75,19 +98,25 @@ export interface UpliftTrueUpInput {
  */
 export function upliftOverRecoveryCents(input: UpliftTrueUpInput): number {
   const {
-    chargeAmountCents,
-    paymentMethodType,
+    recordedUpliftCents,
     actualStripeFeeCents,
     applicationFeeCents,
     alreadyRefundedFeeCents = 0,
   } = input;
 
+  // NO RECORDED UPLIFT, NO TRUE-UP. Either this charge predates the metadata
+  // (nothing to reconcile that a refund will not handle anyway) or it carried
+  // no uplift at all. Guessing one from the charge amount is the defect this
+  // design exists to remove.
+  if (recordedUpliftCents === null) return 0;
+
   // Unusable numbers do nothing at all. NaN comparisons are all false, so a bad
   // input would otherwise slip past the guards below as a silent 0 anyway - but
   // being explicit is what makes that a decision rather than an accident.
-  for (const n of [chargeAmountCents, actualStripeFeeCents, applicationFeeCents, alreadyRefundedFeeCents]) {
+  for (const n of [recordedUpliftCents, actualStripeFeeCents, applicationFeeCents, alreadyRefundedFeeCents]) {
     if (!Number.isFinite(n)) return 0;
   }
+  if (!(recordedUpliftCents > 0)) return 0;
 
   // GUARD 1 - DESTINATION ONLY. On a direct charge Stripe's fee comes out of
   // the OPERATOR's balance, readChargeFeeFacts reports it as 0, and the
@@ -100,20 +129,15 @@ export function upliftOverRecoveryCents(input: UpliftTrueUpInput): number {
   // No fee taken means nothing to give back.
   if (!(applicationFeeCents > 0)) return 0;
 
-  // What the uplift was sized from at charge time. Same pure function, same two
-  // inputs - so this is the estimate that was actually used, not a guess at it.
-  const estimated = estimateStripeFee(chargeAmountCents, paymentMethodType);
-
-  // GUARD 2 - THE FEE MUST BE BIG ENOUGH TO CONTAIN THE UPLIFT. When the uplift
-  // was applied the fee is `margin + estimated`, and margin is never negative,
-  // so `applicationFeeCents >= estimated` always holds. When it does NOT hold,
-  // the fee cannot contain this uplift - an org that absorbs the processing fee
-  // is the ordinary way to get here - and anything we returned would be margin.
-  if (applicationFeeCents < estimated) return 0;
+  // GUARD 2 - THE FEE MUST BE BIG ENOUGH TO CONTAIN THE UPLIFT. The fee is
+  // `margin + uplift` and margin is never negative, so this always holds for a
+  // charge whose metadata belongs to it. When it does not, the two numbers
+  // disagree about the same charge and anything returned would be margin.
+  if (applicationFeeCents < recordedUpliftCents) return 0;
 
   // The over-recovery itself. Not an over-recovery if Stripe charged us at or
-  // above the estimate: see ONE DIRECTION ONLY in the header.
-  const excess = estimated - actualStripeFeeCents;
+  // above what we recovered: see ONE DIRECTION ONLY in the header.
+  const excess = recordedUpliftCents - actualStripeFeeCents;
   if (!(excess > 0)) return 0;
 
   // Never refund more of the fee than is left. Stripe rejects a fee refund that
@@ -208,12 +232,11 @@ export async function runUpliftTrueUp(
 
     if (!facts.applicationFeeId) return { returnedCents: 0, reason: 'no application fee' };
 
-    // A rail we do not price is a rail whose estimate we cannot reconstruct,
-    // and guessing 'card' would invent a large over-recovery on a cheap rail
-    // and pay it out of margin. Do nothing and say so.
-    if (facts.chargePaymentMethodType === null) {
-      console.warn(`${tag} ${paymentIntentId}: unrecognised payment method, not truing up`);
-      return { returnedCents: 0, reason: 'unrecognised payment method' };
+    // No recorded uplift means this charge predates the metadata, or carried no
+    // uplift. Either way there is nothing here that can be reconciled honestly.
+    if (facts.recordedUpliftCents === null) {
+      console.log(`${tag} ${paymentIntentId}: no recorded uplift, nothing to true up`);
+      return { returnedCents: 0, reason: 'no recorded uplift' };
     }
 
     // ALREADY DONE? Ask Stripe, never infer. Two webhook endpoints currently
@@ -243,14 +266,13 @@ export async function runUpliftTrueUp(
     }
 
     const owed = upliftOverRecoveryCents({
-      chargeAmountCents: facts.chargeAmountCents,
-      paymentMethodType: facts.chargePaymentMethodType,
+      recordedUpliftCents: facts.recordedUpliftCents,
       actualStripeFeeCents: facts.stripeFeeCents,
       applicationFeeCents: facts.applicationFeeCents,
       alreadyRefundedFeeCents: facts.alreadyRefundedFeeCents,
     });
 
-    if (owed <= 0) return { returnedCents: 0, reason: 'estimate matched the real fee' };
+    if (owed <= 0) return { returnedCents: 0, reason: 'we recovered no more than Stripe took' };
 
     const refund = await stripe.applicationFees.createRefund(
       facts.applicationFeeId,
@@ -259,9 +281,7 @@ export async function runUpliftTrueUp(
     );
     const returned = refund.amount ?? owed;
     console.log(
-      `${tag} ${paymentIntentId}: quoted ${
-        estimateStripeFee(facts.chargeAmountCents, facts.chargePaymentMethodType)
-      }c, Stripe took ${facts.stripeFeeCents}c, returned ${returned}c to the provider`,
+      `${tag} ${paymentIntentId}: recovered ${facts.recordedUpliftCents}c, Stripe took ${facts.stripeFeeCents}c, returned ${returned}c to the provider`,
     );
     return { returnedCents: returned, reason: 'trued up' };
   } catch (err) {
