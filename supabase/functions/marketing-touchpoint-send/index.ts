@@ -1456,15 +1456,30 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
     // that also features a $450 full-day camp). Mixed or any-null → empty so
     // Ennie's body omits the price line. Partner-run camps keep price_cents
     // null on purpose (we don't set their prices) which correctly suppresses.
+    // ALL-IN, exactly like the programs branch above. These were left bare when
+    // blocker 3 converted the programs branch, while the savings token below
+    // WAS converted - so a camp email quoted two bare prices and an all-in
+    // saving, and the three numbers did not agree with each other. Found by the
+    // code review of blockers 1-3 on 2026-09-21.
+    //
+    // It was inert at the time only because J2S is the one org with camp
+    // sessions and J2S absorbs the fee, which renders every number bare and
+    // self-consistent. It would have started quoting families the wrong price
+    // on the first camp campaign after the pricing flip.
+    //
+    // advertisedPriceLabel returns '' for a null or non-positive price, which
+    // is the same suppression the `!= null` checks used to do by hand; the
+    // samePrice / sameEb guards stay because they answer a different question -
+    // whether one price can speak for the whole batch.
     const campPrices = camps.map((c) => c.price_cents);
     const allPriced = campPrices.length > 0 && campPrices.every((p) => p != null);
     const samePrice = allPriced && campPrices.every((p) => p === campPrices[0]);
-    tokens.set("regular_price", samePrice && campPrices[0] != null ? `$${(campPrices[0] / 100).toFixed(0)}` : "");
+    tokens.set("regular_price", samePrice ? advertisedPriceLabel(campPrices[0], feeOrg) : "");
 
     const ebPrices = camps.map((c) => c.early_bird_price_cents);
     const allEb = ebPrices.length > 0 && ebPrices.every((p) => p != null);
     const sameEb = allEb && ebPrices.every((p) => p === ebPrices[0]);
-    tokens.set("early_bird_price", sameEb && ebPrices[0] != null ? `$${(ebPrices[0] / 100).toFixed(0)}` : "");
+    tokens.set("early_bird_price", sameEb ? advertisedPriceLabel(ebPrices[0], feeOrg) : "");
 
     tokens.set("savings",
       samePrice && sameEb ? advertisedSavingLabel(campPrices[0], ebPrices[0], feeOrg) : "");

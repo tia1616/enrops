@@ -113,3 +113,85 @@ Deno.test('advertised means CARD: the bank price is a discount shown later', () 
     advertisedPriceLabel(24000, PASS_NEW, 'card'),
   );
 });
+
+// ---------------------------------------------------------------------------
+// RATCHET: every price a campaign quotes goes through this module.
+//
+// THE BUG THIS EXISTS FOR. Blocker 3 converted the PROGRAMS branch of
+// marketing-touchpoint-send to all-in prices and left the CAMPS branch bare -
+// while converting the camps SAVINGS token, so one email carried two bare
+// prices and an all-in saving and the three numbers disagreed. Found by the
+// code review of blockers 1-3, 2026-09-21, not by any test: every unit test
+// here passed, because the helper was correct and simply was not being called.
+//
+// The class is "a two-branch surface where only one branch got converted", and
+// no arithmetic test can see it. This reads the call sites instead.
+// ---------------------------------------------------------------------------
+
+import { assert } from 'https://deno.land/std@0.208.0/assert/mod.ts';
+
+const SENDER = new URL('../../marketing-touchpoint-send/index.ts', import.meta.url);
+
+/** Strip comments so prose naming a token is not mistaken for code setting it. */
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+}
+
+/**
+ * Tokens that quote a price to a family. `vip_price` is deliberately absent:
+ * a VIP bundle is three registrations and this column holds only the full-year
+ * total, so there is no per-line price to make all-in. That decision is
+ * written out above the call site, and the test below holds it to being the
+ * ONLY exception rather than the first of several.
+ */
+const PRICE_TOKENS = ['regular_price', 'early_bird_price', 'savings'];
+
+Deno.test('RATCHET: every campaign price token is quoted all-in, on BOTH branches', () => {
+  const src = stripComments(Deno.readTextFileSync(SENDER));
+  const offenders: string[] = [];
+
+  for (const token of PRICE_TOKENS) {
+    // Plain string scanning on purpose. A hand-built RegExp here lost its
+    // escapes on the way into the file and matched NOTHING - which a ratchet
+    // reports as "all clear". The `sites.length >= 2` assertion below is what
+    // caught that, and it earns its place for exactly that reason: a source
+    // ratchet that finds no call sites must fail, never pass quietly.
+    const sites: string[] = [];
+    for (const marker of [`tokens.set("${token}"`, `tokens.set('${token}'`]) {
+      let from = src.indexOf(marker);
+      while (from !== -1) {
+        sites.push(src.slice(from + marker.length, from + marker.length + 240));
+        from = src.indexOf(marker, from + marker.length);
+      }
+    }
+    assert(
+      sites.length >= 2,
+      `expected ${token} to be set on BOTH the programs and camps branches, found ${sites.length}. ` +
+        `If a branch was removed, update this list; if one was added, it needs the same treatment.`,
+    );
+    for (const site of sites) {
+      if (!/advertisedPriceLabel|advertisedSavingLabel/.test(site)) {
+        offenders.push(`${token}: ${site.trim().slice(0, 70)}`);
+      }
+    }
+  }
+
+  assert(
+    offenders.length === 0,
+    'these campaign prices are quoted WITHOUT the all-in helper, so a family is told a ' +
+      'price they will not be charged (money layer section 3, "every share surface enrops ' +
+      `generates"):\n        ${offenders.join('\n        ')}`,
+  );
+});
+
+Deno.test('RATCHET: vip_price is the only bare price, and it says why', () => {
+  const raw = Deno.readTextFileSync(SENDER);
+  const idx = raw.indexOf('tokens.set("vip_price"');
+  assert(idx !== -1, 'vip_price moved; this ratchet needs a new anchor');
+  // The 500 characters above it must explain the exception. An undocumented
+  // bare price is how the camps branch survived review in the first place.
+  assert(
+    /BARE on purpose|left bare/i.test(raw.slice(Math.max(0, idx - 500), idx)),
+    'vip_price is quoted bare with no stated reason. Either make it all-in or write down why it cannot be.',
+  );
+});
