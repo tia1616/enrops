@@ -5,22 +5,30 @@ import { assertEquals } from 'https://deno.land/std@0.208.0/assert/mod.ts';
 import {
   findExistingTrueUp,
   runUpliftTrueUp,
+  UPLIFT_METADATA_KEY,
   UPLIFT_TRUEUP_KEY,
   upliftOverRecoveryCents,
 } from '../upliftTrueUp.ts';
+import { UPLIFT_METADATA_KEY as READER_KEY } from '../chargeFeeFacts.ts';
 import { computeMarginRefund } from '../refundFeeSplit.ts';
 
 // J2S on production: 1% margin, destination charges, provider bears Stripe.
 const margin = (amt: number) => Math.round(amt * 0.01);
-const cardEstimate = (amt: number) => Math.round(amt * 0.029) + 30;
-const appFee = (amt: number) => margin(amt) + cardEstimate(amt);
+const cardUplift = (amt: number) => Math.round(amt * 0.029) + 30;
+const appFee = (amt: number) => margin(amt) + cardUplift(amt);
+
+Deno.test('the writers and the reader use the SAME metadata key', () => {
+  // A drift here is silent: every true-up would simply find no uplift and do
+  // nothing, forever, with no error anywhere.
+  assertEquals(UPLIFT_METADATA_KEY, READER_KEY);
+  assertEquals(UPLIFT_METADATA_KEY, 'enrops_uplift_cents');
+});
 
 Deno.test('the charge that started this: Link funded by bank, 86c back', () => {
-  // ch_3UCSDdEEGKl6BPRF0Xn7vSfc, 2026-09-05. $285.00. We quoted 857, Stripe
+  // ch_3UCSDdEEGKl6BPRF0Xn7vSfc, 2026-09-05. $285.00. We recovered 857, Stripe
   // took 771, and the provider was charged the difference for nothing.
   const got = upliftOverRecoveryCents({
-    chargeAmountCents: 28500,
-    paymentMethodType: 'card',
+    recordedUpliftCents: 857,
     actualStripeFeeCents: 771,
     applicationFeeCents: 1142,
   });
@@ -29,8 +37,9 @@ Deno.test('the charge that started this: Link funded by bank, 86c back', () => {
 
 Deno.test('every Link-by-bank charge on production reconciles to its real delta', () => {
   // Read off the live platform account 2026-09-21: the 7 charges of the last
-  // 100 where Stripe's real fee came in under the estimate. If this total ever
-  // moves, the arithmetic moved - not production.
+  // 100 where Stripe's real fee came in under what we recovered. None of these
+  // carried a pass-through line, so the uplift equals the card rate on the
+  // charge - which is why these numbers survive the move to recorded metadata.
   const live: Array<[number, number, number]> = [
     // [charge amount, Stripe's real fee, the cents owed back]
     [30929, 834, 93],
@@ -44,8 +53,7 @@ Deno.test('every Link-by-bank charge on production reconciles to its real delta'
   let total = 0;
   for (const [amt, actual, owed] of live) {
     const got = upliftOverRecoveryCents({
-      chargeAmountCents: amt,
-      paymentMethodType: 'card',
+      recordedUpliftCents: cardUplift(amt),
       actualStripeFeeCents: actual,
       applicationFeeCents: appFee(amt),
     });
@@ -55,53 +63,84 @@ Deno.test('every Link-by-bank charge on production reconciles to its real delta'
   assertEquals(total, 536); // $5.36, the whole measured over-recovery.
 });
 
-Deno.test('an ordinary card is already correct and must not move a cent', () => {
-  // 92 of the 99 destination charges measured. The estimate IS the real fee.
-  const amt = 28500;
+Deno.test('THE PASS-THROUGH CASE: the reason the uplift is recorded and not rebuilt', () => {
+  // Found by code review. A provider who passes the fee on to families has an
+  // extra line on the charge, so the charge total is BIGGER than the base the
+  // uplift was sized on. Rebuilding the uplift from the charge total therefore
+  // overstates it, and the difference comes out of Enrops's margin.
+  const regTotal = 29900;        // what the uplift was sized on
+  const passThroughLine = 598;   // a 2% service fee the family also pays
+  const chargeTotal = regTotal + passThroughLine; // 30498, what Stripe bills
+  const recordedUplift = cardUplift(regTotal);    // 897, what we really took
+  const actual = Math.round(chargeTotal * 0.026) + 30; // 823, Link by bank
+
+  // The honest answer, from the recorded fact.
   const got = upliftOverRecoveryCents({
-    chargeAmountCents: amt,
-    paymentMethodType: 'card',
-    actualStripeFeeCents: cardEstimate(amt),
-    applicationFeeCents: appFee(amt),
+    recordedUpliftCents: recordedUplift,
+    actualStripeFeeCents: actual,
+    applicationFeeCents: margin(regTotal) + recordedUplift,
+  });
+  assertEquals(got, 74);
+
+  // What the first version computed, by rebuilding the uplift from the charge
+  // total. 17c of pure margin, on one $299 registration.
+  const rebuiltFromChargeTotal = cardUplift(chargeTotal) - actual;
+  assertEquals(rebuiltFromChargeTotal, 91);
+  assertEquals(rebuiltFromChargeTotal - got, 17);
+});
+
+Deno.test('an ordinary card is already correct and must not move a cent', () => {
+  // 92 of the 99 destination charges measured. What we recovered IS the fee.
+  const got = upliftOverRecoveryCents({
+    recordedUpliftCents: 857,
+    actualStripeFeeCents: 857,
+    applicationFeeCents: 1142,
   });
   assertEquals(got, 0);
 });
 
 Deno.test('a bank payment is quoted exactly, so there is nothing to give back', () => {
-  // ACH is 0.8% capped at $5 and we quote it precisely; the cap case too.
   for (const amt of [24000, 240000]) {
-    const est = Math.min(Math.round(amt * 0.008), 500);
+    const uplift = Math.min(Math.round(amt * 0.008), 500);
     const got = upliftOverRecoveryCents({
-      chargeAmountCents: amt,
-      paymentMethodType: 'us_bank_account',
-      actualStripeFeeCents: est,
-      applicationFeeCents: margin(amt) + est,
+      recordedUpliftCents: uplift,
+      actualStripeFeeCents: uplift,
+      applicationFeeCents: margin(amt) + uplift,
     });
     assertEquals(got, 0, `bank charge of ${amt}`);
   }
 });
 
-Deno.test('FAIL SAFE: a DIRECT charge never gives back a cent of margin', () => {
-  // The dangerous case. On a direct charge Stripe bills the operator, so
-  // readChargeFeeFacts reports our fee as 0 and the application fee is clean
-  // margin. Subtracting "estimate minus zero" here would refund the entire
-  // estimate out of Enrops's margin on every direct charge on the platform.
-  const got = upliftOverRecoveryCents({
-    chargeAmountCents: 28500,
-    paymentMethodType: 'card',
-    actualStripeFeeCents: 0,
-    applicationFeeCents: 285,
-  });
-  assertEquals(got, 0);
-
-  // AND ON A BIG MARGIN, where the size check cannot save us. A 3% org taking
-  // $1,000 has a $30.00 application fee, comfortably larger than the $29.30
-  // card estimate - so the only thing standing between this charge and a $29.30
-  // gift out of margin is the destination check itself.
+Deno.test('FAIL SAFE: a charge with no recorded uplift is left alone', () => {
+  // Every charge created before this shipped. Guessing what the uplift was is
+  // exactly the defect the recorded metadata removes, so null means stop.
   assertEquals(
     upliftOverRecoveryCents({
-      chargeAmountCents: 100000,
-      paymentMethodType: 'card',
+      recordedUpliftCents: null,
+      actualStripeFeeCents: 771,
+      applicationFeeCents: 1142,
+    }),
+    0,
+  );
+});
+
+Deno.test('FAIL SAFE: a DIRECT charge never gives back a cent of margin', () => {
+  // On a direct charge Stripe bills the operator, so readChargeFeeFacts reports
+  // our fee as 0 and the application fee is clean margin. Without the
+  // destination check, "uplift minus zero" would gift the whole uplift away.
+  assertEquals(
+    upliftOverRecoveryCents({
+      recordedUpliftCents: 857,
+      actualStripeFeeCents: 0,
+      applicationFeeCents: 285,
+    }),
+    0,
+  );
+  // And on a big margin, where the size check cannot save us: a 3% org taking
+  // $1,000 has a $30.00 fee, larger than a $29.30 uplift.
+  assertEquals(
+    upliftOverRecoveryCents({
+      recordedUpliftCents: 2930,
       actualStripeFeeCents: 0,
       applicationFeeCents: 3000,
     }),
@@ -109,53 +148,62 @@ Deno.test('FAIL SAFE: a DIRECT charge never gives back a cent of margin', () => 
   );
 });
 
-Deno.test('FAIL SAFE: an org that absorbs the processing fee has no uplift to return', () => {
-  // J2S on production today: the application fee is margin only. It is smaller
-  // than the estimate, which is how we know it cannot contain an uplift.
-  const got = upliftOverRecoveryCents({
-    chargeAmountCents: 28500,
-    paymentMethodType: 'card',
-    actualStripeFeeCents: 771,
-    applicationFeeCents: 285, // 1% margin, no uplift
-  });
-  assertEquals(got, 0);
+Deno.test('FAIL SAFE: an org that absorbs the processing fee records a zero uplift', () => {
+  assertEquals(
+    upliftOverRecoveryCents({
+      recordedUpliftCents: 0,
+      actualStripeFeeCents: 771,
+      applicationFeeCents: 285,
+    }),
+    0,
+  );
+});
+
+Deno.test('FAIL SAFE: a fee too small to contain its own recorded uplift', () => {
+  // The two numbers disagree about the same charge. Something is wrong, and
+  // the safe reading of "wrong" is to touch nothing.
+  assertEquals(
+    upliftOverRecoveryCents({
+      recordedUpliftCents: 857,
+      actualStripeFeeCents: 771,
+      applicationFeeCents: 400,
+    }),
+    0,
+  );
 });
 
 Deno.test('FAIL SAFE: under-recovery is absorbed, never clawed back', () => {
-  // An international card costs Stripe more than we quoted. Standing policy is
-  // to eat it. A negative "refund" would be a charge to the provider.
-  const got = upliftOverRecoveryCents({
-    chargeAmountCents: 28500,
-    paymentMethodType: 'card',
-    actualStripeFeeCents: 1200,
-    applicationFeeCents: 1142,
-  });
-  assertEquals(got, 0);
+  // An international card costs Stripe more than we recovered. Standing policy
+  // is to eat it. A negative "refund" would be a charge to the provider.
+  assertEquals(
+    upliftOverRecoveryCents({
+      recordedUpliftCents: 857,
+      actualStripeFeeCents: 1200,
+      applicationFeeCents: 1142,
+    }),
+    0,
+  );
 });
 
 Deno.test('FAIL SAFE: unusable numbers do nothing', () => {
   for (const bad of [
-    { chargeAmountCents: NaN, actualStripeFeeCents: 771, applicationFeeCents: 1142 },
-    { chargeAmountCents: 28500, actualStripeFeeCents: NaN, applicationFeeCents: 1142 },
-    { chargeAmountCents: 28500, actualStripeFeeCents: 771, applicationFeeCents: NaN },
-    { chargeAmountCents: 28500, actualStripeFeeCents: -771, applicationFeeCents: 1142 },
-    { chargeAmountCents: 0, actualStripeFeeCents: 771, applicationFeeCents: 1142 },
+    { recordedUpliftCents: NaN, actualStripeFeeCents: 771, applicationFeeCents: 1142 },
+    { recordedUpliftCents: 857, actualStripeFeeCents: NaN, applicationFeeCents: 1142 },
+    { recordedUpliftCents: 857, actualStripeFeeCents: 771, applicationFeeCents: NaN },
+    { recordedUpliftCents: 857, actualStripeFeeCents: -771, applicationFeeCents: 1142 },
+    { recordedUpliftCents: -1, actualStripeFeeCents: 771, applicationFeeCents: 1142 },
   ]) {
-    const got = upliftOverRecoveryCents({ ...bad, paymentMethodType: 'card' });
-    assertEquals(got, 0, JSON.stringify(bad));
+    assertEquals(upliftOverRecoveryCents(bad), 0, JSON.stringify(bad));
   }
 });
 
-Deno.test('a true-up already issued is not issued twice', () => {
+Deno.test('the tag, not the arithmetic, is what stops a second true-up', () => {
   const owed = upliftOverRecoveryCents({
-    chargeAmountCents: 28500,
-    paymentMethodType: 'card',
+    recordedUpliftCents: 857,
     actualStripeFeeCents: 771,
     applicationFeeCents: 1142,
     alreadyRefundedFeeCents: 86,
   });
-  // The ceiling still allows it arithmetically - what stops the second call is
-  // the tag, which is why the tag is the idempotency mechanism and not this.
   assertEquals(owed, 86);
 
   const found = findExistingTrueUp(
@@ -173,6 +221,16 @@ Deno.test('a true-up already issued is not issued twice', () => {
   );
 });
 
+Deno.test("a refund's fee refund is never read as a true-up", () => {
+  assertEquals(
+    findExistingTrueUp(
+      [{ id: 'fr_1', amount: 285, metadata: { enrops_source_refund_id: 're_x' } }],
+      'pi_link',
+    ),
+    null,
+  );
+});
+
 Deno.test('a refund on top of a true-up returns the margin ONCE, not twice', () => {
   // THE COMPOSITION THAT MUST HOLD. refundFeeSplit computes the refundable
   // margin from Stripe's REAL fee, so before this change a full refund already
@@ -183,8 +241,7 @@ Deno.test('a refund on top of a true-up returns the margin ONCE, not twice', () 
   const real = 771;
 
   const trueUp = upliftOverRecoveryCents({
-    chargeAmountCents: amt,
-    paymentMethodType: 'card',
+    recordedUpliftCents: cardUplift(amt),
     actualStripeFeeCents: real,
     applicationFeeCents: fee,
   });
@@ -219,9 +276,13 @@ Deno.test('a refund on top of a true-up returns the margin ONCE, not twice', () 
 
 /** The Link-by-bank charge that started this, as Stripe returns it. */
 function linkByBankStripe(
-  opts: { feeRefunds?: Array<{ id: string; amount: number; metadata: Record<string, string> }> } = {},
+  opts: {
+    feeRefunds?: Array<{ id: string; amount: number; metadata: Record<string, string> }>;
+    metadata?: Record<string, unknown> | null;
+  } = {},
 ) {
   const feeRefunds = opts.feeRefunds ?? [];
+  const metadata = opts.metadata === undefined ? { [UPLIFT_METADATA_KEY]: '857' } : opts.metadata;
   const created: Array<{ feeId: string; params: Record<string, unknown>; options: Record<string, unknown> }> = [];
   const reads: string[] = [];
   return {
@@ -231,12 +292,12 @@ function linkByBankStripe(
       retrieve(id: string) {
         reads.push(id);
         return Promise.resolve({
+          metadata,
           latest_charge: {
             amount: 28500,
             application_fee_amount: 1142,
             application_fee: 'fee_1',
             balance_transaction: { fee: 771 },
-            payment_method_details: { type: 'card' },
           },
         });
       },
@@ -256,13 +317,11 @@ function linkByBankStripe(
   };
 }
 
+const DESTINATION = { chargeAccountId: null, orgBearsStripeFee: true } as const;
+
 Deno.test('a Link-by-bank charge returns 86c to the provider, tagged', async () => {
   const stripe = linkByBankStripe();
-  const got = await runUpliftTrueUp(stripe, {
-    paymentIntentId: 'pi_link',
-    chargeAccountId: null,
-    orgBearsStripeFee: true,
-  });
+  const got = await runUpliftTrueUp(stripe, { paymentIntentId: 'pi_link', ...DESTINATION });
   assertEquals(got.returnedCents, 86);
   assertEquals(stripe.created.length, 1);
   assertEquals(stripe.created[0].params.amount, 86);
@@ -279,29 +338,45 @@ Deno.test('THE SECOND DELIVERY refunds nothing', async () => {
   const stripe = linkByBankStripe({
     feeRefunds: [{ id: 'fr_1', amount: 86, metadata: { [UPLIFT_TRUEUP_KEY]: 'pi_link' } }],
   });
-  const got = await runUpliftTrueUp(stripe, {
-    paymentIntentId: 'pi_link',
-    chargeAccountId: null,
-    orgBearsStripeFee: true,
-  });
+  const got = await runUpliftTrueUp(stripe, { paymentIntentId: 'pi_link', ...DESTINATION });
   assertEquals(got.returnedCents, 86); // reports what was already returned
   assertEquals(stripe.created.length, 0); // but moves nothing
 });
 
-Deno.test('a fee refund from a REFUND blocks the true-up, and is never read as one', () => {
-  // This test used to assert the OPPOSITE - that a refund's fee refund should
-  // be ignored and the true-up should proceed. Code review showed that pays the
-  // over-recovery twice, because refundFeeSplit already included it. The
-  // behaviour is now asserted by the two "already returned by a refund" tests
-  // below; what remains true here, and still worth pinning, is that the two
-  // tags are never confused for one another.
-  assertEquals(
-    findExistingTrueUp(
-      [{ id: 'fr_1', amount: 285, metadata: { enrops_source_refund_id: 're_x' } }],
-      'pi_link',
-    ),
-    null,
-  );
+Deno.test('FAIL SAFE: a refund got here first, so the excess is NOT returned twice', async () => {
+  // refundFeeSplit computes the refundable margin from Stripe's REAL fee, so
+  // the 86c is already inside any fee refund it issued. Stripe redelivers a
+  // failed checkout.session.completed for up to three days - ample time for a
+  // family to cancel first - so the charge event genuinely can arrive later.
+  const stripe = linkByBankStripe({
+    feeRefunds: [{ id: 'fr_refund', amount: 371, metadata: { enrops_source_refund_id: 're_x' } }],
+  });
+  const got = await runUpliftTrueUp(stripe, { paymentIntentId: 'pi_link', ...DESTINATION });
+  assertEquals(got.returnedCents, 0);
+  assertEquals(got.reason, 'already returned by a refund');
+  assertEquals(stripe.created.length, 0);
+});
+
+Deno.test('a PARTIAL fee refund also blocks the true-up rather than topping it up', async () => {
+  // Deliberately not clever: a partial refund returned a PROPORTION of a margin
+  // that already contained the over-recovery. Working out what is left is
+  // arithmetic nobody can check against Stripe, for cents.
+  const stripe = linkByBankStripe({
+    feeRefunds: [{ id: 'fr_partial', amount: 40, metadata: { enrops_source_refund_id: 're_y' } }],
+  });
+  const got = await runUpliftTrueUp(stripe, { paymentIntentId: 'pi_link', ...DESTINATION });
+  assertEquals(got.returnedCents, 0);
+  assertEquals(stripe.created.length, 0);
+});
+
+Deno.test('FAIL SAFE: a charge with no uplift metadata does nothing', async () => {
+  for (const metadata of [null, {}, { [UPLIFT_METADATA_KEY]: '' }, { [UPLIFT_METADATA_KEY]: 'x' }]) {
+    const stripe = linkByBankStripe({ metadata });
+    const got = await runUpliftTrueUp(stripe, { paymentIntentId: 'pi_old', ...DESTINATION });
+    assertEquals(got.returnedCents, 0, JSON.stringify(metadata));
+    assertEquals(got.reason, 'no recorded uplift', JSON.stringify(metadata));
+    assertEquals(stripe.created.length, 0);
+  }
 });
 
 Deno.test('a direct charge is not even read from Stripe', async () => {
@@ -338,22 +413,14 @@ Deno.test('NEVER THROWS: a Stripe outage does not fail the registration', async 
       createRefund: () => Promise.reject(new Error('stripe is down')),
     },
   };
-  const got = await runUpliftTrueUp(exploding, {
-    paymentIntentId: 'pi_boom',
-    chargeAccountId: null,
-    orgBearsStripeFee: true,
-  });
+  const got = await runUpliftTrueUp(exploding, { paymentIntentId: 'pi_boom', ...DESTINATION });
   assertEquals(got.returnedCents, 0);
 });
 
 Deno.test('NEVER THROWS: the refund call itself failing is swallowed', async () => {
   const stripe = linkByBankStripe();
   stripe.applicationFees.createRefund = () => Promise.reject(new Error('fee refund rejected'));
-  const got = await runUpliftTrueUp(stripe, {
-    paymentIntentId: 'pi_link',
-    chargeAccountId: null,
-    orgBearsStripeFee: true,
-  });
+  const got = await runUpliftTrueUp(stripe, { paymentIntentId: 'pi_link', ...DESTINATION });
   assertEquals(got.returnedCents, 0);
   assertEquals(got.reason, 'failed');
 });
@@ -365,106 +432,15 @@ Deno.test('ACH before it clears: no balance transaction yet, nothing happens', a
   const stripe = linkByBankStripe();
   stripe.paymentIntents.retrieve = () =>
     Promise.resolve({
+      metadata: { [UPLIFT_METADATA_KEY]: '192' },
       latest_charge: {
         amount: 24000,
         application_fee_amount: 432,
         application_fee: 'fee_1',
         balance_transaction: null,
-        payment_method_details: { type: 'us_bank_account' },
       },
     });
-  const got = await runUpliftTrueUp(stripe, {
-    paymentIntentId: 'pi_ach',
-    chargeAccountId: null,
-    orgBearsStripeFee: true,
-  });
-  assertEquals(got.returnedCents, 0);
-  assertEquals(stripe.created.length, 0);
-});
-
-Deno.test('FAIL SAFE: a rail we do not price is left alone, not guessed at', async () => {
-  // The defect this closes, found in self-review. Defaulting an unknown type to
-  // 'card' is not conservative: on a 3% org taking $1,000 the application fee
-  // ($30.00) is larger than the card estimate ($29.30), so the size guard lets
-  // it through, and "card estimate minus a cheap rail's real fee" would have
-  // paid out $24-plus of pure margin as an imaginary over-recovery.
-  const stripe = linkByBankStripe();
-  stripe.paymentIntents.retrieve = () =>
-    Promise.resolve({
-      latest_charge: {
-        amount: 100000,
-        application_fee_amount: 3000,
-        application_fee: 'fee_1',
-        balance_transaction: { fee: 500 },
-        payment_method_details: { type: 'some_future_wallet' },
-      },
-    });
-  const got = await runUpliftTrueUp(stripe, {
-    paymentIntentId: 'pi_unknown',
-    chargeAccountId: null,
-    orgBearsStripeFee: true,
-  });
-  assertEquals(got.returnedCents, 0);
-  assertEquals(got.reason, 'unrecognised payment method');
-  assertEquals(stripe.created.length, 0);
-});
-
-Deno.test('FAIL SAFE: a charge with no payment method details at all', async () => {
-  const stripe = linkByBankStripe();
-  stripe.paymentIntents.retrieve = () =>
-    Promise.resolve({
-      latest_charge: {
-        amount: 28500,
-        application_fee_amount: 1142,
-        application_fee: 'fee_1',
-        balance_transaction: { fee: 771 },
-      },
-    });
-  const got = await runUpliftTrueUp(stripe, {
-    paymentIntentId: 'pi_nodetails',
-    chargeAccountId: null,
-    orgBearsStripeFee: true,
-  });
-  assertEquals(got.returnedCents, 0);
-  assertEquals(stripe.created.length, 0);
-});
-
-Deno.test('FAIL SAFE: a refund got here first, so the excess is NOT returned twice', async () => {
-  // Found by code review. refundFeeSplit computes the refundable margin from
-  // Stripe's REAL fee, so the 86c over-recovery is already inside any fee
-  // refund it issued. Stripe redelivers a failed checkout.session.completed
-  // for up to three days - ample time for a family to cancel first - so the
-  // charge event genuinely can arrive after the refund.
-  const refundedMargin = 371; // 1142 - 771, the whole recoverable amount
-  const stripe = linkByBankStripe({
-    feeRefunds: [
-      { id: 'fr_refund', amount: refundedMargin, metadata: { enrops_source_refund_id: 're_x' } },
-    ],
-  });
-  const got = await runUpliftTrueUp(stripe, {
-    paymentIntentId: 'pi_link',
-    chargeAccountId: null,
-    orgBearsStripeFee: true,
-  });
-  assertEquals(got.returnedCents, 0);
-  assertEquals(got.reason, 'already returned by a refund');
-  assertEquals(stripe.created.length, 0);
-});
-
-Deno.test('a PARTIAL fee refund also blocks the true-up rather than topping it up', async () => {
-  // Same reasoning, and deliberately not clever: a partial refund returned a
-  // PROPORTION of a margin that already contained the over-recovery. Working
-  // out what is left over is arithmetic nobody can check against Stripe, and
-  // the whole amount at stake is cents. Do nothing and leave it to the refund
-  // path, which is where the money reconciles.
-  const stripe = linkByBankStripe({
-    feeRefunds: [{ id: 'fr_partial', amount: 40, metadata: { enrops_source_refund_id: 're_y' } }],
-  });
-  const got = await runUpliftTrueUp(stripe, {
-    paymentIntentId: 'pi_link',
-    chargeAccountId: null,
-    orgBearsStripeFee: true,
-  });
+  const got = await runUpliftTrueUp(stripe, { paymentIntentId: 'pi_ach', ...DESTINATION });
   assertEquals(got.returnedCents, 0);
   assertEquals(stripe.created.length, 0);
 });

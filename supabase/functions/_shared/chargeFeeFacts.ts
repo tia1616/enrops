@@ -39,7 +39,25 @@
 // when the charge it came from lives on a connected account. Only the charge
 // read is account-scoped.
 
-import type { PaymentMethodType } from './computePlatformFee.ts';
+/**
+ * PaymentIntent metadata key carrying the Stripe-fee uplift, in cents.
+ *
+ * Declared here rather than imported from upliftTrueUp so that the READER of
+ * this fact does not depend on the module that acts on it; upliftTrueUp
+ * re-exports the same literal for its writers, and a test pins the two equal.
+ */
+export const UPLIFT_METADATA_KEY = 'enrops_uplift_cents';
+
+/** Parse the recorded uplift. Anything not a clean non-negative integer is null. */
+function readRecordedUplift(metadata: Record<string, unknown> | null | undefined): number | null {
+  const raw = metadata?.[UPLIFT_METADATA_KEY];
+  if (raw === undefined || raw === null || raw === '') return null;
+  const n = Number(raw);
+  // Number('') is 0 and Number(null) is 0, which is why both are excluded
+  // above: a missing uplift must read as "unknown", never as "zero uplift".
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.round(n);
+}
 
 interface StripeLike {
   paymentIntents: {
@@ -64,19 +82,16 @@ export interface ChargeFeeFacts {
   /** Application fee already refunded, in cents - the idempotency ceiling. */
   alreadyRefundedFeeCents: number;
   /**
-   * The rail the charge ACTUALLY settled on, from payment_method_details.type.
+   * The Stripe-fee uplift that went INTO this charge's application fee, in
+   * cents, as recorded on the PaymentIntent at creation.
    *
-   * Read rather than assumed because the uplift was sized before the family
-   * chose - see _shared/upliftTrueUp.ts.
-   *
-   * NULL when Stripe reports a type we do not model, and callers must treat
-   * that as "do nothing" rather than defaulting. Defaulting to 'card' looks
-   * conservative and is not: 'card' carries much the larger estimate, so on an
-   * unrecognised rail that actually cost very little, `estimate - actual` would
-   * compute a large over-recovery that never existed and pay it out of Enrops's
-   * margin.
+   * NULL when the charge carries no such metadata - it predates the change, or
+   * was not created by us. Callers must treat null as "do nothing" rather than
+   * reconstructing a number: the uplift is sized on the registration total
+   * while the charge also carries the pass-through fee line, so any attempt to
+   * recompute it from the charge amount overstates it. See _shared/upliftTrueUp.ts.
    */
-  chargePaymentMethodType: PaymentMethodType | null;
+  recordedUpliftCents: number | null;
   /**
    * Fee refunds already issued against this ApplicationFee, with their metadata.
    *
@@ -123,15 +138,21 @@ export async function readChargeFeeFacts(
     chargeAccountId ? { stripeAccount: chargeAccountId } : undefined,
   );
 
-  const charge = (pi as {
+  const piTyped = pi as {
+    metadata?: Record<string, unknown> | null;
     latest_charge?: {
       amount?: number;
       application_fee_amount?: number | null;
       application_fee?: { id?: string } | string | null;
       balance_transaction?: { fee?: number } | string | null;
-      payment_method_details?: { type?: string } | null;
+      metadata?: Record<string, unknown> | null;
     } | null;
-  }).latest_charge ?? null;
+  };
+  const charge = piTyped.latest_charge ?? null;
+  // The PaymentIntent's own metadata is the record we wrote; Stripe also copies
+  // it down onto the Charge, so the charge is read as a fallback rather than a
+  // second source of truth.
+  const piMetadata = piTyped.metadata ?? charge?.metadata ?? null;
 
   const applicationFeeId =
     typeof charge?.application_fee === 'string'
@@ -164,17 +185,7 @@ export async function readChargeFeeFacts(
     chargeAmountCents: charge?.amount ?? 0,
     // Direct: Stripe's fee hit the OPERATOR, not us. Never subtract it.
     stripeFeeCents: chargeAccountId ? 0 : (bt?.fee ?? 0),
-    // An ALLOW-LIST, not a default. These are the only two rails Enrops offers
-    // and the only two estimateStripeFee prices, so they are the only two whose
-    // estimate we can honestly reconstruct. A Link payment - however it is
-    // funded - reports type 'card', which is exactly why the true-up compares
-    // against the real fee instead of trusting this.
-    chargePaymentMethodType:
-      charge?.payment_method_details?.type === 'us_bank_account'
-        ? 'us_bank_account'
-        : charge?.payment_method_details?.type === 'card'
-        ? 'card'
-        : null,
+    recordedUpliftCents: readRecordedUplift(piMetadata),
     alreadyRefundedFeeCents,
     feeRefunds,
   };

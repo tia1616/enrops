@@ -66,6 +66,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { buildChargeRouting, ConnectOrgConfig } from '../_shared/connectChargeParams.ts';
+import { UPLIFT_METADATA_KEY } from '../_shared/chargeFeeFacts.ts';
 import { passThroughLineItemForAmount } from '../_shared/passThroughFee.ts';
 import { cartFeeCents, allocateCartFeeByLine } from '../_shared/cartFee.ts';
 import { withResolvedFee, loadPlatformFeeDefaults } from '../_shared/feeConfig.ts';
@@ -629,6 +630,12 @@ serve(async (req) => {
             enrops_org_id: orgId ?? '',
             enrops_record_type: 'registration',
             enrops_term: orgTerm,
+            // What the application fee recovered towards Stripe's processing
+            // cost. Recorded because it CANNOT be recomputed later: the uplift
+            // is sized on the registration total, while this charge also
+            // carries the pass-through fee line. _shared/upliftTrueUp.ts reads
+            // it back to return anything Stripe did not actually charge us.
+            [UPLIFT_METADATA_KEY]: String(routing.upliftCents),
           },
           ...connectParams,
         },
@@ -919,6 +926,12 @@ serve(async (req) => {
         // miscategorisation the C1 metadata above exists to prevent.
         enrops_donation_gift_cents: gift.giftCents > 0 ? String(gift.giftCents) : '',
         enrops_donation_covered_fee_cents: gift.coveredFeeCents > 0 ? String(gift.coveredFeeCents) : '',
+        // What the application fee recovered towards Stripe's processing cost.
+        // Recorded because it CANNOT be recomputed later: the uplift is sized
+        // on chargeBaseStd, while the charge Stripe bills also carries the
+        // pass-through fee line. _shared/upliftTrueUp.ts reads it back to
+        // return anything Stripe did not actually charge us.
+        [UPLIFT_METADATA_KEY]: String(routingStd.upliftCents),
       },
     };
 

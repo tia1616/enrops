@@ -170,6 +170,22 @@ export interface ChargeRouting {
    */
   requestOptions: { stripeAccount: string } | undefined;
   /**
+   * The Stripe-fee uplift actually inside application_fee_amount, in cents.
+   * 0 on a direct charge and on an org that absorbs processing.
+   *
+   * RECORD THIS ON THE CHARGE. _shared/upliftTrueUp.ts has to know what the
+   * uplift was in order to give back any part of it Stripe did not actually
+   * charge us, and it CANNOT be re-derived afterwards: the uplift is sized on
+   * the registration total, while the charge Stripe bills also carries the
+   * pass-through fee line, so recomputing it from the charge amount overstates
+   * it and pays the difference out of Enrops's margin. Measured off the charge
+   * is a guess; written down at creation is a fact.
+   *
+   * Computed AFTER both clamps below, so it is the uplift that survived into
+   * the fee rather than the one that was asked for.
+   */
+  upliftCents: number;
+  /**
    * Non-null when this charge MUST NOT proceed. Only ever set for 'direct' orgs:
    * a direct charge with no usable connected account has nowhere to go, and
    * falling through would create a plain platform charge - silently taking an
@@ -208,7 +224,16 @@ export function buildChargeRouting(
       const shifted = params.application_fee_amount + (marginOverrideCents - baseMargin);
       params.application_fee_amount = Math.max(0, Math.min(shifted, amountCents));
     }
-    return { direct: false, params, requestOptions: undefined, blocked: null };
+    // What is left of the fee once the margin is taken out IS the uplift, and
+    // deriving it this way rather than recomputing estimateStripeFee means it
+    // survives both clamps above: a tiny charge whose fee was capped at the
+    // charge amount records the uplift it actually carries, not the one that
+    // was asked for. See ChargeRouting.upliftCents for why it is recorded.
+    const effectiveMargin = org
+      ? (marginOverrideCents ?? computePlatformFee(amountCents, paymentMethod, org))
+      : 0;
+    const upliftCents = Math.max(0, (params.application_fee_amount ?? 0) - effectiveMargin);
+    return { direct: false, params, requestOptions: undefined, blocked: null, upliftCents };
   }
 
   // --- direct charge ---
@@ -216,13 +241,13 @@ export function buildChargeRouting(
   // charged at all; there is no safe fallback.
   if (!org!.stripe_account_id) {
     return {
-      direct: true, params: {}, requestOptions: undefined,
+      direct: true, params: {}, requestOptions: undefined, upliftCents: 0,
       blocked: `org ${orgIdForLog ?? '(unknown)'} is stripe_charge_model=direct but has no stripe_account_id`,
     };
   }
   if (!org!.stripe_charges_enabled) {
     return {
-      direct: true, params: {}, requestOptions: undefined,
+      direct: true, params: {}, requestOptions: undefined, upliftCents: 0,
       blocked: `org ${orgIdForLog ?? '(unknown)'} is stripe_charge_model=direct but stripe_charges_enabled=false`,
     };
   }
@@ -247,6 +272,9 @@ export function buildChargeRouting(
     direct: true,
     params,
     requestOptions: { stripeAccount: org!.stripe_account_id },
+    // A direct charge never carries an uplift: Stripe bills the operator's own
+    // account natively, so the application fee is clean margin.
+    upliftCents: 0,
     blocked: null,
   };
 }
