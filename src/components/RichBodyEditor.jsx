@@ -31,6 +31,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   chipsToTokens,
+  editableToHtml,
   highlightTokens,
   sanitizeRichHtml,
   stripHtml,
@@ -233,11 +234,21 @@ export default function RichBodyEditor({
       insertHtmlAtCaret(sanitizeRichHtml(html));
       return;
     }
-    // Plain text: keep the operator's line breaks, escape everything else.
-    const escaped = text
-      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-      .replace(/\r?\n/g, "<br>");
-    insertHtmlAtCaret(escaped);
+    // PLAIN TEXT GOES THROUGH THE MARKDOWN CONVERTER, and this is not a nicety -
+    // leaving it out re-created the exact defect this whole build exists to fix.
+    //
+    // Jeff drafts with an assistant and pastes. Copying the RENDERED answer gives
+    // real HTML and lands in the branch above. Copying the RAW answer - out of a
+    // code block, or from anywhere that hands over plain text - gives
+    // `We **WILL** have class`, which the old textarea converted to bold because
+    // its whole editing form was markdown. Escaping it here instead would have
+    // put the literal asterisks back in front of 400 families, from the change
+    // that was supposed to end them. Caught on staging, not by a test.
+    //
+    // `editableToHtml` is the converter that has always done this job, so a
+    // pasted `[words](url)` becomes a real link too - the other half of his
+    // report. Sanitized afterwards like any other inserted HTML.
+    insertHtmlAtCaret(sanitizeRichHtml(editableToHtml(text)));
   }
 
   return (
