@@ -162,7 +162,7 @@ export function htmlToEditable(html) {
 //      (the real form operators use, e.g. [text]({{register_url}})); anything
 //      else (javascript:, data:, relative junk) collapses to "#",
 //   3. escape the one attribute-breaking char escapeText left: `"`.
-function safeLinkHref(href) {
+export function safeLinkHref(href) {
   const cleaned = String(href).replace(/[\x00-\x1F\x7F]/g, "").trim();
   const allowed = /^\{\{\w+\}\}$/.test(cleaned) || /^(?:https?:|mailto:)/i.test(cleaned);
   return (allowed ? cleaned : "#").replace(/"/g, "&quot;");
@@ -243,4 +243,116 @@ export function editableToHtml(text) {
 export function stripHtml(html) {
   if (!html) return "";
   return unescapeText(html.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim());
+}
+
+// ── WYSIWYG support ────────────────────────────────────────────────────────
+//
+// The helpers above exist to show an operator a MARKDOWN form of their email in
+// a textarea. That was already the wrong answer to the right question, and
+// Jessica named it twice: "no one will know what those words mean" (Aug, about
+// `[text](url)`) and again on 2026-09-21, looking at `hi **hows **it going` in
+// the Message families box - "it just needs to be bold, not have asterisks.
+// same with the link. just should be blue/underlined as parents will see it."
+//
+// The rule this file already states for HTML - "No one should see HTML"
+// (2026-06-03) - was only ever half-applied: a literal `<br/>` was removed and
+// `**` was put in its place. A marker is a marker. So the editing surface
+// becomes contenteditable and these three helpers serve it. `htmlToEditable` /
+// `editableToHtml` stay exactly as they are for the surfaces still on textareas.
+
+// Tags an operator can actually produce with the toolbar, plus the block tags a
+// paste can legitimately bring. EVERYTHING else is unwrapped (text kept) rather
+// than deleted, so a paste from a word processor loses its styling and keeps
+// its words - losing an operator's sentence would be far worse than losing bold.
+const ALLOWED_TAGS = new Set(["P", "BR", "STRONG", "B", "EM", "I", "U", "A", "UL", "OL", "LI", "DIV", "SPAN"]);
+
+/**
+ * Whitelist-sanitize HTML on its way IN from a paste or OUT of contenteditable.
+ *
+ * Uses the DOM rather than regexes on purpose: a regex sanitizer is the classic
+ * way to ship an XSS, and this HTML is both rendered with dangerouslySetInnerHTML
+ * in the admin and mailed to families. Anything not on the list is unwrapped.
+ * `href` goes through the same safeLinkHref the markdown path uses, so
+ * `javascript:` collapses to "#" here exactly as it does there.
+ */
+export function sanitizeRichHtml(html) {
+  if (!html) return "";
+  // NO DOM, NO GUESSING. These three helpers parse with the real HTML parser
+  // because a regex sanitizer is the classic way to ship an XSS, and this HTML
+  // is both rendered with dangerouslySetInnerHTML in the admin and mailed to
+  // families. If they are ever called where there is no document (a Node test,
+  // a future server render), the answer is not "pass it through" - it is strip
+  // every tag. Losing the bold is survivable; passing an unchecked <script>
+  // through a function whose whole job is to check is not.
+  if (typeof document === "undefined") return stripHtml(html);
+  const doc = document.implementation.createHTMLDocument("");
+  doc.body.innerHTML = String(html);
+
+  const walk = (node) => {
+    // A static copy: we mutate the tree while walking it.
+    for (const child of [...node.childNodes]) {
+      if (child.nodeType === 3) continue;                 // text, always fine
+      if (child.nodeType !== 1) { child.remove(); continue; } // comments etc.
+      // Script and style carry TEXT that must die with the tag - unwrapping
+      // them would paste the script source into the email as visible words.
+      if (child.tagName === "SCRIPT" || child.tagName === "STYLE") {
+        child.remove();
+        continue;
+      }
+      walk(child);
+      if (!ALLOWED_TAGS.has(child.tagName)) {
+        child.replaceWith(...child.childNodes);
+        continue;
+      }
+      // A merge-field chip is the one element allowed to keep attributes.
+      const token = child.getAttribute("data-token");
+      const href = child.tagName === "A" ? child.getAttribute("href") : null;
+      for (const attr of [...child.attributes]) child.removeAttribute(attr.name);
+      if (token) {
+        child.setAttribute("data-token", token);
+        child.setAttribute("contenteditable", "false");
+      }
+      if (href !== null) child.setAttribute("href", safeLinkHref(href));
+    }
+  };
+  walk(doc.body);
+  return doc.body.innerHTML;
+}
+
+/**
+ * `{{key}}` -> a chip the operator reads as words. `labelFor` maps a key to the
+ * human label ("Parent's first name"); an unknown key keeps its raw spelling so
+ * a typo stays visible rather than turning into a confident-looking chip.
+ *
+ * contenteditable="false" so the chip deletes as ONE unit. Without it an
+ * operator backspacing through `{{parent_first_name}}` produces
+ * `{{parent_first_nam}}`, which still looks like a merge field and silently
+ * stops being one.
+ */
+export function tokensToChips(html, labelFor) {
+  if (!html) return "";
+  return String(html).replace(/\{\{(\w+)\}\}/g, (m, key) => {
+    const label = labelFor?.(key);
+    if (!label) return m;
+    return `<span data-token="${key}" contenteditable="false" class="enr-chip">${escapeText(label)}</span>`;
+  });
+}
+
+/** Chips back to `{{key}}` for storage and for the send. */
+export function chipsToTokens(html) {
+  if (!html) return "";
+  // Regex fallback is safe HERE (unlike the sanitizer) because this only
+  // rewrites chips we authored ourselves back into their {{key}} spelling.
+  if (typeof document === "undefined") {
+    return String(html).replace(
+      /<span[^>]*data-token="(\w+)"[^>]*>[\s\S]*?<\/span>/gi,
+      (_m, key) => `{{${key}}}`,
+    );
+  }
+  const doc = document.implementation.createHTMLDocument("");
+  doc.body.innerHTML = String(html);
+  for (const el of [...doc.body.querySelectorAll("[data-token]")]) {
+    el.replaceWith(doc.createTextNode(`{{${el.getAttribute("data-token")}}}`));
+  }
+  return doc.body.innerHTML;
 }

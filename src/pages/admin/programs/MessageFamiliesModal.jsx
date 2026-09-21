@@ -464,7 +464,11 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
                 rows={7}
                 fields={FIELDS}
                 showPreview={false}
-                placeholder={"e.g. Hi {{parent_first_name}}, next week {{student_first_name}}'s class will start at 3pm instead of 2:30."}
+                // Plain words, no token spelling. An operator who wants the
+                // parent's name in there presses Personalize with fields; an
+                // example written in braces teaches the notation this editor
+                // exists to hide.
+                placeholder={"e.g. Next week class will start at 3pm instead of 2:30."}
               />
             </div>
 
