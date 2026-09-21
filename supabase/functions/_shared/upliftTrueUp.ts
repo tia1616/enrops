@@ -272,7 +272,18 @@ export async function runUpliftTrueUp(
       alreadyRefundedFeeCents: facts.alreadyRefundedFeeCents,
     });
 
-    if (owed <= 0) return { returnedCents: 0, reason: 'we recovered no more than Stripe took' };
+    if (owed <= 0) {
+      // Logged even though nothing happens. This is the ORDINARY outcome - the
+      // rail cost what we expected - and without a line here there is no way to
+      // tell "ran and correctly did nothing" from "never ran", which is exactly
+      // the question a staging verification asks. Found while verifying on
+      // staging 2026-09-21: the charge reconciled perfectly and the logs were
+      // silent, so the run could only be inferred.
+      console.log(
+        `${tag} ${paymentIntentId}: recovered ${facts.recordedUpliftCents}c, Stripe took ${facts.stripeFeeCents}c, nothing owed back`,
+      );
+      return { returnedCents: 0, reason: 'we recovered no more than Stripe took' };
+    }
 
     const refund = await stripe.applicationFees.createRefund(
       facts.applicationFeeId,
