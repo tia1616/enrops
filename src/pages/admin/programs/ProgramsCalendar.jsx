@@ -16,10 +16,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
+import { useAdminNarrow, tapTarget } from "../../../lib/adminViewport.js";
 import EditProgramCurriculumModal from "./EditProgramCurriculumModal.jsx";
 import CancelClassModal from "./CancelClassModal.jsx";
 import MessageFamiliesModal from "./MessageFamiliesModal.jsx";
 import ShareProgram from "../../../components/ShareProgram.jsx";
+import FamiliesPayNote, { useOrgFeeConfig } from "../../../components/FamiliesPayNote.jsx";
 import ShareLink from "../../../components/ShareLink.jsx";
 import EnnieTip from "../../../components/EnnieTip.jsx";
 import EmbedSnippet from "../../../components/EmbedSnippet.jsx";
@@ -955,12 +957,36 @@ export default function ProgramsCalendar() {
           every cell on screen. !important because the row styles are inline. */}
       <style>{`
         @media (max-width: 900px) {
+          /* ONE COLUMN, not two. This rule used to say "1fr auto", and the row
+             has SIX children - so the long class title landed in the "auto"
+             track, took its own max-content width, and starved the "1fr" to
+             ZERO. Measured on Jeff's phone and reproduced at 375px: the track
+             computed to 0px, so the date rendered in a zero-width column and
+             spilled on top of the title, and "2:35pm" drew over the Expand
+             button. The row was unreadable while the page reported no overflow
+             at all, which is why an audit that only checked for sideways scroll
+             passed it.
+
+             A phone gets one field per line. "auto" cannot starve a sibling
+             that is not there.
+
+             NOTE: this whole block is a JS template literal, so a backtick in a
+             comment ends the string. Quote CSS keywords, never backtick them -
+             the freeIdentifiers test caught exactly that here. */
           [data-program-row] {
-            grid-template-columns: 1fr auto !important;
-            gap: 4px 12px !important;
+            grid-template-columns: 1fr !important;
+            gap: 6px 0 !important;
             padding: 12px 14px !important;
             align-items: start !important;
           }
+          /* The class name is what an operator scans for, and stacked there is
+             no left column to run an eye down - so it leads, ahead of the date
+             that leads on desktop. Second child = curriculum + school + teacher. */
+          [data-program-row] > *:nth-child(2) { order: -1; }
+          /* Right-alignment is a COLUMN behaviour: it lines the enrolment count
+             up against the edge of a table. Stacked full-width it just strands
+             each value on the far side of the screen from its label. */
+          [data-program-row] > * { text-align: left !important; }
         }
       `}</style>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18, flexWrap: "wrap", gap: 12 }}>
@@ -1485,6 +1511,11 @@ function districtHasCal(program, calendarCoverage) {
 }
 
 function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, isDatesExpanded, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onCancel, onUpdate, onScheduleChanged, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm, showDay = false }) {
+  // PHONE: every control on this row was under the 44px touch minimum - the
+  // roster link 18px, Expand 20px, Change class 26px. The status pills are
+  // deliberately left alone: they read as information that happens to be a
+  // button, and sizing all of them would add ~90px to every stacked row.
+  const narrow = useAdminNarrow();
   // Lean registration ops have no curriculum library, no partner-school
   // facilities, and no instructors — hide those J2S-shaped affordances. J2S
   // (legacy_own_platform) keeps them all.
@@ -1701,6 +1732,8 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
               fontFamily: "inherit",
               cursor: "pointer",
               flexShrink: 0,
+              // 20px before this. The primary action on the row.
+              ...tapTarget(narrow),
             }}
             title="Expand to edit dates, time, capacity, status, and more"
           >
@@ -1731,10 +1764,14 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
 
       {/* Count + breakdown — click to open this program's roster */}
       <div style={{ textAlign: "right" }}>
+        {/* 18px tall before this - the smallest control on the page an
+            operator opens most, and the way into a roster. Found by the control
+            audit, which the first pass on this page skipped because the page
+            reported no overflow. */}
         <Link
           to={`/admin/programs/${p.id}/roster`}
           title="View the enrolled students (roster, allergies, contacts)"
-          style={{ fontSize: 13, fontWeight: 600, color: PURPLE, textDecoration: "none" }}
+          style={{ fontSize: 13, fontWeight: 600, color: PURPLE, textDecoration: "none", ...tapTarget(narrow) }}
         >
           {enrolled}<span style={{ color: MUTED, fontWeight: 400 }}>{capacity > 0 ? ` / ${capacity}` : ""}</span>
           <span style={{ fontSize: 10, marginLeft: 3 }}>›</span>
@@ -1755,7 +1792,8 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
           <button
             type="button"
             onClick={() => onEdit(p)}
-            style={editLinkStyle}
+            // 26px before this.
+            style={{ ...editLinkStyle, ...tapTarget(narrow) }}
             title={p.curriculum_id
               ? "Change the class for this program"
               : "Match this program to a class from your Offerings library"}
@@ -1796,6 +1834,9 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
   // Lean ops don't have partner-run registration or instructors — hide those.
   const { org: panelOrg } = useOutletContext() ?? {};
   const isLean = panelOrg?.instructor_pay_model === "enrops_platform";
+  // What a family is charged for the price in this panel. Same endpoint the
+  // registration flow asks. See src/components/FamiliesPayNote.jsx.
+  const panelFeeConfig = useOrgFeeConfig(orgSlug || panelOrg?.slug);
   // Reads the SAVED row, not the local draft below: Publish writes status and
   // nothing else, so an unsaved price change must not talk the gate out of the
   // way. Saving first is what moves it.
@@ -2623,6 +2664,15 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
             value={draft.price_cents == null || draft.price_cents === "" ? "" : Math.round(Number(draft.price_cents) / 100)}
             onChange={(e) => set("price_cents", e.target.value === "" ? "" : Math.round(Number(e.target.value) * 100))}
             style={expandInputStyle}
+          />
+          {/* The number to advertise, next to the number being typed. Same
+              component and same source as the two program builders, so an
+              operator editing a price here is told exactly what they would be
+              told creating it. */}
+          <FamiliesPayNote
+            priceCents={draft.price_cents === "" || draft.price_cents == null ? null : Number(draft.price_cents)}
+            feeConfig={panelFeeConfig}
+            style={{ fontSize: 12.5 }}
           />
         </ExpandField>
         <ExpandField label="Location *">
@@ -3759,6 +3809,13 @@ const toggleBtnActive = {
 
 const summaryBar = {
   display: "flex",
+  // Without this the four counts are one un-wrapping row: on a 430px phone each
+  // item shrank past its own text and the overflow printed on top of its
+  // neighbour - "2 programs" and "(0 paid . 4 on installments)" were rendered
+  // over each other in Jessica's screenshot. Flex items only shrink to
+  // min-content and then wrap, so this costs desktop nothing (there is room for
+  // one row) and gives the phone as many rows as it needs.
+  flexWrap: "wrap",
   gap: 18,
   alignItems: "center",
   padding: "10px 14px",
