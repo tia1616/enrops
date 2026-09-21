@@ -105,7 +105,25 @@ function fmtWhen(iso) {
   });
 }
 
-export default function MessageFamiliesModal({ program, orgId, onClose }) {
+/**
+ * @param programs the classes this message goes to, as [{ id, curriculum }].
+ *
+ * A LIST, chosen before the composer opens, because that is where operators
+ * expect to choose it. The first version put a class picker INSIDE this panel;
+ * Jessica: "wouldn't it be cleaner to have one 'message families' button at the
+ * top of rosters, and then the provider just clicks one or multiple? seems like
+ * that would be standard crm behavior?" It is - Jackrabbit ticks classes on the
+ * class list and then presses one Send a Message - and a picker buried in a
+ * per-class modal was the third shape nobody uses.
+ *
+ * So the selection lives on the roster list and this panel just composes. One
+ * composer, reached from the two natural places: tick several classes and press
+ * the button above the list, or press the button on a single class's row.
+ */
+export default function MessageFamiliesModal({ programs, orgId, onClose }) {
+  // The class the panel is titled after and whose name fills a merge field in
+  // the test send. With several, it is simply the first.
+  const program = programs?.[0];
   const [tab, setTab] = useState("write");          // write | sent
   const [subject, setSubject] = useState("");
   // HTML is the canonical form, the same as every other body editor. The
@@ -150,8 +168,7 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
   //
   // Jeff sent "Help Us Bring More Friends" to TWELVE classes in one sitting,
   // 175 emails, by pasting it twelve times - 23 of his 33 sends in eight days
-  // were the same message re-entered class by class. Jackrabbit does this with
-  // checkboxes on the class list feeding one composer.
+  // were the same message re-entered class by class.
   //
   // It is orchestrated HERE rather than in the edge function, deliberately. One
   // call per class keeps every existing reader correct: each class still gets
@@ -160,9 +177,6 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
   // is actually in. A function that took a list of classes would have had to
   // invent an answer to "which class is this family's" for the 13% of J2S
   // families in more than one, and would have made every count ambiguous.
-  const [otherClassIds, setOtherClassIds] = useState(() => new Set());
-  const [classList, setClassList] = useState(null);     // null = loading
-  const [classPickerOpen, setClassPickerOpen] = useState(false);
   const [progress, setProgress] = useState(null);       // { done, total, name }
 
   // WHAT THIS COMPOSE SESSION HAS ALREADY DONE, so a retry RESUMES instead of
@@ -195,37 +209,17 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
   // resume is only a resume while it is the same message.
   const batchMessageKey = useRef(null);
 
+  // The classes to send to, in the order the operator picked them. Order
+  // matters: a family in two of them is emailed by the FIRST and excluded from
+  // the rest, so it decides which class their copy is about.
   const selectedClassIds = useMemo(
-    () => [program?.id, ...otherClassIds].filter(Boolean),
-    [program?.id, otherClassIds],
+    () => (programs ?? []).map((p) => p?.id).filter(Boolean),
+    [programs],
   );
-
-  // The other classes this message could also go to. Mirrors the Rosters list
-  // rather than inventing a second rule: drafts are hidden (they cannot have
-  // registrations), cancelled and closed classes are shown, because a cancelled
-  // class is precisely when its families most need telling.
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      const { data, error } = await supabase
-        .from("programs")
-        .select("id, curriculum, term, day_of_week, status, program_locations ( name )")
-        .eq("organization_id", orgId)
-        .neq("status", "draft");
-      if (!alive) return;
-      if (error) { setClassList([]); return; }
-      // Same TERM as the class they opened. Messaging this term's families and
-      // next spring's in one send is almost never what someone means, and the
-      // term is the line operators already think in.
-      const here = (data ?? []).find((p) => p.id === program?.id);
-      setClassList(
-        (data ?? [])
-          .filter((p) => p.id !== program?.id && p.term === here?.term)
-          .sort((a, b) => (a.curriculum ?? "").localeCompare(b.curriculum ?? "")),
-      );
-    })();
-    return () => { alive = false; };
-  }, [orgId, program?.id]);
+  const labelFor = useCallback(
+    (pid) => (programs ?? []).find((p) => p?.id === pid)?.curriculum || "this class",
+    [programs],
+  );
 
   const call = useCallback(async (payload) => {
     const { data: { session } } = await supabase.auth.getSession();
@@ -434,9 +428,7 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
     try {
       for (let i = 0; i < selectedClassIds.length; i++) {
         const pid = selectedClassIds[i];
-        const label = pid === program?.id
-          ? (program?.curriculum || "this class")
-          : (classList?.find((c) => c.id === pid)?.curriculum || "a class");
+        const label = labelFor(pid);
 
         // A RESUME SKIPS WHAT ALREADY WENT. Without this, a duplicate warning
         // raised on class 3 of 12 - which happens whenever THAT class had the
@@ -748,44 +740,23 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
                 Also include families who have left or been refunded
               </label>
 
-              {/* SEND IT TO OTHER CLASSES TOO. Collapsed by default: the common
-                  case is one class, and a list of every class in the term above
-                  the message box would bury it. */}
-              {!!classList?.length && (
+              {/* WHICH CLASSES, named rather than counted. The selection was
+                  made on the roster list before this opened, so the panel's job
+                  is to show it back - an operator who ticked twelve rows needs
+                  to see the twelve, not the number twelve. */}
+              {selectedClassIds.length > 1 && (
                 <div style={{ marginTop: 8, borderTop: `1px solid ${RULE}`, paddingTop: 8 }}>
-                  <button type="button" onClick={() => setClassPickerOpen((v) => !v)} disabled={sending}
-                    style={{ background: "transparent", border: "none", padding: 0, color: BRIGHT, fontSize: 12.5, fontFamily: "inherit", cursor: sending ? "not-allowed" : "pointer", fontWeight: 600 }}>
-                    {classPickerOpen ? "Hide other classes" : `Also send to other classes${otherClassIds.size ? ` (${otherClassIds.size} added)` : ""}`}
-                  </button>
-                  {classPickerOpen && (
-                    <div style={{ marginTop: 6, maxHeight: 150, overflowY: "auto", border: `1px solid ${RULE}`, borderRadius: 6 }}>
-                      {classList.map((c) => (
-                        <label key={c.id} style={{ display: "flex", alignItems: "center", gap: 7, padding: "5px 8px", fontSize: 12, borderBottom: `1px solid ${RULE}`, cursor: sending ? "not-allowed" : "pointer" }}>
-                          <input type="checkbox" disabled={sending} checked={otherClassIds.has(c.id)}
-                            onChange={() => setOtherClassIds((prev) => {
-                              const next = new Set(prev);
-                              if (next.has(c.id)) next.delete(c.id); else next.add(c.id);
-                              return next;
-                            })} />
-                          <span style={{ color: INK, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                            {c.curriculum}
-                            <span style={{ color: MUTED }}>
-                              {c.program_locations?.name ? ` · ${c.program_locations.name}` : ""}
-                              {c.day_of_week ? ` · ${c.day_of_week}` : ""}
-                              {c.status === "cancelled" ? " · cancelled" : ""}
-                            </span>
-                          </span>
-                        </label>
-                      ))}
-                    </div>
-                  )}
-                  {/* Said once, plainly, because it is the question an operator
-                      asks the moment they tick a second class. */}
-                  {otherClassIds.size > 0 && (
-                    <div style={{ fontSize: 11, color: MUTED, marginTop: 6 }}>
-                      A family in more than one of these classes gets this once, not once per class.
-                    </div>
-                  )}
+                  <div style={{ fontSize: 12, fontWeight: 600, color: INK }}>
+                    Going to {selectedClassIds.length} classes
+                  </div>
+                  <div style={{ fontSize: 12, color: MUTED, marginTop: 3 }}>
+                    {(programs ?? []).map((p) => p?.curriculum).filter(Boolean).join(" · ")}
+                  </div>
+                  {/* Said plainly, because it is the question an operator asks
+                      the moment they tick a second class. */}
+                  <div style={{ fontSize: 11, color: MUTED, marginTop: 6 }}>
+                    A family in more than one of these gets this once, not once per class.
+                  </div>
                 </div>
               )}
 

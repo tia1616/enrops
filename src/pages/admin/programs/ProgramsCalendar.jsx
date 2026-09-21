@@ -3141,9 +3141,12 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         />
       )}
 
+      {/* A list of one: the composer takes the classes to write to, and from
+          here there is exactly one. Choosing several is a roster-list job,
+          which is where the tick boxes are. */}
       {tellingFamilies && (
         <MessageFamiliesModal
-          program={program}
+          programs={[program]}
           orgId={panelOrg?.id}
           onClose={() => setTellingFamilies(false)}
         />
