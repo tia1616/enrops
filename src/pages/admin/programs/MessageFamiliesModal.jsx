@@ -407,11 +407,25 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
           return;
         }
 
-        // Only households that were ACTUALLY emailed are carried forward. A
-        // family whose send failed must stay eligible for the next class rather
-        // than being silently skipped everywhere because one attempt bounced.
+        // EVERY household this class ATTEMPTED is carried forward, not only the
+        // ones that succeeded.
+        //
+        // The first version of this carried only `status === 'sent'`, reasoning
+        // that a family whose send failed should stay eligible for the next
+        // class. Watching it on staging showed why that is wrong: a family in
+        // two classes appeared TWICE in "these did not go", because the failure
+        // in class one made them eligible again in class two. Two consequences,
+        // both bad - the operator reads one family as two problems, and if that
+        // first send had in fact reached the inbox while reporting a failure,
+        // the family gets the message twice, which is the exact thing this
+        // batch exists to prevent.
+        //
+        // The operator's intent is "this family hears this once". Being
+        // addressed is what satisfies it; whether the attempt bounced is a
+        // delivery problem to report, not a reason to quietly re-aim the same
+        // message at them under a different class.
         for (const r of json.results ?? []) {
-          if (r.status === "sent" && r.parent_id) alreadyEmailed.add(r.parent_id);
+          if (r.parent_id) alreadyEmailed.add(r.parent_id);
         }
         perClass.push({ programId: pid, label, ...json });
       }
@@ -425,7 +439,11 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
         status: perClass.every((p) => p.status === "sent") ? "sent"
           : perClass.every((p) => p.status === "failed" || p.status === "no_recipients") ? "failed" : "partial",
         sent: perClass.reduce((n, p) => n + (p.sent ?? 0), 0),
-        households_sent: alreadyEmailed.size,
+        // Households actually REACHED, which is not the same as households
+        // addressed now that a failed attempt also counts as addressed.
+        households_sent: new Set(
+          perClass.flatMap((p) => (p.results ?? []).filter((r) => r.status === "sent").map((r) => r.parent_id)).filter(Boolean),
+        ).size,
         failed: perClass.reduce((n, p) => n + (p.failed ?? 0), 0),
         unreachable_count: perClass.reduce((n, p) => n + (p.unreachable_count ?? 0), 0),
         copy: perClass[0]?.copy ?? null,
