@@ -214,6 +214,9 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
     try {
       const { status, json } = await call({
         mode: "test",
+        // Sent on a test too, so the sample family whose name fills the merge
+        // fields is one who is actually going to receive it.
+        exclude_parent_ids: [...excluded],
         subject: subject.trim(),
         body_html: bodyHtml,
         test_email: myEmail.trim(),
@@ -241,14 +244,26 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
       setError("Add a subject and a message before sending.");
       return;
     }
+    // Two different empties, two different sentences. "Nobody has an address" is
+    // a data problem the operator cannot fix from here; "you unticked everyone"
+    // is a thing they just did and can undo.
     if ((preview?.recipient_count ?? 0) === 0) {
       setError("Nobody in this class has an email address we can send to.");
+      return;
+    }
+    if (count === 0) {
+      setError("Every family is unticked, so there is nobody to send to.");
       return;
     }
     setPhase("sending");
     try {
       const { status, json } = await call({
         mode: "send",
+        // Sent as the households LEFT OUT rather than the ones selected, so the
+        // default - an empty array - means everybody. A caller that forgets the
+        // field emails the whole class, which is the pre-existing behaviour;
+        // sending the inverse would mean a dropped field silently emails nobody.
+        exclude_parent_ids: [...excluded],
         subject: subject.trim(),
         body_html: bodyHtml,
         copy_to: copyToMe && myEmail.trim() ? myEmail.trim() : undefined,
@@ -281,7 +296,45 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
     }
   }
 
-  const count = preview?.recipient_count ?? 0;
+  // HOUSEHOLDS, built from the preview's rows. Every row carries the parent_id
+  // of the registration it came from, and a second guardian carries the SAME
+  // one, so grouping on it turns "10 inboxes" back into "6 families" - which is
+  // what the label above has always claimed to be counting and never was.
+  const households = useMemo(() => {
+    const byFamily = new Map();
+    for (const r of preview?.recipients ?? []) {
+      const key = r.parent_id || r.email;
+      if (!byFamily.has(key)) {
+        byFamily.set(key, { key, name: r.name, children: r.children, audiences: r.audiences ?? [], emails: [] });
+      }
+      const h = byFamily.get(key);
+      h.emails.push(r.email);
+      // The account holder's name wins; a guardian-only household keeps theirs.
+      if (r.kinds?.includes("parent") && r.name) h.name = r.name;
+      for (const a of r.audiences ?? []) if (!h.audiences.includes(a)) h.audiences.push(a);
+    }
+    return [...byFamily.values()];
+  }, [preview]);
+
+  // Excluded households, by key. Starts empty: the default is everybody, which
+  // is what an operator opening this panel means.
+  const [excluded, setExcluded] = useState(() => new Set());
+  const toggleHousehold = (key) => setExcluded((prev) => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
+
+  // The audience toggles re-fetch a different list, and a household excluded
+  // under the old one may not exist under the new one. Clearing is the honest
+  // reset: a stale exclusion silently dropping a family from a list they were
+  // never shown on is exactly the kind of quiet omission this panel exists to
+  // prevent.
+  useEffect(() => { setExcluded(new Set()); }, [includeWaitlist, includeCancelled]);
+
+  const selected = households.filter((h) => !excluded.has(h.key));
+  const count = selected.length;
+  const inboxCount = selected.reduce((n, h) => n + h.emails.length, 0);
   const unreachable = preview?.unreachable ?? [];
   const sending = phase === "sending";
 
@@ -405,17 +458,41 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
                 ) : previewError ? (
                   <span style={{ color: RED }}>{previewError}</span>
                 ) : (
-                  <strong>{count} {count === 1 ? "family" : "families"} will receive this</strong>
+                  <>
+                    <strong>{count} {count === 1 ? "family" : "families"} will receive this</strong>
+                    {/* The second number, and it only appears when it differs.
+                        A household with two guardians is ONE family and TWO
+                        emails; printing only the bigger number is what made this
+                        label say 10 for 6 at Jackson. */}
+                    {inboxCount !== count && (
+                      <span style={{ color: MUTED }}> ({inboxCount} email addresses)</span>
+                    )}
+                    {excluded.size > 0 && (
+                      <span style={{ color: AMBER }}> · {excluded.size} left out</span>
+                    )}
+                  </>
                 )}
               </div>
 
-              {!!preview?.recipients?.length && (
+              {!!households.length && (
                 <div style={{ marginTop: 8, maxHeight: 160, overflowY: "auto", border: `1px solid ${RULE}`, borderRadius: 6 }}>
-                  {preview.recipients.map((r) => (
-                    <div key={r.email} style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "5px 8px", fontSize: 12, borderBottom: `1px solid ${RULE}` }}>
-                      <span style={{ color: INK, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                        {r.name || r.email}
-                        <span style={{ color: MUTED }}> · {r.children}</span>
+                  {/* ONE ROW PER FAMILY, and the checkbox drops the HOUSEHOLD.
+                      A row used to be an inbox, so unticking "Rosemary" would
+                      have left Jim receiving it - the same household told
+                      anyway, which is the exclude-by-address bug wearing a new
+                      control. Both their addresses sit under one tick. */}
+                  {households.map((r) => (
+                    <label key={r.key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "5px 8px", fontSize: 12, borderBottom: `1px solid ${RULE}`, cursor: sending ? "not-allowed" : "pointer", opacity: excluded.has(r.key) ? 0.45 : 1 }}>
+                      <span style={{ color: INK, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 7 }}>
+                        <input type="checkbox" checked={!excluded.has(r.key)} disabled={sending}
+                          onChange={() => toggleHousehold(r.key)} />
+                        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
+                          {r.name || r.emails[0]}
+                          <span style={{ color: MUTED }}> · {r.children}</span>
+                          {r.emails.length > 1 && (
+                            <span style={{ color: MUTED }}> · {r.emails.length} addresses</span>
+                          )}
+                        </span>
                       </span>
                       {/* FOUR STATES, FOUR LABELS. A family can be in more than
                           one group at once - one child enrolled, another waiting
@@ -431,7 +508,7 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
                               : r.audiences?.includes("waitlist") ? "WAITING LIST" : "LEFT / REFUNDED"}
                         </span>
                       )}
-                    </div>
+                    </label>
                   ))}
                 </div>
               )}

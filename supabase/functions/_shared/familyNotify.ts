@@ -203,6 +203,35 @@ export function groupRecipientsByAddress(rows: MessageRecipientRow[]) {
   };
 }
 
+/**
+ * Drop the households an operator unticked, BY FAMILY and never by address.
+ *
+ * Lives here rather than inline in the caller for one reason: the test that
+ * pins this rule must exercise the code that ships, not a second copy of the
+ * rule written next to it. The first draft of that test had its own filter and
+ * would have passed against a broken function.
+ *
+ * `parent_id` is the household: program_message_recipients stamps the
+ * registration's parent_id on the guardian row too, so both of a family's
+ * addresses carry it. Excluding by address instead is the defect that let three
+ * second guardians through a campaign filter in September and told three
+ * households the same thing twice in two days.
+ *
+ * An empty list means EVERYBODY. That direction matters: a caller that forgets
+ * the field emails the whole class, which is what it did before pickers
+ * existed, rather than silently emailing nobody.
+ */
+export function excludeHouseholds<T extends { parent_id: string }>(
+  groups: T[],
+  excludedParentIds: readonly string[] | null | undefined,
+): T[] {
+  const excluded = new Set(
+    (excludedParentIds ?? []).map((id) => String(id ?? '').trim()).filter(Boolean),
+  );
+  if (excluded.size === 0) return groups ?? [];
+  return (groups ?? []).filter((g) => !excluded.has(g.parent_id));
+}
+
 export interface FamilySendResult {
   parent_id: string;
   name: string;

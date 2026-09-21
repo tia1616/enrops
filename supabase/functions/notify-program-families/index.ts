@@ -27,6 +27,7 @@ import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 import { venueLabel } from '../_shared/roomLabel.ts';
 import { htmlToPlainText } from '../_shared/familyEmailHtml.ts';
 import {
+  excludeHouseholds,
   groupRecipientsByAddress,
   sendFamilyEmails,
   tallyFamilySends,
@@ -97,6 +98,15 @@ interface RequestBody {
   test_email?: string;
   /** mode 'send': one address that also receives ONE copy of the message. */
   copy_to?: string;
+  /**
+   * Households to leave out, by `parent_id`. A HOUSEHOLD, not an address: both
+   * of a family's addresses carry the same parent_id, so one entry drops both.
+   *
+   * Applied to a SEND only. A preview must keep returning everybody, because it
+   * is the list the operator ticks and unticks - filtering it would make an
+   * unticked family disappear off the screen instead of showing as unticked.
+   */
+  exclude_parent_ids?: string[];
   /** Set only after the operator has been told an identical send just went out. */
   confirm_duplicate?: boolean;
 }
@@ -262,10 +272,32 @@ serve(async (req: Request) => {
       return json({ error: 'recipients_failed', detail: rErr.message }, 500);
     }
 
-    const grouped = groupRecipientsByAddress((rows ?? []) as MessageRecipientRow[]);
+    const groupedAll = groupRecipientsByAddress((rows ?? []) as MessageRecipientRow[]);
+
+    // EXCLUSIONS ARE APPLIED ONCE, HERE, BY HOUSEHOLD.
+    //
+    // Everything downstream - the count on the button, the emails, the audit
+    // row, the duplicate guard's comparison - reads `grouped`, so there is no
+    // path on which a family the operator unticked can be counted in one place
+    // and emailed in another. That is the only ordering that makes an exclusion
+    // trustworthy.
+    //
+    // BY PARENT_ID, NEVER BY ADDRESS. Unticking a household must drop BOTH its
+    // addresses; excluding Rosemary while Jim still receives it is the same
+    // defect as the campaign filter that matched parents.email and let three
+    // second guardians through in September.
+    const excludeIds = Array.isArray(body.exclude_parent_ids) ? body.exclude_parent_ids : [];
+    const grouped = {
+      sendable: excludeHouseholds(groupedAll.sendable, excludeIds),
+      // The unreachable list is NOT filtered: those families are not being
+      // emailed either way, and hiding an excluded one would quietly shrink the
+      // "these have no address on file" warning that exists to be complete.
+      unreachable: groupedAll.unreachable,
+    };
     const programName = (program as any).curriculum ?? 'your class';
     const programSummary = describeProgram(program as any);
 
+    // groupedAll on purpose, NOT grouped: the preview is the list being ticked.
     if (mode === 'preview') {
       return json({
         mode: 'preview',
@@ -274,18 +306,32 @@ serve(async (req: Request) => {
         include_cancelled: includeCancelled,
         // Names and addresses so the operator can COUNT and INSPECT before
         // sending, and can see which children sit behind an address.
-        recipients: grouped.sendable.map((g) => ({
+        // `parent_id` IS THE HOUSEHOLD, and it is returned so the screen can
+        // group on it. program_message_recipients stamps the REGISTRATION's
+        // parent_id on the guardian row as well as the parent row, so Rosemary
+        // and Jim on one child share a parent_id and differ only by address.
+        // Without this the screen can only offer a checkbox per INBOX, and
+        // unticking Rosemary would still email Jim - the same household hearing
+        // it anyway, which is the exclude-by-address bug in a new place.
+        recipients: groupedAll.sendable.map((g) => ({
+          parent_id: g.parent_id,
           email: g.email, name: g.name, children: g.student_first_name,
           child_count: g.child_count, audiences: g.audiences, kinds: g.kinds,
         })),
         // The half a send would hide. Named, not just counted, so the operator
         // can chase the school that runs its own registration for real addresses.
-        unreachable: grouped.unreachable.map((g) => ({
+        unreachable: groupedAll.unreachable.map((g) => ({
+          parent_id: g.parent_id,
           email: g.email, name: g.name, children: g.student_first_name,
           reason: g.unreachable_reason,
         })),
-        recipient_count: grouped.sendable.length,
-        unreachable_count: grouped.unreachable.length,
+        // TWO NUMBERS, because they are two different facts and the screen has
+        // been printing the wrong one. `recipient_count` counts INBOXES; the
+        // label above it said "N families will receive this" and printed 10 for
+        // 6 households at Jackson, because a second guardian is a second row.
+        recipient_count: groupedAll.sendable.length,
+        household_count: new Set(groupedAll.sendable.map((g) => g.parent_id)).size,
+        unreachable_count: groupedAll.unreachable.length,
       });
     }
 
@@ -392,7 +438,9 @@ serve(async (req: Request) => {
         // ticked still re-emails every enrolled family. Keying on the flags would
         // let that through silently; keying on subject alone catches it and lets
         // them decide with "Send it again anyway".
-        .select('id, sent_at, sent_count, status, include_waitlist, include_cancelled')
+        // `recipients` is selected now because the guard compares WHO, not just
+        // whether. See the overlap test below.
+        .select('id, sent_at, sent_count, status, include_waitlist, include_cancelled, recipients')
         .eq('program_id', programId)
         .eq('subject', subject)
         .in('status', ['sent', 'partial'])
@@ -405,20 +453,55 @@ serve(async (req: Request) => {
       if (dupErr) {
         console.error('[notify-program-families] duplicate check failed, allowing send:', dupErr);
       } else if (recent && recent.length > 0) {
+        // WHO GOT IT, NOT WHETHER ANYTHING WENT.
+        //
+        // The guard used to key on (class + subject) alone. That was right when
+        // a send always meant "everybody", and it becomes wrong the moment an
+        // operator can pick families: sending to half a class and then to the
+        // other half is one job done in two presses, and blocking the second
+        // half teaches people to click past the warning - which is how the
+        // warning stops working for the case it exists for.
+        //
+        // So it compares the actual households. No overlap means nobody is
+        // hearing it twice and the send proceeds silently. Overlap warns, and
+        // now says HOW MANY would get a second copy, which is the number the
+        // operator actually needs.
+        const previouslySent = new Set(
+          (Array.isArray(recent[0].recipients) ? recent[0].recipients : [])
+            .filter((r: Record<string, unknown>) => r?.status === 'sent')
+            .map((r: Record<string, unknown>) => String(r?.parent_id ?? ''))
+            .filter(Boolean),
+        );
+        const wouldRepeat = new Set(
+          grouped.sendable.map((g) => g.parent_id).filter((id) => previouslySent.has(id)),
+        );
+        // An OLD row carries no parent_id on its recipients (they were written
+        // before this guard needed them) and yields an empty set. Falling back
+        // to the old behaviour is deliberate: an empty set must not be read as
+        // "no overlap, send away", which would silently disable the guard for
+        // exactly the rows it was protecting before today.
+        const knowWho = previouslySent.size > 0;
+        if (knowWho && wouldRepeat.size === 0) {
+          console.log('[notify-program-families] same subject, no overlapping household - allowing');
+        } else {
         return json({
           error: 'duplicate_send',
           message:
-            `The same message went to ${recent[0].sent_count} ` +
-            `${recent[0].sent_count === 1 ? 'family' : 'families'} on this class less than ` +
-            `${DUPLICATE_WINDOW_MINUTES} minutes ago` +
+            (knowWho
+              ? `${wouldRepeat.size} of the ${grouped.sendable.length === 1 ? 'family' : 'families'} you are sending to now already had this message less than ${DUPLICATE_WINDOW_MINUTES} minutes ago`
+              : `The same message went to ${recent[0].sent_count} ` +
+                `${recent[0].sent_count === 1 ? 'family' : 'families'} on this class less than ` +
+                `${DUPLICATE_WINDOW_MINUTES} minutes ago`) +
             // Names the audience that already received it, so an operator who
             // has just ticked a new group can tell whether the people they are
             // trying to reach were covered or not.
             `${recent[0].include_cancelled ? ', including families who had left or been refunded' : ''}` +
             `${recent[0].include_waitlist ? ', including the waiting list' : ''}` +
-            '. Sending again will email everyone on the list above a second time.',
-          previous: recent[0],
+            '. Sending again will email them a second time.',
+          previous: { ...recent[0], recipients: undefined },
+          repeat_count: knowWho ? wouldRepeat.size : null,
         }, 409);
+        }
       }
     }
 
