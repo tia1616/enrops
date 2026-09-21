@@ -16,6 +16,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
+import { useAdminNarrow, tapTarget } from "../../../lib/adminViewport.js";
 import EditProgramCurriculumModal from "./EditProgramCurriculumModal.jsx";
 import CancelClassModal from "./CancelClassModal.jsx";
 import MessageFamiliesModal from "./MessageFamiliesModal.jsx";
@@ -1510,6 +1511,11 @@ function districtHasCal(program, calendarCoverage) {
 }
 
 function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, isDatesExpanded, onToggleDates, onEdit, onEditFacility, onPublish, onUnpublish, onDelete, onCancel, onUpdate, onScheduleChanged, onDuplicate, termOptions, locations, orgSlug, orgActiveTerm, showDay = false }) {
+  // PHONE: every control on this row was under the 44px touch minimum - the
+  // roster link 18px, Expand 20px, Change class 26px. The status pills are
+  // deliberately left alone: they read as information that happens to be a
+  // button, and sizing all of them would add ~90px to every stacked row.
+  const narrow = useAdminNarrow();
   // Lean registration ops have no curriculum library, no partner-school
   // facilities, and no instructors — hide those J2S-shaped affordances. J2S
   // (legacy_own_platform) keeps them all.
@@ -1726,6 +1732,8 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
               fontFamily: "inherit",
               cursor: "pointer",
               flexShrink: 0,
+              // 20px before this. The primary action on the row.
+              ...tapTarget(narrow),
             }}
             title="Expand to edit dates, time, capacity, status, and more"
           >
@@ -1756,10 +1764,14 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
 
       {/* Count + breakdown — click to open this program's roster */}
       <div style={{ textAlign: "right" }}>
+        {/* 18px tall before this - the smallest control on the page an
+            operator opens most, and the way into a roster. Found by the control
+            audit, which the first pass on this page skipped because the page
+            reported no overflow. */}
         <Link
           to={`/admin/programs/${p.id}/roster`}
           title="View the enrolled students (roster, allergies, contacts)"
-          style={{ fontSize: 13, fontWeight: 600, color: PURPLE, textDecoration: "none" }}
+          style={{ fontSize: 13, fontWeight: 600, color: PURPLE, textDecoration: "none", ...tapTarget(narrow) }}
         >
           {enrolled}<span style={{ color: MUTED, fontWeight: 400 }}>{capacity > 0 ? ` / ${capacity}` : ""}</span>
           <span style={{ fontSize: 10, marginLeft: 3 }}>›</span>
@@ -1780,7 +1792,8 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
           <button
             type="button"
             onClick={() => onEdit(p)}
-            style={editLinkStyle}
+            // 26px before this.
+            style={{ ...editLinkStyle, ...tapTarget(narrow) }}
             title={p.curriculum_id
               ? "Change the class for this program"
               : "Match this program to a class from your Offerings library"}
