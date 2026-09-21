@@ -22,9 +22,10 @@
 // anything itself.
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
+import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 import { venueLabel } from '../_shared/roomLabel.ts';
+import { htmlToPlainText } from '../_shared/familyEmailHtml.ts';
 import {
   groupRecipientsByAddress,
   sendFamilyEmails,
@@ -86,9 +87,66 @@ interface RequestBody {
   include_cancelled?: boolean;
   subject?: string;
   body_text?: string;
-  mode?: 'preview' | 'send';
+  /**
+   * The message as HTML, from the shared body editor. Optional: a caller that
+   * sends only `body_text` gets the original text-only email, unchanged.
+   */
+  body_html?: string;
+  mode?: 'preview' | 'send' | 'test';
+  /** mode 'test': the single address to send the proof to. */
+  test_email?: string;
+  /** mode 'send': one address that also receives ONE copy of the message. */
+  copy_to?: string;
   /** Set only after the operator has been told an identical send just went out. */
   confirm_duplicate?: boolean;
+}
+
+/**
+ * A test or a copy may only go to somebody who already works for this org.
+ *
+ * WITHOUT THIS, "send a test to any address" is a way to send mail FROM a
+ * tenant's verified sending domain TO anyone, which is an open relay wearing a
+ * proof-reading control's clothes. Matched against org_members for THIS org
+ * (case-insensitively), plus the caller's own account address, which covers the
+ * common case and lets Jeff proof a message to a colleague - the thing he
+ * cannot do today.
+ */
+async function resolveInternalAddress(
+  supabase: SupabaseClient,
+  orgId: string,
+  callerEmail: string | null | undefined,
+  requested: string,
+): Promise<{ email: string } | { error: string }> {
+  const wanted = requested.trim().toLowerCase();
+  if (!wanted || !wanted.includes('@')) return { error: 'test_email_invalid' };
+  if ((callerEmail ?? '').trim().toLowerCase() === wanted) return { email: wanted };
+
+  // THE WHOLE TEAM, COMPARED IN JS, and NOT `.ilike('email', wanted)`. `ilike`
+  // reads `%` and `_` as wildcards, so "a%@example.com" would match a real
+  // member and pass a guard it never actually satisfied. The address is then
+  // used verbatim as the recipient, so the wildcard form is undeliverable rather
+  // than dangerous - but a guard that can be made to answer yes about a string
+  // it did not match is not a guard. An org's team is a handful of rows.
+  const { data, error } = await supabase
+    .from('org_members')
+    .select('email')
+    .eq('organization_id', orgId);
+  // FAIL CLOSED, unlike the duplicate guard. A lookup failure here means we
+  // cannot prove the address belongs to the org, and the failure mode of
+  // guessing is mailing a stranger from the tenant's domain.
+  if (error) {
+    console.error('[notify-program-families] member address lookup failed:', error);
+    return { error: 'lookup_failed' };
+  }
+  // Invited-but-not-yet-accepted members count. Adding someone to the team
+  // already sends mail to that address, so this opens no route that inviting
+  // them does not already open - and refusing would break the colleague case
+  // this control exists for.
+  const match = (data ?? []).some(
+    (m) => String(m.email ?? '').trim().toLowerCase() === wanted,
+  );
+  if (!match) return { error: 'test_email_not_in_org' };
+  return { email: wanted };
 }
 
 // How recently an identical send counts as an accidental repeat.
@@ -131,15 +189,26 @@ serve(async (req: Request) => {
     const orgId = body.organization_id?.trim();
     const includeWaitlist = !!body.include_waitlist;
     const includeCancelled = !!body.include_cancelled;
-    const mode = body.mode === 'send' ? 'send' : 'preview';
+    const mode = body.mode === 'send' ? 'send' : body.mode === 'test' ? 'test' : 'preview';
     const subject = body.subject?.trim() ?? '';
     const bodyText = body.body_text?.trim() ?? '';
+    const bodyHtml = body.body_html?.trim() ?? '';
+    // WHAT THE AUDIT ROW STORES AS THE PLAIN HALF. An editor-written message
+    // arrives as HTML alone, and `body_text` is read by the message history and
+    // by the family's contact timeline - so it is derived here rather than left
+    // empty. Tokens are left UNRESOLVED, exactly as the column has always held
+    // them: the row records what the operator wrote, not one family's copy.
+    const storedBodyText = bodyHtml ? htmlToPlainText(bodyHtml) : bodyText;
 
     if (!programId) return json({ error: 'program_id_required' }, 400);
     if (!orgId) return json({ error: 'organization_id_required' }, 400);
-    // Only a SEND needs copy. A preview is how the operator decides whether to
-    // write any, so it must work on an empty form.
-    if (mode === 'send' && (!subject || !bodyText)) {
+    // Only a SEND or a TEST needs copy. A preview is how the operator decides
+    // whether to write any, so it must work on an empty form.
+    //
+    // Either half satisfies this. An editor-written message carries both; a
+    // caller that only knows about text still sends. Requiring both would break
+    // the older shape for no gain.
+    if ((mode === 'send' || mode === 'test') && (!subject || (!bodyText && !bodyHtml))) {
       return json({ error: 'subject_and_body_required_when_sending' }, 400);
     }
 
@@ -220,6 +289,93 @@ serve(async (req: Request) => {
       });
     }
 
+    // Both a test and a real send need the sender identity and the SAME token
+    // values. Built once, here, so a test cannot render different words from the
+    // send it is supposed to be proving - which would make the control worse
+    // than useless. Deliberately after the preview return: a preview runs on
+    // every audience toggle and must not pay for a query it never reads.
+    const brand = await loadOrgBrand(supabase, orgId);
+    const fromAddress = formatFromAddress(brand);
+    const messageVars = {
+      program_name: programName,
+      program_summary: programSummary,
+      program_day: (program as any).day_of_week
+        ? (DAY_LABELS[String((program as any).day_of_week).toLowerCase()] ?? (program as any).day_of_week)
+        : '',
+      program_location: venueLabel(
+        (program as any).program_locations?.name,
+        (program as any).room,
+        (program as any).program_locations?.room_number,
+      ) ?? '',
+      org_name: brand.org_name,
+    };
+
+    // ── TEST ────────────────────────────────────────────────────────────────
+    //
+    // ONE email, to somebody who works here, and NO audit row. A test is not a
+    // send: it must not appear in the message history, must not arm the
+    // duplicate guard, and must not consume the operator's one chance to get a
+    // real send right.
+    //
+    // Tokens are filled from a REAL recipient wherever there is one, because a
+    // proof that renders "there" and "your child" tells the operator nothing
+    // about whether they spelled {{student_first_name}} correctly.
+    if (mode === 'test') {
+      const { data: callerRow } = await supabase
+        .from('org_members')
+        .select('email')
+        .eq('auth_user_id', callerAuthId)
+        .eq('organization_id', orgId)
+        .maybeSingle();
+      const callerEmail = callerRow?.email ?? userData.user.email ?? null;
+      const requested = body.test_email?.trim() || callerEmail || '';
+      const resolved = await resolveInternalAddress(supabase, orgId, callerEmail, requested);
+      if ('error' in resolved) {
+        return json({
+          error: resolved.error,
+          message: resolved.error === 'test_email_not_in_org'
+            ? 'A test can only go to someone on your team. Add them under Team first, or send the test to yourself.'
+            : 'That does not look like an email address.',
+        }, resolved.error === 'lookup_failed' ? 500 : 400);
+      }
+
+      const sample = grouped.sendable[0];
+      const [testResult] = await sendFamilyEmails({
+        recipients: [{
+          parent_id: sample?.parent_id ?? '',
+          // The operator's OWN name is wrong here: the proof must show what the
+          // family sees, and the family sees their own name.
+          name: sample?.name ?? '',
+          email: resolved.email,
+          student_first_name: sample?.student_first_name ?? '',
+        }],
+        subject: `[TEST] ${subject}`,
+        bodyText,
+        bodyHtml,
+        vars: messageVars,
+        orgName: brand.org_name,
+        programName,
+        isTest: true,
+        from: fromAddress,
+        replyTo: brand.reply_to,
+        apiKey: RESEND_API_KEY,
+        tags: [
+          { name: 'type', value: 'program_family_message_test' },
+          { name: 'program_id', value: programId },
+        ],
+      });
+      return json({
+        mode: 'test',
+        status: testResult?.status ?? 'failed',
+        to: resolved.email,
+        // Named, because "test failed" with no reason sends an operator back to
+        // guessing, which is the state this whole control exists to end.
+        failure_reason: testResult?.failure_reason ?? null,
+        // Said out loud so nobody reads a successful test as the job being done.
+        recipient_count: grouped.sendable.length,
+      });
+    }
+
     // ── SEND ────────────────────────────────────────────────────────────────
 
     // DID THIS EXACT MESSAGE JUST GO OUT? Checked BEFORE anything is sent, and
@@ -266,9 +422,6 @@ serve(async (req: Request) => {
       }
     }
 
-    const brand = await loadOrgBrand(supabase, orgId);
-    const fromAddress = formatFromAddress(brand);
-
     // NOBODY REACHABLE IS NOT A SEND. Recorded with its own status rather than
     // as a successful send of zero emails, because "sent" against 0 recipients
     // is the shape that lets a class go un-notified while the log looks fine.
@@ -278,7 +431,8 @@ serve(async (req: Request) => {
         program_id: programId,
         sent_by_user_id: callerAuthId,
         subject,
-        body_text: bodyText,
+        body_text: storedBodyText,
+        body_html: bodyHtml || null,
         include_waitlist: includeWaitlist,
         include_cancelled: includeCancelled,
         recipient_count: 0,
@@ -311,19 +465,10 @@ serve(async (req: Request) => {
       })),
       subject,
       bodyText,
-      vars: {
-        program_name: programName,
-        program_summary: programSummary,
-        program_day: (program as any).day_of_week
-          ? (DAY_LABELS[String((program as any).day_of_week).toLowerCase()] ?? (program as any).day_of_week)
-          : '',
-        program_location: venueLabel(
-          (program as any).program_locations?.name,
-          (program as any).room,
-          (program as any).program_locations?.room_number,
-        ) ?? '',
-        org_name: brand.org_name,
-      },
+      bodyHtml,
+      vars: messageVars,
+      orgName: brand.org_name,
+      programName,
       from: fromAddress,
       replyTo: brand.reply_to,
       apiKey: RESEND_API_KEY,
@@ -345,7 +490,12 @@ serve(async (req: Request) => {
       program_id: programId,
       sent_by_user_id: callerAuthId,
       subject,
-      body_text: bodyText,
+      body_text: storedBodyText,
+      // THE RECORD OF WHAT WAS SENT, not an approximation of it. The history
+      // panel renders this; storing only the plain half would make "what did I
+      // send?" answer with the formatting stripped out, which is the same class
+      // of confidently-wrong record as a template that re-reads today's wording.
+      body_html: bodyHtml || null,
       include_waitlist: includeWaitlist,
       include_cancelled: includeCancelled,
       recipient_count: tally.total,
@@ -373,8 +523,74 @@ serve(async (req: Request) => {
     // an operator would send the whole class a second copy.
     if (auditErr) console.error('[notify-program-families] audit insert failed:', auditErr);
 
+    // ONE COPY FOR THE OPERATOR, not a BCC on every family's email.
+    //
+    // Sawyer offers BCC here and it is the obvious shape, but the shapes differ:
+    // this surface sends ONE EMAIL PER FAMILY so that nobody learns anyone
+    // else's address, and a BCC would therefore deliver 29 identical copies for
+    // a class of 29. One copy, sent once, after the families - and deliberately
+    // AFTER the audit row, so a failure to copy the operator can never be
+    // mistaken for, or interfere with, the send that already happened.
+    //
+    // ITS OWN try/catch, AND THAT IS THE WHOLE POINT. Everything from here on
+    // runs AFTER 29 families already have their email. Left inside the
+    // handler's outer catch, a thrown lookup here returns a 500, the modal says
+    // "Couldn't send. Nothing was sent.", and the operator sends the class a
+    // second copy - a real double-send caused by a failure to email the
+    // OPERATOR. Nothing after the send may ever change what the send is
+    // reported as.
+    let copySent: { to: string; status: string } | null = null;
+    try {
+    if (body.copy_to?.trim()) {
+      const { data: callerRow } = await supabase
+        .from('org_members')
+        .select('email')
+        .eq('auth_user_id', callerAuthId)
+        .eq('organization_id', orgId)
+        .maybeSingle();
+      const resolved = await resolveInternalAddress(
+        supabase, orgId, callerRow?.email ?? userData.user.email, body.copy_to,
+      );
+      if ('error' in resolved) {
+        // NOT an error response: the families have their email. The operator is
+        // told the copy did not go, and nothing else changes.
+        copySent = { to: body.copy_to.trim(), status: resolved.error };
+      } else {
+        const sample = grouped.sendable[0];
+        const [copyResult] = await sendFamilyEmails({
+          recipients: [{
+            parent_id: sample?.parent_id ?? '',
+            name: sample?.name ?? '',
+            email: resolved.email,
+            student_first_name: sample?.student_first_name ?? '',
+          }],
+          subject: `[COPY] ${subject}`,
+          bodyText,
+          bodyHtml,
+          vars: messageVars,
+          orgName: brand.org_name,
+          programName,
+          from: fromAddress,
+          replyTo: brand.reply_to,
+          apiKey: RESEND_API_KEY,
+          tags: [
+            { name: 'type', value: 'program_family_message_copy' },
+            { name: 'program_id', value: programId },
+          ],
+        });
+        copySent = { to: resolved.email, status: copyResult?.status ?? 'failed' };
+      }
+    }
+    } catch (copyErr) {
+      // Logged and reported as a failed COPY. The families' outcome below is
+      // computed from `tally` and is unaffected.
+      console.error('[notify-program-families] copy to operator failed:', copyErr);
+      copySent = { to: body.copy_to?.trim() ?? '', status: 'failed' };
+    }
+
     return json({
       mode: 'send',
+      copy: copySent,
       status,
       sent: tally.sent,
       failed: tally.failed,

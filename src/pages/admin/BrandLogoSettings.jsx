@@ -571,7 +571,10 @@ export default function BrandLogoSettings() {
           /* Tenant-NEUTRAL example. A real provider's wording or web address must never
              be the platform's placeholder - every other operator sees it. */
           placeholder={"Need supplies before the first class? We keep everything you need in stock."}
-          helpText={<>Leave a blank line to start a new paragraph. For your main link, use the button below rather than a link in the text.</>}
+          /* "Leave a blank line to start a new paragraph" was true of the old
+             textarea and is not true of the editor that replaced it - Enter
+             starts a paragraph now. A stale instruction is worse than none. */
+          helpText={<>For your main link, use the button below rather than a link in the text.</>}
           /* No Link button here: the button fields below own the link, and two ways to
              make one link is one too many. Email bodies keep theirs. */
           allowLink={false}

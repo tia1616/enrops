@@ -6,7 +6,17 @@
 // whole mechanism Jessica asked for next ("there is no way to email just the
 // families in one class - and it cost a real send today"), and it was welded to
 // one trigger: a curriculum swap. Rather than write a second send loop beside it,
-// the loop moves here and both callers use it.
+// the loop moved here.
+//
+// "AND BOTH CALLERS USE IT" is what this said, and it was never true - checked
+// 2026-09-21. `notify-program-curriculum-change` still has its OWN send loop and
+// imports only `familyRecipients`, so there is exactly ONE caller of
+// `sendFamilyEmails`: notify-program-families. That matters now rather than as
+// trivia: the HTML half added below therefore reaches Message families and
+// nothing else, and the curriculum notice - 14 sends on prod, its body typed
+// free-hand into a textarea - still sends plain text only and still shows an
+// operator's **bold** as asterisks. Adopting this module there is the other half
+// of the fix, and it is a chunk of its own, not a line.
 //
 // WHO ALREADY OWNS THE OTHER HALVES, so this file does not re-do them:
 //   - WHICH families      program_note_recipients (SECURITY DEFINER, org-checked,
@@ -27,6 +37,13 @@
 // real Resend API.
 
 import { joinChildNames } from './familyRecipients.ts';
+import { esc } from './escapeHtml.ts';
+import {
+  FAMILY_TEST_NOTICE,
+  familyMessageFooterLine,
+  htmlToPlainText,
+  renderFamilyMessageHtml,
+} from './familyEmailHtml.ts';
 
 export interface FamilyRecipient {
   parent_id: string;
@@ -199,10 +216,30 @@ export interface FamilySendResult {
 // was written, on purpose: the operator's template wins, so a typo like
 // {Parent_First_Name} reaches the reader and the audit row visibly, instead of
 // being silently blanked and nobody ever learning the placeholder was wrong.
-export function substitute(template: string, vars: Record<string, string>): string {
-  return (template ?? '').replace(/\{(\w+)\}/g, (m, key) =>
-    Object.prototype.hasOwnProperty.call(vars, key) ? vars[key] : m,
-  );
+//
+// BOTH SPELLINGS, and the double brace is the canonical one. Every other body
+// editor in the product writes `{{parent_first_name}}`; this surface alone was
+// built on `{parent_first_name}`, and the shared editor's field palette inserts
+// the double form. Rather than teach one screen a private dialect, the canonical
+// spelling is accepted here and the single brace keeps working forever, because
+// operators learned it from this panel's own help list and 64 sends already used
+// it. Two spellings IN, one spelling taught.
+//
+// The double-brace alternative MUST come first: `\{(\w+)\}` would otherwise match
+// the inner `{parent_first_name}` of a `{{...}}` pair and leave a stray brace.
+export function substitute(
+  template: string,
+  vars: Record<string, string>,
+  opts: { escape?: (value: string) => string } = {},
+): string {
+  return (template ?? '').replace(/\{\{(\w+)\}\}|\{(\w+)\}/g, (m, double, single) => {
+    const key = double ?? single;
+    if (!Object.prototype.hasOwnProperty.call(vars, key)) return m;
+    // Escaping happens HERE, on the value, never on the template - the template
+    // is HTML we built and must stay live, while a family called "Tom & Kate"
+    // is text that must not be able to close a tag or open one.
+    return opts.escape ? opts.escape(vars[key]) : vars[key];
+  });
 }
 
 // The two placeholders every family email has, whoever is sending it. Callers
@@ -225,6 +262,21 @@ export interface SendFamilyEmailsOptions {
   recipients: FamilyRecipient[];
   subject: string;
   bodyText: string;
+  /**
+   * The operator's message as HTML. When present it becomes the email, and the
+   * plain-text half is derived FROM it rather than from `bodyText` - see
+   * familyEmailHtml for why that ordering is the fix and not a detail.
+   *
+   * Optional, and absent is the pre-2026-09-21 behaviour byte for byte: a
+   * text-only send. Every caller that has not been taught HTML keeps working,
+   * and the side that fails safe is the one that already ships.
+   */
+  bodyHtml?: string | null;
+  /** Footer line: who sent it, and about which class. */
+  orgName?: string | null;
+  programName?: string | null;
+  /** Marks the send as a test in the body and the plain-text half. */
+  isTest?: boolean;
   /** Applied to every recipient, under the two familyVars defaults. */
   vars?: Record<string, string>;
   from: string;
@@ -241,10 +293,35 @@ export async function sendFamilyEmails(
   const doFetch = opts.fetchImpl ?? fetch;
   const results: FamilySendResult[] = [];
 
+  const footerLine = familyMessageFooterLine({
+    orgName: opts.orgName,
+    programName: opts.programName,
+  });
+
   for (const r of opts.recipients ?? []) {
     const vars = familyVars(r, opts.vars ?? {});
     const subject = substitute(opts.subject, vars);
-    const text = substitute(opts.bodyText, vars);
+    // The HTML path builds BOTH halves; the text-only path is untouched.
+    const useHtml = !!(opts.bodyHtml && opts.bodyHtml.trim());
+    const inner = useHtml ? substitute(opts.bodyHtml!, vars, { escape: esc }) : '';
+    const html = useHtml
+      ? renderFamilyMessageHtml(inner, {
+        orgName: opts.orgName ?? '',
+        programName: opts.programName,
+        isTest: opts.isTest,
+      })
+      : undefined;
+    // Composed from the PARTS rather than by stripping the finished shell: the
+    // shell carries a <title> inside <head>, and a tag-stripper run over the
+    // whole document would paste the org's name at the top of every plain-text
+    // email as a stray first line.
+    const text = useHtml
+      ? [
+        opts.isTest ? FAMILY_TEST_NOTICE : '',
+        htmlToPlainText(inner),
+        footerLine ? `--\n${footerLine}` : '',
+      ].filter(Boolean).join('\n\n')
+      : substitute(opts.bodyText, vars);
     try {
       const resp = await doFetch('https://api.resend.com/emails', {
         method: 'POST',
@@ -259,6 +336,10 @@ export async function sendFamilyEmails(
           // reply_to, and an org with no reply-to configured must still send.
           reply_to: opts.replyTo ? [opts.replyTo] : undefined,
           subject,
+          // Both halves whenever we have HTML. `html` alone is penalised by spam
+          // filters and unreadable to a plain-text client; `text` alone is what
+          // shipped the asterisks.
+          html,
           text,
           tags: opts.tags ?? [],
         }),

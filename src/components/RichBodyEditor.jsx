@@ -10,30 +10,32 @@
 // it easy"). Templates and the campaign body field had neither. Every fix landed
 // on one of them and drifted from the rest.
 //
-// So: the toolbar comes from the automations side, the field palette from the
-// Campaigns side, and nothing here exposes a markdown marker to an operator.
+// WHAT YOU TYPE IS WHAT THE FAMILY GETS. Until 2026-09-21 this was a TEXTAREA
+// holding a markdown form: press Bold and you saw `**hows **it going`; add a
+// link and you saw `[going](https://journeytosteam.com)`. Jessica, looking at
+// exactly that: "take out computer stuff - it just needs to be bold, not have
+// asterisks. same with the link. just should be blue/underlined as parents will
+// see it." That is the same rule bodyEditorUtils already stated for HTML in June
+// ("No one should see HTML"), only half-applied: a literal <br/> was removed and
+// `**` was put in its place. A marker is a marker. So the surface is now
+// contenteditable — bold looks bold, a link is blue and underlined, and a merge
+// field is a chip reading "Parent's first name" rather than {{parent_first_name}}.
+//
+// The stored value is UNCHANGED: HTML with {{key}} tokens, exactly as before, so
+// nothing downstream (the send functions, the preview, the plain-text half)
+// needed to know about this. `htmlToEditable` / `editableToHtml` stay in
+// bodyEditorUtils for the surfaces still on textareas.
+//
 // Mailchimp, HubSpot and MailerSend all work this way — select your words, press
 // a button, a small box asks for the web address.
-//
-// STATE OF ADOPTION — read this before believing the paragraph above. As of
-// 2026-08-11 the ONLY caller is BrandLogoSettings (the confirmation page), and it
-// passes allowLink={false}, showPreview={false} and no fields. So the link panel, the
-// merge-field palette and the preview are all currently UNREACHABLE, and the drift
-// this file was written to end still exists in AutomationEditor, the Campaigns body
-// editor and Templates. Those three are unblocked and at parity — adopting them is
-// the remaining work, and the unreachable code is here for that, not because it is
-// used. Do not read this header as "the four editors are unified". They are not yet.
-//
-// The HTML round-trip itself is NOT reimplemented here. bodyEditorUtils already
-// owns it (and its regexes carry hard-won bug history — the attribute-value
-// lookahead, the bullet marker that must not eat a "- {{sender_name}}" sign-off).
-// It is imported from its existing home on purpose: relocating it would mean
-// editing AutomationEditor.jsx, which another chat is inside as of 2026-08-10.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  chipsToTokens,
   editableToHtml,
-  htmlToEditable,
   highlightTokens,
+  sanitizeRichHtml,
+  stripHtml,
+  tokensToChips,
 } from "../pages/admin/marketing-v2/bodyEditorUtils.js";
 
 const PURPLE = "#1C004F";
@@ -41,16 +43,48 @@ const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
 
+// Module-level so the default below has a STABLE identity. `fields = []` as an
+// inline default mints a new array on every render, which churns the memo that
+// builds the label map and re-runs the effect that writes the DOM - harmless
+// only until something else changes `value` mid-edit, at which point the box is
+// rewritten under the operator and the caret jumps to the start.
+const NO_FIELDS = [];
+
 const linkInputStyle = {
   width: "100%", boxSizing: "border-box", marginTop: 4, padding: "8px 10px",
   fontSize: 13, border: `1px solid ${RULE}`, borderRadius: 6, fontFamily: "inherit",
 };
 
+// Scoped to this editor's own class names. Inline styles cannot reach INTO
+// contenteditable content (a link the operator just made is not a React
+// element), so the one thing an operator must see - that a link looks like a
+// link - has to be a stylesheet rule.
+const EDITOR_CSS = `
+.enr-rbe[contenteditable] { outline: none; }
+.enr-rbe a { color: #1a55c4; text-decoration: underline; }
+.enr-rbe p { margin: 0 0 10px; }
+.enr-rbe p:last-child { margin-bottom: 0; }
+.enr-rbe ul, .enr-rbe ol { margin: 0 0 10px; padding-left: 22px; }
+.enr-rbe .enr-chip {
+  display: inline-block; padding: 1px 8px; margin: 0 1px; border-radius: 999px;
+  background: #EDE8F5; color: ${PURPLE}; font-size: 0.92em; font-weight: 600;
+  white-space: nowrap; user-select: all;
+}
+.enr-rbe[data-empty="true"]::before {
+  content: attr(data-placeholder);
+  color: #9a9a9a; pointer-events: none;
+}
+`;
+
 function FormatButton({ label, onClick, children }) {
   return (
     <button
       type="button"
-      onClick={onClick}
+      // onMouseDown, NOT onClick, and preventDefault: a click would blur the
+      // editable first, collapsing the operator's selection, and the command
+      // would then apply to nothing. This is why the bold button appears to do
+      // nothing in every naive contenteditable toolbar.
+      onMouseDown={(e) => { e.preventDefault(); onClick(); }}
       title={label}
       aria-label={label}
       style={{
@@ -66,91 +100,156 @@ function FormatButton({ label, onClick, children }) {
 }
 
 /**
- * @param value       stored HTML (the canonical form)
- * @param onChange    (html) => void, fired on every keystroke
+ * @param value       stored HTML (the canonical form), tokens as {{key}}
+ * @param onChange    (html) => void, fired as the operator types
  * @param fields      optional [{ group, tokens: [{ key, label, tip }] }] merge-field palette
- * @param showPreview render the result underneath, so authoring is previewable in place
+ * @param showPreview render the result underneath. Largely redundant now that the
+ *                    editor shows the real thing; kept for callers that want a
+ *                    separate "what families will see" block.
  * @param allowLink   show the Link button. OFF on the confirmation page, where a
  *                    dedicated button field sits under this box and owns the link -
  *                    two ways to make one link is one too many (Jessica, 2026-08-11).
- *                    Email bodies keep it: it is the whole point of that toolbar.
  */
 export default function RichBodyEditor({
   value,
   onChange,
   rows = 8,
   placeholder = "",
-  fields = [],
+  fields = NO_FIELDS,
   showPreview = true,
   helpText = null,
   allowLink = true,
 }) {
-  // editableText is the operator-facing form and the thing they type into. It is
-  // local state, NOT derived on every render: re-deriving would fight the caret
-  // and mangle half-typed markers. `value` is only read back in when it changes
-  // to something we did not ourselves emit (an async load, or a parent reset).
-  const lastEmitted = useRef(null);
-  const [editableText, setEditableText] = useState(() => htmlToEditable(value || ""));
-
-  useEffect(() => {
-    const incoming = value || "";
-    if (incoming === lastEmitted.current) return; // our own echo coming back
-    setEditableText(htmlToEditable(incoming));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [value]);
-
   const areaRef = useRef(null);
-  // Where to put the selection after a programmatic insert. Applied in an effect
-  // rather than inline because React has to commit the new text first.
-  //
-  // A RANGE, not a caret position. It used to be a single number applied as
-  // setSelectionRange(pos, pos), which meant the bold/italic PLACEHOLDER was never
-  // actually selected: pressing B on an empty box put the caret between the
-  // asterisks and the next keystroke inserted BEFORE "bold text" instead of
-  // replacing it, so families got "**Ukuleles bold text**" on the page.
-  const caretRef = useRef(null); // null | { start, end }
-  useEffect(() => {
-    if (caretRef.current == null || !areaRef.current) return;
-    const { start, end } = caretRef.current;
-    caretRef.current = null;
-    areaRef.current.focus();
-    areaRef.current.setSelectionRange(start, end);
-  }, [editableText]);
+  // The last HTML WE emitted. `value` coming back equal to this is our own echo
+  // and must not be written back into the DOM - doing so on every keystroke
+  // resets the caret to the start of the box, which is the classic
+  // contenteditable-in-React bug.
+  const lastEmitted = useRef(null);
+  // The operator's selection, saved on every interaction inside the editable.
+  // Toolbar buttons need it because the link panel's inputs take focus away.
+  const savedRange = useRef(null);
 
-  function emit(text) {
-    setEditableText(text);
-    const html = editableToHtml(text);
+  const hasFields = Array.isArray(fields) && fields.length > 0;
+
+  const labelFor = useMemo(() => {
+    const map = new Map();
+    for (const g of fields ?? []) {
+      for (const t of g.tokens ?? []) map.set(t.key, t.label);
+    }
+    return (key) => map.get(key) ?? null;
+  }, [fields]);
+
+  const isEmpty = !stripHtml(value || "").trim();
+
+  // Write `value` into the DOM only when it differs from what we last emitted.
+  useEffect(() => {
+    const el = areaRef.current;
+    if (!el) return;
+    const incoming = value || "";
+    if (incoming === lastEmitted.current) return;
+    el.innerHTML = tokensToChips(sanitizeRichHtml(incoming), labelFor);
+  }, [value, labelFor]);
+
+  function rememberSelection() {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    if (areaRef.current?.contains(range.commonAncestorContainer)) {
+      savedRange.current = range.cloneRange();
+    }
+  }
+
+  function restoreSelection() {
+    const el = areaRef.current;
+    if (!el) return;
+    el.focus();
+    const range = savedRange.current;
+    if (!range) return;
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  function emit() {
+    const el = areaRef.current;
+    if (!el) return;
+    // Chips back to {{key}} BEFORE sanitizing, so the stored value is the same
+    // shape every other surface and every send function already understands.
+    const html = sanitizeRichHtml(chipsToTokens(el.innerHTML));
     lastEmitted.current = html;
     onChange(html);
   }
 
-  function selection() {
-    const el = areaRef.current;
-    if (!el) return { start: editableText.length, end: editableText.length };
-    return { start: el.selectionStart ?? 0, end: el.selectionEnd ?? 0 };
+  /**
+   * Shrink the saved selection so it excludes leading and trailing whitespace.
+   *
+   * THIS IS WHAT MAKES UN-BOLDING WORK, and without it the Bold button is a
+   * one-way door. Double-clicking a word selects the word AND its trailing
+   * space - every browser does this - and that space sits OUTSIDE the
+   * <strong>. The browser reads a selection that is partly bold and partly not
+   * as "not bold", so pressing B APPLIES bold instead of removing it, turning
+   * <strong>cancelled</strong> into <b>cancelled </b>: still bold, and now
+   * swallowing the space. Jessica, 2026-09-21: "i can't cut and paste bold
+   * words and then unbold them in the editor."
+   *
+   * Trimming also stops a link or a bold run from ending in a space, which is
+   * what produced `<strong>WILL </strong>` earlier in this build.
+   */
+  function trimSavedRangeWhitespace() {
+    const range = savedRange.current;
+    if (!range || range.collapsed) return;
+    const { startContainer, endContainer } = range;
+    let { startOffset, endOffset } = range;
+    const isText = (n) => n && n.nodeType === 3;
+    const ws = /\s/;
+    while (isText(endContainer) && endOffset > 0 && ws.test(endContainer.textContent[endOffset - 1])) endOffset--;
+    while (isText(startContainer) && startOffset < (startContainer.textContent?.length ?? 0)
+      && ws.test(startContainer.textContent[startOffset])) startOffset++;
+    try {
+      const next = document.createRange();
+      next.setStart(startContainer, startOffset);
+      next.setEnd(endContainer, endOffset);
+      // An all-whitespace selection trims to nothing; keep the original rather
+      // than handing execCommand a collapsed range, which would toggle the
+      // caret's state and silently format the NEXT thing typed.
+      if (!next.collapsed) savedRange.current = next;
+    } catch {
+      // Offsets can go out of range across element boundaries; the untrimmed
+      // selection is still usable, so prefer it over throwing.
+    }
   }
 
-  /** Wrap the selection in `marker`; with nothing selected, drop in a placeholder
-   *  and leave it SELECTED so the next keystroke replaces it. */
-  function wrapSelection(marker, placeholder2) {
-    const { start, end } = selection();
-    const selected = editableText.slice(start, end);
-    const inner = selected || placeholder2;
-    const next = `${marker}${inner}${marker}`;
-    emit(editableText.slice(0, start) + next + editableText.slice(end));
-    caretRef.current = selected
-      // Had a selection: land after the whole wrapped run and keep typing.
-      ? { start: start + next.length, end: start + next.length }
-      // No selection: select the placeholder itself, so typing overwrites it.
-      : { start: start + marker.length, end: start + marker.length + inner.length };
+  function exec(command, arg) {
+    // Block-level commands act on whole lines, so trimming the inline selection
+    // would be meaningless for them.
+    if (command === "bold" || command === "italic") trimSavedRangeWhitespace();
+    restoreSelection();
+    // Tags, not inline styles: <b>/<i> survive our whitelist and every email
+    // client, whereas a <span style> would be stripped on the way out and the
+    // operator's formatting would vanish between the editor and the inbox.
+    try { document.execCommand("styleWithCSS", false, false); } catch { /* not supported, tags are the default */ }
+    document.execCommand(command, false, arg);
+    rememberSelection();
+    emit();
   }
 
-  const [linkPanel, setLinkPanel] = useState(null); // null | { text, url, start, end }
+  function insertHtmlAtCaret(html) {
+    restoreSelection();
+    document.execCommand("insertHTML", false, html);
+    rememberSelection();
+    emit();
+  }
+
+  const [linkPanel, setLinkPanel] = useState(null); // null | { text, url }
 
   function openLinkPanel() {
-    const { start, end } = selection();
+    rememberSelection();
+    // Trimmed for the same reason bold is: a link that ends in a space renders
+    // with an underlined gap after the words.
+    trimSavedRangeWhitespace();
     // Pre-fill from the highlighted words, the way Mailchimp does.
-    setLinkPanel({ text: editableText.slice(start, end), url: "", start, end });
+    setLinkPanel({ text: (savedRange.current?.toString() ?? "").trim(), url: "" });
   }
 
   function insertLink() {
@@ -158,73 +257,63 @@ export default function RichBodyEditor({
     let url = (linkPanel?.url || "").trim();
     if (!words || !url) return;
     // Operators paste "mysite.com" far more often than they type a scheme, and
-    // bodyEditorUtils' sanitizer only accepts http/https/mailto — anything else
-    // silently collapses to a dead "#". Assume https rather than hand them a
-    // broken link.
+    // the sanitizer only accepts http/https/mailto — anything else silently
+    // collapses to a dead "#". Assume https rather than hand them a broken link.
     if (!/^(https?:|mailto:)/i.test(url)) url = `https://${url}`;
-    const { start, end } = linkPanel;
-    emit(`${editableText.slice(0, start)}[${words}](${url})${editableText.slice(end)}`);
+    const safeWords = words.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const safeUrl = url.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+    // insertHTML replaces the selection, so editing the words in the panel
+    // swaps the highlighted text for what the operator actually wants shown.
+    insertHtmlAtCaret(`<a href="${safeUrl}">${safeWords}</a>&nbsp;`);
     setLinkPanel(null);
   }
 
   function insertField(key) {
-    const tag = `{{${key}}}`;
-    const { start, end } = selection();
-    caretRef.current = { start: start + tag.length, end: start + tag.length };
-    emit(editableText.slice(0, start) + tag + editableText.slice(end));
+    const label = labelFor(key);
+    insertHtmlAtCaret(
+      label
+        ? `<span data-token="${key}" contenteditable="false" class="enr-chip">${label}</span>&nbsp;`
+        : `{{${key}}}`,
+    );
   }
 
-  const [paletteOpen, setPaletteOpen] = useState(false);
-  const hasFields = Array.isArray(fields) && fields.length > 0;
+  // A paste carries whatever the source felt like sending - Word styling, a
+  // whole table, a tracking pixel. Taking the HTML and sanitizing it (rather
+  // than forcing plain text) is deliberate: pasting a formatted draft from a
+  // document or an assistant KEEPS its bold and its links, which is the case
+  // that started all of this.
+  function onPaste(e) {
+    e.preventDefault();
+    const html = e.clipboardData?.getData("text/html");
+    const text = e.clipboardData?.getData("text/plain") ?? "";
+    if (html) {
+      insertHtmlAtCaret(sanitizeRichHtml(html));
+      return;
+    }
+    // PLAIN TEXT GOES THROUGH THE MARKDOWN CONVERTER, and this is not a nicety -
+    // leaving it out re-created the exact defect this whole build exists to fix.
+    //
+    // Jeff drafts with an assistant and pastes. Copying the RENDERED answer gives
+    // real HTML and lands in the branch above. Copying the RAW answer - out of a
+    // code block, or from anywhere that hands over plain text - gives
+    // `We **WILL** have class`, which the old textarea converted to bold because
+    // its whole editing form was markdown. Escaping it here instead would have
+    // put the literal asterisks back in front of 400 families, from the change
+    // that was supposed to end them. Caught on staging, not by a test.
+    //
+    // `editableToHtml` is the converter that has always done this job, so a
+    // pasted `[words](url)` becomes a real link too - the other half of his
+    // report. Sanitized afterwards like any other inserted HTML.
+    insertHtmlAtCaret(sanitizeRichHtml(editableToHtml(text)));
+  }
 
   return (
     <div>
+      <style>{EDITOR_CSS}</style>
+
       {hasFields && (
         <div style={{ marginBottom: 8 }}>
-          <button
-            type="button"
-            onClick={() => setPaletteOpen((v) => !v)}
-            style={{
-              background: paletteOpen ? "#EDE8F5" : "#f7f4ec",
-              border: `1px solid ${paletteOpen ? "#C4B5DC" : RULE}`,
-              color: paletteOpen ? PURPLE : INK, padding: "5px 12px", borderRadius: 999,
-              cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit",
-            }}
-          >
-            {paletteOpen ? "Hide personalization fields" : "Personalize with fields"}
-          </button>
-          {paletteOpen && (
-            <div style={{ marginTop: 8, padding: 12, background: "#faf8f1", border: `1px solid ${RULE}`, borderRadius: 8 }}>
-              <p style={{ margin: "0 0 8px", fontSize: 12, color: MUTED, lineHeight: 1.5 }}>
-                Click a field to insert it where your cursor is. Each one is replaced with the real
-                value for every family when the email sends.
-              </p>
-              {fields.map((g) => (
-                <div key={g.group} style={{ marginBottom: 8 }}>
-                  <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: MUTED, marginBottom: 4 }}>
-                    {g.group}
-                  </div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-                    {(g.tokens || []).map((t) => (
-                      <button
-                        key={t.key}
-                        type="button"
-                        onClick={() => insertField(t.key)}
-                        title={t.tip}
-                        style={{
-                          background: "#fff", border: "1px solid #C4B5DC", borderRadius: 999,
-                          padding: "3px 10px", fontSize: 12, fontFamily: "inherit",
-                          color: PURPLE, cursor: "pointer", fontWeight: 500,
-                        }}
-                      >
-                        {t.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
+          <FieldPalette fields={fields} onInsert={insertField} />
         </div>
       )}
 
@@ -234,11 +323,14 @@ export default function RichBodyEditor({
         border: `1px solid ${RULE}`, borderBottom: "none",
         borderRadius: "6px 6px 0 0", padding: "5px 6px", background: "#FBFBFB",
       }}>
-        <FormatButton label="Bold" onClick={() => wrapSelection("**", "bold text")}>
+        <FormatButton label="Bold" onClick={() => exec("bold")}>
           <span style={{ fontWeight: 800 }}>B</span>
         </FormatButton>
-        <FormatButton label="Italic" onClick={() => wrapSelection("_", "italic text")}>
+        <FormatButton label="Italic" onClick={() => exec("italic")}>
           <span style={{ fontStyle: "italic", fontFamily: "Georgia, serif" }}>I</span>
+        </FormatButton>
+        <FormatButton label="Bulleted list" onClick={() => exec("insertUnorderedList")}>
+          <span style={{ fontSize: 15, lineHeight: 1 }}>•</span>
         </FormatButton>
         {allowLink && (
           <>
@@ -255,17 +347,29 @@ export default function RichBodyEditor({
         )}
       </div>
 
-      <textarea
+      <div
         ref={areaRef}
-        value={editableText}
-        onChange={(e) => emit(e.target.value)}
-        rows={rows}
-        placeholder={placeholder}
+        className="enr-rbe"
+        contentEditable
+        suppressContentEditableWarning
+        role="textbox"
+        aria-multiline="true"
+        aria-label="Message"
+        data-empty={isEmpty ? "true" : "false"}
+        data-placeholder={placeholder}
+        onInput={emit}
+        onBlur={() => { rememberSelection(); emit(); }}
+        onKeyUp={rememberSelection}
+        onMouseUp={rememberSelection}
+        onPaste={onPaste}
         style={{
           width: "100%", boxSizing: "border-box", padding: "10px 12px",
           border: `1px solid ${RULE}`, borderRadius: "0 0 6px 6px",
           fontFamily: "inherit", fontSize: 13, lineHeight: 1.55, color: INK,
-          background: "#fff", resize: "vertical", outline: "none",
+          background: "#fff", overflowY: "auto", overflowWrap: "anywhere",
+          // rows is the caller's sizing unit from the textarea days; honour it
+          // rather than making every call site learn a new one.
+          minHeight: Math.max(2, rows) * 22,
         }}
       />
 
@@ -320,10 +424,10 @@ export default function RichBodyEditor({
       )}
 
       <p style={{ margin: "6px 0 0", fontSize: 11.5, color: MUTED, lineHeight: 1.5 }}>
-        {helpText || <>Highlight any words and press <strong>Link</strong> to turn them into a link. Leave a blank line to start a new paragraph.</>}
+        {helpText || <>Highlight any words and press <strong>Link</strong> to turn them into a link.</>}
       </p>
 
-      {showPreview && (editableText || "").trim() !== "" && (
+      {showPreview && !isEmpty && (
         <div style={{ marginTop: 12 }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>
             What families will see
@@ -333,11 +437,66 @@ export default function RichBodyEditor({
               live-looking field would promise a replacement that never happens and the
               literal braces would reach the reader. */}
           <div
+            className="enr-rbe"
             style={{ padding: "12px 14px", border: `1px solid ${RULE}`, borderRadius: 8, background: "#faf8f1", fontSize: 13.5, color: INK, lineHeight: 1.55 }}
-            dangerouslySetInnerHTML={{ __html: hasFields ? highlightTokens(editableToHtml(editableText)) : editableToHtml(editableText) }}
+            dangerouslySetInnerHTML={{ __html: hasFields ? highlightTokens(value || "") : (value || "") }}
           />
         </div>
       )}
     </div>
+  );
+}
+
+function FieldPalette({ fields, onInsert }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        style={{
+          background: open ? "#EDE8F5" : "#f7f4ec",
+          border: `1px solid ${open ? "#C4B5DC" : RULE}`,
+          color: open ? PURPLE : INK, padding: "5px 12px", borderRadius: 999,
+          cursor: "pointer", fontSize: 12, fontWeight: 600, fontFamily: "inherit",
+        }}
+      >
+        {open ? "Hide personalization fields" : "Personalize with fields"}
+      </button>
+      {open && (
+        <div style={{ marginTop: 8, padding: 12, background: "#faf8f1", border: `1px solid ${RULE}`, borderRadius: 8 }}>
+          <p style={{ margin: "0 0 8px", fontSize: 12, color: MUTED, lineHeight: 1.5 }}>
+            Click a field to insert it where your cursor is. Each one is replaced with the real
+            value for every family when the email sends.
+          </p>
+          {fields.map((g) => (
+            <div key={g.group} style={{ marginBottom: 8 }}>
+              <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, color: MUTED, marginBottom: 4 }}>
+                {g.group}
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                {(g.tokens || []).map((t) => (
+                  <button
+                    key={t.key}
+                    type="button"
+                    // Same reason as the format buttons: a click would blur the
+                    // editable and drop the caret before we could insert at it.
+                    onMouseDown={(e) => { e.preventDefault(); onInsert(t.key); }}
+                    title={t.tip}
+                    style={{
+                      background: "#fff", border: "1px solid #C4B5DC", borderRadius: 999,
+                      padding: "3px 10px", fontSize: 12, fontFamily: "inherit",
+                      color: PURPLE, cursor: "pointer", fontWeight: 500,
+                    }}
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
   );
 }

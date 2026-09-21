@@ -20,8 +20,33 @@
 // from a school that runs its own registration has placeholder addresses, and on
 // prod one class has 13 of them - "13 recipients" with zero deliverable is the
 // exact silent failure this panel exists to make visible.
-import { useCallback, useEffect, useState } from "react";
+//
+// ── 2026-09-21: formatting, a test, a copy, and a record ────────────────────
+//
+// Jeff: "Since there's no way to test or add a CC to Message families, I've just
+// been hitting send and giving a slight prayer... all the copied bold text shows
+// up regular with **before and after**."
+//
+// He was right three times over, and the numbers are from prod, not from the
+// report: of his 33 sends in eight days, 17 carried `**bold**` and 15 carried
+// `[words](url)`, so 230 of 405 emails went out with the markers visible - one
+// of them giving 29 families the portal sign-in link as `[enrops.com/...](...)`.
+//
+// The cause was not that we failed to understand his notation. `bodyEditorUtils`
+// has understood exactly `**bold**`, `_italic_` and `[words](url)` since June,
+// and every other body editor in the product is built on it. THIS was the one
+// send surface that never got wired to it - a raw textarea whose contents went
+// straight into a plain-text email. So the fix is adoption, not invention:
+// the shared RichBodyEditor, and an HTML half on the send.
+//
+// The other two are the same complaint in different clothes - he could not see
+// what he was about to send, and could not see what he had sent. Hence "Send a
+// test to", "email me a copy", and the Sent tab, which reads the audit rows this
+// panel has been writing since day one and that nothing on this screen showed.
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "../../../lib/supabase.js";
+import RichBodyEditor from "../../../components/RichBodyEditor.jsx";
+import { sanitizeRichHtml, stripHtml } from "../marketing-v2/bodyEditorUtils.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -32,21 +57,53 @@ const RED = "#b53737";
 const AMBER = "#a16207";
 const OK_GREEN = "#3a7c3a";
 
-// Every placeholder the edge function fills, said in plain words. Not a jargon
-// list: an operator reads "the parent's first name", not "{parent_first_name}
-// interpolation".
-const PLACEHOLDERS = [
-  ["{parent_first_name}", "the parent's first name"],
-  ["{student_first_name}", "their child - or all their children in this class"],
-  ["{program_name}", "the class name"],
-  ["{program_day}", "the weekday it runs"],
-  ["{program_location}", "the school or site"],
-  ["{org_name}", "your organisation's name"],
+// Every placeholder the edge function fills, said in plain words and grouped the
+// way an operator thinks about them. Not a jargon list: the palette shows
+// "The parent's first name", never "{parent_first_name} interpolation".
+//
+// The keys are inserted as {{double braces}}, which is the spelling every other
+// editor in the product uses. The edge function still honours the single-brace
+// form this panel used to teach, so the 64 sends already written that way, and
+// anyone who learned it here, keep working.
+const FIELDS = [
+  {
+    group: "The family",
+    tokens: [
+      { key: "parent_first_name", label: "Parent's first name", tip: "The parent's first name" },
+      { key: "student_first_name", label: "Their child", tip: "Their child - or all their children in this class" },
+    ],
+  },
+  {
+    group: "The class",
+    tokens: [
+      { key: "program_name", label: "Class name", tip: "The name of this class" },
+      { key: "program_day", label: "Day it runs", tip: "The weekday this class meets" },
+      { key: "program_location", label: "School or site", tip: "Where this class meets" },
+    ],
+  },
+  {
+    group: "You",
+    tokens: [
+      { key: "org_name", label: "Your business name", tip: "Your organisation's name" },
+    ],
+  },
 ];
 
+function fmtWhen(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString(undefined, {
+    month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+  });
+}
+
 export default function MessageFamiliesModal({ program, orgId, onClose }) {
+  const [tab, setTab] = useState("write");          // write | sent
   const [subject, setSubject] = useState("");
-  const [body, setBody] = useState("");
+  // HTML is the canonical form, the same as every other body editor. The
+  // operator never sees it; RichBodyEditor shows them words and a toolbar.
+  const [bodyHtml, setBodyHtml] = useState("");
   const [includeWaitlist, setIncludeWaitlist] = useState(false);
   // THE THIRD GROUP, and it exists because of a dead end Jessica spotted: a
   // refund sets the registration to cancelled, which takes the family off the
@@ -61,6 +118,26 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
   const [error, setError] = useState("");
   const [duplicate, setDuplicate] = useState(null);    // the 409 payload
   const [result, setResult] = useState(null);
+
+  // ONE ADDRESS, TWO USES - the test goes to it, and the copy goes to it. Two
+  // separate address fields in one panel is two chances to typo the same fact.
+  const [myEmail, setMyEmail] = useState("");
+  const [copyToMe, setCopyToMe] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState(null);  // { ok, message }
+
+  // The body as words, used ONLY to decide whether anything has been written.
+  // An "empty" RichBodyEditor still holds markup, so a trim() on the HTML would
+  // call an empty message written and let a blank email go to a class.
+  const bodyIsEmpty = useMemo(() => !stripHtml(bodyHtml || "").trim(), [bodyHtml]);
+
+  useEffect(() => {
+    let alive = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (alive) setMyEmail(data?.session?.user?.email ?? "");
+    });
+    return () => { alive = false; };
+  }, []);
 
   const call = useCallback(async (payload) => {
     const { data: { session } } = await supabase.auth.getSession();
@@ -119,11 +196,48 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
     return () => { alive = false; };
   }, [call]);
 
+  // A TEST IS NOT A SEND, and the difference is enforced on the server: it
+  // writes no audit row, does not arm the duplicate guard, and goes to exactly
+  // one address that must already belong to this org.
+  async function sendTest() {
+    if (testing) return;
+    setTestResult(null);
+    if (!subject.trim() || bodyIsEmpty) {
+      setTestResult({ ok: false, message: "Write a subject and a message first." });
+      return;
+    }
+    if (!myEmail.trim()) {
+      setTestResult({ ok: false, message: "Add an address to send the test to." });
+      return;
+    }
+    setTesting(true);
+    try {
+      const { status, json } = await call({
+        mode: "test",
+        subject: subject.trim(),
+        body_html: bodyHtml,
+        test_email: myEmail.trim(),
+      });
+      if (status !== 200 || json?.status !== "sent") {
+        setTestResult({
+          ok: false,
+          message: json?.message || json?.failure_reason || "The test didn't go. Nothing was sent to families.",
+        });
+      } else {
+        setTestResult({ ok: true, message: `Test sent to ${json.to}. Check how it looks before sending to families.` });
+      }
+    } catch (e) {
+      setTestResult({ ok: false, message: e.message ?? "The test didn't go." });
+    } finally {
+      setTesting(false);
+    }
+  }
+
   async function send({ confirmDuplicate = false } = {}) {
     if (phase === "sending") return;
     setError("");
     setDuplicate(null);
-    if (!subject.trim() || !body.trim()) {
+    if (!subject.trim() || bodyIsEmpty) {
       setError("Add a subject and a message before sending.");
       return;
     }
@@ -136,7 +250,8 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
       const { status, json } = await call({
         mode: "send",
         subject: subject.trim(),
-        body_text: body.trim(),
+        body_html: bodyHtml,
+        copy_to: copyToMe && myEmail.trim() ? myEmail.trim() : undefined,
         confirm_duplicate: confirmDuplicate,
       });
       if (status === 409 && json?.error === "duplicate_send") {
@@ -145,14 +260,23 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
         return;
       }
       if (status !== 200) {
-        setError(json?.message || json?.error || "Couldn't send. Nothing was sent.");
+        // NOT "nothing was sent" - we do not know that. The server emails the
+        // families BEFORE several of the things that can fail afterwards, so
+        // asserting a clean failure is the sentence that makes an operator
+        // press Send again and mail the whole class twice. Say what is true
+        // (it did not finish) and point at the record that can settle it.
+        setError(json?.message || json?.error
+          || "Something went wrong before this finished. Check the Sent tab before trying again - some families may already have it.");
         setPhase("compose");
         return;
       }
       setResult(json);
       setPhase("done");
     } catch (e) {
-      setError(e.message ?? "Couldn't send. Nothing was sent.");
+      // Same reasoning: a dropped connection tells us nothing about what the
+      // server did with the request it already received.
+      setError(e.message
+        ?? "The connection dropped before this finished. Check the Sent tab before trying again - some families may already have it.");
       setPhase("compose");
     }
   }
@@ -183,6 +307,26 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
           </button>
         </div>
 
+        {/* ONE PANEL, TWO QUESTIONS: what am I about to send, and what have I
+            already sent. Kept in this modal rather than on a screen of its own
+            so there is ONE place a class's messages live, reachable identically
+            from Rosters and from the calendar. */}
+        {phase !== "done" && (
+          <div style={{ display: "flex", gap: 4, marginTop: 12, borderBottom: `1px solid ${RULE}` }}>
+            {[["write", "Write a message"], ["sent", "Sent"]].map(([key, label]) => (
+              <button key={key} type="button" onClick={() => setTab(key)} disabled={sending}
+                style={{
+                  background: "transparent", border: "none", borderBottom: `2px solid ${tab === key ? BRIGHT : "transparent"}`,
+                  color: tab === key ? PURPLE : MUTED, fontWeight: tab === key ? 700 : 500,
+                  fontSize: 13, fontFamily: "inherit", padding: "6px 10px", marginBottom: -1,
+                  cursor: sending ? "not-allowed" : "pointer",
+                }}>
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+
         {phase === "done" ? (
           // THE RESULT WHERE THEY CLICKED. Counts first, then every failure by
           // name - a tally with no names is a result an operator cannot act on.
@@ -198,6 +342,18 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
                   {result.unreachable_count} {result.unreachable_count === 1 ? "family has" : "families have"} no email address on file, so they were not included.
                 </div>
               )}
+              {/* The copy is reported separately, and says NOTHING about the
+                  families. It read "The families were emailed, but your copy
+                  did not go" until a staging run produced that sentence under a
+                  heading that said 0 sent, 1 failed - the copy branch asserting
+                  an outcome it does not know. The line above owns that fact. */}
+              {result?.copy && (
+                <div style={{ fontSize: 12, color: result.copy.status === "sent" ? MUTED : AMBER, marginTop: 6 }}>
+                  {result.copy.status === "sent"
+                    ? `A copy was sent to you at ${result.copy.to}.`
+                    : `Your copy to ${result.copy.to} did not go.`}
+                </div>
+              )}
               {result?.audit_recorded === false && (
                 <div style={{ fontSize: 12, color: AMBER, marginTop: 6 }}>
                   The emails went out, but recording them in the log failed. Don't send again - check the log later.
@@ -208,7 +364,9 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
               <div style={{ marginTop: 10 }}>
                 <div style={{ fontSize: 12, fontWeight: 700, color: RED, marginBottom: 4 }}>These did not go:</div>
                 {(result.results).filter((r) => r.status === "failed").map((r) => (
-                  <div key={r.email} style={{ fontSize: 12, color: INK }}>
+                  // overflowWrap, because an email address is one unbroken word
+                  // and a long one runs out of a 375px phone. Seen on staging.
+                  <div key={r.email} style={{ fontSize: 12, color: INK, overflowWrap: "anywhere" }}>
                     {r.name || r.email} <span style={{ color: MUTED }}>({r.email})</span>
                   </div>
                 ))}
@@ -220,6 +378,8 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
               </button>
             </div>
           </div>
+        ) : tab === "sent" ? (
+          <SentMessages programId={program?.id} orgId={orgId} />
         ) : (
           <>
             {/* WHO, before what. */}
@@ -257,12 +417,6 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
                         {r.name || r.email}
                         <span style={{ color: MUTED }}> · {r.children}</span>
                       </span>
-                      {/* THREE STATES, THREE SENTENCES. A family can be BOTH -
-                          one child enrolled and another waiting - and the first
-                          version of this badge said only "WAITING LIST" for
-                          them, which reads as "this family has no place" when
-                          one of their children does. Seen live on staging:
-                          Jessica Vorster has Priya enrolled and J dog waiting. */}
                       {/* FOUR STATES, FOUR LABELS. A family can be in more than
                           one group at once - one child enrolled, another waiting
                           or refunded - and a single-word badge for that reads as
@@ -307,23 +461,61 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
                 style={{ width: "100%", marginTop: 4, padding: "7px 10px", border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", color: INK, boxSizing: "border-box" }} />
             </label>
 
-            <label style={{ display: "block", marginTop: 10 }}>
-              <span style={{ fontSize: 12, fontWeight: 600, color: INK }}>Message</span>
-              <textarea value={body} onChange={(e) => setBody(e.target.value)} disabled={sending} rows={7}
-                placeholder={"e.g. Hi {parent_first_name}, next week {student_first_name}'s class will start at 3pm instead of 2:30."}
-                style={{ width: "100%", marginTop: 4, padding: "7px 10px", border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", color: INK, boxSizing: "border-box", resize: "vertical" }} />
-            </label>
+            <div style={{ marginTop: 10 }}>
+              <span style={{ fontSize: 12, fontWeight: 600, color: INK, display: "block", marginBottom: 4 }}>Message</span>
+              {/* THE FIX. Select your words and press B, or press Link and fill
+                  in a box - the same control Mailchimp, HubSpot and every other
+                  comms tool gives you, and the same one the rest of Enrops
+                  already uses. Nothing here shows an operator a markup marker. */}
+              <RichBodyEditor
+                value={bodyHtml}
+                onChange={setBodyHtml}
+                rows={7}
+                fields={FIELDS}
+                showPreview={false}
+                // Plain words, no token spelling. An operator who wants the
+                // parent's name in there presses Personalize with fields; an
+                // example written in braces teaches the notation this editor
+                // exists to hide.
+                placeholder={"e.g. Next week class will start at 3pm instead of 2:30."}
+              />
+            </div>
 
-            <details style={{ marginTop: 8 }}>
-              <summary style={{ fontSize: 12, color: BRIGHT, cursor: "pointer" }}>Words you can drop in</summary>
-              <div style={{ marginTop: 6 }}>
-                {PLACEHOLDERS.map(([token, what]) => (
-                  <div key={token} style={{ fontSize: 12, color: MUTED }}>
-                    <code style={{ color: INK }}>{token}</code> — {what}
-                  </div>
-                ))}
+            {/* SEE IT BEFORE THEY DO. Jeff's words: "I've just been hitting send
+                and giving a slight prayer." */}
+            <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, padding: 12, marginTop: 12, background: "#fcfbf7" }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: INK }}>Check it first</div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-end", marginTop: 6 }}>
+                <label style={{ flex: "1 1 220px", fontSize: 11, color: MUTED }}>
+                  Send a test to
+                  <input value={myEmail} onChange={(e) => setMyEmail(e.target.value)} disabled={sending || testing}
+                    placeholder="you@yourbusiness.com"
+                    style={{ width: "100%", marginTop: 3, padding: "7px 10px", border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", color: INK, boxSizing: "border-box" }} />
+                </label>
+                <button type="button" onClick={sendTest} disabled={sending || testing}
+                  style={{ padding: "8px 14px", background: "#fff", color: PURPLE, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: (sending || testing) ? "not-allowed" : "pointer" }}>
+                  {testing ? "Sending test…" : "Send test"}
+                </button>
               </div>
-            </details>
+              <div style={{ fontSize: 11, color: MUTED, marginTop: 5 }}>
+                A test goes to one person on your team and reaches no families. It is not recorded as a send.
+              </div>
+              {testResult && (
+                <div style={{ fontSize: 12, marginTop: 7, color: testResult.ok ? OK_GREEN : RED }}>
+                  {testResult.message}
+                </div>
+              )}
+              {/* Disabled with no address rather than silently sending no copy.
+                  Ticked-but-blank used to drop `copy_to` on the floor: the
+                  families were emailed, no copy was sent, and the result panel
+                  said nothing either way because there was no copy to report. */}
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: myEmail.trim() ? INK : MUTED, marginTop: 9 }}>
+                <input type="checkbox" checked={copyToMe && !!myEmail.trim()} disabled={sending || !myEmail.trim()}
+                  onChange={(e) => setCopyToMe(e.target.checked)} />
+                Email me a copy when this goes
+                {!myEmail.trim() && <span style={{ fontSize: 11 }}>(add an address above first)</span>}
+              </label>
+            </div>
 
             {/* One email per family, said out loud - it is the question an
                 operator asks before sending to a class. */}
@@ -364,6 +556,120 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+// What this class has already been sent, read from the rows this panel has been
+// writing since it was built - and which, until today, only appeared on ONE
+// contact's timeline over in Comms. An operator who sent from here had no way to
+// see it from here.
+//
+// Every row states its own outcome, including the families that were never
+// attempted, because "sent to 29" with no failures listed is the number that
+// makes an operator stop looking.
+function SentMessages({ programId, orgId }) {
+  const [rows, setRows] = useState(null);   // null = loading
+  const [loadError, setLoadError] = useState("");
+  const [openId, setOpenId] = useState(null);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const { data, error } = await supabase
+        .from("program_family_messages")
+        .select("id, sent_at, subject, body_text, body_html, status, recipient_count, sent_count, failed_count, include_waitlist, include_cancelled, recipients")
+        .eq("program_id", programId)
+        .eq("organization_id", orgId)
+        .order("sent_at", { ascending: false })
+        .limit(25);
+      if (!alive) return;
+      if (error) {
+        setLoadError("Couldn't load what has been sent to this class.");
+        setRows([]);
+        return;
+      }
+      setRows(data ?? []);
+    })();
+    return () => { alive = false; };
+  }, [programId, orgId]);
+
+  if (rows === null) {
+    return <div style={{ fontSize: 13, color: MUTED, padding: "20px 2px" }}>Loading…</div>;
+  }
+  if (loadError) {
+    return <div style={{ fontSize: 13, color: RED, padding: "20px 2px" }}>{loadError}</div>;
+  }
+  if (!rows.length) {
+    return (
+      <div style={{ fontSize: 13, color: MUTED, padding: "24px 2px" }}>
+        Nothing has been sent to this class's families yet. Anything you send from here will be listed, with who received it.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      {rows.map((m) => {
+        const open = openId === m.id;
+        const failed = (m.recipients ?? []).filter((r) => r.status === "failed");
+        const notAttempted = (m.recipients ?? []).filter((r) => r.status === "not_attempted");
+        return (
+          <div key={m.id} style={{ border: `1px solid ${RULE}`, borderRadius: 8, padding: 10, marginBottom: 8 }}>
+            <button type="button" onClick={() => setOpenId(open ? null : m.id)}
+              style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", padding: 0, cursor: "pointer", fontFamily: "inherit" }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: INK }}>{m.subject}</div>
+              <div style={{ fontSize: 11.5, color: MUTED, marginTop: 3 }}>
+                {fmtWhen(m.sent_at)}
+                {" · "}
+                {m.status === "no_recipients"
+                  ? "nobody could be reached"
+                  : `${m.sent_count} of ${m.recipient_count} ${m.recipient_count === 1 ? "family" : "families"}`}
+                {m.failed_count ? ` · ${m.failed_count} failed` : ""}
+                {m.include_waitlist ? " · incl. waiting list" : ""}
+                {m.include_cancelled ? " · incl. left/refunded" : ""}
+              </div>
+            </button>
+
+            {open && (
+              <div style={{ marginTop: 10, borderTop: `1px solid ${RULE}`, paddingTop: 10 }}>
+                {/* The message as it was written. `body_html` is only ever
+                    produced by our own editor, which sanitises link targets;
+                    older rows have none and fall back to the plain half. */}
+                {/* SANITIZED AT RENDER, not trusted because the editor cleaned
+                    it on the way in. The edge function stores body_html as it
+                    receives it, so anyone able to call that function - every
+                    admin and staff member of this org - can put arbitrary
+                    markup in this column without going near the editor. This
+                    div is the only thing standing between that and an admin's
+                    own session, so it does the check itself. */}
+                {m.body_html
+                  ? <div style={{ fontSize: 12.5, color: INK, lineHeight: 1.5 }} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(m.body_html) }} />
+                  : <div style={{ fontSize: 12.5, color: INK, whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{m.body_text}</div>}
+
+                {failed.length > 0 && (
+                  <div style={{ marginTop: 10 }}>
+                    <div style={{ fontSize: 11.5, fontWeight: 700, color: RED }}>Did not arrive:</div>
+                    {failed.map((r) => (
+                      <div key={r.email} style={{ fontSize: 11.5, color: INK, overflowWrap: "anywhere" }}>
+                        {r.name || r.email} <span style={{ color: MUTED }}>({r.email})</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {notAttempted.length > 0 && (
+                  <div style={{ marginTop: 10 }}>
+                    <div style={{ fontSize: 11.5, fontWeight: 700, color: AMBER }}>Not included - no email address on file:</div>
+                    {notAttempted.map((r) => (
+                      <div key={r.email || r.name} style={{ fontSize: 11.5, color: MUTED }}>{r.name || r.email}</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
