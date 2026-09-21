@@ -19,6 +19,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import ShareProgram from "../../../components/ShareProgram.jsx";
+import FamiliesPayNote, { useOrgFeeConfig } from "../../../components/FamiliesPayNote.jsx";
 import ProgramSteps from "../../../components/ProgramSteps.jsx";
 import { STRIPE_CONNECT_ESTIMATE_SENTENCE } from "../../../lib/stripeConnectEstimate.js";
 import EnnieTip from "../../../components/EnnieTip.jsx";
@@ -113,6 +114,10 @@ export default function QuickProgramBuilder() {
   // at their defaults, quietly switching on a question the operator had turned
   // off.
   const { org, setOrg } = useOutletContext();
+  // What a family is charged for the price typed below. Same endpoint the
+  // registration flow asks, so the operator and the family cannot be shown
+  // different numbers. See src/components/FamiliesPayNote.jsx.
+  const feeConfig = useOrgFeeConfig(org?.slug);
   const navigate = useNavigate();
 
   const [name, setName] = useState("");
@@ -1788,6 +1793,14 @@ export default function QuickProgramBuilder() {
                 placeholder="0.00"
               />
             </div>
+            {/* priceValid, not priceCents alone: an in-progress "12." parses to
+                1200 and would flash a confident "families pay $12.36" at a
+                half-typed number. */}
+            <FamiliesPayNote
+              priceCents={priceValid ? priceCents : null}
+              feeConfig={feeConfig}
+              style={{ color: INK }}
+            />
           </div>
           <div>
             <label style={labelStyle} htmlFor="qpb-spots">Spots</label>

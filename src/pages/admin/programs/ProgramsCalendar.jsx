@@ -20,6 +20,7 @@ import EditProgramCurriculumModal from "./EditProgramCurriculumModal.jsx";
 import CancelClassModal from "./CancelClassModal.jsx";
 import MessageFamiliesModal from "./MessageFamiliesModal.jsx";
 import ShareProgram from "../../../components/ShareProgram.jsx";
+import FamiliesPayNote, { useOrgFeeConfig } from "../../../components/FamiliesPayNote.jsx";
 import ShareLink from "../../../components/ShareLink.jsx";
 import EnnieTip from "../../../components/EnnieTip.jsx";
 import EmbedSnippet from "../../../components/EmbedSnippet.jsx";
@@ -1820,6 +1821,9 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
   // Lean ops don't have partner-run registration or instructors — hide those.
   const { org: panelOrg } = useOutletContext() ?? {};
   const isLean = panelOrg?.instructor_pay_model === "enrops_platform";
+  // What a family is charged for the price in this panel. Same endpoint the
+  // registration flow asks. See src/components/FamiliesPayNote.jsx.
+  const panelFeeConfig = useOrgFeeConfig(orgSlug || panelOrg?.slug);
   // Reads the SAVED row, not the local draft below: Publish writes status and
   // nothing else, so an unsaved price change must not talk the gate out of the
   // way. Saving first is what moves it.
@@ -2647,6 +2651,15 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
             value={draft.price_cents == null || draft.price_cents === "" ? "" : Math.round(Number(draft.price_cents) / 100)}
             onChange={(e) => set("price_cents", e.target.value === "" ? "" : Math.round(Number(e.target.value) * 100))}
             style={expandInputStyle}
+          />
+          {/* The number to advertise, next to the number being typed. Same
+              component and same source as the two program builders, so an
+              operator editing a price here is told exactly what they would be
+              told creating it. */}
+          <FamiliesPayNote
+            priceCents={draft.price_cents === "" || draft.price_cents == null ? null : Number(draft.price_cents)}
+            feeConfig={panelFeeConfig}
+            style={{ fontSize: 12.5 }}
           />
         </ExpandField>
         <ExpandField label="Location *">
