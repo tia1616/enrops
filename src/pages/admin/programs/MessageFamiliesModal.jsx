@@ -332,6 +332,14 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
   // prevent.
   useEffect(() => { setExcluded(new Set()); }, [includeWaitlist, includeCancelled]);
 
+  // CAN WE TELL HOUSEHOLDS APART AT ALL? `parent_id` arrives only from a server
+  // that has this release. Against an older one every row falls back to keying
+  // on its own address, so the list silently becomes one row per INBOX - and
+  // unticking Rosemary would leave Jim receiving it, which is the exact defect
+  // this control exists to prevent. Offer no control rather than one that lies:
+  // the picker is hidden until the function that honours it is deployed.
+  const canPick = (preview?.recipients ?? []).every((r) => !!r.parent_id);
+
   const selected = households.filter((h) => !excluded.has(h.key));
   const count = selected.length;
   const inboxCount = selected.reduce((n, h) => n + h.emails.length, 0);
@@ -388,7 +396,17 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
               <div style={{ fontSize: 14, fontWeight: 700, color: result?.failed ? AMBER : OK_GREEN }}>
                 {result?.status === "no_recipients"
                   ? "Nothing was sent - nobody in this class had an email address."
-                  : `Sent to ${result?.sent} ${result?.sent === 1 ? "family" : "families"}${result?.failed ? `, ${result.failed} failed` : ""}.`}
+                  : (() => {
+                    // Families, then the number of emails behind them when the
+                    // two differ. `sent` counts EMAILS; calling that number
+                    // "families" is what the preview label did for months.
+                    // Older responses carry no household count, so fall back to
+                    // the email count rather than printing "undefined".
+                    const fam = result?.households_sent ?? result?.sent;
+                    return `Sent to ${fam} ${fam === 1 ? "family" : "families"}`
+                      + (result?.sent !== fam ? ` (${result.sent} emails)` : "")
+                      + (result?.failed ? `, ${result.failed} failed` : "") + ".";
+                  })()}
               </div>
               {!!result?.unreachable_count && (
                 <div style={{ fontSize: 12, color: MUTED, marginTop: 6 }}>
@@ -484,8 +502,10 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
                   {households.map((r) => (
                     <label key={r.key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "5px 8px", fontSize: 12, borderBottom: `1px solid ${RULE}`, cursor: sending ? "not-allowed" : "pointer", opacity: excluded.has(r.key) ? 0.45 : 1 }}>
                       <span style={{ color: INK, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 7 }}>
-                        <input type="checkbox" checked={!excluded.has(r.key)} disabled={sending}
-                          onChange={() => toggleHousehold(r.key)} />
+                        {canPick && (
+                          <input type="checkbox" checked={!excluded.has(r.key)} disabled={sending}
+                            onChange={() => toggleHousehold(r.key)} />
+                        )}
                         <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
                           {r.name || r.emails[0]}
                           <span style={{ color: MUTED }}> · {r.children}</span>

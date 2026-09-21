@@ -676,6 +676,13 @@ serve(async (req: Request) => {
       copy: copySent,
       status,
       sent: tally.sent,
+      // HOUSEHOLDS, because the screen says "families" and `sent` counts
+      // EMAILS. A class of 6 families holding 10 addresses would have reported
+      // "Sent to 10 families" - the identical defect that was just fixed on the
+      // preview label, still sitting on the result panel afterwards.
+      households_sent: new Set(
+        results.filter((r) => r.status === 'sent').map((r) => r.parent_id).filter(Boolean),
+      ).size,
       failed: tally.failed,
       unreachable_count: grouped.unreachable.length,
       audit_recorded: !auditErr,
