@@ -43,7 +43,7 @@
 // what he was about to send, and could not see what he had sent. Hence "Send a
 // test to", "email me a copy", and the Sent tab, which reads the audit rows this
 // panel has been writing since day one and that nothing on this screen showed.
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../../lib/supabase.js";
 import RichBodyEditor from "../../../components/RichBodyEditor.jsx";
 import { sanitizeRichHtml, stripHtml } from "../marketing-v2/bodyEditorUtils.js";
@@ -158,6 +158,27 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
   const [classPickerOpen, setClassPickerOpen] = useState(false);
   const [progress, setProgress] = useState(null);       // { done, total, name }
 
+  // WHAT THIS COMPOSE SESSION HAS ALREADY DONE, so a retry RESUMES instead of
+  // restarting.
+  //
+  // These are refs, not state, because the send loop reads them mid-flight and
+  // a re-render must not hand it a stale copy. They survive across calls to
+  // send() deliberately: the whole point is that pressing "Send it again
+  // anyway" after a warning on class 3 does not re-send classes 1 and 2.
+  const sentClassIds = useRef(new Set());
+  // Households already addressed anywhere in this batch - the dedupe, carried
+  // across a resume for the same reason.
+  const emailedHouseholds = useRef(new Set());
+  // The class a duplicate warning was raised FOR. Confirming clears the guard
+  // for that class only.
+  const duplicateForRef = useRef(null);
+  // Per-class outcomes, accumulated across resumes so the final panel reports
+  // the whole batch.
+  const sentResults = useRef([]);
+  // Preview responses by (class, audience). Keyed rather than cleared, so a
+  // stale entry is unreachable by construction.
+  const previewCache = useRef(new Map());
+
   const selectedClassIds = useMemo(
     () => [program?.id, ...otherClassIds].filter(Boolean),
     [program?.id, otherClassIds],
@@ -235,6 +256,16 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
         // looking at a list, not racing a clock.
         const perClass = [];
         for (const pid of selectedClassIds) {
+          // CACHED PER (CLASS, AUDIENCE), so ticking a twelfth class fetches
+          // ONE preview and not twelve. Without this the effect replayed the
+          // whole list on every tick - 1+2+...+12 = 78 calls to a function that
+          // runs a SECURITY DEFINER query each time, with superseded runs still
+          // in flight. The audience is part of the key rather than something to
+          // remember to invalidate, so a stale entry cannot be served.
+          const cacheKey = `${pid}|${includeWaitlist}|${includeCancelled}`;
+          const hit = previewCache.current.get(cacheKey);
+          if (hit) { perClass.push({ programId: pid, json: hit }); continue; }
+
           const { status, json } = await call({ mode: "preview", program_id: pid });
           if (!alive) return;
           if (status !== 200) {
@@ -244,6 +275,7 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
             setPreview({ recipients: [], unreachable: [], recipient_count: 0, unreachable_count: 0 });
             return;
           }
+          previewCache.current.set(cacheKey, json);
           perClass.push({ programId: pid, json });
         }
         if (!alive) return;
@@ -253,15 +285,24 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
         // repeatedly. Which class each family is counted under is decided at
         // send time by the order below; here they are simply one row.
         const byAddress = new Map();
-        const unreachable = [];
+        // DEDUPED THE SAME WAY THE RECIPIENTS ARE. This was a flat push, so a
+        // family with a placeholder address in three of the selected classes
+        // was counted three times and their child named three times - "3
+        // families have no email address on file" for one family. The panel
+        // exists to make a silent gap visible; inflating it sends an operator
+        // chasing a school for addresses that are one address.
+        const byUnreachable = new Map();
         for (const { programId, json } of perClass) {
           for (const r of json.recipients ?? []) {
             const key = `${r.email}|${r.parent_id ?? ""}`;
             if (!byAddress.has(key)) byAddress.set(key, { ...r, programIds: [] });
             byAddress.get(key).programIds.push(programId);
           }
-          for (const u of json.unreachable ?? []) unreachable.push(u);
+          for (const u of json.unreachable ?? []) {
+            byUnreachable.set(`${u.email}|${u.parent_id ?? ""}`, u);
+          }
         }
+        const unreachable = [...byUnreachable.values()];
         const recipients = [...byAddress.values()];
         setPreview({
           program: perClass[0]?.json?.program,
@@ -324,7 +365,7 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
     }
   }
 
-  async function send({ confirmDuplicate = false } = {}) {
+  async function send({ confirmFor = null } = {}) {
     if (phase === "sending") return;
     setError("");
     setDuplicate(null);
@@ -346,22 +387,32 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
       return;
     }
     setPhase("sending");
-    // ALREADY EMAILED IN THIS BATCH, carried forward from class to class.
-    //
-    // This is the whole dedupe, and it reuses the exclusion the picker already
-    // sends rather than inventing a second mechanism. A family in Monday and
-    // Tuesday is emailed by Monday, then excluded from Tuesday - so they hear
-    // it once, and the class named in their email is one they are really in.
-    // The alternative, one email per class, would have told 67 J2S families the
-    // same thing two to four times.
-    const alreadyEmailed = new Set();
-    const perClass = [];
+    // ALREADY EMAILED IN THIS BATCH, carried forward from class to class AND
+    // across a resume. This is the whole dedupe, and it reuses the exclusion
+    // the picker already sends rather than inventing a second mechanism. A
+    // family in Monday and Tuesday is emailed by Monday, then excluded from
+    // Tuesday - so they hear it once, and the class named in their email is one
+    // they are really in. The alternative, one email per class, would have told
+    // 67 J2S families the same thing two to four times.
+    const alreadyEmailed = emailedHouseholds.current;
+    // Accumulated across resumes too, so the panel at the end reports the whole
+    // batch rather than only the classes that ran after the last warning.
+    const perClass = sentResults.current;
     try {
       for (let i = 0; i < selectedClassIds.length; i++) {
         const pid = selectedClassIds[i];
         const label = pid === program?.id
           ? (program?.curriculum || "this class")
           : (classList?.find((c) => c.id === pid)?.curriculum || "a class");
+
+        // A RESUME SKIPS WHAT ALREADY WENT. Without this, a duplicate warning
+        // raised on class 3 of 12 - which happens whenever THAT class had the
+        // same subject minutes ago - left classes 1 and 2 sent, and pressing
+        // "Send it again anyway" restarted at class 1 and emailed both of them
+        // a second time. The control that exists to prevent a double send was
+        // causing one.
+        if (sentClassIds.current.has(pid)) continue;
+
         setProgress({ done: i, total: selectedClassIds.length, name: label });
 
         const { status, json } = await call({
@@ -375,18 +426,26 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
           exclude_parent_ids: [...new Set([...excluded, ...alreadyEmailed])],
           subject: subject.trim(),
           body_html: bodyHtml,
-          // The operator's copy rides the FIRST class only. One message, one
-          // copy - twelve copies of their own send is the same noise a BCC per
-          // family would have been.
-          copy_to: i === 0 && copyToMe && myEmail.trim() ? myEmail.trim() : undefined,
-          confirm_duplicate: confirmDuplicate,
+          // The operator's copy rides the first class ACTUALLY SENT, not
+          // index 0 - on a resume, index 0 has already gone and would send a
+          // second copy. One message, one copy.
+          copy_to: sentClassIds.current.size === 0 && copyToMe && myEmail.trim()
+            ? myEmail.trim() : undefined,
+          // THIS CLASS ONLY. Passing the operator's confirmation to every class
+          // in the batch spent one decision about one class on eleven others,
+          // disabling their guards silently. The warning names a class; the
+          // confirmation answers for that class.
+          confirm_duplicate: confirmFor === pid,
         });
 
         if (status === 409 && json?.error === "duplicate_send") {
-          // Only reachable on the first class: every later one has a different
-          // program_id, and the guard is per class. Stopping here leaves the
-          // batch untouched rather than half-sent.
-          setDuplicate(json);
+          // Reachable on ANY class, not just the first: the guard is per class,
+          // so class 3 trips it whenever class 3 had this subject minutes ago.
+          // Everything before it has already been sent, which is why the retry
+          // resumes rather than restarts, and why the operator is told where it
+          // stopped instead of being left to assume nothing happened.
+          duplicateForRef.current = pid;
+          setDuplicate({ ...json, class_label: label, already_sent: sentClassIds.current.size });
           setPhase("compose");
           setProgress(null);
           return;
@@ -427,6 +486,9 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
         for (const r of json.results ?? []) {
           if (r.parent_id) alreadyEmailed.add(r.parent_id);
         }
+        // Recorded BEFORE the next class runs, so a failure or a warning later
+        // in the batch can never cause this one to be sent again.
+        sentClassIds.current.add(pid);
         perClass.push({ programId: pid, label, ...json });
       }
 
@@ -436,8 +498,14 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
       setResult({
         mode: "send",
         classes: perClass,
-        status: perClass.every((p) => p.status === "sent") ? "sent"
-          : perClass.every((p) => p.status === "failed" || p.status === "no_recipients") ? "failed" : "partial",
+        // no_recipients SURVIVES AGGREGATION. Collapsing it into "failed" lost
+        // the one sentence that explains an empty send - "nobody had an email
+        // address" - and replaced it with "Sent to 0 families, 0 failed", which
+        // is true and tells the operator nothing. Reachable when a roster
+        // empties between the preview and the send.
+        status: perClass.every((p) => p.status === "no_recipients") ? "no_recipients"
+          : perClass.every((p) => p.status === "sent") ? "sent"
+            : perClass.every((p) => p.status === "failed" || p.status === "no_recipients") ? "failed" : "partial",
         sent: perClass.reduce((n, p) => n + (p.sent ?? 0), 0),
         // Households actually REACHED, which is not the same as households
         // addressed now that a failed attempt also counts as addressed.
@@ -845,8 +913,21 @@ export default function MessageFamiliesModal({ program, orgId, onClose }) {
             {duplicate && (
               <div style={{ marginTop: 12, background: "#fdf6e3", border: "1px solid #ecdca6", borderRadius: 8, padding: 10 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: AMBER }}>This looks like a repeat</div>
-                <div style={{ fontSize: 12, color: INK, marginTop: 4 }}>{duplicate.message}</div>
-                <button type="button" onClick={() => send({ confirmDuplicate: true })}
+                <div style={{ fontSize: 12, color: INK, marginTop: 4 }}>
+                  {selectedClassIds.length > 1 && duplicate.class_label
+                    ? <><b>{duplicate.class_label}:</b> {duplicate.message}</>
+                    : duplicate.message}
+                </div>
+                {/* WHERE IT STOPPED, said out loud. Over several classes the
+                    earlier ones have already gone out, and an operator who
+                    cannot see that will read "repeat" as "nothing happened". */}
+                {duplicate.already_sent > 0 && (
+                  <div style={{ fontSize: 12, color: INK, marginTop: 6 }}>
+                    {duplicate.already_sent} {duplicate.already_sent === 1 ? "class has" : "classes have"} already
+                    been sent. Continuing picks up from this one - they will not be sent again.
+                  </div>
+                )}
+                <button type="button" onClick={() => send({ confirmFor: duplicateForRef.current })}
                   style={{ marginTop: 8, padding: "6px 12px", background: AMBER, color: "#fff", border: "none", borderRadius: 6, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>
                   Send it again anyway
                 </button>
