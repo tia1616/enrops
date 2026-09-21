@@ -6,7 +6,17 @@
 // whole mechanism Jessica asked for next ("there is no way to email just the
 // families in one class - and it cost a real send today"), and it was welded to
 // one trigger: a curriculum swap. Rather than write a second send loop beside it,
-// the loop moves here and both callers use it.
+// the loop moved here.
+//
+// "AND BOTH CALLERS USE IT" is what this said, and it was never true - checked
+// 2026-09-21. `notify-program-curriculum-change` still has its OWN send loop and
+// imports only `familyRecipients`, so there is exactly ONE caller of
+// `sendFamilyEmails`: notify-program-families. That matters now rather than as
+// trivia: the HTML half added below therefore reaches Message families and
+// nothing else, and the curriculum notice - 14 sends on prod, its body typed
+// free-hand into a textarea - still sends plain text only and still shows an
+// operator's **bold** as asterisks. Adopting this module there is the other half
+// of the fix, and it is a chunk of its own, not a line.
 //
 // WHO ALREADY OWNS THE OTHER HALVES, so this file does not re-do them:
 //   - WHICH families      program_note_recipients (SECURITY DEFINER, org-checked,
