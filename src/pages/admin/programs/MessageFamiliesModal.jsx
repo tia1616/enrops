@@ -45,7 +45,7 @@
 // panel has been writing since day one and that nothing on this screen showed.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../../lib/supabase.js";
-import RichBodyEditor from "../../../components/RichBodyEditor.jsx";
+import RichBodyEditor, { EDITOR_CSS } from "../../../components/RichBodyEditor.jsx";
 import { sanitizeRichHtml, stripHtml } from "../marketing-v2/bodyEditorUtils.js";
 
 const PURPLE = "#1C004F";
@@ -1477,8 +1477,19 @@ function SentMessages({ programIds, labelFor, orgId }) {
                     markup in this column without going near the editor. This
                     div is the only thing standing between that and an admin's
                     own session, so it does the check itself. */}
+                {/* THE HISTORY HAS TO LOOK LIKE WHAT WENT OUT. This div carried
+                    no styling of its own, so Preflight applied: a message sent
+                    with a bulleted list read back here as unbulleted,
+                    unindented lines. The record of what an operator sent is the
+                    one place that must not quietly reformat it. Same class and
+                    the same stylesheet the composer uses - one definition, so
+                    the two cannot drift. RichBodyEditor is not mounted on this
+                    tab, so its <style> comes with it. */}
                 {m.body_html
-                  ? <div style={{ fontSize: 12.5, color: INK, lineHeight: 1.5 }} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(m.body_html) }} />
+                  ? <>
+                    <style>{EDITOR_CSS}</style>
+                    <div className="enr-rbe" style={{ fontSize: 12.5, color: INK, lineHeight: 1.5 }} dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(m.body_html) }} />
+                  </>
                   : <div style={{ fontSize: 12.5, color: INK, whiteSpace: "pre-wrap", lineHeight: 1.5 }}>{m.body_text}</div>}
 
                 {failed.length > 0 && (

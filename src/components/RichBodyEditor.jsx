@@ -59,12 +59,28 @@ const linkInputStyle = {
 // contenteditable content (a link the operator just made is not a React
 // element), so the one thing an operator must see - that a link looks like a
 // link - has to be a stylesheet rule.
-const EDITOR_CSS = `
+export const EDITOR_CSS = `
 .enr-rbe[contenteditable] { outline: none; }
 .enr-rbe a { color: #1a55c4; text-decoration: underline; }
 .enr-rbe p { margin: 0 0 10px; }
 .enr-rbe p:last-child { margin-bottom: 0; }
+/* THE BULLET HAS TO BE PUT BACK, not just made room for.
+   Jessica, 2026-09-22, eyeballing staging: "when i clicked bullet it didn't
+   show it bulleted - the bullet did show up in the test email though."
+   Tailwind's Preflight sets "list-style: none" on every ul and ol in the admin
+   app. This rule restored the INDENT (padding-left) and the spacing but never
+   the marker, so a list looked like indented lines while the operator was
+   writing it. The email is a separate document with no Preflight in it, which
+   is why it bulleted there and only there - the editor was the one place
+   showing something other than what the family would get, which is the whole
+   promise of this control.
+   Stated explicitly rather than "list-style: revert": revert hands it back to
+   the user-agent sheet, and what that sheet says is not ours to depend on. */
 .enr-rbe ul, .enr-rbe ol { margin: 0 0 10px; padding-left: 22px; }
+.enr-rbe ul { list-style: disc outside; }
+.enr-rbe ol { list-style: decimal outside; }
+.enr-rbe ul ul { list-style: circle outside; }
+.enr-rbe li { display: list-item; margin: 0 0 2px; }
 .enr-rbe .enr-chip {
   display: inline-block; padding: 1px 8px; margin: 0 1px; border-radius: 999px;
   background: #EDE8F5; color: ${PURPLE}; font-size: 0.92em; font-weight: 600;
