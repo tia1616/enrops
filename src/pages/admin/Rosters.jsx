@@ -890,6 +890,15 @@ function CamperEditableRow({ registration, contacts = [], contactsLoaded = false
                 Pickup &amp; dismissal
               </button>
             )}
+            {/* RENAMED 2026-09-22 (Jessica). For a family who has PAID, this is
+                the ONLY control that takes a child off a roster - the sibling
+                "Remove" button below only renders when they have NOT paid. So
+                the same job had two different names depending on whether money
+                had changed hands, and for paying families it was hidden behind a
+                word that means something else entirely. "remove" is the
+                sibling's verb, so one word now covers the job in both states.
+                Deliberately NOT "cancel": the drawer this opens already has a
+                Cancel button meaning "close without doing anything". */}
             {canManage && hasPayment && payStatus !== "refunded" && (
               <button
                 type="button"
@@ -906,9 +915,9 @@ function CamperEditableRow({ registration, contacts = [], contactsLoaded = false
                   cursor: "pointer",
                   whiteSpace: "nowrap",
                 }}
-                title="Refund this family's payment (and optionally free their spot)"
+                title="Refund this family's payment, or take the child off the roster (or both)"
               >
-                Refund
+                Refund / remove
               </button>
             )}
             {canManage && !hasPayment && (

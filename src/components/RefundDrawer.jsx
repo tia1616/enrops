@@ -31,6 +31,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import { formatCalendarDate } from "../lib/programSchedule";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -43,6 +44,15 @@ const CREAM = "#FBFBFB";
 
 function fmtCents(cents) {
   return `$${((cents || 0) / 100).toFixed(2)}`;
+}
+
+// A due date is a CALENDAR date, not a moment, and this repo already has one
+// place that knows that: formatCalendarDate parses at local midnight (so a
+// charge due 5 Jan does not render as 4 Jan) and returns null rather than a
+// rolled-over guess for a malformed date. Always shows the year - a payment
+// date months out is exactly where a bare "Jan 5" is ambiguous.
+function fmtDue(iso) {
+  return formatCalendarDate(iso, { month: "short", day: "numeric", year: "numeric" });
 }
 
 // Map the edge function's error codes to plain English (no jargon, no codes).
@@ -58,6 +68,14 @@ function humanError(code, payload) {
       return `Stripe couldn't process the refund${payload?.stripe_message ? `: ${payload.stripe_message}` : ""}. Nothing was charged back.`;
     case "cancel_failed_after_refund":
       return "The refund went through, but freeing the spot didn't. Refresh the roster — if the family is still listed, use Remove or try again.";
+    // The two outcomes of the withdraw path. Both used to fall through to the
+    // default and show the operator the raw code, which is precisely the
+    // opposite of what this function exists for — and the second of them is the
+    // half-done state that most needs explaining.
+    case "pause_failed":
+      return "We couldn't stop this family's scheduled payments, so nothing was changed — they're still enrolled and still due to be charged. Try again, and if it keeps failing don't leave it: their card will be charged on schedule.";
+    case "cancel_failed_charges_stopped":
+      return `Their scheduled payments ARE stopped${payload?.pending_charges_stopped ? ` (${payload.pending_charges_stopped})` : ""}, but freeing their spot didn't work. No money moved. Refresh the roster and, if they're still listed, try again.`;
     case "forbidden":
       return "You don't have permission to issue refunds for this organization.";
     case "registration_not_found":
@@ -74,6 +92,14 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
   const [paidCents, setPaidCents] = useState(0);
   const [refundedCents, setRefundedCents] = useState(0);
   const [adminFeeCents, setAdminFeeCents] = useState(0);
+  // Pending installments on THIS registration. Shown so a withdrawal states
+  // what it actually prevents, in money, rather than promising vaguely to
+  // "stop any future payments" and leaving the operator to hope.
+  const [pendingCharges, setPendingCharges] = useState([]);
+  // THREE STATES, NOT TWO. "no pending charges" and "could not find out" are
+  // different facts and only one of them is safe to tell an operator who is
+  // about to withdraw a family.
+  const [pendingChargesUnknown, setPendingChargesUnknown] = useState(false);
 
   const [amountStr, setAmountStr] = useState("");      // dollars, as typed
   const [reason, setReason] = useState("");
@@ -98,11 +124,17 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
         // could only be offered $274.00 back. The server now reads the real
         // charged total from Stripe; asking it is the only way this UI can be
         // sure it is showing a number the server will honour.
-        const [{ data: elig, error: eligErr }, { data: orgRow }] = await Promise.all([
+        const [{ data: elig, error: eligErr }, { data: orgRow }, { data: pendingRows, error: pendingErr }] = await Promise.all([
           supabase.functions.invoke("refund-registration", {
             body: { registration_id: reg.id, preview: true },
           }),
           supabase.from("organizations").select("withdrawal_admin_fee_cents").eq("id", reg.organization_id).maybeSingle(),
+          supabase
+            .from("installments")
+            .select("id, amount_cents, due_date")
+            .eq("registration_id", reg.id)
+            .eq("status", "pending")
+            .order("due_date"),
         ]);
         if (!alive) return;
         if (eligErr || !elig || typeof elig.eligible_cents !== "number") {
@@ -116,6 +148,12 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
         setPaidCents(paid);
         setRefundedCents(refunded);
         setAdminFeeCents(orgRow?.withdrawal_admin_fee_cents || 0);
+        // A failed read must not block a refund, so it is recorded rather than
+        // thrown - but it is RECORDED, because an empty list and a failed query
+        // are indistinguishable otherwise and the copy below would tell an
+        // operator there are no scheduled charges when it simply could not look.
+        setPendingChargesUnknown(!!pendingErr);
+        setPendingCharges(pendingErr ? [] : (pendingRows || []));
         // Default the field to the full refundable amount.
         setAmountStr(((Math.max(0, elig.eligible_cents)) / 100).toFixed(2));
       } catch (e) {
@@ -135,11 +173,49 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
   })();
 
   const overMax = amountCents > refundableCents;
+
+  // NOTHING TO REFUND IS NOT NOTHING TO DO. A family that leaves before a later
+  // term has been charged has no money coming back, but their PENDING
+  // installments are still armed - and stopping those lives behind this same
+  // drawer. Until 2026-09-22 this state hid the submit button entirely, so the
+  // operator's only options were to leave the charges running or have someone
+  // edit the database by hand.
+  const nothingToRefund = refundableCents <= 0;
+
+  // WITHDRAW WITHOUT REFUNDING. Two different situations, one action:
+  //   - there is nothing to refund (a later term never charged), or
+  //   - there IS money but the operator is deliberately keeping it (the family
+  //     attended the term they paid for and is leaving after it).
+  // Both were unreachable: the first hid the button, the second refused to
+  // submit with a zero amount. Escher Swanson on 2026-09-22 needed BOTH on the
+  // same child on the same day - keep the fall money, stop the winter and
+  // spring charges - and neither could be done from this drawer.
+  //
+  // KEEPING THE MONEY MUST BE TYPED, NOT ARRIVED AT. `amountCents` collapses an
+  // EMPTY field to 0 as well as a typed zero, so keying off it alone meant that
+  // select-all-deleting the amount to retype it silently relabelled the primary
+  // button to "Withdraw without refunding" and left it ENABLED - one misclick
+  // away from cancelling the registration and keeping the family's money, with
+  // no receipt and no refund record. An empty field is an unfinished thought,
+  // not an instruction.
+  const typedZero = (() => {
+    const t = amountStr.trim();
+    if (t === "") return false;
+    const n = parseFloat(t);
+    return Number.isFinite(n) && Math.round(n * 100) === 0;
+  })();
+
+  const withdrawNoRefund = nothingToRefund || (seatChoice === "withdraw" && typedZero);
+
+  // Flattened: the old nested ternary's true-branch was a tautology. Inside it
+  // `withdrawNoRefund` holds, and if `nothingToRefund` is false the other
+  // disjunct forces `seatChoice === "withdraw"` - so it could never reject
+  // anything while reading like a guard.
   const canSubmit =
     !busy && !loading && !loadErr &&
-    refundableCents > 0 &&
-    amountCents > 0 && !overMax &&
-    (seatChoice === "keep" || seatChoice === "withdraw");
+    (withdrawNoRefund ||
+      (amountCents > 0 && !overMax &&
+        (seatChoice === "keep" || seatChoice === "withdraw")));
 
   function setFull() { setAmountStr((refundableCents / 100).toFixed(2)); }
   function setKeepFee() { setAmountStr((Math.max(0, refundableCents - adminFeeCents) / 100).toFixed(2)); }
@@ -152,9 +228,12 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
       const { data, error } = await supabase.functions.invoke("refund-registration", {
         body: {
           registration_id: reg.id,
-          amount_cents: amountCents,
+          // Zero when there is nothing to refund. The server accepts that ONLY
+          // alongside cancel_registration, and takes a path that never calls
+          // Stripe at all.
+          amount_cents: withdrawNoRefund ? 0 : amountCents,
           reason: reason.trim() || undefined,
-          cancel_registration: seatChoice === "withdraw",
+          cancel_registration: withdrawNoRefund ? true : seatChoice === "withdraw",
         },
       });
       if (error) {
@@ -245,12 +324,23 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
       onClick={busy ? undefined : onClose}
       style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: "40px 16px", zIndex: 220 }}
     >
+      {/* THE BOX MUST SCROLL. It had no height limit, so on a laptop viewport
+          the Cancel and confirm buttons fell off the bottom of the screen with
+          no way to reach them - the drawer rendered perfectly and could not be
+          used. Adding the itemised list of scheduled payments is what pushed it
+          over, but the bug was always there waiting for a tall enough state: a
+          family with three pending charges, a long error, or a smaller screen.
+          Caught by Jessica on staging, 2026-09-22. */}
       <div
         onClick={(e) => e.stopPropagation()}
-        style={{ background: "#fff", width: "100%", maxWidth: 460, border: `1px solid ${RULE}`, borderRadius: 10, padding: 22, boxShadow: "0 10px 40px rgba(0,0,0,0.2)" }}
+        style={{ background: "#fff", width: "100%", maxWidth: 460, border: `1px solid ${RULE}`, borderRadius: 10, padding: 22, boxShadow: "0 10px 40px rgba(0,0,0,0.2)", maxHeight: "85vh", overflowY: "auto" }}
       >
+        {/* Matches the button that opens it. "Refund <name>" sat above a panel
+            explaining there was nothing to refund, and above a button reading
+            "Withdraw without refunding" - a heading contradicting the screen
+            underneath it. One name for one entry point, true in every state. */}
         <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: INK }}>
-          Refund {reg.studentName || "this registration"}
+          Refund / remove {reg.studentName || "this registration"}
         </h3>
 
         {loading && <p style={{ color: MUTED, fontSize: 13, marginTop: 12 }}>Loading payment details…</p>}
@@ -270,10 +360,52 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
               <span style={{ color: MUTED }}>Refundable <strong style={{ color: OK }}>{fmtCents(refundableCents)}</strong></span>
             </div>
 
-            {refundableCents <= 0 ? (
-              <p style={{ color: MUTED, fontSize: 13, marginTop: 14, lineHeight: 1.5 }}>
-                There's nothing left to refund on this registration — it's either already fully refunded or has no Stripe payment to refund against.
-              </p>
+            {nothingToRefund ? (
+              <div style={{ marginTop: 14 }}>
+                <p style={{ color: MUTED, fontSize: 13, lineHeight: 1.5, margin: 0 }}>
+                  There's nothing to refund here — this registration has no payment to refund against, or it has already been fully refunded.
+                </p>
+
+                {pendingCharges.length > 0 ? (
+                  <div style={{ background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, padding: "10px 12px", marginTop: 12 }} role="alert">
+                    <div style={{ fontSize: 12.5, fontWeight: 600, color: "#7c2d12", marginBottom: 6 }}>
+                      Their card is still scheduled to be charged
+                    </div>
+                    <ul style={{ margin: "0 0 6px", paddingLeft: 18, fontSize: 12.5, color: "#7c2d12", lineHeight: 1.7 }}>
+                      {pendingCharges.map((c) => (
+                        <li key={c.id}>
+                          {/* Guard on the FORMATTED value, not the raw one: an
+                              unparseable date used to leave a dangling "on "
+                              with nothing after it. */}
+                          <strong>{fmtCents(c.amount_cents)}</strong>{fmtDue(c.due_date) ? ` on ${fmtDue(c.due_date)}` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                    <div style={{ fontSize: 12, color: "#7c2d12", lineHeight: 1.5 }}>
+                      Withdrawing stops {pendingCharges.length === 1 ? "this payment" : `all ${pendingCharges.length} of these`} for <strong>this class</strong>. No money is refunded, because none was collected. If they are enrolled in other terms, those are separate and are not affected.
+                    </div>
+                  </div>
+                ) : (
+                  <p style={{ color: MUTED, fontSize: 12.5, marginTop: 10, lineHeight: 1.5 }}>
+                    {pendingChargesUnknown
+                      ? "We couldn't check whether this class has any scheduled payments. Withdrawing still frees their spot and stops anything that is scheduled, but check their payment plan afterwards."
+                      : "This class has no scheduled payments either. Withdrawing frees their spot and takes them off the roster. Any other terms they are enrolled in are separate and are not affected."}
+                  </p>
+                )}
+
+                <label style={{ display: "block", fontSize: 12.5, fontWeight: 600, color: INK, marginTop: 16, marginBottom: 6 }}>
+                  Reason <span style={{ color: MUTED, fontWeight: 400 }}>(internal note — not sent to the family)</span>
+                </label>
+                <input
+                  type="text" value={reason} onChange={(e) => setReason(e.target.value)} disabled={busy}
+                  placeholder="e.g. Moving schools"
+                  style={{ width: "100%", boxSizing: "border-box", padding: "8px 12px", fontSize: 13, border: `1px solid ${RULE}`, borderRadius: 6, fontFamily: "inherit" }}
+                />
+
+                <p style={{ color: MUTED, fontSize: 11.5, marginTop: 10, lineHeight: 1.5 }}>
+                  The family is not emailed about this — Stripe only writes to them when money actually moves. Tell them yourself if they should know.
+                </p>
+              </div>
             ) : (
               <>
                 {/* Amount */}
@@ -339,6 +471,40 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
                     title="Refund and withdraw — free their spot"
                     sub="Cancels the registration, opens the seat, and stops any future payments."
                   />
+
+                  {/* The button's MEANING changes when a zero is typed, so it
+                      has to say so here rather than letting an operator discover
+                      it after pressing. This whole arm renders only when there
+                      IS money to refund - the nothing-to-refund case has its own
+                      panel above - so the condition is just the typed zero. */}
+                  {withdrawNoRefund && (
+                    <div style={{ marginTop: 10, padding: "10px 12px", background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, color: "#7c2d12", fontSize: 12.5, lineHeight: 1.5 }} role="alert">
+                      <div>
+                        You typed $0, so <strong>no money goes back to the family</strong>. Their {fmtCents(refundableCents)} stays with you, and their spot is freed.
+                      </div>
+                      {pendingChargesUnknown ? (
+                        <div style={{ marginTop: 6 }}>
+                          We couldn't check this class's scheduled payments, so check their payment plan afterwards.
+                        </div>
+                      ) : pendingCharges.length > 0 ? (
+                        <>
+                          {/* ITEMISED, not counted. "2 payments are stopped" asks an
+                              operator to take it on trust; the amounts and dates let
+                              them recognise the plan they are cancelling - and catch
+                              it if the drawer is showing the wrong family. */}
+                          <div style={{ marginTop: 6 }}>These scheduled payments are stopped:</div>
+                          <ul style={{ margin: "4px 0 0", paddingLeft: 18, lineHeight: 1.7 }}>
+                            {pendingCharges.map((c) => (
+                              <li key={c.id}>
+                                <strong>{fmtCents(c.amount_cents)}</strong>{fmtDue(c.due_date) ? ` on ${fmtDue(c.due_date)}` : ""}
+                              </li>
+                            ))}
+                          </ul>
+                          <div style={{ marginTop: 4 }}>Other terms are separate and are not affected.</div>
+                        </>
+                      ) : null}
+                    </div>
+                  )}
                 </div>
 
                 {/* Reason */}
@@ -351,8 +517,15 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
                   style={{ width: "100%", boxSizing: "border-box", padding: "8px 12px", fontSize: 13, border: `1px solid ${RULE}`, borderRadius: 6, fontFamily: "inherit" }}
                 />
 
+                {/* This footer described a refund unconditionally, so in the
+                    withdraw-without-refunding state it promised the family a
+                    Stripe confirmation for money that never moves - the drawer
+                    telling an operator the opposite of what it is about to do.
+                    Caught by Jessica on staging, 2026-09-22. */}
                 <p style={{ color: MUTED, fontSize: 11.5, marginTop: 10, lineHeight: 1.5 }}>
-                  Stripe sends the family its own refund confirmation automatically. The money comes back from your Stripe balance.
+                  {withdrawNoRefund
+                    ? "No money moves, so the family is not emailed — Stripe only writes to them when a refund actually happens. Tell them yourself if they should know."
+                    : "Stripe sends the family its own refund confirmation automatically. The money comes back from your Stripe balance."}
                 </p>
               </>
             )}
@@ -370,10 +543,12 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
             style={{ padding: "8px 14px", background: "transparent", color: MUTED, border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 13, fontFamily: "inherit", cursor: busy ? "not-allowed" : "pointer" }}>
             Cancel
           </button>
-          {!loading && !loadErr && refundableCents > 0 && (
+          {!loading && !loadErr && (
             <button type="button" onClick={submit} disabled={!canSubmit}
               style={{ padding: "8px 16px", background: canSubmit ? PURPLE : "#bbb", color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: canSubmit ? "pointer" : "not-allowed" }}>
-              {busy ? "Issuing refund…" : `Refund ${fmtCents(amountCents)}`}
+              {withdrawNoRefund
+                ? (busy ? "Withdrawing…" : "Withdraw without refunding")
+                : (busy ? "Issuing refund…" : `Refund ${fmtCents(amountCents)}`)}
             </button>
           )}
         </div>

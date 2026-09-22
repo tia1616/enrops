@@ -96,7 +96,9 @@ const KNOWN_UNPINNED = new Set([
   'marketing-delete-draft', 'marketing-touchpoint-cron', 'match-afterschool',
   'match-instructors', 'notify-instructor-removed',
   'offer-message-reply', 'pay-instructor',
-  'polish-skills', 'refund-registration', 'replay-digest',
+  // refund-registration removed 2026-09-22: it now has a real block in
+  // config.toml pinning verify_jwt = false, so it no longer needs an exemption.
+  'polish-skills', 'replay-digest',
   'request-resume-onboarding', 'respond-to-assignment', 'respond-to-sub-offer',
   // The four offer senders came OFF this list on 2026-08-18: a parity sweep found
   // them deployed verify_jwt=false on staging and true on prod, so they are now
