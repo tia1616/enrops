@@ -65,7 +65,7 @@ import {
   welcomeVerdict,
   type WelcomeWindow,
 } from "./welcomeWindow.ts";
-import { claimSend, loadPriorSends, type PriorSend } from "./sendLedger.ts";
+import { claimSend, loadPriorSends, type PriorSend, reclaimStaleClaims } from "./sendLedger.ts";
 import { venueLabel } from "../_shared/roomLabel.ts";
 import { runWaitlistSweep } from "./waitlistSweep.ts";
 import { offeringIdOf, buildResolvedIndex, isGenuinelyAbandoned } from "./abandonedSuppression.ts";
@@ -516,6 +516,12 @@ async function runAutomation(
   // `.in("id", [778 uuids])` note); the lifecycle cron was never swept for it.
   // A pre-check we cannot trust must STOP the run, never wave it through: the
   // failure mode of sending blind is mailing the whole audience again.
+  // Hand back any retries that were spent on sends which never happened, BEFORE
+  // the pre-check reads attempts - so a family whose welcome was interrupted by
+  // a dying run is eligible again on this run rather than one closer to being
+  // dropped. Best-effort by design: see reclaimStaleClaims.
+  await reclaimStaleClaims(supabase, a.id);
+
   const contextKeys = audience.map((e) => e.context_key);
   let priorByKey: Map<string, PriorSend>;
   try {

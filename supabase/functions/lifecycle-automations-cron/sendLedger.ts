@@ -53,6 +53,30 @@ export const PRECHECK_CHUNK_SIZE = 50;
  */
 export const CLAIM_MARKER = "Send claimed by a run in progress.";
 
+/**
+ * What a claim becomes once we know the run holding it died.
+ *
+ * Deliberately NOT the claim marker, so a reclaimed row cannot be reclaimed a
+ * second time and walked down to zero attempts. Deliberately not a "Resend
+ * <code>" shape either, so isPermanentFailure() still reads it as transient.
+ */
+export const INTERRUPTED_MARKER = "Send was interrupted before it reached the provider; it will be retried.";
+
+/**
+ * How long a claim may be held before we treat the run holding it as dead.
+ *
+ * A Supabase edge function is killed at 150 seconds, so nothing can legitimately
+ * still be mid-send after that. 10 minutes is four times the hard ceiling: long
+ * enough that we can never reclaim a send that is actually in flight (which
+ * would mail the family twice - the exact thing this file exists to stop), short
+ * enough that an interrupted family is recovered on the next daily run rather
+ * than waiting for someone to notice.
+ */
+export const STALE_CLAIM_AFTER_MS = 10 * 60 * 1000;
+
+/** Most stale claims to repair in one run. Normally there are none. */
+const RECLAIM_LIMIT = 200;
+
 export interface PriorSend {
   status: string;
   attempts: number;
@@ -65,6 +89,78 @@ export interface ClaimTarget {
   parentId: string | null;
   contextKey: string;
   email: string;
+}
+
+/**
+ * Give back the retries that were spent on sends which never actually happened.
+ *
+ * claimSend writes "attempt N+1, failed" BEFORE calling Resend, so the claim is
+ * the thing that makes the send provably ours. The cost is that a run which dies
+ * between claiming and sending leaves a row that is indistinguishable from a
+ * real failed attempt: it has burned one of MAX_SEND_ATTEMPTS, and after five
+ * such interruptions isDone() would drop the family for good while
+ * classifyFailure() told the operator "We couldn't reach their inbox after
+ * several tries" - about an address that was never submitted to Resend even
+ * once. A false explanation on that screen is precisely the lie this table was
+ * built to prevent, so the claim must be undone rather than left to accumulate.
+ *
+ * Called before the pre-check so a repaired row is eligible again on the same
+ * run. Returns how many it repaired (normally 0).
+ *
+ * Scoped to the automation, NOT to today's audience, so one run with anybody in
+ * it repairs every stale claim that automation holds. The one row this cannot
+ * reach is a claim on an automation whose audience is empty on every subsequent
+ * run - its caller returns before this point rather than pay a scan on each of
+ * the ~96 daily no-op sweeps. That family's sending window has passed either
+ * way, so the cost is a stale line on the delivery screen, not a missed email.
+ */
+export async function reclaimStaleClaims(
+  supabase: LedgerClient,
+  automationId: string,
+  now: Date = new Date(),
+): Promise<number> {
+  const cutoff = new Date(now.getTime() - STALE_CLAIM_AFTER_MS).toISOString();
+  const { data: stale, error } = await supabase
+    .from("automation_run_recipients")
+    .select("id, attempts")
+    .eq("automation_id", automationId)
+    .eq("status", "failed")
+    .eq("error_message", CLAIM_MARKER)
+    .lt("last_attempt_at", cutoff)
+    .limit(RECLAIM_LIMIT);
+  if (error || !stale) {
+    // Non-fatal, and deliberately NOT a throw: failing to repair a stale claim
+    // only delays one family, whereas refusing to run would stop every send.
+    // The pre-check is the gate that must fail closed, not this.
+    console.error("[sendLedger] stale-claim scan failed:", error);
+    return 0;
+  }
+
+  let repaired = 0;
+  for (const row of stale as Array<{ id: string; attempts: number | null }>) {
+    const attempts = row.attempts ?? 0;
+    // Undo exactly what the claim added, and never below zero.
+    const restored = attempts > 0 ? attempts - 1 : 0;
+    // Guarded on the values we just read, like claimSend: if anything touched
+    // this row since the scan, leave it alone rather than fight for it.
+    const { data: won, error: updErr } = await supabase
+      .from("automation_run_recipients")
+      .update({ attempts: restored, error_message: INTERRUPTED_MARKER })
+      .eq("id", row.id)
+      .eq("status", "failed")
+      .eq("error_message", CLAIM_MARKER)
+      .eq("attempts", attempts)
+      .select("id");
+    if (updErr) {
+      console.error("[sendLedger] stale-claim repair failed:", updErr);
+      continue;
+    }
+    if ((won ?? []).length > 0) repaired += 1;
+  }
+  if (repaired > 0) {
+    console.warn(`[sendLedger] recovered ${repaired} interrupted send(s) for automation ${automationId}`);
+  }
+  return repaired;
 }
 
 /**
