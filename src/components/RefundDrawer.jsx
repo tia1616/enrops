@@ -328,8 +328,12 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
         onClick={(e) => e.stopPropagation()}
         style={{ background: "#fff", width: "100%", maxWidth: 460, border: `1px solid ${RULE}`, borderRadius: 10, padding: 22, boxShadow: "0 10px 40px rgba(0,0,0,0.2)" }}
       >
+        {/* Matches the button that opens it. "Refund <name>" sat above a panel
+            explaining there was nothing to refund, and above a button reading
+            "Withdraw without refunding" - a heading contradicting the screen
+            underneath it. One name for one entry point, true in every state. */}
         <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: INK }}>
-          Refund {reg.studentName || "this registration"}
+          Refund / remove {reg.studentName || "this registration"}
         </h3>
 
         {loading && <p style={{ color: MUTED, fontSize: 13, marginTop: 12 }}>Loading payment details…</p>}
