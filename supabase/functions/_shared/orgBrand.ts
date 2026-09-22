@@ -577,17 +577,6 @@ function escapeAttr(s: string): string {
 }
 
 /**
- * Render the tenant's email signature block (image + text) for injection above
- * the footer of every outgoing email. Returns '' when the tenant has set no
- * signature — so orgs without one are byte-for-byte unchanged (backward compat).
- *
- * `email_signature` is HTML from the friendly Comms editor (the same safe subset
- * as body_override: <p>/<strong>/<em>/<a>/<br>), so it is emitted as-is. The
- * image is our own <img> tag with the URL attribute-escaped. Used by BOTH send
- * shells (lifecycle-automations-cron + marketing-touchpoint-send) so the
- * signature is identical across automated and campaign email.
- */
-/**
  * "Questions? Email <the operator's address>" — the line that survives a forward.
  *
  * WHY THIS EXISTS. 2026-09-22: a school music teacher forwarded a roster email to
@@ -613,6 +602,26 @@ function renderContactLine(brand: OrgBrand): string {
   return `<div style="margin-top:8px;">Questions? Email <a href="mailto:${safe}" style="color:${escapeAttr(brand.primary_color)};">${safe}</a></div>`;
 }
 
+/**
+ * Render the tenant's email signature block for injection above the footer of
+ * every outgoing email: their signature text, their image, and a contact line
+ * carrying their own address.
+ *
+ * RETURNS '' ONLY when the tenant has neither a signature NOR an address of
+ * their own. It used to return '' whenever the signature was unset, and eight
+ * callers leaned on that, writing `${signatureHtml || '— {org name}'}` so the
+ * sign-off appeared exactly when this was empty. Adding the contact line made
+ * this non-empty for every org with an address and silently took that sign-off
+ * away from the orgs that had never set a signature — the very ones the
+ * fallback existed for. So the sign-off is rendered HERE when there is nothing
+ * else, which keeps it and gives it one spelling instead of eight.
+ *
+ * `email_signature` is HTML from the friendly Comms editor (the same safe subset
+ * as body_override: <p>/<strong>/<em>/<a>/<br>), so it is emitted as-is. The
+ * image is our own <img> tag with the URL attribute-escaped. Used by BOTH send
+ * shells (lifecycle-automations-cron + marketing-touchpoint-send) so the
+ * signature is identical across automated and campaign email.
+ */
 export function renderSignatureBlock(brand: OrgBrand): string {
   const text = (brand.email_signature ?? '').trim();
   // Resolve the signature image by its stored mode. 'logo' tracks the org's
@@ -631,9 +640,13 @@ export function renderSignatureBlock(brand: OrgBrand): string {
   // so gating it behind an existing signature would have helped almost nobody.
   const contact = renderContactLine(brand);
   if (!text && !img && !contact) return '';
+  // The sign-off the eight callers used to supply themselves. Only when the
+  // operator has set nothing of their own, so an org WITH a signature is
+  // byte-for-byte unchanged apart from the contact line.
+  const signOff = (!text && !img) ? `<div>&mdash; ${escapeAttr(brand.org_name)}</div>` : '';
   const textBlock = text ? `<div>${text}</div>` : '';
   const imgBlock = img
     ? `<img src="${escapeAttr(img)}" alt="${escapeAttr(brand.org_name)}" style="max-height:64px;max-width:220px;height:auto;display:block;margin:${text ? '12px' : '0'} 0 0;" />`
     : '';
-  return `<div style="margin-top:28px;padding-top:16px;border-top:1px solid #eee;color:#555;font-size:14px;line-height:1.5;">${textBlock}${imgBlock}${contact}</div>`;
+  return `<div style="margin-top:28px;padding-top:16px;border-top:1px solid #eee;color:#555;font-size:14px;line-height:1.5;">${signOff}${textBlock}${imgBlock}${contact}</div>`;
 }

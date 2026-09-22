@@ -361,3 +361,30 @@ Deno.test('signature: the address is escaped, so it cannot break out of the mark
   assertEquals(html.includes('<script>'), false);
   assertEquals(html.includes('&lt;script&gt;'), true);
 });
+
+Deno.test('signature: an org with no signature still gets its sign-off, not just an address', () => {
+  // Eight senders wrote `${signatureHtml || '— {org}'}`, so the sign-off used to
+  // appear exactly when this returned ''. The contact line made it non-empty and
+  // silently removed that sign-off from the orgs that never set a signature.
+  const html = renderSignatureBlock(brandForSignature({
+    org_name: 'Yoga Playgrounds',
+    tenant_reply_to: 'leslie@yogaplaygrounds.com',
+    email_signature: null,
+    email_signature_image_url: null,
+    email_signature_image_mode: 'none',
+  }));
+  assertEquals(html.includes('Yoga Playgrounds'), true, 'the school must still see who it is from');
+  assertEquals(html.includes('leslie@yogaplaygrounds.com'), true);
+});
+
+Deno.test('signature: an org WITH a signature is unchanged apart from the contact line', () => {
+  // Their own sign-off is the one that shows; we must not add a second.
+  const html = renderSignatureBlock(brandForSignature({
+    org_name: 'The Ukulele Project',
+    tenant_reply_to: 'admin@theukuleleproject.com',
+    email_signature: 'Strumming our way to a brighter future,<div>The Ukulele Project Team</div>',
+  }));
+  assertEquals(html.includes('&mdash; The Ukulele Project'), false, 'no duplicate sign-off');
+  assertEquals(html.includes('Strumming our way'), true);
+  assertEquals(html.includes('admin@theukuleleproject.com'), true);
+});
