@@ -1680,7 +1680,9 @@ function wrapInEmailShell(innerHtml: string, tokens: Map<string, string>): strin
   const unsubscribeUrl = tokens.get("unsubscribe_url") || "";
   const logoUrl = tokens.get("logo_url") || "";
   const mailingAddress = (tokens.get("mailing_address") || "").trim();
-  // Pre-rendered by renderSignatureBlock(brand); "" when the org has no signature.
+  // Pre-rendered by renderSignatureBlock(brand). "" ONLY when the org has neither
+  // a signature nor a reply address of its own — since 2026-09-22 it also carries
+  // a contact line, so an org that set no signature still gets a block.
   const signatureBlock = tokens.get("signature_block") || "";
 
   // Defensive: if for some reason unsubscribe_url didn't resolve, don't render

@@ -577,9 +577,44 @@ function escapeAttr(s: string): string {
 }
 
 /**
- * Render the tenant's email signature block (image + text) for injection above
- * the footer of every outgoing email. Returns '' when the tenant has set no
- * signature — so orgs without one are byte-for-byte unchanged (backward compat).
+ * "Questions? Email <the operator's address>" — the line that survives a forward.
+ *
+ * WHY THIS EXISTS. 2026-09-22: a school music teacher forwarded a roster email to
+ * her office colleague, who replied to the only address she could see — the
+ * platform's send-only From address, which has no inbox. The message reached
+ * nobody and the operator never knew. Reply-To is set correctly and protects a
+ * direct reply, but a FORWARD does not carry it, and forwarding to whoever
+ * actually handles parent calls is exactly what school offices do. A visible
+ * address travels in the body, so it survives.
+ *
+ * tenant_reply_to, NOT reply_to. reply_to always resolves to something, and when
+ * the operator has set nothing that something is OUR address — printing it here
+ * would tell another business's families to write to Enrops. tenant_reply_to is
+ * null in precisely that case, which is what this field was added for.
+ */
+function renderContactLine(brand: OrgBrand): string {
+  const addr = (brand.tenant_reply_to ?? '').trim();
+  if (!addr) return '';
+  // An operator who already put their address in their own signature should not
+  // be given it twice.
+  if ((brand.email_signature ?? '').toLowerCase().includes(addr.toLowerCase())) return '';
+  const safe = escapeAttr(addr);
+  return `<div style="margin-top:8px;">Questions? Email <a href="mailto:${safe}" style="color:${escapeAttr(brand.primary_color)};">${safe}</a></div>`;
+}
+
+/**
+ * Render the tenant's email signature block for injection above the footer of
+ * every outgoing email: their signature text, their image, and a contact line
+ * carrying their own address.
+ *
+ * RETURNS '' ONLY when the tenant has neither a signature NOR an address of
+ * their own. It used to return '' whenever the signature was unset, and eight
+ * callers leaned on that, writing `${signatureHtml || '— {org name}'}` so the
+ * sign-off appeared exactly when this was empty. Adding the contact line made
+ * this non-empty for every org with an address and silently took that sign-off
+ * away from the orgs that had never set a signature — the very ones the
+ * fallback existed for. So the sign-off is rendered HERE when there is nothing
+ * else, which keeps it and gives it one spelling instead of eight.
  *
  * `email_signature` is HTML from the friendly Comms editor (the same safe subset
  * as body_override: <p>/<strong>/<em>/<a>/<br>), so it is emitted as-is. The
@@ -600,10 +635,18 @@ export function renderSignatureBlock(brand: OrgBrand): string {
     : mode === 'none'   ? ''
     : (brand.email_signature_image_url ?? '') // legacy
   ).trim();
-  if (!text && !img) return '';
+  // The contact line renders even when the operator has set no signature at all,
+  // which is most of them — 7 of 9 tenants had an empty signature on 2026-09-22,
+  // so gating it behind an existing signature would have helped almost nobody.
+  const contact = renderContactLine(brand);
+  if (!text && !img && !contact) return '';
+  // The sign-off the eight callers used to supply themselves. Only when the
+  // operator has set nothing of their own, so an org WITH a signature is
+  // byte-for-byte unchanged apart from the contact line.
+  const signOff = (!text && !img) ? `<div>&mdash; ${escapeAttr(brand.org_name)}</div>` : '';
   const textBlock = text ? `<div>${text}</div>` : '';
   const imgBlock = img
     ? `<img src="${escapeAttr(img)}" alt="${escapeAttr(brand.org_name)}" style="max-height:64px;max-width:220px;height:auto;display:block;margin:${text ? '12px' : '0'} 0 0;" />`
     : '';
-  return `<div style="margin-top:28px;padding-top:16px;border-top:1px solid #eee;color:#555;font-size:14px;line-height:1.5;">${textBlock}${imgBlock}</div>`;
+  return `<div style="margin-top:28px;padding-top:16px;border-top:1px solid #eee;color:#555;font-size:14px;line-height:1.5;">${signOff}${textBlock}${imgBlock}${contact}</div>`;
 }
