@@ -271,9 +271,28 @@ Deno.test("an interrupted row does not read as a bad address to the operator scr
 // hermetic. These are the two facts a stub cannot establish: that the chunked
 // URL actually fits, and that Postgres really does reject the second claimer.
 
-const DB = Deno.env.get("STAGING_DB_URL");
-const SK = Deno.env.get("STAGING_SERVICE_KEY");
+// Read lazily and defensively. CI runs `deno test` WITHOUT --allow-env on
+// purpose, so that a test can never reach a real Supabase or Stripe. A bare
+// Deno.env.get at module scope therefore throws NotCapable before a single
+// Deno.test registers, which does not skip this file - it fails the whole job
+// and silently takes all 22 tests with it. That is how this file shipped on
+// 2026-09-22 contributing zero coverage while looking green locally.
+function envOrUndefined(name: string): string | undefined {
+  try {
+    return Deno.env.get(name);
+  } catch {
+    return undefined;
+  }
+}
+const DB = envOrUndefined("STAGING_DB_URL");
+const SK = envOrUndefined("STAGING_SERVICE_KEY");
+const AUTO_ID = envOrUndefined("STAGING_AUTOMATION_ID");
+const ORG_ID = envOrUndefined("STAGING_ORG_ID");
+const RUN_ID = envOrUndefined("STAGING_RUN_ID");
+// Every id the live tests need is part of the gate, so a half-configured run
+// can never report "ok" having asserted nothing.
 const live = !!(DB && SK);
+const liveWithFixtures = !!(live && AUTO_ID && ORG_ID && RUN_ID);
 
 function restClient(): LedgerClient {
   const H = { apikey: SK!, Authorization: `Bearer ${SK!}`, "Content-Type": "application/json" };
@@ -353,12 +372,9 @@ Deno.test({
 
 Deno.test({
   name: "LIVE: a claim abandoned by a dead run gets its retry back, and becomes sendable again",
-  ignore: !live,
+  ignore: !liveWithFixtures,
   fn: async () => {
-    const autoId = Deno.env.get("STAGING_AUTOMATION_ID");
-    const orgId = Deno.env.get("STAGING_ORG_ID");
-    const runId = Deno.env.get("STAGING_RUN_ID");
-    if (!autoId || !orgId || !runId) return;
+    const autoId = AUTO_ID!, orgId = ORG_ID!, runId = RUN_ID!;
     const c = restClient();
     const contextKey = `selftest-stale:${crypto.randomUUID()}`;
     const H = { apikey: SK!, Authorization: `Bearer ${SK!}`, "Content-Type": "application/json" };
@@ -414,12 +430,9 @@ Deno.test({
 
 Deno.test({
   name: "LIVE: two runs claiming the same family — exactly one may send",
-  ignore: !live,
+  ignore: !liveWithFixtures,
   fn: async () => {
-    const autoId = Deno.env.get("STAGING_AUTOMATION_ID");
-    const orgId = Deno.env.get("STAGING_ORG_ID");
-    const runId = Deno.env.get("STAGING_RUN_ID");
-    if (!autoId || !orgId || !runId) return;
+    const autoId = AUTO_ID!, orgId = ORG_ID!, runId = RUN_ID!;
     const target = {
       automationId: autoId,
       organizationId: orgId,

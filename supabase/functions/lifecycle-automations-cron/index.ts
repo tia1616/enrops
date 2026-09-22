@@ -65,7 +65,7 @@ import {
   welcomeVerdict,
   type WelcomeWindow,
 } from "./welcomeWindow.ts";
-import { claimSend, loadPriorSends, type PriorSend, reclaimStaleClaims } from "./sendLedger.ts";
+import { claimSend, loadPriorSends, type PriorSend } from "./sendLedger.ts";
 import { venueLabel } from "../_shared/roomLabel.ts";
 import { runWaitlistSweep } from "./waitlistSweep.ts";
 import { offeringIdOf, buildResolvedIndex, isGenuinelyAbandoned } from "./abandonedSuppression.ts";
@@ -516,11 +516,25 @@ async function runAutomation(
   // `.in("id", [778 uuids])` note); the lifecycle cron was never swept for it.
   // A pre-check we cannot trust must STOP the run, never wave it through: the
   // failure mode of sending blind is mailing the whole audience again.
-  // Hand back any retries that were spent on sends which never happened, BEFORE
-  // the pre-check reads attempts - so a family whose welcome was interrupted by
-  // a dying run is eligible again on this run rather than one closer to being
-  // dropped. Best-effort by design: see reclaimStaleClaims.
-  await reclaimStaleClaims(supabase, a.id);
+  // DELIBERATELY NOT CALLING reclaimStaleClaims HERE. The code review on
+  // 2026-09-22 established that handing the retry back is the DANGEROUS half of
+  // that idea, and the module keeps it only as the starting point for a redesign.
+  //
+  // A row still holding CLAIM_MARKER is not evidence the email was never sent.
+  // sendOne writes the claim before Resend and records the outcome after, and
+  // its own comment on the failure path says "The email may already have gone
+  // out." So undoing the attempt in that case removes the ONLY termination
+  // guarantee this file has - attempts reaching MAX_SEND_ATTEMPTS - and because
+  // claimSend re-writes CLAIM_MARKER on the next retry, attempts can oscillate
+  // instead of climbing. A family whose outcome write keeps failing would then be
+  // mailed every day forever rather than five times and stopping, and one who is
+  // genuinely stuck would never surface to the operator at all.
+  //
+  // Counting an interrupted claim as an attempt is the FAIL-SAFE choice: we
+  // cannot prove the family was not mailed, so we must not assume they were not.
+  // The real defect the review raised is the operator-facing WORDING - telling
+  // her "we couldn't reach their inbox" about an address never submitted - and
+  // that is fixed on the reading side, not by rewriting the ledger.
 
   const contextKeys = audience.map((e) => e.context_key);
   let priorByKey: Map<string, PriorSend>;
