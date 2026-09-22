@@ -518,7 +518,25 @@ serve(async (req: Request) => {
       });
     }
 
-    if (piSlots.length === 0) {
+    // NOTHING PAID IS A FACT, NOT AN ERROR - FOR A PREVIEW.
+    //
+    // A registration can be marked paid with no Stripe payment behind it:
+    // comped places, roster imports, anything an operator marked by hand. For
+    // those, this gate returned 400 to the DRAWER'S OWN preview call, the drawer
+    // treated it as a failed load, and the operator got "Couldn't load this
+    // registration's payment details. Close and try again." - a dead end, on
+    // exactly the families the withdraw path exists to serve. The withdraw
+    // itself always worked; the UI could simply never offer it, because it could
+    // not get past its own opening question.
+    //
+    // A preview now answers honestly: nothing paid, nothing refundable, zero.
+    // The Stripe loop below is a no-op on an empty list, so the numbers fall out
+    // correctly without a special case.
+    //
+    // A REAL refund with nothing paid is still 400 - there is nothing to refund
+    // and saying so is right. (A withdrawal never reaches here: it returns long
+    // before this line.)
+    if (piSlots.length === 0 && !preview) {
       return json({ error: 'nothing_paid' }, 400);
     }
 

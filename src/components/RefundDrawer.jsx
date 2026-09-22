@@ -324,9 +324,16 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
       onClick={busy ? undefined : onClose}
       style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "center", justifyContent: "center", padding: "40px 16px", zIndex: 220 }}
     >
+      {/* THE BOX MUST SCROLL. It had no height limit, so on a laptop viewport
+          the Cancel and confirm buttons fell off the bottom of the screen with
+          no way to reach them - the drawer rendered perfectly and could not be
+          used. Adding the itemised list of scheduled payments is what pushed it
+          over, but the bug was always there waiting for a tall enough state: a
+          family with three pending charges, a long error, or a smaller screen.
+          Caught by Jessica on staging, 2026-09-22. */}
       <div
         onClick={(e) => e.stopPropagation()}
-        style={{ background: "#fff", width: "100%", maxWidth: 460, border: `1px solid ${RULE}`, borderRadius: 10, padding: 22, boxShadow: "0 10px 40px rgba(0,0,0,0.2)" }}
+        style={{ background: "#fff", width: "100%", maxWidth: 460, border: `1px solid ${RULE}`, borderRadius: 10, padding: 22, boxShadow: "0 10px 40px rgba(0,0,0,0.2)", maxHeight: "85vh", overflowY: "auto" }}
       >
         {/* Matches the button that opens it. "Refund <name>" sat above a panel
             explaining there was nothing to refund, and above a button reading
