@@ -37,14 +37,22 @@ jobs:
         # guards read their web halves from there (e.g.
         # platformFooterTwinParity reads src/components/PlatformFooterLine.jsx
         # — without src/ that test fails NotCapable, which is what turned CI
-        # red). Both paths are committed app source; the scope still can't
-        # reach .env or anything outside the repo, and --allow-env stays off
-        # so tests can't reach real Supabase or Stripe by accident.
+        # red), plus supabase/migrations/ because orgMoneyColumnsGuarded reads
+        # the migrations to hold each money column to the rule it is supposed
+        # to follow — which is NOT "lock everything": fee_pass_through is
+        # audited and deliberately left unlocked, because "cover the fee" is
+        # the operator's own setting. Same NotCapable failure, same way,
+        # on 2026-09-21.
+        # All three paths are committed app source; the scope still can't
+        # reach .env, supabase/.temp, or anything outside the repo, and
+        # --allow-env stays off so tests can't reach real Supabase or Stripe
+        # by accident. A test that needs to read somewhere new belongs on
+        # this line, not behind a wider flag.
         # --no-check matches Supabase Edge Runtime, which doesn't
         # type-check at deploy time either. Strict type-checking would
         # flag pre-existing warnings in non-test files and block CI on
         # unrelated noise.
-        run: deno test --allow-net --allow-read=supabase/functions,src --no-check supabase/functions/
+        run: deno test --allow-net --allow-read=supabase/functions,supabase/migrations,src --no-check supabase/functions/
 
       - name: Set up Node
         uses: actions/setup-node@v4

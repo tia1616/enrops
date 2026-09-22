@@ -177,8 +177,22 @@ Deno.test("a held claim does not look like a bad address to the operator screens
 // hermetic. These are the two facts a stub cannot establish: that the chunked
 // URL actually fits, and that Postgres really does reject the second claimer.
 
-const DB = Deno.env.get("STAGING_DB_URL");
-const SK = Deno.env.get("STAGING_SERVICE_KEY");
+// Read lazily and defensively. CI runs `deno test` WITHOUT --allow-env on
+// purpose, so that a test can never reach a real Supabase or Stripe. A bare
+// Deno.env.get at module scope therefore throws NotCapable before a single
+// Deno.test registers, which does not skip this file - it fails the whole job
+// and silently takes all 13 tests in it down as one uncaught error. That is
+// how this file shipped on 2026-09-22 contributing zero coverage while
+// looking green locally.
+function envOrUndefined(name: string): string | undefined {
+  try {
+    return Deno.env.get(name);
+  } catch {
+    return undefined;
+  }
+}
+const DB = envOrUndefined("STAGING_DB_URL");
+const SK = envOrUndefined("STAGING_SERVICE_KEY");
 const live = !!(DB && SK);
 
 function restClient(): LedgerClient {
@@ -259,9 +273,9 @@ Deno.test({
   name: "LIVE: two runs claiming the same family — exactly one may send",
   ignore: !live,
   fn: async () => {
-    const autoId = Deno.env.get("STAGING_AUTOMATION_ID");
-    const orgId = Deno.env.get("STAGING_ORG_ID");
-    const runId = Deno.env.get("STAGING_RUN_ID");
+    const autoId = envOrUndefined("STAGING_AUTOMATION_ID");
+    const orgId = envOrUndefined("STAGING_ORG_ID");
+    const runId = envOrUndefined("STAGING_RUN_ID");
     if (!autoId || !orgId || !runId) return;
     const target = {
       automationId: autoId,
