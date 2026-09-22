@@ -182,7 +182,20 @@ serve(async (req: Request) => {
     const preview = body.preview === true;
 
     if (!registrationId) return json({ error: 'missing_registration_id' }, 400);
-    if (!preview && (!Number.isFinite(amountCents) || amountCents <= 0)) {
+
+    // WITHDRAWING WITH NOTHING TO REFUND IS LEGITIMATE, and until 2026-09-22 it
+    // was unreachable. A family that leaves before a later term has been charged
+    // has no money to get back, so the drawer could not be submitted at all -
+    // and the only thing that stops their PENDING installments lives behind that
+    // same button. The operator's choice was to leave future charges armed or to
+    // have someone edit the database. A real case (Escher Swanson, moving
+    // schools, $480 pending across two unpaid terms) is what surfaced it.
+    //
+    // Zero is accepted ONLY when withdrawing. A zero-amount refund with no
+    // withdrawal is still meaningless and still rejected.
+    const withdrawOnly = cancelRegistration && (!Number.isFinite(amountCents) || amountCents === 0);
+
+    if (!preview && !withdrawOnly && (!Number.isFinite(amountCents) || amountCents <= 0)) {
       return json({ error: 'invalid_amount' }, 400);
     }
 
@@ -209,6 +222,73 @@ serve(async (req: Request) => {
       .not('accepted_at', 'is', null)
       .maybeSingle();
     if (!cmData) return FORBIDDEN;
+
+    // ── WITHDRAW ONLY: no money moves, so no Stripe call is made at all ───
+    // Placed here deliberately: AFTER authorization, and BEFORE every line that
+    // touches Stripe. There is no path from here to a charge, a refund or an
+    // application fee, which is what makes this branch safe to add to the
+    // function that moves real money.
+    //
+    // THE PENDING CHARGES ARE STOPPED FIRST, then the registration is
+    // cancelled. That order is the whole point. If the pause succeeds and the
+    // cancel fails, a child stays on a roster and nobody is billed - annoying,
+    // visible, recoverable. The other order fails the other way: a cancelled
+    // registration whose card is still charged on a date months away, which is
+    // the single worst thing this function can produce and nobody would notice
+    // until the money left.
+    if (withdrawOnly) {
+      const nowIso = new Date().toISOString();
+
+      const { data: pausedRows, error: pauseErr } = await supabase
+        .from('installments')
+        .update({ status: 'paused_program_cancelled', last_attempt_at: nowIso })
+        .eq('registration_id', registrationId)
+        .eq('status', 'pending')
+        .select('id, amount_cents');
+      if (pauseErr) {
+        console.error('[withdraw] pausing pending installments failed:', pauseErr);
+        return json({ error: 'pause_failed' }, 500);
+      }
+
+      const { error: cancErr } = await supabase
+        .from('registrations')
+        .update({ status: 'cancelled', cancelled_at: nowIso })
+        .eq('id', registrationId)
+        // Idempotent: pressing this twice must not rewrite cancelled_at to the
+        // later date. An already-cancelled row updates nothing and is not an
+        // error - the caller asked for a state that already holds.
+        .neq('status', 'cancelled');
+      if (cancErr) {
+        console.error('[withdraw] registration cancel failed:', cancErr);
+        // The charges ARE stopped by this point, so say what did and did not
+        // happen rather than implying nothing worked.
+        return json({
+          error: 'cancel_failed_charges_stopped',
+          pending_charges_stopped: pausedRows?.length ?? 0,
+        }, 500);
+      }
+
+      await logEnrollmentEvent(supabase, {
+        organizationId: reg.organization_id,
+        parentId: reg.parent_id,
+        studentId: reg.student_id,
+        programId: reg.program_id,
+        campSessionId: reg.camp_session_id,
+        registrationId: registrationId,
+        actionType: ENROLLMENT_ACTIONS.CANCELLED,
+        // Distinct from 'refund': this withdrawal returned no money, and the
+        // churn read should not imply a refund happened.
+        metadata: { via: 'withdraw_no_refund' },
+        dedupeKey: `cancelled:${registrationId}`,
+      });
+
+      return json({
+        withdrawn: true,
+        refunded_cents: 0,
+        pending_charges_stopped: pausedRows?.length ?? 0,
+        pending_cents_stopped: (pausedRows ?? []).reduce((s, r) => s + (r.amount_cents || 0), 0),
+      });
+    }
 
     // ── refund policy: who is made whole on a refund ──────────────────────
     // When the provider bears Stripe's processing fee (stripe_fee_payer='tenant',
