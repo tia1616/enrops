@@ -228,19 +228,26 @@ Deno.test({
       `program:101be1f8-91c5-49f6-80ba-249023${String(i).padStart(4, "0")}:parent:ebe7bd9a-5a51-4a9d-b232-ba1c4699ae8c:student:2bd56a64-4d76-4b59-b8c8-b518dbeea184`;
     const keys = Array.from({ length: 200 }, (_, i) => real(i));
 
-    // The OLD shape: one request for all 200. Must be unusable — that is the bug.
-    const oneShot = `${DB}/rest/v1/automation_run_recipients?select=context_key&context_key=in.(${
-      keys.map((k) => `"${k}"`).join(",")
-    })`;
-    let oneShotUsable = true;
-    try {
-      const r = await fetch(oneShot, { headers: { apikey: SK!, Authorization: `Bearer ${SK!}` } });
-      await r.text(); // drain, or Deno reports a resource leak
-      oneShotUsable = r.ok;
-    } catch {
-      oneShotUsable = false;
-    }
-    assertEquals(oneShotUsable, false, "if one request now works, re-measure PRECHECK_CHUNK_SIZE");
+    const oneShot = (ks: string[]) =>
+      `${DB}/rest/v1/automation_run_recipients?select=context_key&context_key=in.(${
+        ks.map((k) => `"${k}"`).join(",")
+      })`;
+    const usable = async (ks: string[]) => {
+      try {
+        const r = await fetch(oneShot(ks), { headers: { apikey: SK!, Authorization: `Bearer ${SK!}` } });
+        await r.text(); // drain, or Deno reports a resource leak
+        return r.ok;
+      } catch {
+        return false; // the request never completed — too long to send
+      }
+    };
+
+    // CONTROL FIRST. Without this the test passes just as happily on a revoked
+    // key or a typo'd URL, and would be asserting nothing about length at all.
+    assertEquals(await usable(keys.slice(0, 10)), true, "control: short request must work, or the credentials/URL are wrong");
+
+    // Now the only thing that changed is how many keys are in the URL.
+    assertEquals(await usable(keys), false, "if one request of 200 now works, re-measure PRECHECK_CHUNK_SIZE");
 
     // The NEW shape: chunked, and it completes.
     const prior = await loadPriorSends(restClient(), TARGET.automationId, keys);

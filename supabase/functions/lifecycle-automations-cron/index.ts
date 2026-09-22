@@ -683,13 +683,18 @@ async function sendOne(
     ? `${plainBody}\n\nUnsubscribe: ${unsubscribeUrl}`
     : plainBody;
 
-  // CLAIM THE SEND BEFORE MAILING IT. The pre-check above is a READ, and two
-  // runs can both pass it: prod fires the daily cron (0 15 * * *) and the
-  // 15-minute welcome sweep at the same instant, and on 2026-09-21 and -22 the
-  // two overlapped by ~30 seconds and each mailed the full audience. Writing the
-  // ledger row FIRST turns UNIQUE(automation_id, context_key) into the guard the
-  // table was built to be ("the cron uses the conflict to dedupe" — see the
-  // 20260603 migration): whoever writes wins, the loser skips WITHOUT sending.
+  // CLAIM THE SEND BEFORE MAILING IT. The pre-check above is a READ, so two runs
+  // can both pass it for a family neither has mailed yet. That overlap is real
+  // on prod, not theoretical: the daily cron (0 15 * * *) and the 15-minute
+  // welcome sweep both fire at 15:00 UTC, and the run rows show them landing
+  // ~30 seconds apart on both 2026-09-21 and -22. It did NOT duplicate on the
+  // 21st — the pre-check was still working at 88 keys, so both runs correctly
+  // saw every row as sent and mailed nobody. The race only bites on a genuinely
+  // new family, which is exactly who this automation exists to reach.
+  // Writing the ledger row FIRST turns UNIQUE(automation_id, context_key) into
+  // the guard the table was built to be ("the cron uses the conflict to dedupe"
+  // — see the 20260603 migration): whoever writes wins, the loser skips WITHOUT
+  // sending.
   const claimed = await claimSend(supabase, {
     automationId: a.id,
     organizationId: a.organization_id,
@@ -1851,13 +1856,24 @@ async function runPartnerRosterAutomation(
   const programIds = dayOnePrograms.map((p: any) => p.id);
   const alreadySent = new Set<string>();
   if (programIds.length > 0) {
-    const { data: sentToday } = await supabase
+    const { data: sentToday, error: sentErr } = await supabase
       .from("roster_email_sends")
       .select("program_id")
       .in("program_id", programIds)
       .gte("sent_at", `${todayStr}T00:00:00+00:00`)
       .eq("status", "sent");
-    for (const r of sentToday ?? []) alreadySent.add(r.program_id);
+    // SAME SHAPE AS THE 2026-09-22 DUPLICATE WELCOME, and it was failing OPEN.
+    // This read is the only thing stopping a school being emailed its day-one
+    // roster twice, and discarding the error made a failed read indistinguishable
+    // from "nothing has gone yet" — so a blip here would re-send every day-one
+    // roster to every school partner. Stop instead: the per-automation catch in
+    // serve() records it and the next run re-evaluates with a working read.
+    if (sentErr || !sentToday) {
+      throw new Error(
+        `roster already-sent check failed, refusing to send day-one rosters: ${sentErr?.message ?? "no rows returned"}`,
+      );
+    }
+    for (const r of sentToday) alreadySent.add(r.program_id);
   }
 
   let sent = 0;
@@ -2010,13 +2026,21 @@ async function runRosterChangeResends(
   // whose baseline fell off the end would read as unarmed and go quiet, which is
   // safe but silently stops the feature. Ordered newest-first and capped well
   // above the realistic number of candidate classes.
-  const { data: sends } = await supabase
+  const { data: sends, error: sendsErr } = await supabase
     .from("roster_email_sends")
     .select("program_id, sent_at, roster_student_ids")
     .in("program_id", programIds)
     .eq("status", "sent")
     .order("sent_at", { ascending: false })
     .limit(5000);
+  // Unlike the day-one check above, this one already fails CLOSED: an empty
+  // result leaves previousIds undefined, shouldResendRoster answers "no baseline
+  // yet", and nothing is sent. The error was still being discarded though, so a
+  // database problem looked exactly like a healthy quiet day. Log it rather than
+  // throw — going quiet is the safe outcome here, being silent about WHY is not.
+  if (sendsErr) {
+    console.error("[lifecycle-automations-cron] roster baseline read failed; no change re-sends this run:", sendsErr);
+  }
   const lastSend = new Map<string, any>();
   const sentToday = new Set<string>();
   // Compared as INSTANTS, not as strings. A lexicographic compare against

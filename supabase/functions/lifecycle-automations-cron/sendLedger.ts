@@ -107,10 +107,14 @@ export async function loadPriorSends(
  * Reserve this (automation_id, context_key) BEFORE a single byte goes to Resend.
  * Returns false when someone else holds it — the caller must then not send.
  *
- * loadPriorSends is a READ, and two runs can both pass it: prod fires the daily
- * cron (0 15 * * *) and the 15-minute welcome sweep at the same instant, and on
- * 2026-09-21 and -22 the two overlapped by ~30 seconds and each mailed the full
- * audience. Writing the row first turns UNIQUE(automation_id, context_key) into
+ * loadPriorSends is a READ, so two runs can both pass it for a family neither
+ * has mailed yet. The overlap is real on prod: the daily cron (0 15 * * *) and
+ * the 15-minute welcome sweep both fire at 15:00 UTC and the run rows show them
+ * landing ~30 seconds apart on 2026-09-21 and -22. It did not duplicate on the
+ * 21st — the pre-check still worked at 88 keys, so both runs saw every row as
+ * sent and mailed nobody. The race bites only on a genuinely new family, which
+ * is precisely who this automation exists to reach.
+ * Writing the row first turns UNIQUE(automation_id, context_key) into
  * the guard the table was built to be — "the cron uses the conflict to dedupe",
  * per the 20260603 migration — instead of a constraint an upsert never trips.
  *
