@@ -165,10 +165,24 @@ async function fetchFamily(contact, orgId) {
       .eq("organization_id", orgId)
       .order("sent_at", { ascending: false })
       .limit(300);
+    // 'covered_by_another_class' IS NOT A TIMELINE EVENT.
+    //
+    // One message sent to several classes at once emails a family in two of
+    // them ONCE, under the first class, and records a bookkeeping entry on the
+    // second saying so. That entry is a receipt for the duplicate guard, not a
+    // delivery. Left in, this family's record showed the same message twice -
+    // once correctly, and once in red as "Not delivered", because the rule
+    // below treats anything that is not 'sent' as a failure. An operator
+    // reading that would re-send a message the family already has.
+    //
+    // Skipping it is always right: the household is in the FIRST class's row
+    // too, so whatever really happened - delivered or failed - is already on
+    // the timeline once, from the send that actually attempted it.
     const famMine = (fam ?? [])
       .map((r) => ({
         r,
-        hit: (Array.isArray(r.recipients) ? r.recipients : []).find((x) => low(x.email) === email),
+        hit: (Array.isArray(r.recipients) ? r.recipients : [])
+          .find((x) => low(x.email) === email && x.status !== "covered_by_another_class"),
       }))
       .filter((x) => x.hit);
     if (famMine.length) {

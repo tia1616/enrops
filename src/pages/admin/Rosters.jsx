@@ -2416,9 +2416,20 @@ function AfterschoolRostersSection({ org, canEdit }) {
   // modal for the page, fed either by the ticked rows or by a single row's own
   // button.
   const [messagingPrograms, setMessagingPrograms] = useState(null);
+  // WHICH DOOR the composer was opened through: "selection" (the ticked classes)
+  // or "row" (one class's own button). Only a selection-launched send spends the
+  // ticks.
+  const [messagingSource, setMessagingSource] = useState(null);
   // One line of explanation for the times the selection changes under the
   // operator rather than because of them.
   const [pickNote, setPickNote] = useState("");
+  // WHICH classes `pickNote` is about, so the sentence can be retired by the
+  // event that falsifies it rather than by any roster edit anywhere.
+  const pickNoteIds = useRef(new Set());
+  // ONE CLEARER for both halves. Six call sites cleared the sentence and left
+  // the id set behind, which is how a note and the thing it is about drift
+  // apart.
+  const clearPickNote = () => { pickNoteIds.current = new Set(); setPickNote(""); };
   const [query, setQuery] = useState("");
 
   useEffect(() => {
@@ -2524,8 +2535,36 @@ function AfterschoolRostersSection({ org, canEdit }) {
       .eq("program_id", programId)
       .neq("status", WAITLIST_STATUS)
       .is("cancelled_at", null)
-      .then(({ data }) => {
+      .then(({ data, error }) => {
+        // A FAILED READ IS NOT AN EMPTY CLASS. This destructured only `data`, so
+        // any error - an RLS hiccup, a dropped connection - produced `n = 0` and
+        // wrote "0 enrolled" onto a class with 14 families. That was merely
+        // cosmetic until ticks existed; now a 0 unticks the class and tells the
+        // operator it was deliberate. Leave the count alone when we did not get
+        // one, and still bump the token so the roster editor refreshes.
+        if (error) {
+          console.error("[Rosters] enrolled re-count failed, keeping previous count:", error);
+          if (bump) {
+            setPrograms((ps) => (ps ?? []).map((p) => p.id === programId
+              ? { ...p, refresh_token: (p.refresh_token || 0) + bump } : p));
+          }
+          return;
+        }
         const n = (data ?? []).filter(isOnRoster).length;
+        // THE NOTE DIES WITH THE FACT IT REPORTS. It says a ticked class no
+        // longer has anyone on its roster; a re-upload that puts families back
+        // makes that false while leaving the sentence on screen, next to a row
+        // that once again has a tick box and is NOT ticked - so the operator
+        // cannot tell whether they have to re-tick it or not.
+        //
+        // ONLY FOR THE CLASSES THE NOTE IS ABOUT. This handler runs after any
+        // roster edit anywhere, and a bare clear here would have wiped a note
+        // about class A because the operator uploaded into class B - a shared
+        // handler reaching outside its own path.
+        if (n > 0 && pickNoteIds.current.has(programId)) {
+          pickNoteIds.current.delete(programId);
+          if (pickNoteIds.current.size === 0) clearPickNote();
+        }
         setPrograms((ps) => (ps ?? []).map((p) => p.id === programId ? { ...p, enrolled: n, refresh_token: (p.refresh_token || 0) + bump } : p));
       });
   }
@@ -2578,6 +2617,39 @@ function AfterschoolRostersSection({ org, canEdit }) {
   // is how they stop agreeing.
   const pickedHiddenCount = pickedLive.size - visible.filter((p) => pickedLive.has(p.id)).length;
 
+  // AND THE TICK IS DESTROYED, not merely ignored.
+  //
+  // `pickedLive` above keeps the SCREEN honest with no stale frame. It does not
+  // do the other thing the old pruning effect did: remove the id. Deriving
+  // alone, a tick on a class whose roster empties is hidden rather than gone -
+  // and a row with no families renders no checkbox, so there is no way to untick
+  // it. Re-upload that roster and the checkbox returns ALREADY TICKED, counting
+  // toward a send the operator never asked for.
+  //
+  // Both, because they guard different failures: derive for the frame, drop for
+  // the lifetime. This also gives `pickNote` a writer that can actually fire -
+  // it previously sat behind a branch the button's own disabled state made
+  // unreachable, so the case it existed to explain happened in silence.
+  useEffect(() => {
+    if (!programs || picked.size === 0) return;
+    const messageable = new Set(programs.filter((p) => p.enrolled > 0).map((p) => p.id));
+    const dropped = [...picked].filter((id) => !messageable.has(id));
+    if (dropped.length === 0) return;
+    // Functional, like every other writer of this Set, so a checkbox click in
+    // the same frame cannot be clobbered.
+    setPicked((prev) => new Set([...prev].filter((id) => messageable.has(id))));
+    // SAYS WHAT IS TRUE, which is narrower than it first read. This said "no
+    // longer has families to message" - false: `enrolled` counts the ROSTER, and
+    // the composer can deliberately reach waitlisted and refunded families, so a
+    // class whose last family was refunded still has people who need telling.
+    // That those classes cannot be ticked at all is a real gap, pre-existing and
+    // on the board; this note must not restate it as a fact about them.
+    pickNoteIds.current = new Set(dropped);
+    setPickNote(dropped.length === 1
+      ? "A class you had ticked no longer has anyone on its roster, so it was unticked."
+      : `${dropped.length} classes you had ticked no longer have anyone on their rosters, so they were unticked.`);
+  }, [programs, picked]);
+
   return (
     <div style={{ marginBottom: 28 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 12, flexWrap: "wrap" }}>
@@ -2620,7 +2692,10 @@ function AfterschoolRostersSection({ org, canEdit }) {
           {/* Ticks are cleared with the term, not carried into it: a class id
               picked in FA26 is not in WI27's list at all, so it would be
               silently dropped from a send whose button had counted it. */}
-          <select value={term} onChange={(e) => { setTerm(e.target.value); setExpandedId(null); setPicked(new Set()); }} style={{ padding: "7px 10px", border: `1px solid ${RULE}`, borderRadius: 6, fontFamily: "inherit", fontSize: 13, background: "#fff", color: INK }}>
+          {/* The note describes THIS term's list. Changing term discards the
+              selection, so a sentence explaining why one of its classes was
+              unticked would sit over a completely different set of classes. */}
+          <select value={term} onChange={(e) => { setTerm(e.target.value); setExpandedId(null); setPicked(new Set()); clearPickNote(); }} style={{ padding: "7px 10px", border: `1px solid ${RULE}`, borderRadius: 6, fontFamily: "inherit", fontSize: 13, background: "#fff", color: INK }}>
             <option value="FA26">Fall 2026 (FA26)</option>
             <option value="WI27">Winter 2027 (WI27)</option>
             <option value="SP27">Spring 2027 (SP27)</option>
@@ -2688,7 +2763,14 @@ function AfterschoolRostersSection({ org, canEdit }) {
           "ticked but hidden" note away while the ticks were still held - which
           reads as "my selection was lost", and the next thing an operator does
           is change term, which really does discard it. */}
-      {canEdit && programs !== null && (pickedLive.size > 0 || visible.some((p) => p.enrolled > 0)) && (
+      {/* ...AND A NOTE ABOUT A SELECTION KEEPS THE BAR ALIVE TOO. The note
+          explaining that a tick was removed lives inside this bar, and the
+          bar's condition is "there is a selection or something to select" -
+          both of which the untick can falsify in the same commit that writes
+          the note. Search for a school whose one class empties, and the tick
+          vanished with no button, no Clear and no sentence: precisely the
+          silence the note was added to break. */}
+      {canEdit && programs !== null && (pickedLive.size > 0 || pickNote || visible.some((p) => p.enrolled > 0)) && (
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
           <button
             type="button"
@@ -2704,17 +2786,21 @@ function AfterschoolRostersSection({ org, canEdit }) {
               // in several of them hears about.
               const chosen = (programs ?? [])
                 .filter((p) => pickedLive.has(p.id))
-                .map((p) => ({ id: p.id, curriculum: p.curriculum }));
-              // Unreachable while the button is disabled on an empty selection,
-              // and kept anyway: opening a composer titled "This class" saying
-              // 0 families with a dead Send, and no word about why, is the dead
-              // end this panel exists to avoid.
-              if (chosen.length === 0) {
-                setPicked(new Set());
-                setPickNote("Those classes no longer have families to message, so the selection was cleared.");
-                return;
-              }
-              setPickNote("");
+                // `status` travels with the class so the composer can mark a
+                // cancelled one in its list. A mixed selection is legitimate -
+                // "this class is off, the other two are on" is one message -
+                // but it must be visible in the composer, not only on the row
+                // the operator ticked two searches ago.
+                .map((p) => ({ id: p.id, curriculum: p.curriculum, status: p.status }));
+              // Belt and braces: unreachable while the button is disabled on an
+              // empty selection AND the effect above drops ids the moment they
+              // stop qualifying. Kept because what it prevents - a composer
+              // titled "This class" saying 0 families with a dead Send - is a
+              // dead end, and cheap to refuse. It no longer owns the note; the
+              // effect above does, because that is where the real transition is.
+              if (chosen.length === 0) { setPicked(new Set()); return; }
+              clearPickNote();
+              setMessagingSource("selection");
               setMessagingPrograms(chosen);
             }}
             style={{
@@ -2730,8 +2816,36 @@ function AfterschoolRostersSection({ org, canEdit }) {
               ? "Message families - tick classes below"
               : `Message families (${pickedLive.size} ${pickedLive.size === 1 ? "class" : "classes"})`}
           </button>
+          {/* Select all / Clear, the same pair SurveyDialog on the scheduling
+              screen already offers over its own Set of selected ids - the house
+              idiom for this, rather than a second spelling of it. Ticking twelve
+              classes one row at a time is the thing this whole control exists to
+              spare Jeff. Selects everything the SEARCH currently shows, because
+              that is what "all" means with a filter on screen. */}
+          {/* CANCELLED CLASSES ARE NEVER SWEPT IN. Their rows keep their tick
+              box on purpose - telling a cancelled class's families that it is
+              not running is the most likely thing an operator wants from that
+              row - but that is a deliberate, one-row choice next to a
+              CANCELLED badge. "Select all" makes it neither: one click on an
+              unfiltered term list would put a cancelled class into a batch
+              saying "your class starts at 3pm next week", and its paid families
+              would be told about a class that is not happening. Pick it
+              knowingly or not at all. */}
+          {visible.some((p) => p.enrolled > 0 && p.status !== "cancelled" && !pickedLive.has(p.id)) && (
+            <button type="button"
+              onClick={() => {
+                setPicked((prev) => new Set([
+                  ...prev,
+                  ...visible.filter((p) => p.enrolled > 0 && p.status !== "cancelled").map((p) => p.id),
+                ]));
+                clearPickNote();
+              }}
+              style={{ background: "none", border: "none", color: BRIGHT, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", padding: 0, textDecoration: "underline" }}>
+              {searching ? "Select all shown" : "Select all"}
+            </button>
+          )}
           {pickedLive.size > 0 && (
-            <button type="button" onClick={() => { setPicked(new Set()); setPickNote(""); }}
+            <button type="button" onClick={() => { setPicked(new Set()); clearPickNote(); }}
               style={{ background: "none", border: "none", color: BRIGHT, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", padding: 0, textDecoration: "underline" }}>
               Clear
             </button>
@@ -2768,12 +2882,20 @@ function AfterschoolRostersSection({ org, canEdit }) {
               // renders when the class has families - so this is about there
               // being no second answer to the question, not about behaviour.
               picked={pickedLive.has(p.id)}
-              onPick={() => setPicked((prev) => {
-                const next = new Set(prev);
-                if (next.has(p.id)) next.delete(p.id); else next.add(p.id);
-                return next;
-              })}
-              onMessage={() => setMessagingPrograms([{ id: p.id, curriculum: p.curriculum }])}
+              onPick={() => {
+                // Any deliberate tick supersedes the note: it is about a
+                // selection the operator has now moved on from.
+                clearPickNote();
+                setPicked((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(p.id)) next.delete(p.id); else next.add(p.id);
+                  return next;
+                });
+              }}
+              onMessage={() => {
+                setMessagingSource("row");
+                setMessagingPrograms([{ id: p.id, curriculum: p.curriculum, status: p.status }]);
+              }}
             />
           ))}
         </div>
@@ -2792,7 +2914,28 @@ function AfterschoolRostersSection({ org, canEdit }) {
           // time, with no duplicate warning because the subject differs. The
           // composer reports the send so the ticks can go with it; cancelling
           // without sending leaves them, because then nothing was spent.
-          onSent={() => { setPicked(new Set()); setPickNote(""); }}
+          // CLEAR ONLY THE CLASSES THAT WERE ACTUALLY REACHED.
+          //
+          // This cleared the WHOLE selection on any completed send, which was
+          // wrong twice over. A send from one class's own row - which never
+          // consumes the ticks - wiped a multi-class selection assembled across
+          // two searches, with nothing saying why. And a batch where every class
+          // reached nobody destroyed the selection in exactly the case a retry
+          // is wanted. The composer now reports which classes reached somebody,
+          // and only those are spent. Same `sent > 0` test the roster-email
+          // modal a few lines up already uses: a 200 is not a delivery.
+          onSent={({ reachedProgramIds }) => {
+            // ONLY A SEND THAT USED THE SELECTION SPENDS IT. A send launched
+            // from one class's own row never consumed the ticks, so clearing
+            // that class's tick would silently drop it from a batch the
+            // operator is still assembling - they tick A, B, C, fire a one-off
+            // note at A from its row, and the batch then reaches B and C only.
+            if (messagingSource !== "selection") return;
+            if (!reachedProgramIds?.length) return;
+            const spent = new Set(reachedProgramIds);
+            setPicked((prev) => new Set([...prev].filter((id) => !spent.has(id))));
+            clearPickNote();
+          }}
           onClose={() => setMessagingPrograms(null)}
         />
       )}

@@ -107,6 +107,20 @@ interface RequestBody {
    * unticked family disappear off the screen instead of showing as unticked.
    */
   exclude_parent_ids?: string[];
+  /**
+   * Households an EARLIER CLASS in this same message already addressed, kept
+   * apart from the operator's own unticks above. Both are removed from the
+   * audience; only this one can make a class "covered elsewhere" rather than
+   * empty, and conflating them told operators that families they had unticked
+   * by hand already had a message nobody was sent.
+   */
+  already_emailed_parent_ids?: string[];
+  /**
+   * The subset of the above whose email actually went out. Addressed is not
+   * reached: a household whose earlier send failed is still skipped here, but
+   * nothing may claim it has the message.
+   */
+  already_sent_parent_ids?: string[];
   /** Set only after the operator has been told an identical send just went out. */
   confirm_duplicate?: boolean;
 }
@@ -286,9 +300,31 @@ serve(async (req: Request) => {
     // addresses; excluding Rosemary while Jim still receives it is the same
     // defect as the campaign filter that matched parents.email and let three
     // second guardians through in September.
+    // THREE LISTS, NOT ONE UNION.
+    //
+    // `exclude_parent_ids` is what the OPERATOR unticked on this panel.
+    // `already_emailed_parent_ids` is what an earlier class in this same
+    // message already addressed. They were arriving as one merged array, which
+    // made "this class's audience is empty after exclusions" ambiguous: it
+    // could mean an earlier class covered them, or it could mean the operator
+    // unticked every family here by hand. Stamping the second case as
+    // 'covered' told the operator those families already had a message that
+    // was never sent to anyone.
     const excludeIds = Array.isArray(body.exclude_parent_ids) ? body.exclude_parent_ids : [];
+    const carriedIds = Array.isArray(body.already_emailed_parent_ids)
+      ? body.already_emailed_parent_ids : [];
+    // Only these may be CLAIMED to have the message. A household whose earlier
+    // send failed is carried forward so it is not re-aimed under this class,
+    // but it is not evidence of anything having arrived.
+    const sentElsewhere = new Set(
+      (Array.isArray(body.already_sent_parent_ids) ? body.already_sent_parent_ids : [])
+        .map((id: unknown) => String(id ?? '').trim()).filter(Boolean),
+    );
+    // After the operator's own choices, before the batch's. The gap between
+    // these two is what tells coverage apart from an emptied list.
+    const afterOperator = excludeHouseholds(groupedAll.sendable, excludeIds);
     const grouped = {
-      sendable: excludeHouseholds(groupedAll.sendable, excludeIds),
+      sendable: excludeHouseholds(afterOperator, carriedIds),
       // The unreachable list is NOT filtered: those families are not being
       // emailed either way, and hiding an excluded one would quietly shrink the
       // "these have no address on file" warning that exists to be complete.
@@ -443,7 +479,10 @@ serve(async (req: Request) => {
         .select('id, sent_at, sent_count, status, include_waitlist, include_cancelled, recipients')
         .eq('program_id', programId)
         .eq('subject', subject)
-        .in('status', ['sent', 'partial'])
+        // 'covered' counts: those families HAVE this message, they just got it
+        // under another class in the same send. Leaving it out is what let a
+        // re-send to a fully-covered class go out with no warning at all.
+        .in('status', ['sent', 'partial', 'covered'])
         .gte('sent_at', since)
         .order('sent_at', { ascending: false })
         .limit(1);
@@ -468,7 +507,14 @@ serve(async (req: Request) => {
         // operator actually needs.
         const previouslySent = new Set(
           (Array.isArray(recent[0].recipients) ? recent[0].recipients : [])
-            .filter((r: Record<string, unknown>) => r?.status === 'sent')
+            // A household covered by another class in the same message HAS the
+            // message. Counting only 'sent' left a fully-covered class's row
+            // with an empty set, which reads as "we do not know who got it" and
+            // produced a warning built on `sent_count` - zero, on that row - so
+            // the operator was told the message went to 0 families and pressed
+            // on. They are the same fact to a parent: it is in their inbox.
+            .filter((r: Record<string, unknown>) =>
+              r?.status === 'sent' || r?.status === 'covered_by_another_class')
             .map((r: Record<string, unknown>) => String(r?.parent_id ?? ''))
             .filter(Boolean),
         );
@@ -505,11 +551,39 @@ serve(async (req: Request) => {
       }
     }
 
+    // "EVERYONE HERE WAS ALREADY TOLD" IS NOT "NOBODY COULD BE REACHED".
+    //
+    // These two collapsed into one status, and the collapse was silently
+    // dangerous. Send one message to twelve classes and a small class whose
+    // families are all in a bigger earlier one legitimately emails nobody -
+    // they have the message. Recorded as `no_recipients`, that class then said
+    // "nobody could be reached" in the Sent tab, was never named in the result,
+    // kept its tick on the roster list, and - because the duplicate guard only
+    // looks at rows with status 'sent' or 'partial' - raised no warning at all
+    // when the operator re-sent to it. Both families got a second copy in
+    // silence. An outcome the operator must act on differently needs its own
+    // name.
+    // Claimed only when EVERY household this class would have emailed was
+    // actually reached by an earlier class in this same message. An operator
+    // who unticked them (they are gone before `afterOperator`), or a household
+    // whose earlier send failed (addressed, never delivered), both fall through
+    // to the honest 'no_recipients' - the class keeps its tick and nobody is
+    // told a message arrived that did not.
+    const coveredElsewhere = afterOperator.length > 0
+      && grouped.sendable.length === 0
+      && afterOperator.every((g) => sentElsewhere.has(g.parent_id));
     // NOBODY REACHABLE IS NOT A SEND. Recorded with its own status rather than
     // as a successful send of zero emails, because "sent" against 0 recipients
     // is the shape that lets a class go un-notified while the log looks fine.
     if (grouped.sendable.length === 0) {
-      await supabase.from('program_family_messages').insert({
+      // THE ERROR IS READ, not discarded. This was a bare `await insert(...)`
+      // and the response carried no `audit_recorded`, so the screen's "we could
+      // not record this" banner could never fire on this path. That was
+      // cosmetic while the row was a tombstone for an empty class. It is not
+      // cosmetic now: for a covered class this row is the ONLY evidence the
+      // duplicate guard reads, so an insert that quietly fails disarms the
+      // guard for those households while the panel reports a clean run.
+      const { error: auditErr } = await supabase.from('program_family_messages').insert({
         organization_id: orgId,
         program_id: programId,
         sent_by_user_id: callerAuthId,
@@ -521,20 +595,47 @@ serve(async (req: Request) => {
         recipient_count: 0,
         sent_count: 0,
         failed_count: 0,
-        status: 'no_recipients',
+        status: coveredElsewhere ? 'covered' : 'no_recipients',
         // Same shape as the sent path: every element states its own status.
-        recipients: grouped.unreachable.map((g) => ({
-          parent_id: g.parent_id,
-          name: g.name,
-          email: g.email,
-          resend_message_id: null,
-          status: 'not_attempted',
-          failure_reason: g.unreachable_reason,
-        })),
+        //
+        // THE COVERED HOUSEHOLDS ARE NAMED, not just counted. This row is what
+        // the duplicate guard reads to answer "have these people already had
+        // this?" on a later send to this class, and a row that recorded only a
+        // zero could not answer it - which is how the re-send went out with no
+        // warning.
+        recipients: [
+          ...grouped.unreachable.map((g) => ({
+            parent_id: g.parent_id,
+            name: g.name,
+            email: g.email,
+            resend_message_id: null,
+            status: 'not_attempted',
+            failure_reason: g.unreachable_reason,
+          })),
+          ...(coveredElsewhere
+            ? afterOperator.map((g) => ({
+              parent_id: g.parent_id,
+              name: g.name,
+              email: g.email,
+              resend_message_id: null,
+              status: 'covered_by_another_class',
+              failure_reason: null,
+            }))
+            : []),
+        ],
       });
+      if (auditErr) {
+        console.error('[notify-program-families] audit insert failed on empty send:', auditErr);
+      }
       return json({
-        mode: 'send', status: 'no_recipients',
+        mode: 'send',
+        status: coveredElsewhere ? 'covered' : 'no_recipients',
         sent: 0, failed: 0,
+        audit_recorded: !auditErr,
+        // How many households this class would have emailed had another class
+        // in the same message not already reached them. The screen needs the
+        // number to say so out loud instead of reporting an empty class.
+        covered_count: coveredElsewhere ? afterOperator.length : 0,
         unreachable_count: grouped.unreachable.length,
       });
     }

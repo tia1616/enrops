@@ -57,12 +57,20 @@ const RED = "#b53737";
 const AMBER = "#a16207";
 const OK_GREEN = "#3a7c3a";
 
-// How long a fetched recipient list stays good for. Long enough that ticking a
-// dozen classes costs a dozen queries and not seventy-eight; short enough that
-// a count an operator reads is one they can still act on. Without an expiry the
-// list froze at first fetch, so drafting, taking a phone call and sending
-// twenty minutes later counted a roster that had since changed.
+// How long a fetched recipient list stays good for. It stops ticking a dozen
+// classes from costing seventy-eight queries instead of a dozen.
+//
+// WHAT IT IS NOT: a freshness guarantee. Nothing re-runs the preview on a
+// timer, so this expiry is only consulted when something else - a new class, an
+// audience toggle - already invalidated the list. Draft for twenty minutes and
+// the counts on screen are twenty minutes old. That is survivable because the
+// SERVER re-resolves the roster at send time and emails whoever is on it then:
+// the screen can undercount a family who registered while the operator was
+// writing, but it cannot cause them to be missed.
 const PREVIEW_CACHE_MS = 60_000;
+// How many past messages the Sent tab lists, across every class in the
+// composer. One list, newest first.
+const SENT_HISTORY_LIMIT = 100;
 
 // Every placeholder the edge function fills, said in plain words and grouped the
 // way an operator thinks about them. Not a jargon list: the palette shows
@@ -106,6 +114,39 @@ function fmtWhen(iso) {
 }
 
 /**
+ * The sentence appended to every failure that stops a batch part-way: how much
+ * of it already went out.
+ *
+ * COUNTS CLASSES THAT ACTUALLY REACHED SOMEBODY. It counted every class the
+ * server answered 200 to, which includes classes that emailed nobody - an empty
+ * roster, or a class whose families a bigger earlier class had already covered.
+ * An operator told "5 of 12 classes had already been sent" when three of the
+ * five emailed nobody makes the retry decision on a number that is wrong in the
+ * dangerous direction: they believe more has gone than has.
+ *
+ * @param perClass accumulated per-class responses.
+ * @param total how many classes the batch set out to do.
+ */
+/**
+ * DID THIS CLASS DO ITS JOB? One definition, because three readers depend on it
+ * and they must not disagree: the roster ticks that get spent, the "how much
+ * already went out" sentence, and the aggregate status.
+ *
+ * True when the class emailed somebody, OR when every family in it was reached
+ * by an earlier class in the same message. False for a class that reached
+ * nobody for any other reason - that is precisely when a retry is wanted, so it
+ * keeps its tick.
+ */
+const classDidItsJob = (p) => (p?.sent ?? 0) > 0 || p?.status === "covered";
+
+function describeProgressSoFar(perClass, total) {
+  const done = (perClass ?? []).filter(classDidItsJob).length;
+  if (!done) return " Check the Sent tab before trying again - some families may already have it.";
+  return ` ${done} of ${total} ${done === 1 ? "class has" : "classes have"} already gone out.`
+    + " Check the Sent tab before trying again.";
+}
+
+/**
  * @param programs the classes this message goes to, as [{ id, curriculum }].
  *
  * A LIST, chosen before the composer opens, because that is where operators
@@ -140,6 +181,14 @@ export default function MessageFamiliesModal({ programs, orgId, onClose, onSent 
   const [preview, setPreview] = useState(null);       // null = loading
   const [previewError, setPreviewError] = useState("");
   const [phase, setPhase] = useState("compose");       // compose | sending | done
+  // Declared WITH `phase`, not three hundred lines below it next to the render.
+  // It sat down there for as long as only the render used it, and the moment
+  // something above needed it the whole panel threw on every render - a const
+  // read before its own declaration is a crash, not a warning, and no test
+  // mounts this component to catch it. scripts/check-component-tdz.mjs now
+  // fails the build on this shape rather than waiting for a blank screen.
+  const sending = phase === "sending";
+
   const [error, setError] = useState("");
   const [duplicate, setDuplicate] = useState(null);    // the 409 payload
   const [result, setResult] = useState(null);
@@ -150,11 +199,98 @@ export default function MessageFamiliesModal({ programs, orgId, onClose, onSent 
   const [copyToMe, setCopyToMe] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);  // { ok, message }
+  // WHAT THE SEND LOOP HAS DONE, PUBLISHED FOR THE SCREEN.
+  //
+  // The loop's own copy lives in refs so a re-render cannot hand it a stale
+  // set. Refs do not re-render, so anything drawn from them has to be told.
+  // This is that telling, written at the same two moments the refs change - the
+  // batch reset and each completed class - so there is one writer per fact
+  // rather than a second, drifting count.
+  // `staleCount` is NOT derivable from `sentCount`, which is why it is stored
+  // beside it. A restart zeroes sentCount before the new attempt runs, so a
+  // restart that then sends nothing - offline, say - erased the only record
+  // that an earlier wording had already gone to two classes. Edit the subject
+  // again and those two are emailed a THIRD time, unwarned, with no 409 because
+  // the subject differs. What an earlier version reached is a fact about the
+  // past; it survives every later attempt and is cleared only by a class
+  // receiving the current message.
+  const [batchState, setBatchState] = useState({ key: null, sentCount: 0, staleCount: 0 });
 
   // The body as words, used ONLY to decide whether anything has been written.
   // An "empty" RichBodyEditor still holds markup, so a trim() on the HTML would
   // call an empty message written and let a blank email go to a class.
   const bodyIsEmpty = useMemo(() => !stripHtml(bodyHtml || "").trim(), [bodyHtml]);
+
+  // WHICH MESSAGE THIS IS. One definition, used by the send loop to decide
+  // whether a press is a resume or a fresh batch, and by the banner below to
+  // decide what to promise. Two spellings of this expression is how the screen
+  // and the loop come to disagree about which message the operator is looking
+  // at, which is the disagreement that double-sends people.
+  const messageKey = useMemo(
+    () => [subject.trim(), bodyHtml].join("\n--\n"),
+    [subject, bodyHtml],
+  );
+  // A BATCH IS PART-DONE AND STILL RESUMABLE. True only while the message is
+  // unchanged: edit it and the next press starts over, which is a different
+  // situation and gets a different sentence.
+  const batchPending = batchState.sentCount > 0 && batchState.key === messageKey;
+  // WHO IT GOES TO IS FIXED ONCE ANY OF IT HAS GONE.
+  //
+  // The batch key is the message, not the audience, so the waiting-list and
+  // left/refunded toggles and the household ticks stayed live after part of a
+  // batch had been sent. Change one after a stop at class 3 and classes 1-2
+  // keep the old audience while 3-12 get the new one, under a single blended
+  // result - and the audience toggles clear the household exclusions outright,
+  // so families the operator had deliberately unticked quietly came back for
+  // the rest of the run. Neither answer is available afterwards: restarting
+  // double-sends, continuing blends. So it is refused before it can happen,
+  // and editing the message - which honestly restarts - is the way out.
+  const audienceLocked = sending || batchPending;
+  // WHAT THE NEXT PRESS OF SEND WOULD DO, SAID BEFORE IT IS PRESSED.
+  //
+  // The first version of this was a fixed string set when the message was
+  // edited, and it went stale the moment anything else happened: send, drop out
+  // at class 5, come back, and it still named the count from two edits ago
+  // while asserting a second copy that a resume would not actually send.
+  // Derived from the loop's own published state instead, so it cannot describe
+  // a batch that no longer exists.
+  const priorSendNotice = useMemo(() => {
+    // How many classes hold a DIFFERENT wording from the one on screen.
+    //
+    // Same message as the last attempt: only the carried-over stale count
+    // counts, and that is zero as soon as any class has had this wording -
+    // because then the next press RESUMES and skips them, which needs no
+    // warning. A different message: the next press restarts from class one, so
+    // everything the previous wording reached is about to be sent to twice.
+    const n = batchState.key === messageKey
+      ? batchState.staleCount
+      : Math.max(batchState.staleCount, batchState.sentCount);
+    if (!n) return "";
+    return `${n} ${n === 1 ? "class has" : "classes have"} already received an earlier version of this message. `
+      + "Sending now starts again at the first class, so those families get a second copy.";
+  }, [batchState, messageKey]);
+
+  // THE REPEAT WARNING DIES WITH THE MESSAGE IT IS ABOUT.
+  //
+  // It said "2 classes have already been sent. Continuing picks up from this one
+  // - they will not be sent again." True when printed. But editing the subject
+  // or the body changes the batch key, which RESETS the resume state, so
+  // pressing "Send it again anyway" underneath that sentence restarted at class
+  // 1 and emailed those two families a second time. The sentence became false at
+  // the exact moment the operator acted on it. Clearing it here means an edited
+  // message gets a fresh warning if it deserves one, or none.
+  // REPLACED, NOT JUST CLEARED - and that distinction was itself a review
+  // finding. Clearing the stale banner removed the ONLY thing on screen saying
+  // part of the batch had already gone out, while leaving the re-send behaviour
+  // underneath completely unchanged: editing the SUBJECT resets the batch, the
+  // loop restarts at class 1, and the server's guard is keyed on (class +
+  // exact subject) so a reworded subject raises no 409 at all. Those families
+  // would have been emailed a second time in silence. A true sentence replaces
+  // the false one.
+  useEffect(() => {
+    setDuplicate(null);
+    duplicateForRef.current = null;
+  }, [subject, bodyHtml]);
 
   useEffect(() => {
     let alive = true;
@@ -190,6 +326,12 @@ export default function MessageFamiliesModal({ programs, orgId, onClose, onSent 
   // Households already addressed anywhere in this batch - the dedupe, carried
   // across a resume for the same reason.
   const emailedHouseholds = useRef(new Set());
+  // The subset of those whose email actually went out. Kept apart from the one
+  // above because they answer different questions: that one decides who to
+  // SKIP, this one decides what we may CLAIM about them.
+  const sentHouseholdsRef = useRef(new Set());
+  // Whether the operator's own copy has been attempted yet in this batch.
+  const copySentRef = useRef(false);
   // The class a duplicate warning was raised FOR. Confirming clears the guard
   // for that class only.
   const duplicateForRef = useRef(null);
@@ -334,6 +476,18 @@ export default function MessageFamiliesModal({ programs, orgId, onClose, onSent 
           unreachable,
           recipient_count: recipients.length,
           unreachable_count: unreachable.length,
+          // DOES THE SERVER CARRY THIS RELEASE? Asked of the RESPONSE SHAPE,
+          // not of the rows. `household_count` is returned only by a function
+          // that also honours `exclude_parent_ids`; the previous probe - every
+          // recipient row has a parent_id - asked a question the data could
+          // answer wrongly, because the guardian branch of the recipients
+          // function passes `parent_id` straight through and a registration is
+          // allowed to have none. One such row anywhere in any selected class
+          // would have refused every multi-class send with "the server has not
+          // been updated yet", about a server that had.
+          // (Zero such rows on prod today, 1152 registrations. Still wrong.)
+          server_has_households: perClass.length > 0
+            && perClass.every(({ json }) => typeof json.household_count === "number"),
           per_class: perClass.map((p) => ({ programId: p.programId, count: p.json.recipient_count })),
         });
       } catch (e) {
@@ -406,6 +560,27 @@ export default function MessageFamiliesModal({ programs, orgId, onClose, onSent 
         : "Nobody in this class has an email address we can send to.");
       return;
     }
+    // THE DEDUPE IS A SERVER FEATURE, SO REFUSE IF THE SERVER LACKS IT.
+    //
+    // Sending one message to several classes only avoids emailing a family
+    // twice because the function honours `exclude_parent_ids`, which shipped
+    // WITH this screen. If the site is deployed ahead of the function - the
+    // reverse of the required order - that parameter is ignored and the 67 J2S
+    // families in two to four of the selected classes get two to four copies,
+    // under a line on this very panel promising exactly one.
+    //
+    // `canPick` is the same signal, read off the preview's RESPONSE SHAPE -
+    // only a server carrying this release returns a household count. It already
+    // hides the household checkboxes; it must also stop the multi-class send
+    // rather than let the screen keep a promise the server cannot keep.
+    if (selectedClassIds.length > 1 && !canPick) {
+      // THE ADVICE MUST NOT BE THE HARM. This said "send to one class at a time
+      // until it has" - which is exactly what produces the duplicates it warns
+      // about: the household exclusion only dedupes WITHIN one batch, so twelve
+      // separate sends give the 67 cross-enrolled families one copy each time.
+      setError("Sending to several classes at once needs an update that has not reached the server yet. Wait for it rather than sending them one at a time - separate sends cannot skip a family who is in two of these classes, so they would get a copy from each.");
+      return;
+    }
     if (count === 0) {
       setError("Every family is unticked, so there is nobody to send to.");
       return;
@@ -415,13 +590,25 @@ export default function MessageFamiliesModal({ programs, orgId, onClose, onSent 
     // already sent received the OLD wording, so skipping them would silently
     // deny them the correction the operator just wrote. Only an unchanged
     // message resumes.
-    const messageKey = [subject.trim(), bodyHtml].join("\n--\n");
     if (batchMessageKey.current !== messageKey) {
       batchMessageKey.current = messageKey;
       sentClassIds.current = new Set();
       emailedHouseholds.current = new Set();
+      sentHouseholdsRef.current = new Set();
+      copySentRef.current = false;
       sentResults.current = [];
       duplicateForRef.current = null;
+      // Published in the same breath as the reset. A snapshot written anywhere
+      // but beside the thing it snapshots is a snapshot that drifts.
+      //
+      // CARRIED, NOT ZEROED: whatever the outgoing message had already reached
+      // becomes the stale count, and the largest such count wins so a second
+      // failed restart cannot shrink it.
+      setBatchState((prev) => ({
+        key: messageKey,
+        sentCount: 0,
+        staleCount: Math.max(prev.staleCount, prev.sentCount),
+      }));
     }
 
     setPhase("sending");
@@ -432,10 +619,29 @@ export default function MessageFamiliesModal({ programs, orgId, onClose, onSent 
     // Tuesday - so they hear it once, and the class named in their email is one
     // they are really in. The alternative, one email per class, would have told
     // 67 J2S families the same thing two to four times.
+    // TELL THE CALLER WHAT WAS ACTUALLY REACHED, on EVERY way out of this loop.
+    //
+    // The first version called onSent() once, on the clean completion path, with
+    // no argument. Two failures came out of that. A batch that stopped partway -
+    // a duplicate warning on class 3, a network error on class 5 - had already
+    // emailed classes 1 and 2 and said nothing, so their ticks survived and the
+    // next message re-sent them. And a caller told only "a send happened" could
+    // not tell WHICH classes, so a send from one class's own button wiped a
+    // multi-class selection it had never touched.
+    //
+    // Reached, not attempted: a class that reached nobody stays ticked, because
+    // that is the case where a retry is wanted.
     const alreadyEmailed = emailedHouseholds.current;
+    const sentHouseholds = sentHouseholdsRef.current;
     // Accumulated across resumes too, so the panel at the end reports the whole
     // batch rather than only the classes that ran after the last warning.
     const perClass = sentResults.current;
+    // Reached includes covered - see classDidItsJob above, which the "how much
+    // already went out" sentence uses too.
+    const reportSent = () => {
+      const reached = perClass.filter(classDidItsJob).map((p) => p.programId);
+      if (reached.length) onSent?.({ reachedProgramIds: reached });
+    };
     try {
       for (let i = 0; i < selectedClassIds.length; i++) {
         const pid = selectedClassIds[i];
@@ -459,13 +665,35 @@ export default function MessageFamiliesModal({ programs, orgId, onClose, onSent 
           // forgets the field emails the whole class, which is the pre-existing
           // behaviour; sending the inverse would mean a dropped field silently
           // emails nobody.
-          exclude_parent_ids: [...new Set([...excluded, ...alreadyEmailed])],
+          // THREE LISTS, BECAUSE THEY MEAN THREE DIFFERENT THINGS and the
+          // server has to tell them apart. They were sent as one union, and the
+          // server - which infers "this class was already covered" from the
+          // audience being empty after exclusions - could not distinguish "the
+          // operator unticked everybody here" from "an earlier class already
+          // reached them". A class the operator emptied by hand was recorded as
+          // covered, its tick was cleared, and the panel told them those
+          // families already had the message. They had nothing.
+          exclude_parent_ids: [...excluded],
+          already_emailed_parent_ids: [...alreadyEmailed],
+          // ADDRESSED IS NOT REACHED. A household whose send failed is still
+          // carried forward so it is not re-aimed under another class, but
+          // "they already have this" must only be claimed of households that
+          // actually went out.
+          already_sent_parent_ids: [...sentHouseholds],
           subject: subject.trim(),
           body_html: bodyHtml,
-          // The operator's copy rides the first class ACTUALLY SENT, not
-          // index 0 - on a resume, index 0 has already gone and would send a
-          // second copy. One message, one copy.
-          copy_to: sentClassIds.current.size === 0 && copyToMe && myEmail.trim()
+          // The operator's copy rides the first class that ACTUALLY EMAILS
+          // SOMEBODY, and it keeps riding until one goes.
+          //
+          // It used to ride whichever class was attempted first. The server
+          // returns early for a class with nobody left to email - an empty
+          // roster, or one every family of which an earlier class covered - and
+          // that early return is before the copy is sent, so the copy was
+          // silently dropped and nothing on the panel said so. Tying it to "a
+          // copy has not gone yet" rather than "nothing has been attempted yet"
+          // also keeps the original promise on a resume: index 0 has already
+          // been emailed, and its copy with it.
+          copy_to: !copySentRef.current && copyToMe && myEmail.trim()
             ? myEmail.trim() : undefined,
           // THIS CLASS ONLY. Passing the operator's confirmation to every class
           // in the batch spent one decision about one class on eleven others,
@@ -484,6 +712,7 @@ export default function MessageFamiliesModal({ programs, orgId, onClose, onSent 
           setDuplicate({ ...json, class_label: label, already_sent: sentClassIds.current.size });
           setPhase("compose");
           setProgress(null);
+          reportSent();
           return;
         }
         if (status !== 200) {
@@ -494,11 +723,10 @@ export default function MessageFamiliesModal({ programs, orgId, onClose, onSent 
           // an operator press Send again and mail people twice.
           setError((json?.message || json?.error
             || "Something went wrong before this finished.")
-            + (perClass.length
-              ? ` ${perClass.length} of ${selectedClassIds.length} classes had already been sent. Check the Sent tab before trying again.`
-              : " Check the Sent tab before trying again - some families may already have it."));
+            + describeProgressSoFar(perClass, selectedClassIds.length));
           setPhase("compose");
           setProgress(null);
+          reportSent();
           return;
         }
 
@@ -520,11 +748,24 @@ export default function MessageFamiliesModal({ programs, orgId, onClose, onSent 
         // delivery problem to report, not a reason to quietly re-aim the same
         // message at them under a different class.
         for (const r of json.results ?? []) {
-          if (r.parent_id) alreadyEmailed.add(r.parent_id);
+          if (!r.parent_id) continue;
+          alreadyEmailed.add(r.parent_id);
+          // The narrower set: households an email really went to. Only these
+          // let a later class say "everyone here already has it".
+          if (r.status === "sent") sentHouseholds.add(r.parent_id);
         }
         // Recorded BEFORE the next class runs, so a failure or a warning later
         // in the batch can never cause this one to be sent again.
+        // ONE COPY PER MESSAGE, and only once one has actually been attempted.
+        // A class that returned before the copy block leaves this false, so the
+        // next class carries the request instead of the operator silently
+        // getting nothing.
+        if (json.copy) copySentRef.current = true;
         sentClassIds.current.add(pid);
+        // The stale count dies HERE, not at the reset: once a class has had the
+        // current message, "an earlier version went out" is no longer the thing
+        // the operator needs told - the resume warning takes over.
+        setBatchState({ key: messageKey, sentCount: sentClassIds.current.size, staleCount: 0 });
         perClass.push({ programId: pid, label, ...json });
       }
 
@@ -539,9 +780,19 @@ export default function MessageFamiliesModal({ programs, orgId, onClose, onSent 
         // address" - and replaced it with "Sent to 0 families, 0 failed", which
         // is true and tells the operator nothing. Reachable when a roster
         // empties between the preview and the send.
+        // 'covered' COUNTS AS DONE, NOT AS EMPTY. A class every one of whose
+        // families was reached under an earlier class in this same message did
+        // its job; folding it in with "nobody could be reached" turned a clean
+        // twelve-class send into an alarming "partial" and hid the one sentence
+        // that explains it.
         status: perClass.every((p) => p.status === "no_recipients") ? "no_recipients"
-          : perClass.every((p) => p.status === "sent") ? "sent"
+          : perClass.every((p) => p.status === "sent" || p.status === "covered") ? "sent"
             : perClass.every((p) => p.status === "failed" || p.status === "no_recipients") ? "failed" : "partial",
+        // The classes that emailed nobody BECAUSE the families were already
+        // reached, named so the result can say so rather than leave a ticked
+        // class unaccounted for.
+        covered_classes: perClass.filter((p) => p.status === "covered")
+          .map((p) => ({ label: p.label, count: p.covered_count ?? 0 })),
         sent: perClass.reduce((n, p) => n + (p.sent ?? 0), 0),
         // Households actually REACHED, which is not the same as households
         // addressed now that a failed attempt also counts as addressed.
@@ -550,7 +801,9 @@ export default function MessageFamiliesModal({ programs, orgId, onClose, onSent 
         ).size,
         failed: perClass.reduce((n, p) => n + (p.failed ?? 0), 0),
         unreachable_count: perClass.reduce((n, p) => n + (p.unreachable_count ?? 0), 0),
-        copy: perClass[0]?.copy ?? null,
+        // The class that carried the copy, not index 0 - index 0 can be a class
+        // that emailed nobody and never reached the copy block at all.
+        copy: perClass.find((p) => p.copy)?.copy ?? null,
         audit_recorded: perClass.every((p) => p.audit_recorded !== false),
         // Tagged with the class, because across several classes the SAME
         // address can appear twice - a family whose send failed stays eligible
@@ -560,17 +813,16 @@ export default function MessageFamiliesModal({ programs, orgId, onClose, onSent 
         results: perClass.flatMap((p) => (p.results ?? []).map((r) => ({ ...r, class_label: p.label }))),
       });
       setPhase("done");
-      // The batch ran. The caller's selection has been spent, and it is the
-      // caller's to clear - reported here rather than on close, because closing
-      // after cancelling must NOT discard a selection that was never used.
-      onSent?.();
+      // Reported here rather than on close, because closing after CANCELLING
+      // must not discard a selection that was never used.
+      reportSent();
     } catch (e) {
       setProgress(null);
       setError((e.message ?? "The connection dropped before this finished.")
-        + (perClass.length
-          ? ` ${perClass.length} of ${selectedClassIds.length} classes had already been sent. Check the Sent tab before trying again.`
-          : " Check the Sent tab before trying again - some families may already have it."));
+        + describeProgressSoFar(perClass, selectedClassIds.length));
       setPhase("compose");
+      // A thrown fetch is the path most likely to have emailed people already.
+      reportSent();
     }
   }
 
@@ -583,7 +835,15 @@ export default function MessageFamiliesModal({ programs, orgId, onClose, onSent 
     for (const r of preview?.recipients ?? []) {
       const key = r.parent_id || r.email;
       if (!byFamily.has(key)) {
-        byFamily.set(key, { key, name: r.name, children: r.children, audiences: r.audiences ?? [], emails: [], classIds: [] });
+        // `excludable` IS PER HOUSEHOLD, because the exclusion is. The server
+        // drops households by parent_id, so a row that has none would be sent
+        // an exclusion keyed on its email address - which matches no parent_id
+        // and quietly does nothing, leaving a family the operator had unticked
+        // in the send. A tick that cannot be honoured must not be offered.
+        byFamily.set(key, {
+          key, excludable: !!r.parent_id,
+          name: r.name, children: r.children, audiences: r.audiences ?? [], emails: [], classIds: [],
+        });
       }
       const h = byFamily.get(key);
       h.emails.push(r.email);
@@ -620,13 +880,28 @@ export default function MessageFamiliesModal({ programs, orgId, onClose, onSent 
   // unticking Rosemary would leave Jim receiving it, which is the exact defect
   // this control exists to prevent. Offer no control rather than one that lies:
   // the picker is hidden until the function that honours it is deployed.
-  const canPick = (preview?.recipients ?? []).every((r) => !!r.parent_id);
+  // EVERY ROW OF SOMETHING, not every row of nothing. `[].every()` is true, so
+  // while the preview was still loading this read as "the server has the
+  // release" and the panel printed its green promise - a family in two of these
+  // hears it once - on no evidence at all, then flipped to the amber refusal a
+  // moment later. A capability probe with no rows to probe has not answered.
+  //
+  // Three answers, not two: yes, no, and NOT YET. Everything downstream used to
+  // collapse "not yet" into "no", which is how the panel came to print a
+  // confident sentence about a server it had not spoken to yet - the green
+  // "a family in more than one of these hears it once" promise appeared while
+  // the recipient list was still loading, then flipped to the amber refusal.
+  const pickSupport = preview === null || previewError
+    ? "unknown"
+    : preview.server_has_households ? "yes" : "no";
+  // The send guard and the household picker both want the strict reading: only
+  // a server that has PROVED it carries the release.
+  const canPick = pickSupport === "yes";
 
   const selected = households.filter((h) => !excluded.has(h.key));
   const count = selected.length;
   const inboxCount = selected.reduce((n, h) => n + h.emails.length, 0);
   const unreachable = preview?.unreachable ?? [];
-  const sending = phase === "sending";
 
   return (
     // textAlign RESET, and it is not cosmetic paranoia. This panel is opened
@@ -677,7 +952,9 @@ export default function MessageFamiliesModal({ programs, orgId, onClose, onSent 
             <div style={{ background: result?.failed ? "#fdf6e3" : "#eef7ee", border: `1px solid ${result?.failed ? "#ecdca6" : "#cfe6cf"}`, borderRadius: 8, padding: 12 }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: result?.failed ? AMBER : OK_GREEN }}>
                 {result?.status === "no_recipients"
-                  ? "Nothing was sent - nobody in this class had an email address."
+                  ? (selectedClassIds.length > 1
+                    ? "Nothing was sent - nobody in these classes had an email address."
+                    : "Nothing was sent - nobody in this class had an email address.")
                   : (() => {
                     // Families, then the number of emails behind them when the
                     // two differ. `sent` counts EMAILS; calling that number
@@ -693,6 +970,19 @@ export default function MessageFamiliesModal({ programs, orgId, onClose, onSent 
               {!!result?.unreachable_count && (
                 <div style={{ fontSize: 12, color: MUTED, marginTop: 6 }}>
                   {result.unreachable_count} {result.unreachable_count === 1 ? "family has" : "families have"} no email address on file, so they were not included.
+                </div>
+              )}
+              {/* A TICKED CLASS THAT EMAILED NOBODY IS ACCOUNTED FOR BY NAME.
+                  Without this the operator ticked twelve, read "Sent to 140
+                  families", and had no way to learn that two of the twelve
+                  emailed nobody - which looks like the send skipped them. It
+                  did not: their families are inside the 140. */}
+              {!!result?.covered_classes?.length && (
+                <div style={{ fontSize: 12, color: MUTED, marginTop: 6 }}>
+                  {result.covered_classes.map((c) => c.label).join(", ")}
+                  {result.covered_classes.length === 1 ? " sent nothing of its own" : " sent nothing of their own"}
+                  : every family in {result.covered_classes.length === 1 ? "it" : "them"} is
+                  also in another class here and already has this message.
                 </div>
               )}
               {/* The copy is reported separately, and says NOTHING about the
@@ -735,13 +1025,18 @@ export default function MessageFamiliesModal({ programs, orgId, onClose, onSent 
             </div>
           </div>
         ) : tab === "sent" ? (
-          <SentMessages programId={program?.id} orgId={orgId} />
+          // EVERY class in this composer, not just the first. The error copy on
+          // a failed batch tells the operator to "check the Sent tab before
+          // trying again" - and for a twelve-class send this showed class one's
+          // history only, so the surface they were sent to could not answer the
+          // question they were sent to answer.
+          <SentMessages programIds={selectedClassIds} labelFor={labelFor} orgId={orgId} />
         ) : (
           <>
             {/* WHO, before what. */}
             <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, padding: 12, marginTop: 14 }}>
               <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: INK }}>
-                <input type="checkbox" checked={includeWaitlist} disabled={sending}
+                <input type="checkbox" checked={includeWaitlist} disabled={audienceLocked}
                   onChange={(e) => setIncludeWaitlist(e.target.checked)} />
                 Also include families on the waiting list
               </label>
@@ -750,10 +1045,17 @@ export default function MessageFamiliesModal({ programs, orgId, onClose, onSent 
                   registration's status value. Off by default: most messages are
                   for the people currently in the class. */}
               <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: INK, marginTop: 6 }}>
-                <input type="checkbox" checked={includeCancelled} disabled={sending}
+                <input type="checkbox" checked={includeCancelled} disabled={audienceLocked}
                   onChange={(e) => setIncludeCancelled(e.target.checked)} />
                 Also include families who have left or been refunded
               </label>
+
+              {batchPending && (
+                <div style={{ marginTop: 8, fontSize: 11.5, color: AMBER }}>
+                  Part of this has already gone out, so who it goes to is fixed until the batch
+                  finishes. Changing the message starts it over from the first class.
+                </div>
+              )}
 
               {/* WHICH CLASSES, named rather than counted. The selection was
                   made on the roster list before this opened, so the panel's job
@@ -764,14 +1066,36 @@ export default function MessageFamiliesModal({ programs, orgId, onClose, onSent 
                   <div style={{ fontSize: 12, fontWeight: 600, color: INK }}>
                     Going to {selectedClassIds.length} classes
                   </div>
+                  {/* A CANCELLED CLASS IS NAMED AS ONE. It can legitimately be
+                      in here - telling its families it is not running is the
+                      most likely reason to message them - but a bare list of
+                      twelve names gave the operator no way to notice one of
+                      them was cancelled before writing "see you at 3pm". */}
                   <div style={{ fontSize: 12, color: MUTED, marginTop: 3 }}>
-                    {(programs ?? []).map((p) => p?.curriculum).filter(Boolean).join(" · ")}
+                    {(programs ?? []).filter((p) => p?.curriculum).map((p, i) => (
+                      <span key={p.id ?? i}>
+                        {i > 0 && " · "}
+                        {p.curriculum}
+                        {p.status === "cancelled" && (
+                          <span style={{ color: AMBER, fontWeight: 600 }}> (cancelled)</span>
+                        )}
+                      </span>
+                    ))}
                   </div>
                   {/* Said plainly, because it is the question an operator asks
                       the moment they tick a second class. */}
-                  <div style={{ fontSize: 11, color: MUTED, marginTop: 6 }}>
-                    A family in more than one of these gets this once, not once per class.
-                  </div>
+                  {/* Only promised when the server can keep it - see the
+                      canPick guard in send(). */}
+                  {/* Silent until it knows. A promise and an accusation are
+                      both assertions about a server we have not heard from
+                      while the recipient list is still loading. */}
+                  {pickSupport !== "unknown" && (
+                    <div style={{ fontSize: 11, color: canPick ? MUTED : AMBER, marginTop: 6 }}>
+                      {canPick
+                        ? "A family in more than one of these gets this once, not once per class."
+                        : "Sending to several classes at once needs an update that has not reached the server yet. Waiting is safer than sending them one at a time - separate sends cannot skip a family who is in two of these classes."}
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -805,10 +1129,10 @@ export default function MessageFamiliesModal({ programs, orgId, onClose, onSent 
                       anyway, which is the exclude-by-address bug wearing a new
                       control. Both their addresses sit under one tick. */}
                   {households.map((r) => (
-                    <label key={r.key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "5px 8px", fontSize: 12, borderBottom: `1px solid ${RULE}`, cursor: sending ? "not-allowed" : "pointer", opacity: excluded.has(r.key) ? 0.45 : 1 }}>
+                    <label key={r.key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "5px 8px", fontSize: 12, borderBottom: `1px solid ${RULE}`, cursor: audienceLocked ? "not-allowed" : "pointer", opacity: excluded.has(r.key) ? 0.45 : 1 }}>
                       <span style={{ color: INK, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 7 }}>
-                        {canPick && (
-                          <input type="checkbox" checked={!excluded.has(r.key)} disabled={sending}
+                        {canPick && r.excludable && (
+                          <input type="checkbox" checked={!excluded.has(r.key)} disabled={audienceLocked}
                             onChange={() => toggleHousehold(r.key)} />
                         )}
                         <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>
@@ -875,6 +1199,12 @@ export default function MessageFamiliesModal({ programs, orgId, onClose, onSent 
               <RichBodyEditor
                 value={bodyHtml}
                 onChange={setBodyHtml}
+                // Frozen while the batch runs, like every other control here.
+                // It was the one editable thing left live during a send that
+                // takes minutes - and a keystroke mid-batch both wiped a repeat
+                // warning that had just landed and changed the message key, so
+                // the next Send restarted the whole batch.
+                disabled={sending}
                 rows={7}
                 fields={FIELDS}
                 showPreview={false}
@@ -926,9 +1256,18 @@ export default function MessageFamiliesModal({ programs, orgId, onClose, onSent 
                 operator asks before sending to a class. */}
             <div style={{ fontSize: 11, color: MUTED, marginTop: 10 }}>
               Each family gets their own email. Nobody sees anyone else's address, and a family
-              with two children in this class gets one email naming both.
+              with two children {selectedClassIds.length > 1 ? "in these classes" : "in this class"} gets
+              one email naming both.
             </div>
 
+            {/* Survives the edit that invalidates the repeat warning above, and
+                says the thing that stays true: those families already have a
+                version of this. */}
+            {priorSendNotice && !duplicate && (
+              <div style={{ marginTop: 12, background: "#fdf6e3", border: "1px solid #ecdca6", borderRadius: 8, padding: 10, fontSize: 12, color: INK }}>
+                {priorSendNotice}
+              </div>
+            )}
             {duplicate && (
               <div style={{ marginTop: 12, background: "#fdf6e3", border: "1px solid #ecdca6", borderRadius: 8, padding: 10 }}>
                 <div style={{ fontSize: 13, fontWeight: 700, color: AMBER }}>This looks like a repeat</div>
@@ -995,31 +1334,55 @@ export default function MessageFamiliesModal({ programs, orgId, onClose, onSent 
 // Every row states its own outcome, including the families that were never
 // attempted, because "sent to 29" with no failures listed is the number that
 // makes an operator stop looking.
-function SentMessages({ programId, orgId }) {
+function SentMessages({ programIds, labelFor, orgId }) {
+  const idKey = (programIds ?? []).join(",");
+  // More than one class in scope changes what a row has to say: the history is
+  // no longer "this class's", so every row has to name which class it went to.
+  const multi = (programIds ?? []).length > 1;
   const [rows, setRows] = useState(null);   // null = loading
   const [loadError, setLoadError] = useState("");
   const [openId, setOpenId] = useState(null);
 
   useEffect(() => {
     let alive = true;
+    // No classes, no query. `.in("program_id", [])` is a request for nothing
+    // that still costs a round trip, and PostgREST's empty-list handling is not
+    // a thing to rely on for a tab whose empty state we can render outright.
+    if (!idKey) { setRows([]); setLoadError(""); return; }
+    // Cleared at the START of the fetch, not only on success. The error branch
+    // is checked before the rows, so a failure followed by a good read would
+    // have kept showing the failure over a list that had loaded.
+    setLoadError("");
     (async () => {
       const { data, error } = await supabase
         .from("program_family_messages")
-        .select("id, sent_at, subject, body_text, body_html, status, recipient_count, sent_count, failed_count, include_waitlist, include_cancelled, recipients")
-        .eq("program_id", programId)
+        .select("id, program_id, sent_at, subject, body_text, body_html, status, recipient_count, sent_count, failed_count, include_waitlist, include_cancelled, recipients")
+        .in("program_id", programIds ?? [])
         .eq("organization_id", orgId)
         .order("sent_at", { ascending: false })
-        .limit(25);
+        // THE MOST RECENT 100 ACROSS THESE CLASSES - one ordered list, not a
+        // quota per class. Said plainly because the first version of this
+        // comment claimed "25 per class so a twelve-class batch's rows are all
+        // reachable", which the code does not do: one chatty class can use the
+        // whole budget. The batch an operator has just run is always at the top
+        // by sent_at, which is the case this tab is opened for; older history
+        // for a quiet class can fall off, and the line under the list says so
+        // rather than leaving them to assume it never happened.
+        .limit(SENT_HISTORY_LIMIT);
       if (!alive) return;
       if (error) {
-        setLoadError("Couldn't load what has been sent to this class.");
+        setLoadError(multi
+          ? "Couldn't load what has been sent to these classes."
+          : "Couldn't load what has been sent to this class.");
         setRows([]);
         return;
       }
       setRows(data ?? []);
     })();
     return () => { alive = false; };
-  }, [programId, orgId]);
+    // idKey, not programIds: a fresh array of the same ids must not refetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idKey, orgId]);
 
   if (rows === null) {
     return <div style={{ fontSize: 13, color: MUTED, padding: "20px 2px" }}>Loading…</div>;
@@ -1030,7 +1393,9 @@ function SentMessages({ programId, orgId }) {
   if (!rows.length) {
     return (
       <div style={{ fontSize: 13, color: MUTED, padding: "24px 2px" }}>
-        Nothing has been sent to this class's families yet. Anything you send from here will be listed, with who received it.
+        {multi
+          ? "Nothing has been sent to the families in these classes yet. Anything you send from here will be listed, with who received it."
+          : "Nothing has been sent to this class's families yet. Anything you send from here will be listed, with who received it."}
       </div>
     );
   }
@@ -1047,11 +1412,23 @@ function SentMessages({ programId, orgId }) {
               style={{ display: "block", width: "100%", textAlign: "left", background: "transparent", border: "none", padding: 0, cursor: "pointer", fontFamily: "inherit" }}>
               <div style={{ fontSize: 13, fontWeight: 600, color: INK }}>{m.subject}</div>
               <div style={{ fontSize: 11.5, color: MUTED, marginTop: 3 }}>
+                {/* With several classes in scope the same subject appears once
+                    per class, so the class name is what tells them apart -
+                    and it is what an operator told "5 of 12 already had this"
+                    came here to find. */}
+                {multi && (
+                  <>
+                    <span style={{ color: INK }}>{labelFor?.(m.program_id) || "This class"}</span>
+                    {" · "}
+                  </>
+                )}
                 {fmtWhen(m.sent_at)}
                 {" · "}
-                {m.status === "no_recipients"
-                  ? "nobody could be reached"
-                  : `${m.sent_count} of ${m.recipient_count} ${m.recipient_count === 1 ? "family" : "families"}`}
+                {m.status === "covered"
+                  ? "already reached under another class in the same message"
+                  : m.status === "no_recipients"
+                    ? "nobody could be reached"
+                    : `${m.sent_count} of ${m.recipient_count} ${m.recipient_count === 1 ? "family" : "families"}`}
                 {m.failed_count ? ` · ${m.failed_count} failed` : ""}
                 {m.include_waitlist ? " · incl. waiting list" : ""}
                 {m.include_cancelled ? " · incl. left/refunded" : ""}
@@ -1097,6 +1474,15 @@ function SentMessages({ programId, orgId }) {
           </div>
         );
       })}
+      {/* SAYS WHEN THE LIST IS NOT THE WHOLE LIST. A history capped in silence
+          is how "it was never sent" gets concluded from a list that simply
+          stopped. */}
+      {rows.length >= SENT_HISTORY_LIMIT && (
+        <div style={{ fontSize: 11.5, color: MUTED, padding: "4px 2px 8px" }}>
+          Showing the {SENT_HISTORY_LIMIT} most recent. Older messages
+          {multi ? " to these classes" : " to this class"} are not listed.
+        </div>
+      )}
     </div>
   );
 }
