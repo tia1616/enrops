@@ -203,6 +203,70 @@ export function groupRecipientsByAddress(rows: MessageRecipientRow[]) {
   };
 }
 
+/**
+ * Drop the households an operator unticked, BY FAMILY and never by address.
+ *
+ * Lives here rather than inline in the caller for one reason: the test that
+ * pins this rule must exercise the code that ships, not a second copy of the
+ * rule written next to it. The first draft of that test had its own filter and
+ * would have passed against a broken function.
+ *
+ * `parent_id` is the household: program_message_recipients stamps the
+ * registration's parent_id on the guardian row too, so both of a family's
+ * addresses carry it. Excluding by address instead is the defect that let three
+ * second guardians through a campaign filter in September and told three
+ * households the same thing twice in two days.
+ *
+ * An empty list means EVERYBODY. That direction matters: a caller that forgets
+ * the field emails the whole class, which is what it did before pickers
+ * existed, rather than silently emailing nobody.
+ */
+export function excludeHouseholds<T extends { parent_id: string }>(
+  groups: T[],
+  excludedParentIds: readonly string[] | null | undefined,
+): T[] {
+  const excluded = new Set(
+    (excludedParentIds ?? []).map((id) => String(id ?? '').trim()).filter(Boolean),
+  );
+  if (excluded.size === 0) return groups ?? [];
+  return (groups ?? []).filter((g) => !excluded.has(g.parent_id));
+}
+
+/**
+ * WAS THIS CLASS ALREADY COVERED BY AN EARLIER CLASS IN THE SAME MESSAGE?
+ *
+ * One message can go to several classes at once, and a family in two of them is
+ * emailed by the first and skipped by the rest. So a small class whose families
+ * are all in a bigger one legitimately emails nobody - and that is NOT the same
+ * outcome as a class with nobody reachable. Recorded as the same thing, the
+ * class kept its tick on the roster list, its history read "nobody could be
+ * reached", and the duplicate guard - which only looks at sends that reached
+ * somebody - stayed silent when the operator sent to it again. Those families
+ * got a second copy with no warning.
+ *
+ * Extracted and tested because it decides whether the product ASSERTS to an
+ * operator that a family already has a message. Three ways it must say no:
+ *
+ *  - the operator unticked them by hand (`afterOperator` is already empty, so
+ *    nothing was covered - they were declined),
+ *  - an earlier class only ATTEMPTED them and the send failed (carried forward
+ *    so they are not re-aimed, but nothing arrived),
+ *  - there was nobody in the class to begin with.
+ *
+ * @param afterOperator households left after the operator's own exclusions.
+ * @param remaining     households left after the batch's exclusions too.
+ * @param sentElsewhere households an earlier class in this message really emailed.
+ */
+export function isCoveredByEarlierClass<T extends { parent_id: string }>(
+  afterOperator: readonly T[],
+  remaining: readonly T[],
+  sentElsewhere: ReadonlySet<string>,
+): boolean {
+  if ((afterOperator?.length ?? 0) === 0) return false;
+  if ((remaining?.length ?? 0) !== 0) return false;
+  return afterOperator.every((g) => sentElsewhere.has(g.parent_id));
+}
+
 export interface FamilySendResult {
   parent_id: string;
   name: string;

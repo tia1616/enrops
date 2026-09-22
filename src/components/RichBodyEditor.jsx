@@ -59,12 +59,28 @@ const linkInputStyle = {
 // contenteditable content (a link the operator just made is not a React
 // element), so the one thing an operator must see - that a link looks like a
 // link - has to be a stylesheet rule.
-const EDITOR_CSS = `
+export const EDITOR_CSS = `
 .enr-rbe[contenteditable] { outline: none; }
 .enr-rbe a { color: #1a55c4; text-decoration: underline; }
 .enr-rbe p { margin: 0 0 10px; }
 .enr-rbe p:last-child { margin-bottom: 0; }
+/* THE BULLET HAS TO BE PUT BACK, not just made room for.
+   Jessica, 2026-09-22, eyeballing staging: "when i clicked bullet it didn't
+   show it bulleted - the bullet did show up in the test email though."
+   Tailwind's Preflight sets "list-style: none" on every ul and ol in the admin
+   app. This rule restored the INDENT (padding-left) and the spacing but never
+   the marker, so a list looked like indented lines while the operator was
+   writing it. The email is a separate document with no Preflight in it, which
+   is why it bulleted there and only there - the editor was the one place
+   showing something other than what the family would get, which is the whole
+   promise of this control.
+   Stated explicitly rather than "list-style: revert": revert hands it back to
+   the user-agent sheet, and what that sheet says is not ours to depend on. */
 .enr-rbe ul, .enr-rbe ol { margin: 0 0 10px; padding-left: 22px; }
+.enr-rbe ul { list-style: disc outside; }
+.enr-rbe ol { list-style: decimal outside; }
+.enr-rbe ul ul { list-style: circle outside; }
+.enr-rbe li { display: list-item; margin: 0 0 2px; }
 .enr-rbe .enr-chip {
   display: inline-block; padding: 1px 8px; margin: 0 1px; border-radius: 999px;
   background: #EDE8F5; color: ${PURPLE}; font-size: 0.92em; font-weight: 600;
@@ -76,7 +92,7 @@ const EDITOR_CSS = `
 }
 `;
 
-function FormatButton({ label, onClick, children }) {
+function FormatButton({ label, onClick, children, disabled = false }) {
   return (
     <button
       type="button"
@@ -84,7 +100,8 @@ function FormatButton({ label, onClick, children }) {
       // editable first, collapsing the operator's selection, and the command
       // would then apply to nothing. This is why the bold button appears to do
       // nothing in every naive contenteditable toolbar.
-      onMouseDown={(e) => { e.preventDefault(); onClick(); }}
+      onMouseDown={(e) => { e.preventDefault(); if (!disabled) onClick(); }}
+      disabled={disabled}
       title={label}
       aria-label={label}
       style={{
@@ -119,6 +136,11 @@ export default function RichBodyEditor({
   showPreview = true,
   helpText = null,
   allowLink = true,
+  /** Freeze the whole control - the box AND the toolbar - while a caller is
+   *  mid-send. Without it this was the one editable thing left live during a
+   *  batch that takes minutes, and a keystroke could invalidate a warning the
+   *  send had just raised. */
+  disabled = false,
 }) {
   const areaRef = useRef(null);
   // The last HTML WE emitted. `value` coming back equal to this is our own echo
@@ -243,6 +265,17 @@ export default function RichBodyEditor({
 
   const [linkPanel, setLinkPanel] = useState(null); // null | { text, url }
 
+  // DISABLING THE BUTTON IS NOT DISABLING THE PANEL. Freezing the toolbar left
+  // an ALREADY-OPEN link panel sitting there with live inputs and a live Add
+  // button, so the one path still able to alter the message during a send was
+  // the one the freeze existed to close. Its Add would also have failed
+  // silently - execCommand does nothing on a box that is no longer editable -
+  // leaving an operator pressing a button that reports success and changes
+  // nothing. Close it when the freeze arrives.
+  useEffect(() => {
+    if (disabled) setLinkPanel(null);
+  }, [disabled]);
+
   function openLinkPanel() {
     rememberSelection();
     // Trimmed for the same reason bold is: a link that ends in a space renders
@@ -313,7 +346,15 @@ export default function RichBodyEditor({
 
       {hasFields && (
         <div style={{ marginBottom: 8 }}>
-          <FieldPalette fields={fields} onInsert={insertField} />
+          {/* THE FREEZE HAS TO REACH EVERY WRITER, and this one was missed.
+              Disabling the toolbar and the box left the field palette live -
+              on the one screen this freeze was written for. Its token buttons
+              run execCommand, which does nothing against a box that is no
+              longer editable, and then emit() anyway: a writer firing during a
+              send, able to change the body and so the batch identity, which
+              restarts the batch at class one and re-emails every class already
+              done. */}
+          <FieldPalette fields={fields} onInsert={insertField} disabled={disabled} />
         </div>
       )}
 
@@ -323,19 +364,19 @@ export default function RichBodyEditor({
         border: `1px solid ${RULE}`, borderBottom: "none",
         borderRadius: "6px 6px 0 0", padding: "5px 6px", background: "#FBFBFB",
       }}>
-        <FormatButton label="Bold" onClick={() => exec("bold")}>
+        <FormatButton label="Bold" disabled={disabled} onClick={() => exec("bold")}>
           <span style={{ fontWeight: 800 }}>B</span>
         </FormatButton>
-        <FormatButton label="Italic" onClick={() => exec("italic")}>
+        <FormatButton label="Italic" disabled={disabled} onClick={() => exec("italic")}>
           <span style={{ fontStyle: "italic", fontFamily: "Georgia, serif" }}>I</span>
         </FormatButton>
-        <FormatButton label="Bulleted list" onClick={() => exec("insertUnorderedList")}>
+        <FormatButton label="Bulleted list" disabled={disabled} onClick={() => exec("insertUnorderedList")}>
           <span style={{ fontSize: 15, lineHeight: 1 }}>•</span>
         </FormatButton>
         {allowLink && (
           <>
             <span style={{ width: 1, height: 18, background: RULE, margin: "0 4px" }} />
-            <FormatButton label="Add a link" onClick={openLinkPanel}>
+            <FormatButton label="Add a link" disabled={disabled} onClick={openLinkPanel}>
               {/* Chain glyph — the icon every email tool uses for this. */}
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
                 <path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.5 1.5" />
@@ -350,7 +391,7 @@ export default function RichBodyEditor({
       <div
         ref={areaRef}
         className="enr-rbe"
-        contentEditable
+        contentEditable={!disabled}
         suppressContentEditableWarning
         role="textbox"
         aria-multiline="true"
@@ -447,12 +488,16 @@ export default function RichBodyEditor({
   );
 }
 
-function FieldPalette({ fields, onInsert }) {
+function FieldPalette({ fields, onInsert, disabled = false }) {
   const [open, setOpen] = useState(false);
+  // An OPEN palette is closed by the freeze, for the same reason the link panel
+  // is: disabling the way in leaves the way already opened wide open.
+  useEffect(() => { if (disabled) setOpen(false); }, [disabled]);
   return (
     <>
       <button
         type="button"
+        disabled={disabled}
         onClick={() => setOpen((v) => !v)}
         style={{
           background: open ? "#EDE8F5" : "#f7f4ec",
@@ -481,7 +526,7 @@ function FieldPalette({ fields, onInsert }) {
                     type="button"
                     // Same reason as the format buttons: a click would blur the
                     // editable and drop the caret before we could insert at it.
-                    onMouseDown={(e) => { e.preventDefault(); onInsert(t.key); }}
+                    onMouseDown={(e) => { e.preventDefault(); if (!disabled) onInsert(t.key); }}
                     title={t.tip}
                     style={{
                       background: "#fff", border: "1px solid #C4B5DC", borderRadius: 999,

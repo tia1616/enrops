@@ -128,6 +128,43 @@ when this comes back around.
 
 ---
 
+## 8. The curriculum-change notice still sends literal `**asterisks**`
+
+**Added 2026-09-22.** Jessica's call: not urgent, because curricula are not
+changed often. Do it the next time anything touches that sender.
+
+**Today.** `notify-program-curriculum-change` has its own private send loop, its
+own plain textarea, and posts `text:` only to Resend — no HTML path at all.
+That is the exact defect Jeff reported on Message families on 20 Sept, in the
+one surface that was not fixed with it. **14 sends on prod** have gone through
+it. An operator who drafts with an assistant and pastes gets `**bold**` and
+`[words](url)` delivered literally, the same as the 230 of 405 emails measured
+on The Ukulele Project before the Message families fix.
+
+**Why it was left.** Scope. The Message families build was Jeff's actual
+complaint and shipped 21 Sept; this is its twin, and nothing about it got worse
+in the meantime.
+
+**Do NOT fix it by teaching the twin the same trick.** It also defines its own
+private `substitute()` at `index.ts:100`, a second copy of the one exported from
+`_shared/familyNotify.ts`. Two spellings of one rule is the divergence, not the
+cure. The fix is to **delete both private copies and adopt the shared modules**
+— `familyNotify` for the send loop and token substitution, `familyEmailHtml` for
+the HTML body and the plain-text half derived from it. That is the same adoption
+Message families just went through, so the shape is proven.
+
+**Watch for when you do.** The shared `substitute()` now accepts `{single}` as
+well as `{{double}}` braces; the twin's private copy does not. Check the twin's
+stored templates for either form before switching, so nothing that renders today
+starts rendering blank.
+
+**Touches.** `notify-program-curriculum-change/index.ts` (its send loop, its
+`substitute`, its textarea's surface), `_shared/familyNotify.ts` and
+`_shared/familyEmailHtml.ts` (adopt, do not copy). Deploy-order note: this
+function bundles `_shared`, so deploy it from a tree level with `origin/main`.
+
+---
+
 ## Recently resolved (prior session, 2026-06-02)
 
 - Q1 intent-first surface with 4 intents + "Something else" sub-intents.

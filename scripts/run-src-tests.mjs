@@ -42,4 +42,14 @@ for (const t of tests) {
 }
 
 console.log(`\nsrc tests: ${tests.length - failed}/${tests.length} files passed`);
+
+// A STATIC CHECK THE UNIT TESTS CANNOT DO. None of the files above mounts a
+// component, so a `const` read before its own declaration in a component body -
+// a guaranteed ReferenceError on every render - passes both `npm test` and
+// `npm run build` and reaches a human as a blank screen. Run here so it cannot
+// be forgotten. See scripts/check-component-tdz.mjs.
+console.log('\n=== component TDZ check ===');
+const tdz = spawnSync(process.execPath, [join(fileURLToPath(new URL('.', import.meta.url)), 'check-component-tdz.mjs')], { stdio: 'inherit' });
+if (tdz.status !== 0) failed++;
+
 process.exit(failed ? 1 : 0);

@@ -27,6 +27,8 @@ import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 import { venueLabel } from '../_shared/roomLabel.ts';
 import { htmlToPlainText } from '../_shared/familyEmailHtml.ts';
 import {
+  excludeHouseholds,
+  isCoveredByEarlierClass,
   groupRecipientsByAddress,
   sendFamilyEmails,
   tallyFamilySends,
@@ -97,6 +99,29 @@ interface RequestBody {
   test_email?: string;
   /** mode 'send': one address that also receives ONE copy of the message. */
   copy_to?: string;
+  /**
+   * Households to leave out, by `parent_id`. A HOUSEHOLD, not an address: both
+   * of a family's addresses carry the same parent_id, so one entry drops both.
+   *
+   * Applied to a SEND only. A preview must keep returning everybody, because it
+   * is the list the operator ticks and unticks - filtering it would make an
+   * unticked family disappear off the screen instead of showing as unticked.
+   */
+  exclude_parent_ids?: string[];
+  /**
+   * Households an EARLIER CLASS in this same message already addressed, kept
+   * apart from the operator's own unticks above. Both are removed from the
+   * audience; only this one can make a class "covered elsewhere" rather than
+   * empty, and conflating them told operators that families they had unticked
+   * by hand already had a message nobody was sent.
+   */
+  already_emailed_parent_ids?: string[];
+  /**
+   * The subset of the above whose email actually went out. Addressed is not
+   * reached: a household whose earlier send failed is still skipped here, but
+   * nothing may claim it has the message.
+   */
+  already_sent_parent_ids?: string[];
   /** Set only after the operator has been told an identical send just went out. */
   confirm_duplicate?: boolean;
 }
@@ -262,30 +287,107 @@ serve(async (req: Request) => {
       return json({ error: 'recipients_failed', detail: rErr.message }, 500);
     }
 
-    const grouped = groupRecipientsByAddress((rows ?? []) as MessageRecipientRow[]);
+    const groupedAll = groupRecipientsByAddress((rows ?? []) as MessageRecipientRow[]);
+
+    // EXCLUSIONS ARE APPLIED ONCE, HERE, BY HOUSEHOLD.
+    //
+    // Everything downstream - the count on the button, the emails, the audit
+    // row, the duplicate guard's comparison - reads `grouped`, so there is no
+    // path on which a family the operator unticked can be counted in one place
+    // and emailed in another. That is the only ordering that makes an exclusion
+    // trustworthy.
+    //
+    // BY PARENT_ID, NEVER BY ADDRESS. Unticking a household must drop BOTH its
+    // addresses; excluding Rosemary while Jim still receives it is the same
+    // defect as the campaign filter that matched parents.email and let three
+    // second guardians through in September.
+    // THREE LISTS, NOT ONE UNION.
+    //
+    // `exclude_parent_ids` is what the OPERATOR unticked on this panel.
+    // `already_emailed_parent_ids` is what an earlier class in this same
+    // message already addressed. They were arriving as one merged array, which
+    // made "this class's audience is empty after exclusions" ambiguous: it
+    // could mean an earlier class covered them, or it could mean the operator
+    // unticked every family here by hand. Stamping the second case as
+    // 'covered' told the operator those families already had a message that
+    // was never sent to anyone.
+    const excludeIds = Array.isArray(body.exclude_parent_ids) ? body.exclude_parent_ids : [];
+    const carriedIds = Array.isArray(body.already_emailed_parent_ids)
+      ? body.already_emailed_parent_ids : [];
+    // Only these may be CLAIMED to have the message. A household whose earlier
+    // send failed is carried forward so it is not re-aimed under this class,
+    // but it is not evidence of anything having arrived.
+    const sentElsewhere = new Set(
+      (Array.isArray(body.already_sent_parent_ids) ? body.already_sent_parent_ids : [])
+        .map((id: unknown) => String(id ?? '').trim()).filter(Boolean),
+    );
+    // After the operator's own choices, before the batch's. The gap between
+    // these two is what tells coverage apart from an emptied list.
+    const afterOperator = excludeHouseholds(groupedAll.sendable, excludeIds);
+    const grouped = {
+      sendable: excludeHouseholds(afterOperator, carriedIds),
+      // The unreachable list is NOT filtered: those families are not being
+      // emailed either way, and hiding an excluded one would quietly shrink the
+      // "these have no address on file" warning that exists to be complete.
+      unreachable: groupedAll.unreachable,
+    };
     const programName = (program as any).curriculum ?? 'your class';
     const programSummary = describeProgram(program as any);
 
+    // groupedAll on purpose, NOT grouped: the preview is the list being ticked.
     if (mode === 'preview') {
       return json({
         mode: 'preview',
+        // WHICH CONTRACT THIS FUNCTION SPEAKS, stated outright rather than
+        // inferred from some incidental field being present.
+        //
+        // The screen refuses a multi-class send unless the deployed function
+        // honours the exclusion that stops a cross-enrolled family being
+        // emailed twice. It used to infer that from `household_count` appearing
+        // in this response - which was true of the version that took ONE merged
+        // exclusion list, and stayed true when this version split it into three.
+        // So a new screen against the previous function would have read "yes,
+        // it dedupes", sent the batch households under a field that function
+        // never reads, and emailed the 67 cross-enrolled families once per
+        // class. An incidental field answers the question it happens to
+        // correlate with; a version answers the question asked.
+        //
+        // 2 = honours exclude_parent_ids / already_emailed_parent_ids /
+        //     already_sent_parent_ids separately, and reports 'covered'.
+        // Bump this whenever the send contract changes, and raise the minimum
+        // the screen requires in the same commit.
+        send_contract: 2,
         program: { id: programId, name: programName, summary: programSummary },
         include_waitlist: includeWaitlist,
         include_cancelled: includeCancelled,
         // Names and addresses so the operator can COUNT and INSPECT before
         // sending, and can see which children sit behind an address.
-        recipients: grouped.sendable.map((g) => ({
+        // `parent_id` IS THE HOUSEHOLD, and it is returned so the screen can
+        // group on it. program_message_recipients stamps the REGISTRATION's
+        // parent_id on the guardian row as well as the parent row, so Rosemary
+        // and Jim on one child share a parent_id and differ only by address.
+        // Without this the screen can only offer a checkbox per INBOX, and
+        // unticking Rosemary would still email Jim - the same household hearing
+        // it anyway, which is the exclude-by-address bug in a new place.
+        recipients: groupedAll.sendable.map((g) => ({
+          parent_id: g.parent_id,
           email: g.email, name: g.name, children: g.student_first_name,
           child_count: g.child_count, audiences: g.audiences, kinds: g.kinds,
         })),
         // The half a send would hide. Named, not just counted, so the operator
         // can chase the school that runs its own registration for real addresses.
-        unreachable: grouped.unreachable.map((g) => ({
+        unreachable: groupedAll.unreachable.map((g) => ({
+          parent_id: g.parent_id,
           email: g.email, name: g.name, children: g.student_first_name,
           reason: g.unreachable_reason,
         })),
-        recipient_count: grouped.sendable.length,
-        unreachable_count: grouped.unreachable.length,
+        // TWO NUMBERS, because they are two different facts and the screen has
+        // been printing the wrong one. `recipient_count` counts INBOXES; the
+        // label above it said "N families will receive this" and printed 10 for
+        // 6 households at Jackson, because a second guardian is a second row.
+        recipient_count: groupedAll.sendable.length,
+        household_count: new Set(groupedAll.sendable.map((g) => g.parent_id)).size,
+        unreachable_count: groupedAll.unreachable.length,
       });
     }
 
@@ -392,10 +494,15 @@ serve(async (req: Request) => {
         // ticked still re-emails every enrolled family. Keying on the flags would
         // let that through silently; keying on subject alone catches it and lets
         // them decide with "Send it again anyway".
-        .select('id, sent_at, sent_count, status, include_waitlist, include_cancelled')
+        // `recipients` is selected now because the guard compares WHO, not just
+        // whether. See the overlap test below.
+        .select('id, sent_at, sent_count, status, include_waitlist, include_cancelled, recipients')
         .eq('program_id', programId)
         .eq('subject', subject)
-        .in('status', ['sent', 'partial'])
+        // 'covered' counts: those families HAVE this message, they just got it
+        // under another class in the same send. Leaving it out is what let a
+        // re-send to a fully-covered class go out with no warning at all.
+        .in('status', ['sent', 'partial', 'covered'])
         .gte('sent_at', since)
         .order('sent_at', { ascending: false })
         .limit(1);
@@ -405,28 +512,98 @@ serve(async (req: Request) => {
       if (dupErr) {
         console.error('[notify-program-families] duplicate check failed, allowing send:', dupErr);
       } else if (recent && recent.length > 0) {
+        // WHO GOT IT, NOT WHETHER ANYTHING WENT.
+        //
+        // The guard used to key on (class + subject) alone. That was right when
+        // a send always meant "everybody", and it becomes wrong the moment an
+        // operator can pick families: sending to half a class and then to the
+        // other half is one job done in two presses, and blocking the second
+        // half teaches people to click past the warning - which is how the
+        // warning stops working for the case it exists for.
+        //
+        // So it compares the actual households. No overlap means nobody is
+        // hearing it twice and the send proceeds silently. Overlap warns, and
+        // now says HOW MANY would get a second copy, which is the number the
+        // operator actually needs.
+        const previouslySent = new Set(
+          (Array.isArray(recent[0].recipients) ? recent[0].recipients : [])
+            // A household covered by another class in the same message HAS the
+            // message. Counting only 'sent' left a fully-covered class's row
+            // with an empty set, which reads as "we do not know who got it" and
+            // produced a warning built on `sent_count` - zero, on that row - so
+            // the operator was told the message went to 0 families and pressed
+            // on. They are the same fact to a parent: it is in their inbox.
+            .filter((r: Record<string, unknown>) =>
+              r?.status === 'sent' || r?.status === 'covered_by_another_class')
+            .map((r: Record<string, unknown>) => String(r?.parent_id ?? ''))
+            .filter(Boolean),
+        );
+        const wouldRepeat = new Set(
+          grouped.sendable.map((g) => g.parent_id).filter((id) => previouslySent.has(id)),
+        );
+        // An OLD row carries no parent_id on its recipients (they were written
+        // before this guard needed them) and yields an empty set. Falling back
+        // to the old behaviour is deliberate: an empty set must not be read as
+        // "no overlap, send away", which would silently disable the guard for
+        // exactly the rows it was protecting before today.
+        const knowWho = previouslySent.size > 0;
+        if (knowWho && wouldRepeat.size === 0) {
+          console.log('[notify-program-families] same subject, no overlapping household - allowing');
+        } else {
         return json({
           error: 'duplicate_send',
           message:
-            `The same message went to ${recent[0].sent_count} ` +
-            `${recent[0].sent_count === 1 ? 'family' : 'families'} on this class less than ` +
-            `${DUPLICATE_WINDOW_MINUTES} minutes ago` +
+            (knowWho
+              ? `${wouldRepeat.size} of the ${grouped.sendable.length === 1 ? 'family' : 'families'} you are sending to now already had this message less than ${DUPLICATE_WINDOW_MINUTES} minutes ago`
+              : `The same message went to ${recent[0].sent_count} ` +
+                `${recent[0].sent_count === 1 ? 'family' : 'families'} on this class less than ` +
+                `${DUPLICATE_WINDOW_MINUTES} minutes ago`) +
             // Names the audience that already received it, so an operator who
             // has just ticked a new group can tell whether the people they are
             // trying to reach were covered or not.
             `${recent[0].include_cancelled ? ', including families who had left or been refunded' : ''}` +
             `${recent[0].include_waitlist ? ', including the waiting list' : ''}` +
-            '. Sending again will email everyone on the list above a second time.',
-          previous: recent[0],
+            '. Sending again will email them a second time.',
+          previous: { ...recent[0], recipients: undefined },
+          repeat_count: knowWho ? wouldRepeat.size : null,
         }, 409);
+        }
       }
     }
 
+    // "EVERYONE HERE WAS ALREADY TOLD" IS NOT "NOBODY COULD BE REACHED".
+    //
+    // These two collapsed into one status, and the collapse was silently
+    // dangerous. Send one message to twelve classes and a small class whose
+    // families are all in a bigger earlier one legitimately emails nobody -
+    // they have the message. Recorded as `no_recipients`, that class then said
+    // "nobody could be reached" in the Sent tab, was never named in the result,
+    // kept its tick on the roster list, and - because the duplicate guard only
+    // looks at rows with status 'sent' or 'partial' - raised no warning at all
+    // when the operator re-sent to it. Both families got a second copy in
+    // silence. An outcome the operator must act on differently needs its own
+    // name.
+    // Claimed only when EVERY household this class would have emailed was
+    // actually reached by an earlier class in this same message. An operator
+    // who unticked them (they are gone before `afterOperator`), or a household
+    // whose earlier send failed (addressed, never delivered), both fall through
+    // to the honest 'no_recipients' - the class keeps its tick and nobody is
+    // told a message arrived that did not.
+    const coveredElsewhere = isCoveredByEarlierClass(
+      afterOperator, grouped.sendable, sentElsewhere,
+    );
     // NOBODY REACHABLE IS NOT A SEND. Recorded with its own status rather than
     // as a successful send of zero emails, because "sent" against 0 recipients
     // is the shape that lets a class go un-notified while the log looks fine.
     if (grouped.sendable.length === 0) {
-      await supabase.from('program_family_messages').insert({
+      // THE ERROR IS READ, not discarded. This was a bare `await insert(...)`
+      // and the response carried no `audit_recorded`, so the screen's "we could
+      // not record this" banner could never fire on this path. That was
+      // cosmetic while the row was a tombstone for an empty class. It is not
+      // cosmetic now: for a covered class this row is the ONLY evidence the
+      // duplicate guard reads, so an insert that quietly fails disarms the
+      // guard for those households while the panel reports a clean run.
+      const { error: auditErr } = await supabase.from('program_family_messages').insert({
         organization_id: orgId,
         program_id: programId,
         sent_by_user_id: callerAuthId,
@@ -438,20 +615,47 @@ serve(async (req: Request) => {
         recipient_count: 0,
         sent_count: 0,
         failed_count: 0,
-        status: 'no_recipients',
+        status: coveredElsewhere ? 'covered' : 'no_recipients',
         // Same shape as the sent path: every element states its own status.
-        recipients: grouped.unreachable.map((g) => ({
-          parent_id: g.parent_id,
-          name: g.name,
-          email: g.email,
-          resend_message_id: null,
-          status: 'not_attempted',
-          failure_reason: g.unreachable_reason,
-        })),
+        //
+        // THE COVERED HOUSEHOLDS ARE NAMED, not just counted. This row is what
+        // the duplicate guard reads to answer "have these people already had
+        // this?" on a later send to this class, and a row that recorded only a
+        // zero could not answer it - which is how the re-send went out with no
+        // warning.
+        recipients: [
+          ...grouped.unreachable.map((g) => ({
+            parent_id: g.parent_id,
+            name: g.name,
+            email: g.email,
+            resend_message_id: null,
+            status: 'not_attempted',
+            failure_reason: g.unreachable_reason,
+          })),
+          ...(coveredElsewhere
+            ? afterOperator.map((g) => ({
+              parent_id: g.parent_id,
+              name: g.name,
+              email: g.email,
+              resend_message_id: null,
+              status: 'covered_by_another_class',
+              failure_reason: null,
+            }))
+            : []),
+        ],
       });
+      if (auditErr) {
+        console.error('[notify-program-families] audit insert failed on empty send:', auditErr);
+      }
       return json({
-        mode: 'send', status: 'no_recipients',
+        mode: 'send',
+        status: coveredElsewhere ? 'covered' : 'no_recipients',
         sent: 0, failed: 0,
+        audit_recorded: !auditErr,
+        // How many households this class would have emailed had another class
+        // in the same message not already reached them. The screen needs the
+        // number to say so out loud instead of reporting an empty class.
+        covered_count: coveredElsewhere ? afterOperator.length : 0,
         unreachable_count: grouped.unreachable.length,
       });
     }
@@ -593,6 +797,13 @@ serve(async (req: Request) => {
       copy: copySent,
       status,
       sent: tally.sent,
+      // HOUSEHOLDS, because the screen says "families" and `sent` counts
+      // EMAILS. A class of 6 families holding 10 addresses would have reported
+      // "Sent to 10 families" - the identical defect that was just fixed on the
+      // preview label, still sitting on the result panel afterwards.
+      households_sent: new Set(
+        results.filter((r) => r.status === 'sent').map((r) => r.parent_id).filter(Boolean),
+      ).size,
       failed: tally.failed,
       unreachable_count: grouped.unreachable.length,
       audit_recorded: !auditErr,
