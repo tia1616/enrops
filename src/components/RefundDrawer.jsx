@@ -31,6 +31,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../lib/supabase";
+import { formatCalendarDate } from "../lib/programSchedule";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -45,17 +46,13 @@ function fmtCents(cents) {
   return `$${((cents || 0) / 100).toFixed(2)}`;
 }
 
-// A due date is a CALENDAR date, not a moment. `new Date("2027-01-05")` parses
-// as UTC midnight, which renders as 4 January everywhere west of Greenwich - so
-// a drawer warning an operator about a charge would name the wrong day. Split
-// the parts and build a local date instead.
+// A due date is a CALENDAR date, not a moment, and this repo already has one
+// place that knows that: formatCalendarDate parses at local midnight (so a
+// charge due 5 Jan does not render as 4 Jan) and returns null rather than a
+// rolled-over guess for a malformed date. Always shows the year - a payment
+// date months out is exactly where a bare "Jan 5" is ambiguous.
 function fmtDue(iso) {
-  if (!iso) return "";
-  const [y, m, d] = String(iso).slice(0, 10).split("-").map(Number);
-  if (!y || !m || !d) return "";
-  return new Date(y, m - 1, d).toLocaleDateString(undefined, {
-    month: "short", day: "numeric", year: "numeric",
-  });
+  return formatCalendarDate(iso, { month: "short", day: "numeric", year: "numeric" });
 }
 
 // Map the edge function's error codes to plain English (no jargon, no codes).
@@ -71,6 +68,14 @@ function humanError(code, payload) {
       return `Stripe couldn't process the refund${payload?.stripe_message ? `: ${payload.stripe_message}` : ""}. Nothing was charged back.`;
     case "cancel_failed_after_refund":
       return "The refund went through, but freeing the spot didn't. Refresh the roster — if the family is still listed, use Remove or try again.";
+    // The two outcomes of the withdraw path. Both used to fall through to the
+    // default and show the operator the raw code, which is precisely the
+    // opposite of what this function exists for — and the second of them is the
+    // half-done state that most needs explaining.
+    case "pause_failed":
+      return "We couldn't stop this family's scheduled payments, so nothing was changed — they're still enrolled and still due to be charged. Try again, and if it keeps failing don't leave it: their card will be charged on schedule.";
+    case "cancel_failed_charges_stopped":
+      return `Their scheduled payments ARE stopped${payload?.pending_charges_stopped ? ` (${payload.pending_charges_stopped})` : ""}, but freeing their spot didn't work. No money moved. Refresh the roster and, if they're still listed, try again.`;
     case "forbidden":
       return "You don't have permission to issue refunds for this organization.";
     case "registration_not_found":
@@ -91,6 +96,10 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
   // what it actually prevents, in money, rather than promising vaguely to
   // "stop any future payments" and leaving the operator to hope.
   const [pendingCharges, setPendingCharges] = useState([]);
+  // THREE STATES, NOT TWO. "no pending charges" and "could not find out" are
+  // different facts and only one of them is safe to tell an operator who is
+  // about to withdraw a family.
+  const [pendingChargesUnknown, setPendingChargesUnknown] = useState(false);
 
   const [amountStr, setAmountStr] = useState("");      // dollars, as typed
   const [reason, setReason] = useState("");
@@ -115,7 +124,7 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
         // could only be offered $274.00 back. The server now reads the real
         // charged total from Stripe; asking it is the only way this UI can be
         // sure it is showing a number the server will honour.
-        const [{ data: elig, error: eligErr }, { data: orgRow }, { data: pendingRows }] = await Promise.all([
+        const [{ data: elig, error: eligErr }, { data: orgRow }, { data: pendingRows, error: pendingErr }] = await Promise.all([
           supabase.functions.invoke("refund-registration", {
             body: { registration_id: reg.id, preview: true },
           }),
@@ -139,10 +148,12 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
         setPaidCents(paid);
         setRefundedCents(refunded);
         setAdminFeeCents(orgRow?.withdrawal_admin_fee_cents || 0);
-        // A failed read here must not block a refund, so an error leaves the
-        // list empty and the drawer simply says less. It never claims there are
-        // no pending charges when it could not find out - see the copy below.
-        setPendingCharges(pendingRows || []);
+        // A failed read must not block a refund, so it is recorded rather than
+        // thrown - but it is RECORDED, because an empty list and a failed query
+        // are indistinguishable otherwise and the copy below would tell an
+        // operator there are no scheduled charges when it simply could not look.
+        setPendingChargesUnknown(!!pendingErr);
+        setPendingCharges(pendingErr ? [] : (pendingRows || []));
         // Default the field to the full refundable amount.
         setAmountStr(((Math.max(0, elig.eligible_cents)) / 100).toFixed(2));
       } catch (e) {
@@ -179,16 +190,32 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
   // submit with a zero amount. Escher Swanson on 2026-09-22 needed BOTH on the
   // same child on the same day - keep the fall money, stop the winter and
   // spring charges - and neither could be done from this drawer.
-  const withdrawNoRefund = nothingToRefund || (seatChoice === "withdraw" && amountCents === 0);
+  //
+  // KEEPING THE MONEY MUST BE TYPED, NOT ARRIVED AT. `amountCents` collapses an
+  // EMPTY field to 0 as well as a typed zero, so keying off it alone meant that
+  // select-all-deleting the amount to retype it silently relabelled the primary
+  // button to "Withdraw without refunding" and left it ENABLED - one misclick
+  // away from cancelling the registration and keeping the family's money, with
+  // no receipt and no refund record. An empty field is an unfinished thought,
+  // not an instruction.
+  const typedZero = (() => {
+    const t = amountStr.trim();
+    if (t === "") return false;
+    const n = parseFloat(t);
+    return Number.isFinite(n) && Math.round(n * 100) === 0;
+  })();
 
+  const withdrawNoRefund = nothingToRefund || (seatChoice === "withdraw" && typedZero);
+
+  // Flattened: the old nested ternary's true-branch was a tautology. Inside it
+  // `withdrawNoRefund` holds, and if `nothingToRefund` is false the other
+  // disjunct forces `seatChoice === "withdraw"` - so it could never reject
+  // anything while reading like a guard.
   const canSubmit =
     !busy && !loading && !loadErr &&
-    (withdrawNoRefund
-      // Freeing the spot IS the action; it needs no amount. When there is
-      // nothing to refund there is also no "keep their spot" version of it.
-      ? (nothingToRefund || seatChoice === "withdraw")
-      : amountCents > 0 && !overMax &&
-        (seatChoice === "keep" || seatChoice === "withdraw"));
+    (withdrawNoRefund ||
+      (amountCents > 0 && !overMax &&
+        (seatChoice === "keep" || seatChoice === "withdraw")));
 
   function setFull() { setAmountStr((refundableCents / 100).toFixed(2)); }
   function setKeepFee() { setAmountStr((Math.max(0, refundableCents - adminFeeCents) / 100).toFixed(2)); }
@@ -336,17 +363,22 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
                     <ul style={{ margin: "0 0 6px", paddingLeft: 18, fontSize: 12.5, color: "#7c2d12", lineHeight: 1.7 }}>
                       {pendingCharges.map((c) => (
                         <li key={c.id}>
-                          <strong>{fmtCents(c.amount_cents)}</strong>{c.due_date ? ` on ${fmtDue(c.due_date)}` : ""}
+                          {/* Guard on the FORMATTED value, not the raw one: an
+                              unparseable date used to leave a dangling "on "
+                              with nothing after it. */}
+                          <strong>{fmtCents(c.amount_cents)}</strong>{fmtDue(c.due_date) ? ` on ${fmtDue(c.due_date)}` : ""}
                         </li>
                       ))}
                     </ul>
                     <div style={{ fontSize: 12, color: "#7c2d12", lineHeight: 1.5 }}>
-                      Withdrawing them stops {pendingCharges.length === 1 ? "this payment" : `all ${pendingCharges.length} of these`}. No money is refunded, because none was collected.
+                      Withdrawing stops {pendingCharges.length === 1 ? "this payment" : `all ${pendingCharges.length} of these`} for <strong>this class</strong>. No money is refunded, because none was collected. If they are enrolled in other terms, those are separate and are not affected.
                     </div>
                   </div>
                 ) : (
                   <p style={{ color: MUTED, fontSize: 12.5, marginTop: 10, lineHeight: 1.5 }}>
-                    They have no scheduled payments either. Withdrawing frees their spot and takes them off the roster.
+                    {pendingChargesUnknown
+                      ? "We couldn't check whether this class has any scheduled payments. Withdrawing still frees their spot and stops anything that is scheduled, but check their payment plan afterwards."
+                      : "This class has no scheduled payments either. Withdrawing frees their spot and takes them off the roster. Any other terms they are enrolled in are separate and are not affected."}
                   </p>
                 )}
 
@@ -429,16 +461,19 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
                     sub="Cancels the registration, opens the seat, and stops any future payments."
                   />
 
-                  {/* The button's MEANING changes when the amount is zero, so it
+                  {/* The button's MEANING changes when a zero is typed, so it
                       has to say so here rather than letting an operator discover
-                      it after pressing. Only reachable with money on the table -
-                      the nothing-to-refund case has its own panel above. */}
-                  {withdrawNoRefund && !nothingToRefund && (
+                      it after pressing. This whole arm renders only when there
+                      IS money to refund - the nothing-to-refund case has its own
+                      panel above - so the condition is just the typed zero. */}
+                  {withdrawNoRefund && (
                     <div style={{ marginTop: 10, padding: "10px 12px", background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, color: "#7c2d12", fontSize: 12.5, lineHeight: 1.5 }} role="alert">
-                      The amount is $0, so <strong>no money goes back to the family</strong>. Their {fmtCents(refundableCents)} stays with you.
-                      {pendingCharges.length > 0
-                        ? ` Their spot is freed and ${pendingCharges.length === 1 ? "their 1 scheduled payment is" : `all ${pendingCharges.length} scheduled payments are`} stopped.`
-                        : " Their spot is freed."}
+                      You typed $0, so <strong>no money goes back to the family</strong>. Their {fmtCents(refundableCents)} stays with you.
+                      {pendingChargesUnknown
+                        ? " Their spot is freed. We couldn't check this class's scheduled payments, so check their payment plan afterwards."
+                        : pendingCharges.length > 0
+                          ? ` Their spot is freed and ${pendingCharges.length === 1 ? "the 1 scheduled payment" : `all ${pendingCharges.length} scheduled payments`} for this class ${pendingCharges.length === 1 ? "is" : "are"} stopped. Other terms are separate and are not affected.`
+                          : " Their spot is freed."}
                     </div>
                   )}
                 </div>

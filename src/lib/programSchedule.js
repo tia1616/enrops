@@ -17,19 +17,39 @@
 
 const SEP = '·'; // middot, matching the separator the catalog cards already use
 
+// A calendar date, parsed at LOCAL midnight and formatted however the caller
+// asks. The one place that knows the trap, so nobody has to rediscover it:
+// `new Date('2026-09-15')` is UTC midnight, which renders as Sep 14 anywhere
+// west of Greenwich - including every family and every operator this platform
+// currently serves.
+//
+// Returns null - never a half-formatted string - for anything it cannot parse,
+// including a rolled-over date like '2027-13-05', so a caller can tell "no date"
+// from "a date I made up". Callers render nothing on null.
+export function formatCalendarDate(iso, opts = { month: 'short', day: 'numeric' }) {
+  if (typeof iso !== 'string' || !iso) return null;
+  const ymd = iso.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return null;
+  const d = new Date(`${ymd}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return null;
+  // Reject rollover: JS turns month 13 into January of the next year and day 30
+  // of February into March, so a malformed date would otherwise print as a
+  // confident, wrong day.
+  const [y, m, day] = ymd.split('-').map(Number);
+  if (d.getFullYear() !== y || d.getMonth() + 1 !== m || d.getDate() !== day) return null;
+  return d.toLocaleDateString('en-US', opts);
+}
+
 // "Sep 15", or "Sep 15, 2027" when the date is not in the current year. A bare
 // "Sep 15" on a card a parent reads in December is genuinely ambiguous; adding
 // the year only when it differs keeps the common case short.
 export function formatStartDate(iso, now = new Date()) {
   if (typeof iso !== 'string' || !iso) return null;
-  // Parse at local midnight, not UTC: `new Date('2026-09-15')` is UTC midnight,
-  // which renders as Sep 14 anywhere west of Greenwich - including every family
-  // this platform currently serves.
   const d = new Date(`${iso}T00:00:00`);
   if (Number.isNaN(d.getTime())) return null;
   const opts = { month: 'short', day: 'numeric' };
   if (d.getFullYear() !== now.getFullYear()) opts.year = 'numeric';
-  return d.toLocaleDateString('en-US', opts);
+  return formatCalendarDate(iso, opts);
 }
 
 // Reads `first_session_date` and `session_count` off a program row OR a pricing

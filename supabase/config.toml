@@ -220,21 +220,20 @@ verify_jwt = false
 # invalid session with 401, and a caller who is not an admin of the target
 # organization with 403. The platform gate only proves a JWT is valid, which
 # would let any signed-in user reach another org's campaign drafting.
+[functions.marketing-draft-campaign]
+verify_jwt = false
+
 # PINNED 2026-09-22. This function had NO block here, and both environments run
 # it with verify_jwt = false - a value that survived only because the CLI keeps
 # the current setting when the flag is omitted. Any deploy that forgot
 # --no-verify-jwt would have silently flipped it to the platform default and
 # broken every refund and withdrawal from the drawer.
 #
-# false is correct, not a gap: the function authenticates callers ITSELF and
-# more strictly than the platform gate would. It requires an Authorization
-# header, resolves the user, and then demands owner/admin membership of the
-# registration's own organisation before it will move a cent. The platform gate
-# only proves a JWT is valid, which would let any signed-in user reach it.
+# Same reasoning as the two blocks above, with one addition specific to this
+# function: it demands owner/admin membership of the REGISTRATION'S OWN
+# organisation before it will move a cent, which the platform gate cannot
+# express.
 [functions.refund-registration]
-verify_jwt = false
-
-[functions.marketing-draft-campaign]
 verify_jwt = false
 
 [functions.lifecycle-automations-cron]

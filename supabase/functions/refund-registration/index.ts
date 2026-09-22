@@ -148,6 +148,67 @@ interface RefundedAgg {
 
 const FORBIDDEN = json({ error: 'forbidden' }, 403);
 
+/**
+ * Stop a registration's future charges, then cancel it.
+ *
+ * ONE implementation, called by BOTH the withdraw-only path and the
+ * refund-and-withdraw path. They used to be two copies that had already
+ * diverged on all three of the decisions below, which is exactly the drift this
+ * collapses.
+ *
+ * PAUSE FIRST, THEN CANCEL, and do not cancel if the pause failed. The failure
+ * modes are not symmetrical:
+ *   - pause ok, cancel fails  -> a child stays on a roster and nobody is billed.
+ *                                Visible the next time anyone looks at the list,
+ *                                and recoverable by pressing the button again.
+ *   - cancel ok, pause fails  -> a CANCELLED registration whose card is still
+ *                                charged on a date months away. Nobody notices
+ *                                until the money has gone.
+ * The second is the worst thing this function can produce, so the order and the
+ * early return are the guard against it. The older copy did it the other way
+ * round and only console.warn'd a failed pause.
+ *
+ * Idempotent: `.neq('status','cancelled')` means a second call updates no row
+ * and does not rewrite `cancelled_at` to a later date, and the pause is scoped
+ * to rows still `pending`.
+ *
+ * Returns what happened rather than deciding how bad it is - a withdrawal with
+ * no money involved can fail loudly, while a refund that has already moved money
+ * must carry on and report.
+ */
+async function stopChargesAndCancel(
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  registrationId: string,
+  nowIso: string,
+): Promise<{
+  pausedRows: Array<{ id: string; amount_cents: number }>;
+  pauseError: string | null;
+  cancelError: string | null;
+}> {
+  const { data: pausedRows, error: pauseErr } = await supabase
+    .from('installments')
+    .update({ status: 'paused_program_cancelled', last_attempt_at: nowIso })
+    .eq('registration_id', registrationId)
+    .eq('status', 'pending')
+    .select('id, amount_cents');
+  if (pauseErr) {
+    return { pausedRows: [], pauseError: pauseErr.message, cancelError: null };
+  }
+
+  const { error: cancErr } = await supabase
+    .from('registrations')
+    .update({ status: 'cancelled', cancelled_at: nowIso })
+    .eq('id', registrationId)
+    .neq('status', 'cancelled');
+
+  return {
+    pausedRows: (pausedRows ?? []) as Array<{ id: string; amount_cents: number }>,
+    pauseError: null,
+    cancelError: cancErr ? cancErr.message : null,
+  };
+}
+
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (req.method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
@@ -191,9 +252,26 @@ serve(async (req: Request) => {
     // have someone edit the database. A real case (Escher Swanson, moving
     // schools, $480 pending across two unpaid terms) is what surfaced it.
     //
-    // Zero is accepted ONLY when withdrawing. A zero-amount refund with no
-    // withdrawal is still meaningless and still rejected.
-    const withdrawOnly = cancelRegistration && (!Number.isFinite(amountCents) || amountCents === 0);
+    // Zero is accepted ONLY when withdrawing, only when the caller EXPLICITLY
+    // sent a zero, and never on a preview.
+    //
+    // `!preview` is load-bearing: the withdraw block below runs long before the
+    // preview return, so without this a body of {preview:true,
+    // cancel_registration:true} would cancel the registration and pause its
+    // charges while the function's own contract promises no side effects.
+    //
+    // `amountProvided` is load-bearing too: `Number(undefined)` is NaN and
+    // `Number(null)` / `Number('')` are 0, so treating "absent" as "deliberately
+    // zero" turned a refund whose amount was dropped in transit into a silent
+    // successful withdrawal that returned 200 and kept the family's money. An
+    // omitted amount is a caller error and still gets `invalid_amount`.
+    const rawAmount = (body as Record<string, unknown>).amount_cents;
+    const amountProvided = rawAmount !== undefined && rawAmount !== null && rawAmount !== '';
+    const withdrawOnly = !preview &&
+      cancelRegistration &&
+      amountProvided &&
+      Number.isFinite(amountCents) &&
+      amountCents === 0;
 
     if (!preview && !withdrawOnly && (!Number.isFinite(amountCents) || amountCents <= 0)) {
       return json({ error: 'invalid_amount' }, 400);
@@ -239,32 +317,22 @@ serve(async (req: Request) => {
     if (withdrawOnly) {
       const nowIso = new Date().toISOString();
 
-      const { data: pausedRows, error: pauseErr } = await supabase
-        .from('installments')
-        .update({ status: 'paused_program_cancelled', last_attempt_at: nowIso })
-        .eq('registration_id', registrationId)
-        .eq('status', 'pending')
-        .select('id, amount_cents');
-      if (pauseErr) {
-        console.error('[withdraw] pausing pending installments failed:', pauseErr);
+      const { pausedRows, pauseError, cancelError } =
+        await stopChargesAndCancel(supabase, registrationId, nowIso);
+
+      if (pauseError) {
+        console.error('[withdraw] pausing pending installments failed:', pauseError);
+        // Nothing was cancelled - the helper refuses to cancel a registration
+        // whose charges it could not stop.
         return json({ error: 'pause_failed' }, 500);
       }
-
-      const { error: cancErr } = await supabase
-        .from('registrations')
-        .update({ status: 'cancelled', cancelled_at: nowIso })
-        .eq('id', registrationId)
-        // Idempotent: pressing this twice must not rewrite cancelled_at to the
-        // later date. An already-cancelled row updates nothing and is not an
-        // error - the caller asked for a state that already holds.
-        .neq('status', 'cancelled');
-      if (cancErr) {
-        console.error('[withdraw] registration cancel failed:', cancErr);
+      if (cancelError) {
+        console.error('[withdraw] registration cancel failed:', cancelError);
         // The charges ARE stopped by this point, so say what did and did not
         // happen rather than implying nothing worked.
         return json({
           error: 'cancel_failed_charges_stopped',
-          pending_charges_stopped: pausedRows?.length ?? 0,
+          pending_charges_stopped: pausedRows.length,
         }, 500);
       }
 
@@ -277,9 +345,16 @@ serve(async (req: Request) => {
         registrationId: registrationId,
         actionType: ENROLLMENT_ACTIONS.CANCELLED,
         // Distinct from 'refund': this withdrawal returned no money, and the
-        // churn read should not imply a refund happened.
-        metadata: { via: 'withdraw_no_refund' },
-        dedupeKey: `cancelled:${registrationId}`,
+        // churn read should not imply a refund happened. The operator's typed
+        // reason is carried here because this path writes no `refunds` row -
+        // without it, the one field they filled in would be thrown away and
+        // nothing anywhere would record why the seat was freed.
+        metadata: { via: 'withdraw_no_refund', reason },
+        // Scoped by `via`. Both paths log a CANCELLED event for the same
+        // registration, so a shared key let a later refund-and-cancel dedupe
+        // itself away against an earlier withdrawal. Retries of the SAME action
+        // still dedupe, which is what the key is for.
+        dedupeKey: `cancelled:${registrationId}:withdraw_no_refund`,
       });
 
       return json({
@@ -888,39 +963,28 @@ serve(async (req: Request) => {
     // ── optionally cancel the registration ────────────────────────────────
     if (cancelRegistration) {
       const nowIso = new Date().toISOString();
-      const { error: cancErr } = await supabase
-        .from('registrations')
-        .update({
-          status: 'cancelled',
-          cancelled_at: nowIso,
-        })
-        .eq('id', registrationId);
-      if (cancErr) {
-        console.error('[refund] registration cancel failed:', cancErr);
-        // DO NOT RETURN. The comment here used to say "surface a soft error so
-        // operator knows to retry the cancel manually" - but returning skipped
-        // the INSTALMENT PAUSE immediately below, so a family who had just been
-        // refunded would keep being charged for the instalments still pending on
-        // the registration we failed to cancel. That is the worst outcome this
-        // function can produce, and it was the fallback path.
-        //
-        // It also skipped the refund receipt, so the family got no word from us.
-        //
-        // Same correction as the margin-refund failure above: money moved, so
-        // the bookkeeping runs and the operator is told what did not happen.
-        cancelFailedReason = cancErr.message;
-      }
-
-      // Pause any pending future installments. Use the existing
-      // 'paused_program_cancelled' status (defined in the installments CHECK
-      // constraint) so process-installments leaves them alone.
-      const { error: pauseErr } = await supabase
-        .from('installments')
-        .update({ status: 'paused_program_cancelled', last_attempt_at: nowIso })
-        .eq('registration_id', registrationId)
-        .eq('status', 'pending');
-      if (pauseErr) {
-        console.warn('[refund] pause pending installments failed (non-fatal):', pauseErr);
+      // ONE implementation, shared with the withdraw-only path above. This used
+      // to be a second copy that cancelled FIRST and then paused, treating a
+      // failed pause as a console.warn - so a refunded family whose pause failed
+      // kept being charged on a cancelled registration and the only trace was a
+      // log line nobody reads. The helper pauses first and refuses to cancel a
+      // registration whose charges it could not stop.
+      //
+      // DO NOT RETURN on failure here: money has already moved, so the receipt
+      // and the bookkeeping below must still run and the operator is told what
+      // did not happen.
+      const { pauseError, cancelError } =
+        await stopChargesAndCancel(supabase, registrationId, nowIso);
+      if (pauseError) {
+        console.error('[refund] pausing pending installments failed:', pauseError);
+        // Surfaced to the operator through the same field as a failed cancel,
+        // because the consequence they need to act on is identical: this
+        // registration is not fully wound down and its charges may still fire.
+        cancelFailedReason =
+          `could not stop this registration's future payments (${pauseError}) - the registration was left active on purpose; try again`;
+      } else if (cancelError) {
+        console.error('[refund] registration cancel failed:', cancelError);
+        cancelFailedReason = cancelError;
       }
     }
 
@@ -952,8 +1016,10 @@ serve(async (req: Request) => {
       await logEnrollmentEvent(supabase, {
         ...eventBase,
         actionType: ENROLLMENT_ACTIONS.CANCELLED,
-        metadata: { via: 'refund' },
-        dedupeKey: `cancelled:${registrationId}`,
+        metadata: { via: 'refund', reason },
+        // Scoped by `via` - see the withdraw path. A shared key let one of these
+        // two events dedupe the other away on the same registration.
+        dedupeKey: `cancelled:${registrationId}:refund`,
       });
     }
 
