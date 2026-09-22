@@ -28,6 +28,7 @@ import { venueLabel } from '../_shared/roomLabel.ts';
 import { htmlToPlainText } from '../_shared/familyEmailHtml.ts';
 import {
   excludeHouseholds,
+  isCoveredByEarlierClass,
   groupRecipientsByAddress,
   sendFamilyEmails,
   tallyFamilySends,
@@ -337,6 +338,25 @@ serve(async (req: Request) => {
     if (mode === 'preview') {
       return json({
         mode: 'preview',
+        // WHICH CONTRACT THIS FUNCTION SPEAKS, stated outright rather than
+        // inferred from some incidental field being present.
+        //
+        // The screen refuses a multi-class send unless the deployed function
+        // honours the exclusion that stops a cross-enrolled family being
+        // emailed twice. It used to infer that from `household_count` appearing
+        // in this response - which was true of the version that took ONE merged
+        // exclusion list, and stayed true when this version split it into three.
+        // So a new screen against the previous function would have read "yes,
+        // it dedupes", sent the batch households under a field that function
+        // never reads, and emailed the 67 cross-enrolled families once per
+        // class. An incidental field answers the question it happens to
+        // correlate with; a version answers the question asked.
+        //
+        // 2 = honours exclude_parent_ids / already_emailed_parent_ids /
+        //     already_sent_parent_ids separately, and reports 'covered'.
+        // Bump this whenever the send contract changes, and raise the minimum
+        // the screen requires in the same commit.
+        send_contract: 2,
         program: { id: programId, name: programName, summary: programSummary },
         include_waitlist: includeWaitlist,
         include_cancelled: includeCancelled,
@@ -569,9 +589,9 @@ serve(async (req: Request) => {
     // whose earlier send failed (addressed, never delivered), both fall through
     // to the honest 'no_recipients' - the class keeps its tick and nobody is
     // told a message arrived that did not.
-    const coveredElsewhere = afterOperator.length > 0
-      && grouped.sendable.length === 0
-      && afterOperator.every((g) => sentElsewhere.has(g.parent_id));
+    const coveredElsewhere = isCoveredByEarlierClass(
+      afterOperator, grouped.sendable, sentElsewhere,
+    );
     // NOBODY REACHABLE IS NOT A SEND. Recorded with its own status rather than
     // as a successful send of zero emails, because "sent" against 0 recipients
     // is the shape that lets a class go un-notified while the log looks fine.

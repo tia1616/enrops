@@ -72,6 +72,19 @@ const PREVIEW_CACHE_MS = 60_000;
 // composer. One list, newest first.
 const SENT_HISTORY_LIMIT = 100;
 
+// THE VERSION OF notify-program-families THIS SCREEN NEEDS to keep its promise
+// that a family in several of the selected classes hears the message once.
+//
+// 2 is the first version that reads the operator's exclusions, the batch's
+// already-emailed households and the already-SENT households as three separate
+// lists. Against version 1 - which is what is deployed right now - the batch
+// list arrives under a field it does not read, so every cross-enrolled family
+// would get one copy per class. The screen refuses the multi-class send rather
+// than make a promise the deployed function cannot keep.
+//
+// Raise this in the SAME commit that changes the function's own send_contract.
+const REQUIRED_SEND_CONTRACT = 2;
+
 // Every placeholder the edge function fills, said in plain words and grouped the
 // way an operator thinks about them. Not a jargon list: the palette shows
 // "The parent's first name", never "{parent_first_name} interpolation".
@@ -476,18 +489,29 @@ export default function MessageFamiliesModal({ programs, orgId, onClose, onSent 
           unreachable,
           recipient_count: recipients.length,
           unreachable_count: unreachable.length,
-          // DOES THE SERVER CARRY THIS RELEASE? Asked of the RESPONSE SHAPE,
-          // not of the rows. `household_count` is returned only by a function
-          // that also honours `exclude_parent_ids`; the previous probe - every
-          // recipient row has a parent_id - asked a question the data could
-          // answer wrongly, because the guardian branch of the recipients
-          // function passes `parent_id` straight through and a registration is
-          // allowed to have none. One such row anywhere in any selected class
-          // would have refused every multi-class send with "the server has not
-          // been updated yet", about a server that had.
-          // (Zero such rows on prod today, 1152 registrations. Still wrong.)
-          server_has_households: perClass.length > 0
-            && perClass.every(({ json }) => typeof json.household_count === "number"),
+          // DOES THE DEPLOYED FUNCTION HONOUR THE DEDUPE? Asked of the version
+          // it declares, not of anything we infer.
+          //
+          // Two wrong answers to this question have already been written. The
+          // first asked whether every recipient row carried a parent_id - which
+          // the DATA is allowed to break, since the guardian branch of
+          // `program_message_recipients` passes a nullable column straight
+          // through, so one row could refuse every multi-class send against a
+          // server that was fine. The second asked whether `household_count`
+          // came back - true of the PREVIOUS function too, which takes one
+          // merged exclusion list and would silently ignore the split lists
+          // this screen now sends, emailing the 67 cross-enrolled families once
+          // per class under a line promising exactly once.
+          //
+          // A declared version cannot drift from the behaviour it describes,
+          // because changing the behaviour is what bumps it.
+          // The LOWEST any selected class answered - one stale reply is enough
+          // to refuse. Empty means nothing answered, which is not a yes:
+          // Math.min() of nothing is Infinity, which would have read as the
+          // newest server in existence.
+          send_contract: perClass.length
+            ? Math.min(...perClass.map(({ json }) => Number(json.send_contract) || 0))
+            : 0,
           per_class: perClass.map((p) => ({ programId: p.programId, count: p.json.recipient_count })),
         });
       } catch (e) {
@@ -874,17 +898,23 @@ export default function MessageFamiliesModal({ programs, orgId, onClose, onSent 
   // prevent.
   useEffect(() => { setExcluded(new Set()); }, [includeWaitlist, includeCancelled]);
 
-  // CAN WE TELL HOUSEHOLDS APART AT ALL? `parent_id` arrives only from a server
-  // that has this release. Against an older one every row falls back to keying
-  // on its own address, so the list silently becomes one row per INBOX - and
-  // unticking Rosemary would leave Jim receiving it, which is the exact defect
-  // this control exists to prevent. Offer no control rather than one that lies:
-  // the picker is hidden until the function that honours it is deployed.
-  // EVERY ROW OF SOMETHING, not every row of nothing. `[].every()` is true, so
-  // while the preview was still loading this read as "the server has the
-  // release" and the panel printed its green promise - a family in two of these
-  // hears it once - on no evidence at all, then flipped to the amber refusal a
-  // moment later. A capability probe with no rows to probe has not answered.
+  // CAN THE SERVER TELL HOUSEHOLDS APART AT ALL?
+  //
+  // It matters twice: the household picker drops a family by `parent_id`, and
+  // the multi-class send only avoids emailing a cross-enrolled family twice
+  // because the function honours the exclusion. Against a server without this
+  // release both are lies - the picker would key on an address, so unticking
+  // Rosemary would leave Jim receiving it, and the "hears it once" promise
+  // would be kept by nobody. Offer neither until the function is deployed.
+  //
+  // ASKED OF THE RESPONSE SHAPE. `household_count` is returned only by a
+  // function that also honours the exclusion (both arrived in the same commit),
+  // so it answers the deploy question directly. The previous probe asked
+  // whether EVERY recipient row carried a parent_id, which the data is allowed
+  // to break: the guardian branch of `program_message_recipients` passes
+  // `registrations.parent_id` straight through and that column is nullable, so
+  // one such row anywhere would have refused every multi-class send with "the
+  // server has not been updated yet" - about a server that had.
   //
   // Three answers, not two: yes, no, and NOT YET. Everything downstream used to
   // collapse "not yet" into "no", which is how the panel came to print a
@@ -893,7 +923,7 @@ export default function MessageFamiliesModal({ programs, orgId, onClose, onSent 
   // the recipient list was still loading, then flipped to the amber refusal.
   const pickSupport = preview === null || previewError
     ? "unknown"
-    : preview.server_has_households ? "yes" : "no";
+    : (preview.send_contract ?? 0) >= REQUIRED_SEND_CONTRACT ? "yes" : "no";
   // The send guard and the household picker both want the strict reading: only
   // a server that has PROVED it carries the release.
   const canPick = pickSupport === "yes";
