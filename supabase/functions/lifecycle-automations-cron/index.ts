@@ -65,6 +65,7 @@ import {
   welcomeVerdict,
   type WelcomeWindow,
 } from "./welcomeWindow.ts";
+import { claimSend, loadPriorSends, type PriorSend } from "./sendLedger.ts";
 import { venueLabel } from "../_shared/roomLabel.ts";
 import { runWaitlistSweep } from "./waitlistSweep.ts";
 import { offeringIdOf, buildResolvedIndex, isGenuinelyAbandoned } from "./abandonedSuppression.ts";
@@ -503,16 +504,31 @@ async function runAutomation(
   // row counted as done, but failures wrote no row at all, so this set only ever
   // held successes; now that failures are recorded, the status filter is what
   // keeps them retryable instead of being mistaken for "already handled".)
+  //
+  // CHUNKED, AND IT THROWS ON ERROR. Both halves of that sentence are load-
+  // bearing, and 2026-09-22 is why. A single `.in("context_key", [102 keys])`
+  // builds a ~14KB GET; past ~101 keys of this shape the request line overflows
+  // the HTTP header buffer and dies BEFORE reaching PostgREST ("Headers Overflow
+  // Error"). The old code destructured only `data`, so that failure read as
+  // "no prior rows exist" — every family looked new, and the welcome went out
+  // again on every 15-minute sweep. 93 J2S families got 8 copies each.
+  // The same shape had already burned marketing-draft-campaign once (see its
+  // `.in("id", [778 uuids])` note); the lifecycle cron was never swept for it.
+  // A pre-check we cannot trust must STOP the run, never wave it through: the
+  // failure mode of sending blind is mailing the whole audience again.
   const contextKeys = audience.map((e) => e.context_key);
-  const { data: priorRows } = await supabase
-    .from("automation_run_recipients")
-    .select("context_key, status, attempts")
-    .eq("automation_id", a.id)
-    .in("context_key", contextKeys);
-  const priorByKey = new Map<string, { status: string; attempts: number }>(
-    (priorRows ?? []).map((r: { context_key: string; status: string; attempts: number | null }) =>
-      [r.context_key, { status: r.status, attempts: r.attempts ?? 0 }]),
-  );
+  let priorByKey: Map<string, PriorSend>;
+  try {
+    priorByKey = await loadPriorSends(supabase, a.id, contextKeys);
+  } catch (e) {
+    // Leave an honest run row behind rather than one stuck on 'sending', then
+    // re-throw so the per-automation catch in serve() records it and NOTHING
+    // is sent for this automation on this run.
+    await supabase.from("automation_runs")
+      .update({ status: "failed", error_message: (e as Error).message })
+      .eq("id", runRow.id);
+    throw e;
+  }
   const isDone = (contextKey: string): boolean => {
     const p = priorByKey.get(contextKey);
     if (!p) return false;
@@ -561,7 +577,13 @@ async function runAutomation(
         priorByKey.get(entry.context_key)?.attempts ?? 0),
     ));
     for (const r of results) {
-      if (r.status === "fulfilled" && r.value === "sent") sent += 1;
+      if (r.status !== "fulfilled") { failed += 1; continue; }
+      // "skipped" is a concurrent run holding the claim — that run mails this
+      // family, so it is neither a send of ours nor a delivery failure. Counting
+      // it as failed would put a healthy family in the "Didn't send" panel and
+      // write "N of M sends failed" onto a run that lost a harmless race.
+      if (r.value === "sent") sent += 1;
+      else if (r.value === "skipped") skipped += 1;
       else failed += 1;
     }
   }
@@ -615,7 +637,7 @@ async function sendOne(
   downloadButtonsText: string,
   resendAttachments: { filename: string; content: string }[],
   priorAttempts: number,
-): Promise<"sent" | "failed"> {
+): Promise<"sent" | "failed" | "skipped"> {
   const tokens = buildTokens(entry, brand);
   // A resolver may attach per-entry copy (entry.subject_template/body_template)
   // to tailor a message by recipient role — no_school_day uses this to send
@@ -660,6 +682,23 @@ async function sendOne(
   const plainText = unsubscribeUrl
     ? `${plainBody}\n\nUnsubscribe: ${unsubscribeUrl}`
     : plainBody;
+
+  // CLAIM THE SEND BEFORE MAILING IT. The pre-check above is a READ, and two
+  // runs can both pass it: prod fires the daily cron (0 15 * * *) and the
+  // 15-minute welcome sweep at the same instant, and on 2026-09-21 and -22 the
+  // two overlapped by ~30 seconds and each mailed the full audience. Writing the
+  // ledger row FIRST turns UNIQUE(automation_id, context_key) into the guard the
+  // table was built to be ("the cron uses the conflict to dedupe" — see the
+  // 20260603 migration): whoever writes wins, the loser skips WITHOUT sending.
+  const claimed = await claimSend(supabase, {
+    automationId: a.id,
+    organizationId: a.organization_id,
+    runId,
+    parentId: entry.parent_id,
+    contextKey: entry.context_key,
+    email: entry.parent_email,
+  }, priorAttempts);
+  if (!claimed) return "skipped";
 
   // Send with a short in-run retry: a transient Resend failure (429 rate-limit,
   // 5xx, or a network blip) is retried a few times with exponential backoff so a
