@@ -120,7 +120,7 @@ function fmtWhen(iso) {
  * composer, reached from the two natural places: tick several classes and press
  * the button above the list, or press the button on a single class's row.
  */
-export default function MessageFamiliesModal({ programs, orgId, onClose }) {
+export default function MessageFamiliesModal({ programs, orgId, onClose, onSent }) {
   // The class the panel is titled after and whose name fills a merge field in
   // the test send. With several, it is simply the first.
   const program = programs?.[0];
@@ -560,6 +560,10 @@ export default function MessageFamiliesModal({ programs, orgId, onClose }) {
         results: perClass.flatMap((p) => (p.results ?? []).map((r) => ({ ...r, class_label: p.label }))),
       });
       setPhase("done");
+      // The batch ran. The caller's selection has been spent, and it is the
+      // caller's to clear - reported here rather than on close, because closing
+      // after cancelling must NOT discard a selection that was never used.
+      onSent?.();
     } catch (e) {
       setProgress(null);
       setError((e.message ?? "The connection dropped before this finished.")

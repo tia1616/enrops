@@ -2416,23 +2416,10 @@ function AfterschoolRostersSection({ org, canEdit }) {
   // modal for the page, fed either by the ticked rows or by a single row's own
   // button.
   const [messagingPrograms, setMessagingPrograms] = useState(null);
+  // One line of explanation for the times the selection changes under the
+  // operator rather than because of them.
+  const [pickNote, setPickNote] = useState("");
   const [query, setQuery] = useState("");
-
-  // A TICK FOLLOWS ITS CLASS. The checkbox only exists while a class has
-  // families, but nothing used to remove the id when a count fell to zero - so
-  // emptying a ticked class's roster left it selected and invisible, the button
-  // kept counting it, and the send wrote that class a Sent-tab entry for a
-  // message nobody received. Pruned wherever the counts change, and `prev` is
-  // returned unchanged when there is nothing to drop so this cannot loop.
-  useEffect(() => {
-    if (!programs) return;
-    setPicked((prev) => {
-      if (prev.size === 0) return prev;
-      const messageable = new Set(programs.filter((p) => p.enrolled > 0).map((p) => p.id));
-      const next = new Set([...prev].filter((id) => messageable.has(id)));
-      return next.size === prev.size ? prev : next;
-    });
-  }, [programs]);
 
   useEffect(() => {
     if (!org?.id) return;
@@ -2566,6 +2553,31 @@ function AfterschoolRostersSection({ org, canEdit }) {
   const visible = useMemo(() => filterRosterPrograms(programs ?? [], query), [programs, query]);
   const searching = query.trim() !== "";
 
+  // THE SELECTION, DERIVED RATHER THAN REPAIRED.
+  //
+  // `picked` is raw storage: whatever the operator has clicked. What the screen
+  // and the send are allowed to use is this - the ticks that still point at a
+  // class with families to message.
+  //
+  // It was a useEffect that pruned `picked` after the fact, which is derived
+  // state synchronised a render too late: emptying a ticked class's roster
+  // painted one frame counting a class that no longer qualified, then corrected
+  // itself. A brief wrong count on the control whose trustworthiness is the
+  // whole point. Deriving during render makes the desync window not exist
+  // rather than closing it quickly.
+  const messageableIds = useMemo(
+    () => new Set((programs ?? []).filter((p) => p.enrolled > 0).map((p) => p.id)),
+    [programs],
+  );
+  const pickedLive = useMemo(
+    () => new Set([...picked].filter((id) => messageableIds.has(id))),
+    [picked, messageableIds],
+  );
+  // Ticked, but the current search is hiding them. Computed once: the badge and
+  // the condition that shows it have to agree, and two copies of one expression
+  // is how they stop agreeing.
+  const pickedHiddenCount = pickedLive.size - visible.filter((p) => pickedLive.has(p.id)).length;
+
   return (
     <div style={{ marginBottom: 28 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, gap: 12, flexWrap: "wrap" }}>
@@ -2676,11 +2688,11 @@ function AfterschoolRostersSection({ org, canEdit }) {
           "ticked but hidden" note away while the ticks were still held - which
           reads as "my selection was lost", and the next thing an operator does
           is change term, which really does discard it. */}
-      {canEdit && programs !== null && (picked.size > 0 || visible.some((p) => p.enrolled > 0)) && (
+      {canEdit && programs !== null && (pickedLive.size > 0 || visible.some((p) => p.enrolled > 0)) && (
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
           <button
             type="button"
-            disabled={picked.size === 0}
+            disabled={pickedLive.size === 0}
             onClick={() => {
               // Built from the WHOLE term's list, not the filtered view. Ticks
               // deliberately survive the search box - searching "Mario", ticking
@@ -2691,32 +2703,35 @@ function AfterschoolRostersSection({ org, canEdit }) {
               // In list order, because that order decides which class a family
               // in several of them hears about.
               const chosen = (programs ?? [])
-                .filter((p) => picked.has(p.id))
+                .filter((p) => pickedLive.has(p.id))
                 .map((p) => ({ id: p.id, curriculum: p.curriculum }));
-              // NOTHING LEFT TO WRITE TO. The prune above makes this very hard
-              // to reach, but opening a composer titled "This class" that says
-              // 0 families and refuses to send, with nothing explaining why, is
-              // the kind of dead end this panel exists to avoid. Drop the stale
-              // ticks instead; the button returns to its "tick classes below"
-              // state, which says what to do next.
-              if (chosen.length === 0) { setPicked(new Set()); return; }
+              // Unreachable while the button is disabled on an empty selection,
+              // and kept anyway: opening a composer titled "This class" saying
+              // 0 families with a dead Send, and no word about why, is the dead
+              // end this panel exists to avoid.
+              if (chosen.length === 0) {
+                setPicked(new Set());
+                setPickNote("Those classes no longer have families to message, so the selection was cleared.");
+                return;
+              }
+              setPickNote("");
               setMessagingPrograms(chosen);
             }}
             style={{
-              padding: "7px 14px", background: picked.size ? BRIGHT : "transparent",
-              color: picked.size ? "#fff" : MUTED,
-              border: `1px solid ${picked.size ? BRIGHT : RULE}`, borderRadius: 6,
+              padding: "7px 14px", background: pickedLive.size ? BRIGHT : "transparent",
+              color: pickedLive.size ? "#fff" : MUTED,
+              border: `1px solid ${pickedLive.size ? BRIGHT : RULE}`, borderRadius: 6,
               fontSize: 12.5, fontWeight: 600, fontFamily: "inherit",
-              cursor: picked.size ? "pointer" : "not-allowed",
+              cursor: pickedLive.size ? "pointer" : "not-allowed",
             }}
             title="Write one message and send it to every class you have ticked."
           >
-            {picked.size === 0
+            {pickedLive.size === 0
               ? "Message families - tick classes below"
-              : `Message families (${picked.size} ${picked.size === 1 ? "class" : "classes"})`}
+              : `Message families (${pickedLive.size} ${pickedLive.size === 1 ? "class" : "classes"})`}
           </button>
-          {picked.size > 0 && (
-            <button type="button" onClick={() => setPicked(new Set())}
+          {pickedLive.size > 0 && (
+            <button type="button" onClick={() => { setPicked(new Set()); setPickNote(""); }}
               style={{ background: "none", border: "none", color: BRIGHT, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer", padding: 0, textDecoration: "underline" }}>
               Clear
             </button>
@@ -2724,11 +2739,13 @@ function AfterschoolRostersSection({ org, canEdit }) {
           {/* Ticks survive the search box, so some of them can be off screen.
               Saying so is the difference between a count an operator trusts and
               one they have to reconcile. */}
-          {picked.size > visible.filter((p) => picked.has(p.id)).length && (
+          {pickedHiddenCount > 0 && (
             <span style={{ fontSize: 11.5, color: MUTED }}>
-              {picked.size - visible.filter((p) => picked.has(p.id)).length} ticked but hidden by the search
+              {pickedHiddenCount} ticked but hidden by the search
             </span>
           )}
+          {/* Says what happened rather than only undoing it. */}
+          {pickNote && <span style={{ fontSize: 11.5, color: MUTED }}>{pickNote}</span>}
         </div>
       )}
       {programs !== null && visible.length > 0 && (
@@ -2746,7 +2763,11 @@ function AfterschoolRostersSection({ org, canEdit }) {
               onEmail={() => setEmailingProgram(p)}
               subtitle={subtitleFor(p)}
               onChanged={() => refreshProgramCount(p.id)}
-              picked={picked.has(p.id)}
+              // pickedLive, not picked: one source of truth for what counts as
+              // ticked. They agree for any row that renders a checkbox - it only
+              // renders when the class has families - so this is about there
+              // being no second answer to the question, not about behaviour.
+              picked={pickedLive.has(p.id)}
               onPick={() => setPicked((prev) => {
                 const next = new Set(prev);
                 if (next.has(p.id)) next.delete(p.id); else next.add(p.id);
@@ -2764,6 +2785,14 @@ function AfterschoolRostersSection({ org, canEdit }) {
         <MessageFamiliesModal
           programs={messagingPrograms}
           orgId={org?.id}
+          // A SELECTION THAT HAS BEEN USED IS SPENT. Closing used to clear only
+          // the open message, so classes that had already been messaged stayed
+          // ticked: tick three, send, then later tick two more meaning to reach
+          // only those two, and all five go out - three of them for the second
+          // time, with no duplicate warning because the subject differs. The
+          // composer reports the send so the ticks can go with it; cancelling
+          // without sending leaves them, because then nothing was spent.
+          onSent={() => { setPicked(new Set()); setPickNote(""); }}
           onClose={() => setMessagingPrograms(null)}
         />
       )}
