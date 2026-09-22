@@ -468,12 +468,30 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
                       panel above - so the condition is just the typed zero. */}
                   {withdrawNoRefund && (
                     <div style={{ marginTop: 10, padding: "10px 12px", background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, color: "#7c2d12", fontSize: 12.5, lineHeight: 1.5 }} role="alert">
-                      You typed $0, so <strong>no money goes back to the family</strong>. Their {fmtCents(refundableCents)} stays with you.
-                      {pendingChargesUnknown
-                        ? " Their spot is freed. We couldn't check this class's scheduled payments, so check their payment plan afterwards."
-                        : pendingCharges.length > 0
-                          ? ` Their spot is freed and ${pendingCharges.length === 1 ? "the 1 scheduled payment" : `all ${pendingCharges.length} scheduled payments`} for this class ${pendingCharges.length === 1 ? "is" : "are"} stopped. Other terms are separate and are not affected.`
-                          : " Their spot is freed."}
+                      <div>
+                        You typed $0, so <strong>no money goes back to the family</strong>. Their {fmtCents(refundableCents)} stays with you, and their spot is freed.
+                      </div>
+                      {pendingChargesUnknown ? (
+                        <div style={{ marginTop: 6 }}>
+                          We couldn't check this class's scheduled payments, so check their payment plan afterwards.
+                        </div>
+                      ) : pendingCharges.length > 0 ? (
+                        <>
+                          {/* ITEMISED, not counted. "2 payments are stopped" asks an
+                              operator to take it on trust; the amounts and dates let
+                              them recognise the plan they are cancelling - and catch
+                              it if the drawer is showing the wrong family. */}
+                          <div style={{ marginTop: 6 }}>These scheduled payments are stopped:</div>
+                          <ul style={{ margin: "4px 0 0", paddingLeft: 18, lineHeight: 1.7 }}>
+                            {pendingCharges.map((c) => (
+                              <li key={c.id}>
+                                <strong>{fmtCents(c.amount_cents)}</strong>{fmtDue(c.due_date) ? ` on ${fmtDue(c.due_date)}` : ""}
+                              </li>
+                            ))}
+                          </ul>
+                          <div style={{ marginTop: 4 }}>Other terms are separate and are not affected.</div>
+                        </>
+                      ) : null}
                     </div>
                   )}
                 </div>
@@ -488,8 +506,15 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
                   style={{ width: "100%", boxSizing: "border-box", padding: "8px 12px", fontSize: 13, border: `1px solid ${RULE}`, borderRadius: 6, fontFamily: "inherit" }}
                 />
 
+                {/* This footer described a refund unconditionally, so in the
+                    withdraw-without-refunding state it promised the family a
+                    Stripe confirmation for money that never moves - the drawer
+                    telling an operator the opposite of what it is about to do.
+                    Caught by Jessica on staging, 2026-09-22. */}
                 <p style={{ color: MUTED, fontSize: 11.5, marginTop: 10, lineHeight: 1.5 }}>
-                  Stripe sends the family its own refund confirmation automatically. The money comes back from your Stripe balance.
+                  {withdrawNoRefund
+                    ? "No money moves, so the family is not emailed — Stripe only writes to them when a refund actually happens. Tell them yourself if they should know."
+                    : "Stripe sends the family its own refund confirmation automatically. The money comes back from your Stripe balance."}
                 </p>
               </>
             )}
