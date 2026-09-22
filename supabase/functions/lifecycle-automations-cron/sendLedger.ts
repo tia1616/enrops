@@ -104,8 +104,21 @@ export interface ClaimTarget {
  * once. A false explanation on that screen is precisely the lie this table was
  * built to prevent, so the claim must be undone rather than left to accumulate.
  *
- * Called before the pre-check so a repaired row is eligible again on the same
- * run. Returns how many it repaired (normally 0).
+ * NOT CALLED BY ANYTHING TODAY, AND THAT IS DELIBERATE. This docstring used to
+ * say "called before the pre-check so a repaired row is eligible again on the
+ * same run"; index.ts says `DELIBERATELY NOT CALLING reclaimStaleClaims HERE`
+ * and has since 2026-09-22, because handing the attempt back removes the only
+ * termination guarantee this file has. A row still holding CLAIM_MARKER is not
+ * evidence the email never went out - sendOne writes the claim BEFORE Resend -
+ * so reclaiming it can re-mail a family whose outcome write keeps failing, every
+ * day, forever, instead of five times and stopping.
+ *
+ * So: the tests below it pin behaviour that production does not run. Keep them -
+ * they are what makes it safe to re-enable - but do not read them as cover for
+ * interrupted sends. An interrupted run still burns one of MAX_SEND_ATTEMPTS,
+ * which is the open half of the duplicate-welcome incident.
+ *
+ * Returns how many it repaired (normally 0).
  *
  * Scoped to the automation, NOT to today's audience, so one run with anybody in
  * it repairs every stale claim that automation holds. The one row this cannot

@@ -1,27 +1,48 @@
-// Every money column on `organizations` must be BOTH locked against operator
-// edits and written to the audit trail. Neither list fails when you forget it,
-// which is exactly how two columns went unprotected for three days.
+// Every money column on `organizations` must be classified: locked against
+// operator edits, written to the audit trail, or deliberately neither WITH A
+// WRITTEN REASON. Nothing fails when you forget one, which is exactly how two
+// columns went unprotected for three days.
 //
 // WHAT HAPPENED, 2026-09-18 to 2026-09-21. platform_fee_ach_cap_cents and
 // platform_fee_override_until shipped, and neither was added to
 // guard_organizations_locked_columns or audit_organization_money. Because
-// members_update_own_org lets any org ADMIN update their own row, that made
-// them the only money columns an operator could change on their own
-// organisation, and the only ones that could change with no record of who did
-// it. The end date IS the negotiated agreement - an operator who can move their
-// own expiry keeps a negotiated rate forever - and a bank ceiling of 1c means
-// Enrops collects nothing on bank payments. Neither was reachable by a family
-// and nothing had actually been changed, but nothing had stopped it either.
+// members_update_own_org lets any org ADMIN update their own row - it is
+// `FOR UPDATE USING (...)` with NO WITH CHECK - that made them the only money
+// columns an operator could change on their own organisation, and the only ones
+// that could change with no record of who did it.
 //
-// THE SOURCE OF TRUTH IS ORG_FEE_COLUMNS, deliberately. A new fee column has to
-// be added there or resolveFeeConfig cannot read it, so nobody can add one and
-// skip this test by forgetting a list. That is the whole design: the list that
-// is impossible to forget drives the two lists that are easy to forget.
+// AND THEN, 2026-09-22, THIS TEST FAILED TO CATCH TWO MORE. stripe_charge_model
+// and withdrawal_admin_fee_cents were in the same position and this file said
+// nothing, because of three defects fixed in this rewrite:
+//
+//   1. IT READ A LIST NOTHING MAINTAINS. The old version drove itself from
+//      ORG_FEE_COLUMNS in feeConfig.ts and claimed "a new column has to be added
+//      there or resolveFeeConfig cannot read it". That is FALSE: that constant
+//      is exported and read by NOTHING in production - every caller hand-writes
+//      its own select list - so it cannot grow when the schema does. It now
+//      drives itself from THE MIGRATIONS THEMSELVES, so a money column added by
+//      any migration is in scope automatically, whether or not anybody
+//      remembered this file.
+//
+//   2. IT MATCHED BARE COLUMN NAMES. `body.includes('stripe_fee_payer')` is
+//      satisfied by the column's name appearing in the guard's RAISE message, so
+//      deleting the real lock while leaving the prose behind read as green.
+//      Proved by deleting it. It now matches the FUNCTIONAL clause,
+//      `NEW.<col> IS DISTINCT FROM OLD.<col>`, which is the thing that actually
+//      does the work.
+//
+//   3. IT ASSUMED $$ QUOTING. 32 migration files use `AS $function$` against 29
+//      using `AS $$`, and both previous definitions of the guard used
+//      $function$ - it is what pg_get_functiondef emits. Taking the first `$$`
+//      after the CREATE then ran the slice past the end of the function and into
+//      unrelated statements, so columns matched text belonging to other code. It
+//      now reads the actual dollar-quote tag and finds its true partner.
 //
 // SCOPE, honestly. This reads the MIGRATIONS - the repo's intent - not the live
-// databases. A function edited directly in a database would not be caught here.
-// Both databases were read back and confirmed to match on 2026-09-21; the
-// standing way to re-check is `select prosrc from pg_proc` on each.
+// databases. A function edited directly in a database would not be caught here,
+// and neither would a trigger dropped by hand. Both databases were read back and
+// confirmed to match on 2026-09-22; the standing way to re-check is
+// `select md5(prosrc) from pg_proc` on each.
 
 import { assert, assertEquals } from 'https://deno.land/std@0.208.0/assert/mod.ts';
 import { ORG_FEE_COLUMNS } from '../feeConfig.ts';
@@ -29,110 +50,296 @@ import { ORG_FEE_COLUMNS } from '../feeConfig.ts';
 const MIGRATIONS = new URL('../../../migrations/', import.meta.url);
 
 /**
- * The body of JUST `fnName`, from the LAST migration that defines it.
+ * Migration filenames in apply order, newest last.
  *
- * Last by filename, because migration filenames are date-ordered and the newest
- * definition is the one the database ends up with. Reading an earlier one would
- * let a column that was since removed still satisfy this test.
+ * Plain lexicographic sort is NOT apply order when two migrations share a
+ * version prefix - and five groups already do (20260810f, 20260810g, 20260907b,
+ * 20260908a, 20260921a). Within a tie the topic name silently decides, so a
+ * same-day corrective migration named `20260921a_fix_org_guard.sql` would sort
+ * BEFORE `20260921a_guard_and_audit_...` and this file would keep reading the
+ * superseded definition while the database had the corrected one.
  *
- * THE SLICE MATTERS, and the first version of this test got it wrong. Searching
- * the whole FILE passes for the wrong reason: the 2026-09-21 migration defines
- * BOTH functions, so "is this column locked?" was satisfied by the column
- * appearing in the AUDIT function sitting below it in the same file. The test
- * told me so by failing on the one case where the two lists legitimately
- * differ. Only the function's own body counts.
+ * Ties are allowed - they exist and are harmless in general - but a tie BETWEEN
+ * TWO FILES THAT BOTH DEFINE THE SAME FUNCTION is not, because then nobody can
+ * say which one the database ended up with. That case fails loudly below.
  */
-function latestDefinitionOf(fnName: string): { file: string; body: string } {
-  const files = [...Deno.readDirSync(MIGRATIONS)]
+function migrationFiles(): string[] {
+  return [...Deno.readDirSync(MIGRATIONS)]
     .filter((e) => e.isFile && e.name.endsWith('.sql'))
     .map((e) => e.name)
     .sort();
+}
 
-  const re = new RegExp(`CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+(?:public\\.)?${fnName}\\s*\\(`, 'i');
+const VERSION_PREFIX = /^([0-9]{8}[a-z]?)/;
+
+/**
+ * The body of JUST `fnName`, from the LAST migration that defines it.
+ *
+ * THE DOLLAR QUOTE IS READ, NOT ASSUMED. `AS $$`, `AS $function$` and `AS $_$`
+ * are all legal and all appear in this repo. Taking `indexOf('$$')` on a
+ * $function$-quoted body skips the whole function and lands on some later `$$`,
+ * producing a slice that spans unrelated statements - which passes, wrongly.
+ *
+ * THE SLICE MATTERS, and the first version of this test got it wrong the other
+ * way too: searching the whole FILE passes for the wrong reason, because the
+ * 2026-09-21 migration defines BOTH functions and "is this column locked?" was
+ * satisfied by the column appearing in the AUDIT function below it. Only the
+ * function's own body counts.
+ */
+function latestDefinitionOf(fnName: string): { file: string; body: string } {
+  const files = migrationFiles();
+  const re = new RegExp(
+    `CREATE\\s+(?:OR\\s+REPLACE\\s+)?FUNCTION\\s+(?:public\\.)?${fnName}\\s*\\(`,
+    'i',
+  );
 
   // Find the LAST file that defines it before extracting anything. Extracting
   // inside the loop made the test fail on a July migration that quotes its body
   // differently - a definition that has since been replaced and is nobody's
-  // business here. Only the newest definition is the one the database has.
-  let latest: { name: string; src: string; at: number } | null = null;
+  // business here.
+  const definers: { name: string; src: string; at: number }[] = [];
   for (const name of files) {
     const src = Deno.readTextFileSync(new URL(name, MIGRATIONS));
     const m = re.exec(src);
-    if (m) latest = { name, src, at: m.index };
+    if (m) definers.push({ name, src, at: m.index });
   }
   assert(
-    latest,
+    definers.length > 0,
     `no migration defines ${fnName} any more. If it was renamed, this test needs the new name - do not delete the test.`,
   );
 
-  // From the CREATE to the end of its dollar-quoted body.
-  const { name, src, at } = latest!;
-  const open = src.indexOf('$$', at);
-  assert(open !== -1, `the newest ${fnName} (${name}) is not quoted with $$; this test needs updating`);
-  const close = src.indexOf('$$', open + 2);
-  assert(close !== -1, `the newest ${fnName} (${name}) has an unterminated $$ body`);
-  return { file: name, body: src.slice(at, close + 2) };
+  // A prefix tie between two definers of the SAME function means apply order is
+  // unknowable from the filenames. Refuse to guess.
+  const last = definers[definers.length - 1];
+  if (definers.length > 1) {
+    const prev = definers[definers.length - 2];
+    const pa = VERSION_PREFIX.exec(last.name)?.[1];
+    const pb = VERSION_PREFIX.exec(prev.name)?.[1];
+    assert(
+      !pa || !pb || pa !== pb,
+      `${last.name} and ${prev.name} share the version prefix "${pa}" and BOTH define ${fnName}, ` +
+        `so which one the database applied last cannot be read off the filenames. Rename one.`,
+    );
+  }
+
+  const { name, src, at } = last;
+
+  // Read the dollar-quote tag the function actually uses, then find ITS partner.
+  const tagMatch = /\bAS\s+(\$[A-Za-z_0-9]*\$)/i.exec(src.slice(at));
+  assert(
+    tagMatch,
+    `the newest ${fnName} (${name}) has no "AS $tag$" body; this test needs updating`,
+  );
+  const tag = tagMatch![1];
+  const open = at + tagMatch!.index + tagMatch![0].length - tag.length;
+  const close = src.indexOf(tag, open + tag.length);
+  assert(close !== -1, `the newest ${fnName} (${name}) has an unterminated ${tag} body`);
+  return { file: name, body: src.slice(at, close + tag.length) };
 }
 
-/** The fee columns, from the one list a new column cannot avoid being added to. */
-const FEE_COLUMNS = ORG_FEE_COLUMNS.split(',').map((c) => c.trim()).filter(Boolean);
+/**
+ * The columns a function actually gates on, read from the clause that does the
+ * work rather than from the column's name appearing somewhere in the text.
+ *
+ * `NEW.x IS DISTINCT FROM OLD.x` is the predicate in both functions: in the
+ * guard it is what triggers the refusal, in the audit it is what triggers the
+ * INSERT. A name in a RAISE message, a quoted 'label' in an INSERT, or a comment
+ * does not match - which is the entire point.
+ */
+function gatedColumns(body: string): Set<string> {
+  const out = new Set<string>();
+  const re = /NEW\.([a-z_][a-z0-9_]*)\s+IS\s+DISTINCT\s+FROM\s+OLD\.\1\b/gi;
+  for (const m of body.matchAll(re)) out.add(m[1].toLowerCase());
+  return out;
+}
 
-Deno.test('the fee column list is actually populated (this test must not pass vacuously)', () => {
-  // If ORG_FEE_COLUMNS were ever emptied or reshaped, every assertion below
-  // would iterate nothing and pass. Pin the shape first.
-  assert(FEE_COLUMNS.length >= 6, `expected the fee columns, got ${JSON.stringify(FEE_COLUMNS)}`);
-  for (const c of FEE_COLUMNS) {
-    assert(/^platform_fee_[a-z_]+$/.test(c), `unexpected entry in ORG_FEE_COLUMNS: ${c}`);
+/**
+ * Every column ever added to `organizations` whose name says it carries money.
+ *
+ * THIS IS THE LIST THAT CANNOT BE FORGOTTEN, because it is the schema itself. A
+ * new money column reaches it the moment its migration lands, with nobody having
+ * to remember this file exists. That is what the old ORG_FEE_COLUMNS comment
+ * claimed and did not deliver.
+ *
+ * Deliberately name-based and deliberately generous: a false positive costs one
+ * line in the classification below, a false negative is the 2026-09-18 incident.
+ */
+const MONEY_NAME = /(fee|price|pct|cents|amount|rate|charge_model|payer|discount|plan)/;
+
+function moneyColumnsOnOrganizations(): Set<string> {
+  const out = new Set<string>();
+  // ALTER TABLE ... organizations ... up to the statement's terminating ;
+  const stmtRe = /alter\s+table\s+(?:if\s+exists\s+)?(?:public\.)?organizations\b([\s\S]*?);/gi;
+  const colRe = /add\s+column\s+(?:if\s+not\s+exists\s+)?([a-z_][a-z0-9_]*)/gi;
+  for (const name of migrationFiles()) {
+    const src = Deno.readTextFileSync(new URL(name, MIGRATIONS));
+    for (const stmt of src.matchAll(stmtRe)) {
+      for (const col of stmt[1].matchAll(colRe)) {
+        const c = col[1].toLowerCase();
+        if (MONEY_NAME.test(c)) out.add(c);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Money columns that are deliberately NEITHER locked NOR audited, each with the
+ * reason. This is the escape hatch, and it is deliberately noisy: adding a line
+ * here is a decision somebody made on purpose, which is the whole difference
+ * between this and the silence that let two columns through.
+ */
+const DELIBERATELY_UNCLASSIFIED: Record<string, string> = {
+  // Instructor pay rates. The provider sets what they pay their own staff, and
+  // they are not charged to a family, so neither locking nor auditing them is
+  // Enrops's business. They reach payroll, not checkout.
+  pay_hourly_cents: 'the provider sets what it pays its own instructors',
+  pay_camp_full_day_hours: 'instructor pay basis, provider-owned',
+  pay_camp_morning_hours: 'instructor pay basis, provider-owned',
+  pay_camp_afternoon_hours: 'instructor pay basis, provider-owned',
+  // "One-time bonus paid when all weekdays of a camp are confirmed taught" -
+  // the column's own COMMENT. Instructor pay, same as the rates above. Found by
+  // this test on its first run, which is the behaviour the old version lacked.
+  pay_camp_weekly_bonus_cents: 'instructor camp bonus, provider-owned',
+  // Sibling discount is the provider's own promotion on their own prices.
+  sibling_discount_pct: 'the provider discounting their own price to their own families',
+};
+
+Deno.test('the money-column list is derived from the schema and is not empty', () => {
+  // If the discovery above ever breaks - a migration style it cannot parse, a
+  // renamed table - every assertion below would iterate nothing and pass. Pin
+  // the shape first, and pin the specific columns whose absence would be silent.
+  const found = moneyColumnsOnOrganizations();
+  assert(found.size >= 8, `expected the money columns, got ${JSON.stringify([...found])}`);
+  for (
+    const must of [
+      'platform_fee_card_pct',
+      'platform_fee_ach_cap_cents',
+      'platform_fee_override_until',
+      'stripe_fee_payer',
+      'stripe_charge_model',
+      'withdrawal_admin_fee_cents',
+    ]
+  ) {
+    assert(found.has(must), `schema scan lost ${must}; the ADD COLUMN parser has drifted`);
   }
 });
 
-Deno.test('every fee column is LOCKED against operator edits', () => {
-  const { file, body } = latestDefinitionOf('guard_organizations_locked_columns');
-  const missing = FEE_COLUMNS.filter((c) => !body.includes(c));
+Deno.test('every money column on organizations is locked, audited, or deliberately neither', () => {
+  const locked = gatedColumns(latestDefinitionOf('guard_organizations_locked_columns').body);
+  const audited = gatedColumns(latestDefinitionOf('audit_organization_money').body);
+
+  const unclassified = [...moneyColumnsOnOrganizations()]
+    .filter((c) => !locked.has(c) && !audited.has(c) && !(c in DELIBERATELY_UNCLASSIFIED))
+    .sort();
+
+  assertEquals(
+    unclassified,
+    [],
+    'these money columns on `organizations` are neither locked nor audited, and members_update_own_org ' +
+      'has no WITH CHECK - so an org admin can change them on their own organisation with no record. ' +
+      'Lock it, audit it, or add it to DELIBERATELY_UNCLASSIFIED with the reason.',
+  );
+});
+
+Deno.test('the fee columns the resolver reads are all locked', () => {
+  // ORG_FEE_COLUMNS is no longer the source of truth - it is read by nothing in
+  // production, so it cannot be trusted to grow. It is still worth asserting:
+  // anything the fee resolver DOES read is a platform term and must be locked.
+  const locked = gatedColumns(latestDefinitionOf('guard_organizations_locked_columns').body);
+  const missing = ORG_FEE_COLUMNS.split(',')
+    .map((c) => c.trim().toLowerCase())
+    .filter(Boolean)
+    .filter((c) => !locked.has(c));
   assertEquals(
     missing,
     [],
-    `these fee columns are not locked in ${file}, so an org admin can change them on their own ` +
-      `organisation via members_update_own_org. Add them to the guard.`,
+    'these columns feed resolveFeeConfig but an org admin can change them on their own organisation.',
   );
 });
 
-Deno.test('every fee column is WRITTEN TO THE AUDIT when it changes', () => {
-  const { file, body } = latestDefinitionOf('audit_organization_money');
-  const missing = FEE_COLUMNS.filter((c) => !body.includes(c));
-  assertEquals(
-    missing,
-    [],
-    `these fee columns change what a family is charged and leave no record in ${file}. ` +
-      `Add an IF block for each.`,
-  );
+Deno.test('stripe_fee_payer and stripe_charge_model are both locked and audited', () => {
+  // Who bears Stripe's processing cost, and whose balance it comes out of. An
+  // operator moving either would shift real money onto the Enrops balance.
+  const locked = gatedColumns(latestDefinitionOf('guard_organizations_locked_columns').body);
+  const audited = gatedColumns(latestDefinitionOf('audit_organization_money').body);
+  for (const col of ['stripe_fee_payer', 'stripe_charge_model']) {
+    assert(locked.has(col), `${col} decides where real money goes and must be platform-admin only`);
+    assert(audited.has(col), `${col} must leave a record of who changed it`);
+  }
 });
 
-// The two money columns that are NOT in ORG_FEE_COLUMNS, because the fee
-// resolver does not read them - so they have to be named here or nothing covers
-// them. They are NOT treated the same, and the difference is deliberate.
-Deno.test('stripe_fee_payer is both locked and audited', () => {
-  // Who bears Stripe's processing cost. An operator moving this to 'absorb'
-  // would silently shift real money onto the Enrops balance.
-  assert(
-    latestDefinitionOf('guard_organizations_locked_columns').body.includes('stripe_fee_payer'),
-  );
-  assert(latestDefinitionOf('audit_organization_money').body.includes('stripe_fee_payer'));
+Deno.test('fee_pass_through and withdrawal_admin_fee_cents are audited but deliberately NOT locked', () => {
+  // Money layer section 4: "The business can turn on cover the fee." And the
+  // withdrawal admin fee is the provider's own deduction on a refund. Both are
+  // the operator's decisions to make, so locking them would break a documented
+  // setting - but both change what a family pays or gets back, so both are
+  // recorded. Asserted in BOTH directions so the "fix" the next person reaches
+  // for (locking them) fails loudly instead of quietly removing an operator
+  // control.
+  const locked = gatedColumns(latestDefinitionOf('guard_organizations_locked_columns').body);
+  const audited = gatedColumns(latestDefinitionOf('audit_organization_money').body);
+  for (const col of ['fee_pass_through', 'withdrawal_admin_fee_cents']) {
+    assert(audited.has(col), `${col} changes what families pay and must stay in the audit`);
+    assert(
+      !locked.has(col),
+      `${col} is now locked, which takes away a documented operator setting. ` +
+        'If that is intended, change the doc first.',
+    );
+  }
 });
 
-Deno.test('fee_pass_through is audited but deliberately NOT locked', () => {
-  // Money layer section 4: "The business can turn on cover the fee." That is
-  // the operator's own decision to make, so locking it would break a documented
-  // setting - but it changes what every family is charged, so it is recorded.
-  // Asserted in BOTH directions so that "fix" the next person reaches for
-  // (locking it) fails loudly instead of quietly removing an operator control.
-  assert(
-    latestDefinitionOf('audit_organization_money').body.includes('fee_pass_through'),
-    'fee_pass_through changes what families pay and must stay in the audit',
-  );
-  assert(
-    !latestDefinitionOf('guard_organizations_locked_columns').body.includes('fee_pass_through'),
-    'fee_pass_through is now locked, which takes away the documented "cover the fee" setting ' +
-      '(money layer section 4). If that is intended, change the doc first.',
-  );
+Deno.test('both functions are actually bound to organizations by a trigger', () => {
+  // The whole file checks function TEXT. A function nothing calls locks nothing,
+  // and the guard trigger is created in exactly one migration from May - so a
+  // later `drop trigger` would unlock every column above with every test here
+  // still green. Assert the binding exists, and that nothing drops it afterwards.
+  for (const fn of ['guard_organizations_locked_columns', 'audit_organization_money']) {
+    // MATCH THE DROP ON THE TRIGGER'S OWN NAME, NOT THE FUNCTION'S. The two
+    // differ: prod and staging carry `guard_organizations_locked_columns` and
+    // `trg_audit_organization_money`. A `DROP TRIGGER trg_audit_organization_money`
+    // does not contain `\baudit_organization_money\b` at a word boundary, so
+    // matching on the function name silently misses the drop that matters. Found
+    // by mutating this very test - which is the only reason it is right.
+    const createRe = new RegExp(
+      `CREATE\\s+TRIGGER\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?([a-z_][a-z0-9_]*)[\\s\\S]{0,400}?` +
+        `ON\\s+(?:public\\.)?organizations[\\s\\S]{0,200}?` +
+        `EXECUTE\\s+(?:PROCEDURE|FUNCTION)\\s+(?:public\\.)?${fn}\\s*\\(`,
+      'i',
+    );
+
+    let createdIn: string | null = null;
+    let triggerName: string | null = null;
+    let droppedAfter: string | null = null;
+
+    for (const name of migrationFiles()) {
+      const src = Deno.readTextFileSync(new URL(name, MIGRATIONS));
+
+      // A DROP followed by its own CREATE in the same file is the ordinary
+      // idempotent re-bind, not a removal - so check CREATE first and let it
+      // clear any drop seen earlier.
+      const created = createRe.exec(src);
+      if (created) {
+        createdIn = name;
+        triggerName = created[1];
+        droppedAfter = null;
+        continue;
+      }
+      if (triggerName) {
+        const dropRe = new RegExp(
+          `DROP\\s+TRIGGER\\s+(?:IF\\s+EXISTS\\s+)?${triggerName}\\s+ON\\s+(?:public\\.)?organizations`,
+          'i',
+        );
+        if (dropRe.test(src)) droppedAfter = name;
+      }
+    }
+
+    assert(createdIn, `nothing binds ${fn} to organizations, so it gates nothing`);
+    assertEquals(
+      droppedAfter,
+      null,
+      `${droppedAfter} drops the ${triggerName} trigger and no later migration re-creates it, ` +
+        'so every column this file checks is unguarded on the database.',
+    );
+  }
 });

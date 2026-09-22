@@ -83,7 +83,20 @@ const keysN = (n: number) =>
 
 Deno.test("the pre-check never asks for more keys than one request can carry", () => {
   // The whole incident in one number: 102 keys in ONE request is what broke.
-  assert(PRECHECK_CHUNK_SIZE <= 101, "chunk must stay under the measured 102-key ceiling");
+  //
+  // BOUND AT HALF THE CEILING, NOT AT THE CEILING. `<= 101` was the old
+  // assertion and it permitted 101 - one key below a limit that lives in
+  // PostgREST and the gateway in front of it, not in this code, and can
+  // therefore move underneath us without warning. The shipped value is 50
+  // precisely because the source picked half the observed ceiling; assert the
+  // margin that reasoning chose, so raising the constant has to be a deliberate
+  // argument rather than something that slips past a bound nobody re-read.
+  assert(
+    PRECHECK_CHUNK_SIZE <= 51,
+    `chunk is ${PRECHECK_CHUNK_SIZE}; the measured ceiling is 102 and the design keeps ` +
+      'half of it as margin. Raising this needs a fresh measurement against the real ' +
+      'gateway (the LIVE tests below), not just a bigger number here.',
+  );
 });
 
 Deno.test("a 102-key audience is split, and every prior send is still seen", async () => {
@@ -270,6 +283,18 @@ Deno.test("an interrupted row does not read as a bad address to the operator scr
 // Skipped unless STAGING_DB_URL + STAGING_SERVICE_KEY are set, so CI stays
 // hermetic. These are the two facts a stub cannot establish: that the chunked
 // URL actually fits, and that Postgres really does reject the second claimer.
+//
+// HOW TO ACTUALLY RUN THESE, because until 2026-09-22 nothing said and so they
+// had never run once since the day they were written:
+//
+//   STAGING_DB_URL=https://mumfymlapolsfdnpewci.supabase.co \
+//   STAGING_SERVICE_KEY=<staging service_role key> \
+//   deno test --allow-net --allow-env --allow-read=supabase/functions,supabase/migrations,src \
+//     --no-check supabase/functions/lifecycle-automations-cron/sendLedger.test.ts
+//
+// Worth doing whenever PRECHECK_CHUNK_SIZE is questioned: the 102-key ceiling is
+// a property of PostgREST and the gateway, not of this code, so it can move
+// without anything here changing. A stub can never re-measure it.
 
 // Read lazily and defensively. CI runs `deno test` WITHOUT --allow-env on
 // purpose, so that a test can never reach a real Supabase or Stripe. A bare
@@ -284,7 +309,33 @@ function envOrUndefined(name: string): string | undefined {
     return undefined;
   }
 }
-const DB = envOrUndefined("STAGING_DB_URL");
+// THE VARIABLE IS NAMED STAGING_*; NOTHING MAKES THAT TRUE. These tests INSERT
+// into automation_run_recipients and run an automation-wide reclaim, and
+// supabase/.temp/project-ref is a documented foot-gun that points at PROD. A
+// prod URL exported under this name would write to real families' rows. So the
+// project is asserted, not trusted: an allow-list of the one database these
+// tests may touch, rather than a deny-list of the one they must not, because a
+// deny-list is wrong the moment a third project exists.
+const STAGING_PROJECT_REF = "mumfymlapolsfdnpewci";
+
+// NOT thrown at module scope. A throw out here is the very bug this file was
+// just fixed for: it kills every test in the file before one registers, and the
+// 11 hermetic tests have nothing to do with which database somebody exported.
+// Record it instead, and let the live tests fail loudly on it below.
+const DB_RAW = envOrUndefined("STAGING_DB_URL");
+const DB_IS_WRONG_PROJECT = !!DB_RAW && !DB_RAW.includes(STAGING_PROJECT_REF);
+const DB = DB_IS_WRONG_PROJECT ? undefined : DB_RAW;
+
+Deno.test("a non-staging STAGING_DB_URL is refused, not quietly skipped", () => {
+  // Loud, because a silent skip looks identical to "not configured" - which is
+  // exactly how somebody concludes the live tests passed when they never ran.
+  assert(
+    !DB_IS_WRONG_PROJECT,
+    `STAGING_DB_URL points at ${DB_RAW} — these tests WRITE to automation_run_recipients ` +
+      `and may only run against the staging project (${STAGING_PROJECT_REF}). ` +
+      'supabase/.temp/project-ref points at PROD; do not let that become this variable.',
+  );
+});
 const SK = envOrUndefined("STAGING_SERVICE_KEY");
 const AUTO_ID = envOrUndefined("STAGING_AUTOMATION_ID");
 const ORG_ID = envOrUndefined("STAGING_ORG_ID");
@@ -442,13 +493,22 @@ Deno.test({
       email: "sendledger-selftest@example.invalid",
     };
     const c = restClient();
-    const [a, b] = await Promise.all([claimSend(c, target, 0), claimSend(c, target, 0)]);
-    assertEquals([a, b].filter(Boolean).length, 1, "the UNIQUE constraint must let exactly one through");
-    // Clean up after ourselves — this row is test litter, not a real send.
-    const del = await fetch(
-      `${DB}/rest/v1/automation_run_recipients?context_key=eq.${encodeURIComponent(target.contextKey)}`,
-      { method: "DELETE", headers: { apikey: SK!, Authorization: `Bearer ${SK!}` } },
-    );
-    await del.text();
+    // CLEAN UP IN `finally`, NOT AFTER THE ASSERTION. The sibling test above
+    // does this correctly and this one did not: the DELETE sat on the line after
+    // assertEquals, so it was skipped in exactly the case this test exists to
+    // catch. The leftover row carries the real automation_id and organization_id
+    // with CLAIM_MARKER in error_message, which renders on the operator's
+    // delivery screen as a send in progress to sendledger-selftest@example.invalid
+    // that never clears - test litter that looks like a live incident.
+    try {
+      const [a, b] = await Promise.all([claimSend(c, target, 0), claimSend(c, target, 0)]);
+      assertEquals([a, b].filter(Boolean).length, 1, "the UNIQUE constraint must let exactly one through");
+    } finally {
+      const del = await fetch(
+        `${DB}/rest/v1/automation_run_recipients?context_key=eq.${encodeURIComponent(target.contextKey)}`,
+        { method: "DELETE", headers: { apikey: SK!, Authorization: `Bearer ${SK!}` } },
+      );
+      await del.text();
+    }
   },
 });
