@@ -166,20 +166,53 @@ function gatedColumns(body: string): Set<string> {
  */
 const MONEY_NAME = /(fee|price|pct|cents|amount|rate|charge_model|payer|discount|plan)/;
 
+/**
+ * Money columns that are ON THE DATABASE but in NO MIGRATION.
+ *
+ * THE LIMIT OF A FILE-BASED CHECK, found 2026-09-22 by comparing this scan
+ * against information_schema on both databases. `platform_fee_cents` and
+ * `platform_monthly_cents` exist on staging AND prod and appear in no migration
+ * anywhere - they were applied straight to the database - so no amount of
+ * parsing can discover them. A scan of the repo is a scan of the repo.
+ *
+ * They are listed here so they are still CLASSIFIED. When one of these is
+ * finally written into a migration the scan finds it anyway and the duplicate is
+ * harmless. Re-check the list with, on each database:
+ *
+ *   select column_name from information_schema.columns
+ *    where table_schema='public' and table_name='organizations'
+ *      and column_name ~ '(fee|price|pct|cents|amount|rate|charge_model|payer|discount|plan)';
+ */
+const ON_DB_BUT_NOT_IN_ANY_MIGRATION = ['platform_fee_cents', 'platform_monthly_cents'];
+
 function moneyColumnsOnOrganizations(): Set<string> {
   const out = new Set<string>();
   // ALTER TABLE ... organizations ... up to the statement's terminating ;
-  const stmtRe = /alter\s+table\s+(?:if\s+exists\s+)?(?:public\.)?organizations\b([\s\S]*?);/gi;
-  const colRe = /add\s+column\s+(?:if\s+not\s+exists\s+)?([a-z_][a-z0-9_]*)/gi;
+  // `ONLY` is accepted because ALTER TABLE ONLY is what pg_dump emits, even
+  // though no migration currently uses it - a form this missed would be a
+  // silent false negative, which is the one direction that matters here.
+  const stmtRe =
+    /alter\s+table\s+(?:only\s+)?(?:if\s+exists\s+)?(?:only\s+)?(?:public\.)?organizations\b([\s\S]*?);/gi;
+  const addRe = /add\s+column\s+(?:if\s+not\s+exists\s+)?([a-z_][a-z0-9_]*)/gi;
+  // A column that was later DROPPED is not on the table and must not be
+  // reported - the pay_* rate columns were added in May and dropped in June, and
+  // reporting them means carrying classifications for columns nobody can change
+  // because they do not exist.
+  const dropRe = /drop\s+column\s+(?:if\s+exists\s+)?([a-z_][a-z0-9_]*)/gi;
+
   for (const name of migrationFiles()) {
     const src = Deno.readTextFileSync(new URL(name, MIGRATIONS));
     for (const stmt of src.matchAll(stmtRe)) {
-      for (const col of stmt[1].matchAll(colRe)) {
+      for (const col of stmt[1].matchAll(addRe)) {
         const c = col[1].toLowerCase();
         if (MONEY_NAME.test(c)) out.add(c);
       }
+      // Applied after the adds in the same statement, and in file order across
+      // migrations, so a drop-then-re-add still ends up present.
+      for (const col of stmt[1].matchAll(dropRe)) out.delete(col[1].toLowerCase());
     }
   }
+  for (const c of ON_DB_BUT_NOT_IN_ANY_MIGRATION) out.add(c);
   return out;
 }
 
@@ -190,17 +223,6 @@ function moneyColumnsOnOrganizations(): Set<string> {
  * between this and the silence that let two columns through.
  */
 const DELIBERATELY_UNCLASSIFIED: Record<string, string> = {
-  // Instructor pay rates. The provider sets what they pay their own staff, and
-  // they are not charged to a family, so neither locking nor auditing them is
-  // Enrops's business. They reach payroll, not checkout.
-  pay_hourly_cents: 'the provider sets what it pays its own instructors',
-  pay_camp_full_day_hours: 'instructor pay basis, provider-owned',
-  pay_camp_morning_hours: 'instructor pay basis, provider-owned',
-  pay_camp_afternoon_hours: 'instructor pay basis, provider-owned',
-  // "One-time bonus paid when all weekdays of a camp are confirmed taught" -
-  // the column's own COMMENT. Instructor pay, same as the rates above. Found by
-  // this test on its first run, which is the behaviour the old version lacked.
-  pay_camp_weekly_bonus_cents: 'instructor camp bonus, provider-owned',
   // Sibling discount is the provider's own promotion on their own prices.
   sibling_discount_pct: 'the provider discounting their own price to their own families',
 };
