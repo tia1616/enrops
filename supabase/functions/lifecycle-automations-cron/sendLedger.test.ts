@@ -109,7 +109,17 @@ Deno.test("a 102-key audience is split, and every prior send is still seen", asy
   });
   const prior = await loadPriorSends(client, TARGET.automationId, keys);
   assertEquals(prior.size, 102, "every prior send must survive the chunking");
-  assertEquals(calls.selectChunks.length, 3);
+  // DERIVED, not hardcoded. This used to assert a literal 3, which silently
+  // pinned PRECHECK_CHUNK_SIZE to 34..50 from a test about chunking rather than
+  // about the bound - so anyone re-measuring the ceiling and raising the
+  // constant got an unexplained red here, in a message that said nothing about
+  // why. The bound belongs in its own assertion above; this one only cares that
+  // the audience was split correctly for whatever the constant is.
+  assertEquals(
+    calls.selectChunks.length,
+    Math.ceil(102 / PRECHECK_CHUNK_SIZE),
+    `102 keys at ${PRECHECK_CHUNK_SIZE} per request should be ${Math.ceil(102 / PRECHECK_CHUNK_SIZE)} chunks`,
+  );
   for (const c of calls.selectChunks) assert(c.length <= PRECHECK_CHUNK_SIZE);
   // The exact regression: the 102nd family must be known to have been mailed.
   assertEquals(prior.get(keys[101])?.status, "sent");
@@ -289,8 +299,18 @@ Deno.test("an interrupted row does not read as a bad address to the operator scr
 //
 //   STAGING_DB_URL=https://mumfymlapolsfdnpewci.supabase.co \
 //   STAGING_SERVICE_KEY=<staging service_role key> \
+//   STAGING_AUTOMATION_ID=<an automation id on staging> \
+//   STAGING_ORG_ID=<its organization id> \
+//   STAGING_RUN_ID=<any automation_runs id for it> \
 //   deno test --allow-net --allow-env --allow-read=supabase/functions,supabase/migrations,src \
 //     --no-check supabase/functions/lifecycle-automations-cron/sendLedger.test.ts
+//
+// ALL FIVE ARE REQUIRED, not just the first two. The first two set `live`, but
+// the two most valuable tests - the reclaim and the claim race - are gated on
+// `liveWithFixtures`, which also needs the three ids. An earlier version of this
+// block listed only the first two, so someone following it verbatim would see
+// "ok ... 2 ignored" and reasonably report the live gates green while the fact
+// the file exists to prove went on being unproven.
 //
 // Worth doing whenever PRECHECK_CHUNK_SIZE is questioned: the 102-key ceiling is
 // a property of PostgREST and the gateway, not of this code, so it can move
@@ -300,7 +320,7 @@ Deno.test("an interrupted row does not read as a bad address to the operator scr
 // purpose, so that a test can never reach a real Supabase or Stripe. A bare
 // Deno.env.get at module scope therefore throws NotCapable before a single
 // Deno.test registers, which does not skip this file - it fails the whole job
-// and silently takes all 22 tests with it. That is how this file shipped on
+// and silently takes all 23 tests with it. That is how this file shipped on
 // 2026-09-22 contributing zero coverage while looking green locally.
 function envOrUndefined(name: string): string | undefined {
   try {
@@ -320,10 +340,22 @@ const STAGING_PROJECT_REF = "mumfymlapolsfdnpewci";
 
 // NOT thrown at module scope. A throw out here is the very bug this file was
 // just fixed for: it kills every test in the file before one registers, and the
-// 11 hermetic tests have nothing to do with which database somebody exported.
+// 20 hermetic tests have nothing to do with which database somebody exported.
 // Record it instead, and let the live tests fail loudly on it below.
 const DB_RAW = envOrUndefined("STAGING_DB_URL");
-const DB_IS_WRONG_PROJECT = !!DB_RAW && !DB_RAW.includes(STAGING_PROJECT_REF);
+// ANCHORED ON THE HOST, not a substring of the whole URL. `includes()` was the
+// first shape and it is defeated by the ref appearing anywhere else in the
+// string: `https://<prod-ref>.supabase.co/#mumfymlapolsfdnpewci` passed it, and
+// these tests WRITE. Parse failures count as wrong-project, so a malformed URL
+// cannot slip through either.
+function isStagingHost(url: string): boolean {
+  try {
+    return new URL(url).hostname === `${STAGING_PROJECT_REF}.supabase.co`;
+  } catch {
+    return false;
+  }
+}
+const DB_IS_WRONG_PROJECT = !!DB_RAW && !isStagingHost(DB_RAW);
 const DB = DB_IS_WRONG_PROJECT ? undefined : DB_RAW;
 
 Deno.test("a non-staging STAGING_DB_URL is refused, not quietly skipped", () => {
@@ -429,12 +461,20 @@ Deno.test({
     const c = restClient();
     const contextKey = `selftest-stale:${crypto.randomUUID()}`;
     const H = { apikey: SK!, Authorization: `Bearer ${SK!}`, "Content-Type": "application/json" };
+    // BEST-EFFORT ON PURPOSE. A cleanup that throws out of `finally` REPLACES
+    // the assertion failure with a transport error, so the one signal that
+    // matters - two runs claimed the same family - would surface as "error
+    // sending request". Leaving a test row behind is the cheaper failure.
     const cleanup = async () => {
-      const r = await fetch(
-        `${DB}/rest/v1/automation_run_recipients?context_key=eq.${encodeURIComponent(contextKey)}`,
-        { method: "DELETE", headers: H },
-      );
-      await r.text();
+      try {
+        const r = await fetch(
+          `${DB}/rest/v1/automation_run_recipients?context_key=eq.${encodeURIComponent(contextKey)}`,
+          { method: "DELETE", headers: H },
+        );
+        await r.text();
+      } catch (e) {
+        console.warn("[sendLedger.test] cleanup failed, leaving test row:", e);
+      }
     };
 
     try {
@@ -504,11 +544,18 @@ Deno.test({
       const [a, b] = await Promise.all([claimSend(c, target, 0), claimSend(c, target, 0)]);
       assertEquals([a, b].filter(Boolean).length, 1, "the UNIQUE constraint must let exactly one through");
     } finally {
-      const del = await fetch(
-        `${DB}/rest/v1/automation_run_recipients?context_key=eq.${encodeURIComponent(target.contextKey)}`,
-        { method: "DELETE", headers: { apikey: SK!, Authorization: `Bearer ${SK!}` } },
-      );
-      await del.text();
+      // Best-effort, same reason as the sibling above: a throw here would
+      // replace "the UNIQUE constraint must let exactly one through" with a
+      // network error, on the exact run where that assertion matters most.
+      try {
+        const del = await fetch(
+          `${DB}/rest/v1/automation_run_recipients?context_key=eq.${encodeURIComponent(target.contextKey)}`,
+          { method: "DELETE", headers: { apikey: SK!, Authorization: `Bearer ${SK!}` } },
+        );
+        await del.text();
+      } catch (e) {
+        console.warn("[sendLedger.test] cleanup failed, leaving test row:", e);
+      }
     }
   },
 });

@@ -14,9 +14,13 @@
 -- not an operator's to set. Real money moves on this value.
 --
 -- LOCKING IT CANNOT BREAK THE CONNECT FLOW, checked rather than assumed. The
--- guard returns early for `auth.role() = 'service_role'`, and every writer of
--- this column is a service-role edge function: stripe-connect-onboard,
--- stripe-oauth-callback and process-installments. NOTHING in src/ writes it --
+-- guard returns early for `auth.role() = 'service_role'`, and both writers of
+-- this column are service-role edge functions: stripe-connect-onboard and
+-- stripe-oauth-callback. (An earlier version of this comment also named
+-- process-installments; that is WRONG and was corrected 2026-09-22 - its only
+-- occurrence builds an in-memory object for buildChargeRouting and never
+-- UPDATEs. Naming a non-writer inside a paragraph headed "checked rather than
+-- assumed" is how the next person skips the check.) NOTHING in src/ writes it --
 -- Finances.jsx only reads it, and its three saves are single-column
 -- (fee_pass_through, statement_descriptor_suffix, withdrawal_admin_fee_cents),
 -- so no whole-row write drags it along. Read every one of them on 2026-09-22.
@@ -36,9 +40,20 @@
 -- (orgMoneyColumnsGuarded now matches `NEW.<col>`, not the bare name), which is
 -- what makes it safe for this message to stay helpful to an operator.
 --
--- COPIED FROM pg_get_functiondef ON STAGING, not from an older migration file.
--- Both functions were byte-identical on staging and prod before this ran
--- (guard 2d45cd40..., audit c4e097a2...), so this lands the same change on both.
+-- PROVENANCE, stated accurately after a review caught this comment overclaiming.
+-- These bodies were assembled from the previous migration (20260921a) plus a
+-- read of `prosrc` on staging -- they were NOT copied from pg_get_functiondef,
+-- which is what an earlier version of this line said. The tell is in the file:
+-- pg_get_functiondef emits `AS $function$` and `SET search_path TO 'public',
+-- 'pg_temp'`, and this writes `AS $$` and `SET search_path = public, pg_temp`.
+--
+-- The check that actually matters was done and does hold: both functions were
+-- byte-identical on staging and prod before this ran (md5(prosrc) guard
+-- 2d45cd40..., audit c4e097a2...), and the locked chain only ever GREW across
+-- every version - 4 -> 9 -> 10 -> 12 -> 13 -> 15 columns, nothing dropped at any
+-- step. Verify a wholesale CREATE OR REPLACE that way, column by column against
+-- the previous definition; "I copied the live one" is not a substitute and is
+-- exactly the sentence that would hide a dropped column next time.
 
 CREATE OR REPLACE FUNCTION public.guard_organizations_locked_columns()
 RETURNS trigger
