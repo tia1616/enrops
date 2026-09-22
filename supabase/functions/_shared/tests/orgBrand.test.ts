@@ -1,7 +1,7 @@
 // Tests for encodeDisplayName / formatFromAddress (From-header RFC 5322 quoting).
 
 import { assertEquals } from 'https://deno.land/std@0.177.0/testing/asserts.ts';
-import { encodeDisplayName, formatFromAddress, resolveTestRecipient, resolveReplyTo, NO_TENANT_INBOX_MESSAGE, OrgBrand } from '../orgBrand.ts';
+import { encodeDisplayName, formatFromAddress, renderSignatureBlock, resolveTestRecipient, resolveReplyTo, NO_TENANT_INBOX_MESSAGE, OrgBrand } from '../orgBrand.ts';
 
 // Minimal brand stub — only the two fields formatFromAddress reads matter.
 function brandWith(sender_name: string, sender_email = 'sender@mail.enrops.com'): OrgBrand {
@@ -283,4 +283,81 @@ Deno.test('resolveReplyTo: alert_email is NOT a reply-to source', () => {
     hardcodedFallback: PLATFORM,
   });
   assertEquals(r.reply_to_source, 'platform');
+});
+
+// --- renderSignatureBlock: the contact line that survives a forward ---------
+//
+// 2026-09-22: a school forwarded a roster email internally, the colleague
+// replied to the only address visible to her (the platform's send-only FROM
+// address, which has no inbox), and the message reached nobody. Reply-To
+// protects a direct reply and does not survive a forward; a visible address in
+// the body does. These pin the two things that make it safe.
+
+function brandForSignature(over: Partial<OrgBrand> = {}): OrgBrand {
+  return { ...brandWith('Any Org'), ...over };
+}
+
+Deno.test('signature: the operator OWN address is shown, so a forwarded copy has a way back', () => {
+  const html = renderSignatureBlock(brandForSignature({
+    tenant_reply_to: 'admin@theukuleleproject.com',
+    email_signature: 'Strumming our way to a brighter future,',
+  }));
+  assertEquals(html.includes('mailto:admin@theukuleleproject.com'), true);
+  assertEquals(html.includes('Questions? Email'), true);
+});
+
+Deno.test('signature: NEVER prints the platform address on a tenant email', () => {
+  // reply_to always resolves to something; when the operator has set nothing,
+  // that something is OURS. Printing it would tell another business's families
+  // to write to Enrops. tenant_reply_to is null in exactly that case.
+  const html = renderSignatureBlock(brandForSignature({
+    tenant_reply_to: null,
+    reply_to: 'jessica@enrops.com',
+    reply_to_source: 'platform',
+    email_signature: 'Warmly,',
+  }));
+  assertEquals(html.includes('jessica@enrops.com'), false);
+  assertEquals(html.includes('Questions? Email'), false);
+  // ...and the operator's own signature still renders.
+  assertEquals(html.includes('Warmly,'), true);
+});
+
+Deno.test('signature: renders for an org with NO signature at all', () => {
+  // 7 of 9 tenants had an empty signature, so gating the contact line behind an
+  // existing signature would have helped almost nobody.
+  const html = renderSignatureBlock(brandForSignature({
+    tenant_reply_to: 'leslie@yogaplaygrounds.com',
+    email_signature: null,
+    email_signature_image_url: null,
+    email_signature_image_mode: 'none',
+  }));
+  assertEquals(html.includes('mailto:leslie@yogaplaygrounds.com'), true);
+});
+
+Deno.test('signature: an org with no signature AND no own address still gets nothing', () => {
+  const html = renderSignatureBlock(brandForSignature({
+    tenant_reply_to: null,
+    email_signature: null,
+    email_signature_image_url: null,
+    email_signature_image_mode: 'none',
+  }));
+  assertEquals(html, '');
+});
+
+Deno.test('signature: an address already in the operator signature is not repeated', () => {
+  const html = renderSignatureBlock(brandForSignature({
+    tenant_reply_to: 'info@mrsrichelle.com',
+    email_signature: 'Mrs. Richelle<div>info@mrsrichelle.com</div>',
+  }));
+  assertEquals(html.split('info@mrsrichelle.com').length - 1, 1, 'shown once, not twice');
+  assertEquals(html.includes('Questions? Email'), false);
+});
+
+Deno.test('signature: the address is escaped, so it cannot break out of the markup', () => {
+  const html = renderSignatureBlock(brandForSignature({
+    tenant_reply_to: 'a"><script>alert(1)</script>@x.com',
+    email_signature: null,
+  }));
+  assertEquals(html.includes('<script>'), false);
+  assertEquals(html.includes('&lt;script&gt;'), true);
 });
