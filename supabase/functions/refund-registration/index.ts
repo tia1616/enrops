@@ -427,6 +427,79 @@ serve(async (req: Request) => {
       });
     }
 
+    // ── AN ALREADY-ISSUED CREDIT IS ANSWERED BEFORE THE CEILING IS CONSULTED ─
+    //
+    // This has to run here, above the money maths, and staging proved why. The
+    // ceiling check further down is `amountCents > eligible`, and a credit
+    // CONSUMES the ceiling - so the moment the first credit is written, eligible
+    // is legitimately 0 and the identical retry is rejected with
+    // `amount_exceeds_eligible` before the idempotency handling is ever reached.
+    // The operator double-clicks "Give $240 credit" and the second click tells
+    // them "that's more than is left to refund", which is alarming, sounds like
+    // the credit failed, and is the precise case the idempotency key exists to
+    // make boring. No money was ever duplicated - the unique index saw to that -
+    // but "it worked" reported as an error is its own defect.
+    //
+    // THE WITHDRAWAL IS STILL RE-RUN rather than short-circuited away. A first
+    // attempt can write the credit and then fail to pause the installments
+    // (`credit_issued_pause_failed`), and the operator's response to that is to
+    // press the button again. If this block returned success without retrying
+    // the pause, that retry would silently do nothing and the family's card
+    // would still be charged on schedule - turning a visible, recoverable
+    // failure into the invisible one. Both calls are idempotent, so re-running
+    // costs nothing when the first attempt did complete.
+    if (issueCredit && idempotencyKey) {
+      const { data: prior, error: priorErr } = await supabase
+        .from('family_credits')
+        .select('id, amount_cents')
+        .eq('organization_id', reg.organization_id)
+        .eq('idempotency_key', idempotencyKey)
+        .maybeSingle();
+      // A failed lookup is NOT "no prior credit". Falling through on an error
+      // would attempt a second insert, which the unique index catches anyway -
+      // so this carries on rather than failing the request, and the index stays
+      // the thing that actually guarantees it.
+      if (priorErr) console.error('[credit] idempotency lookup failed:', priorErr);
+
+      const priorRow = prior as { id: string; amount_cents: number } | null;
+      if (priorRow) {
+        const nowIso = new Date().toISOString();
+        const { pausedRows, pauseError, cancelError } =
+          await stopChargesAndCancel(supabase, registrationId, nowIso);
+        if (pauseError) {
+          console.error('[credit] retry: pausing pending installments failed:', pauseError);
+          return json({
+            error: 'credit_issued_pause_failed',
+            credit_id: priorRow.id,
+            credited_cents: priorRow.amount_cents,
+          }, 500);
+        }
+        if (cancelError) {
+          console.error('[credit] retry: registration cancel failed:', cancelError);
+          return json({
+            error: 'credit_issued_cancel_failed_charges_stopped',
+            credit_id: priorRow.id,
+            credited_cents: priorRow.amount_cents,
+            pending_charges_stopped: pausedRows.length,
+          }, 500);
+        }
+        return json({
+          credited: true,
+          credit_id: priorRow.id,
+          // The AMOUNT ALREADY ISSUED, not the amount asked for. They are the
+          // same on a genuine retry, and if they differ the honest answer is
+          // what the ledger holds - reporting the request back would claim a
+          // credit that was never written.
+          credited_cents: priorRow.amount_cents,
+          credit_reason: creditReason,
+          already_existed: true,
+          refunded_cents: 0,
+          pending_charges_stopped: pausedRows?.length ?? 0,
+          pending_cents_stopped: (pausedRows ?? []).reduce((s, r) => s + (r.amount_cents || 0), 0),
+        });
+      }
+    }
+
     // ── refund policy: who is made whole on a refund ──────────────────────
     // When the provider bears Stripe's processing fee (stripe_fee_payer='tenant',
     // Enrops-platform), the application fee was sized up to recover Stripe's fee

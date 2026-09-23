@@ -535,7 +535,13 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
                   />
                 </div>
                 <div style={{ display: "flex", gap: 8, marginTop: 8, flexWrap: "wrap" }}>
-                  <button type="button" onClick={setFull} disabled={busy} style={chip}>Full refund ({fmtCents(refundableCents)})</button>
+                  {/* The chip fills the same field either way, but it must not
+                      call the action by the wrong name: "Full refund" sitting
+                      above a "Give $240 credit" button is the screen telling an
+                      operator two different things about one press. */}
+                  <button type="button" onClick={setFull} disabled={busy} style={chip}>
+                    {isCredit ? "Full credit" : "Full refund"} ({fmtCents(refundableCents)})
+                  </button>
                   {showKeepFee && (
                     <button type="button" onClick={setKeepFee} disabled={busy} style={chip}>
                       Keep {fmtCents(adminFeeCents)} admin fee
