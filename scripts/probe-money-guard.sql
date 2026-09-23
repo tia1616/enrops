@@ -162,8 +162,7 @@ drop table if exists public._probe_backup;
 
 -- PARITY. Run this on BOTH databases; guard_md5, audit_md5, cols_md5 and
 -- enabled_triggers must match, or behaviour measured on staging does not
--- describe prod. checks_md5 is reported for information: it already differs
--- (pre-existing drift on organizations, unrelated to the guard).
+-- describe prod.
 --
 --   select
 --     (select md5(prosrc) from pg_proc where proname='guard_organizations_locked_columns') as guard_md5,
@@ -171,6 +170,32 @@ drop table if exists public._probe_backup;
 --     (select md5(string_agg(column_name,',' order by column_name)) from information_schema.columns
 --        where table_schema='public' and table_name='organizations')                      as cols_md5,
 --     (select count(*) from pg_trigger where tgrelid='public.organizations'::regclass
---        and not tgisinternal and tgenabled='O')                                          as enabled_triggers,
---     (select md5(string_agg(conname||pg_get_constraintdef(oid),',' order by conname)) from pg_constraint
---        where conrelid='public.organizations'::regclass and contype='c')                 as checks_md5;
+--        and not tgisinternal and tgenabled='O')                                          as enabled_triggers;
+--
+-- CHECK CONSTRAINTS: compare them PER CONSTRAINT, never as one hash.
+--
+-- A single md5 over every definition was the first shape and it cried wolf on
+-- 2026-09-22: it reported the two databases as drifted when the only difference
+-- was how Postgres printed the brackets in ONE constraint -
+-- organizations_statement_descriptor_suffix_check, stored as
+-- `(A AND B) AND C` on prod and `A AND B AND C` on staging. AND is associative,
+-- so those are the same rule; the deparser just grouped them differently because
+-- the two databases had it created from differently-written SQL.
+--
+-- PROVEN identical rather than argued, 2026-09-23: the stored expression was
+-- rebuilt onto a scratch table on each database and fed the same twelve values
+-- (NULL, '', too short, too long, lowercase, underscore, at-sign, hyphen, comma,
+-- space, and both length boundaries). Accept/reject was byte-identical on both,
+-- md5 9bd4f32e. No DDL was run on either database: there was nothing to fix, and
+-- dropping and re-adding a CHECK on a live prod table to make a hash match would
+-- be real risk for a cosmetic gain.
+--
+-- So this returns one row per constraint. A whole-table hash tells you something
+-- differs and nothing about what; this tells you WHICH, and lets you see in one
+-- read whether it is bracketing or a genuinely different rule. Run on both and
+-- compare the two result sets.
+--
+--   select conname, pg_get_constraintdef(oid) as def
+--     from pg_constraint
+--    where conrelid = 'public.organizations'::regclass and contype = 'c'
+--    order by conname;

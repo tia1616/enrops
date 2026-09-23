@@ -14,7 +14,7 @@
   "fixture_org": "b177a0ea-32c6-45c9-82ac-cbb7261c2dee (Cascade Enrichment Co., a QA fixture - never a real tenant)",
   "newest_migration_at_probe_time": "20260922e_guard_the_two_columns_no_migration_created.sql",
 
-  "_parity": "PROD IS EQUIVALENT, checked the same day: guard, audit, the column list and the enabled-trigger count are byte-identical on both databases, so behaviour measured on staging holds on prod. NOT identical, and NOT covered by this file: the CHECK constraints differ (prod 6526257e..., staging 43fa76b0...). That is pre-existing drift on organizations, unrelated to the guard, and is recorded here so nobody reads this file as claiming full schema parity.",
+  "_parity": "PROD IS EQUIVALENT: guard, audit, the column list and the enabled-trigger count are byte-identical on both databases, so behaviour measured on staging holds on prod. The CHECK constraints are equivalent too - all 21 present on both, and the one whose printed text differs (organizations_statement_descriptor_suffix_check, bracketed '(A AND B) AND C' on prod and 'A AND B AND C' on staging) was PROVEN to behave identically on 2026-09-23: the stored expression was rebuilt on a scratch table on each database and fed the same twelve values, and accept/reject matched exactly. AND is associative; the deparser just grouped them differently. No DDL was run to 'fix' it - there was nothing to fix, and re-creating a CHECK on a live prod table for a cosmetic hash match is risk for nothing. An earlier version of this note called it drift, because the parity check hashed all 21 definitions together and could not tell bracketing from a changed rule; that check now compares per constraint.",
   "guard_md5": "ebdd8d26354e76d78d1b53307db87dbb",
   "audit_md5": "32ade27983612047d7d5fd746271f096",
   "columns_md5": "c5abd2b435eb5a97d5f2a2b59bccb7f7",
@@ -58,6 +58,7 @@
   "_unprobeable": "Columns the probe could not test (no legal alternative value). MUST stay empty for any money column - the test fails if one appears, because an untested column is not a protected column.",
   "unprobeable": [],
 
+  "_all_columns": "66 of the table's 67 columns. `id` is excluded by the probe - it is the primary key, cannot be a money setting, and an UPDATE of it is a different kind of question. If that number ever reads as a missing column, this is why.",
   "all_columns": [
     "active_registration_term",
     "alert_email",
