@@ -1166,7 +1166,12 @@ function buildImportant(sig, openHires, subSignals, deliverySignals) {
   if (needsCoverDays > 0) out.push({
     key: "needs_cover", kind: "act", prio: 3,
     title: needsCoverDays === 1 ? "A class day has no one to cover it" : `${needsCoverDays} class days have no one to cover them`,
-    detail: "Someone said no and nobody has accepted yet — line up another sub, or have the lead take it.",
+    // Was "Someone said no and nobody has accepted yet". That is now false of
+    // most of what lands here: a day whose cover was RELEASED (nobody refused
+    // anything) and a day whose offer email never left (nobody was even asked)
+    // both count in `uncovered`. The sentence has to be true of every day it
+    // indicts, so it says the one thing all of them share.
+    detail: "Nobody is covering these yet — line up a sub, or have the lead take it.",
     cta: { to: "/admin/schedule", label: "Find a sub →" },
   });
   // Its own card, not folded into the one above: on these days NOBODY has been

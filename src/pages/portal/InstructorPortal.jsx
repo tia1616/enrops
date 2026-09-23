@@ -125,6 +125,20 @@ function portalReturnUrl() {
   return `${window.location.origin}${window.location.pathname}`;
 }
 
+// The body of a failed edge-function call.
+//
+// supabase.functions.invoke returns { data: null, error: FunctionsHttpError }
+// for ANY non-2xx response — it only parses the body inside its `response.ok`
+// branch — so `data` is null on every error path and a branch keyed on
+// `data?.error` can never run. This file had four such branches; the only one
+// that ever fired was the race outcome, and that only because the server
+// deliberately returns it as a 200. The real body is on the error's context,
+// which is the shape AfterschoolSchedule.jsx:1527 and CalendarsList.jsx:854
+// already use — this file should have copied it from there.
+async function fnErrorBody(fnErr) {
+  try { return (await fnErr?.context?.json?.()) ?? null; } catch { return null; }
+}
+
 export default function InstructorPortal() {
   // Unified home for everything instructor: sign-in, onboarding wizard,
   // schedule, profile. The phase machine routes between sub-states.
@@ -1044,6 +1058,11 @@ export default function InstructorPortal() {
 
   async function handleSubMarkTaught(substitutionId) {
     setSubActingOn({ id: substitutionId, action: "mark" });
+    // Clear the notice as well as the error, for the same reason the response
+    // handler does: "someone else accepted this one first" is about a DIFFERENT
+    // day, and leaving it sitting above the page while they mark a day they
+    // really did teach is the sibling handler's rule applied inconsistently.
+    setNotice("");
     setError("");
     try {
       const { data, error: fnErr } = await supabase.functions.invoke(
@@ -1051,7 +1070,11 @@ export default function InstructorPortal() {
         { body: { substitution_id: substitutionId } },
       );
       if (fnErr || data?.error) {
-        throw new Error(data?.detail || data?.error || fnErr?.message || "Couldn't mark this day.");
+        const body = await fnErrorBody(fnErr);
+        throw new Error(
+          body?.detail || body?.error || data?.detail || data?.error
+            || fnErr?.message || "Couldn't mark this day.",
+        );
       }
       await loadSubAssignments(instructor.instructor_id);
     } catch (err) {
@@ -1073,17 +1096,31 @@ export default function InstructorPortal() {
         { body: { substitution_id: substitutionId, action, decline_reason: declineReason || undefined } },
       );
       if (fnErr || data?.error) {
-        if (data?.error === "already_responded") {
+        // Read the CODE off the error body, not off `data` — see fnErrorBody.
+        const body = await fnErrorBody(fnErr);
+        const code = body?.error ?? data?.error;
+        if (code === "already_responded") {
           // Stale tab — refetch and move on.
           await loadSubAssignments(instructor.instructor_id);
           return;
         }
-        if (data?.error === "forbidden") {
+        if (code === "forbidden") {
           setError("That sub offer is no longer available.");
           await loadSubAssignments(instructor.instructor_id);
           return;
         }
-        throw new Error(data?.error || fnErr?.message || "Couldn't send your response.");
+        if (code === "time_conflict") {
+          // They are already covering another class that overlaps this one.
+          // Nothing is broken and nothing they can fix by retrying, so this is
+          // an explanation, not a failure they should read as their fault.
+          setNotice(body?.detail
+            || "You're already covering another class that overlaps this one, so we couldn't add it. Contact the office if that's wrong.");
+          await loadSubAssignments(instructor.instructor_id);
+          return;
+        }
+        throw new Error(
+          body?.detail || code || fnErr?.message || "Couldn't send your response.",
+        );
       }
       // SOMEBODY ELSE GOT THERE FIRST. A day can be offered to several people
       // and the first to accept takes it, so this is an ordinary outcome and the

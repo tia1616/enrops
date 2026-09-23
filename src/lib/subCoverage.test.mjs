@@ -23,7 +23,12 @@ const bo = { first_name: 'Bo', last_name: 'Ng' };
 const cy = { first_name: 'Cy', last_name: 'Park' };
 const row = (status, sub, id, over = {}) => ({
   parent_assignment_id: 'A1', date: '2026-10-05', status,
-  sub, sub_instructor_id: id, ...over,
+  sub, sub_instructor_id: id,
+  // An ordinary offer HAS been emailed -- that is what makes it an ask rather
+  // than a row. The cases that care about a row whose email never left pass
+  // `email_sent_at: null` explicitly, below.
+  email_sent_at: status === 'pending' ? '2026-10-01T12:00:00Z' : null,
+  ...over,
 });
 
 // --- a day with nothing on it ---
@@ -257,6 +262,101 @@ const row = (status, sub, id, over = {}) => ({
   ]);
   ok('REVIEW2 a real refusal alongside an auto-decline counts once', mixed.declineCount === 1);
   ok('REVIEW2 and still needs cover', slotNeedsCover(mixed) === true);
+}
+
+// --- REVIEW3: a released cover (2026-09-23 max review, finding 1 + 11) ---
+// The day loses its sub and NOBODY refused anything. Every branch of the old
+// aggregate fell through on this: no winner, no pending, no declines, so the
+// slot took the first row's own status, drew nothing, and slotNeedsCover said
+// false. A class with no adult, reported as nothing at all.
+{
+  const s = aggregateSubSlot([row('cancelled', ann, 'i-ann')]);
+  ok('REVIEW3 a released cover is not a refusal', s.declineCount === 0);
+  ok('REVIEW3 a released cover is counted', s.cancelledCount === 1);
+  ok('REVIEW3 a released day NEEDS COVER', slotNeedsCover(s) === true);
+  ok('REVIEW3 nobody is drawn as covering it', subSlotLabel(s) === null);
+  ok('REVIEW3 it is not an active status', !SUB_ACTIVE_STATUSES.has(s.status));
+  ok('REVIEW3 and nobody is named', s.sub === null && s.sub_instructor_id === null);
+
+  // Released, then somebody else asked: waiting, but not calmly.
+  const reasked = aggregateSubSlot([
+    row('cancelled', ann, 'i-ann'),
+    row('pending', bo, 'i-bo'),
+  ]);
+  ok('REVIEW3 re-asked after a release still needs cover', slotNeedsCover(reasked) === true);
+  ok('REVIEW3 and it reads as at risk, not as a fresh offer',
+    subSlotLabel(reasked).marker === '· needs cover');
+  ok('REVIEW3 the note says why', subSlotLabel(reasked).note === 'cover was cancelled');
+  ok('REVIEW3 without inventing a refusal', reasked.declineCount === 0);
+
+  // A release does not un-cover a day somebody else has since accepted.
+  const recovered = aggregateSubSlot([
+    row('cancelled', ann, 'i-ann'),
+    row('confirmed', bo, 'i-bo'),
+  ]);
+  ok('REVIEW3 a later acceptance still covers the day', slotNeedsCover(recovered) === false);
+  ok('REVIEW3 and names the person actually coming', subSlotLabel(recovered).text === 'Bo Ng');
+}
+
+// --- REVIEW3: a row whose offer email never left (finding 6) ---
+// create-assignment-substitution writes the row BEFORE it sends. A Resend
+// failure used to leave a pending row that read as a live offer everywhere:
+// "Offered, waiting" in the modal, counted in "N people asked", and filed by
+// the RPC under 'awaiting', its calm state, for somebody who had never heard
+// of the day.
+{
+  const s = aggregateSubSlot([row('pending', ann, 'i-ann', { email_sent_at: null })]);
+  ok('REVIEW3 an un-emailed row is not an offer out', s.offersOut === 0);
+  ok('REVIEW3 it does not draw as a live offer', subSlotLabel(s) === null);
+  ok('REVIEW3 it never names the person as asked', s.sub === null);
+  ok('REVIEW3 and the day needs cover', slotNeedsCover(s) === true);
+  ok('REVIEW3 the status never falls through to pending', s.status !== 'pending');
+
+  // One real ask beside one failed one: the count is 1, not 2.
+  const mixed = aggregateSubSlot([
+    row('pending', ann, 'i-ann'),
+    row('pending', bo, 'i-bo', { email_sent_at: null }),
+  ]);
+  ok('REVIEW3 only the emailed offer counts', mixed.offersOut === 1);
+  ok('REVIEW3 and it names the one person actually asked',
+    subSlotLabel(mixed).text === 'Ann Diaz');
+  ok('REVIEW3 one real offer out is still calm', slotNeedsCover(mixed) === false);
+}
+
+// --- REVIEW4: WHY the cover was released (independent reviewers, round 2) ---
+// Round 3 of this module made every released cover raise the alarm. But the
+// commonest reason to release one is that the REGULAR instructor is teaching
+// the class after all -- and then nobody is needed, the day is fine, and an
+// alarm on it can never be cleared: there is no dismiss, no delete, and the
+// banner's own advice ("or the lead can take it back") is what already
+// happened. An alarm that cannot be cleared is worse than the silence, because
+// an operator learns to ignore it.
+{
+  const settled = aggregateSubSlot([
+    row('cancelled', ann, 'i-ann', { cover_still_needed: false }),
+  ]);
+  ok('REVIEW4 a release that needs nobody does not alarm', slotNeedsCover(settled) === false);
+  ok('REVIEW4 and is not counted as a release needing cover', settled.cancelledCount === 0);
+  ok('REVIEW4 and draws nothing on the card', subSlotLabel(settled) === null);
+
+  const stillLooking = aggregateSubSlot([
+    row('cancelled', ann, 'i-ann', { cover_still_needed: true }),
+  ]);
+  ok('REVIEW4 a release that still needs somebody DOES alarm', slotNeedsCover(stillLooking) === true);
+
+  // An older row, written before the column existed, must keep alarming: NULL
+  // is "we do not know", and the safe reading of not knowing is that the day
+  // still needs a person.
+  const legacy = aggregateSubSlot([row('cancelled', ann, 'i-ann')]);
+  ok('REVIEW4 a release with no reason recorded still alarms', slotNeedsCover(legacy) === true);
+
+  // One of each on the same day: somebody still has to find a sub.
+  const mixed = aggregateSubSlot([
+    row('cancelled', ann, 'i-ann', { cover_still_needed: false }),
+    row('cancelled', bo, 'i-bo', { cover_still_needed: true }),
+  ]);
+  ok('REVIEW4 mixed releases alarm on the one that needs somebody',
+    slotNeedsCover(mixed) === true && mixed.cancelledCount === 1);
 }
 
 console.log(`\nsubCoverage: ${pass} passed, ${fail} failed`);

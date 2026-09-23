@@ -641,7 +641,11 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       if (assignmentIds.length) {
         const { data: subRows, error: subErr } = await supabase
           .from("assignment_substitutions")
-          .select("id, parent_assignment_id, date, status, decline_reason, sub_tier, sub_instructor_id, sub:instructors!sub_instructor_id(first_name, last_name, preferred_name)")
+          // email_sent_at is load-bearing, not decoration: aggregateSubSlot
+          // counts an offer only once its email has actually left, so a row
+          // arriving here without this column reads as "written but never
+          // sent" and every live offer would draw as a day needing cover.
+          .select("id, parent_assignment_id, date, status, decline_reason, sub_tier, sub_instructor_id, email_sent_at, cover_still_needed, sub:instructors!sub_instructor_id(first_name, last_name, preferred_name)")
           .eq("parent_assignment_type", "program")
           .in("parent_assignment_id", assignmentIds);
         if (subErr) console.warn("[AfterschoolSchedule] sub load failed:", subErr.message);
@@ -2515,6 +2519,11 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           instructors={state.instructors}
           onClose={() => setAssignSubFor(null)}
           onSubmitted={() => { setAssignSubFor(null); loadAll(); }}
+          // A release changes the day without ending the operator's task: the
+          // next thing they do is ask somebody else. Reload the board and leave
+          // the dialog open — onSubmitted above closes it, which is right for a
+          // send and wrong here.
+          onChanged={() => { loadAll(); }}
         />
       )}
 

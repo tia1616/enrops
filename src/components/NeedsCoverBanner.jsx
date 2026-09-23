@@ -67,9 +67,14 @@ function whoDeclined(it) {
         : null;
   // What is happening now. A day with an offer still out is NOT the same as a
   // day with nobody asked, and it must not borrow the other's wording.
+  // "no sub yet" implied nobody had got round to asking. Two newer populations
+  // arrive in this same branch and that sentence is false of both: a day whose
+  // cover was RELEASED had a sub and lost one, and a day whose offer email
+  // never left has rows but no ask. The wording has to be true of all three,
+  // and "nobody is covering this" is the thing they actually have in common.
   const now = it.offersOut > 0
     ? (it.offersOut === 1 ? "1 offer still out" : `${it.offersOut} offers still out`)
-    : "no sub yet";
+    : "nobody is covering it";
   return said ? ` · ${said}, ${now}` : ` · ${now}`;
 }
 

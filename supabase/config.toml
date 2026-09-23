@@ -268,3 +268,10 @@ verify_jwt = false
 # onboarding completes, so there is no user JWT; it checks operator_welcome_secret itself.
 [functions.operator-welcome]
 verify_jwt = false
+
+# An admin releases a confirmed sub, or withdraws an offer nobody has answered.
+# Called from the admin schedule with the operator's own session, and the
+# function re-checks owner/admin membership on the ROW's org before writing.
+# TRUE: there is a real user JWT and it is the whole basis of the permission.
+[functions.cancel-sub-cover]
+verify_jwt = true

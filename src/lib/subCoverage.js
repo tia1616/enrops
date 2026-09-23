@@ -65,6 +65,32 @@ export function aggregateSubSlot(rows) {
     && r.decline_reason !== "covered_by_other");
   const declineCount = distinctPeople(declined);
 
+  // AN OFFER IS NOT AN ASK UNTIL ITS EMAIL HAS LEFT. The row is written before
+  // the email is sent and, when Resend fails, deleted again -- but a row can
+  // still outlive a failed send (the delete itself failing, a function timing
+  // out mid-flight). Counting those as live offers is how a class-day nobody
+  // has been contacted about reads as "Offered, waiting" and files itself under
+  // the calm state. get_sub_coverage filters on the same column, and the two
+  // halves have to agree or the card and the banner above it describe the same
+  // day differently.
+  const pendingAsked = all.filter((r) => r.status === "pending" && r.email_sent_at);
+  const pendingUnsent = all.filter((r) => r.status === "pending" && !r.email_sent_at);
+
+  // A cover an admin released AND still wants somebody for. The day is open
+  // again and nobody is coming -- the one state that used to fall through every
+  // branch here and draw nothing at all, because it is produced by the winner's
+  // REMOVAL rather than by anybody refusing.
+  //
+  // cover_still_needed === false is the other half of that decision and must
+  // NOT alarm: the commonest reason to release a cover is that the regular
+  // instructor is teaching the class after all, and a day nobody needs a sub
+  // for would otherwise sit on the banner shouting until the date passed, with
+  // no dismiss and no way to make it true. An alarm that cannot be cleared
+  // teaches an operator to ignore the alarm.
+  const cancelled = all.filter((r) => r.status === "cancelled"
+    && r.cover_still_needed !== false);
+  const cancelledCount = distinctPeople(cancelled);
+
   // A confirmed sub wins the day. 'taught' is the SAME person one step later.
   // Migration 20260923d made two settled rows on one day impossible, so this can
   // no longer be ambiguous in practice -- but the preference stays EXPLICIT
@@ -79,45 +105,61 @@ export function aggregateSubSlot(rows) {
     // the siblings it can lock, so a skipped one stays pending. The day is
     // covered, but somebody is still holding an unanswered email and the card
     // has to be able to say so.
-    const stillOut = distinctPeople(all.filter((r) => r.status === "pending"));
+    const stillOut = distinctPeople(pendingAsked);
     return {
       status: winner.status,
       sub: winner.sub ?? null,
       sub_instructor_id: winner.sub_instructor_id ?? null,
       offersOut: stillOut,
       declineCount,
+      cancelledCount,
+      needsCover: false,
       rows: all,
     };
   }
 
-  const pending = all.filter((r) => r.status === "pending");
-  if (pending.length > 0) {
-    const people = distinctPeople(pending);
-    const only = people === 1 ? pending[0] : null;
+  if (pendingAsked.length > 0) {
+    const people = distinctPeople(pendingAsked);
+    const only = people === 1 ? pendingAsked[0] : null;
     return {
       status: "pending",
       sub: only ? (only.sub ?? null) : null,
       sub_instructor_id: only ? (only.sub_instructor_id ?? null) : null,
       offersOut: people,
       declineCount,
+      cancelledCount,
+      // Somebody said no, or a cover was released, and a fresh offer is out.
+      // Mirrors the RPC's 'at_risk': waiting, but not calmly.
+      needsCover: declineCount > 0 || cancelledCount > 0,
       rows: all,
     };
   }
 
-  // Everyone declined, or the day only holds a 'missed' row. Nothing is drawn
-  // on the card (SUB_ACTIVE_STATUSES excludes both), but the slot is still
-  // reported so callers that care about declines can see it -- a day everybody
-  // turned down is exactly the day an operator must not be left guessing about.
+  // Nobody is confirmed and not one live, actually-sent offer remains. The card
+  // draws nothing (SUB_ACTIVE_STATUSES excludes every status below), exactly as
+  // it already did for a day everybody turned down -- the regular instructor is
+  // still the name on the schedule. That the day NEEDS somebody is carried by
+  // `needsCover` and surfaced by the banner and the homescreen count.
+  //
+  // The status must never fall through to "pending" here. A day whose only
+  // pending rows were never emailed would then be drawn as "Sub - pending",
+  // naming nobody, for a class no one has been contacted about.
+  const fallbackStatus = declined.length > 0 ? "declined"
+    : cancelled.length > 0 ? "cancelled"
+    : pendingUnsent.length > 0 ? "unsent"
+    : all[0].status;
+
   return {
-    // `declined` here is REAL refusals only, so a day whose every row is an
-    // auto-decline falls through to the first row's own status and draws
-    // nothing -- correct: nobody refused it, and nobody is coming either, which
-    // is a state only the winner's removal can produce and chunk 2 owns.
-    status: declined.length > 0 ? "declined" : all[0].status,
+    status: fallbackStatus,
     sub: null,
     sub_instructor_id: null,
     offersOut: 0,
     declineCount,
+    cancelledCount,
+    // Three ways to arrive here and all of them need a person: somebody
+    // refused, a cover was released, or a row exists whose offer email never
+    // left. The last one used to read as calm, which is the worst of the three.
+    needsCover: declineCount > 0 || cancelledCount > 0 || pendingUnsent.length > 0,
     rows: all,
   };
 }
@@ -187,16 +229,19 @@ export function subSlotLabel(slot) {
     // Somebody has already said no on this day and an offer is still out: the
     // day is AT RISK, not calmly waiting, and it must not read like a healthy
     // first offer. Mirrors the RPC's 'at_risk' state (migration 20260923b).
-    const atRisk = slot.declineCount > 0;
+    // A released cover puts the day in the same place a refusal does: an offer
+    // is out, but the day has already lost somebody once.
+    const atRisk = slot.declineCount > 0 || slot.cancelledCount > 0;
     const who = slot.offersOut > 1
       ? `${slot.offersOut} people asked`
       : subDisplayName(slot.sub);
+    const note = slot.declineCount > 0
+      ? (slot.declineCount === 1 ? "1 said no" : `${slot.declineCount} said no`)
+      : (slot.cancelledCount > 0 ? "cover was cancelled" : null);
     return {
       text: who,
       marker: atRisk ? "· needs cover" : "· pending",
-      note: atRisk
-        ? (slot.declineCount === 1 ? "1 said no" : `${slot.declineCount} said no`)
-        : null,
+      note,
       tone: atRisk ? "uncovered" : "pending",
     };
   }
@@ -211,12 +256,11 @@ export function subSlotLabel(slot) {
 // days they can see while one of its days has nobody coming.
 export function slotNeedsCover(slot) {
   if (!slot) return false;
-  // Only an ACCEPTANCE clears a day. An unanswered offer does not: a day two
-  // people have already refused is at risk whether or not a third is still
-  // deciding, which is exactly the 'at_risk' state the RPC reports and the
-  // regression this module had to have fixed in both halves, not one.
-  if (slot.status === "confirmed" || slot.status === "taught") return false;
-  return slot.declineCount > 0;
+  // Decided once, in aggregateSubSlot, where every row of the class-day is in
+  // hand. This used to re-derive the answer from declineCount alone, which is
+  // why a day whose sub had been released -- nobody refused, nobody is coming
+  // -- came back false and vanished from every count that asks this question.
+  return slot.needsCover === true;
 }
 
 // The whole label as one string, for callers that cannot pin the marker

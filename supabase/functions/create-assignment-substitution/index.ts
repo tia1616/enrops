@@ -11,6 +11,7 @@
 //   sub_tier: 'lead' | 'developing',
 //   notes?: string,
 //   mode?: 'send' | 'test'    // default 'send'; 'test' routes to test_recipient (else the tenant's OWN inbox)
+//                             // and writes NO offer row: it proves the wording, it does not ask anybody.
 //   test_recipient?: string   // test-mode override inbox; defaults to the tenant's OWN inbox.
 //                             // Refuses with 400 no_tenant_inbox when the org has neither, rather
 //                             // than falling back to the platform address and mailing us the detail.
@@ -285,14 +286,14 @@ serve(async (req: Request) => {
       console.error('[create-assignment-substitution] settled check failed:', settledErr);
       return json({ error: 'settled_check_failed', detail: settledErr.message }, 500);
     }
-    // Refused in TEST mode too. The test only changes where the email goes; it
-    // still writes a real offer row, and a live "can you cover this?" landing in
-    // an instructor's portal for a class that already has a teacher is not a
-    // test, it is a real ask nobody meant to make.
+    // Refused in TEST mode too. A test writes no row now, but the wording it
+    // produces says "can you cover this?" about a class that already has a
+    // teacher, and an operator reading that back has been told something false
+    // about the day.
     if (settled && settled.length > 0) {
       return json({
         error: 'already_covered',
-        detail: 'Somebody has already accepted this day. Cancel their cover first if you need a different person.',
+        detail: 'Somebody has already accepted this day. Release their cover first if you need a different person.',
       }, 409);
     }
 
@@ -396,10 +397,6 @@ serve(async (req: Request) => {
         .select('id')
         .single();
       if (error || !data) {
-        // 23505 here means the one-offer-per-day rule this build removes is
-        // still on the database — i.e. the function reached an environment
-        // ahead of its migration. Say that, rather than handing an operator a
-        // raw Postgres string about a constraint.
         // 23505 has two possible causes and the message must not assert one:
         // the one-offer-per-day rule still being in place (the function reached
         // an environment ahead of its migration), or two admins asking the same
@@ -437,7 +434,14 @@ serve(async (req: Request) => {
     // Everyone asked gets the same offer, addressed to them. Declared as a
     // function so the whole compose-and-send path is identical for one person
     // and for five — the multi-offer case is not a second code path.
-    async function offerTo(cand: { id: string; preferred_name?: string | null; first_name?: string | null; email?: string | null }, substitutionId: string, isRefresh: boolean) {
+    // substitutionId is NULL for a test send, which deliberately writes no row
+    // at all. A test used to insert a real pending offer against the named
+    // instructor while the [TEST] email went to the tenant's own inbox, so the
+    // instructor - who never received anything - could open their portal, find
+    // a live offer with Accept and Decline on it, and accept. That confirmed
+    // them for real and fired the 3-way coordination email for real. A test
+    // must not be able to staff a class.
+    async function offerTo(cand: { id: string; preferred_name?: string | null; first_name?: string | null; email?: string | null }, substitutionId: string | null, isRefresh: boolean) {
     const subFirst = cand.preferred_name || cand.first_name || 'there';
 
     const html = `<!doctype html>
@@ -492,9 +496,8 @@ serve(async (req: Request) => {
     // A test offer names the sub, the class and the date. resolveTestRecipient
     // returns null rather than cascading to the platform, so refuse here: the
     // old fallback mailed one provider's substitution detail to Enrops while
-    // the modal reported a successful test. The substitution row is left in
-    // place exactly as the resend-failure path below leaves it, so the admin
-    // can fix the address and retry without re-creating anything.
+    // the modal reported a successful test. Nothing needs undoing - a test
+    // writes no row - so the admin can fix the address and retry.
     if (mode === 'test' && !recipient) {
       console.error('[create-assignment-substitution] test send refused, org has no inbox of its own', {
         organization_id: orgId,
@@ -522,7 +525,30 @@ serve(async (req: Request) => {
     if (!resp.ok) {
       const errText = await resp.text();
       console.error('[create-assignment-substitution] resend failed:', resp.status, errText);
-      // Row already exists; surface the failure but leave the row in place so admin can retry.
+      // The email did NOT go, so this person has not been asked. A row left
+      // behind here says otherwise everywhere it is read: the modal renders
+      // "Offered, waiting" beside their name, the board counts them in "N
+      // people asked", and get_sub_coverage files the day as 'awaiting', its
+      // calm state, for a class nobody has been contacted about. The operator's
+      // one correct move is to ask somebody else, and the screen talks them out
+      // of it.
+      //
+      // Only a row THIS call created is removed. A refresh's row is a real
+      // earlier offer with a real email behind it; deleting that would destroy
+      // the record of a message the instructor actually received. Guarded on
+      // pending + no stamp so a row that somehow got used in the meantime is
+      // left alone.
+      if (substitutionId && !isRefresh) {
+        const { error: cleanupErr } = await supabase
+          .from('assignment_substitutions')
+          .delete()
+          .eq('id', substitutionId)
+          .eq('status', 'pending')
+          .is('email_sent_at', null);
+        if (cleanupErr) {
+          console.error('[create-assignment-substitution] could not remove the un-emailed offer row:', cleanupErr, { substitution_id: substitutionId });
+        }
+      }
       return { error: 'email_failed', detail: errText.slice(0, 300), status: 502 };
     }
 
@@ -537,22 +563,60 @@ serve(async (req: Request) => {
     // The terms ride along with the stamp on a refresh: the email that just went
     // is the one that describes them, so they become true at exactly the moment
     // it does. A new row already carries them from its insert.
-    const { error: stampErr } = await supabase
+    //
+    // GUARDED ON pending, not on id alone. The settled check ran three round
+    // trips and a Resend call ago, and a class-day can now be held by several
+    // people at once. In that gap the offer can be ACCEPTED - the sub taps
+    // Accept on their phone while the admin is resending with a different tier
+    // - and an id-only write would then stamp the new sub_tier and a fresh
+    // assigned_at onto a confirmed row. sub_tier is what v_effective_pay_lines
+    // reads as effective_tier, so that silently re-prices a class-day somebody
+    // has already agreed to teach, at a rate no email ever quoted them.
+    if (!substitutionId) return { ok: true, substitution_id: null, recipient };
+    const stampedAt = new Date().toISOString();
+    const { data: stampedRows, error: stampErr } = await supabase
       .from('assignment_substitutions')
       .update(isRefresh
         ? {
             sub_tier: subTier, notes: notes || null,
             assigned_by: callerAuthId, assigned_at: nowIso,
-            email_sent_at: new Date().toISOString(),
+            email_sent_at: stampedAt,
           }
-        : { email_sent_at: new Date().toISOString() })
-      .eq('id', substitutionId);
+        : { email_sent_at: stampedAt })
+      .eq('id', substitutionId)
+      .eq('status', 'pending')
+      .select('id');
     if (stampErr) {
       console.error('[create-assignment-substitution] email_sent_at stamp failed:', stampErr, { substitution_id: substitutionId });
       return {
         error: 'sent_but_unrecorded',
         detail: `The offer email went to ${recipient}, but we could not record that it was sent. Do not send it again — check with them directly.`,
         status: 500,
+      };
+    }
+    if (!stampedRows || stampedRows.length === 0) {
+      // The offer settled while this email was in flight. The TERMS must not be
+      // written - the row already describes what that person agreed to - but
+      // the email is a fact that happened, and the column it lives in is what
+      // the modal reads to decide between "Send offer" and "Resend". Leaving it
+      // blank is how the same person gets asked twice.
+      const { error: factErr } = await supabase
+        .from('assignment_substitutions')
+        .update({ email_sent_at: stampedAt })
+        .eq('id', substitutionId);
+      if (factErr) {
+        console.error('[create-assignment-substitution] settled-row stamp failed:', factErr, { substitution_id: substitutionId });
+      }
+      console.warn('[create-assignment-substitution] offer settled mid-send; terms not re-written', {
+        substitution_id: substitutionId,
+      });
+      // Reported, not swallowed. The email that just landed quotes the NEW
+      // terms and the row still holds the old ones, and the row is what payroll
+      // reads. An operator who changed the tier and saw a clean "sent" would
+      // believe they had re-priced the day.
+      return {
+        ok: true, substitution_id: substitutionId, recipient,
+        terms_not_applied: true,
       };
     }
 
@@ -564,17 +628,66 @@ serve(async (req: Request) => {
     // must not leave the others half-reported. The first hard failure stops the
     // round and says who was already asked, so an operator is never left
     // guessing which of five people is holding an offer.
-    const asked: Array<{ instructor_id: string; substitution_id: string; recipient: string }> = [];
+    const asked: Array<{ instructor_id: string; substitution_id: string | null; recipient: string }> = [];
+    // People whose offer settled while their resend was in flight, so the email
+    // they just received quotes terms the row does not carry.
+    const termsNotApplied: string[] = [];
+
+    // Usage is recorded for what ACTUALLY happened, on every exit, not only on
+    // the clean one. This used to sit after the loop, past both of its early
+    // returns, so a round that emailed two people and then hit a Resend failure
+    // on the third logged nothing at all - two real offer emails with no
+    // receipt anywhere that they were sent.
+    async function logRound(ok: boolean) {
+      if (mode !== 'send' || asked.length === 0) return;
+      await logPlatformEvent(supabase, {
+        feature: FEATURE.SCHEDULING, action: ACTION.SUB_ASSIGNED,
+        outcome: ok ? OUTCOME.SUCCESS : OUTCOME.FAIL,
+        organizationId: orgId, actorUserId: callerAuthId,
+        metadata: {
+          substitution_ids: asked.map((a) => a.substitution_id),
+          asked_count: asked.length,
+          candidate_count: candidates.length,
+        },
+      });
+    }
+
     for (const cand of candidates as Array<NonNullable<typeof candidates[number]>>) {
-      const row = await rowForCandidate(cand.id);
-      if ('error' in row) {
-        console.error('[create-assignment-substitution] row write failed:', row.error);
-        return json({
-          error: 'offer_write_failed', detail: row.error,
-          asked, asked_count: asked.length,
-        }, 500);
+      // A test writes no row: it only proves what the email looks like. See the
+      // note on offerTo - a test used to leave a live, acceptable offer sitting
+      // in a real instructor's portal.
+      let rowId: string | null = null;
+      let rowIsRefresh = false;
+      if (mode === 'send') {
+        const row = await rowForCandidate(cand.id);
+        if ('error' in row) {
+          console.error('[create-assignment-substitution] row write failed:', row.error);
+          await logRound(false);
+          return json({
+            error: 'offer_write_failed', detail: row.error,
+            asked, asked_count: asked.length,
+          }, 500);
+        }
+        rowId = row.id;
+        rowIsRefresh = row.isRefresh;
       }
-      const sent = await offerTo(cand, row.id, row.isRefresh);
+      // The Resend call inside offerTo is a bare fetch: a DNS failure or a
+      // timeout THROWS rather than returning !resp.ok, and the outer catch
+      // cannot see `asked`. Without this, the exact case logRound was written
+      // for - two people emailed, the third failing - would leave no usage row
+      // and tell the operator nothing about who already holds an offer.
+      let sent: Awaited<ReturnType<typeof offerTo>>;
+      try {
+        sent = await offerTo(cand, rowId, rowIsRefresh);
+      } catch (e) {
+        console.error('[create-assignment-substitution] send threw:', e);
+        await logRound(false);
+        return json({
+          error: 'email_failed',
+          detail: (e as Error).message || 'The offer email could not be sent.',
+          asked, asked_count: asked.length,
+        }, 502);
+      }
       if ('error' in sent) {
         // 'sent_but_unrecorded' means the email DID go — count that person as
         // asked, or the operator is told fewer were contacted than really were
@@ -582,22 +695,20 @@ serve(async (req: Request) => {
         // means no email went, and a refresh's row is untouched: its old terms
         // and old stamp still describe the last message that really was sent.
         if (sent.error === 'sent_but_unrecorded') {
-          asked.push({ instructor_id: cand.id, substitution_id: row.id, recipient: cand.email! });
+          asked.push({ instructor_id: cand.id, substitution_id: rowId, recipient: cand.email! });
         }
+        await logRound(false);
         return json({ ...sent, asked, asked_count: asked.length }, sent.status ?? 502);
       }
       asked.push({ instructor_id: cand.id, substitution_id: sent.substitution_id, recipient: sent.recipient! });
+      if ((sent as { terms_not_applied?: boolean }).terms_not_applied) {
+        termsNotApplied.push(cand.preferred_name || cand.first_name || 'Somebody');
+      }
     }
 
     // Only a real send counts as usage (matches send-offers / invite-parents /
-    // matcher guards). Test-fires still write the row but aren't production use.
-    if (mode === 'send') {
-      await logPlatformEvent(supabase, {
-        feature: FEATURE.SCHEDULING, action: ACTION.SUB_ASSIGNED, outcome: OUTCOME.SUCCESS,
-        organizationId: orgId, actorUserId: callerAuthId,
-        metadata: { substitution_ids: asked.map((a) => a.substitution_id), asked_count: asked.length },
-      });
-    }
+    // matcher guards). A test writes no row and is not production use.
+    await logRound(true);
     return json({
       ok: true,
       // Single-candidate shape kept so the existing picker keeps working
@@ -606,6 +717,10 @@ serve(async (req: Request) => {
       recipient: asked[0]?.recipient ?? null,
       asked,
       asked_count: asked.length,
+      // Named, not a bare flag: the operator has to know WHOSE terms did not
+      // take, because that person is the one holding a message that disagrees
+      // with what payroll will pay.
+      terms_not_applied: termsNotApplied,
       mode,
     });
   } catch (err) {

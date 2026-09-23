@@ -42,7 +42,15 @@ const STATUS_LABEL = {
   declined: 'Declined',
   taught: 'Taught',
   missed: 'Missed',
+  cancelled: 'Cancelled',
 };
+
+// The columns every read of this table in this file needs. One spelling: three
+// near-identical select strings drifted apart once already, and a column
+// missing from one of them does not error, it just makes that refresh disagree
+// with the others about the same day.
+const SUB_ROW_COLUMNS =
+  'id, date, sub_instructor_id, sub_tier, status, decline_reason, email_sent_at, declined_at, cover_still_needed';
 
 // What happened to one offer, in the operator's words. A row closed out because
 // SOMEBODY ELSE accepted first is not a refusal — that person very likely said
@@ -51,6 +59,20 @@ const STATUS_LABEL = {
 function offerLabel(s) {
   if (s.status === 'declined' && s.decline_reason === 'covered_by_other') {
     return { text: 'Someone else covered it', tone: 'neutral' };
+  }
+  // A pending row whose offer email never left is NOT "Offered, waiting" -
+  // nobody has heard from us at all. The sentence below the list already omits
+  // these people, and two contradictory statements about the same person, six
+  // lines apart, on the screen where an operator decides whether to ask anybody
+  // else, is worse than either one alone.
+  if (s.status === 'pending' && !s.email_sent_at) {
+    return { text: 'Not sent - nobody was asked', tone: 'bad' };
+  }
+  if (s.status === 'cancelled') {
+    return {
+      text: s.cover_still_needed === false ? 'Cancelled, no sub needed' : 'Cover released',
+      tone: 'neutral',
+    };
   }
   const text = STATUS_LABEL[s.status] ?? s.status;
   if (s.status === 'declined') return { text, tone: 'bad' };
@@ -123,7 +145,8 @@ export default function AssignSubModal({
   organizationId,
   instructors,                // full instructor list for the org
   onClose,
-  onSubmitted,                // (substitutionId) => void
+  onSubmitted,                // (substitutionId) => void — a send landed
+  onChanged,                  // () => void — the day changed but the modal stays open (a release)
 }) {
   const [date, setDate] = useState(defaultDate ?? '');
   const [subInstructorId, setSubInstructorId] = useState('');
@@ -134,6 +157,10 @@ export default function AssignSubModal({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [okMsg, setOkMsg] = useState('');
+  // Releasing a cover is a separate action from sending one, and it is armed
+  // in two steps: it emails somebody that a day they agreed to teach is off.
+  const [releasing, setReleasing] = useState(false);
+  const [releaseArmed, setReleaseArmed] = useState(false);
   // Availability signals for the chosen date, keyed by instructor id. Only
   // flagged instructors appear here; anyone absent is free that day. Loaded
   // from the sub_availability_on_date RPC whenever the date changes.
@@ -179,7 +206,7 @@ export default function AssignSubModal({
       if (!parentAssignment?.id) { setLoading(false); return; }
       const { data, error } = await supabase
         .from('assignment_substitutions')
-        .select('id, date, sub_instructor_id, sub_tier, status, decline_reason, email_sent_at, declined_at')
+        .select(SUB_ROW_COLUMNS)
         .eq('parent_assignment_id', parentAssignment.id)
         .eq('parent_assignment_type', parentType)
         .order('date', { ascending: true });
@@ -256,10 +283,32 @@ export default function AssignSubModal({
   const isResend = !!(minePending && minePending.email_sent_at);
   // Other people already holding a LIVE offer on this day. A settled day is not
   // counted here: the send refuses outright once somebody has accepted.
+  //
+  // email_sent_at is part of the test, not decoration. The row is written
+  // BEFORE its email goes, so a failed send can leave one behind, and the
+  // sentence this drives says the person "is already holding this day and
+  // hasn't answered" — which is false for somebody who was never contacted. An
+  // operator who reads that stops looking for anybody else, and the class goes
+  // uncovered on the strength of an email that never left.
   const othersPending = offersThisDate.filter(
-    (s) => s.status === 'pending' && s.sub_instructor_id !== subInstructorId,
+    (s) => s.status === 'pending' && s.email_sent_at && s.sub_instructor_id !== subInstructorId,
   );
-  const dayIsCovered = offersThisDate.some((s) => s.status === 'confirmed' || s.status === 'taught');
+  // The row that actually has the day, so it can be released. `taught` is
+  // deliberately not releasable here — that class happened and its pay line is
+  // real; unwinding it is a payroll correction, and the function refuses it.
+  const coveringRow = offersThisDate.find((s) => s.status === 'confirmed') ?? null;
+  const taughtRow = offersThisDate.find((s) => s.status === 'taught') ?? null;
+  const dayIsCovered = !!coveringRow || !!taughtRow;
+
+  // An armed release must not outlive the thing it was armed for. Changing the
+  // date re-points coveringRow at a DIFFERENT day's sub, and a "Yes, release
+  // it" button still sitting there would email somebody the operator never
+  // looked at that a class they agreed to teach is off.
+  //
+  // Declared HERE, below coveringRow, not up with the other effects: the
+  // dependency array is evaluated during render, so reading coveringRow before
+  // its `const` would throw on every single render rather than fail loudly once.
+  useEffect(() => { setReleaseArmed(false); }, [date, coveringRow?.id]);
 
   const chosenSub = eligible.find((i) => i.id === subInstructorId);
   const submitLabel = !subInstructorId || !date
@@ -269,6 +318,75 @@ export default function AssignSubModal({
       : othersPending.length > 0
         ? `Also ask ${shortName(chosenSub)}`
         : `Send offer to ${shortName(chosenSub)}`;
+
+  // Take the day back from whoever has it, or withdraw an offer nobody has
+  // answered yet.
+  //
+  // This is the action the picker has been telling operators to perform since
+  // multi-offer shipped ("cancel their cover first") while no surface in the
+  // product could do it. Dropping the old one-row-per-day upsert removed the
+  // only way to replace a confirmed sub, and nothing took its place: a sub who
+  // accepted and then fell ill froze the class-day, with the board still
+  // drawing a tick and the submit button greyed out.
+  async function releaseCover(row, stillNeedsCover) {
+    if (!row) return;
+    setErr(''); setOkMsg(''); setReleasing(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (!token) throw new Error('Not signed in.');
+      const resp = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/cancel-sub-cover`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+            apikey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+          },
+          body: JSON.stringify({ substitution_id: row.id, still_needs_cover: stillNeedsCover }),
+        },
+      );
+      const data = await resp.json();
+      if (!resp.ok) {
+        setErr(data.detail || data.message || data.error || 'Could not release this cover.');
+      } else {
+        const who = shortName((instructors ?? []).find((i) => i.id === row.sub_instructor_id));
+        // Say what actually happened, not what was attempted. The release
+        // succeeds even when the email does not, and an operator told "Dana has
+        // been told" who then closes the dialog is how Dana turns up to a class
+        // that was given away.
+        const told = data.notified_sub
+          ? `${who} has been emailed.`
+          : `We could NOT email ${who} — tell them yourself.`;
+        if (!data.was_confirmed) {
+          setOkMsg(`The offer to ${who} has been withdrawn. ${data.notified_sub ? 'They have been told.' : 'We could not email them, so let them know.'}`);
+        } else if (stillNeedsCover) {
+          setOkMsg(`${told} The day is open again — you can ask someone else now.`);
+        } else {
+          setOkMsg(`${told} The day is marked as not needing a sub, so it won't show as uncovered.`);
+        }
+      }
+      // Refresh either way. On failure the list is what tells the operator what
+      // the day ACTUALLY holds, which is exactly what a 409 is complaining about.
+      const { data: refreshed, error: refreshErr } = await supabase
+        .from('assignment_substitutions')
+        .select(SUB_ROW_COLUMNS)
+        .eq('parent_assignment_id', parentAssignment.id)
+        .eq('parent_assignment_type', parentType)
+        .order('date', { ascending: true });
+      if (!refreshErr && refreshed) setExistingSubs(refreshed);
+      // Tell the board, WITHOUT closing this modal: the next thing an operator
+      // does after releasing a cover is ask somebody else, and the after-school
+      // board's onSubmitted closes the dialog.
+      onChanged?.();
+      setReleaseArmed(false);
+    } catch (e) {
+      setErr(e.message || 'Could not release this cover.');
+    } finally {
+      setReleasing(false);
+    }
+  }
 
   async function submit() {
     setErr(''); setOkMsg(''); setBusy(true);
@@ -313,7 +431,7 @@ export default function AssignSubModal({
           : base);
         const { data: afterFail, error: afterFailErr } = await supabase
           .from('assignment_substitutions')
-          .select('id, date, sub_instructor_id, sub_tier, status, decline_reason, email_sent_at, declined_at')
+          .select(SUB_ROW_COLUMNS)
           .eq('parent_assignment_id', parentAssignment.id)
           .eq('parent_assignment_type', parentType)
           .order('date', { ascending: true });
@@ -329,7 +447,7 @@ export default function AssignSubModal({
       // Re-load the existing list so the day appears with email_sent_at set.
       const { data: refreshed } = await supabase
         .from('assignment_substitutions')
-        .select('id, date, sub_instructor_id, sub_tier, status, decline_reason, email_sent_at, declined_at')
+        .select(SUB_ROW_COLUMNS)
         .eq('parent_assignment_id', parentAssignment.id)
         .eq('parent_assignment_type', parentType)
         .order('date', { ascending: true });
@@ -376,8 +494,31 @@ export default function AssignSubModal({
               {existingSubs.map((s) => {
                 const subInst = (instructors ?? []).find((i) => i.id === s.sub_instructor_id);
                 return (
-                  <div key={s.id} style={{ fontSize: 13, color: INK, padding: '4px 0' }}>
-                    <strong>{fmtDate(s.date)}</strong> — {shortName(subInst)} · {s.sub_tier} · <span style={{ color: offerLabel(s).tone === 'bad' ? CORAL : offerLabel(s).tone === 'good' ? OK_GREEN : MUTED }}>{offerLabel(s).text}</span>
+                  <div key={s.id} style={{ fontSize: 13, color: INK, padding: '4px 0', display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+                    <span>
+                      <strong>{fmtDate(s.date)}</strong> — {shortName(subInst)} · {s.sub_tier} · <span style={{ color: offerLabel(s).tone === 'bad' ? CORAL : offerLabel(s).tone === 'good' ? OK_GREEN : MUTED }}>{offerLabel(s).text}</span>
+                    </span>
+                    {/* Taking back an offer nobody has answered. Without this
+                        the only way to undo asking the wrong person was to wait
+                        for them to answer, while they held a working Accept
+                        button — and the endpoint's whole withdraw path sat
+                        unreachable, which is the same defect this build set out
+                        to fix, inverted. Not armed in two steps like a release:
+                        nobody has agreed to anything yet. */}
+                    {s.status === 'pending' && (
+                      <button
+                        type="button"
+                        onClick={() => releaseCover(s, true)}
+                        disabled={busy || releasing}
+                        style={{
+                          background: 'none', border: 'none', padding: 0,
+                          color: MUTED, fontSize: 12, textDecoration: 'underline',
+                          cursor: (busy || releasing) ? 'default' : 'pointer',
+                        }}
+                      >
+                        {releasing ? 'Withdrawing…' : 'Withdraw'}
+                      </button>
+                    )}
                   </div>
                 );
               })}
@@ -514,9 +655,70 @@ export default function AssignSubModal({
               to see who else is already holding this day before they decide —
               otherwise the only way to find out is when two people both say yes
               and one of them has to be told no. */}
-          {dayIsCovered ? (
+          {taughtRow ? (
+            <div style={{ marginTop: 10, fontSize: 12, color: MUTED }}>
+              {shortName((instructors ?? []).find((i) => i.id === taughtRow.sub_instructor_id))} already
+              taught this day, so it can't be reassigned here. Change it in payroll if that's wrong.
+            </div>
+          ) : coveringRow ? (
+            /* The sentence that used to sit here told the operator to "cancel
+               their cover first" — an action that existed nowhere in the
+               product. Now it IS the action. Armed in two steps because
+               confirming it emails somebody that a day they agreed to teach is
+               off, and that is not an undo. */
             <div style={{ marginTop: 10, fontSize: 12, color: CORAL }}>
-              Somebody has already accepted this day. Cancel their cover first if you need a different person.
+              <div style={{ marginBottom: 6 }}>
+                {shortName((instructors ?? []).find((i) => i.id === coveringRow.sub_instructor_id))} has
+                accepted this day. Release it to ask somebody else.
+              </div>
+              {releaseArmed ? (
+                /* The two outcomes are genuinely different days, and only the
+                   operator knows which one this is. "Still need a sub" keeps
+                   the day on the coverage alarm; "no sub needed" settles it.
+                   Without the choice, releasing a cover because the regular is
+                   teaching after all would pin the day as uncovered with no way
+                   to clear it — and an alarm nobody can clear gets ignored. */
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <span style={{ color: INK }}>
+                    They'll be emailed that they're no longer needed. What happens to the day?
+                  </span>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      onClick={() => releaseCover(coveringRow, true)}
+                      disabled={releasing}
+                      style={{ ...btnSecondary, borderColor: CORAL, color: CORAL, opacity: releasing ? 0.5 : 1 }}
+                    >
+                      {releasing ? 'Releasing…' : 'Release — I still need a sub'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => releaseCover(coveringRow, false)}
+                      disabled={releasing}
+                      style={{ ...btnSecondary, opacity: releasing ? 0.5 : 1 }}
+                    >
+                      {releasing ? 'Releasing…' : 'Release — no sub needed now'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setReleaseArmed(false)}
+                      disabled={releasing}
+                      style={btnSecondary}
+                    >
+                      Keep it
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setReleaseArmed(true)}
+                  disabled={busy || releasing}
+                  style={{ ...btnSecondary, borderColor: CORAL, color: CORAL }}
+                >
+                  Release this cover
+                </button>
+              )}
             </div>
           ) : othersPending.length > 0 && subInstructorId ? (
             <div style={{ marginTop: 10, fontSize: 12, color: MUTED }}>

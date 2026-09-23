@@ -22,7 +22,7 @@ import AfterschoolSchedule from "./AfterschoolSchedule";
 import ClassScheduleView from "./ClassScheduleView.jsx";
 import NeedsCoverBanner from "../../components/NeedsCoverBanner.jsx";
 import { formatTimeText } from "../../lib/timeText.js";
-import { aggregateSubOffers, subSlotKey, subSlotLabel, subDisplayName, SUB_ACTIVE_STATUSES } from "../../lib/subCoverage.js";
+import { aggregateSubOffers, subSlotKey, subSlotLabel, subDisplayName, slotNeedsCover, SUB_ACTIVE_STATUSES } from "../../lib/subCoverage.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -612,7 +612,11 @@ export default function Schedule() {
       if (assignmentIds.length > 0) {
         const { data: subRows, error: subErr } = await supabase
           .from("assignment_substitutions")
-          .select("id, parent_assignment_id, date, status, decline_reason, sub_tier, sub_instructor_id, sub:instructors!sub_instructor_id(first_name, last_name, preferred_name)")
+          // email_sent_at is load-bearing, not decoration: aggregateSubSlot
+          // counts an offer only once its email has actually left, so a row
+          // arriving here without this column reads as "written but never
+          // sent" and every live offer would draw as a day needing cover.
+          .select("id, parent_assignment_id, date, status, decline_reason, sub_tier, sub_instructor_id, email_sent_at, cover_still_needed, sub:instructors!sub_instructor_id(first_name, last_name, preferred_name)")
           .eq("parent_assignment_type", "camp")
           .in("parent_assignment_id", assignmentIds);
         if (subErr) console.warn("[Schedule] sub load failed:", subErr.message);
@@ -2644,6 +2648,10 @@ export default function Schedule() {
           onSubmitted={() => {
             loadAll();
           }}
+          // A release changes the day without ending the operator's task: the
+          // next thing they do is ask somebody else. Reload the board, leave
+          // the dialog where it is.
+          onChanged={() => { loadAll(); }}
         />
       )}
       {notifyRemoval && (
@@ -3594,6 +3602,19 @@ function ProgramCard({ item, dayDate, subsByKey, cardBg, flash, getValidationFor
   // Only surface live subs (pending/confirmed/taught) — a declined sub leaves the lead covering.
   const leadSubActive = leadSub && SUB_ACTIVE_STATUSES.has(leadSub.status) ? leadSub : null;
   const devSubActive = devSub && SUB_ACTIVE_STATUSES.has(devSub.status) ? devSub : null;
+  // ...but a day that needs SOMEBODY still has to say so. None of the states
+  // that mean "nobody is coming" is an active status — everybody refused, the
+  // cover was released, the offer email never left — so on this board they all
+  // drew nothing and the card looked identical to a day that never needed a sub
+  // at all, while the banner at the top of this same page listed it. The
+  // after-school board already does this (slotNeedsCover + a date bound); this
+  // one did not, and two surfaces on one screen contradicting each other is how
+  // an alarm stops being believed.
+  const cardToday = todayIso();
+  const leadSubNeedsCover = !leadSubActive && leadSub && dayDate
+    && dayDate >= cardToday && slotNeedsCover(leadSub);
+  const devSubNeedsCover = !devSubActive && devSub && dayDate
+    && dayDate >= cardToday && slotNeedsCover(devSub);
   // In the day-grid each card is one weekday; only flag the conflict on the day it
   // actually falls (dayDate). In dateless views (no dayDate) show all conflict dates.
   const leadDayConflicts = dayDate ? leadSubNeeded.filter((d) => d === dayDate) : leadSubNeeded;
@@ -3737,6 +3758,9 @@ function ProgramCard({ item, dayDate, subsByKey, cardBg, flash, getValidationFor
       {leadSubActive && (
         <SubLine sub={leadSubActive} onClick={() => onSubClick && lead && onSubClick(session, lead)} />
       )}
+      {leadSubNeedsCover && (
+        <NeedsCoverPill slot={leadSub} onClick={() => onSubClick && lead && onSubClick(session, lead)} />
+      )}
       {leadDayConflicts.length > 0 && (
         <div style={{ fontSize: 11, color: CORAL, fontWeight: 600, lineHeight: 1.35, marginTop: 2 }}>
           ⚠ out {listDates(leadDayConflicts)} — needs a sub
@@ -3754,6 +3778,9 @@ function ProgramCard({ item, dayDate, subsByKey, cardBg, flash, getValidationFor
       )}
       {showDevelopingRow && devSubActive && (
         <SubLine sub={devSubActive} onClick={() => onSubClick && developing && onSubClick(session, developing)} />
+      )}
+      {showDevelopingRow && devSubNeedsCover && (
+        <NeedsCoverPill slot={devSub} onClick={() => onSubClick && developing && onSubClick(session, developing)} />
       )}
       {showDevelopingRow && devDayConflicts.length > 0 && (
         <div style={{ fontSize: 11, color: CORAL, fontWeight: 600, lineHeight: 1.35, marginTop: 2 }}>
@@ -3837,6 +3864,36 @@ function SlotRow({ label, assignment, session, role, dragStateRef, onClick, righ
 // Clickable sub indicator, rendered on its OWN line under the lead/developing
 // chip so it never competes for width in the narrow day cards. Truncates with
 // an ellipsis instead of wrapping. Click opens the assign-sub modal for that day.
+// A day where nobody is coming and the card would otherwise be blank. Says WHY
+// in the tooltip, because "needs cover" is the same three words whether
+// everybody refused, the cover was released, or the offer was never sent, and
+// the operator's next move differs in each case.
+function NeedsCoverPill({ slot, onClick }) {
+  const why = slot?.declineCount > 0
+    ? (slot.declineCount === 1 ? "1 person said no" : `${slot.declineCount} people said no`)
+    : slot?.cancelledCount > 0
+      ? "the cover was released"
+      : "nobody has been asked yet";
+  return (
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); if (onClick) onClick(); }}
+      title={`${why} — find a sub for this day`}
+      style={{
+        display: "inline-flex", alignItems: "center", gap: 4,
+        alignSelf: "flex-start", maxWidth: "100%",
+        marginTop: 2, padding: "1px 8px",
+        fontSize: 10, fontWeight: 600, color: CORAL,
+        background: `${CORAL}14`, border: `1px solid ${CORAL}44`,
+        borderRadius: 999, cursor: "pointer", fontFamily: "inherit",
+        whiteSpace: "nowrap", overflow: "hidden",
+      }}
+    >
+      needs cover
+    </button>
+  );
+}
+
 function SubLine({ sub, onClick }) {
   // One sentence per class-day, from the shared rule: the sub's name, or a count
   // when several people are still deciding. Never a name picked out of several

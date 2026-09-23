@@ -31,6 +31,13 @@ interface Body {
   decline_reason?: string;
 }
 
+// The one spelling of the race sentinel in this function. accept_sub_offer
+// writes it onto the people who were closed out when somebody else accepted
+// first; every reader that asks "did this person actually refuse?" compares
+// against it. It is a machine value living in a human free-text column, so it
+// is written in one place here and refused as input below.
+const RESERVED_DECLINE_REASON = 'covered_by_other';
+
 function fmtDate(d: string) {
   return new Date(`${d}T00:00:00`).toLocaleDateString('en-US', {
     weekday: 'long', month: 'long', day: 'numeric',
@@ -61,6 +68,24 @@ serve(async (req: Request) => {
     if (!substitutionId) return json({ error: 'missing_substitution_id' }, 400);
     if (action !== 'accept' && action !== 'decline') return json({ error: 'invalid_action' }, 400);
 
+    // 'covered_by_other' is how the product records that somebody LOST a race,
+    // not that they refused, and six readers treat that exact string as "this
+    // person did not really say no". decline_reason is otherwise free text the
+    // instructor writes, so the sentinel has to be refused on the way in: a
+    // decline carrying it would delete a genuine refusal from the coverage
+    // alarm and from the contact timeline.
+    //
+    // The database trigger refuses it too, but it cannot be the only guard.
+    // That trigger waves SERVICE ROLE writes through on purpose (every edge
+    // function here is service role, and auth.uid() is null for all of them),
+    // so the trigger closes the direct-PATCH route and this closes ours.
+    if (declineReason.toLowerCase() === RESERVED_DECLINE_REASON) {
+      return json({
+        error: 'reserved_decline_reason',
+        detail: 'Please word your reason differently - that exact phrase is reserved.',
+      }, 400);
+    }
+
     const supabase = adminClient();
 
     const { data: subRow, error: rowErr } = await supabase
@@ -83,7 +108,7 @@ serve(async (req: Request) => {
       // confusing and slightly insulting. The class simply went to whoever was
       // quicker, which is the whole point of asking several people.
       const coveredByOther = subRow.status === 'declined'
-        && subRow.decline_reason === 'covered_by_other';
+        && subRow.decline_reason === RESERVED_DECLINE_REASON;
       if (coveredByOther) {
         return json({ ok: true, status: 'covered_by_other', already_covered: true });
       }
@@ -111,7 +136,34 @@ serve(async (req: Request) => {
         console.error('[respond-to-sub-offer] accept rpc failed:', acceptErr);
         return json({ error: 'update_failed', detail: acceptErr.message }, 500);
       }
-      const result = (outcome ?? {}) as { outcome?: string; status?: string };
+      // `losers` is typed in, not cast away. accept_sub_offer builds it on every
+      // winning accept for exactly one reason -- its own header says the list is
+      // returned "so the edge fn can email them 'already covered'" -- and the
+      // narrower cast that used to be here silently dropped it, so the people
+      // closed out of a class-day were never told by any channel. They kept a
+      // live "Can you sub on Tuesday?" email with a working-looking Accept
+      // button for a day that was gone.
+      const result = (outcome ?? {}) as {
+        outcome?: string;
+        status?: string;
+        losers?: Array<{
+          sub_instructor_id: string;
+          email: string | null;
+          first_name: string | null;
+          preferred_name: string | null;
+        }>;
+      };
+      if (result.outcome === 'time_conflict') {
+        // They are already covering another class that overlaps this one. The
+        // pickers could not see it: sub_availability_on_date counts only
+        // confirmed and taught as busy, so two live offers left this person
+        // looking free in both. Refusing here is what stops one of the two
+        // rooms being empty.
+        return json({
+          error: 'time_conflict',
+          detail: 'You are already covering another class that overlaps this one. Contact the office if that is wrong.',
+        }, 409);
+      }
       if (result.outcome === 'lost') {
         // Their own offer has already been closed as covered by the RPC. Tell
         // them plainly rather than failing: they said yes, and the honest answer
@@ -144,11 +196,34 @@ serve(async (req: Request) => {
         console.error('[respond-to-sub-offer] coordination email failed:', e);
       }
 
+      // ── tell the people who did not get it ──
+      // Their offer rows were closed inside accept_sub_offer's transaction, so
+      // the card simply disappears from their portal at the next load. Without
+      // this they are never told anything at all: the only message they hold is
+      // the original ask, and somebody who replied "yes, I'll take it" by email
+      // rather than clicking Accept has blocked the afternoon out and may turn
+      // up. Same reasoning as the accept path's own consolation notice, for the
+      // people who never click.
+      try {
+        await notifyLosers(supabase, subRow, result.losers ?? []);
+      } catch (e) {
+        console.error('[respond-to-sub-offer] loser notification failed:', e);
+      }
+
       return json({ ok: true, status: 'confirmed' });
     }
 
     // ── decline path ──
-    const { error: updErr } = await supabase
+    // Guarded on status, not on id alone. The pending check at the top of this
+    // function ran two round trips ago, and a class-day can now be held by
+    // several people at once, so in that gap this very row can move: the sub
+    // pressing Accept in another tab confirms it, or somebody else's accept
+    // closes it as covered_by_other. An id-only write would then stamp
+    // 'declined' over a CONFIRMED row -- silently uncovering a class that three
+    // inboxes have already been told is covered -- or wipe the covered_by_other
+    // stamp, which is what makes a race loss read as a refusal on the timeline
+    // and fires a "they declined" alert for a day somebody is already teaching.
+    const { data: declinedRows, error: updErr } = await supabase
       .from('assignment_substitutions')
       .update({
         status: 'declined',
@@ -156,10 +231,26 @@ serve(async (req: Request) => {
         decline_reason: declineReason || null,
         updated_at: nowIso,
       })
-      .eq('id', substitutionId);
+      .eq('id', substitutionId)
+      .eq('status', 'pending')
+      .select('id');
     if (updErr) {
       console.error('[respond-to-sub-offer] decline update failed:', updErr);
       return json({ error: 'update_failed', detail: updErr.message }, 500);
+    }
+    if (!declinedRows || declinedRows.length === 0) {
+      // Nothing was written, so the row moved underneath us. Re-read and answer
+      // for the state it is ACTUALLY in rather than reporting a decline that
+      // did not happen and emailing an admin about it.
+      const { data: fresh } = await supabase
+        .from('assignment_substitutions')
+        .select('status, decline_reason')
+        .eq('id', substitutionId)
+        .maybeSingle();
+      if (fresh?.status === 'declined' && fresh.decline_reason === RESERVED_DECLINE_REASON) {
+        return json({ ok: true, status: 'covered_by_other', already_covered: true });
+      }
+      return json({ error: 'already_responded', current_status: fresh?.status ?? null }, 400);
     }
 
     // ── notify admin ──
@@ -170,50 +261,10 @@ serve(async (req: Request) => {
       supabase.from('org_branding').select('email_from_name, email_reply_to').eq('organization_id', subRow.organization_id).maybeSingle(),
     ]);
 
-    let curriculumName = '';
-    let locationName: string | null = null;
-    if (subRow.parent_assignment_type === 'camp') {
-      const { data: parent } = await supabase
-        .from('camp_assignments')
-        .select('camp_session_id')
-        .eq('id', subRow.parent_assignment_id)
-        .maybeSingle();
-      if (parent?.camp_session_id) {
-        const { data: sess } = await supabase
-          .from('camp_sessions')
-          .select('curriculum_name, location_name')
-          .eq('id', parent.camp_session_id)
-          .maybeSingle();
-        if (sess) {
-          curriculumName = sess.curriculum_name ?? '';
-          locationName = sess.location_name;
-        }
-      }
-    } else {
-      const { data: parent } = await supabase
-        .from('program_assignments')
-        .select('program_id')
-        .eq('id', subRow.parent_assignment_id)
-        .maybeSingle();
-      if (parent?.program_id) {
-        const { data: prog } = await supabase
-          .from('programs')
-          .select('curriculum, program_location_id')
-          .eq('id', parent.program_id)
-          .maybeSingle();
-        if (prog) {
-          curriculumName = prog.curriculum ?? '';
-          if (prog.program_location_id) {
-            const { data: loc } = await supabase
-              .from('program_locations')
-              .select('name')
-              .eq('id', prog.program_location_id)
-              .maybeSingle();
-            if (loc) locationName = loc.name;
-          }
-        }
-      }
-    }
+    const declineCtx = await loadClassContext(
+      supabase, subRow.parent_assignment_type, subRow.parent_assignment_id);
+    const curriculumName = declineCtx.curriculumName;
+    const locationName = declineCtx.locationName;
 
     const subFullName = [me.first_name, me.last_name].filter(Boolean).join(' ') || 'A sub';
     const friendlyDate = fmtDate(subRow.date);
@@ -280,6 +331,156 @@ serve(async (req: Request) => {
   }
 });
 
+// What class is this row about? ONE spelling, because this file used to answer
+// the question twice with two near-identical blocks (once for the decline
+// notice, once inside sendCoordinationEmail) and the loser notice below would
+// have made three. Returns empty-ish values rather than throwing: every caller
+// is building an email, and a missing curriculum name should degrade the
+// wording, never lose the message.
+async function loadClassContext(
+  supabase: ReturnType<typeof adminClient>,
+  parentType: string,
+  parentId: string,
+): Promise<{
+  curriculumName: string;
+  locationName: string | null;
+  regularId: string | null;
+  campSessionId: string | null;
+  programId: string | null;
+}> {
+  const out = {
+    curriculumName: '',
+    locationName: null as string | null,
+    regularId: null as string | null,
+    campSessionId: null as string | null,
+    programId: null as string | null,
+  };
+
+  if (parentType === 'camp') {
+    const { data: parent } = await supabase
+      .from('camp_assignments').select('instructor_id, camp_session_id')
+      .eq('id', parentId).maybeSingle();
+    if (!parent) return out;
+    out.regularId = parent.instructor_id;
+    out.campSessionId = parent.camp_session_id;
+    if (parent.camp_session_id) {
+      const { data: sess } = await supabase
+        .from('camp_sessions').select('curriculum_name, location_name')
+        .eq('id', parent.camp_session_id).maybeSingle();
+      if (sess) {
+        out.curriculumName = sess.curriculum_name ?? '';
+        out.locationName = sess.location_name;
+      }
+    }
+    return out;
+  }
+
+  if (parentType === 'program') {
+    const { data: parent } = await supabase
+      .from('program_assignments').select('instructor_id, program_id')
+      .eq('id', parentId).maybeSingle();
+    if (!parent) return out;
+    out.regularId = parent.instructor_id;
+    out.programId = parent.program_id;
+    if (parent.program_id) {
+      const { data: prog } = await supabase
+        .from('programs').select('curriculum, program_location_id')
+        .eq('id', parent.program_id).maybeSingle();
+      if (prog) {
+        out.curriculumName = prog.curriculum ?? '';
+        if (prog.program_location_id) {
+          const { data: loc } = await supabase
+            .from('program_locations').select('name')
+            .eq('id', prog.program_location_id).maybeSingle();
+          if (loc) out.locationName = loc.name;
+        }
+      }
+    }
+  }
+  return out;
+}
+
+// Told to everybody whose offer was closed out when somebody else accepted
+// first. Short on purpose: there is nothing for them to do, and the one thing
+// they need is to stop holding the afternoon.
+//
+// Each person is mailed SEPARATELY rather than bcc'd as a group, because these
+// are colleagues who were quietly competing for the same day and a shared
+// recipient list would show each of them who else was asked and who was slower.
+async function notifyLosers(
+  supabase: ReturnType<typeof adminClient>,
+  subRow: { parent_assignment_id: string; parent_assignment_type: string; date: string; organization_id: string },
+  losers: Array<{ email: string | null; first_name: string | null; preferred_name: string | null }>,
+) {
+  const withEmail = losers.filter((l) => l.email);
+  if (withEmail.length === 0) {
+    if (losers.length > 0) {
+      console.warn('[notifyLosers] closed-out subs have no email on file; nobody told', {
+        count: losers.length,
+      });
+    }
+    return;
+  }
+
+  const ctx = await loadClassContext(supabase, subRow.parent_assignment_type, subRow.parent_assignment_id);
+  const [{ data: org }, { data: branding }] = await Promise.all([
+    supabase.from('organizations').select('name').eq('id', subRow.organization_id).maybeSingle(),
+    supabase.from('org_branding').select('email_from_name').eq('organization_id', subRow.organization_id).maybeSingle(),
+  ]);
+  const senderFirstName = (branding?.email_from_name ?? org?.name ?? '').split(' ')[0] || 'the team';
+  const friendlyDate = fmtDate(subRow.date);
+  const className = ctx.curriculumName || 'that class';
+  const brand = await loadOrgBrand(supabase, subRow.organization_id);
+  const fromEmail = formatFromAddress(brand);
+
+  const subject = `${friendlyDate.replace(/^[A-Za-z]+, /, '')} is covered - thanks for considering it`;
+
+  for (const loser of withEmail) {
+    const first = loser.preferred_name || loser.first_name || 'there';
+    const html = `<!doctype html>
+<html><body style="margin:0;background:#FBFBFB;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#1a1a1a;">
+  <div style="max-width:560px;margin:0 auto;padding:24px;">
+    <p style="font-size:15px;line-height:1.55;margin:0 0 14px;">Hi ${escapeHtml(first)},</p>
+    <p style="font-size:15px;line-height:1.55;margin:0 0 14px;">Quick update: <strong>${escapeHtml(className)}</strong>${ctx.locationName ? ` at <strong>${escapeHtml(ctx.locationName)}</strong>` : ''} on <strong>${escapeHtml(friendlyDate)}</strong> has been covered by someone else, so please don't hold the time.</p>
+    <p style="font-size:15px;line-height:1.55;margin:0 0 14px;">Nothing for you to do. Thanks for being willing, and sorry for the back and forth.</p>
+    <p style="font-size:14px;line-height:1.55;margin:18px 0 0;">- ${escapeHtml(senderFirstName)}${org?.name ? ` @ ${escapeHtml(org.name)}` : ''}</p>
+  </div>
+</body></html>`;
+    const text = [
+      `Hi ${first},`,
+      ``,
+      `Quick update: ${className}${ctx.locationName ? ` at ${ctx.locationName}` : ''} on ${friendlyDate} has been covered by someone else, so please don't hold the time.`,
+      ``,
+      `Nothing for you to do. Thanks for being willing, and sorry for the back and forth.`,
+      ``,
+      `- ${senderFirstName}${org?.name ? ` @ ${org.name}` : ''}`,
+    ].join('\n');
+
+    // One person's bounce must not stop the rest being told.
+    try {
+      const r = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
+        // tenant_reply_to, not reply_to: the latter falls back to the PLATFORM
+        // address when a tenant has none of its own, so an instructor hitting
+        // Reply on "your day was covered" would be writing to Enrops about
+        // another company's class instead of to the office that asked them.
+        // Undefined is the honest answer when the tenant has no mailbox.
+        body: JSON.stringify({
+          from: fromEmail, to: loser.email,
+          reply_to: brand.tenant_reply_to ?? undefined,
+          subject, html, text,
+        }),
+      });
+      if (!r.ok) {
+        console.error('[notifyLosers] resend failed:', r.status, (await r.text()).slice(0, 300));
+      }
+    } catch (e) {
+      console.error('[notifyLosers] resend threw:', e);
+    }
+  }
+}
+
 // 3-way coordination email fired when a sub ACCEPTS an offer. TO: regular
 // + sub. CC: org alert_email (admin). The middle paragraph comes from
 // organizations.sub_coordination_notes — tenant-configurable, empty
@@ -295,46 +496,10 @@ async function sendCoordinationEmail(
   me: { id: string; first_name: string | null; last_name: string | null; email: string },
 ) {
   // Regular instructor (parent's instructor_id) + curriculum/venue context.
-  let regularId: string | null = null;
-  let curriculumName = '';
-  let locationName: string | null = null;
-  let campSessionId: string | null = null;
-  let programId: string | null = null;
-  if (subRow.parent_assignment_type === 'camp') {
-    const { data: parent } = await supabase
-      .from('camp_assignments').select('instructor_id, camp_session_id')
-      .eq('id', subRow.parent_assignment_id).maybeSingle();
-    if (!parent) return;
-    regularId = parent.instructor_id;
-    campSessionId = parent.camp_session_id;
-    if (parent.camp_session_id) {
-      const { data: sess } = await supabase
-        .from('camp_sessions').select('curriculum_name, location_name')
-        .eq('id', parent.camp_session_id).maybeSingle();
-      if (sess) { curriculumName = sess.curriculum_name ?? ''; locationName = sess.location_name; }
-    }
-  } else if (subRow.parent_assignment_type === 'program') {
-    const { data: parent } = await supabase
-      .from('program_assignments').select('instructor_id, program_id')
-      .eq('id', subRow.parent_assignment_id).maybeSingle();
-    if (!parent) return;
-    regularId = parent.instructor_id;
-    programId = parent.program_id;
-    if (parent.program_id) {
-      const { data: prog } = await supabase
-        .from('programs').select('curriculum, program_location_id')
-        .eq('id', parent.program_id).maybeSingle();
-      if (prog) {
-        curriculumName = prog.curriculum ?? '';
-        if (prog.program_location_id) {
-          const { data: loc } = await supabase
-            .from('program_locations').select('name')
-            .eq('id', prog.program_location_id).maybeSingle();
-          if (loc) locationName = loc.name;
-        }
-      }
-    }
-  }
+  const ctx = await loadClassContext(
+    supabase, subRow.parent_assignment_type, subRow.parent_assignment_id);
+  const { curriculumName, locationName, campSessionId, programId } = ctx;
+  const regularId = ctx.regularId;
   if (!regularId) return;
 
   const [{ data: regular }, { data: org }, { data: branding }] = await Promise.all([
