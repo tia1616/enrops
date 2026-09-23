@@ -56,3 +56,29 @@ export function collectedCents(
 export function externalCount(regs: RegistrationRow[]): number {
   return regs.filter((r) => r.payment_method == null).length;
 }
+
+export interface FamilyCreditRow {
+  status: string;                  // 'active' | 'spent' | 'refunded' | 'void'
+  amount_cents: number | null;
+}
+
+/**
+ * Σ credit still OWED to families. Money layer section 6: "A credit is money
+ * owed, not revenue... and is not zeroed."
+ *
+ * Deliberately NOT part of `collectedCents`. The business took that cash and
+ * still holds it, so collected is right as it stands; this is the obligation
+ * sitting against it, reported beside it and never subtracted from it.
+ *
+ * 'active' is the entire predicate because it is equivalent to the claim rather
+ * than merely correlated with it: 'spent' is no longer owed, 'refunded' was
+ * paid back in cash, and 'void' was withdrawn as issued in error.
+ *
+ * Unlike every other figure here this is a BALANCE, not a flow, so the SQL does
+ * not date-filter it - a credit issued last term is still owed today.
+ */
+export function creditOutstandingCents(credits: FamilyCreditRow[]): number {
+  return credits
+    .filter((c) => c.status === 'active')
+    .reduce((sum, c) => sum + (c.amount_cents ?? 0), 0);
+}

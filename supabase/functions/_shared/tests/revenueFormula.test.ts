@@ -11,6 +11,8 @@ import {
   RegistrationRow,
   InstallmentRow,
   RefundRow,
+  creditOutstandingCents,
+  FamilyCreditRow,
 } from '../revenueFormula.ts';
 
 const reg = (payment_method: string | null, payment_status: string, amount_cents: number | null): RegistrationRow =>
@@ -85,4 +87,37 @@ Deno.test('mixed realistic set', () => {
 
 Deno.test('null amount_cents is treated as 0', () => {
   assertEquals(collectedCents([reg('stripe', 'paid', null)], [inst('paid', null as unknown as number)], []), 0);
+});
+
+// ── credit outstanding ──────────────────────────────────────────────────────
+// The point of these is the PREDICATE, not the addition: three of the four
+// statuses are money that is no longer owed, and counting any of them would
+// overstate the business's liability on its own money screen.
+const cr = (status: string, amount_cents: number | null): FamilyCreditRow => ({ status, amount_cents });
+
+Deno.test('credit outstanding: only active credits are still owed', () => {
+  const credits = [
+    cr('active', 24000),    // +24000
+    cr('active', 10000),    // +10000
+    cr('spent', 50000),     // already used against a registration
+    cr('refunded', 50000),  // paid back in cash
+    cr('void', 50000),      // issued in error and withdrawn
+  ];
+  assertEquals(creditOutstandingCents(credits), 34000);
+});
+
+Deno.test('credit outstanding: no credits is zero, not NaN', () => {
+  assertEquals(creditOutstandingCents([]), 0);
+});
+
+Deno.test('credit outstanding: null amount_cents is treated as 0', () => {
+  assertEquals(creditOutstandingCents([cr('active', null)]), 0);
+});
+
+Deno.test('credit outstanding is NOT folded into collected', () => {
+  // A credited registration collected real cash and the business still holds
+  // it, so `collected` must not move. Section 6: "not zeroed".
+  const regs = [reg('stripe', 'paid', 24000)];
+  assertEquals(collectedCents(regs, [], []), 24000);
+  assertEquals(creditOutstandingCents([cr('active', 24000)]), 24000);
 });

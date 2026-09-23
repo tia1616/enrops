@@ -142,9 +142,14 @@ Deno.serve(async (req: Request) => {
     const fromInstant = localDayStartUtc(dateFrom, tz);
     const toInstant = localDayStartUtc(nextDayStr(dateTo), tz);
 
+    // `family_credit` is in the DEFAULT set on purpose. A credit is money the
+    // business owes a family (money layer section 6), so a bookkeeper who
+    // exports without naming types must not silently get a file that shows the
+    // cash and hides the obligation attached to it. Nothing changes for anyone
+    // until a credit is actually issued, because the table is empty until then.
     const types = Array.isArray(body.record_types) && body.record_types.length
       ? new Set(body.record_types)
-      : new Set(['registration', 'contractor_payout']);
+      : new Set(['registration', 'contractor_payout', 'family_credit']);
 
     const rows: string[][] = [];
 
@@ -223,6 +228,57 @@ Deno.serve(async (req: Request) => {
           p.status ?? '',
           p.stripe_transfer_id ?? (p.via_stripe ? '' : 'manual'),
           p.id,
+        ]);
+      }
+    }
+
+    // ── family credits (money OWED, not money moved) ─────────────────────
+    // A credit is cash the business KEPT and now owes back in class value, so
+    // it is its own row type rather than an adjustment to a registration's.
+    // The amount is positive and lives in gross_cents, matching how
+    // contractor_payout already records money flowing the other way - this file
+    // has always distinguished direction by `type`, not by sign, and a second
+    // convention would be worse than the one it has.
+    //
+    // No Stripe object id, ever: issuing a credit makes no Stripe call, so the
+    // column is genuinely empty rather than unknown.
+    if (types.has('family_credit')) {
+      const { data: credits, error: crErr } = await supabase
+        .from('family_credits')
+        .select(`
+          id, amount_cents, status, reason, created_at,
+          parents ( first_name, last_name ),
+          registrations ( programs ( curriculum, term ), camp_sessions ( curriculum_name ) )
+        `)
+        .eq('organization_id', orgId)
+        .gte('created_at', fromInstant)
+        .lt('created_at', toInstant)
+        .order('created_at', { ascending: true });
+      if (crErr) {
+        console.error('[export-finances] family_credits query failed:', crErr.message);
+        return json({ error: 'query_failed', detail: 'family_credits' }, 500);
+      }
+      for (const c of (credits ?? []) as any[]) {
+        const parent = c.parents ?? {};
+        const counterparty = `${parent.first_name ?? ''} ${parent.last_name ?? ''}`.trim();
+        const reg = c.registrations ?? {};
+        const program = reg.programs?.curriculum ?? reg.camp_sessions?.curriculum_name ?? '';
+        rows.push([
+          localDateOf(c.created_at, tz),
+          'family_credit',
+          String(c.amount_cents ?? ''),
+          '', // stripe_fee_cents - no Stripe call is made when a credit is issued
+          '', // application_fee_cents - N/A
+          '', // net_cents - nothing settled; this is a liability, not a transfer
+          counterparty,
+          program,
+          reg.programs?.term ?? orgTerm,
+          // Both facts, because they answer different questions: `status` is
+          // whether it is still owed, `reason` is which side ended the
+          // enrollment - and reason is recorded nowhere else.
+          `${c.status ?? ''}${c.reason ? ` (${c.reason})` : ''}`,
+          '', // stripe_object_id - a credit never touches Stripe
+          c.id,
         ]);
       }
     }

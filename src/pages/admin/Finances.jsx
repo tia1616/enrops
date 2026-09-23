@@ -1816,6 +1816,11 @@ function ActivityTab({ org }) {
   const expected = Number(summary.expected_soon_cents || 0);
   const paidFam = Number(summary.paid_count || 0);
   const external = Number(summary.external_count || 0);
+  // Money layer section 6: "A credit is money owed, not revenue. It shows on the
+  // money dashboard and is not zeroed." Deliberately NOT subtracted from
+  // `collected` - the business really did take that cash and still holds it;
+  // what this adds is the obligation attached to it.
+  const creditOwed = Number(summary.credit_outstanding_cents || 0);
 
   return (
     <Card>
@@ -1831,6 +1836,18 @@ function ActivityTab({ org }) {
       <div style={{ display: "flex", gap: 22, flexWrap: "wrap", margin: "12px 0 16px" }}>
         <RAStat label="Refunded" value={fmtCents(refunded)} />
         {expected > 0 && <RAStat label="Expected soon" value={fmtCents(expected)} note="installments due" />}
+        {/* Hidden at zero, like "Expected soon" - an operator who has never
+            issued a credit does not need a permanent $0.00 explaining a feature
+            they have not used.
+
+            THE NOTE IS NOT DECORATION. Every other figure in this band is scoped
+            to the period selector; this one is a running balance and ignores it,
+            because a credit issued last term is still owed today and must not
+            vanish when someone switches to "last 30 days". Saying "all time"
+            is what stops the number reading as a bug when it does not move. */}
+        {creditOwed > 0 && (
+          <RAStat label="Credit owed" value={fmtCents(creditOwed)} note="to families, all time" />
+        )}
         <RAStat label="Paid families" value={String(paidFam)} />
       </div>
 
