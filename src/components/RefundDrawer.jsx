@@ -519,9 +519,31 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
         // recorded" while $240 sits in the ledger - and that sentence is the
         // one they repeat to the family, with no email to contradict it.
         const written = data?.credited_cents ?? amountCents;
+        // NAME THE TICK BOX, because the credit just took them off the roster.
+        // A credit always withdraws, so by the time this alert is read the
+        // child is gone from the class and the obvious reading of "go to
+        // Message families" is that they cannot be reached at all. They can:
+        // they are in the "families who have left or been refunded" group,
+        // which is off by default. CancelClassModal already warns about this
+        // exact trap for refunds; the credit path is worse, because a refund
+        // at least announces itself on the family's card and a credit is
+        // completely silent. Caught by Jessica walking staging, 2026-09-23.
+        //
+        // AND IT IS CONDITIONAL, because `cancel_failed` is appended to THIS
+        // alert a few lines down and says "They are still on the roster -
+        // withdraw them manually". An unconditional "this has taken them off
+        // the roster" contradicts that note inside one alert box, and it wins,
+        // because it is two paragraphs higher. That is the same mistake the
+        // reserve_aborted note above documents and refuses to repeat: the seat
+        // has ONE owner in this alert, and when the withdrawal failed the
+        // owner is that note, not this sentence.
+        const seatFreed = !data?.cancel_failed;
         alert(
           `${fmtCents(written)} credit recorded${data?.already_existed ? " (it was already issued — no second credit was created)" : ""}.\n\n` +
-          `They have NOT been emailed. Tell them about it — Class rosters › Message families.` +
+          (seatFreed
+            ? `They have NOT been emailed, and this has taken them off the class roster.\n\n` +
+              `To tell them: Class rosters › Message families, then tick "Also include families who have left or been refunded" — they won't show up without it.`
+            : `They have NOT been emailed. Tell them from Class rosters › Message families — do that BEFORE you withdraw them by hand, while they are still on the roster.`) +
           (notes.length > 0 ? `\n\n${notes.join("\n\n")}` : ""),
         );
       } else if (notes.length > 0) {
@@ -807,9 +829,17 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
                               ? "This class is still running, so we've assumed the family pulled out. Change it if you cancelled their place."
                               : "We couldn't check whether this class is cancelled, so we haven't assumed either way — pick the one that happened."}
                         </div>
+                        {/* SAID BEFORE THE ACTION, not only in the alert after
+                            it. A credit always withdraws, so issuing one takes
+                            the child off the roster - and the easiest way to
+                            tell the family is while they are still on it.
+                            Naming the order here means the operator never has
+                            to discover the tick box at all. */}
                         <div style={{ fontSize: 12, color: INK, marginTop: 10, lineHeight: 1.6 }}>
                           <strong>Nothing is emailed.</strong> They won't know about this credit until you tell
-                          them, so message them once you've issued it.
+                          them. Easiest is to message them <em>first</em>, while they're still on the roster.
+                          If you issue it now, you can still reach them from Message families by ticking
+                          &ldquo;Also include families who have left or been refunded&rdquo;.
                         </div>
                       </div>
                     )}
