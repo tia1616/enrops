@@ -65,7 +65,14 @@ function humanError(code, payload) {
     case "invalid_amount":
       return "Enter a refund amount greater than zero.";
     case "stripe_refund_failed":
-      return `Stripe couldn't process the refund${payload?.stripe_message ? `: ${payload.stripe_message}` : ""}. Nothing was charged back.`;
+      // TWO DIFFERENT ANSWERS, because "Stripe said no" and "Stripe never
+      // answered" are not the same fact. On the second we genuinely do not
+      // know whether the money moved, so claiming "nothing was charged back"
+      // is a guess the operator would act on - and acting on it means
+      // refunding or crediting the same dollars again.
+      return payload?.outcome_unknown
+        ? `We didn't get an answer back from Stripe${payload?.stripe_message ? `: ${payload.stripe_message}` : ""}. The refund may or may not have gone through, so we've held this amount rather than releasing it. Check the payment in Stripe before trying again.`
+        : `Stripe couldn't process the refund${payload?.stripe_message ? `: ${payload.stripe_message}` : ""}. Nothing was charged back.`;
     case "cancel_failed_after_refund":
       return "The refund went through, but freeing the spot didn't. Refresh the roster — if the family is still listed, use Remove or try again.";
     // The two outcomes of the withdraw path. Both used to fall through to the
@@ -456,6 +463,37 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
           `Check the amount actually refunded before trying again.`,
         );
       }
+      if (data?.stripe_aborted) {
+        // Stripe refused, or never answered, on a later payment. The earlier
+        // ones DID go back and the seat was handled, so this is a note on a
+        // success - but the two cases need different next steps, and only one
+        // of them is safe to describe as "didn't go through".
+        notes.push(
+          (data.stripe_aborted_unknown
+            ? `Part of this refund is UNRESOLVED — we didn't get an answer back from Stripe (${data.stripe_aborted}), so it may or may not have gone through. We've held that amount rather than releasing it. Check the payment in Stripe.`
+            : `Part of this refund didn't go through: ${data.stripe_aborted}.`) +
+          ` ${fmtCents(data?.total_refunded_cents)} has been refunded in total.`,
+        );
+      }
+      if (data?.reserve_aborted) {
+        // A note on a SUCCESS, not an error: money did move, so telling the
+        // operator only "it failed" sends them to press Refund again on a
+        // charge that has already been partly returned.
+        //
+        // IT SAYS NOTHING ABOUT THE SPOT. An earlier draft asserted "their spot
+        // and scheduled payments were still handled", which is false in two
+        // reachable states: the operator may have chosen "keep their spot", in
+        // which case nothing was withdrawn and nothing was paused; and the
+        // withdrawal may have failed, which the `cancel_failed` note directly
+        // above already reports - so the two would have contradicted each other
+        // in the same alert. The seat has its own note; this one owns the money.
+        notes.push(
+          (data.reserve_aborted === "amount_exceeds_eligible_now"
+            ? `Only part of this refund went through — someone else refunded or credited this registration while it was open, so the rest couldn't. `
+            : `Only part of this refund went through — we couldn't record the rest. `) +
+          `${fmtCents(data?.total_refunded_cents)} has been refunded in total. Check that before trying again.`,
+        );
+      }
       // THE HEADLINE HAS TO MATCH WHAT ACTUALLY HAPPENED. "The family has their
       // money back" is false on a credit - the money is precisely what they did
       // NOT get back - and it is the sentence an operator would repeat to them.
@@ -490,7 +528,14 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
           // Same rule as the alert: report what was written, not what was asked
           // for, so a caller that displays or totals this cannot inherit the
           // wrong number from a retry.
-          amountCents: isCredit ? (data?.credited_cents ?? amountCents) : amountCents,
+          // WHAT MOVED, on BOTH paths. The rule above was applied to credits and
+          // left off refunds, and this round created the first case where a
+          // refund's actual total can be smaller than the typed one: a partial
+          // walk now returns success. `total_refunded_cents` is the honest
+          // figure and was sitting unread.
+          amountCents: isCredit
+            ? (data?.credited_cents ?? amountCents)
+            : (data?.total_refunded_cents ?? amountCents),
           cancelled: isCredit || seatChoice === "withdraw",
           credited: isCredit,
         });

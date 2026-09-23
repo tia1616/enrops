@@ -1044,10 +1044,10 @@ async function handleChargeRefunded(admin: SupabaseClient, event: Stripe.Event) 
     if (ownRowId) {
       const { data: ownRow } = await admin
         .from('refunds')
-        .select('id, stripe_refund_id')
+        .select('id, stripe_refund_id, status')
         .eq('id', ownRowId)
         .maybeSingle();
-      const own = ownRow as { id: string; stripe_refund_id: string | null } | null;
+      const own = ownRow as { id: string; stripe_refund_id: string | null; status: string | null } | null;
       if (own) {
         if (!own.stripe_refund_id) {
           // Writing the same value refund-registration is about to write is
@@ -1060,6 +1060,41 @@ async function handleChargeRefunded(admin: SupabaseClient, event: Stripe.Event) 
             .is('stripe_refund_id', null);
           if (healErr && (healErr as { code?: string }).code !== '23505') {
             console.error('[charge.refunded] could not link the in-app refund row:', healErr);
+          }
+        }
+        // STRIPE IS THE AUTHORITY ON WHETHER THE MONEY MOVED, and this event
+        // says it did. Previously this branch linked the id and left `status`
+        // alone, which stranded two real states:
+        //   'pending'  - the in-app call died before it could record success,
+        //                so the row held its share of the ceiling forever.
+        //   'failed'   - the refund SUCCEEDED at Stripe but the reply timed
+        //                out, so enrops released the ceiling and the operator
+        //                could hand the same dollars out again as a credit.
+        // Promoting here fixes both, and it is the only place that can: enrops
+        // never learns the outcome of a request it did not get an answer to.
+        // ONLY WHEN STRIPE SAYS 'succeeded'. `succeeded` above is filtered on
+        // `!== 'failed'`, so it still carries refunds Stripe is only PENDING on
+        // - an ACH return, typically. Promoting one of those would post money
+        // into `get_revenue_summary` and `get_revenue_activity` before it
+        // exists, breaking the rule this file states 90 lines up: "A refund is
+        // only MONEY once Stripe says 'succeeded'."
+        if (refund.status === 'succeeded' && own.status !== 'succeeded') {
+          const { error: statusErr } = await admin
+            .from('refunds')
+            .update({
+              status: 'succeeded',
+              // STRIPE'S timestamp, not "when this webhook ran" - both revenue
+              // reads bucket by succeeded_at, so a retry delivered days later,
+              // or a replay, would otherwise drop the money into the wrong
+              // reporting period. Same rule as recordExternalRefund below.
+              succeeded_at: refund.created
+                ? new Date(refund.created * 1000).toISOString()
+                : new Date().toISOString(),
+            })
+            .eq('id', own.id)
+            .neq('status', 'succeeded');
+          if (statusErr) {
+            console.error('[charge.refunded] could not promote the in-app refund row to succeeded:', statusErr);
           }
         }
         continue; // Enrops-initiated. refund-registration owns the fee refund.

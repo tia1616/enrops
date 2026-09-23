@@ -53,8 +53,21 @@ const successBody = fnCode.slice(i, end + 1);
 
 // Keys that describe something that did NOT happen. `receipt_sent`/`receipt_reason`
 // predate this and are already surfaced by the drawer's own receipt handling.
-const WARNING_KEYS = [...successBody.matchAll(/^\s*(margin_[a-z_]+|cancel_failed|fee_lookup_[a-z_]+)\s*:/gm)]
-  .map((m) => m[1]);
+// ALLOWLIST THE ORDINARY KEYS, RATCHET EVERYTHING ELSE. This used to name the
+// warning prefixes it knew about - margin_*, cancel_failed, fee_lookup_* - which
+// meant a NEW warning key was invisible to the guard whose entire job is to
+// catch new warning keys. `reserve_aborted` and `stripe_aborted` were added to
+// the success payload and this test stayed green without ever considering them.
+// Inverting it means the next one fails here until somebody surfaces it.
+const NOT_WARNINGS = new Set([
+  'refunded_cents', 'total_refunded_cents', 'registration_id', 'refunds',
+  'receipt_sent', 'receipt_reason', 'withdrawn', 'credited', 'credit_id',
+  'credited_cents', 'credit_reason', 'already_existed', 'pending_charges_stopped',
+  'pending_cents_stopped', 'success', 'held_cents', 'cancelled',
+]);
+const WARNING_KEYS = [...successBody.matchAll(/^\s*([a-z][a-z0-9_]*)\s*:/gm)]
+  .map((m) => m[1])
+  .filter((k) => !NOT_WARNINGS.has(k));
 
 ok('the success response carries warning keys', WARNING_KEYS.length >= 2,
   `expected the money-moved-but warnings, found: ${WARNING_KEYS.join(', ') || 'none'}`);

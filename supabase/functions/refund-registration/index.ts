@@ -871,7 +871,48 @@ serve(async (req: Request) => {
     const totalCredited = ((creditRows as Array<{ amount_cents: number }> | null) ?? [])
       .reduce((s, r) => s + (r.amount_cents || 0), 0);
 
-    const eligible = totalPaid - totalRefunded - totalCredited;
+    // THE CEILING COMES FROM THE DATABASE, because there must be exactly one of
+    // it. This line used to be `totalPaid - totalRefunded - totalCredited`, a
+    // fourth copy of a rule the migration writes once - and it had already
+    // drifted, counting only `status = 'succeeded'` refunds while every SQL
+    // caller counted reservations too. An operator was shown a number the
+    // server was certain to refuse, told to reopen, and shown the same number
+    // again: a loop with no exit and a false explanation.
+    //
+    // `registration_available_cents` is now that one implementation, and it
+    // answers the honest question - is this money reserved or gone - rather
+    // than the proxy "is the row not failed". Both writers call it under the
+    // lock; this call is the same rule, read before the lock, so it stays a
+    // pre-check and the writers remain the guard.
+    const { data: availData, error: availErr } = await supabase
+      .rpc('registration_available_cents', {
+        p_registration_id: registrationId,
+        p_paid_cents: totalPaid,
+      });
+    if (availErr || typeof availData !== 'number') {
+      // FAIL CLOSED, for the same reason the credit read above does: not being
+      // able to compute what is left is not the same as everything being left,
+      // and this number gates the branch that hands money back.
+      console.error('[refund] ceiling read failed:', availErr);
+      return json({ error: 'lookup_failed' }, 500);
+    }
+    const eligible = availData;
+
+    // TWO DIFFERENT FACTS, REPORTED SEPARATELY, because collapsing them makes
+    // the screen lie in a way that repairs itself and so never gets reported.
+    //
+    // `total_refunded_cents` stays SUCCEEDED-ONLY. It sits under the words
+    // "Already refunded", which mean the family has the money. Deriving it from
+    // the ceiling instead would have folded in reservations: an operator whose
+    // colleague's refund died mid-flight would read "Already refunded $240" two
+    // minutes later, and "Already refunded $0" thirty minutes after that. A
+    // money figure that reverts on its own is worse than no figure.
+    //
+    // `held_cents` is the rest of the gap - money reserved or unresolved, not
+    // yet known to have moved. It explains why `eligible` is lower than
+    // paid-minus-refunded without claiming the family was paid.
+    const totalRefundedSucceeded = Object.values(refundedAgg).reduce((s, v) => s + v, 0);
+    const heldCents = Math.max(0, totalPaid - totalCredited - totalRefundedSucceeded - eligible);
 
     // PREVIEW: return the numbers and refund nothing. The drawer used to
     // recompute this from installments/registrations itself, which meant the
@@ -924,10 +965,13 @@ serve(async (req: Request) => {
         preview: true,
         eligible_cents: eligible,
         total_paid_cents: totalPaid,
-        total_refunded_cents: totalRefunded,
+        total_refunded_cents: totalRefundedSucceeded,
         // Shown so the ceiling explains itself. An operator who sees "$240 paid,
         // $0 refunded, $0 left" with no third number has been told a riddle.
         total_credited_cents: totalCredited,
+        // Reserved or unresolved: counted against the ceiling, but NOT money we
+        // can say the family has.
+        held_cents: heldCents,
         program_cancelled: programCancelled,
         // WHETHER A CREDIT IS EVEN POSSIBLE ON THIS REGISTRATION. The credit
         // path refuses when the real charge could not be read from Stripe,
@@ -952,8 +996,9 @@ serve(async (req: Request) => {
         error: 'amount_exceeds_eligible',
         eligible_cents: eligible,
         total_paid_cents: totalPaid,
-        total_refunded_cents: totalRefunded,
+        total_refunded_cents: totalRefundedSucceeded,
         total_credited_cents: totalCredited,
+        held_cents: heldCents,
       }, 400);
     }
 
@@ -1198,6 +1243,16 @@ serve(async (req: Request) => {
     // refunded. We stop refunding further slots, but the bookkeeping below still
     // has to record what did move.
     let feeLookupAborted = false;
+    // Set when a slot could not be RESERVED after an earlier slot had already
+    // been refunded - the ceiling moved under us mid-walk, or the reserve write
+    // failed. Same contract as feeLookupAborted: stop reserving further slots,
+    // but let the bookkeeping below record everything that did move.
+    let reserveAbortedCode: string | null = null;
+    // Set when Stripe refused or never answered on a slot AFTER an earlier slot
+    // had already been refunded. Same contract again: stop, but let the
+    // bookkeeping below record what did move. `unknown` carries whether we know
+    // the money did not go - the operator's next step differs entirely.
+    let stripeFailedAfterMoneyMoved: { code: string; message: string; unknown: boolean } | null = null;
     // Set when the family was refunded but the withdrawal write failed. The
     // instalment pause and the receipt still have to run - a refunded family
     // whose future instalments keep charging is the worst outcome here.
@@ -1238,21 +1293,29 @@ serve(async (req: Request) => {
         });
       if (insErr || !reservedId) {
         console.error('[refund] reserving the refund slot failed:', insErr);
-        // FC004 is the ceiling moving under us - somebody else refunded or
-        // credited this registration while we were reading Stripe. It is a
-        // different fact from a failed write, and on a multi-slot refund it
-        // matters which slots already went through, so `partial` is carried on
-        // both. Nothing was charged back for THIS slot either way.
-        if (insErr?.code === 'FC004') {
-          return json({
-            error: 'amount_exceeds_eligible_now',
-            partial: refundsCreated.length > 0 ? refundsCreated : undefined,
-          }, 409);
+        // ONCE MONEY HAS MOVED, WE DO NOT RETURN FROM INSIDE THE LOOP.
+        //
+        // Everything that finishes a refund - advancing payment_status,
+        // pausing the instalments, cancelling the registration, the receipt,
+        // the enrolment event - lives BELOW this loop. Returning here with
+        // slot 1 already refunded in Stripe skips all of it, which is the
+        // 2026-09-08 shape: a family refunded on their card while the roster
+        // still shows them enrolled and their remaining instalments keep
+        // charging. The fee-lookup handler forty lines down already solved
+        // this; FC004 is far likelier to fire than that one, because it is the
+        // designed outcome of the race the lock exists to catch.
+        //
+        // So: refuse outright only while nothing has moved. Otherwise record
+        // why we stopped, break, and let the bookkeeping below run over the
+        // slots that did succeed.
+        const stoppedCode = insErr?.code === 'FC004'
+          ? 'amount_exceeds_eligible_now'
+          : 'refund_row_insert_failed';
+        if (refundsCreated.length === 0) {
+          return json({ error: stoppedCode }, insErr?.code === 'FC004' ? 409 : 500);
         }
-        return json({
-          error: 'refund_row_insert_failed',
-          partial: refundsCreated.length > 0 ? refundsCreated : undefined,
-        }, 500);
+        reserveAbortedCode = stoppedCode;
+        break;
       }
       const refundRowId = reservedId as string;
 
@@ -1455,26 +1518,97 @@ serve(async (req: Request) => {
         });
         remaining -= refundThisPi;
       } catch (err) {
-        const stripeErr = err as { message?: string; raw?: { message?: string; code?: string } };
+        const stripeErr = err as {
+          message?: string; type?: string;
+          raw?: { message?: string; code?: string; type?: string };
+        };
         const errMsg = stripeErr.raw?.message ?? stripeErr.message ?? 'unknown';
         const errCode = stripeErr.raw?.code ?? 'unknown';
+        // Stripe's error CLASS, which is what separates "the card was declined"
+        // from "we never heard back". Read from both shapes because the Deno
+        // client surfaces it on the error and on `raw` depending on the failure.
+        const errType = stripeErr.type ?? stripeErr.raw?.type ?? '';
         console.error('[refund] stripe.refunds.create failed:', errCode, errMsg);
-        await supabase
+
+        // MARKING THIS 'failed' RELEASES THE MONEY, so only do it when Stripe
+        // actually told us the refund did not happen.
+        //
+        // A connection error or a timeout is NOT that answer - Stripe may well
+        // have processed the refund and lost the reply. Marking such a row
+        // 'failed' hands the ceiling back, and the operator can then give the
+        // same dollars away a second time as a credit. That is a real
+        // double-spend, and unlike a second refund (which Stripe itself would
+        // refuse on an already-refunded charge) the credit path never contacts
+        // Stripe, so nothing catches it.
+        //
+        // Left 'pending', the row keeps holding its share of the ceiling, and
+        // the webhook promotes it to 'succeeded' when Stripe tells us the
+        // refund was real. If it never happened, no webhook arrives, the row
+        // keeps no stripe_refund_id, and the 30-minute reservation window in
+        // `registration_available_cents` releases it on its own.
+        // THE TEST IS INVERTED ON PURPOSE: definitive is the allowlist, and
+        // everything else is ambiguous. Listing the ambiguous cases instead
+        // failed OPEN - anything the list missed got marked 'failed', which
+        // RELEASES the ceiling, which is the double-spend. Deno's own fetch
+        // wording ("connection closed before message completed") matched none
+        // of the patterns I had written. These five classes are the ones where
+        // Stripe has told us the refund did not happen; if it is not one of
+        // them, we do not know, and not knowing must hold the money.
+        const DEFINITIVE_STRIPE_FAILURES = [
+          'StripeCardError',
+          'StripeInvalidRequestError',
+          'StripeAuthenticationError',
+          'StripePermissionError',
+          'StripeRateLimitError',
+        ];
+        const ambiguous = !DEFINITIVE_STRIPE_FAILURES.includes(errType);
+        const { error: markErr } = await supabase
           .from('refunds')
-          .update({ status: 'failed', failure_reason: `${errCode}: ${errMsg}` })
+          .update(
+            ambiguous
+              ? { failure_reason: `UNRESOLVED ${errCode}: ${errMsg} - left pending; Stripe may have processed this` }
+              : { status: 'failed', failure_reason: `${errCode}: ${errMsg}` },
+          )
           .eq('id', refundRowId);
-        return json({
-          error: 'stripe_refund_failed',
-          stripe_code: errCode,
-          stripe_message: errMsg,
-          partial: refundsCreated.length > 0 ? refundsCreated : undefined,
-        }, 502);
+        // The old code discarded this error. A failed write here decides
+        // whether the money is released or held, so it does not get to be
+        // silent - and on the definitive branch a miss leaves the row pending,
+        // which is the safe direction but still needs someone to know.
+        if (markErr) console.error('[refund] could not record the Stripe failure on the refunds row:', markErr);
+
+        // SAME RULE AS THE TWO SIBLINGS ABOVE, which I stated and then failed to
+        // apply to this one: once money has moved we do not return from inside
+        // the loop. Returning here with an earlier slot already refunded skips
+        // payment_status, the instalment pause, the cancel, the receipt and the
+        // enrolment event - a family refunded on their card, still on the
+        // roster, still being charged. That is the 2026-09-08 signature, and
+        // the drawer would tell them "nothing was charged back" on top of it.
+        if (refundsCreated.length === 0) {
+          return json({
+            error: 'stripe_refund_failed',
+            stripe_code: errCode,
+            stripe_message: errMsg,
+            // The drawer must not promise "nothing was charged back" when we do
+            // not actually know that.
+            outcome_unknown: ambiguous || undefined,
+          }, 502);
+        }
+        stripeFailedAfterMoneyMoved = { code: errCode, message: errMsg, unknown: ambiguous };
+        break;
       }
     }
 
     if (remaining > 0) {
       // Shouldn't happen — we pre-checked eligibility. But guard anyway.
-      console.error(`[refund] inconsistency: ${remaining} cents remaining after walking all PIs`);
+      // NOT an inconsistency when a slot deliberately stopped the walk - that is
+      // now a designed outcome, and FC004 is the expected result of the race the
+      // lock exists to catch, so logging it as a contradiction would cry wolf on
+      // the normal partial path.
+      if (reserveAbortedCode || stripeFailedAfterMoneyMoved || feeLookupAborted) {
+        console.warn(`[refund] stopped partway with ${remaining} cents unrefunded (${reserveAbortedCode ?? (stripeFailedAfterMoneyMoved ? 'stripe_failed' : 'fee_lookup_aborted')})`);
+      } else {
+        console.error(`[refund] inconsistency: ${remaining} cents remaining after walking all PIs`);
+      }
     }
 
     // ── advance registrations.payment_status ──────────────────────────────
@@ -1797,6 +1931,21 @@ serve(async (req: Request) => {
       // same way rather than as failures of the refund itself.
       cancel_failed: cancelFailedReason ?? undefined,
       fee_lookup_aborted: feeLookupAborted || undefined,
+      // The refund stopped partway because a later slot could not be reserved.
+      // Reported on a SUCCESSFUL response on purpose: money did move, and the
+      // withdrawal and instalment pause did run, so calling the whole thing a
+      // failure would send the operator back to press Refund on a charge that
+      // has already been partly returned.
+      reserve_aborted: reserveAbortedCode ?? undefined,
+      // Stripe refused, or never answered, on a later slot. Reported on a
+      // successful response for the same reason as reserve_aborted: money did
+      // move and the seat was handled, so calling the whole call a failure
+      // sends the operator back to refund a charge that is already part-done.
+      // Flat, not nested: the parity ratchet reads top-level keys out of this
+      // literal, and a nested object hides its contents from the one guard that
+      // exists to notice new warnings.
+      stripe_aborted: stripeFailedAfterMoneyMoved?.message ?? undefined,
+      stripe_aborted_unknown: stripeFailedAfterMoneyMoved?.unknown || undefined,
     });
   } catch (err) {
     console.error('[refund] fatal:', err);
