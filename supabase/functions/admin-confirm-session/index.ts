@@ -178,18 +178,23 @@ serve(async (req: Request) => {
     // Substitution override: price at the sub's tier when a sub covered the day.
     // (Same status filter as v_effective_pay_lines, which routes the payee to
     // the sub only for 'confirmed'/'taught' — so amount and payee stay in sync.)
-    const { data: sub, error: subErr } = await supabase
+    // Reads a LIST, not .maybeSingle(): that call raises PGRST116 on two rows,
+    // which used to mean an admin could not confirm or pay the day at all. The
+    // question here is "who is the payee's tier?", and one row answers it.
+    // 20260923d makes two settled rows impossible; this no longer depends on it.
+    const { data: subs, error: subErr } = await supabase
       .from('assignment_substitutions')
       .select('sub_tier')
       .eq('parent_assignment_id', assignmentId)
       .eq('parent_assignment_type', kind)
       .eq('date', row.session_date)
       .in('status', ['confirmed', 'taught'])
-      .maybeSingle();
+      .limit(1);
     if (subErr) {
       console.error('[admin-confirm-session] substitution lookup failed:', subErr);
       return json({ error: 'lookup_failed' }, 500);
     }
+    const sub = subs?.[0] ?? null;
     if (sub && (sub.sub_tier === 'lead' || sub.sub_tier === 'developing')) {
       tier = sub.sub_tier as Role;
     }

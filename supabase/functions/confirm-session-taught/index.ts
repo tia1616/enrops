@@ -235,15 +235,31 @@ serve(async (req: Request) => {
     // Substitution guard: if a sub was confirmed to cover THIS assignment on THIS
     // date, the assigned instructor must not self-confirm it — the sub is the
     // payee. Keyed to the assignment + date, matching assignment_substitutions.
-    const { data: cover } = await supabase
+    //
+    // This guard decides WHO GETS PAID for the day, so it fails CLOSED. The
+    // error was previously discarded, which meant any failure of this lookup —
+    // a transport blip, an RLS change, or the PGRST116 that .maybeSingle()
+    // raises on two rows — left `cover` null and let the assigned instructor
+    // self-confirm a day a substitute actually taught. A guard that can only be
+    // trusted while a second row is impossible is not a guard.
+    //
+    // Reading a LIST rather than .maybeSingle() for the same reason: the
+    // question is "did anybody cover this?", which one row answers and two rows
+    // answer just as well. 20260923d makes two settled rows impossible anyway;
+    // this does not lean on that.
+    const { data: cover, error: coverErr } = await supabase
       .from('assignment_substitutions')
       .select('id')
       .eq('parent_assignment_id', assignmentId)
       .eq('parent_assignment_type', kind)
       .eq('date', sessionDate)
       .in('status', ['confirmed', 'taught'])
-      .maybeSingle();
-    if (cover) {
+      .limit(1);
+    if (coverErr) {
+      console.error('[confirm-session-taught] substitution lookup failed:', coverErr);
+      return json({ error: 'cover_check_failed' }, 500);
+    }
+    if (cover && cover.length > 0) {
       return json({ error: 'session_covered_by_substitute' }, 409);
     }
 
