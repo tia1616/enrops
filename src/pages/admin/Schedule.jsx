@@ -22,6 +22,7 @@ import AfterschoolSchedule from "./AfterschoolSchedule";
 import ClassScheduleView from "./ClassScheduleView.jsx";
 import NeedsCoverBanner from "../../components/NeedsCoverBanner.jsx";
 import { formatTimeText } from "../../lib/timeText.js";
+import { aggregateSubOffers, subSlotKey, subSlotLabel, SUB_ACTIVE_STATUSES } from "../../lib/subCoverage.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -76,7 +77,7 @@ const DEVELOPING_THRESHOLD = 12;
 
 // Sub statuses that are "live" — shown on the schedule, counted by the
 // instructor filter, and eligible for swap. Excludes declined/missed.
-const SUB_SHOWN_STATUSES = new Set(["pending", "confirmed", "taught"]);
+// One spelling, in src/lib/subCoverage.js, shared with the after-school board.
 
 const FILTER_STATUSES = [
   { key: "needs_hire", label: "Needs hire" },
@@ -639,11 +640,11 @@ export default function Schedule() {
       const surveyedIds = new Set(availability.map((r) => r.instructor_id));
       const missingSurveys = instructors.filter((i) => !surveyedIds.has(i.id)).length;
 
-      // Index subs by "assignmentId:date" for O(1) lookup in the grid.
-      const subsByKey = new Map();
-      for (const s of substitutions) {
-        subsByKey.set(`${s.parent_assignment_id}:${s.date}`, s);
-      }
+      // Index subs by "assignmentId:date" for O(1) lookup in the grid. A day can
+      // hold SEVERAL offers (first-come sub offers), so each entry is the day's
+      // aggregate answer — who is confirmed, or how many offers are still out —
+      // not whichever row happened to arrive last.
+      const subsByKey = aggregateSubOffers(substitutions);
 
       setState({
         status: "ready",
@@ -885,15 +886,21 @@ export default function Schedule() {
     for (const e of enriched.values()) {
       for (const a of e.allAssignments) asgToSession.set(a.id, e.session.id);
     }
-    for (const s of (state.subsByKey ? state.subsByKey.values() : [])) {
-      if (!SUB_SHOWN_STATUSES.has(s.status)) continue;
-      const sid = asgToSession.get(s.parent_assignment_id);
-      if (!sid) continue;
-      if (!m.has(sid)) m.set(sid, { ids: new Set(), names: [] });
-      const entry = m.get(sid);
-      if (s.sub_instructor_id) entry.ids.add(s.sub_instructor_id);
-      const nm = [s.sub?.first_name, s.sub?.last_name].filter(Boolean).join(" ");
-      if (nm) entry.names.push(nm);
+    // Walk every OFFER, not the day's summary: when a day is offered to three
+    // people, all three should surface under the instructor filter — each of
+    // them is genuinely attached to that class-day, and the summary names none
+    // of them on purpose.
+    for (const slot of (state.subsByKey ? state.subsByKey.values() : [])) {
+      for (const s of slot.rows) {
+        if (!SUB_ACTIVE_STATUSES.has(s.status)) continue;
+        const sid = asgToSession.get(s.parent_assignment_id);
+        if (!sid) continue;
+        if (!m.has(sid)) m.set(sid, { ids: new Set(), names: [] });
+        const entry = m.get(sid);
+        if (s.sub_instructor_id) entry.ids.add(s.sub_instructor_id);
+        const nm = [s.sub?.first_name, s.sub?.last_name].filter(Boolean).join(" ");
+        if (nm) entry.names.push(nm);
+      }
     }
     return m;
   }, [state, enriched]);
@@ -3574,12 +3581,14 @@ function ProgramCard({ item, dayDate, subsByKey, cardBg, flash, getValidationFor
   const lead = activeAssignments.find((a) => a.role === "lead") ?? null;
   const developing = activeAssignments.find((a) => a.role === "developing") ?? null;
 
-  // Subs covering this day — look up per assignment.
-  const leadSub = lead && dayDate && subsByKey ? subsByKey.get(`${lead.id}:${dayDate}`) ?? null : null;
-  const devSub = developing && dayDate && subsByKey ? subsByKey.get(`${developing.id}:${dayDate}`) ?? null : null;
+  // Subs covering this day — look up per assignment. Each entry is the day's
+  // aggregate (see src/lib/subCoverage.js): a confirmed sub, or the number of
+  // offers still out on it.
+  const leadSub = lead && dayDate && subsByKey ? subsByKey.get(subSlotKey(lead.id, dayDate)) ?? null : null;
+  const devSub = developing && dayDate && subsByKey ? subsByKey.get(subSlotKey(developing.id, dayDate)) ?? null : null;
   // Only surface live subs (pending/confirmed/taught) — a declined sub leaves the lead covering.
-  const leadSubActive = leadSub && SUB_SHOWN_STATUSES.has(leadSub.status) ? leadSub : null;
-  const devSubActive = devSub && SUB_SHOWN_STATUSES.has(devSub.status) ? devSub : null;
+  const leadSubActive = leadSub && SUB_ACTIVE_STATUSES.has(leadSub.status) ? leadSub : null;
+  const devSubActive = devSub && SUB_ACTIVE_STATUSES.has(devSub.status) ? devSub : null;
   // In the day-grid each card is one weekday; only flag the conflict on the day it
   // actually falls (dayDate). In dateless views (no dayDate) show all conflict dates.
   const leadDayConflicts = dayDate ? leadSubNeeded.filter((d) => d === dayDate) : leadSubNeeded;
@@ -3824,8 +3833,12 @@ function SlotRow({ label, assignment, session, role, dragStateRef, onClick, righ
 // chip so it never competes for width in the narrow day cards. Truncates with
 // an ellipsis instead of wrapping. Click opens the assign-sub modal for that day.
 function SubLine({ sub, onClick }) {
-  const confirmed = sub.status === "confirmed" || sub.status === "taught";
-  const subName = sub.sub ? [sub.sub.first_name, sub.sub.last_name].filter(Boolean).join(" ") : "Sub";
+  // One sentence per class-day, from the shared rule: the confirmed sub's name,
+  // or "3 offers out" while several people are still deciding. Never a name
+  // picked out of several candidates — see src/lib/subCoverage.js.
+  const label = subSlotLabel(sub);
+  if (!label) return null;
+  const confirmed = label.tone === "confirmed";
   const color = confirmed ? OK_GREEN : VIOLET;
   return (
     <button
@@ -3843,8 +3856,7 @@ function SubLine({ sub, onClick }) {
       }}
     >
       <span style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, flexShrink: 0 }}>Sub</span>
-      <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{subName}</span>
-      <span style={{ flexShrink: 0 }}>{confirmed ? "✓" : "· pending"}</span>
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{label.text}</span>
     </button>
   );
 }

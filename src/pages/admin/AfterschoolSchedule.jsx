@@ -23,6 +23,7 @@ import { resolveBoardSendIntro } from "../../lib/boardSendCopy.js";
 import { classifyOther } from "../../lib/scheduleConflicts.js";
 import { programScheduleSummary } from "../../lib/programSchedule.js";
 import { parseBonusDollars } from "../../lib/bonusAmount.js";
+import { aggregateSubOffers, subSlotLabel, SUB_ACTIVE_STATUSES } from "../../lib/subCoverage.js";
 // Replaces a local gradeLabel() that has been deleted with its last caller. It
 // rendered "?" for a missing grade - printing a question mark where the answer is
 // "they didn't say" - which is the exact behaviour the shared module was written
@@ -54,7 +55,7 @@ const LOCATION_PALETTE = ["#F2E4D2", "#E5EDDC", "#DDE7F0", "#ECDFEC", "#F0E0E0",
 const STATUS_RANK = { published: 4, confirmed: 3, change_requested: 2, proposed: 1, withdrawn: 0, declined: 0 };
 
 // Sub statuses that are "live" — shown on the board, counted by the filter. Excludes declined/missed.
-const SUB_SHOWN_STATUSES = new Set(["pending", "confirmed", "taught"]);
+// One spelling, in src/lib/subCoverage.js, shared with the camp board.
 
 // --- Calendar-week helpers (UTC-based so they never shift across the user's tz). ---
 // These bucket CANONICAL session dates (from derive_program_session_dates) into weeks;
@@ -806,23 +807,35 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     return m;
   }, [state]);
 
-  // program_id -> { ids:Set<instructor_id>, names:string[], subs:[{name,date,status}] } for live subs.
+  // program_id -> { ids:Set<instructor_id>, names:string[], subs:[{date, slot}] }.
   // Powers the card sub indicator and lets the instructor filter surface a program a person only SUBs.
+  //
+  // `subs` holds one entry per CLASS-DAY, not per offer. A day offered to three
+  // people is ONE sub day with three offers out — listing it three times would
+  // tell the operator three different people are subbing the same class.
+  // `ids`/`names` stay per PERSON, so the filter still finds everyone who was
+  // asked, including each candidate still deciding.
   const subInfoByProgram = useMemo(() => {
     const m = new Map();
     if (state.status !== "ready") return m;
     const asgToProgram = new Map(state.assignments.map((a) => [a.id, a.program_id]));
-    for (const s of state.substitutions ?? []) {
-      if (!SUB_SHOWN_STATUSES.has(s.status)) continue;
-      const pid = asgToProgram.get(s.parent_assignment_id);
+    for (const slot of aggregateSubOffers(state.substitutions ?? []).values()) {
+      const first = slot.rows[0];
+      const pid = asgToProgram.get(first.parent_assignment_id);
       if (!pid) continue;
+      const live = slot.rows.filter((r) => SUB_ACTIVE_STATUSES.has(r.status));
+      const label = subSlotLabel(slot);
+      if (live.length === 0 && !label) continue;   // a day everyone declined shows nothing
       if (!m.has(pid)) m.set(pid, { ids: new Set(), names: [], subs: [] });
       const entry = m.get(pid);
-      if (s.sub_instructor_id) entry.ids.add(s.sub_instructor_id);
-      const nm = [s.sub?.first_name, s.sub?.last_name].filter(Boolean).join(" ");
-      if (nm) entry.names.push(nm);
-      entry.subs.push({ name: nm || "Sub", date: s.date, status: s.status });
+      for (const r of live) {
+        if (r.sub_instructor_id) entry.ids.add(r.sub_instructor_id);
+        const nm = [r.sub?.first_name, r.sub?.last_name].filter(Boolean).join(" ");
+        if (nm) entry.names.push(nm);
+      }
+      if (label) entry.subs.push({ date: first.date, slot });
     }
+    for (const entry of m.values()) entry.subs.sort((a, b) => a.date.localeCompare(b.date));
     return m;
   }, [state]);
 
@@ -3249,12 +3262,18 @@ function SubLineAS({ subs, onClick }) {
   if (list.length === 0) {
     color = MUTED; label = "+ Sub day";
   } else if (list.length === 1) {
-    const s = list[0];
-    const confirmed = s.status === "confirmed" || s.status === "taught";
-    color = confirmed ? OK_GREEN : VIOLET;
-    label = `Sub ${s.name}${confirmed ? " ✓" : " · pending"}`;
+    // One class-day: the shared rule words it — the confirmed sub's name, or
+    // "3 offers out" while several people are still deciding.
+    const one = subSlotLabel(list[0].slot);
+    color = one?.tone === "confirmed" ? OK_GREEN : VIOLET;
+    label = `Sub ${one?.text ?? ""}`.trim();
   } else {
-    color = OK_GREEN; label = `${list.length} sub days`;
+    // Several sub days on this class. Green only when every one of them is
+    // actually settled — it used to be green regardless, so a class with two
+    // unanswered offers read as covered.
+    const allSettled = list.every((d) => subSlotLabel(d.slot)?.tone === "confirmed");
+    color = allSettled ? OK_GREEN : VIOLET;
+    label = `${list.length} sub days`;
   }
   return (
     <button

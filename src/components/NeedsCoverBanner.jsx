@@ -10,6 +10,12 @@
 // confirmed/taught => covered (not returned), pending => 'awaiting' (not shown
 // here), declined => 'uncovered' (shown). We filter to this page's parentType.
 //
+// One row here is one CLASS-DAY, not one offer (migration 20260923a). That
+// matters now a day can be offered to several people at once: the day somebody
+// ACCEPTED records the losing offers as declines, and counting those rows would
+// put a day that is covered on this banner, blaming people who never turned the
+// class down. The RPC resolves the whole day before answering.
+//
 // Read-only surfacing (v1). Clearing happens through the existing sub UI (assign
 // a sub for that day). "Lead can cover after all" + click-to-jump are fast-follows.
 
@@ -28,6 +34,21 @@ function fmtDate(iso) {
   });
 }
 
+// Who turned this day down. A day can now be offered to several people at once,
+// so there are four states and each sentence has to be TRUE in the state that
+// selects it — no branch may borrow another's wording:
+//   several declined  -> count them; naming one would be false about the others
+//   one, named        -> name them (also the path an older RPC takes, since it
+//                        sends no count and `?? 0` leaves this the only branch)
+//   one, unnamed      -> say somebody did, rather than swallowing the decline
+//   nothing known     -> say only what is certain: no sub yet
+function whoDeclined(it) {
+  if (it.declineCount > 1) return ` · ${it.declineCount} people declined, no sub yet`;
+  if (it.decliner) return ` · ${it.decliner} declined, no sub yet`;
+  if (it.declineCount === 1) return " · someone declined, no sub yet";
+  return " · no sub yet";
+}
+
 export default function NeedsCoverBanner({ org, parentType }) {
   const [items, setItems] = useState([]);
 
@@ -44,6 +65,7 @@ export default function NeedsCoverBanner({ org, parentType }) {
             parent: r.parent_assignment_id,
             date: r.slot_date,
             decliner: r.decliner_name || null,
+            declineCount: r.decline_count ?? 0,
             label: `${r.curriculum_label || "A class"}${r.location_label ? ` · ${r.location_label}` : ""}`,
           }))
           .sort((a, b) => a.date.localeCompare(b.date));
@@ -67,7 +89,7 @@ export default function NeedsCoverBanner({ org, parentType }) {
         {items.map((it) => (
           <div key={`${it.parent}|${it.date}`} style={{ fontSize: 13, color: INK, lineHeight: 1.45 }}>
             <strong>{fmtDate(it.date)}</strong>{" — "}{it.label}
-            <span style={{ color: MUTED }}>{it.decliner ? ` · ${it.decliner} declined, no sub yet` : " · no sub yet"}</span>
+            <span style={{ color: MUTED }}>{whoDeclined(it)}</span>
           </div>
         ))}
       </div>
