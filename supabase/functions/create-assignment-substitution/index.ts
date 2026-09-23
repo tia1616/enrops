@@ -6,7 +6,8 @@
 //   parent_assignment_id: string,
 //   parent_assignment_type: 'camp' | 'program',
 //   date: 'YYYY-MM-DD',
-//   sub_instructor_id: string,
+//   sub_instructor_id?: string,     // one candidate (the shape the picker sent before multi-offer)
+//   sub_instructor_ids?: string[],  // several candidates, first to accept wins; wins if both are sent
 //   sub_tier: 'lead' | 'developing',
 //   notes?: string,
 //   mode?: 'send' | 'test'    // default 'send'; 'test' routes to test_recipient (else the tenant's OWN inbox)
@@ -16,11 +17,18 @@
 // }
 //
 // Behavior:
-//   - UPSERTs assignment_substitutions on the unique (parent_assignment_id,
-//     parent_assignment_type, date). Reassigning a different sub on the same
-//     date replaces the row and resets status to 'pending'. Resending the
-//     same sub refreshes email_sent_at.
-//   - Sends one email via Resend, then writes email_sent_at = now().
+//   - Writes ONE offer row PER PERSON asked, and emails each of them. Several
+//     people can hold a live offer on the same class-day; the first to accept
+//     gets it and the rest are closed out by accept_sub_offer.
+//   - Re-asking somebody who already has a live offer REFRESHES that offer
+//     rather than adding a second. Re-asking somebody who DECLINED creates a
+//     new live offer beside the decline: the refusal is history and is never
+//     overwritten. (It used to be. The old upsert on (parent, type, date) held
+//     one row per class-day, so offering a refused day to the next person
+//     destroyed the record that anyone had said no, and the day quietly went
+//     back to reading "waiting to hear back".)
+//   - Refuses when somebody has already ACCEPTED the day, rather than sending
+//     offers that could never be taken up.
 //   - Multi-tenant: parent's org is the source of truth; sub_instructor's
 //     org must match (validate trigger enforces this server-side, we also
 //     check up front to give a friendly error).
@@ -102,12 +110,19 @@ interface Body {
   parent_assignment_id?: string;
   parent_assignment_type?: 'camp' | 'program';
   date?: string;
+  /** One candidate. Still accepted: the picker sent this shape before multi-offer. */
   sub_instructor_id?: string;
+  /** Several candidates, first to accept gets the day. Wins if both are sent. */
+  sub_instructor_ids?: string[];
   sub_tier?: 'lead' | 'developing';
   notes?: string;
   mode?: 'send' | 'test';
   test_recipient?: string;
 }
+
+// An operator picking from a short list of colleagues; the cap exists so a
+// malformed client cannot fan a single click into hundreds of emails.
+const MAX_CANDIDATES = 12;
 
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
@@ -130,7 +145,15 @@ serve(async (req: Request) => {
     const parentId = (body.parent_assignment_id || '').trim();
     const parentType = body.parent_assignment_type;
     const date = (body.date || '').trim();
-    const subInstructorId = (body.sub_instructor_id || '').trim();
+    // One offer or several. Deduped, because asking the same person twice in one
+    // click would be two emails and two rows for one human, and every count this
+    // feeds ("3 people asked") is about people.
+    const rawCandidates = Array.isArray(body.sub_instructor_ids) && body.sub_instructor_ids.length
+      ? body.sub_instructor_ids
+      : [body.sub_instructor_id];
+    const candidateIds = [...new Set(
+      rawCandidates.map((id) => (id || '').toString().trim()).filter(Boolean),
+    )];
     const subTier = body.sub_tier;
     const notes = (body.notes || '').toString().trim().slice(0, 1000);
     const mode = body.mode === 'test' ? 'test' : 'send';
@@ -139,7 +162,15 @@ serve(async (req: Request) => {
     if (!parentId) return json({ error: 'missing_parent_assignment_id' }, 400);
     if (parentType !== 'camp' && parentType !== 'program') return json({ error: 'invalid_parent_assignment_type' }, 400);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return json({ error: 'invalid_date' }, 400);
-    if (!subInstructorId) return json({ error: 'missing_sub_instructor_id' }, 400);
+    if (candidateIds.length === 0) return json({ error: 'missing_sub_instructor_id' }, 400);
+    if (candidateIds.length > MAX_CANDIDATES) {
+      return json({ error: 'too_many_candidates', detail: `Ask at most ${MAX_CANDIDATES} people at once.` }, 400);
+    }
+    // A test send names one person and goes to the tenant's own inbox. Asking
+    // what a three-person test means invents semantics nobody requested.
+    if (mode === 'test' && candidateIds.length > 1) {
+      return json({ error: 'test_send_is_single', detail: 'Send a test to one person at a time.' }, 400);
+    }
     if (subTier !== 'lead' && subTier !== 'developing') return json({ error: 'invalid_sub_tier' }, 400);
 
     // ── Resolve parent + the org we operate in ────────────────────────────
@@ -211,15 +242,55 @@ serve(async (req: Request) => {
       .maybeSingle();
     if (!cm) return json({ error: 'forbidden' }, 403);
 
-    // ── Sub instructor belongs to same org (server-side trigger also enforces) ──
-    const { data: sub } = await supabase
+    // ── Every candidate belongs to this org and can be emailed ────────────
+    // Validated as a BATCH before anybody is contacted. Asking two of three and
+    // reporting a problem with the third would leave the operator unable to tell
+    // who is holding an offer, so one bad candidate refuses the whole click.
+    const { data: subs, error: subsErr } = await supabase
       .from('instructors')
       .select('id, organization_id, first_name, last_name, preferred_name, email')
-      .eq('id', subInstructorId)
-      .maybeSingle();
-    if (!sub) return json({ error: 'sub_not_found' }, 404);
-    if (sub.organization_id !== orgId) return json({ error: 'sub_wrong_org' }, 400);
-    if (!sub.email) return json({ error: 'sub_missing_email', detail: 'Sub has no email on file.' }, 400);
+      .in('id', candidateIds);
+    if (subsErr) {
+      console.error('[create-assignment-substitution] candidate lookup failed:', subsErr);
+      return json({ error: 'candidate_lookup_failed', detail: subsErr.message }, 500);
+    }
+    const byId = new Map((subs ?? []).map((s) => [s.id, s]));
+    const candidates = candidateIds.map((id) => byId.get(id));
+    if (candidates.some((s) => !s)) return json({ error: 'sub_not_found' }, 404);
+    if (candidates.some((s) => s!.organization_id !== orgId)) return json({ error: 'sub_wrong_org' }, 400);
+    const noEmail = candidates.filter((s) => !s!.email);
+    if (noEmail.length > 0) {
+      return json({
+        error: 'sub_missing_email',
+        detail: noEmail.length === 1
+          ? `${noEmail[0]!.preferred_name || noEmail[0]!.first_name || 'That instructor'} has no email on file.`
+          : `${noEmail.length} of the people you picked have no email on file.`,
+      }, 400);
+    }
+
+    // ── Is the day already settled? ───────────────────────────────────────
+    // Somebody confirmed (or already taught) means the day is covered, and a
+    // fresh offer would ask people to cover a class that has a teacher. Refuse
+    // rather than create offers that can never be accepted: the single-settled
+    // index would reject the winner anyway, but an operator deserves the reason.
+    const { data: settled, error: settledErr } = await supabase
+      .from('assignment_substitutions')
+      .select('id, sub_instructor_id')
+      .eq('parent_assignment_id', parentId)
+      .eq('parent_assignment_type', parentType)
+      .eq('date', date)
+      .in('status', ['confirmed', 'taught'])
+      .limit(1);
+    if (settledErr) {
+      console.error('[create-assignment-substitution] settled check failed:', settledErr);
+      return json({ error: 'settled_check_failed', detail: settledErr.message }, 500);
+    }
+    if (settled && settled.length > 0 && mode === 'send') {
+      return json({
+        error: 'already_covered',
+        detail: 'Somebody has already accepted this day. Cancel their cover first if you need a different person.',
+      }, 409);
+    }
 
     // ── Venue context (school name, address, arrival/dismissal) ───────────
     let locationAddress: string | null = null;
@@ -260,31 +331,67 @@ serve(async (req: Request) => {
     // address, never the hardcoded J2S domain. Loaded once (single-email fn).
     const brand = await loadOrgBrand(supabase, orgId);
 
-    // ── UPSERT assignment_substitutions row ───────────────────────────────
-    const { data: subRow, error: upsertErr } = await supabase
+    // ── One offer row PER PERSON ──────────────────────────────────────────
+    // This used to upsert on (parent, type, date), which meant a class-day held
+    // exactly one row and re-offering a refused day OVERWROTE the refusal: the
+    // decline was destroyed, the day went back to reading "waiting to hear
+    // back", and nothing anywhere recorded that anyone had said no. Now each
+    // person gets their own row, so a decline survives the next ask.
+    //
+    // Re-asking the SAME person is a resend, not a second offer: their existing
+    // live row is refreshed rather than duplicated (the partial unique index on
+    // pending offers enforces that in the database too). A row they previously
+    // DECLINED is left untouched and a new live one is created beside it, which
+    // is what lets "Ann said no, then said yes when I asked again" be true.
+    const nowIso = new Date().toISOString();
+    const { data: existingRows, error: existingErr } = await supabase
       .from('assignment_substitutions')
-      .upsert({
-        parent_assignment_id: parentId,
-        parent_assignment_type: parentType,
-        sub_instructor_id: subInstructorId,
-        date,
-        status: 'pending',
-        sub_tier: subTier,
-        notes: notes || null,
-        assigned_by: callerAuthId,
-        assigned_at: new Date().toISOString(),
-        organization_id: orgId,
-      }, { onConflict: 'parent_assignment_id,parent_assignment_type,date' })
-      .select('id')
-      .single();
-    if (upsertErr || !subRow) {
-      console.error('[create-assignment-substitution] upsert failed:', upsertErr);
-      return json({ error: 'upsert_failed', detail: upsertErr?.message }, 500);
+      .select('id, sub_instructor_id, status')
+      .eq('parent_assignment_id', parentId)
+      .eq('parent_assignment_type', parentType)
+      .eq('date', date)
+      .in('sub_instructor_id', candidateIds);
+    if (existingErr) {
+      console.error('[create-assignment-substitution] existing lookup failed:', existingErr);
+      return json({ error: 'existing_lookup_failed', detail: existingErr.message }, 500);
     }
-    const substitutionId = (subRow as { id: string }).id;
+    const livePendingByInstructor = new Map(
+      (existingRows ?? []).filter((r) => r.status === 'pending').map((r) => [r.sub_instructor_id, r.id]),
+    );
+
+    async function rowForCandidate(instructorId: string): Promise<{ id: string } | { error: string }> {
+      const existingId = livePendingByInstructor.get(instructorId);
+      if (existingId) {
+        const { error } = await supabase
+          .from('assignment_substitutions')
+          .update({ sub_tier: subTier, notes: notes || null, assigned_by: callerAuthId, assigned_at: nowIso })
+          .eq('id', existingId);
+        if (error) return { error: error.message };
+        return { id: existingId };
+      }
+      const { data, error } = await supabase
+        .from('assignment_substitutions')
+        .insert({
+          parent_assignment_id: parentId,
+          parent_assignment_type: parentType,
+          sub_instructor_id: instructorId,
+          date,
+          status: 'pending',
+          sub_tier: subTier,
+          notes: notes || null,
+          assigned_by: callerAuthId,
+          assigned_at: nowIso,
+          organization_id: orgId,
+        })
+        .select('id')
+        .single();
+      if (error || !data) return { error: error?.message ?? 'insert returned no row' };
+      return { id: (data as { id: string }).id };
+    }
 
     // ── Compose email ────────────────────────────────────────────────────
-    const subFirst = sub.preferred_name || sub.first_name || 'there';
+    // Everything that does not depend on WHO is being asked is built once; the
+    // greeting and the recipient are the only per-person parts.
     const friendlyDate = fmtDate(date);
     const timeRange = startTime && endTime ? `${fmtTime(startTime)}–${fmtTime(endTime)}` : (startTime ? fmtTime(startTime) : '');
     // Through the shared rule: the class's room beats the site's, and the label
@@ -301,6 +408,13 @@ serve(async (req: Request) => {
     };
 
     const subject = `Can you sub on ${friendlyDate.replace(/^[A-Za-z]+, /, '')}?`;
+    const fromEmail = formatFromAddress(brand);
+
+    // Everyone asked gets the same offer, addressed to them. Declared as a
+    // function so the whole compose-and-send path is identical for one person
+    // and for five — the multi-offer case is not a second code path.
+    async function offerTo(cand: { id: string; preferred_name?: string | null; first_name?: string | null; email?: string | null }, substitutionId: string) {
+    const subFirst = cand.preferred_name || cand.first_name || 'there';
 
     const html = `<!doctype html>
 <html><body style="margin:0;background:#FBFBFB;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:${TEXT};">
@@ -350,8 +464,7 @@ serve(async (req: Request) => {
     const text = textParts.join('\n');
 
     // ── Send via Resend ───────────────────────────────────────────────────
-    const fromEmail = formatFromAddress(brand);
-    const recipient = mode === 'test' ? resolveTestRecipient(brand, testRecipient) : sub.email;
+    const recipient = mode === 'test' ? resolveTestRecipient(brand, testRecipient) : cand.email;
     // A test offer names the sub, the class and the date. resolveTestRecipient
     // returns null rather than cascading to the platform, so refuse here: the
     // old fallback mailed one provider's substitution detail to Enrops while
@@ -363,7 +476,7 @@ serve(async (req: Request) => {
         organization_id: orgId,
         substitution_id: substitutionId,
       });
-      return json({ error: 'no_tenant_inbox', message: NO_TENANT_INBOX_MESSAGE }, 400);
+      return { error: 'no_tenant_inbox', message: NO_TENANT_INBOX_MESSAGE, status: 400 };
     }
     const subjectOut = mode === 'test' ? `[TEST] ${subject}` : subject;
 
@@ -386,7 +499,7 @@ serve(async (req: Request) => {
       const errText = await resp.text();
       console.error('[create-assignment-substitution] resend failed:', resp.status, errText);
       // Row already exists; surface the failure but leave the row in place so admin can retry.
-      return json({ error: 'email_failed', detail: errText.slice(0, 300) }, 502);
+      return { error: 'email_failed', detail: errText.slice(0, 300), status: 502 };
     }
 
     // ── Mark email_sent_at — the artifact column that gates the "Resent"
@@ -396,19 +509,48 @@ serve(async (req: Request) => {
       .update({ email_sent_at: new Date().toISOString() })
       .eq('id', substitutionId);
 
+    return { ok: true, substitution_id: substitutionId, recipient };
+    }   // end offerTo
+
+    // ── Ask everybody who was picked ──────────────────────────────────────
+    // Sequential, not parallel: each send writes a row and the failure of one
+    // must not leave the others half-reported. The first hard failure stops the
+    // round and says who was already asked, so an operator is never left
+    // guessing which of five people is holding an offer.
+    const asked: Array<{ instructor_id: string; substitution_id: string; recipient: string }> = [];
+    for (const cand of candidates as Array<NonNullable<typeof candidates[number]>>) {
+      const row = await rowForCandidate(cand.id);
+      if ('error' in row) {
+        console.error('[create-assignment-substitution] row write failed:', row.error);
+        return json({
+          error: 'offer_write_failed', detail: row.error,
+          asked, asked_count: asked.length,
+        }, 500);
+      }
+      const sent = await offerTo(cand, row.id);
+      if ('error' in sent) {
+        return json({ ...sent, asked, asked_count: asked.length }, sent.status ?? 502);
+      }
+      asked.push({ instructor_id: cand.id, substitution_id: sent.substitution_id, recipient: sent.recipient! });
+    }
+
     // Only a real send counts as usage (matches send-offers / invite-parents /
-    // matcher guards). Test-fires still upsert the row but aren't production use.
+    // matcher guards). Test-fires still write the row but aren't production use.
     if (mode === 'send') {
       await logPlatformEvent(supabase, {
         feature: FEATURE.SCHEDULING, action: ACTION.SUB_ASSIGNED, outcome: OUTCOME.SUCCESS,
         organizationId: orgId, actorUserId: callerAuthId,
-        metadata: { substitution_id: substitutionId },
+        metadata: { substitution_ids: asked.map((a) => a.substitution_id), asked_count: asked.length },
       });
     }
     return json({
       ok: true,
-      substitution_id: substitutionId,
-      recipient,
+      // Single-candidate shape kept so the existing picker keeps working
+      // unchanged: it reads substitution_id and recipient off the response.
+      substitution_id: asked[0]?.substitution_id ?? null,
+      recipient: asked[0]?.recipient ?? null,
+      asked,
+      asked_count: asked.length,
       mode,
     });
   } catch (err) {

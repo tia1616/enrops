@@ -65,7 +65,7 @@ serve(async (req: Request) => {
 
     const { data: subRow, error: rowErr } = await supabase
       .from('assignment_substitutions')
-      .select('id, sub_instructor_id, status, parent_assignment_id, parent_assignment_type, date, sub_tier, organization_id')
+      .select('id, sub_instructor_id, status, decline_reason, parent_assignment_id, parent_assignment_type, date, sub_tier, organization_id')
       .eq('id', substitutionId)
       .maybeSingle();
     if (rowErr) {
@@ -77,19 +77,57 @@ serve(async (req: Request) => {
       return json({ error: 'forbidden' }, 403);
     }
     if (subRow.status !== 'pending') {
+      // Somebody else accepted first and this offer was closed out for them.
+      // That is NOT "you already responded" — they did not respond at all, and
+      // telling them so about a class they were still deciding on is both
+      // confusing and slightly insulting. The class simply went to whoever was
+      // quicker, which is the whole point of asking several people.
+      const coveredByOther = subRow.status === 'declined'
+        && subRow.decline_reason === 'covered_by_other';
+      if (coveredByOther) {
+        return json({ ok: true, status: 'covered_by_other', already_covered: true });
+      }
       return json({ error: 'already_responded', current_status: subRow.status }, 400);
     }
 
     const nowIso = new Date().toISOString();
 
     if (action === 'accept') {
-      const { error: updErr } = await supabase
-        .from('assignment_substitutions')
-        .update({ status: 'confirmed', updated_at: nowIso })
-        .eq('id', substitutionId);
-      if (updErr) {
-        console.error('[respond-to-sub-offer] accept update failed:', updErr);
-        return json({ error: 'update_failed', detail: updErr.message }, 500);
+      // FIRST YES WINS, decided by the database in one step.
+      //
+      // A class-day can be offered to several people at once, so two of them can
+      // press Accept in the same second. A plain status update would let both
+      // through and leave two people believing they have the class — or, once
+      // the single-settled index rejects the second, surface a raw constraint
+      // error to somebody who did nothing wrong.
+      //
+      // accept_sub_offer (20260723c, on prod since July and until now called by
+      // nothing) confirms this offer, closes the sibling offers in the same
+      // transaction, and tells us which way it went. 'lost' is a normal, polite
+      // outcome, not an error: somebody was simply faster.
+      const { data: outcome, error: acceptErr } = await supabase
+        .rpc('accept_sub_offer', { p_substitution_id: substitutionId, p_sub_instructor_id: me.id });
+      if (acceptErr) {
+        console.error('[respond-to-sub-offer] accept rpc failed:', acceptErr);
+        return json({ error: 'update_failed', detail: acceptErr.message }, 500);
+      }
+      const result = (outcome ?? {}) as { outcome?: string; status?: string };
+      if (result.outcome === 'lost') {
+        // Their own offer has already been closed as covered by the RPC. Tell
+        // them plainly rather than failing: they said yes, and the honest answer
+        // is that the day was taken, not that something went wrong.
+        return json({ ok: true, status: 'covered_by_other', already_covered: true });
+      }
+      if (result.outcome === 'already_responded') {
+        return json({ error: 'already_responded', current_status: result.status }, 400);
+      }
+      if (result.outcome === 'forbidden') return json({ error: 'forbidden' }, 403);
+      if (result.outcome === 'not_found') return json({ error: 'forbidden' }, 403);
+      if (result.outcome !== 'won') {
+        // An outcome nobody has taught this function about. Refuse rather than
+        // report success off a value we do not understand.
+        console.error('[respond-to-sub-offer] unrecognised accept outcome:', result);
+        return json({ error: 'update_failed', detail: 'unrecognised accept outcome' }, 500);
       }
 
       // ── 3-way coordination email ──
