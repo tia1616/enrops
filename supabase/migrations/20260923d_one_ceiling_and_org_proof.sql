@@ -39,9 +39,10 @@
 --   pending WITH a stripe id       -> counts, indefinitely. Stripe has it; it is
 --                                     either settling or was healed by the
 --                                     webhook after a timeout. Never release it.
---   pending, UNRESOLVED marked     -> counts, indefinitely. The refund call
---                                     threw without a definitive answer, so
---                                     Stripe may have taken the money.
+--   pending, UNRESOLVED marked     -> counts for 7 days. The refund call threw
+--                                     without a definitive answer, so Stripe
+--                                     may have taken the money - but the hold
+--                                     is BOUNDED, see below.
 --   pending, otherwise             -> counts for 30 minutes. That is a live
 --                                     reservation whose request died before it
 --                                     ever reached Stripe.
@@ -56,6 +57,20 @@
 -- and the credit path, which never contacts Stripe, hands it out again.
 -- A reservation from a killed isolate carries no failure_reason at all, so the
 -- two cases separate cleanly and the TTL still does the job it was added for.
+--
+-- WHY THE UNRESOLVED HOLD IS 7 DAYS AND NOT FOREVER. An indefinite hold is a
+-- permanent stick with no release surface: a refund that genuinely never
+-- happened, but whose error we classified as ambiguous, would lock that share
+-- of the registration out of every future refund AND credit, fixable only by
+-- editing the database. The classifier treats anything outside five definitive
+-- Stripe classes as ambiguous, so a misclassification is not hypothetical.
+--
+-- Stripe retries `charge.refunded` for up to 3 days. If a refund really had
+-- been taken, the webhook would have arrived and stamped a stripe_refund_id
+-- long before day 7 - and a row carrying an id is held indefinitely by the
+-- clause above, so the money that actually moved is never released by this.
+-- Seven days is therefore "past the point where silence is still ambiguous",
+-- with better than twice Stripe's own window as margin.
 --
 -- This is the shape `20260909a_pending_seat_ttl_30_minutes.sql` already uses for
 -- seats: expiry expressed in the READ, not as a sweeper that has to run.
@@ -77,7 +92,8 @@ as $$
                r.status = 'succeeded'
                or (r.status = 'pending'
                    and (r.stripe_refund_id is not null
-                        or coalesce(r.failure_reason, '') like 'UNRESOLVED %'
+                        or (coalesce(r.failure_reason, '') like 'UNRESOLVED %'
+                            and r.created_at > now() - interval '7 days')
                         or r.created_at > now() - interval '30 minutes'))
              )
          ), 0)

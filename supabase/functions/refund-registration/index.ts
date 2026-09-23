@@ -911,8 +911,10 @@ serve(async (req: Request) => {
     // `held_cents` is the rest of the gap - money reserved or unresolved, not
     // yet known to have moved. It explains why `eligible` is lower than
     // paid-minus-refunded without claiming the family was paid.
-    const totalRefundedSucceeded = Object.values(refundedAgg).reduce((s, v) => s + v, 0);
-    const heldCents = Math.max(0, totalPaid - totalCredited - totalRefundedSucceeded - eligible);
+    // `totalRefunded` above is this same sum and is reused rather than
+    // recomputed - a previous pass left two names for one value in the round
+    // whose whole point was removing a duplicated money figure.
+    const heldCents = Math.max(0, totalPaid - totalCredited - totalRefunded - eligible);
 
     // PREVIEW: return the numbers and refund nothing. The drawer used to
     // recompute this from installments/registrations itself, which meant the
@@ -965,7 +967,7 @@ serve(async (req: Request) => {
         preview: true,
         eligible_cents: eligible,
         total_paid_cents: totalPaid,
-        total_refunded_cents: totalRefundedSucceeded,
+        total_refunded_cents: totalRefunded,
         // Shown so the ceiling explains itself. An operator who sees "$240 paid,
         // $0 refunded, $0 left" with no third number has been told a riddle.
         total_credited_cents: totalCredited,
@@ -996,7 +998,7 @@ serve(async (req: Request) => {
         error: 'amount_exceeds_eligible',
         eligible_cents: eligible,
         total_paid_cents: totalPaid,
-        total_refunded_cents: totalRefundedSucceeded,
+        total_refunded_cents: totalRefunded,
         total_credited_cents: totalCredited,
         held_cents: heldCents,
       }, 400);
@@ -1896,7 +1898,13 @@ serve(async (req: Request) => {
     return json({
       success: true,
       refunds: refundsCreated,
-      total_refunded_cents: refundedThisCall,
+      // TWO FIGURES, EACH NAMED FOR WHAT IT IS. `total_refunded_cents` used to
+      // carry this call's amount here while carrying the registration's
+      // lifetime total on the preview - one field, two meanings, and the
+      // partial-refund copy read it as a lifetime figure and told the operator
+      // a number that was short by every earlier refund.
+      refunded_this_call_cents: refundedThisCall,
+      total_refunded_cents: totalRefunded + refundedThisCall,
       cancelled: cancelRegistration,
       // Surfaced so the drawer can say "refunded, but we could not email them"
       // instead of implying the family was told.

@@ -41,6 +41,8 @@ const RULE = "#e2dfd5";
 const OK = "#3a7c3a";
 const RED = "#b53737";
 const CREAM = "#FBFBFB";
+// Same value CancelClassModal uses for "needs your attention, not an error".
+const AMBER = "#a16207";
 
 function fmtCents(cents) {
   return `$${((cents || 0) / 100).toFixed(2)}`;
@@ -188,6 +190,11 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
   const [cancelKind, setCancelKind] = useState(null); // 'business_cancelled' | 'family_cancelled'
   const [programCancelled, setProgramCancelled] = useState(false);
   const [creditedCents, setCreditedCents] = useState(0);
+  // Money counted against the ceiling that we cannot say the family has: a
+  // refund reserved and still in flight, or one Stripe never answered on.
+  // Without it the summary band is a riddle - paid $240, refunded $0,
+  // refundable $190, and nothing accounting for the missing $50.
+  const [heldCents, setHeldCents] = useState(0);
   // Whether the server could read the real charge from Stripe. Only the credit
   // path cares: a refund still works, because Stripe itself is the backstop.
   const [chargeReadable, setChargeReadable] = useState(true);
@@ -249,6 +256,7 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
         setRefundedCents(refunded);
         setEligibleCents(elig.eligible_cents);
         setCreditedCents(elig.total_credited_cents || 0);
+        setHeldCents(elig.held_cents || 0);
         // Pre-selects the cancellation kind IF the operator goes on to choose
         // credit. Not a claim on its own, and it decides nothing until then.
         //
@@ -535,7 +543,10 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
           // figure and was sitting unread.
           amountCents: isCredit
             ? (data?.credited_cents ?? amountCents)
-            : (data?.total_refunded_cents ?? amountCents),
+            // THIS CALL's amount, which is what a caller refreshing a roster
+            // after one action wants - not the registration's lifetime total,
+            // which is what `total_refunded_cents` now means on every response.
+            : (data?.refunded_this_call_cents ?? amountCents),
           cancelled: isCredit || seatChoice === "withdraw",
           credited: isCredit,
         });
@@ -600,6 +611,15 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
                   refunded, $0 you can refund" reads as a bug rather than as
                   money already given back another way. */}
               {creditedCents > 0 && <span style={{ color: MUTED }}>Already credited <strong style={{ color: INK }}>{fmtCents(creditedCents)}</strong></span>}
+              {/* Deliberately NOT called "refunded": nobody can say this money
+                  reached the family. It is shown because otherwise the
+                  refundable figure is short by an amount with no explanation
+                  anywhere on the screen. */}
+              {heldCents > 0 && (
+                <span style={{ color: MUTED }} title="A refund that is still in flight, or one Stripe never confirmed. Held so it can't be given out twice.">
+                  On hold <strong style={{ color: AMBER }}>{fmtCents(heldCents)}</strong>
+                </span>
+              )}
               <span style={{ color: MUTED }}>Refundable <strong style={{ color: OK }}>{fmtCents(refundableCents)}</strong></span>
             </div>
 

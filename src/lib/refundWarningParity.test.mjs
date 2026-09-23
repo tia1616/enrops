@@ -64,6 +64,7 @@ const NOT_WARNINGS = new Set([
   'receipt_sent', 'receipt_reason', 'withdrawn', 'credited', 'credit_id',
   'credited_cents', 'credit_reason', 'already_existed', 'pending_charges_stopped',
   'pending_cents_stopped', 'success', 'held_cents', 'cancelled',
+  'refunded_this_call_cents',
 ]);
 const WARNING_KEYS = [...successBody.matchAll(/^\s*([a-z][a-z0-9_]*)\s*:/gm)]
   .map((m) => m[1])
