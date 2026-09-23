@@ -641,7 +641,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       if (assignmentIds.length) {
         const { data: subRows, error: subErr } = await supabase
           .from("assignment_substitutions")
-          .select("id, parent_assignment_id, date, status, sub_tier, sub_instructor_id, sub:instructors!sub_instructor_id(first_name, last_name, preferred_name)")
+          .select("id, parent_assignment_id, date, status, decline_reason, sub_tier, sub_instructor_id, sub:instructors!sub_instructor_id(first_name, last_name, preferred_name)")
           .eq("parent_assignment_type", "program")
           .in("parent_assignment_id", assignmentIds);
         if (subErr) console.warn("[AfterschoolSchedule] sub load failed:", subErr.message);

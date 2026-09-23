@@ -156,6 +156,9 @@ export default function InstructorPortal() {
   const [sendBusy, setSendBusy] = useState(false);
   const [sendMsg, setSendMsg] = useState("");
   const [error, setError] = useState("");
+  // Something the instructor should read that is NOT a failure. Kept separate
+  // from `error` so it does not render in the coral you-did-something-wrong box.
+  const [notice, setNotice] = useState("");
   // Set when the signed-in address has no instructor record (link-instructor
   // 404), or belongs to someone else's record (409). Holds the address they
   // ACTUALLY signed in with, which is the one fact that lets them fix it
@@ -1060,6 +1063,9 @@ export default function InstructorPortal() {
 
   async function handleSubResponse(substitutionId, action, declineReason) {
     setSubActingOn({ id: substitutionId, action });
+    // Clear last time's notice too, or "someone else got that one" follows them
+    // around the portal after they have moved on to a different offer.
+    setNotice("");
     setError("");
     try {
       const { data, error: fnErr } = await supabase.functions.invoke(
@@ -1078,6 +1084,25 @@ export default function InstructorPortal() {
           return;
         }
         throw new Error(data?.error || fnErr?.message || "Couldn't send your response.");
+      }
+      // SOMEBODY ELSE GOT THERE FIRST. A day can be offered to several people
+      // and the first to accept takes it, so this is an ordinary outcome and the
+      // server deliberately reports it as a success, not an error — which means
+      // it arrives HERE, above the optimistic update below. Without this branch
+      // that update marks the card "confirmed" for a class they did not get, and
+      // the only thing that corrects it is a background refetch that says
+      // nothing. They said yes; they are owed the real answer.
+      if (data?.already_covered || data?.status === "covered_by_other") {
+        setSubAssignments((prev) => prev.filter((s) => s.id !== substitutionId));
+        // Worded for what they actually did. The same server answer arrives
+        // whether they pressed Accept or Decline — the offer was closed out
+        // before either — and thanking somebody for saying yes when they just
+        // said no is worse than saying nothing.
+        setNotice(action === "accept"
+          ? "Someone else accepted this one first, so it's covered. Thanks for saying yes — nothing else to do."
+          : "That one's already covered by someone else, so there's nothing to decline.");
+        await loadSubAssignments(instructor.instructor_id);
+        return;
       }
       // Optimistic local update so the card moves immediately — the re-fetch
       // below confirms, but avoids a stale-read window where the pending card
@@ -1730,6 +1755,16 @@ export default function InstructorPortal() {
       {error && (
         <div style={{ background: `${CORAL}1F`, border: `1px solid ${CORAL}`, color: CORAL, padding: 12, borderRadius: 8, marginBottom: 14, fontSize: 13 }}>
           {error}
+        </div>
+      )}
+
+      {/* Not everything worth saying is a failure. Losing a first-come race is a
+          normal outcome — somebody was simply quicker — and putting it in the
+          coral box above would tell an instructor who did nothing wrong that
+          something went wrong. */}
+      {notice && (
+        <div style={{ background: '#eef2ff', border: '1px solid #c7d0f5', color: '#333', padding: 12, borderRadius: 8, marginBottom: 14, fontSize: 13 }}>
+          {notice}
         </div>
       )}
 

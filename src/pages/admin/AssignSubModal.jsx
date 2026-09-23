@@ -1,12 +1,16 @@
-// AssignSubModal — admin assigns a single-day substitute for a camp or
-// afterschool session. Calls create-assignment-substitution which UPSERTs
-// the row and sends the sub an Ennie-voiced offer email.
+// AssignSubModal — admin asks somebody to cover a single day of a camp or
+// after-school class. Calls create-assignment-substitution, which writes an
+// offer row PER PERSON and emails each of them an Ennie-voiced offer.
 //
-// Resent state: when the operator re-opens the modal for a day that already
-// has a sub assigned + emailed, the submit button shows "Resend offer to X".
-// The transition keys off assignment_substitutions.email_sent_at — the only
-// column the edge fn ever writes on the offer-send path. Per the
-// feedback_ui_state_artifacts rule.
+// A class-day can hold an offer per person: several people can be asked and the
+// first to accept gets it. So every state below is asked about the PERSON
+// selected, never about the date — "is there a row for this date?" stopped
+// having one answer when the one-row-per-day rule came off (20260923e).
+//
+// Resent state: re-opening the modal for somebody who already holds a live,
+// emailed offer shows "Resend to X". The transition keys off
+// assignment_substitutions.email_sent_at — the only column the edge fn ever
+// writes on the offer-send path. Per the feedback_ui_state_artifacts rule.
 
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../lib/supabase';
@@ -39,6 +43,20 @@ const STATUS_LABEL = {
   taught: 'Taught',
   missed: 'Missed',
 };
+
+// What happened to one offer, in the operator's words. A row closed out because
+// SOMEBODY ELSE accepted first is not a refusal — that person very likely said
+// yes and simply lost the race — and calling it "Declined" on the screen where
+// you choose who to ask next quietly penalises your quickest people.
+function offerLabel(s) {
+  if (s.status === 'declined' && s.decline_reason === 'covered_by_other') {
+    return { text: 'Someone else covered it', tone: 'neutral' };
+  }
+  const text = STATUS_LABEL[s.status] ?? s.status;
+  if (s.status === 'declined') return { text, tone: 'bad' };
+  if (s.status === 'confirmed' || s.status === 'taught') return { text, tone: 'good' };
+  return { text, tone: 'neutral' };
+}
 
 // Why an instructor is already working that date (RPC working_reason).
 // These now fire only on a real TIME OVERLAP, not on "has anything that day"
@@ -161,7 +179,7 @@ export default function AssignSubModal({
       if (!parentAssignment?.id) { setLoading(false); return; }
       const { data, error } = await supabase
         .from('assignment_substitutions')
-        .select('id, date, sub_instructor_id, sub_tier, status, email_sent_at, declined_at')
+        .select('id, date, sub_instructor_id, sub_tier, status, decline_reason, email_sent_at, declined_at')
         .eq('parent_assignment_id', parentAssignment.id)
         .eq('parent_assignment_type', parentType)
         .order('date', { ascending: true });
@@ -215,28 +233,41 @@ export default function AssignSubModal({
     return () => { cancelled = true; };
   }, [date, organizationId, parentType, parentAssignment?.id]);
 
-  // Is the (date, sub) combo a resend? Keyed off email_sent_at on the
-  // matching existing row.
-  const existingForDate = existingSubs.find((s) => s.date === date);
-  const isResend = !!(
-    existingForDate &&
-    existingForDate.sub_instructor_id === subInstructorId &&
-    existingForDate.email_sent_at
+  // A class-day can hold an offer PER PERSON now, so "is there a row for this
+  // date?" is no longer a question with one answer. Everything below asks about
+  // the person actually selected.
+  //
+  // This used to take the first row for the date, which was safe only while the
+  // database allowed one. It drove a "Swap to X" button that described the old
+  // behaviour — the send REPLACED the row — and that is no longer what happens:
+  // asking somebody else now ADDS an offer beside the first. An operator
+  // pressing a button labelled Swap would have believed they moved the day,
+  // while the person they were replacing still held a live offer and could
+  // still accept it.
+  const offersThisDate = existingSubs.filter((s) => s.date === date);
+  // One PERSON can hold two rows for one day: a decline they gave earlier, and a
+  // live offer from being asked again. The pending one is the one every label
+  // here is about, so pick it explicitly rather than taking whichever the query
+  // happened to return first — the same first-row mistake this block replaced,
+  // one level down.
+  const minePending = offersThisDate.find(
+    (s) => s.sub_instructor_id === subInstructorId && s.status === 'pending',
+  ) ?? null;
+  const isResend = !!(minePending && minePending.email_sent_at);
+  // Other people already holding a LIVE offer on this day. A settled day is not
+  // counted here: the send refuses outright once somebody has accepted.
+  const othersPending = offersThisDate.filter(
+    (s) => s.status === 'pending' && s.sub_instructor_id !== subInstructorId,
   );
-  // Is this swapping a different sub onto a day that already had one?
-  const isSwap = !!(
-    existingForDate &&
-    existingForDate.sub_instructor_id !== subInstructorId &&
-    subInstructorId
-  );
+  const dayIsCovered = offersThisDate.some((s) => s.status === 'confirmed' || s.status === 'taught');
 
   const chosenSub = eligible.find((i) => i.id === subInstructorId);
   const submitLabel = !subInstructorId || !date
     ? 'Send offer'
     : isResend
-      ? `Resend offer to ${shortName(chosenSub)}`
-      : isSwap
-        ? `Swap to ${shortName(chosenSub)}`
+      ? `Resend to ${shortName(chosenSub)}`
+      : othersPending.length > 0
+        ? `Also ask ${shortName(chosenSub)}`
         : `Send offer to ${shortName(chosenSub)}`;
 
   async function submit() {
@@ -269,7 +300,27 @@ export default function AssignSubModal({
         // `message` sits between detail and error: `error` is a machine code
         // (e.g. 'no_tenant_inbox') and putting a code on screen tells the
         // operator nothing. Prefer any human sentence the function supplies.
-        setErr(data.detail || data.message || data.error || 'Could not send the offer.');
+        //
+        // A send can stop PARTWAY — some people asked, then a failure. Saying
+        // only "it failed" would invite pressing the button again, which emails
+        // everybody who already got it a second time. The function reports who
+        // it reached; show that, and refresh the list so those offers are
+        // visible rather than hidden behind an error.
+        const already = Array.isArray(data.asked) ? data.asked.length : 0;
+        const base = data.detail || data.message || data.error || 'Could not send the offer.';
+        setErr(already > 0
+          ? `${base} ${already === 1 ? '1 person was' : `${already} people were`} already asked before this failed — don't send again without checking who.`
+          : base);
+        const { data: afterFail, error: afterFailErr } = await supabase
+          .from('assignment_substitutions')
+          .select('id, date, sub_instructor_id, sub_tier, status, decline_reason, email_sent_at, declined_at')
+          .eq('parent_assignment_id', parentAssignment.id)
+          .eq('parent_assignment_type', parentType)
+          .order('date', { ascending: true });
+        // Keep what we already had if the refresh itself fails — very likely,
+        // since whatever broke the send may still be broken. Blanking the list
+        // here would hide the offers this message just told them to check.
+        if (!afterFailErr && afterFail) setExistingSubs(afterFail);
         setBusy(false);
         return;
       }
@@ -278,7 +329,7 @@ export default function AssignSubModal({
       // Re-load the existing list so the day appears with email_sent_at set.
       const { data: refreshed } = await supabase
         .from('assignment_substitutions')
-        .select('id, date, sub_instructor_id, sub_tier, status, email_sent_at, declined_at')
+        .select('id, date, sub_instructor_id, sub_tier, status, decline_reason, email_sent_at, declined_at')
         .eq('parent_assignment_id', parentAssignment.id)
         .eq('parent_assignment_type', parentType)
         .order('date', { ascending: true });
@@ -315,14 +366,18 @@ export default function AssignSubModal({
             <div style={{ fontSize: 14, color: MUTED, padding: '12px 0' }}>Loading existing subs…</div>
           ) : existingSubs.length > 0 && (
             <div style={{ marginBottom: 16, padding: 12, background: CREAM, border: `1px solid ${RULE}`, borderRadius: 6 }}>
+              {/* "Already covered" was never quite true — a declined row has
+                  always appeared in this list — and it is now plainly wrong,
+                  because a day can show several people who were asked and have
+                  not answered. It says what it is instead. */}
               <div style={{ fontSize: 12, color: MUTED, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 6 }}>
-                Already covered
+                Subs asked for this class
               </div>
               {existingSubs.map((s) => {
                 const subInst = (instructors ?? []).find((i) => i.id === s.sub_instructor_id);
                 return (
                   <div key={s.id} style={{ fontSize: 13, color: INK, padding: '4px 0' }}>
-                    <strong>{fmtDate(s.date)}</strong> — {shortName(subInst)} · {s.sub_tier} · <span style={{ color: s.status === 'declined' ? CORAL : (s.status === 'confirmed' || s.status === 'taught' ? OK_GREEN : MUTED) }}>{STATUS_LABEL[s.status] ?? s.status}</span>
+                    <strong>{fmtDate(s.date)}</strong> — {shortName(subInst)} · {s.sub_tier} · <span style={{ color: offerLabel(s).tone === 'bad' ? CORAL : offerLabel(s).tone === 'good' ? OK_GREEN : MUTED }}>{offerLabel(s).text}</span>
                   </div>
                 );
               })}
@@ -454,6 +509,22 @@ export default function AssignSubModal({
               {okMsg}
             </div>
           )}
+          {/* Say what pressing the button will actually do. Asking somebody now
+              ADDS an offer rather than replacing one, so an operator must be able
+              to see who else is already holding this day before they decide —
+              otherwise the only way to find out is when two people both say yes
+              and one of them has to be told no. */}
+          {dayIsCovered ? (
+            <div style={{ marginTop: 10, fontSize: 12, color: CORAL }}>
+              Somebody has already accepted this day. Cancel their cover first if you need a different person.
+            </div>
+          ) : othersPending.length > 0 && subInstructorId ? (
+            <div style={{ marginTop: 10, fontSize: 12, color: MUTED }}>
+              {othersPending.length === 1
+                ? `${shortName((instructors ?? []).find((i) => i.id === othersPending[0].sub_instructor_id))} is already holding this day and hasn't answered. Whoever accepts first gets it.`
+                : `${othersPending.length} people are already holding this day and haven't answered. Whoever accepts first gets it.`}
+            </div>
+          ) : null}
         </div>
 
         <div style={{ padding: '12px 20px', borderTop: `1px solid ${RULE}`, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
@@ -461,8 +532,12 @@ export default function AssignSubModal({
           <button
             type="button"
             onClick={submit}
-            disabled={busy || !date || !subInstructorId}
-            style={{ ...btnPrimary, opacity: (busy || !date || !subInstructorId) ? 0.5 : 1 }}
+            // dayIsCovered is in here as well as in the message above: the server
+            // refuses a covered day with a 409, and a button that invites a click
+            // it will refuse is a button that teaches operators to ignore the
+            // sentence next to it.
+            disabled={busy || !date || !subInstructorId || dayIsCovered}
+            style={{ ...btnPrimary, opacity: (busy || !date || !subInstructorId || dayIsCovered) ? 0.5 : 1 }}
           >
             {busy ? 'Sending…' : submitLabel}
           </button>

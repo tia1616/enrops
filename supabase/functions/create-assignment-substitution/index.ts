@@ -285,7 +285,11 @@ serve(async (req: Request) => {
       console.error('[create-assignment-substitution] settled check failed:', settledErr);
       return json({ error: 'settled_check_failed', detail: settledErr.message }, 500);
     }
-    if (settled && settled.length > 0 && mode === 'send') {
+    // Refused in TEST mode too. The test only changes where the email goes; it
+    // still writes a real offer row, and a live "can you cover this?" landing in
+    // an instructor's portal for a class that already has a teacher is not a
+    // test, it is a real ask nobody meant to make.
+    if (settled && settled.length > 0) {
       return json({
         error: 'already_covered',
         detail: 'Somebody has already accepted this day. Cancel their cover first if you need a different person.',
@@ -346,7 +350,7 @@ serve(async (req: Request) => {
     const nowIso = new Date().toISOString();
     const { data: existingRows, error: existingErr } = await supabase
       .from('assignment_substitutions')
-      .select('id, sub_instructor_id, status')
+      .select('id, sub_instructor_id, status, email_sent_at')
       .eq('parent_assignment_id', parentId)
       .eq('parent_assignment_type', parentType)
       .eq('date', date)
@@ -356,19 +360,25 @@ serve(async (req: Request) => {
       return json({ error: 'existing_lookup_failed', detail: existingErr.message }, 500);
     }
     const livePendingByInstructor = new Map(
-      (existingRows ?? []).filter((r) => r.status === 'pending').map((r) => [r.sub_instructor_id, r.id]),
+      (existingRows ?? [])
+        .filter((r) => r.status === 'pending')
+        .map((r) => [r.sub_instructor_id, { id: r.id }]),
     );
 
-    async function rowForCandidate(instructorId: string): Promise<{ id: string } | { error: string }> {
-      const existingId = livePendingByInstructor.get(instructorId);
-      if (existingId) {
-        const { error } = await supabase
-          .from('assignment_substitutions')
-          .update({ sub_tier: subTier, notes: notes || null, assigned_by: callerAuthId, assigned_at: nowIso })
-          .eq('id', existingId);
-        if (error) return { error: error.message };
-        return { id: existingId };
-      }
+    // Get the row this offer will live on, WITHOUT yet writing anything a failed
+    // send would make untrue.
+    //
+    // A refresh is deliberately not written here. The offer email states the
+    // ROLE, so writing "developing" onto the row before the email goes means a
+    // bounced resend leaves the row saying developing while the only message the
+    // instructor ever received says lead — and the role on the row is what
+    // payroll pays. Clearing the stamp instead was tried and is worse: it erases
+    // a real earlier email from their contact history and turns the button back
+    // into "Send offer", which is how somebody gets asked twice. So the terms
+    // are written only once the email carrying them has actually gone.
+    async function rowForCandidate(instructorId: string): Promise<{ id: string; isRefresh: boolean } | { error: string }> {
+      const existingId = livePendingByInstructor.get(instructorId)?.id;
+      if (existingId) return { id: existingId, isRefresh: true };
       const { data, error } = await supabase
         .from('assignment_substitutions')
         .insert({
@@ -385,8 +395,22 @@ serve(async (req: Request) => {
         })
         .select('id')
         .single();
-      if (error || !data) return { error: error?.message ?? 'insert returned no row' };
-      return { id: (data as { id: string }).id };
+      if (error || !data) {
+        // 23505 here means the one-offer-per-day rule this build removes is
+        // still on the database — i.e. the function reached an environment
+        // ahead of its migration. Say that, rather than handing an operator a
+        // raw Postgres string about a constraint.
+        // 23505 has two possible causes and the message must not assert one:
+        // the one-offer-per-day rule still being in place (the function reached
+        // an environment ahead of its migration), or two admins asking the same
+        // person for the same day at the same moment on a fully-migrated one.
+        // Both are "somebody already holds this", and a retry is the right move.
+        if ((error as { code?: string } | null)?.code === '23505') {
+          return { error: 'Somebody already holds an offer for this class day. Refresh and check who before asking again.' };
+        }
+        return { error: error?.message ?? 'insert returned no row' };
+      }
+      return { id: (data as { id: string }).id, isRefresh: false };
     }
 
     // ── Compose email ────────────────────────────────────────────────────
@@ -413,7 +437,7 @@ serve(async (req: Request) => {
     // Everyone asked gets the same offer, addressed to them. Declared as a
     // function so the whole compose-and-send path is identical for one person
     // and for five — the multi-offer case is not a second code path.
-    async function offerTo(cand: { id: string; preferred_name?: string | null; first_name?: string | null; email?: string | null }, substitutionId: string) {
+    async function offerTo(cand: { id: string; preferred_name?: string | null; first_name?: string | null; email?: string | null }, substitutionId: string, isRefresh: boolean) {
     const subFirst = cand.preferred_name || cand.first_name || 'there';
 
     const html = `<!doctype html>
@@ -504,10 +528,33 @@ serve(async (req: Request) => {
 
     // ── Mark email_sent_at — the artifact column that gates the "Resent"
     //    button state in the modal. Only this edge fn writes it.
-    await supabase
+    //
+    // The error is CHECKED, because by this point the email HAS gone. A silent
+    // failure here leaves the row looking un-emailed, so the modal offers to
+    // send again and the same person gets a second identical offer — while the
+    // first one is missing from their contact history, which filters on this
+    // very column. Report it instead: the offer stands, the record does not.
+    // The terms ride along with the stamp on a refresh: the email that just went
+    // is the one that describes them, so they become true at exactly the moment
+    // it does. A new row already carries them from its insert.
+    const { error: stampErr } = await supabase
       .from('assignment_substitutions')
-      .update({ email_sent_at: new Date().toISOString() })
+      .update(isRefresh
+        ? {
+            sub_tier: subTier, notes: notes || null,
+            assigned_by: callerAuthId, assigned_at: nowIso,
+            email_sent_at: new Date().toISOString(),
+          }
+        : { email_sent_at: new Date().toISOString() })
       .eq('id', substitutionId);
+    if (stampErr) {
+      console.error('[create-assignment-substitution] email_sent_at stamp failed:', stampErr, { substitution_id: substitutionId });
+      return {
+        error: 'sent_but_unrecorded',
+        detail: `The offer email went to ${recipient}, but we could not record that it was sent. Do not send it again — check with them directly.`,
+        status: 500,
+      };
+    }
 
     return { ok: true, substitution_id: substitutionId, recipient };
     }   // end offerTo
@@ -527,8 +574,16 @@ serve(async (req: Request) => {
           asked, asked_count: asked.length,
         }, 500);
       }
-      const sent = await offerTo(cand, row.id);
+      const sent = await offerTo(cand, row.id, row.isRefresh);
       if ('error' in sent) {
+        // 'sent_but_unrecorded' means the email DID go — count that person as
+        // asked, or the operator is told fewer were contacted than really were
+        // and may re-send to somebody who already has it. Every other failure
+        // means no email went, and a refresh's row is untouched: its old terms
+        // and old stamp still describe the last message that really was sent.
+        if (sent.error === 'sent_but_unrecorded') {
+          asked.push({ instructor_id: cand.id, substitution_id: row.id, recipient: cand.email! });
+        }
         return json({ ...sent, asked, asked_count: asked.length }, sent.status ?? 502);
       }
       asked.push({ instructor_id: cand.id, substitution_id: sent.substitution_id, recipient: sent.recipient! });

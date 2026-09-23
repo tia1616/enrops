@@ -65,10 +65,12 @@ export function aggregateSubSlot(rows) {
     && r.decline_reason !== "covered_by_other");
   const declineCount = distinctPeople(declined);
 
-  // A confirmed sub wins the day. 'taught' is the SAME person one step later,
-  // but the single-winner index only guards 'confirmed', so a day can legally
-  // hold both -- prefer 'confirmed' EXPLICITLY rather than taking whichever row
-  // the database happened to return first. Neither board query orders its rows.
+  // A confirmed sub wins the day. 'taught' is the SAME person one step later.
+  // Migration 20260923d made two settled rows on one day impossible, so this can
+  // no longer be ambiguous in practice -- but the preference stays EXPLICIT
+  // rather than taking whichever row the database returned first, because
+  // neither board query orders its rows and correctness here should not rest on
+  // an index somewhere else continuing to exist.
   const winner = all.find((r) => r.status === "confirmed")
     ?? all.find((r) => r.status === "taught")
     ?? null;

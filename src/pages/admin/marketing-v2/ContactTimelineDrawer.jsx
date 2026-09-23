@@ -280,7 +280,7 @@ async function fetchInstructor(contact) {
   const [{ data: camp }, { data: prog }, { data: subs }, { data: surv }, { data: onb }, { data: av }, { data: tav }] = await Promise.all([
     supabase.from("camp_assignments").select("id, status, email_sent_at, instructor_response_at, camp_session_id").eq("instructor_id", iid).not("email_sent_at", "is", null).limit(300),
     supabase.from("program_assignments").select("id, status, email_sent_at, instructor_response_at, program_id").eq("instructor_id", iid).not("email_sent_at", "is", null).limit(300),
-    supabase.from("assignment_substitutions").select("id, email_sent_at, declined_at, status, date").eq("sub_instructor_id", iid).not("email_sent_at", "is", null).limit(200),
+    supabase.from("assignment_substitutions").select("id, email_sent_at, declined_at, decline_reason, status, date").eq("sub_instructor_id", iid).not("email_sent_at", "is", null).limit(200),
     supabase.from("instructor_survey_sends").select("id, survey_kind, status, sent_at").eq("instructor_id", iid).order("sent_at", { ascending: false }).limit(100),
     supabase.from("contractor_onboarding_status").select("invited_at").eq("instructor_id", iid).maybeSingle(),
     supabase.from("instructor_availability").select("id, submitted_at").eq("instructor_id", iid).not("submitted_at", "is", null).limit(100),
@@ -315,7 +315,17 @@ async function fetchInstructor(contact) {
   }
   for (const s of subs ?? []) {
     events.push({ id: "sub" + s.id, at: s.email_sent_at, icon: "🔄", title: "Substitute offer", detail: s.date ? `for ${fmtDay(s.date)}` : "", tone: "sent" });
-    if (s.declined_at) events.push({ id: "subd" + s.id, at: s.declined_at, icon: "✖️", title: "Substitute declined", detail: "", tone: "negative" });
+    // Losing a first-come race is NOT declining. When several people are asked
+    // to cover one day, everyone who did not win is closed out automatically and
+    // stamped 'covered_by_other' — several of them will have said YES. Marking
+    // that as a refusal puts a permanent red ✖ on the record of the people who
+    // answer fastest, on the very screen an operator reads when deciding who to
+    // ask next. The same rule lives in the coverage RPC and in subCoverage.js.
+    if (s.declined_at && s.decline_reason !== "covered_by_other") {
+      events.push({ id: "subd" + s.id, at: s.declined_at, icon: "✖️", title: "Substitute declined", detail: "", tone: "negative" });
+    } else if (s.declined_at) {
+      events.push({ id: "subc" + s.id, at: s.declined_at, icon: "↩️", title: "Someone else covered it", detail: "no longer needed", tone: "sent" });
+    }
   }
   for (const s of surv ?? []) {
     events.push({ id: "iss" + s.id, at: s.sent_at, icon: "📨", title: "Availability survey sent", detail: s.status === "failed" ? "Failed" : "", tone: s.status === "failed" ? "negative" : "sent" });

@@ -28,13 +28,22 @@
 -- people may be ASKED; exactly one can end up covering. accept_sub_offer leans on
 -- that index to decide a race, and now finally has a caller.
 --
--- COUPLED DEPLOY - this migration and the send function move together:
--- the old function upserts ON CONFLICT on the constraint being dropped here, so
--- dropping it under the old code raises 42P10 on the live sub-assign path. The
--- new function inserts per person and never names this constraint. Deploy the
--- function FIRST, then apply this; that order leaves only a brief window where
--- re-offering a day that already holds somebody else's row fails, rather than
--- one where every sub assignment fails.
+-- COUPLED DEPLOY - this migration and TWO functions move together. Both, not
+-- one: an earlier draft of this note named only the send, and shipping without
+-- the other leaves the first multi-offer day broken in a way nobody can see.
+--
+--   1. create-assignment-substitution. The old version upserts ON CONFLICT on
+--      the constraint dropped here, so dropping it under the old code raises
+--      42P10 on the live sub-assign path.
+--   2. respond-to-sub-offer. The old version accepts with a bare status update
+--      and has no idea two people can hold one day. Ship the migration without
+--      it and the FIRST person to accept succeeds, the second trips the
+--      single-settled index and gets a raw 500 forever, nobody's losing offer is
+--      ever closed out, and every one of them keeps an Accept button that fails.
+--
+-- ORDER: both functions FIRST, then this migration. That leaves only a brief
+-- window where re-offering a day that already holds somebody else's row fails,
+-- rather than one where every sub assignment fails or races resolve to nothing.
 
 ALTER TABLE public.assignment_substitutions
   DROP CONSTRAINT IF EXISTS assignment_substitutions_parent_assignment_id_parent_assign_key;
