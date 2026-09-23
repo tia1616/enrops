@@ -87,6 +87,18 @@ function humanError(code, payload) {
       return `The ${fmtCents(payload?.credited_cents)} credit IS recorded and their scheduled payments ARE stopped${payload?.pending_charges_stopped ? ` (${payload.pending_charges_stopped})` : ""}, but freeing their spot didn't work. Refresh the roster and, if they're still listed, use Remove.`;
     case "invalid_credit_reason":
       return "Choose whether you cancelled the class or the family did, then try again.";
+    case "charge_unreadable_credit_refused":
+      return "We couldn't read this family's original payment from Stripe, so we haven't recorded a credit — we'd be guessing at the amount. Nothing was changed. Try again in a minute, and if it keeps failing, refund them instead.";
+    case "idempotency_key_unusable":
+      // Not reachable from this drawer, which generates a fresh key every time
+      // it opens. Mapped anyway so it can never surface as a raw code.
+      return "Something went wrong recording this credit. Close the panel and open it again, then try once more.";
+    case "amount_exceeds_eligible_now":
+      // Distinct from `amount_exceeds_eligible`, which means the amount was too
+      // big when it was typed. This one means it was fine when the drawer
+      // opened and somebody else used the money up in between, so the fix is to
+      // reopen rather than to type a smaller number.
+      return "Someone else refunded or credited this registration while this was open, so there isn't enough left. Close and reopen to see what's actually available.";
     case "registration_has_no_parent":
       return "This registration isn't linked to a parent account, so a credit would have nobody to belong to. Refund it instead.";
     case "forbidden":
@@ -145,6 +157,9 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
   const [cancelKind, setCancelKind] = useState(null); // 'business_cancelled' | 'family_cancelled'
   const [programCancelled, setProgramCancelled] = useState(false);
   const [creditedCents, setCreditedCents] = useState(0);
+  // Whether the server could read the real charge from Stripe. Only the credit
+  // path cares: a refund still works, because Stripe itself is the backstop.
+  const [chargeReadable, setChargeReadable] = useState(true);
 
   // One key per drawer opening. A double-clicked button or a retried request
   // sends the SAME key, and the server returns the credit it already wrote
@@ -205,8 +220,21 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
         setCreditedCents(elig.total_credited_cents || 0);
         // Pre-selects the cancellation kind IF the operator goes on to choose
         // credit. Not a claim on its own, and it decides nothing until then.
-        setProgramCancelled(elig.program_cancelled === true);
-        setCancelKind(elig.program_cancelled === true ? "business_cancelled" : "family_cancelled");
+        //
+        // THREE STATES. null means the server could not read the class at all,
+        // which is neither "cancelled" nor "still running" - so nothing is
+        // pre-selected and the operator is asked outright. `canSubmit` already
+        // requires a kind, so an unknown becomes a forced choice rather than a
+        // confident wrong guess about the one fact nothing else records.
+        // `!== false` so an older preview without the field is treated as
+        // readable, which is exactly today's behaviour.
+        setChargeReadable(elig.charge_readable !== false);
+        setProgramCancelled(elig.program_cancelled ?? null);
+        setCancelKind(
+          elig.program_cancelled === true ? "business_cancelled"
+            : elig.program_cancelled === false ? "family_cancelled"
+              : null,
+        );
         setAdminFeeCents(orgRow?.withdrawal_admin_fee_cents || 0);
         // A failed read must not block a refund, so it is recorded rather than
         // thrown - but it is RECORDED, because an empty list and a failed query
@@ -270,7 +298,12 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
   // nothing-to-refund panel above already handles that case as a withdrawal.
   // Guarding the derived flag rather than only the radio means a credit cannot
   // survive a state where its own precondition stopped being true.
-  const creditAvailable = refundableCents > 0;
+  // AND only when the server could actually read what they paid. A credit is a
+  // debt sized from the real charge; when Stripe could not be read the server
+  // refuses to write one, so offering the option here would walk the operator
+  // through the whole form to a dead end. Defaults to true so a preview from an
+  // older deploy, which does not send the field, behaves as it does today.
+  const creditAvailable = refundableCents > 0 && chargeReadable;
   const isCredit = outcome === "credit" && creditAvailable;
 
   // A CREDIT ALWAYS WITHDRAWS. The family is leaving the class - that is why
@@ -396,8 +429,16 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
         // silent - nothing is emailed by this flow - so the one thing standing
         // between the family and never hearing about their money is this
         // sentence. It must not be conditional on something having gone wrong.
+        // THE LEDGER'S NUMBER, NOT THE TYPED ONE. The server deliberately
+        // answers a retry with the amount it already holds, and reading
+        // `amountCents` here threw that away. The field stays editable after a
+        // partial failure (credit written, pause failed), so an operator who
+        // adjusts the amount and presses again would be told "$300 credit
+        // recorded" while $240 sits in the ledger - and that sentence is the
+        // one they repeat to the family, with no email to contradict it.
+        const written = data?.credited_cents ?? amountCents;
         alert(
-          `${fmtCents(amountCents)} credit recorded${data?.already_existed ? " (it was already issued — no second credit was created)" : ""}.\n\n` +
+          `${fmtCents(written)} credit recorded${data?.already_existed ? " (it was already issued — no second credit was created)" : ""}.\n\n` +
           `They have NOT been emailed. Tell them about it — Class rosters › Message families.` +
           (notes.length > 0 ? `\n\n${notes.join("\n\n")}` : ""),
         );
@@ -408,7 +449,16 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
       // withdraws but never sets seatChoice - it is not asked - so reading the
       // seat choice alone reported false and left a freed seat still showing as
       // taken.
-      if (onDone) onDone({ amountCents, cancelled: isCredit || seatChoice === "withdraw", credited: isCredit });
+      if (onDone) {
+        onDone({
+          // Same rule as the alert: report what was written, not what was asked
+          // for, so a caller that displays or totals this cannot inherit the
+          // wrong number from a retry.
+          amountCents: isCredit ? (data?.credited_cents ?? amountCents) : amountCents,
+          cancelled: isCredit || seatChoice === "withdraw",
+          credited: isCredit,
+        });
+      }
     } catch (e) {
       console.error("[RefundDrawer] refund failed", e);
       setErr(e.message ?? "Couldn't issue the refund. Try again.");
@@ -579,6 +629,20 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
                 {/* WHAT THE FAMILY GETS. Only shown when there is money to give
                     back - with nothing refundable there is nothing to credit
                     either, and that case has its own panel above. */}
+                {/* The option is WITHHELD, so say so. A choice that silently
+                    fails to appear reads as a product that does not have the
+                    feature, and the operator's next move - refunding instead -
+                    is the right one only if they know why. Shown only when
+                    there IS money to give back, since the nothing-to-refund
+                    case has its own panel and no credit to discuss. */}
+                {!chargeReadable && refundableCents > 0 && (
+                  <div style={{ marginTop: 18, background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, padding: 12, fontSize: 12.5, color: "#7c2d12", lineHeight: 1.5 }}>
+                    <strong>Credit isn't available on this one.</strong> We couldn't read the original
+                    payment from Stripe, so we can't tell what they actually paid — and a credit has to be
+                    for the right amount. Refunding still works normally.
+                  </div>
+                )}
+
                 {creditAvailable && (
                   <div style={{ marginTop: 18 }}>
                     <div style={{ fontSize: 12.5, fontWeight: 600, color: INK, marginBottom: 8 }}>What they get</div>
@@ -590,7 +654,17 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
                     <SeatRadio
                       checked={isCredit} onChange={() => setOutcome("credit")} disabled={busy}
                       title="Give enrops credit instead"
-                      sub="The money stays with you and they can spend it on a future class. No expiry. Frees their spot and stops any future payments."
+                      // "stops any future payments" without a scope is a promise
+                      // this action does not keep. The pause is filtered to THIS
+                      // registration, and the nightly charger gates on the
+                      // PROGRAM's status, never the registration's - so the other
+                      // terms of a year-long bundle keep charging. On production
+                      // 114 registrations are paid and confirmed while another
+                      // leg for the same parent and child still has pending
+                      // instalments, so this is the common case, not the corner.
+                      // The withdraw panel above already says it correctly; this
+                      // copy dropped the qualifier.
+                      sub="The money stays with you and they can spend it on a future class. No expiry. Frees their spot and stops the scheduled payments for this class. Any other terms they are enrolled in are separate and are not affected."
                     />
                     {isCredit && (
                       <div style={{ marginTop: 10, background: "#fdf6e3", border: "1px solid #ecdca6", borderRadius: 8, padding: 12 }}>
@@ -621,9 +695,16 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
                               them: the first is only reachable when the class
                               really is cancelled, the second only when it is
                               not. */}
-                          {programCancelled
+                          {/* Three states, three sentences, and the third is the
+                              one that must not be skipped: a failed read is not
+                              evidence the class is running. Saying so is also
+                              the honest explanation for why nothing is
+                              pre-selected here when it usually is. */}
+                          {programCancelled === true
                             ? "This class is cancelled, so we've assumed it was your cancellation. Change it if the family had already pulled out."
-                            : "This class is still running, so we've assumed the family pulled out. Change it if you cancelled their place."}
+                            : programCancelled === false
+                              ? "This class is still running, so we've assumed the family pulled out. Change it if you cancelled their place."
+                              : "We couldn't check whether this class is cancelled, so we haven't assumed either way — pick the one that happened."}
                         </div>
                         <div style={{ fontSize: 12, color: INK, marginTop: 10, lineHeight: 1.6 }}>
                           <strong>Nothing is emailed.</strong> They won't know about this credit until you tell
@@ -701,10 +782,24 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
                     Stripe confirmation for money that never moves - the drawer
                     telling an operator the opposite of what it is about to do.
                     Caught by Jessica on staging, 2026-09-22. */}
+                {/* THREE OUTCOMES, THREE SENTENCES. This was a two-way branch on
+                    `withdrawNoRefund`, and the credit path makes that flag
+                    false - so a credit fell into the refund arm and the last
+                    line an operator read before pressing "Give $240 credit" was
+                    "Stripe sends the family its own refund confirmation
+                    automatically. The money comes back from your Stripe
+                    balance." Neither happens on a credit, and it contradicted
+                    the credit panel's own "Nothing is emailed" a few lines
+                    above, so the drawer asserted both at once. Exactly the
+                    defect the comment above says was fixed for the withdraw
+                    arm, reintroduced by adding a third outcome to a two-way
+                    branch. */}
                 <p style={{ color: MUTED, fontSize: 11.5, marginTop: 10, lineHeight: 1.5 }}>
-                  {withdrawNoRefund
-                    ? "No money moves, so the family is not emailed — Stripe only writes to them when a refund actually happens. Tell them yourself if they should know."
-                    : "Stripe sends the family its own refund confirmation automatically. The money comes back from your Stripe balance."}
+                  {isCredit
+                    ? "No money leaves your Stripe balance, and Stripe does not write to the family — it only emails them when a real refund happens. Telling them about the credit is yours to do."
+                    : withdrawNoRefund
+                      ? "No money moves, so the family is not emailed — Stripe only writes to them when a refund actually happens. Tell them yourself if they should know."
+                      : "Stripe sends the family its own refund confirmation automatically. The money comes back from your Stripe balance."}
                 </p>
               </>
             )}
