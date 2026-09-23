@@ -76,6 +76,19 @@ function humanError(code, payload) {
       return "We couldn't stop this family's scheduled payments, so nothing was changed — they're still enrolled and still due to be charged. Try again, and if it keeps failing don't leave it: their card will be charged on schedule.";
     case "cancel_failed_charges_stopped":
       return `Their scheduled payments ARE stopped${payload?.pending_charges_stopped ? ` (${payload.pending_charges_stopped})` : ""}, but freeing their spot didn't work. No money moved. Refresh the roster and, if they're still listed, try again.`;
+    // THE CREDIT PATH'S OUTCOMES. Each one says what DID happen as well as what
+    // did not, because every failure below leaves a different amount of the job
+    // done and the operator's next move is different in each.
+    case "credit_write_failed":
+      return "The credit couldn't be recorded, so nothing was changed — they're still enrolled and still due to be charged. Try again.";
+    case "credit_issued_pause_failed":
+      return `The ${fmtCents(payload?.credited_cents)} credit IS recorded, but we couldn't stop this family's scheduled payments, so they're still enrolled and still due to be charged. Try again, and don't leave it: their card will be charged on schedule.`;
+    case "credit_issued_cancel_failed_charges_stopped":
+      return `The ${fmtCents(payload?.credited_cents)} credit IS recorded and their scheduled payments ARE stopped${payload?.pending_charges_stopped ? ` (${payload.pending_charges_stopped})` : ""}, but freeing their spot didn't work. Refresh the roster and, if they're still listed, use Remove.`;
+    case "invalid_credit_reason":
+      return "Choose whether you cancelled the class or the family did, then try again.";
+    case "registration_has_no_parent":
+      return "This registration isn't linked to a parent account, so a credit would have nobody to belong to. Refund it instead.";
     case "forbidden":
       return "You don't have permission to issue refunds for this organization.";
     case "registration_not_found":
@@ -91,6 +104,8 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
   const [loadErr, setLoadErr] = useState("");
   const [paidCents, setPaidCents] = useState(0);
   const [refundedCents, setRefundedCents] = useState(0);
+  // What the server says is still available — paid, less refunds, less credits.
+  const [eligibleCents, setEligibleCents] = useState(0);
   const [adminFeeCents, setAdminFeeCents] = useState(0);
   // Pending installments on THIS registration. Shown so a withdrawal states
   // what it actually prevents, in money, rather than promising vaguely to
@@ -107,7 +122,46 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
-  const refundableCents = Math.max(0, paidCents - refundedCents);
+  // WHAT THE FAMILY GETS. 'refund' sends money back to their card; 'credit'
+  // keeps it with the business and records it as an enrops credit they can
+  // spend later.
+  //
+  // REFUND IS PRE-SELECTED, ALWAYS, and that is a deliberate departure from the
+  // money layer's "credit is the default when the family cancels". The doc's
+  // defaults describe what a FAMILY gets when they are asked and do not answer.
+  // Nobody is asked yet - the family-facing choice is a later chunk - so what
+  // this drawer picks is not that default, it is what happens when an operator
+  // does not look. This drawer's existing job is refunding, it is used for
+  // routine partial refunds on classes that are running perfectly well, and
+  // quietly re-pointing its default at "keep their money" is the one change
+  // here that could cost a family money through inattention. Credit is opted
+  // into, deliberately, every time.
+  const [outcome, setOutcome] = useState("refund"); // 'refund' | 'credit'
+
+  // Which kind of cancellation this was. Only asked once credit is chosen,
+  // because it is only written on a credit - family_credits.reason. Pre-selected
+  // from whether the class itself is cancelled, which CORRELATES with a business
+  // cancellation without proving one, so it stays changeable.
+  const [cancelKind, setCancelKind] = useState(null); // 'business_cancelled' | 'family_cancelled'
+  const [programCancelled, setProgramCancelled] = useState(false);
+  const [creditedCents, setCreditedCents] = useState(0);
+
+  // One key per drawer opening. A double-clicked button or a retried request
+  // sends the SAME key, and the server returns the credit it already wrote
+  // instead of writing a second one. Generated here rather than server-side
+  // precisely because it has to survive the retry.
+  const [idempotencyKey] = useState(() =>
+    (globalThis.crypto?.randomUUID?.() ?? `credit-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+  );
+
+  // THE CEILING IS THE SERVER'S NUMBER, NOT A SECOND COPY OF ITS ARITHMETIC.
+  // This used to be `paidCents - refundedCents`, which was the whole truth while
+  // a refund was the only way money could leave a registration. Credits consume
+  // the same ceiling, so that expression now drifts from what the server will
+  // actually allow - it would offer back money already given away as credit.
+  // Reading `eligible_cents` keeps one implementation, the same reason the
+  // drawer stopped deriving this locally in the first place.
+  const refundableCents = Math.max(0, eligibleCents);
 
   // Load eligibility + admin fee on open.
   useEffect(() => {
@@ -147,6 +201,12 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
         const refunded = elig.total_refunded_cents || 0;
         setPaidCents(paid);
         setRefundedCents(refunded);
+        setEligibleCents(elig.eligible_cents);
+        setCreditedCents(elig.total_credited_cents || 0);
+        // Pre-selects the cancellation kind IF the operator goes on to choose
+        // credit. Not a claim on its own, and it decides nothing until then.
+        setProgramCancelled(elig.program_cancelled === true);
+        setCancelKind(elig.program_cancelled === true ? "business_cancelled" : "family_cancelled");
         setAdminFeeCents(orgRow?.withdrawal_admin_fee_cents || 0);
         // A failed read must not block a refund, so it is recorded rather than
         // thrown - but it is RECORDED, because an empty list and a failed query
@@ -205,7 +265,20 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
     return Number.isFinite(n) && Math.round(n * 100) === 0;
   })();
 
-  const withdrawNoRefund = nothingToRefund || (seatChoice === "withdraw" && typedZero);
+  // CREDIT IS ONLY OFFERED WHEN THERE IS MONEY TO CREDIT. With nothing
+  // refundable the family has paid nothing that could be owed back, and the
+  // nothing-to-refund panel above already handles that case as a withdrawal.
+  // Guarding the derived flag rather than only the radio means a credit cannot
+  // survive a state where its own precondition stopped being true.
+  const creditAvailable = refundableCents > 0;
+  const isCredit = outcome === "credit" && creditAvailable;
+
+  // A CREDIT ALWAYS WITHDRAWS. The family is leaving the class - that is why
+  // money is owed back to them - so the seat is freed and their future payments
+  // stopped, exactly as a refund-and-withdraw does. There is no keep-their-spot
+  // credit in this chunk: that would be a goodwill credit, which the database
+  // has a separate reason for and no surface issues yet.
+  const withdrawNoRefund = !isCredit && (nothingToRefund || (seatChoice === "withdraw" && typedZero));
 
   // Flattened: the old nested ternary's true-branch was a tautology. Inside it
   // `withdrawNoRefund` holds, and if `nothingToRefund` is false the other
@@ -213,9 +286,16 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
   // anything while reading like a guard.
   const canSubmit =
     !busy && !loading && !loadErr &&
-    (withdrawNoRefund ||
-      (amountCents > 0 && !overMax &&
-        (seatChoice === "keep" || seatChoice === "withdraw")));
+    (isCredit
+      // The seat choice is not consulted: a credit always withdraws. The
+      // cancellation kind IS, because it is written to the credit row and the
+      // two values are not interchangeable - it is the only record of which
+      // side ended the enrollment.
+      ? (amountCents > 0 && !overMax &&
+        (cancelKind === "business_cancelled" || cancelKind === "family_cancelled"))
+      : (withdrawNoRefund ||
+        (amountCents > 0 && !overMax &&
+          (seatChoice === "keep" || seatChoice === "withdraw"))));
 
   function setFull() { setAmountStr((refundableCents / 100).toFixed(2)); }
   function setKeepFee() { setAmountStr((Math.max(0, refundableCents - adminFeeCents) / 100).toFixed(2)); }
@@ -233,7 +313,16 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
           // Stripe at all.
           amount_cents: withdrawNoRefund ? 0 : amountCents,
           reason: reason.trim() || undefined,
-          cancel_registration: withdrawNoRefund ? true : seatChoice === "withdraw",
+          // A credit always withdraws, so this is true without consulting the
+          // seat choice - which is not even shown in that mode.
+          cancel_registration: isCredit ? true : (withdrawNoRefund ? true : seatChoice === "withdraw"),
+          ...(isCredit
+            ? {
+              issue_credit: true,
+              credit_reason: cancelKind,
+              idempotency_key: idempotencyKey,
+            }
+            : null),
         },
       });
       if (error) {
@@ -298,10 +387,28 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
           `Check the amount actually refunded before trying again.`,
         );
       }
-      if (notes.length > 0) {
+      // THE HEADLINE HAS TO MATCH WHAT ACTUALLY HAPPENED. "The family has their
+      // money back" is false on a credit - the money is precisely what they did
+      // NOT get back - and it is the sentence an operator would repeat to them.
+      if (isCredit) {
+        // ALWAYS alerts, unlike the refund path, and that is the point. A refund
+        // announces itself: the family sees it on their card. A credit is
+        // silent - nothing is emailed by this flow - so the one thing standing
+        // between the family and never hearing about their money is this
+        // sentence. It must not be conditional on something having gone wrong.
+        alert(
+          `${fmtCents(amountCents)} credit recorded${data?.already_existed ? " (it was already issued — no second credit was created)" : ""}.\n\n` +
+          `They have NOT been emailed. Tell them about it — Class rosters › Message families.` +
+          (notes.length > 0 ? `\n\n${notes.join("\n\n")}` : ""),
+        );
+      } else if (notes.length > 0) {
         alert(`Refunded. The family has their money back.\n\n${notes.join("\n\n")}`);
       }
-      if (onDone) onDone({ amountCents, cancelled: seatChoice === "withdraw" });
+      // `cancelled` drives the caller's roster refresh. A credit ALWAYS
+      // withdraws but never sets seatChoice - it is not asked - so reading the
+      // seat choice alone reported false and left a freed seat still showing as
+      // taken.
+      if (onDone) onDone({ amountCents, cancelled: isCredit || seatChoice === "withdraw", credited: isCredit });
     } catch (e) {
       console.error("[RefundDrawer] refund failed", e);
       setErr(e.message ?? "Couldn't issue the refund. Try again.");
@@ -357,6 +464,11 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
             <div style={{ background: CREAM, border: `1px solid ${RULE}`, borderRadius: 8, padding: "10px 12px", marginTop: 12, display: "flex", gap: 16, flexWrap: "wrap", fontSize: 13 }}>
               <span style={{ color: MUTED }}>Paid <strong style={{ color: INK }}>{fmtCents(paidCents)}</strong></span>
               {refundedCents > 0 && <span style={{ color: MUTED }}>Already refunded <strong style={{ color: INK }}>{fmtCents(refundedCents)}</strong></span>}
+              {/* Credits consume the same ceiling as refunds, so leaving this
+                  out turns the available figure into a riddle: "$240 paid, $0
+                  refunded, $0 you can refund" reads as a bug rather than as
+                  money already given back another way. */}
+              {creditedCents > 0 && <span style={{ color: MUTED }}>Already credited <strong style={{ color: INK }}>{fmtCents(creditedCents)}</strong></span>}
               <span style={{ color: MUTED }}>Refundable <strong style={{ color: OK }}>{fmtCents(refundableCents)}</strong></span>
             </div>
 
@@ -410,7 +522,7 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
               <>
                 {/* Amount */}
                 <label style={{ display: "block", fontSize: 12.5, fontWeight: 600, color: INK, marginTop: 16, marginBottom: 6 }}>
-                  Refund amount
+                  {isCredit ? "Credit amount" : "Refund amount"}
                 </label>
                 <div style={{ position: "relative", display: "inline-block" }}>
                   <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: MUTED, fontSize: 14 }}>$</span>
@@ -458,8 +570,69 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
                   </div>
                 )}
 
-                {/* Seat choice — forced, no default */}
-                <div style={{ marginTop: 18 }}>
+                {/* WHAT THE FAMILY GETS. Only shown when there is money to give
+                    back - with nothing refundable there is nothing to credit
+                    either, and that case has its own panel above. */}
+                {creditAvailable && (
+                  <div style={{ marginTop: 18 }}>
+                    <div style={{ fontSize: 12.5, fontWeight: 600, color: INK, marginBottom: 8 }}>What they get</div>
+                    <SeatRadio
+                      checked={!isCredit} onChange={() => setOutcome("refund")} disabled={busy}
+                      title="Refund to their card"
+                      sub="The money goes back to the card they paid with. Five to ten business days."
+                    />
+                    <SeatRadio
+                      checked={isCredit} onChange={() => setOutcome("credit")} disabled={busy}
+                      title="Give enrops credit instead"
+                      sub="The money stays with you and they can spend it on a future class. No expiry. Frees their spot and stops any future payments."
+                    />
+                    {isCredit && (
+                      <div style={{ marginTop: 10, background: "#fdf6e3", border: "1px solid #ecdca6", borderRadius: 8, padding: 12 }}>
+                        <div style={{ fontSize: 12.5, fontWeight: 600, color: INK, marginBottom: 8 }}>
+                          Who ended this enrollment?
+                        </div>
+                        {/* THE ONE FACT NOTHING ELSE RECORDS. registrations.status
+                            says 'cancelled' either way, so if this is not stated
+                            here it is not stored anywhere - and the money layer's
+                            rules for the two are opposites. Pre-selected from
+                            whether the class is cancelled, which correlates
+                            without proving: a family who withdrew on Monday
+                            before the class was pulled on Friday looks exactly
+                            like a business cancellation to that test. So the
+                            operator confirms it. */}
+                        <SeatRadio
+                          checked={cancelKind === "business_cancelled"} onChange={() => setCancelKind("business_cancelled")} disabled={busy}
+                          title="We cancelled the class"
+                          sub="Low enrolment, no instructor, or any other reason on your side."
+                        />
+                        <SeatRadio
+                          checked={cancelKind === "family_cancelled"} onChange={() => setCancelKind("family_cancelled")} disabled={busy}
+                          title="The family cancelled"
+                          sub="They changed their mind, moved school, or dropped out."
+                        />
+                        <div style={{ fontSize: 12, color: MUTED, marginTop: 2, lineHeight: 1.6 }}>
+                          {/* Both branches are true in the state that selects
+                              them: the first is only reachable when the class
+                              really is cancelled, the second only when it is
+                              not. */}
+                          {programCancelled
+                            ? "This class is cancelled, so we've assumed it was your cancellation. Change it if the family had already pulled out."
+                            : "This class is still running, so we've assumed the family pulled out. Change it if you cancelled their place."}
+                        </div>
+                        <div style={{ fontSize: 12, color: INK, marginTop: 10, lineHeight: 1.6 }}>
+                          <strong>Nothing is emailed.</strong> They won't know about this credit until you tell
+                          them, so message them once you've issued it.
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Seat choice — forced, no default. Hidden on the credit path,
+                    where there is no choice to make: a credit always withdraws,
+                    so showing a keep-their-spot option would offer something
+                    that cannot happen. */}
+                <div style={{ marginTop: 18, display: isCredit ? "none" : undefined }}>
                   <div style={{ fontSize: 12.5, fontWeight: 600, color: INK, marginBottom: 8 }}>Their spot</div>
                   <SeatRadio
                     checked={seatChoice === "keep"} onChange={() => setSeatChoice("keep")} disabled={busy}
@@ -546,9 +719,15 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
           {!loading && !loadErr && (
             <button type="button" onClick={submit} disabled={!canSubmit}
               style={{ padding: "8px 16px", background: canSubmit ? PURPLE : "#bbb", color: "#fff", border: "none", borderRadius: 6, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: canSubmit ? "pointer" : "not-allowed" }}>
-              {withdrawNoRefund
-                ? (busy ? "Withdrawing…" : "Withdraw without refunding")
-                : (busy ? "Issuing refund…" : `Refund ${fmtCents(amountCents)}`)}
+              {/* Three modes, three labels. The button is the last thing an
+                  operator reads before money is decided, so it names the actual
+                  outcome rather than a generic "Confirm" - and "Refund $240" on
+                  a press that gives no refund is the lie this guards against. */}
+              {isCredit
+                ? (busy ? "Issuing credit…" : `Give ${fmtCents(amountCents)} credit`)
+                : withdrawNoRefund
+                  ? (busy ? "Withdrawing…" : "Withdraw without refunding")
+                  : (busy ? "Issuing refund…" : `Refund ${fmtCents(amountCents)}`)}
             </button>
           )}
         </div>
