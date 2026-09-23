@@ -10,6 +10,8 @@
 // in three states (migration 20260923b):
 //   'uncovered' - somebody said no and no offer is out   -> shown here
 //   'at_risk'   - somebody said no and an offer IS out   -> shown here
+//   'lead_out'  - the instructor marked the date off in their availability
+//                 survey and NOBODY has been asked yet   -> shown here
 //   'awaiting'  - offers out and nobody has said no      -> not shown here
 // We filter to this page's parentType.
 //
@@ -46,6 +48,15 @@ function fmtDate(iso) {
 //   one, unnamed      -> say somebody did, rather than swallowing the decline
 //   nothing known     -> say only what is certain: no sub yet
 function whoDeclined(it) {
+  // The instructor told us they are out and nobody has been asked yet. This is
+  // NOT a decline and must never borrow a decline's wording: nobody refused
+  // this class, and saying somebody did would send the operator looking for a
+  // conversation that never happened.
+  if (it.state === "lead_out") {
+    return it.leadOut
+      ? ` · ${it.leadOut} is out — no sub asked yet`
+      : " · the instructor is out — no sub asked yet";
+  }
   // Who said no. One named person, several counted, or one we cannot name.
   const said = it.declineCount > 1
     ? `${it.declineCount} people declined`
@@ -82,11 +93,13 @@ export default function NeedsCoverBanner({ org, parentType }) {
         // third has not replied.
         const built = (data ?? [])
           .filter((r) => r.parent_assignment_type === parentType
-                      && (r.state === "uncovered" || r.state === "at_risk"))
+                      && (r.state === "uncovered" || r.state === "at_risk" || r.state === "lead_out"))
           .map((r) => ({
             parent: r.parent_assignment_id,
             date: r.slot_date,
+            state: r.state,
             decliner: r.decliner_name || null,
+            leadOut: r.lead_out_name || null,
             declineCount: r.decline_count ?? 0,
             offersOut: r.offers_out ?? 0,
             label: `${r.curriculum_label || "A class"}${r.location_label ? ` · ${r.location_label}` : ""}`,

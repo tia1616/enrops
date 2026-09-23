@@ -1169,6 +1169,18 @@ function buildImportant(sig, openHires, subSignals, deliverySignals) {
     detail: "Someone said no and nobody has accepted yet — line up another sub, or have the lead take it.",
     cta: { to: "/admin/schedule", label: "Find a sub →" },
   });
+  // Its own card, not folded into the one above: on these days NOBODY has been
+  // asked, so "someone said no" would be false of every one of them. The
+  // instructor told you in their availability survey and nothing has happened
+  // since, which is a different job from chasing a refusal.
+  if (subSignals?.leadOut > 0) out.push({
+    key: "lead_marked_out", kind: "act", prio: 3,
+    title: subSignals.leadOut === 1
+      ? "An instructor is out on a day they teach"
+      : `${subSignals.leadOut} class days have an instructor who said they're out`,
+    detail: "They marked it in their availability and nobody has been asked to cover yet.",
+    cta: { to: "/admin/schedule", label: "Ask a sub →" },
+  });
   // A welcome/reminder couldn't reach a family (bad address, or exhausted retries).
   // Silent-miss prevention: surface it where the admin lands, linking to the
   // Automations "Didn't send" list. Only genuine "needs you" failures count —
@@ -1296,19 +1308,20 @@ function ImportantToday({ org, user, openHires }) {
       // through and let buildImportant say it out loud.
       if (subsRes.error) {
         console.error("[admin/overview] sub coverage load failed", subsRes.error);
-        setSubSignals({ uncovered: 0, atRisk: 0, awaitingOffers: 0, awaitingDays: 0, failed: true });
+        setSubSignals({ uncovered: 0, atRisk: 0, leadOut: 0, awaitingOffers: 0, awaitingDays: 0, failed: true });
       } else {
         // Days for the urgent counts; OFFERS for the waiting count, since one
         // day can carry several. Rows are per coverage slot, so a camp day with
         // a lead and a developing instructor both out counts as the two people
         // it genuinely needs.
-        let uncovered = 0, atRisk = 0, awaitingOffers = 0, awaitingDays = 0;
+        let uncovered = 0, atRisk = 0, leadOut = 0, awaitingOffers = 0, awaitingDays = 0;
         for (const r of subsRes.data ?? []) {
           if (r.state === "uncovered") uncovered++;
           else if (r.state === "at_risk") atRisk++;
+          else if (r.state === "lead_out") leadOut++;
           else if (r.state === "awaiting") { awaitingDays++; awaitingOffers += (r.offers_out ?? 1); }
         }
-        setSubSignals({ uncovered, atRisk, awaitingOffers, awaitingDays, failed: false });
+        setSubSignals({ uncovered, atRisk, leadOut, awaitingOffers, awaitingDays, failed: false });
       }
 
       const needsYou = (failRes.data ?? []).filter((r) => classifyFailure(r).needsYou).length;
