@@ -1044,16 +1044,15 @@ async function handleChargeRefunded(admin: SupabaseClient, event: Stripe.Event) 
     if (ownRowId) {
       const { data: ownRow } = await admin
         .from('refunds')
-        .select('id, stripe_refund_id, status, platform_fee_refunded_cents, fee_return_outcome, organization_id, registration_id')
+        // platform_fee_refunded_cents is the completion marker - the same one
+        // `known` uses above - and decides whether we step aside or resume.
+        .select('id, stripe_refund_id, status, platform_fee_refunded_cents')
         .eq('id', ownRowId)
         .maybeSingle();
       const own = ownRow as {
         id: string; stripe_refund_id: string | null; status: string | null;
-        platform_fee_refunded_cents: number | null; fee_return_outcome: string | null;
-        organization_id: string | null; registration_id: string | null;
+        platform_fee_refunded_cents: number | null;
       } | null;
-      const ownOrgId = own?.organization_id ?? null;
-      const ownRegistrationId = own?.registration_id ?? null;
       if (own) {
         if (!own.stripe_refund_id) {
           // Writing the same value refund-registration is about to write is
@@ -1078,71 +1077,57 @@ async function handleChargeRefunded(admin: SupabaseClient, event: Stripe.Event) 
         //                could hand the same dollars out again as a credit.
         // Promoting here fixes both, and it is the only place that can: enrops
         // never learns the outcome of a request it did not get an answer to.
-        // ONLY WHEN STRIPE SAYS 'succeeded'. `succeeded` above is filtered on
-        // `!== 'failed'`, so it still carries refunds Stripe is only PENDING on
-        // - an ACH return, typically. Promoting one of those would post money
-        // into `get_revenue_summary` and `get_revenue_activity` before it
-        // exists, breaking the rule this file states 90 lines up: "A refund is
-        // only MONEY once Stripe says 'succeeded'."
-        if (refund.status === 'succeeded' && own.status !== 'succeeded') {
-          const { error: statusErr } = await admin
-            .from('refunds')
-            .update({
-              status: 'succeeded',
-              // STRIPE'S timestamp, not "when this webhook ran" - both revenue
-              // reads bucket by succeeded_at, so a retry delivered days later,
-              // or a replay, would otherwise drop the money into the wrong
-              // reporting period. Same rule as recordExternalRefund below.
-              succeeded_at: refund.created
-                ? new Date(refund.created * 1000).toISOString()
-                : new Date().toISOString(),
-            })
-            .eq('id', own.id)
-            .neq('status', 'succeeded');
-          if (statusErr) {
-            console.error('[charge.refunded] could not promote the in-app refund row to succeeded:', statusErr);
-          }
-        }
-        // THE FEE MAY NEVER HAVE BEEN RETURNED, AND NULL HIDES THAT.
+        // WE ONLY STEP ASIDE WHEN THE JOB IS ACTUALLY FINISHED.
         //
-        // "refund-registration owns the fee refund" is true only while that
+        // "refund-registration owns the fee refund" holds only while that
         // request is alive. On the ambiguous-timeout path it threw between
         // creating the Stripe refund and calling applicationFees.createRefund,
-        // so platform_fee_refunded_cents and fee_return_outcome are both NULL -
-        // and the Finances tab renders a warning for 'failed', a grey note for
-        // 'nothing_owed', and NOTHING for NULL. The provider's margin quietly
-        // never comes back and the row reads as a clean, complete refund. That
-        // is the exact shape that hid the three 8 September failures.
+        // so `platform_fee_refunded_cents` is NULL and the provider's margin
+        // never came back - while the row read as a clean, complete refund.
+        // The money layer lists "fee return fires on every refund" as a settled
+        // invariant, and the 8 September $7.12 settled by hand in Stripe is the
+        // incident it was settled BY, not the design.
         //
-        // 'failed' would be a lie - nothing was attempted - so the row is
-        // marked 'not_attempted', which the operator surface and the shortfall
-        // alert both key on. The fee itself is returned by a human: doing it
-        // here would mean a second spelling of the fee-refund rule, and the
-        // honest visible gap is worth more than a duplicated one.
-        if (own.platform_fee_refunded_cents === null && own.fee_return_outcome === null) {
-          const { error: feeMarkErr } = await admin
-            .from('refunds')
-            .update({ fee_return_outcome: 'not_attempted' })
-            .eq('id', own.id)
-            .is('fee_return_outcome', null);
-          if (feeMarkErr) {
-            console.error('[charge.refunded] could not mark the fee return as not attempted:', feeMarkErr);
+        // So the completion marker is the same one `known` uses above -
+        // platform_fee_refunded_cents IS NOT NULL - and when it is null we fall
+        // through instead of continuing. `recordExternalRefund` then hits the
+        // UNIQUE (stripe_refund_id, registration_id) we just stamped, takes its
+        // existing 23505 adopt branch ("the retry that repairs a half-done
+        // refund"), promotes the row with Stripe's own timestamp, clears the
+        // stale outcome and runs the fee attempt in the same pass. All of that
+        // already existed; the `continue` was the only thing holding it off.
+        // The fee refund carries a stable idempotency key, so arriving here
+        // twice is safe.
+        if (own.platform_fee_refunded_cents !== null) {
+          // Finished. Still promote a row Stripe has now settled, or it stays
+          // invisible to get_revenue_summary, which filters on 'succeeded'.
+          // Gated on Stripe's OWN status because `succeeded` above is filtered
+          // on `!== 'failed'` and still carries pending ACH returns, and this
+          // file's rule is that a refund is only money once Stripe says so.
+          if (refund.status === 'succeeded' && own.status !== 'succeeded') {
+            const { error: statusErr } = await admin
+              .from('refunds')
+              .update({
+                status: 'succeeded',
+                // Stripe's timestamp, not "when this webhook ran" - both
+                // revenue reads bucket by succeeded_at, so a retry delivered
+                // days later would drop the money into the wrong period.
+                succeeded_at: refund.created
+                  ? new Date(refund.created * 1000).toISOString()
+                  : new Date().toISOString(),
+              })
+              .eq('id', own.id)
+              .neq('status', 'succeeded');
+            if (statusErr) {
+              console.error('[charge.refunded] could not promote the in-app refund row to succeeded:', statusErr);
+            }
           }
-          // Reuses the alert this file already sends on the other path, so the
-          // quieter half is not silent. amountUnknown because we never read the
-          // fee facts - the request died before it could.
-          await alertMarginShortfall(admin, {
-            refundRowId: own.id,
-            organizationId: ownOrgId ?? '',
-            registrationId: ownRegistrationId ?? '',
-            items: [],
-            amountUnknown: true,
-            resendApiKey: RESEND_API_KEY,
-            siteUrl: PUBLIC_SITE_URL,
-            isAllowed: isEmailAllowed,
-          });
+          continue;
         }
-        continue; // Enrops-initiated: the refund itself is refund-registration's.
+        console.log(
+          `[charge.refunded] ${refund.id} is ours but its fee return never completed; resuming it here`,
+        );
+        // deliberate fall-through to the recording path below
       }
       console.warn(`[charge.refunded] ${refund.id} claims refunds row ${ownRowId}, which does not exist; treating as external`);
     }

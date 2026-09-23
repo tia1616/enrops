@@ -74,6 +74,27 @@ comment on function public.registration_payment_status_after_refund(uuid, intege
 -- ---------------------------------------------------------------------------
 -- 2. A FEE RETURN THAT WAS NEVER ATTEMPTED MUST NOT LOOK LIKE ONE THAT WAS
 -- ---------------------------------------------------------------------------
+-- SUPERSEDED BEFORE IT SHIPPED, and left in place only because the constraint
+-- is already applied and a permitted-but-unwritten value is harmless.
+--
+-- This added 'not_attempted' so an operator could see that a fee return had
+-- never run, and be told a human still had to make it. Jessica pushed back:
+-- the money layer lists "fee return fires on every refund" as a settled
+-- invariant, and the $7.12 settled by hand in Stripe on 9 September is the
+-- incident that invariant was written after - not a pattern to design around.
+-- She was right. Marking the gap was treating a missed fee return as
+-- acceptable if it was merely visible.
+--
+-- The webhook now RESUMES the fee return instead: it stops stepping aside for
+-- its own rows when platform_fee_refunded_cents is still NULL, and falls
+-- through to recordExternalRefund's existing 23505 adopt branch - "the retry
+-- that repairs a half-done refund" - which promotes the row and runs the fee
+-- attempt in the same pass. That machinery was already there, and the fee
+-- refund already carried a stable idempotency key so re-running is safe. The
+-- only thing holding it off was a `continue`.
+--
+-- Nothing writes 'not_attempted'. Dropping it would take another migration for
+-- no behavioural gain, so it stays permitted and unused.
 -- When a refund request dies between creating the Stripe refund and returning
 -- the application fee - the ambiguous-timeout path - the row ends with
 -- platform_fee_refunded_cents and fee_return_outcome both NULL. The webhook can

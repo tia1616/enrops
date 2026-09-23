@@ -2197,18 +2197,13 @@ function RefundsTab({ org }) {
                     No enrops service fee to return on this one
                   </span>
                 )}
-                {/* NEVER ATTEMPTED is its own state, and it used to be NULL -
-                    which rendered nothing at all, so a refund whose request
-                    died before it could return the fee looked identical to one
-                    where no fee was owed. Same colour as "failed" because the
-                    operator's position is the same: money is still owed to
-                    them. The wording differs because the cause does, and
-                    because "we tried" would not be true. */}
-                {r.status === "succeeded" && r.fee_return_outcome === "not_attempted" && (
-                  <span style={{ display: "block", color: RED, fontSize: 11.5, marginTop: 2, fontWeight: 600 }}>
-                    This refund went through at Stripe but we lost the connection before returning the enrops service fee, so it has not come back yet. That one is ours to chase, not yours
-                  </span>
-                )}
+                {/* There is deliberately no 'not_attempted' branch. An earlier
+                    pass added one, on the assumption that a refund whose
+                    request died before returning the fee had to be flagged for
+                    a human. It does not: the webhook now resumes that fee
+                    return itself, so the row ends 'returned', 'nothing_owed' or
+                    'failed' like any other. A fourth state would only ever have
+                    described a gap we have since closed. */}
                 {r.status === "succeeded" && r.fee_return_outcome !== "failed" && r.platform_fee_refunded_cents > 0 && (
                   <span style={{ display: "block", color: MUTED, fontSize: 11.5, marginTop: 2 }}>
                     {fmtCents(r.platform_fee_refunded_cents)} of the enrops service fee returned to you
