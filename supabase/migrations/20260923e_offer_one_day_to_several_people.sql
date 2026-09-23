@@ -41,9 +41,20 @@
 --      single-settled index and gets a raw 500 forever, nobody's losing offer is
 --      ever closed out, and every one of them keeps an Accept button that fails.
 --
--- ORDER: both functions FIRST, then this migration. That leaves only a brief
--- window where re-offering a day that already holds somebody else's row fails,
--- rather than one where every sub assignment fails or races resolve to nothing.
+-- ORDER: both functions FIRST, then this migration, IN THE SAME PASS - minutes
+-- apart, not hours.
+--
+-- An earlier version of this note called the gap between the two "brief" and
+-- said only re-offering a day that already holds somebody else's row would
+-- fail. That undersold it. While the new function is live and the old plain
+-- unique is still on the table, the INSERT raises 23505 for any offer on a day
+-- that already holds a DECLINED row - which is "Ann said no, so ask Bob", the
+-- single most common substitute workflow and the reason this build exists. The
+-- window is not an edge case; it is the main path. Keep it short.
+--
+-- The frontend is not part of the ordering either way: the picker still sends
+-- one sub_instructor_id, and every column it reads exists on both databases
+-- already.
 
 ALTER TABLE public.assignment_substitutions
   DROP CONSTRAINT IF EXISTS assignment_substitutions_parent_assignment_id_parent_assign_key;
