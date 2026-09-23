@@ -98,11 +98,26 @@ function humanError(code, payload) {
       // big when it was typed. This one means it was fine when the drawer
       // opened and somebody else used the money up in between, so the fix is to
       // reopen rather than to type a smaller number.
-      return "Someone else refunded or credited this registration while this was open, so there isn't enough left. Close and reopen to see what's actually available.";
+      //
+      // The refund path can hit this PART WAY THROUGH a multi-payment refund,
+      // and that is a different situation to say out loud: some money has
+      // already gone back. Telling them only "there isn't enough left" would
+      // send them to retry the whole amount.
+      return payload?.partial?.length
+        ? "Part of this refund went through, then someone else refunded or credited this registration and the rest couldn't. Refresh and check what's already been refunded before trying again."
+        : "Someone else refunded or credited this registration while this was open, so there isn't enough left. Close and reopen to see what's actually available.";
     case "registration_has_no_parent":
       return "This registration isn't linked to a parent account, so a credit would have nobody to belong to. Refund it instead.";
     case "forbidden":
       return "You don't have permission to issue refunds for this organization.";
+    case "lookup_failed":
+      // The server could not read the registration or what has already been
+      // refunded/credited against it, and fails closed rather than acting on a
+      // possibly-wrong zero. Reachable on the submit press, where `default`
+      // would otherwise print the literal code to a non-technical operator.
+      return "We couldn't check this registration's payment history, so nothing was changed. Refresh and try again.";
+    case "refund_row_insert_failed":
+      return "We couldn't record the refund, so nothing was charged back. Refresh and try again.";
     case "registration_not_found":
       return "This registration no longer exists. Refresh and try again.";
     default:

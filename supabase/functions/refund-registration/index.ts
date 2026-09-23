@@ -462,7 +462,7 @@ serve(async (req: Request) => {
       // caller is not bound by this UI.
       const { data: prior, error: priorErr } = await supabase
         .from('family_credits')
-        .select('id, amount_cents')
+        .select('id, amount_cents, reason')
         .eq('organization_id', reg.organization_id)
         .eq('idempotency_key', idempotencyKey)
         .eq('source_registration_id', registrationId)
@@ -474,7 +474,7 @@ serve(async (req: Request) => {
       // the thing that actually guarantees it.
       if (priorErr) console.error('[credit] idempotency lookup failed:', priorErr);
 
-      const priorRow = prior as { id: string; amount_cents: number } | null;
+      const priorRow = prior as { id: string; amount_cents: number; reason: string } | null;
       if (priorRow) {
         const nowIso = new Date().toISOString();
         const { pausedRows, pauseError, cancelError } =
@@ -515,7 +515,8 @@ serve(async (req: Request) => {
           metadata: {
             via: 'credit_no_refund',
             reason,
-            credit_reason: creditReason,
+            // The STORED reason, like the amount beside it.
+            credit_reason: priorRow.reason,
             credited_cents: priorRow.amount_cents,
             credit_id: priorRow.id,
           },
@@ -525,12 +526,14 @@ serve(async (req: Request) => {
         return json({
           credited: true,
           credit_id: priorRow.id,
-          // The AMOUNT ALREADY ISSUED, not the amount asked for. They are the
-          // same on a genuine retry, and if they differ the honest answer is
-          // what the ledger holds - reporting the request back would claim a
-          // credit that was never written.
+          // THE LEDGER, NOT THE REQUEST - for both of these. They are the same
+          // on a genuine retry, and when they differ the honest answer is what
+          // was actually written. `reason` matters most: it is the only record
+          // of which side ended the enrollment, and the money layer's rules for
+          // the two are opposites, so echoing the request back would let a
+          // caller believe the ledger says something it does not.
           credited_cents: priorRow.amount_cents,
-          credit_reason: creditReason,
+          credit_reason: priorRow.reason,
           already_existed: true,
           refunded_cents: 0,
           pending_charges_stopped: pausedRows?.length ?? 0,
@@ -1019,9 +1022,13 @@ serve(async (req: Request) => {
       // ceiling and inserts - all in one transaction. Same lock shape the
       // waitlist has used since 20260819d.
       //
-      // It is given paid-minus-refunded rather than `eligible`, because it
-      // subtracts already-issued credits itself under the lock; handing it a
-      // number that already had them subtracted would double-count them.
+      // IT IS GIVEN GROSS PAID, AND NOTHING ELSE PRE-SUBTRACTED. Both refunds
+      // and credits are re-read inside the lock, because the copies this
+      // function holds were read BEFORE its one-to-three-second Stripe
+      // round-trip: a refund reserved in that window was invisible to the old
+      // `p_paid_minus_refunded_cents`, so a simultaneous refund and credit
+      // could each take the same $240. Only `paid` still comes from here,
+      // because only this side can read the real charged total from Stripe.
       const { data: creditRpc, error: creditErr } = await supabase
         .rpc('issue_family_credit', {
           p_organization_id: reg.organization_id,
@@ -1032,17 +1039,21 @@ serve(async (req: Request) => {
           // expires_at is never set. Section 6: "No expiration on any credit."
           p_note: reason,
           p_idempotency_key: idempotencyKey,
-          p_paid_minus_refunded_cents: totalPaid - totalRefunded,
+          p_paid_cents: totalPaid,
         });
 
       // A set-returning function comes back as an array of one row.
       const creditOut = (Array.isArray(creditRpc) ? creditRpc[0] : creditRpc) as
-        { credit_id?: string; amount_cents?: number; already_existed?: boolean } | null;
+        { credit_id?: string; amount_cents?: number; already_existed?: boolean; reason?: string } | null;
       const creditId: string | null = creditOut?.credit_id ?? null;
       const creditAlreadyExisted = creditOut?.already_existed === true;
       // What the LEDGER holds, which on a retry is the original amount and not
       // the one just asked for.
       const creditedCents = creditOut?.amount_cents ?? amountCents;
+      // Likewise the stored reason. On a retry it can differ from what this
+      // request sent, and `reason` is the only record of which side ended the
+      // enrollment - so the response must report the ledger, not the request.
+      const creditedReason = creditOut?.reason ?? creditReason;
 
       if (creditErr || !creditId) {
         console.error('[credit] issuing the credit failed:', creditErr);
@@ -1052,7 +1063,21 @@ serve(async (req: Request) => {
         // request's read and its write, which is precisely the race the lock
         // exists to turn into a clean refusal.
         if (creditErr?.code === 'FC001') {
-          return json({ error: 'amount_exceeds_eligible_now', eligible_cents: eligible }, 409);
+          // RE-READ, rather than echoing `eligible`. That variable was computed
+          // before the RPC, and FC001 means precisely that it is out of date -
+          // so returning it would contradict the refusal in the same response
+          // ("there isn't enough left" alongside a number saying there is).
+          // A failed re-read returns null: not knowing is its own answer and is
+          // better than a figure we cannot stand behind.
+          const { data: freshAvail } = await supabase
+            .rpc('registration_available_cents', {
+              p_registration_id: registrationId,
+              p_paid_cents: totalPaid,
+            });
+          return json({
+            error: 'amount_exceeds_eligible_now',
+            eligible_cents: typeof freshAvail === 'number' ? freshAvail : null,
+          }, 409);
         }
         // FC002/FC003 mean the KEY is unusable, not that the money is wrong, and
         // the two need different words: one is a key that belonged to a credit
@@ -1110,7 +1135,7 @@ serve(async (req: Request) => {
         metadata: {
           via: 'credit_no_refund',
           reason,
-          credit_reason: creditReason,
+          credit_reason: creditedReason,
           credited_cents: creditedCents,
           credit_id: creditId,
         },
@@ -1127,7 +1152,7 @@ serve(async (req: Request) => {
         // request asked for - and the drawer repeats this number to the
         // operator, who repeats it to the family.
         credited_cents: creditedCents,
-        credit_reason: creditReason,
+        credit_reason: creditedReason,
         // So a retry can say "already done" rather than claiming a second
         // credit was just issued.
         already_existed: creditAlreadyExisted,
@@ -1186,29 +1211,50 @@ serve(async (req: Request) => {
       if (availableOnPi <= 0) continue;
       const refundThisPi = Math.min(remaining, availableOnPi);
 
-      // Insert pending row first so we have an ID for idempotency
-      const { data: rowData, error: insErr } = await supabase
-        .from('refunds')
-        .insert({
-          registration_id: registrationId,
-          organization_id: reg.organization_id,
-          stripe_payment_intent_id: slot.pi,
-          amount_cents: refundThisPi,
-          reason,
-          refunded_by_user_id: callerAuthId,
-          cancelled_registration: cancelRegistration,
-          status: 'pending',
-        })
-        .select('id')
-        .single();
-      if (insErr || !rowData) {
-        console.error('[refund] failed to insert refunds row:', insErr);
+      // RESERVE THE SLOT UNDER THE SHARED LOCK, then call Stripe.
+      //
+      // This was a bare INSERT. The row itself is unchanged - same columns,
+      // same 'pending' status, still written BEFORE the Stripe call so there is
+      // an id to be idempotent against. What is added is that the write now
+      // happens inside `pg_advisory_xact_lock('family_credit:<registration>')`,
+      // the same key a credit takes, and re-checks the ceiling under it.
+      //
+      // Without that, the two paths could not see each other: `eligible` up
+      // above was computed before this function's one-to-three-second Stripe
+      // round-trip, so a credit issued in that window was invisible here and a
+      // refund reserved in that window was invisible to the credit. Each would
+      // pass its own check and the family would end up with the cash AND a
+      // credit for the same dollars. Now whichever commits second is refused.
+      const { data: reservedId, error: insErr } = await supabase
+        .rpc('reserve_refund_slot', {
+          p_registration_id: registrationId,
+          p_organization_id: reg.organization_id,
+          p_stripe_payment_intent_id: slot.pi,
+          p_amount_cents: refundThisPi,
+          p_reason: reason,
+          p_refunded_by_user_id: callerAuthId,
+          p_cancelled_registration: cancelRegistration,
+          p_paid_cents: totalPaid,
+        });
+      if (insErr || !reservedId) {
+        console.error('[refund] reserving the refund slot failed:', insErr);
+        // FC004 is the ceiling moving under us - somebody else refunded or
+        // credited this registration while we were reading Stripe. It is a
+        // different fact from a failed write, and on a multi-slot refund it
+        // matters which slots already went through, so `partial` is carried on
+        // both. Nothing was charged back for THIS slot either way.
+        if (insErr?.code === 'FC004') {
+          return json({
+            error: 'amount_exceeds_eligible_now',
+            partial: refundsCreated.length > 0 ? refundsCreated : undefined,
+          }, 409);
+        }
         return json({
           error: 'refund_row_insert_failed',
           partial: refundsCreated.length > 0 ? refundsCreated : undefined,
         }, 500);
       }
-      const refundRowId = (rowData as { id: string }).id;
+      const refundRowId = reservedId as string;
 
       // ── read the REAL numbers off the charge, never recompute them ───────
       // A provider's rates can change between the charge and the refund; the
