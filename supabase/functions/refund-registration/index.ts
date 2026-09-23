@@ -1614,15 +1614,29 @@ serve(async (req: Request) => {
     }
 
     // ── advance registrations.payment_status ──────────────────────────────
-    // After this refund pass, compute the new total refunded against this
-    // registration. If we've now refunded the entire eligible amount, the
-    // registration is 'refunded'. Otherwise 'partial'. (Eligible = totalPaid
-    // pre-this-call; we just consumed (amountCents - remaining) of it.)
-    const newTotalRefunded = totalRefunded + (amountCents - remaining);
-    const newPaymentStatus =
-      newTotalRefunded >= totalPaid ? 'refunded' :
-      newTotalRefunded > 0          ? 'partial'  :
-      reg.payment_status;
+    // ONE RULE, IN THE DATABASE, because this was written twice - here and in
+    // stripe-webhook - and both copies spelled it `refunded >= paid` with no
+    // credits subtracted. A registration settled by a MIX of refund and credit
+    // could therefore never reach 'refunded': $240 paid, $120 credited, $120
+    // refunded left nothing refundable and still read 'partial', permanently,
+    // implying more was still to come back.
+    //
+    // Read AFTER the refunds rows were written, so the function sees this
+    // call's money without being handed a total to trust. The stale
+    // `totalRefunded + (amountCents - remaining)` arithmetic it replaces was
+    // built on a figure read before the Stripe round-trip.
+    const { data: psData, error: psReadErr } = await supabase
+      .rpc('registration_payment_status_after_refund', {
+        p_registration_id: registrationId,
+        p_paid_cents: totalPaid,
+      });
+    if (psReadErr) {
+      // Non-fatal and loud: the money has moved and the rest of the bookkeeping
+      // must still run. A silent miss here is how a refunded family keeps
+      // reading as paid.
+      console.error('[refund] payment_status rule read failed:', psReadErr);
+    }
+    const newPaymentStatus = (psData as string | null) ?? reg.payment_status;
     if (newPaymentStatus && newPaymentStatus !== reg.payment_status) {
       const { error: psErr } = await supabase
         .from('registrations')
@@ -1678,9 +1692,12 @@ serve(async (req: Request) => {
       actionType: ENROLLMENT_ACTIONS.REFUNDED,
       metadata: {
         amount_refunded_cents: refundedThisCall,
-        total_refunded_cents: newTotalRefunded,
+        total_refunded_cents: totalRefunded + refundedThisCall,
         total_paid_cents: totalPaid,
-        partial: newTotalRefunded < totalPaid,
+        // The STATUS the rule arrived at, rather than this event re-deriving
+        // "is it partial" from its own arithmetic - a third spelling of a rule
+        // that already had two too many.
+        partial: newPaymentStatus === 'partial',
         withdrew: cancelRegistration,
       },
       dedupeKey: `refunded:${refundsCreated.map((r) => r.refund_row_id).join('_')}`,

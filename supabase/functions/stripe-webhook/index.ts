@@ -1044,10 +1044,16 @@ async function handleChargeRefunded(admin: SupabaseClient, event: Stripe.Event) 
     if (ownRowId) {
       const { data: ownRow } = await admin
         .from('refunds')
-        .select('id, stripe_refund_id, status')
+        .select('id, stripe_refund_id, status, platform_fee_refunded_cents, fee_return_outcome, organization_id, registration_id')
         .eq('id', ownRowId)
         .maybeSingle();
-      const own = ownRow as { id: string; stripe_refund_id: string | null; status: string | null } | null;
+      const own = ownRow as {
+        id: string; stripe_refund_id: string | null; status: string | null;
+        platform_fee_refunded_cents: number | null; fee_return_outcome: string | null;
+        organization_id: string | null; registration_id: string | null;
+      } | null;
+      const ownOrgId = own?.organization_id ?? null;
+      const ownRegistrationId = own?.registration_id ?? null;
       if (own) {
         if (!own.stripe_refund_id) {
           // Writing the same value refund-registration is about to write is
@@ -1097,7 +1103,46 @@ async function handleChargeRefunded(admin: SupabaseClient, event: Stripe.Event) 
             console.error('[charge.refunded] could not promote the in-app refund row to succeeded:', statusErr);
           }
         }
-        continue; // Enrops-initiated. refund-registration owns the fee refund.
+        // THE FEE MAY NEVER HAVE BEEN RETURNED, AND NULL HIDES THAT.
+        //
+        // "refund-registration owns the fee refund" is true only while that
+        // request is alive. On the ambiguous-timeout path it threw between
+        // creating the Stripe refund and calling applicationFees.createRefund,
+        // so platform_fee_refunded_cents and fee_return_outcome are both NULL -
+        // and the Finances tab renders a warning for 'failed', a grey note for
+        // 'nothing_owed', and NOTHING for NULL. The provider's margin quietly
+        // never comes back and the row reads as a clean, complete refund. That
+        // is the exact shape that hid the three 8 September failures.
+        //
+        // 'failed' would be a lie - nothing was attempted - so the row is
+        // marked 'not_attempted', which the operator surface and the shortfall
+        // alert both key on. The fee itself is returned by a human: doing it
+        // here would mean a second spelling of the fee-refund rule, and the
+        // honest visible gap is worth more than a duplicated one.
+        if (own.platform_fee_refunded_cents === null && own.fee_return_outcome === null) {
+          const { error: feeMarkErr } = await admin
+            .from('refunds')
+            .update({ fee_return_outcome: 'not_attempted' })
+            .eq('id', own.id)
+            .is('fee_return_outcome', null);
+          if (feeMarkErr) {
+            console.error('[charge.refunded] could not mark the fee return as not attempted:', feeMarkErr);
+          }
+          // Reuses the alert this file already sends on the other path, so the
+          // quieter half is not silent. amountUnknown because we never read the
+          // fee facts - the request died before it could.
+          await alertMarginShortfall(admin, {
+            refundRowId: own.id,
+            organizationId: ownOrgId ?? '',
+            registrationId: ownRegistrationId ?? '',
+            items: [],
+            amountUnknown: true,
+            resendApiKey: RESEND_API_KEY,
+            siteUrl: PUBLIC_SITE_URL,
+            isAllowed: isEmailAllowed,
+          });
+        }
+        continue; // Enrops-initiated: the refund itself is refund-registration's.
       }
       console.warn(`[charge.refunded] ${refund.id} claims refunds row ${ownRowId}, which does not exist; treating as external`);
     }
@@ -1551,9 +1596,18 @@ async function recordExternalRefund(
     chargedForReg = totalPaid;
     baseForReg = basePaid;
 
-    const newStatus = totalPaid > 0 && totalRefunded >= totalPaid ? 'refunded'
-      : totalRefunded > 0 ? 'partial'
-      : null;
+    // THE SAME RULE refund-registration uses, read from the database rather
+    // than spelled a second time here. Both copies used to say
+    // `refunded >= paid` with no credits subtracted, so a registration settled
+    // by a mix of refund and credit could never reach 'refunded' - it read
+    // 'partial' forever, implying more was still to come back.
+    const { data: psData, error: psErr } = await admin
+      .rpc('registration_payment_status_after_refund', {
+        p_registration_id: reg.id,
+        p_paid_cents: totalPaid,
+      });
+    if (psErr) console.error('[charge.refunded] payment_status rule read failed:', psErr);
+    const newStatus = (psData as string | null) ?? null;
     if (newStatus && newStatus !== reg.payment_status) {
       await admin.from('registrations').update({ payment_status: newStatus }).eq('id', reg.id);
     }
