@@ -6,15 +6,18 @@
 // with the homescreen (AdminOverview). The RPC only returns slots whose parent
 // class is still alive (camp not cancelled/withdrawn, program not cancelled,
 // parent not deleted), so a cancelled/orphaned class can't leave a stale
-// "needs cover" alarm here. It splits coverage the same way the homescreen does:
-// confirmed/taught => covered (not returned), pending => 'awaiting' (not shown
-// here), declined => 'uncovered' (shown). We filter to this page's parentType.
+// "needs cover" alarm here. It splits coverage the same way the homescreen does,
+// in three states (migration 20260923b):
+//   'uncovered' - somebody said no and no offer is out   -> shown here
+//   'at_risk'   - somebody said no and an offer IS out   -> shown here
+//   'awaiting'  - offers out and nobody has said no      -> not shown here
+// We filter to this page's parentType.
 //
-// One row here is one CLASS-DAY, not one offer (migration 20260923a). That
-// matters now a day can be offered to several people at once: the day somebody
-// ACCEPTED records the losing offers as declines, and counting those rows would
-// put a day that is covered on this banner, blaming people who never turned the
-// class down. The RPC resolves the whole day before answering.
+// One row is one COVERAGE SLOT -- a class needing somebody on a date -- not one
+// calendar day and not one offer. A camp session staffed by both a lead and a
+// developing instructor is two slots, so a day both are out is two rows and two
+// people to find. The day somebody ACCEPTED is excluded whole, so the losing
+// offers it records as declines can never put a covered day on this banner.
 //
 // Read-only surfacing (v1). Clearing happens through the existing sub UI (assign
 // a sub for that day). "Lead can cover after all" + click-to-jump are fast-follows.
@@ -43,14 +46,28 @@ function fmtDate(iso) {
 //   one, unnamed      -> say somebody did, rather than swallowing the decline
 //   nothing known     -> say only what is certain: no sub yet
 function whoDeclined(it) {
-  if (it.declineCount > 1) return ` · ${it.declineCount} people declined, no sub yet`;
-  if (it.decliner) return ` · ${it.decliner} declined, no sub yet`;
-  if (it.declineCount === 1) return " · someone declined, no sub yet";
-  return " · no sub yet";
+  // Who said no. One named person, several counted, or one we cannot name.
+  const said = it.declineCount > 1
+    ? `${it.declineCount} people declined`
+    : it.decliner
+      ? `${it.decliner} declined`
+      : it.declineCount === 1
+        ? "someone declined"
+        : null;
+  // What is happening now. A day with an offer still out is NOT the same as a
+  // day with nobody asked, and it must not borrow the other's wording.
+  const now = it.offersOut > 0
+    ? (it.offersOut === 1 ? "1 offer still out" : `${it.offersOut} offers still out`)
+    : "no sub yet";
+  return said ? ` · ${said}, ${now}` : ` · ${now}`;
 }
 
 export default function NeedsCoverBanner({ org, parentType }) {
   const [items, setItems] = useState([]);
+  // A failed read is not "everything is covered". The homescreen's own failure
+  // card sends the operator HERE to resolve it, so this page rendering a clean
+  // board on the same failure would be the one surface that lies about it.
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     if (!org?.id || (parentType !== "camp" && parentType !== "program")) { setItems([]); return; }
@@ -59,31 +76,61 @@ export default function NeedsCoverBanner({ org, parentType }) {
       try {
         const { data, error } = await supabase.rpc("get_sub_coverage", { p_org: org.id });
         if (error) throw error;
+        // 'uncovered' = somebody said no and nothing is out. 'at_risk' = somebody
+        // said no and an offer is still out. BOTH belong here: a day two people
+        // have already turned down is not a day to sit quietly on because a
+        // third has not replied.
         const built = (data ?? [])
-          .filter((r) => r.parent_assignment_type === parentType && r.state === "uncovered")
+          .filter((r) => r.parent_assignment_type === parentType
+                      && (r.state === "uncovered" || r.state === "at_risk"))
           .map((r) => ({
             parent: r.parent_assignment_id,
             date: r.slot_date,
             decliner: r.decliner_name || null,
             declineCount: r.decline_count ?? 0,
+            offersOut: r.offers_out ?? 0,
             label: `${r.curriculum_label || "A class"}${r.location_label ? ` · ${r.location_label}` : ""}`,
           }))
           .sort((a, b) => a.date.localeCompare(b.date));
-        if (!cancelled) setItems(built);
+        if (!cancelled) { setItems(built); setFailed(false); }
       } catch (e) {
         console.error("[NeedsCoverBanner] load failed", e);
-        if (!cancelled) setItems([]);
+        if (!cancelled) { setItems([]); setFailed(true); }
       }
     })();
     return () => { cancelled = true; };
   }, [org?.id, parentType]);
 
+  if (failed) {
+    return (
+      <div style={{ background: `${CORAL}0F`, border: `1px solid ${CORAL}55`, borderRadius: 12, padding: "12px 14px", marginBottom: 14 }}>
+        <div style={{ fontSize: 14, fontWeight: 700, color: CORAL, marginBottom: 4 }}>
+          We couldn&rsquo;t check sub coverage
+        </div>
+        <div style={{ fontSize: 13, color: INK, lineHeight: 1.45 }}>
+          This board can&rsquo;t tell you whether any class day needs a sub right now. Reload the page to try again.
+        </div>
+      </div>
+    );
+  }
+
   if (!items.length) return null;
+
+  // Count the SLOTS, one per class needing somebody on a date -- which is what
+  // each line below is, and what the operator has to act on.
+  //
+  // Deduping on the date alone was tried and is worse: two different classes
+  // uncovered on the same Monday would collapse to "1 day needs cover" over two
+  // lines, and an operator who reads the headline lines up one sub and leaves
+  // the other class empty. An alarm may over-count (a camp session needing both
+  // a lead and a developing sub counts twice, which is two people to find) but
+  // must never under-count.
+  const slotCount = items.length;
 
   return (
     <div style={{ background: `${CORAL}0F`, border: `1px solid ${CORAL}55`, borderRadius: 12, padding: "12px 14px", marginBottom: 14 }}>
       <div style={{ fontSize: 14, fontWeight: 700, color: CORAL, marginBottom: 6 }}>
-        {items.length === 1 ? "1 day needs cover" : `${items.length} days need cover`}
+        {slotCount === 1 ? "1 class day needs cover" : `${slotCount} class days need cover`}
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
         {items.map((it) => (

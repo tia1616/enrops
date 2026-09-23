@@ -22,7 +22,7 @@ import AfterschoolSchedule from "./AfterschoolSchedule";
 import ClassScheduleView from "./ClassScheduleView.jsx";
 import NeedsCoverBanner from "../../components/NeedsCoverBanner.jsx";
 import { formatTimeText } from "../../lib/timeText.js";
-import { aggregateSubOffers, subSlotKey, subSlotLabel, SUB_ACTIVE_STATUSES } from "../../lib/subCoverage.js";
+import { aggregateSubOffers, subSlotKey, subSlotLabel, subDisplayName, SUB_ACTIVE_STATUSES } from "../../lib/subCoverage.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -612,7 +612,7 @@ export default function Schedule() {
       if (assignmentIds.length > 0) {
         const { data: subRows, error: subErr } = await supabase
           .from("assignment_substitutions")
-          .select("id, parent_assignment_id, date, status, sub_tier, sub_instructor_id, sub:instructors!sub_instructor_id(first_name, last_name)")
+          .select("id, parent_assignment_id, date, status, sub_tier, sub_instructor_id, sub:instructors!sub_instructor_id(first_name, last_name, preferred_name)")
           .eq("parent_assignment_type", "camp")
           .in("parent_assignment_id", assignmentIds);
         if (subErr) console.warn("[Schedule] sub load failed:", subErr.message);
@@ -898,8 +898,13 @@ export default function Schedule() {
         if (!m.has(sid)) m.set(sid, { ids: new Set(), names: [] });
         const entry = m.get(sid);
         if (s.sub_instructor_id) entry.ids.add(s.sub_instructor_id);
-        const nm = [s.sub?.first_name, s.sub?.last_name].filter(Boolean).join(" ");
-        if (nm) entry.names.push(nm);
+        // BOTH spellings go in the search haystack. The card shows the preferred
+        // name, but an operator searches for whichever one they know — and the
+        // legal name is the one on the contract, on payroll and in the
+        // instructors list.
+        for (const nm of [subDisplayName(s.sub), [s.sub?.first_name, s.sub?.last_name].filter(Boolean).join(" ")]) {
+          if (nm && nm !== "Sub" && !entry.names.includes(nm)) entry.names.push(nm);
+        }
       }
     }
     return m;
@@ -3833,18 +3838,22 @@ function SlotRow({ label, assignment, session, role, dragStateRef, onClick, righ
 // chip so it never competes for width in the narrow day cards. Truncates with
 // an ellipsis instead of wrapping. Click opens the assign-sub modal for that day.
 function SubLine({ sub, onClick }) {
-  // One sentence per class-day, from the shared rule: the confirmed sub's name,
-  // or "3 offers out" while several people are still deciding. Never a name
-  // picked out of several candidates — see src/lib/subCoverage.js.
+  // One sentence per class-day, from the shared rule: the sub's name, or a count
+  // when several people are still deciding. Never a name picked out of several
+  // candidates — see src/lib/subCoverage.js.
   const label = subSlotLabel(sub);
   if (!label) return null;
-  const confirmed = label.tone === "confirmed";
-  const color = confirmed ? OK_GREEN : VIOLET;
+  const color = label.tone === "confirmed" ? OK_GREEN
+    : label.tone === "uncovered" ? CORAL
+    : VIOLET;
   return (
     <button
       type="button"
       onClick={(e) => { e.stopPropagation(); if (onClick) onClick(); }}
-      title="Change or resend this sub"
+      // The note is the one part with no room on a narrow day card. It goes in
+      // the tooltip rather than being dropped, so the pill never claims less
+      // than it knows.
+      title={label.note ? `${label.note} — change or resend this sub` : "Change or resend this sub"}
       style={{
         display: "inline-flex", alignItems: "center", gap: 4,
         alignSelf: "flex-start", maxWidth: "100%",
@@ -3857,6 +3866,10 @@ function SubLine({ sub, onClick }) {
     >
       <span style={{ fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4, flexShrink: 0 }}>Sub</span>
       <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{label.text}</span>
+      {/* The state marker never shrinks. A clipped NAME is a nuisance; a clipped
+          "✓" / "· pending" makes a covered day and an unanswered one read
+          identically, leaving colour as the only difference. */}
+      <span style={{ flexShrink: 0 }}>{label.marker}</span>
     </button>
   );
 }
