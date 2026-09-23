@@ -153,16 +153,25 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
   // keeps it with the business and records it as an enrops credit they can
   // spend later.
   //
-  // REFUND IS PRE-SELECTED, ALWAYS, and that is a deliberate departure from the
-  // money layer's "credit is the default when the family cancels". The doc's
-  // defaults describe what a FAMILY gets when they are asked and do not answer.
-  // Nobody is asked yet - the family-facing choice is a later chunk - so what
-  // this drawer picks is not that default, it is what happens when an operator
-  // does not look. This drawer's existing job is refunding, it is used for
-  // routine partial refunds on classes that are running perfectly well, and
-  // quietly re-pointing its default at "keep their money" is the one change
-  // here that could cost a family money through inattention. Credit is opted
-  // into, deliberately, every time.
+  // THE PRE-SELECTION FOLLOWS THE MONEY LAYER'S TWO DEFAULTS, which are
+  // opposites and turn on WHO ended the enrollment (section 6):
+  //   the class is cancelled  -> the BUSINESS ended it -> REFUND is the default
+  //   the class is running    -> the FAMILY ended it   -> CREDIT is the default
+  // Set once the preview lands, in the load effect below; the form is hidden
+  // behind `loading` until then, so the operator never sees it change under
+  // them. 'refund' is only the value held while that is in flight.
+  //
+  // Jessica's decision, 2026-09-23: follow the doc literally. I had argued for
+  // refund-always on the grounds that the doc's defaults describe what a FAMILY
+  // gets when asked, and nobody is asked yet - so on a running class this now
+  // opens pre-set to "keep their money", which is the case to watch. It is
+  // guarded by being loud rather than by being cautious: the amount label, the
+  // quick-fill chip, the footer and the button all say CREDIT, and the seat
+  // choice disappears. An operator who reads any one of those sees it.
+  //
+  // Unknown (the class could not be read) keeps 'refund'. Neither rule can be
+  // evaluated without knowing which side cancelled, and refund is the side that
+  // cannot leave a family out of pocket.
   const [outcome, setOutcome] = useState("refund"); // 'refund' | 'credit'
 
   // Which kind of cancellation this was. Only asked once credit is chosen,
@@ -250,6 +259,18 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
             : elig.program_cancelled === false ? "family_cancelled"
               : null,
         );
+        // THE DOC'S TWO DEFAULTS, applied here rather than at declaration
+        // because both depend on an answer only the server has. A running class
+        // means the family ended it, and section 6 makes CREDIT the default
+        // there; a cancelled class means the business did, and refund is the
+        // default. Unknown falls through to the 'refund' the state was born
+        // with. Safe to set here: `loading` hides the whole form until this
+        // resolves, so nothing moves under the operator's hands.
+        //
+        // No guard for "credit is not available on this charge" is needed -
+        // `isCredit` already requires `creditAvailable`, so a pre-selected
+        // credit on an unreadable charge simply presents as a refund.
+        if (elig.program_cancelled === false) setOutcome("credit");
         setAdminFeeCents(orgRow?.withdrawal_admin_fee_cents || 0);
         // A failed read must not block a refund, so it is recorded rather than
         // thrown - but it is RECORDED, because an empty list and a failed query
