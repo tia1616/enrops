@@ -14,6 +14,12 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../../lib/supabase';
+import { offerButtonLabel, offerSentMessage } from '../../lib/subOfferButton.js';
+
+// Mirrors MAX_CANDIDATES in create-assignment-substitution. The cap exists so a
+// single click cannot fan out into a crowd; refusing here means the operator
+// finds out while they are still choosing, not after the round has started.
+const MAX_CANDIDATES = 12;
 
 const PURPLE = '#1C004F';
 const BRIGHT = '#5847C9';   // indigo - primary actions (Figma)
@@ -149,7 +155,13 @@ export default function AssignSubModal({
   onChanged,                  // () => void — the day changed but the modal stays open (a release)
 }) {
   const [date, setDate] = useState(defaultDate ?? '');
-  const [subInstructorId, setSubInstructorId] = useState('');
+  // SEVERAL PEOPLE, NOT ONE. A class-day can hold an offer per person and the
+  // first to accept takes it, so the picker is a set. Order is preserved only
+  // for display; the database decides the winner, not the order we ask in.
+  const [selectedIds, setSelectedIds] = useState([]);
+  const toggleSelected = (id) => setSelectedIds((prev) => (
+    prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+  ));
   const [subTier, setSubTier] = useState(parentAssignment?.role ?? 'lead');
   const [notes, setNotes] = useState('');
   const [existingSubs, setExistingSubs] = useState([]);
@@ -277,10 +289,19 @@ export default function AssignSubModal({
   // here is about, so pick it explicitly rather than taking whichever the query
   // happened to return first — the same first-row mistake this block replaced,
   // one level down.
-  const minePending = offersThisDate.find(
-    (s) => s.sub_instructor_id === subInstructorId && s.status === 'pending',
-  ) ?? null;
-  const isResend = !!(minePending && minePending.email_sent_at);
+  //
+  // A RESEND is a one-person idea. With several people ticked the click is a
+  // round, not a repeat of one message, so it only applies when exactly one is
+  // selected — otherwise the button would say "Resend to Ann" about a click
+  // that also first-asks Bo and Cy.
+  // How many of the SELECTED people already hold a live, emailed offer for this
+  // day. A count, not a yes/no: "is this a resend?" only had an answer when
+  // exactly one person was ticked, so ticking Ann (emailed yesterday) alongside
+  // Bo and Cy read as a first ask and sent Ann a second identical email with
+  // nothing on screen admitting it.
+  const selectedResends = offersThisDate.filter(
+    (s) => s.status === 'pending' && s.email_sent_at && selectedIds.includes(s.sub_instructor_id),
+  );
   // Other people already holding a LIVE offer on this day. A settled day is not
   // counted here: the send refuses outright once somebody has accepted.
   //
@@ -291,7 +312,7 @@ export default function AssignSubModal({
   // operator who reads that stops looking for anybody else, and the class goes
   // uncovered on the strength of an email that never left.
   const othersPending = offersThisDate.filter(
-    (s) => s.status === 'pending' && s.email_sent_at && s.sub_instructor_id !== subInstructorId,
+    (s) => s.status === 'pending' && s.email_sent_at && !selectedIds.includes(s.sub_instructor_id),
   );
   // The row that actually has the day, so it can be released. `taught` is
   // deliberately not releasable here — that class happened and its pay line is
@@ -310,14 +331,31 @@ export default function AssignSubModal({
   // its `const` would throw on every single render rather than fail loudly once.
   useEffect(() => { setReleaseArmed(false); }, [date, coveringRow?.id]);
 
-  const chosenSub = eligible.find((i) => i.id === subInstructorId);
-  const submitLabel = !subInstructorId || !date
-    ? 'Send offer'
-    : isResend
-      ? `Resend to ${shortName(chosenSub)}`
-      : othersPending.length > 0
-        ? `Also ask ${shortName(chosenSub)}`
-        : `Send offer to ${shortName(chosenSub)}`;
+  // A SELECTION IS ABOUT A DAY. Tick three people for Oct 12, change the date
+  // to Oct 19, and those ticks would still be sitting there — so one click
+  // would email three people about a day nobody chose them for, and the
+  // availability ranking they were picked from was for the old date too. Same
+  // shape as the armed release above: state that asserts something about a
+  // specific day must not outlive that day.
+  //
+  // The messages go with it. "Offer sent to 3 people" is a statement about the
+  // day it was sent for; leaving it sitting above an empty picker for a
+  // different date tells the operator that date is handled.
+  useEffect(() => { setSelectedIds([]); setOkMsg(''); setErr(''); }, [date]);
+
+  // The words are in src/lib/subOfferButton.js so each branch can be asserted
+  // against the state that selects it. Five of them, and "Resend" said to
+  // somebody nobody has emailed is the same class of defect as a count that
+  // indicts rows its condition does not prove.
+  const submitLabel = offerButtonLabel({
+    selectedIds,
+    nameOf: (id) => shortName(eligible.find((i) => i.id === id)),
+    resendCount: selectedResends.length,
+    othersPending: othersPending.length,
+    sending: busy,
+    noDate: !date,
+  });
+  const tooMany = selectedIds.length > MAX_CANDIDATES;
 
   // Take the day back from whoever has it, or withdraw an offer nobody has
   // answered yet.
@@ -407,7 +445,10 @@ export default function AssignSubModal({
             parent_assignment_id: parentAssignment.id,
             parent_assignment_type: parentType,
             date,
-            sub_instructor_id: subInstructorId,
+            // The plural shape. The function still accepts a single
+            // sub_instructor_id for compatibility, but sending one id when the
+            // operator ticked three would quietly ask only the first.
+            sub_instructor_ids: selectedIds,
             sub_tier: subTier,
             notes: notes.trim() || undefined,
           }),
@@ -442,7 +483,18 @@ export default function AssignSubModal({
         setBusy(false);
         return;
       }
-      setOkMsg(`Offer sent to ${data.recipient}.`);
+      // From what the function REPORTS it reached, not from what was ticked: a
+      // round can stop partway, and the number the operator reads has to be the
+      // number of people who really got an email.
+      setOkMsg(offerSentMessage(data.asked));
+      if (Array.isArray(data.terms_not_applied) && data.terms_not_applied.length > 0) {
+        // "Settled", not "accepted". The function raises this whenever the row
+        // was no longer pending — which is accepted, declined OR released — so
+        // saying "accepted" would tell the operator the day is covered when the
+        // person may have just turned it down, and they would stop looking.
+        setErr(`${data.terms_not_applied.join(', ')} answered while this was sending, so the role you picked was not applied to their day — open the day again to see where it stands.`);
+      }
+      setSelectedIds([]);
       onSubmitted?.(data.substitution_id);
       // Re-load the existing list so the day appears with email_sent_at set.
       const { data: refreshed } = await supabase
@@ -546,7 +598,9 @@ export default function AssignSubModal({
             )}
           </Field>
 
-          <Field label="Sub instructor">
+          <Field label={selectedIds.length > 1
+            ? `Sub instructors — ${selectedIds.length} picked`
+            : 'Sub instructors — pick one or several'}>
             {!date ? (
               <div style={{ fontSize: 12, color: MUTED }}>
                 Pick a date above to see who's available that day.
@@ -562,15 +616,15 @@ export default function AssignSubModal({
               ) : (() => {
                 const suggested = grouped[SUGGEST];
                 const hidden = [...grouped[OTHER], ...grouped[OUT]];
-                const selectedHidden = hidden.some((r) => r.instr.id === subInstructorId);
+                const selectedHidden = hidden.some((r) => selectedIds.includes(r.instr.id));
                 const noMatches = !!date && !availLoading && suggested.length === 0;
                 const expanded = showAll || selectedHidden || noMatches;
                 const renderRow = (row) => (
                   <SubRow
                     key={row.instr.id}
                     row={row}
-                    selected={row.instr.id === subInstructorId}
-                    onSelect={() => setSubInstructorId(row.instr.id)}
+                    selected={selectedIds.includes(row.instr.id)}
+                    onSelect={() => toggleSelected(row.instr.id)}
                   />
                 );
                 return (
@@ -622,7 +676,9 @@ export default function AssignSubModal({
               <option value="developing">Developing</option>
             </select>
             <div style={{ fontSize: 11, color: MUTED, marginTop: 4 }}>
-              Defaults to the regular instructor's role. Adjust if the sub is filling a different slot.
+              {selectedIds.length > 1
+                ? 'This is the role for the DAY, so whoever accepts covers it at this rate. Defaults to the regular instructor\'s role.'
+                : 'Defaults to the regular instructor\'s role. Adjust if the sub is filling a different slot.'}
             </div>
           </Field>
 
@@ -655,6 +711,19 @@ export default function AssignSubModal({
               to see who else is already holding this day before they decide —
               otherwise the only way to find out is when two people both say yes
               and one of them has to be told no. */}
+          {/* Its OWN line, not the head of the chain below. As a branch of that
+              ternary it hid the two things underneath it — the sentence saying
+              somebody has already accepted the day, and the "Release this
+              cover" button that is the only way to free it. An operator who
+              ticked thirteen names on a covered day was told about the
+              thirteen and lost the control that would have helped. A cap is
+              also not mutually exclusive with a covered day: both can be true,
+              so both are said. */}
+          {tooMany && (
+            <div style={{ marginTop: 10, fontSize: 12, color: CORAL }}>
+              That's {selectedIds.length} people. Ask at most {MAX_CANDIDATES} at once — untick a few.
+            </div>
+          )}
           {taughtRow ? (
             <div style={{ marginTop: 10, fontSize: 12, color: MUTED }}>
               {shortName((instructors ?? []).find((i) => i.id === taughtRow.sub_instructor_id))} already
@@ -720,13 +789,26 @@ export default function AssignSubModal({
                 </button>
               )}
             </div>
-          ) : othersPending.length > 0 && subInstructorId ? (
+          ) : othersPending.length > 0 && selectedIds.length > 0 ? (
             <div style={{ marginTop: 10, fontSize: 12, color: MUTED }}>
               {othersPending.length === 1
                 ? `${shortName((instructors ?? []).find((i) => i.id === othersPending[0].sub_instructor_id))} is already holding this day and hasn't answered. Whoever accepts first gets it.`
                 : `${othersPending.length} people are already holding this day and haven't answered. Whoever accepts first gets it.`}
             </div>
           ) : null}
+          {/* Said about the people who ARE ticked, and therefore about to be
+              emailed again. The line above deliberately covers only people NOT
+              selected, so it went silent at the exact moment the operator
+              ticked the person it was warning about — and the click that
+              followed sent a second identical offer to somebody the screen had
+              just stopped mentioning. */}
+          {selectedResends.length > 0 && (
+            <div style={{ marginTop: 10, fontSize: 12, color: '#9a6a00' }}>
+              {selectedResends.length === 1
+                ? `${shortName((instructors ?? []).find((i) => i.id === selectedResends[0].sub_instructor_id))} has already been emailed about this day. Sending again gives them a second copy.`
+                : `${selectedResends.length} of the people you've ticked have already been emailed about this day. Sending again gives them a second copy.`}
+            </div>
+          )}
         </div>
 
         <div style={{ padding: '12px 20px', borderTop: `1px solid ${RULE}`, display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
@@ -738,10 +820,15 @@ export default function AssignSubModal({
             // refuses a covered day with a 409, and a button that invites a click
             // it will refuse is a button that teaches operators to ignore the
             // sentence next to it.
-            disabled={busy || !date || !subInstructorId || dayIsCovered}
-            style={{ ...btnPrimary, opacity: (busy || !date || !subInstructorId || dayIsCovered) ? 0.5 : 1 }}
+            disabled={busy || !date || selectedIds.length === 0 || tooMany || dayIsCovered}
+            style={{ ...btnPrimary, opacity: (busy || !date || selectedIds.length === 0 || tooMany || dayIsCovered) ? 0.5 : 1 }}
           >
-            {busy ? 'Sending…' : submitLabel}
+            {/* No ternary here. This used to read `busy ? 'Sending…' :
+                submitLabel`, which shadowed the module's own sending branch —
+                so the module that claims to own this copy had a state that
+                could never render, and a test asserting it proved nothing
+                about the screen. The label decides; the button prints it. */}
+            {submitLabel}
           </button>
         </div>
       </div>
@@ -775,23 +862,48 @@ function GroupHeader({ meta, count, first }) {
 function SubRow({ row, selected, onSelect }) {
   const { instr, note, outOfArea, group } = row;
   const noteColor = group === OUT ? CORAL : MUTED;
+  // Somebody with no email cannot be asked, and the function validates the
+  // whole batch BEFORE contacting anyone — so one unpickable person in a tick
+  // of five sends ZERO emails and returns a 400 that, past one missing address,
+  // does not even name who. Fail-safe, but the operator finds out after
+  // pressing send. Stopping the tick is the same answer given earlier.
+  const pickable = !!instr.email;
+  const choose = () => { if (pickable) onSelect(); };
   return (
+    /* A CHECKBOX, not a radio. Several people can be asked about one class-day
+       and the first to accept takes it, so picking Bo must not silently unpick
+       Ann — which is exactly what a radio would do, with no way for the
+       operator to tell that it had. The square shape is the affordance that
+       says "you may choose more than one" before anybody clicks. */
     <div
-      role="radio"
+      role="checkbox"
       aria-checked={selected}
-      onClick={onSelect}
+      aria-disabled={!pickable}
+      // Focusable and Space/Enter operable. A role="checkbox" that answers only
+      // to a mouse is a checkbox in name: an admin working this board by
+      // keyboard could reach the date, the role select and the send button, and
+      // could not tick a single instructor between them.
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); choose(); }
+      }}
+      onClick={choose}
       style={{
-        display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', cursor: 'pointer',
+        display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px',
+        cursor: pickable ? 'pointer' : 'not-allowed',
+        opacity: pickable ? 1 : 0.55,
         borderTop: `1px solid ${RULE}`,
         background: selected ? '#f2f0ff' : '#fff',
       }}
     >
       <span style={{
-        width: 14, height: 14, borderRadius: '50%', flexShrink: 0,
+        width: 14, height: 14, borderRadius: 3, flexShrink: 0,
         border: `2px solid ${selected ? BRIGHT : RULE}`,
+        background: selected ? BRIGHT : '#fff',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
+        color: '#fff', fontSize: 10, fontWeight: 700, lineHeight: 1,
       }}>
-        {selected && <span style={{ width: 6, height: 6, borderRadius: '50%', background: BRIGHT }} />}
+        {selected ? '✓' : ''}
       </span>
       <div style={{ minWidth: 0, flex: 1 }}>
         <div style={{ fontSize: 13, color: INK, fontWeight: selected ? 700 : 500 }}>
@@ -806,6 +918,13 @@ function SubRow({ row, selected, onSelect }) {
         ) : instr.email ? (
           <div style={{ fontSize: 11, color: MUTED }}>{instr.email}</div>
         ) : null}
+        {/* Said on the row itself, whatever other note it carries. Without an
+            address this person cannot be asked at all, and the function
+            validates the whole batch before contacting anybody — so ticking
+            them silently costs everybody else on the round their email too. */}
+        {!pickable && (
+          <div style={{ fontSize: 11, color: CORAL }}>no email on file — can't be asked</div>
+        )}
       </div>
     </div>
   );

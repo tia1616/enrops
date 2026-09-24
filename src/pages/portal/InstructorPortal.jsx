@@ -773,7 +773,13 @@ export default function InstructorPortal() {
   async function loadSubAssignments(instructorId) {
     const { data: rows, error: sErr } = await supabase
       .from("assignment_substitutions")
-      .select("id, date, status, sub_tier, notes, email_sent_at, parent_assignment_id, parent_assignment_type")
+      // decline_reason is what lets a CLOSED-OUT offer say so instead of
+      // vanishing: it is read by closedOutOffers below, and a field read but
+      // not selected is undefined rather than an error, which is how a branch
+      // quietly stops firing. declined_at is deliberately NOT selected — the
+      // card does not say when, and a column nothing reads is a claim that the
+      // next person has to check.
+      .select("id, date, status, sub_tier, notes, email_sent_at, decline_reason, parent_assignment_id, parent_assignment_type")
       .eq("sub_instructor_id", instructorId)
       .order("date", { ascending: true });
     if (sErr) {
@@ -1458,6 +1464,28 @@ export default function InstructorPortal() {
   const currentAssignments = assignments.filter((a) => !isArchived(a));
   const pastAssignments = assignments.filter(isArchived);
   const confirmedSubCount = subAssignments.filter((s) => s.status === "confirmed" || s.status === "taught").length;
+  // Offers closed out because somebody else accepted first, for a day that has
+  // not happened yet. 'covered_by_other' is written by accept_sub_offer alone —
+  // it is the product's record that this person LOST A RACE, not that they
+  // refused anything — so it is the only decline worth showing back to them.
+  //
+  // ...AND NOT a class-day they hold a LIVE row for. An admin can release a
+  // cover and ask the closed-out person again, which leaves them holding BOTH
+  // the old closed row and a fresh pending offer for the same day. Without this
+  // the portal would show a live "can you cover this?" card and, above it,
+  // "someone else accepted this one first, so it's covered" — about the same
+  // class, on the same screen. The instructor would believe the second one.
+  const liveSlotKeys = new Set(
+    subAssignments
+      .filter((s) => s.status === "pending" || s.status === "confirmed" || s.status === "taught")
+      .map((s) => `${s.parent_assignment_id}:${s.date}`),
+  );
+  const closedOutOffers = subAssignments.filter((s) => (
+    s.status === "declined"
+    && s.decline_reason === "covered_by_other"
+    && s.date >= todayLocalISO()
+    && !liveSlotKeys.has(`${s.parent_assignment_id}:${s.date}`)
+  ));
   const totalCount = currentAssignments.length + confirmedSubCount;
   const needsResponse = currentAssignments.filter(
     (a) => a.status === "published" || a.status === "change_requested"
@@ -1869,6 +1897,29 @@ export default function InstructorPortal() {
         </Section>
       )}
 
+      {/* OFFERS SOMEBODY ELSE TOOK.
+          A class-day can be offered to several people and the first to accept
+          gets it; the rest are closed out in the same transaction. Until now
+          their card simply DISAPPEARED at the next load — this section renders
+          only pending and confirmed rows — so an instructor who had been asked
+          on Monday found nothing on Tuesday and no sentence anywhere telling
+          them why. The one person who learned the truth was whoever clicked
+          Accept too late and got the notice at the top of the page.
+
+          Only days that HAVE NOT HAPPENED YET. Once the class is past, "someone
+          else covered it" is history and belongs nowhere near the list of
+          things they are meant to act on.
+
+          Only covered_by_other, never a decline they gave themselves: they know
+          what they turned down, and repeating it back reads like an accusation. */}
+      {closedOutOffers.length > 0 && (
+        <Section title="Already covered by someone else">
+          {closedOutOffers.map((s) => (
+            <CoveredElsewhereCard key={s.id} sub={s} />
+          ))}
+        </Section>
+      )}
+
       {(needsResponse.length > 0 || needsResponseAS.length > 0) && (
         <Section title="Needs your response">
           {needsResponse.map((a) => (
@@ -2221,6 +2272,44 @@ function Section({ title, children }) {
 // Mark Taught button (date-of or after). The component reads from either
 // sub.camp_parent (camp sub) or sub.program_parent (afterschool sub) — set
 // by loadSubAssignments.
+// A day this instructor was asked about and somebody else got. Deliberately
+// plain and actionless: there is nothing for them to do, and the only thing
+// they need is to stop holding the afternoon. It reads as an answer to a
+// question they were asked, not as a rejection — they very likely said yes and
+// were simply slower, which is the whole point of asking several people.
+function CoveredElsewhereCard({ sub }) {
+  const isCamp = sub.parent_assignment_type === "camp";
+  const sess = isCamp ? sub.camp_parent?.camp_sessions ?? null : null;
+  const prog = !isCamp ? sub.program_parent?.programs ?? null : null;
+  const loc = isCamp ? sess?.program_locations ?? null : prog?.program_locations ?? null;
+  const curriculumName = isCamp ? (sess?.curriculum_name ?? "that camp") : (prog?.curriculum ?? "that class");
+  const venueName = loc?.name ?? (isCamp ? sess?.location_name : null) ?? "";
+  const friendlyDate = sub.date
+    ? new Date(`${sub.date}T00:00:00`).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })
+    : "";
+
+  return (
+    <div style={{
+      background: CREAM, border: `1px solid ${RULE}`, borderRadius: 12,
+      padding: "14px 18px", marginBottom: 10,
+    }}>
+      <div style={{ fontSize: 15, fontWeight: 600, color: MUTED }}>{curriculumName}</div>
+      <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>
+        {friendlyDate}{venueName ? ` · ${venueName}` : ""}
+      </div>
+      {/* About THEIR OFFER, not about the state of the day. "So it's covered"
+          was a claim that can go stale the moment an admin releases the cover,
+          and this card has no way of knowing that happened — the instructor
+          cannot see anybody else's rows. What stays true for ever is that
+          somebody was quicker and their own offer was closed. */}
+      <div style={{ fontSize: 13, color: INK, marginTop: 8 }}>
+        Somebody else got to this one first, so your offer was closed. Nothing for you
+        to do — thanks for being willing.
+      </div>
+    </div>
+  );
+}
+
 function SubOfferCard({ sub, busy, busyAction, onAccept, onDecline, readOnly, onOpen, coInstructors = [] }) {
   const [declineOpen, setDeclineOpen] = useState(false);
   const [reason, setReason] = useState("");
