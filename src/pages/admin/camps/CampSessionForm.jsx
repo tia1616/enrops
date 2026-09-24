@@ -42,10 +42,13 @@ const SESSION_TYPES = [
   { value: "full_day", label: "Full day" },
 ];
 
-// camp_sessions.class_days stores lowercase day names - that is the spelling the
-// 51 existing rows use and the spelling session-confirmation-cron lowercases and
-// matches against when it seeds a pay line. A capitalised day here would mean an
-// instructor silently never gets paid for that day.
+// camp_sessions.class_days stores lowercase day names, matching all 51 existing
+// rows. Checked every reader before picking the spelling: the pay cron, the
+// board's double-booking check and the refund proration helper all lowercase
+// defensively, so case would not break pay or money. SchedulePrint's day-order
+// sort is the one that does not normalise - it positions by indexOf against a
+// lowercase list, so a capitalised day sorts to the front of the printed
+// schedule. Cosmetic, but there is no reason to write the odd spelling.
 const WEEKDAYS = [
   { value: "monday", label: "Mon" },
   { value: "tuesday", label: "Tue" },
@@ -234,6 +237,12 @@ export default function CampSessionForm({ orgId, cycle, session = null, onClose,
 
   // Picking a curriculum seeds category, ages and THE SEAT CAP. Untouched fields
   // only - see the `touched` note above.
+  // Computed here rather than inside a setForm updater. An updater has to be a
+  // pure function of the previous state: React is free to call it later, or
+  // twice, so building the "filled in from this curriculum" list by pushing into
+  // an outer array from inside one gave a list that was still empty when the
+  // next line read it, and a doubled list under StrictMode's double-invoke.
+  // This is an event handler, so `form` in scope is already the current state.
   function chooseCurriculum(curriculumId) {
     const cur = curricula.find((c) => c.id === curriculumId);
     setTouched((t) => new Set(t).add("curriculum_id"));
@@ -242,27 +251,26 @@ export default function CampSessionForm({ orgId, cycle, session = null, onClose,
       setPrefilled([]);
       return;
     }
+    const next = { ...form, curriculum_id: curriculumId };
     const filled = [];
-    setForm((f) => {
-      const next = { ...f, curriculum_id: curriculumId };
-      if (!touched.has("curriculum_category") && cur.category) {
-        next.curriculum_category = cur.category;
-        filled.push("category");
-      }
-      // The whole reason the cap survives to the checkout gate.
-      if (!touched.has("max_capacity") && cur.class_size_max != null) {
-        next.max_capacity = cur.class_size_max;
-        filled.push("class size");
-      }
-      if (!touched.has("ages_min") && cur.age_range_min != null) {
-        next.ages_min = cur.age_range_min;
-        filled.push("ages");
-      }
-      if (!touched.has("ages_max") && cur.age_range_max != null) {
-        next.ages_max = cur.age_range_max;
-      }
-      return next;
-    });
+    if (!touched.has("curriculum_category") && cur.category) {
+      next.curriculum_category = cur.category;
+      filled.push("category");
+    }
+    // The whole reason the cap survives to the checkout gate.
+    if (!touched.has("max_capacity") && cur.class_size_max != null) {
+      next.max_capacity = cur.class_size_max;
+      filled.push("class size");
+    }
+    if (!touched.has("ages_min") && cur.age_range_min != null) {
+      next.ages_min = cur.age_range_min;
+      filled.push("ages");
+    }
+    if (!touched.has("ages_max") && cur.age_range_max != null) {
+      next.ages_max = cur.age_range_max;
+      if (!filled.includes("ages")) filled.push("ages");
+    }
+    setForm(next);
     setPrefilled(filled);
   }
 
@@ -453,8 +461,11 @@ export default function CampSessionForm({ orgId, cycle, session = null, onClose,
     <ModalShell title={title} onClose={onClose} maxWidth={620}>
       <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 14 }}>
         <div style={{ fontSize: 13, color: MUTED }}>
+          {/* No promise here about families seeing this camp: nothing sells a
+              camp on enrops yet, and copy that says otherwise would be false on
+              the day it ships. The catalog line belongs with the catalog. */}
           {cycle?.name ? <>Adding to <strong style={{ color: INK }}>{cycle.name}</strong>.</> : null}{" "}
-          Families see this camp once registration opens for this term.
+          It goes on your schedule board, ready to assign an instructor to.
         </div>
 
         <div>
@@ -563,8 +574,10 @@ export default function CampSessionForm({ orgId, cycle, session = null, onClose,
           <label style={labelStyle} htmlFor="camp-capacity">Most children who can join</label>
           <input id="camp-capacity" type="number" min="1" value={form.max_capacity} onChange={(e) => field("max_capacity", e.target.value)} style={{ ...fieldStyle, maxWidth: 160 }} />
           <div style={{ fontSize: 12, color: MUTED, marginTop: 6 }}>
-            Registration stops accepting children once the camp reaches this number.
-            Leave it blank and the camp takes everyone who signs up.
+            {/* States what the number IS, not what enforces it. The seat gate
+                arrives with camp checkout; until then this would be promising
+                a refusal nothing performs. */}
+            The most children this camp can take. Leave it blank and the camp has no limit.
           </div>
         </div>
 
