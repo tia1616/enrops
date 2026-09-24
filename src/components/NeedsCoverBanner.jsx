@@ -12,8 +12,21 @@
 //   'at_risk'   - somebody said no and an offer IS out   -> shown here
 //   'lead_out'  - the instructor marked the date off in their availability
 //                 survey and NOBODY has been asked yet   -> shown here
-//   'awaiting'  - offers out and nobody has said no      -> not shown here
+//   'awaiting'  - offers out and nobody has said no      -> shown here, SEPARATELY
 // We filter to this page's parentType.
+//
+// 'awaiting' is shown in its OWN quiet block, never folded into the coral count.
+// Jessica, 2026-09-24: "the banner telling me offers still out should be on the
+// instructor schedule screen, not homescreen - i never even look at the
+// homescreen." The homescreen card stays, but this is where she works, and a day
+// with offers out was previously invisible on this page: covered days drop out
+// of the RPC and awaiting days were filtered out here, so ten real offers to ten
+// people showed nothing at all on the board they were sent from.
+//
+// It must NOT join the coral count. "Needs cover" is false of a day five people
+// are still deciding on, and this file's own rule is that an alarm may
+// over-count but every sentence must be true in the state that selects it.
+// Two blocks, two sentences, one component.
 //
 // One row is one COVERAGE SLOT -- a class needing somebody on a date -- not one
 // calendar day and not one offer. A camp session staffed by both a lead and a
@@ -30,6 +43,10 @@ import { supabase } from "../lib/supabase";
 const CORAL = "#D9694F";
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
+// Calm indigo for the waiting block. Deliberately NOT coral: these days are
+// proceeding normally and colouring them like a problem is how an operator
+// learns to ignore the colour that means a real one.
+const INDIGO = "#5847C9";
 
 function fmtDate(iso) {
   if (!iso) return "";
@@ -80,13 +97,16 @@ function whoDeclined(it) {
 
 export default function NeedsCoverBanner({ org, parentType }) {
   const [items, setItems] = useState([]);
+  // Days with offers out and no refusal. Its own state so it can never be
+  // counted into the coral headline.
+  const [waiting, setWaiting] = useState([]);
   // A failed read is not "everything is covered". The homescreen's own failure
   // card sends the operator HERE to resolve it, so this page rendering a clean
   // board on the same failure would be the one surface that lies about it.
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    if (!org?.id || (parentType !== "camp" && parentType !== "program")) { setItems([]); return; }
+    if (!org?.id || (parentType !== "camp" && parentType !== "program")) { setItems([]); setWaiting([]); return; }
     let cancelled = false;
     (async () => {
       try {
@@ -96,10 +116,7 @@ export default function NeedsCoverBanner({ org, parentType }) {
         // said no and an offer is still out. BOTH belong here: a day two people
         // have already turned down is not a day to sit quietly on because a
         // third has not replied.
-        const built = (data ?? [])
-          .filter((r) => r.parent_assignment_type === parentType
-                      && (r.state === "uncovered" || r.state === "at_risk" || r.state === "lead_out"))
-          .map((r) => ({
+        const shape = (r) => ({
             parent: r.parent_assignment_id,
             date: r.slot_date,
             state: r.state,
@@ -108,12 +125,21 @@ export default function NeedsCoverBanner({ org, parentType }) {
             declineCount: r.decline_count ?? 0,
             offersOut: r.offers_out ?? 0,
             label: `${r.curriculum_label || "A class"}${r.location_label ? ` · ${r.location_label}` : ""}`,
-          }))
-          .sort((a, b) => a.date.localeCompare(b.date));
-        if (!cancelled) { setItems(built); setFailed(false); }
+        });
+        const mine = (data ?? []).filter((r) => r.parent_assignment_type === parentType);
+        const byDate = (a, b) => a.date.localeCompare(b.date);
+        const built = mine
+          .filter((r) => r.state === "uncovered" || r.state === "at_risk" || r.state === "lead_out")
+          .map(shape).sort(byDate);
+        // Offers out and nobody has refused. Not an alarm, so it is kept apart
+        // from `built` rather than counted with it.
+        const out = mine
+          .filter((r) => r.state === "awaiting")
+          .map(shape).sort(byDate);
+        if (!cancelled) { setItems(built); setWaiting(out); setFailed(false); }
       } catch (e) {
         console.error("[NeedsCoverBanner] load failed", e);
-        if (!cancelled) { setItems([]); setFailed(true); }
+        if (!cancelled) { setItems([]); setWaiting([]); setFailed(true); }
       }
     })();
     return () => { cancelled = true; };
@@ -132,7 +158,7 @@ export default function NeedsCoverBanner({ org, parentType }) {
     );
   }
 
-  if (!items.length) return null;
+  if (!items.length && !waiting.length) return null;
 
   // Count the SLOTS, one per class needing somebody on a date -- which is what
   // each line below is, and what the operator has to act on.
@@ -145,22 +171,60 @@ export default function NeedsCoverBanner({ org, parentType }) {
   // must never under-count.
   const slotCount = items.length;
 
+  // How many PEOPLE are still deciding, across the waiting days. Counted from
+  // offers_out, which the RPC already limits to offers whose email actually
+  // left - so this never claims somebody was asked when the send failed.
+  const waitingPeople = waiting.reduce((n, it) => n + (it.offersOut || 0), 0);
+
   return (
-    <div style={{ background: `${CORAL}0F`, border: `1px solid ${CORAL}55`, borderRadius: 12, padding: "12px 14px", marginBottom: 14 }}>
-      <div style={{ fontSize: 14, fontWeight: 700, color: CORAL, marginBottom: 6 }}>
-        {slotCount === 1 ? "1 class day needs cover" : `${slotCount} class days need cover`}
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-        {items.map((it) => (
-          <div key={`${it.parent}|${it.date}`} style={{ fontSize: 13, color: INK, lineHeight: 1.45 }}>
-            <strong>{fmtDate(it.date)}</strong>{" — "}{it.label}
-            <span style={{ color: MUTED }}>{whoDeclined(it)}</span>
+    <>
+      {slotCount > 0 && (
+        <div style={{ background: `${CORAL}0F`, border: `1px solid ${CORAL}55`, borderRadius: 12, padding: "12px 14px", marginBottom: 14 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: CORAL, marginBottom: 6 }}>
+            {slotCount === 1 ? "1 class day needs cover" : `${slotCount} class days need cover`}
           </div>
-        ))}
-      </div>
-      <div style={{ fontSize: 12, color: MUTED, marginTop: 8 }}>
-        Line up another sub on the day below, or the lead can take it back.
-      </div>
-    </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {items.map((it) => (
+              <div key={`${it.parent}|${it.date}`} style={{ fontSize: 13, color: INK, lineHeight: 1.45 }}>
+                <strong>{fmtDate(it.date)}</strong>{" — "}{it.label}
+                <span style={{ color: MUTED }}>{whoDeclined(it)}</span>
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize: 12, color: MUTED, marginTop: 8 }}>
+            Line up another sub on the day below, or the lead can take it back.
+          </div>
+        </div>
+      )}
+
+      {/* Waiting, not wrong. Deliberately quiet: no coral, no "needs cover", and
+          its own count, because these days do not need an operator to do
+          anything yet. It exists so a day that offers went out for is VISIBLE on
+          the board they were sent from - before this, a covered day dropped out
+          of the RPC and a waiting day was filtered out here, so a send of ten
+          offers left the board looking exactly as it did beforehand. */}
+      {waiting.length > 0 && (
+        <div style={{ background: `${INDIGO}0D`, border: `1px solid ${INDIGO}40`, borderRadius: 12, padding: "12px 14px", marginBottom: 14 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: INDIGO, marginBottom: 6 }}>
+            {waiting.length === 1
+              ? `1 class day is waiting on a reply${waitingPeople ? ` — ${waitingPeople} asked` : ""}`
+              : `${waiting.length} class days are waiting on a reply${waitingPeople ? ` — ${waitingPeople} people asked` : ""}`}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+            {waiting.map((it) => (
+              <div key={`${it.parent}|${it.date}`} style={{ fontSize: 13, color: INK, lineHeight: 1.45 }}>
+                <strong>{fmtDate(it.date)}</strong>{" — "}{it.label}
+                <span style={{ color: MUTED }}>
+                  {it.offersOut === 1 ? " · 1 person asked, no reply yet" : ` · ${it.offersOut} people asked, no reply yet`}
+                </span>
+              </div>
+            ))}
+          </div>
+          <div style={{ fontSize: 12, color: MUTED, marginTop: 8 }}>
+            Nobody has said no. You&rsquo;ll be emailed as soon as someone accepts.
+          </div>
+        </div>
+      )}
+    </>
   );
 }
