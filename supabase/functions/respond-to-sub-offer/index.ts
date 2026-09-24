@@ -311,7 +311,10 @@ serve(async (req: Request) => {
           body: JSON.stringify({
             from: fromEmail,
             to: recipient,
-            reply_to: brand.reply_to,
+            // tenant_reply_to, never reply_to - see the offer sender. This one
+            // goes to the org's own alert inbox, so a reply landing at Enrops
+            // would be the tenant writing to us about their own class.
+            reply_to: brand.tenant_reply_to ?? undefined,
             subject,
             html,
             text,
@@ -510,7 +513,11 @@ async function sendCoordinationEmail(
 
   const brand = await loadOrgBrand(supabase, subRow.organization_id);
   const fromEmail = formatFromAddress(brand);
-  const replyTo = brand.reply_to;
+  // tenant_reply_to, never reply_to. This message goes to the regular
+  // instructor AND the sub, about a class-day they now have to coordinate
+  // between themselves - the single most likely email in this flow to be
+  // replied to. A reply must reach the office that arranged it.
+  const replyTo = brand.tenant_reply_to ?? undefined;
   // Normalize for both sending and dedup — emails are effectively
   // case-insensitive and stored with inconsistent case across import paths, so
   // compare lowercased to avoid the same person landing on both To and Cc.

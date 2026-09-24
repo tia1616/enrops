@@ -516,7 +516,13 @@ serve(async (req: Request) => {
       body: JSON.stringify({
         from: fromEmail,
         to: recipient,
-        reply_to: brand.reply_to,
+        // tenant_reply_to, NOT reply_to. reply_to always resolves to something,
+        // and when the tenant has set nothing that something is OUR address -
+        // so an instructor hitting Reply on "can you cover Tuesday?" would be
+        // writing to Enrops about another company's class instead of to the
+        // office that asked them. tenant_reply_to is null in exactly that case,
+        // which is what the field exists for.
+        reply_to: brand.tenant_reply_to ?? undefined,
         subject: subjectOut,
         html,
         text,
