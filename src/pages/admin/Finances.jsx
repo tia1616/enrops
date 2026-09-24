@@ -1722,8 +1722,16 @@ function ActivityTab({ org }) {
   // fetched twice. It also re-ran the activity feed, which contains no credit
   // rows at all, throwing away every "Load more" page. Only the total can
   // change here, so only the total is re-read.
+  // Gated on the token having actually CHANGED, not merely being non-zero. With
+  // `reloadToken === 0` as the test, every later period change ran this effect
+  // AND the one above, firing two identical get_revenue_summary calls and
+  // racing their writes for the rest of the session.
+  const lastReload = useRef(0);
   useEffect(() => {
-    if (!org?.id || !period || reloadToken === 0) return;
+    if (!org?.id || !period) return;
+    if (reloadToken === lastReload.current) return;
+    lastReload.current = reloadToken;
+    if (reloadToken === 0) return;
     let alive = true;
     const { from, to, term } = bounds(period);
     (async () => {
@@ -1983,7 +1991,13 @@ function ActivityTab({ org }) {
 // an operator without that bar cannot load in the first place.
 function CreditsOwed({ org, onSettled, reloadToken }) {
   const [credits, setCredits] = useState(null);   // null = loading
-  const [err, setErr] = useState("");
+  // TWO ERRORS, NOT ONE, and they cannot share a slot. A failed settle must
+  // ALSO refresh the list (the row on screen is stale), and that refresh clears
+  // the load error - so a single state meant the message explaining the refusal
+  // was wiped in the same tick by the refresh it triggered. The operator saw the
+  // row change with no reason given. Same shape as the dead pre-tick.
+  const [err, setErr] = useState("");             // the LIST failed to load
+  const [actionErr, setActionErr] = useState(""); // a SETTLE was refused
   const [openId, setOpenId] = useState(null);     // which row is expanded
   const [kind, setKind] = useState(null);         // 'refund_pending' | 'void'
   const [note, setNote] = useState("");
@@ -2031,7 +2045,7 @@ function CreditsOwed({ org, onSettled, reloadToken }) {
     if (!newStatus || busy || inFlight.current) return;
     inFlight.current = true;
     setBusy(true);
-    setErr("");
+    setActionErr("");
     const { error } = await supabase.rpc("settle_family_credit", {
       p_credit_id: creditId,
       p_new_status: newStatus,
@@ -2045,7 +2059,7 @@ function CreditsOwed({ org, onSettled, reloadToken }) {
       // leaves no trace once dismissed - on the one action that changes what a
       // family is owed.
       const code = String(error.code || "");
-      setErr(
+      setActionErr(
         code === "FC009"
           ? "This credit was already changed, probably in another tab or by someone else. The list below has been refreshed."
           : code === "FC010"
@@ -2062,13 +2076,16 @@ function CreditsOwed({ org, onSettled, reloadToken }) {
     if (onSettled) onSettled();
   }
 
-  if (credits === null) return null;              // loading: the total above is enough
-  if (credits.length === 0 && !err) return null;  // nothing owed: no empty panel
+  if (credits === null) return null;                            // loading: the total above is enough
+  // An action error keeps the panel on screen even with nothing left to list -
+  // otherwise a refusal on the last credit would take its own explanation away.
+  if (credits.length === 0 && !err && !actionErr) return null;
 
   return (
     <div style={{ marginBottom: 18 }}>
       <h3 style={{ margin: "0 0 8px", fontSize: 14, color: INK, fontWeight: 700 }}>Credit owed to families</h3>
       {err && <div style={{ background: `${RED}1A`, color: RED, padding: 10, borderRadius: 6, fontSize: 12.5, marginBottom: 10 }}>{err}</div>}
+      {actionErr && <div style={{ background: `${RED}1A`, color: RED, padding: 10, borderRadius: 6, fontSize: 12.5, marginBottom: 10 }}>{actionErr}</div>}
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
         {credits.map((c) => {
           const p = c.parents ?? {};
