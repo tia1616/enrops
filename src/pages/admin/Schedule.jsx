@@ -118,8 +118,17 @@ const WEEKDAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "
 
 // Which of an instructor's unavailable dates fall inside a camp's week span (on a
 // day the camp actually meets). Non-blocking — surfaced as "needs a sub".
-function campUnavailableConflicts(av, session) {
-  const blackout = Array.isArray(av?.unavailable_dates) ? av.unavailable_dates.map((d) => String(d).slice(0, 10)) : [];
+//
+// `extraDates` carries the dates an instructor blocked in their AFTER-SCHOOL
+// term survey. Camps and after-school collect availability in two different
+// tables, and until now the camp board could only see its own. A date block is
+// absolute, though: an instructor who told you they are away over the holidays
+// on the autumn survey is still away when a winter break camp lands on those
+// days. Unioned rather than term-matched on purpose - the break falls between
+// two terms, so matching by term code would have found nothing.
+function campUnavailableConflicts(av, session, extraDates = []) {
+  const own = Array.isArray(av?.unavailable_dates) ? av.unavailable_dates : [];
+  const blackout = [...new Set([...own, ...(extraDates ?? [])].map((d) => String(d).slice(0, 10)))];
   if (!blackout.length || !session?.starts_on || !session?.ends_on) return [];
   const s = String(session.starts_on).slice(0, 10);
   const e = String(session.ends_on).slice(0, 10);
@@ -556,7 +565,7 @@ export default function Schedule() {
       const sessions = sessionsRes.data ?? [];
       const sessionIds = sessions.map((s) => s.id);
 
-      const [assignmentsRes, instructorsRes, availabilityRes, locPrefRes, curPrefRes, declinesRes, cfgRes] = await Promise.all([
+      const [assignmentsRes, instructorsRes, availabilityRes, termBlackoutRes, locPrefRes, curPrefRes, declinesRes, cfgRes] = await Promise.all([
         sessionIds.length
           ? supabase
               .from("camp_assignments")
@@ -573,6 +582,16 @@ export default function Schedule() {
           .from("instructor_availability")
           .select("instructor_id, session_types, available_weeks, needs_confirmation, notes, unavailable_dates, submitted_at")
           .eq("cycle_id", cycle.id),
+        // Dates instructors blocked on their AFTER-SCHOOL surveys, every term.
+        // Deliberately NOT joined to this cycle: a break camp falls between
+        // terms, so the block that matters for it was almost certainly given on
+        // the term either side. Kept OUT of `availability` so it cannot make an
+        // instructor look surveyed for this cycle when they are not - the survey
+        // count and the "no availability survey" block both read that list.
+        supabase
+          .from("instructor_term_availability")
+          .select("instructor_id, term, unavailable_dates")
+          .eq("organization_id", org.id),
         supabase
           .from("instructor_location_preferences")
           .select("instructor_id, location_name, preference")
@@ -647,6 +666,13 @@ export default function Schedule() {
       }));
       const instructors = instructorsRes.data ?? [];
       const availability = availabilityRes.data ?? [];
+      // Non-blocking: without it the board simply loses the cross-term date
+      // warning it never had before today. Refusing to draw the whole schedule
+      // because a convenience read failed would be the worse trade.
+      if (termBlackoutRes.error) {
+        console.warn("[Schedule] after-school blocked dates unavailable:", termBlackoutRes.error.message);
+      }
+      const termBlackouts = termBlackoutRes.data ?? [];
       const surveyedIds = new Set(availability.map((r) => r.instructor_id));
       const missingSurveys = instructors.filter((i) => !surveyedIds.has(i.id)).length;
 
@@ -663,6 +689,7 @@ export default function Schedule() {
         assignments,
         instructors,
         availability,
+        termBlackouts,
         locPrefs: locPrefRes.data ?? [],
         curPrefs: curPrefRes.data ?? [],
         declines: declinesRes.data ?? [],
@@ -859,8 +886,15 @@ export default function Schedule() {
 
   const enriched = useMemo(() => {
     if (state.status !== "ready") return null;
-    const { sessions, assignments, availability } = state;
+    const { sessions, assignments, availability, termBlackouts } = state;
     const availMap = new Map((availability ?? []).map((r) => [r.instructor_id, r]));
+    // Same union as termBlackoutsByInstructor, built here because this memo
+    // reads straight off `state` rather than the component's lookup maps.
+    const termBlackoutMap = new Map();
+    for (const row of termBlackouts ?? []) {
+      if (!Array.isArray(row.unavailable_dates) || !row.unavailable_dates.length) continue;
+      termBlackoutMap.set(row.instructor_id, (termBlackoutMap.get(row.instructor_id) ?? []).concat(row.unavailable_dates));
+    }
     const annotate = (a) => {
       const av = availMap.get(a.instructor_id);
       return {
@@ -879,8 +913,8 @@ export default function Schedule() {
       // lands inside this camp's week — surfaced on the card as "needs a sub".
       const leadA = ownActive.find((a) => a.role === "lead") ?? null;
       const devA = ownActive.find((a) => a.role === "developing") ?? null;
-      const leadSubNeeded = leadA ? campUnavailableConflicts(availMap.get(leadA.instructor_id), s) : [];
-      const devSubNeeded = devA ? campUnavailableConflicts(availMap.get(devA.instructor_id), s) : [];
+      const leadSubNeeded = leadA ? campUnavailableConflicts(availMap.get(leadA.instructor_id), s, termBlackoutMap.get(leadA.instructor_id)) : [];
+      const devSubNeeded = devA ? campUnavailableConflicts(availMap.get(devA.instructor_id), s, termBlackoutMap.get(devA.instructor_id)) : [];
       byId.set(s.id, { session: s, status, assignment: lead, allAssignments: own, activeAssignments: ownActive, leadSubNeeded, devSubNeeded });
     }
     return byId;
@@ -924,6 +958,20 @@ export default function Schedule() {
   const availabilityByInstructor = useMemo(() => {
     if (state.status !== "ready") return new Map();
     return new Map((state.availability ?? []).map((r) => [r.instructor_id, r]));
+  }, [state]);
+  // instructor_id -> every date they blocked on ANY after-school term survey.
+  // A separate map rather than folded into availabilityByInstructor: that map
+  // answers "did this person fill in THIS cycle's survey", and an after-school
+  // row must never make the answer yes.
+  const termBlackoutsByInstructor = useMemo(() => {
+    if (state.status !== "ready") return new Map();
+    const m = new Map();
+    for (const row of state.termBlackouts ?? []) {
+      if (!Array.isArray(row.unavailable_dates) || !row.unavailable_dates.length) continue;
+      const prev = m.get(row.instructor_id) ?? [];
+      m.set(row.instructor_id, prev.concat(row.unavailable_dates));
+    }
+    return m;
   }, [state]);
   const locPrefLookup = useMemo(() => {
     if (state.status !== "ready") return new Map();
@@ -2611,6 +2659,7 @@ export default function Schedule() {
           currentAssignment={candidatesFor.currentAssignment}
           instructors={state.instructors}
           availabilityByInstructor={availabilityByInstructor}
+          termBlackoutsByInstructor={termBlackoutsByInstructor}
           locPrefLookup={locPrefLookup}
           curPrefLookup={curPrefLookup}
           allAssignments={assignmentsWithSession}
@@ -5879,6 +5928,7 @@ function DialogChoice({ title, subtitle, onClick, disabled, tone }) {
 
 function CandidatePicker({
   session, currentAssignment, role = "lead", instructors, availabilityByInstructor,
+  termBlackoutsByInstructor = new Map(),
   locPrefLookup, curPrefLookup, allAssignments,
   declinedInstructorIds = new Set(),
   onClose, onPick, onRemove, onResetAcceptance, onResendOffer, onSendMessage, onCreateInstructor, onUndecline,
@@ -5993,7 +6043,7 @@ function CandidatePicker({
       if (session.enrollment_synced_at && session.current_enrollment != null && session.current_enrollment < MIN_ENROLLMENT) warningsForBanner.push(`Enrollment is ${session.current_enrollment} — below the ${MIN_ENROLLMENT}-student minimum.`);
       if (sessionTypes.includes("full_day") && (session.session_type === "morning" || session.session_type === "afternoon")) warningsForBanner.push(`${inst.first_name} is reserved for full-day work.`);
       if (avail.needs_confirmation) warningsForBanner.push(`${inst.first_name}'s availability is unconfirmed.`);
-      const dateConflicts = campUnavailableConflicts(avail, session);
+      const dateConflicts = campUnavailableConflicts(avail, session, termBlackoutsByInstructor.get(inst.id));
       if (dateConflicts.length) warningsForBanner.push(`${inst.first_name} is unavailable on ${listDates(dateConflicts)} — would need a sub.`);
 
       let score = 0;
