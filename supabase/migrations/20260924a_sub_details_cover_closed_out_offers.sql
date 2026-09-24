@@ -27,6 +27,21 @@
 -- CREATE OR REPLACE with an unchanged signature, so the grants survive and this
 -- is not a DROP - a dropped-and-recreated public function is born with an anon
 -- EXECUTE grant that REVOKE ... FROM public does not remove.
+--
+-- DEPLOY ORDER: THIS MIGRATION BEFORE THE FRONTEND.
+-- Stated here, in the file, because the next person opens the migration and not
+-- the git log - and because the OTHER migrations in this build run the opposite
+-- way round (functions first, then 20260923e, or the old upsert 42P10s on a
+-- constraint that is gone). There is no house rule to fall back on; each change
+-- has its own answer and this one is: migration first.
+--
+-- Why this direction here. Landing this alone is inert: nothing on prod reads
+-- the extra rows, and the portal it feeds maps them onto substitutions it has
+-- already loaded under RLS. Landing the FRONTEND alone is not inert - the new
+-- "already covered by someone else" section renders, gets no details back for a
+-- declined row, and every card reads "that class" with no school to an
+-- instructor who works at three. Ugly and visible, on the one screen that
+-- exists to explain something.
 
 create or replace function public.get_my_sub_details()
 returns table(
