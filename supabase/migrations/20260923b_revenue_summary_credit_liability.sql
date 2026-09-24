@@ -1,3 +1,16 @@
+-- DEPLOY ORDER: migrations (20260923a-e) BEFORE refund-registration, frontend
+-- LAST. The full reasoning is at the top of 20260923a_issue_family_credit.sql;
+-- in one line, the new function fails closed without these RPCs, and the new
+-- drawer refunds for real against an older function. The order is a property of
+-- what the change depends on, not of the file type - a sibling feature this same
+-- week correctly needs the reverse.
+--
+-- THIS FILE'S OWN HALF OF THAT CONTRACT: it adds a column to
+-- get_revenue_summary's RETURNS TABLE, and Finances.jsx reads
+-- `credit_outstanding_cents` off it. Frontend ahead of this migration reads
+-- undefined and renders nothing; this migration ahead of the frontend is inert.
+-- Inert is the safe side, which is why it travels with the other migrations.
+--
 -- Credits, chunk 2: show what the business OWES, next to what it collected.
 --
 -- Money layer section 6: "A credit is money owed, not revenue. It shows on the

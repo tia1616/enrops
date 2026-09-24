@@ -1,3 +1,21 @@
+-- DEPLOY ORDER: migrations (20260923a-e) BEFORE refund-registration and
+-- stripe-webhook, frontend LAST. Full reasoning at the top of
+-- 20260923a_issue_family_credit.sql. In one line: the new function calls RPCs
+-- these files create and fails CLOSED without them, so a function shipped first
+-- refuses every refund on prod; and the new drawer sends `issue_credit`, which
+-- an older function ignores - issuing a real REFUND when the operator asked to
+-- record a credit.
+--
+-- THIS FILE HAS TWO CALLERS, not one: registration_payment_status_after_refund
+-- is read by BOTH refund-registration and stripe-webhook. Deploy either of them
+-- ahead of this file and that one starts failing; the webhook's failures are the
+-- quieter of the two, because nobody is watching a Stripe callback.
+--
+-- THE ORDER IS NOT A HABIT. A sibling feature shipping this same week needs the
+-- exact opposite, because its migration DROPS a constraint its old function
+-- still upserts on. The answer is a property of what a change REMOVES or
+-- DEPENDS ON, never of the file type.
+--
 -- Two review findings, both about what is left behind when a refund request dies.
 --
 -- ---------------------------------------------------------------------------

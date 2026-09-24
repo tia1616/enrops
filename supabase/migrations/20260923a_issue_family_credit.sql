@@ -1,3 +1,18 @@
+-- DEPLOY ORDER: THIS MIGRATION FIRST, THEN refund-registration, THEN the
+-- frontend. Reversed, every refund on prod dies: the new function calls
+-- issue_family_credit / registration_available_cents /
+-- registration_payment_status_after_refund and fails CLOSED when an RPC is
+-- missing, so a function deployed ahead of this file refuses refunds outright.
+-- Frontend last for the opposite reason: the new drawer sends `issue_credit`,
+-- which an older function does not know and ignores - so it issues a real
+-- REFUND when the operator asked to record a credit, and money leaves.
+--
+-- AND THE ORDER IS NOT A HABIT. A sibling feature shipping the same week needs
+-- the exact opposite (functions before its migration, because its migration
+-- DROPS a constraint the old function still upserts on). The answer is a
+-- property of what the change REMOVES or DEPENDS ON, never of the file type.
+-- Do not carry "migrations first" from here to the next feature.
+--
 -- Credits, chunk 2: make issuing a credit atomic against its own ceiling.
 --
 -- WHY THIS EXISTS. The edge function computed
