@@ -1001,7 +1001,7 @@ export default function CampSessionForm({ org, orgId, cycle, session = null, onC
         {/* What a family is actually charged, fee included - the same component
             and the same fee config the program wizard uses, so the two screens
             cannot quote different all-in prices for the same number typed. */}
-        <FamiliesPayNote priceCents={form.price_cents} feeConfig={feeConfig} style={{ color: INK }} />
+        <FamiliesPayNote priceCents={form.price_cents} feeConfig={feeConfig} noun="camp" style={{ color: INK }} />
 
         <div style={{ background: CREAM, border: `1px solid ${RULE}`, borderRadius: 6, padding: 12 }}>
           <label style={{ display: "flex", gap: 8, alignItems: "flex-start", cursor: "pointer" }}>

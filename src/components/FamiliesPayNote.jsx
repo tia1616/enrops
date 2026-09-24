@@ -63,7 +63,10 @@ export function useOrgFeeConfig(slug) {
  * @param {number|null} priceCents  what the operator has typed, in cents
  * @param {object|null} feeConfig   from useOrgFeeConfig
  */
-export default function FamiliesPayNote({ priceCents, feeConfig, style }) {
+// `noun` is what the operator is looking at - "program" for an after-school
+// class, "camp" for a camp. Defaulted so the three program callers are unchanged
+// and cannot drift; the camp builder is the one that passes it.
+export default function FamiliesPayNote({ priceCents, feeConfig, style, noun = "program" }) {
   // Nothing to say yet: no price typed, or the config did not load. Silence is
   // the honest state - see the note above.
   if (feeConfig == null) return null;
@@ -106,7 +109,7 @@ export default function FamiliesPayNote({ priceCents, feeConfig, style }) {
   return (
     <div style={base}>
       <strong>Families pay {formatMoney(familiesPay)}.</strong>{' '}
-      Use {formatMoney(familiesPay)} anywhere you advertise this program.
+      Use {formatMoney(familiesPay)} anywhere you advertise this {noun}.
       That is your {formatMoney(priceCents)} plus the {formatMoney(fee)} enrops
       service fee.
     </div>
