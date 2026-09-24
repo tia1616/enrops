@@ -2853,7 +2853,17 @@ function AfterschoolRostersSection({ org, canEdit }) {
                 // "this class is off, the other two are on" is one message -
                 // but it must be visible in the composer, not only on the row
                 // the operator ticked two searches ago.
-                .map((p) => ({ id: p.id, curriculum: p.curriculum, status: p.status }));
+                //
+                // THE COUNTS TRAVEL TOO. This list is narrowed to the fields
+                // the composer needs, and `defaultIncludeCancelled` below reads
+                // `enrolled`/`departed` off it - so leaving them out did not
+                // make the pre-tick wrong, it made it permanently FALSE, a
+                // guard that could never fire. Anything added to that condition
+                // has to be added here and in the per-row handler.
+                .map((p) => ({
+                  id: p.id, curriculum: p.curriculum, status: p.status,
+                  enrolled: p.enrolled, departed: p.departed,
+                }));
               // Belt and braces: unreachable while the button is disabled on an
               // empty selection AND the effect above drops ids the moment they
               // stop qualifying. Kept because what it prevents - a composer
@@ -2965,7 +2975,13 @@ function AfterschoolRostersSection({ org, canEdit }) {
               }}
               onMessage={() => {
                 setMessagingSource("row");
-                setMessagingPrograms([{ id: p.id, curriculum: p.curriculum, status: p.status }]);
+                // enrolled/departed travel with it - see the selection path
+                // above. This is the handler Jessica opened the composer from,
+                // and dropping them here is what made the pre-tick dead.
+                setMessagingPrograms([{
+                  id: p.id, curriculum: p.curriculum, status: p.status,
+                  enrolled: p.enrolled, departed: p.departed,
+                }]);
               }}
             />
           ))}
