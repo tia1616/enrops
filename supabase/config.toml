@@ -275,3 +275,11 @@ verify_jwt = false
 # TRUE: there is a real user JWT and it is the whole basis of the permission.
 [functions.cancel-sub-cover]
 verify_jwt = true
+
+# Chases a sub class-day nobody has answered: instructors at T-8 and T-4, the
+# provider at T-7 and T-3. Triggered by pg_cron, which posts the anon key, and
+# gated per-tenant by organizations.sub_nudges_enabled.
+# TRUE, matching offer-reminders-cron: the anon key IS a JWT, so the cron
+# satisfies it, and an unauthenticated stranger cannot poke a mail sender.
+[functions.sub-offer-nudges-cron]
+verify_jwt = true
