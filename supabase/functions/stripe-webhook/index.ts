@@ -1044,10 +1044,15 @@ async function handleChargeRefunded(admin: SupabaseClient, event: Stripe.Event) 
     if (ownRowId) {
       const { data: ownRow } = await admin
         .from('refunds')
-        .select('id, stripe_refund_id')
+        // platform_fee_refunded_cents is the completion marker - the same one
+        // `known` uses above - and decides whether we step aside or resume.
+        .select('id, stripe_refund_id, status, platform_fee_refunded_cents')
         .eq('id', ownRowId)
         .maybeSingle();
-      const own = ownRow as { id: string; stripe_refund_id: string | null } | null;
+      const own = ownRow as {
+        id: string; stripe_refund_id: string | null; status: string | null;
+        platform_fee_refunded_cents: number | null;
+      } | null;
       if (own) {
         if (!own.stripe_refund_id) {
           // Writing the same value refund-registration is about to write is
@@ -1062,7 +1067,67 @@ async function handleChargeRefunded(admin: SupabaseClient, event: Stripe.Event) 
             console.error('[charge.refunded] could not link the in-app refund row:', healErr);
           }
         }
-        continue; // Enrops-initiated. refund-registration owns the fee refund.
+        // STRIPE IS THE AUTHORITY ON WHETHER THE MONEY MOVED, and this event
+        // says it did. Previously this branch linked the id and left `status`
+        // alone, which stranded two real states:
+        //   'pending'  - the in-app call died before it could record success,
+        //                so the row held its share of the ceiling forever.
+        //   'failed'   - the refund SUCCEEDED at Stripe but the reply timed
+        //                out, so enrops released the ceiling and the operator
+        //                could hand the same dollars out again as a credit.
+        // Promoting here fixes both, and it is the only place that can: enrops
+        // never learns the outcome of a request it did not get an answer to.
+        // WE ONLY STEP ASIDE WHEN THE JOB IS ACTUALLY FINISHED.
+        //
+        // "refund-registration owns the fee refund" holds only while that
+        // request is alive. On the ambiguous-timeout path it threw between
+        // creating the Stripe refund and calling applicationFees.createRefund,
+        // so `platform_fee_refunded_cents` is NULL and the provider's margin
+        // never came back - while the row read as a clean, complete refund.
+        // The money layer lists "fee return fires on every refund" as a settled
+        // invariant, and the 8 September $7.12 settled by hand in Stripe is the
+        // incident it was settled BY, not the design.
+        //
+        // So the completion marker is the same one `known` uses above -
+        // platform_fee_refunded_cents IS NOT NULL - and when it is null we fall
+        // through instead of continuing. `recordExternalRefund` then hits the
+        // UNIQUE (stripe_refund_id, registration_id) we just stamped, takes its
+        // existing 23505 adopt branch ("the retry that repairs a half-done
+        // refund"), promotes the row with Stripe's own timestamp, clears the
+        // stale outcome and runs the fee attempt in the same pass. All of that
+        // already existed; the `continue` was the only thing holding it off.
+        // The fee refund carries a stable idempotency key, so arriving here
+        // twice is safe.
+        if (own.platform_fee_refunded_cents !== null) {
+          // Finished. Still promote a row Stripe has now settled, or it stays
+          // invisible to get_revenue_summary, which filters on 'succeeded'.
+          // Gated on Stripe's OWN status because `succeeded` above is filtered
+          // on `!== 'failed'` and still carries pending ACH returns, and this
+          // file's rule is that a refund is only money once Stripe says so.
+          if (refund.status === 'succeeded' && own.status !== 'succeeded') {
+            const { error: statusErr } = await admin
+              .from('refunds')
+              .update({
+                status: 'succeeded',
+                // Stripe's timestamp, not "when this webhook ran" - both
+                // revenue reads bucket by succeeded_at, so a retry delivered
+                // days later would drop the money into the wrong period.
+                succeeded_at: refund.created
+                  ? new Date(refund.created * 1000).toISOString()
+                  : new Date().toISOString(),
+              })
+              .eq('id', own.id)
+              .neq('status', 'succeeded');
+            if (statusErr) {
+              console.error('[charge.refunded] could not promote the in-app refund row to succeeded:', statusErr);
+            }
+          }
+          continue;
+        }
+        console.log(
+          `[charge.refunded] ${refund.id} is ours but its fee return never completed; resuming it here`,
+        );
+        // deliberate fall-through to the recording path below
       }
       console.warn(`[charge.refunded] ${refund.id} claims refunds row ${ownRowId}, which does not exist; treating as external`);
     }
@@ -1516,9 +1581,18 @@ async function recordExternalRefund(
     chargedForReg = totalPaid;
     baseForReg = basePaid;
 
-    const newStatus = totalPaid > 0 && totalRefunded >= totalPaid ? 'refunded'
-      : totalRefunded > 0 ? 'partial'
-      : null;
+    // THE SAME RULE refund-registration uses, read from the database rather
+    // than spelled a second time here. Both copies used to say
+    // `refunded >= paid` with no credits subtracted, so a registration settled
+    // by a mix of refund and credit could never reach 'refunded' - it read
+    // 'partial' forever, implying more was still to come back.
+    const { data: psData, error: psErr } = await admin
+      .rpc('registration_payment_status_after_refund', {
+        p_registration_id: reg.id,
+        p_paid_cents: totalPaid,
+      });
+    if (psErr) console.error('[charge.refunded] payment_status rule read failed:', psErr);
+    const newStatus = (psData as string | null) ?? null;
     if (newStatus && newStatus !== reg.payment_status) {
       await admin.from('registrations').update({ payment_status: newStatus }).eq('id', reg.id);
     }

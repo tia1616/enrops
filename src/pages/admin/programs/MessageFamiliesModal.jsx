@@ -174,7 +174,16 @@ function describeProgressSoFar(perClass, total) {
  * composer, reached from the two natural places: tick several classes and press
  * the button above the list, or press the button on a single class's row.
  */
-export default function MessageFamiliesModal({ programs, orgId, onClose, onSent }) {
+// defaultIncludeCancelled: start with "Also include families who have left or
+// been refunded" already ticked. Passed ONLY by the roster list, and only when
+// every class in the selection has nobody enrolled - otherwise opening the
+// composer on such a class is a dead end: the audience is empty, Send is
+// disabled, and the empty state claims nobody here has an email address, which
+// is not true. It is an EXPLICIT prop rather than something inferred from the
+// programs array, because ProgramsCalendar passes a raw program row with no
+// enrolled/departed counts on it at all - inferring would have read those as
+// zero and silently widened the audience on every send from the calendar.
+export default function MessageFamiliesModal({ programs, orgId, onClose, onSent, defaultIncludeCancelled = false }) {
   // The class the panel is titled after and whose name fills a merge field in
   // the test send. With several, it is simply the first.
   const program = programs?.[0];
@@ -190,7 +199,7 @@ export default function MessageFamiliesModal({ programs, orgId, onClose, onSent 
   // cancelled class on prod has 2 refunded families and returned ZERO reachable
   // people. Sawyer solves it the same way, with a separate "canceled" tab you
   // can still message from.
-  const [includeCancelled, setIncludeCancelled] = useState(false);
+  const [includeCancelled, setIncludeCancelled] = useState(defaultIncludeCancelled);
   const [preview, setPreview] = useState(null);       // null = loading
   const [previewError, setPreviewError] = useState("");
   const [phase, setPhase] = useState("compose");       // compose | sending | done

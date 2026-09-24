@@ -12,7 +12,23 @@
 //   amount_cents: integer (> 0),
 //   reason?: string,                // internal note; not emailed to parent
 //   cancel_registration?: boolean,  // also flip status to 'cancelled' + pause future installments
+//   issue_credit?: boolean,         // record an enrops credit INSTEAD of refunding
+//   credit_reason?: 'business_cancelled' | 'family_cancelled',
+//   idempotency_key?: string,       // required in practice for issue_credit
 // }
+//
+// THREE OUTCOMES, NOT ONE. This function is named for the only thing it used to
+// do, and now does three, distinguished by what leaves the business:
+//   refund   - money goes back to the family's card. Stripe is called.
+//   withdraw - nothing leaves; the seat is freed and future charges stopped.
+//   credit   - nothing leaves the business, but money is now OWED to the
+//              family and recorded in family_credits. Stripe is NOT called.
+// Credit and withdraw both return before the first Stripe line, which is what
+// makes them safe to carry inside the function that moves real money.
+//
+// THE CEILING IS SHARED BY ALL THREE: paid - refunded - credited, computed from
+// the real charged total. A credit consumes it exactly as a refund does, or the
+// same dollars could go out twice.
 //
 // PI walk:
 //   1. Collect all paid PaymentIntents for this registration:
@@ -113,6 +129,27 @@ interface Body {
   cancel_registration?: boolean;
   /** true = return eligibility only, refund nothing. */
   preview?: boolean;
+  /**
+   * CREDIT INSTEAD OF REFUND. The family's money stays with the business and is
+   * recorded as an enrops credit rather than sent back to their card. No Stripe
+   * call is made on this path at all.
+   */
+  issue_credit?: boolean;
+  /**
+   * Which kind of cancellation this was, as the OPERATOR states it - not as the
+   * platform guesses it. `programs.status = 'cancelled'` only correlates: a
+   * family who withdrew on Monday before the class was pulled on Friday would be
+   * labelled business_cancelled by that proxy, and the two have opposite
+   * defaults in the money layer. The program's status pre-selects the choice in
+   * the drawer; the operator confirms it, and what they confirm is what is
+   * written.
+   */
+  credit_reason?: string;
+  /**
+   * Caller-supplied, unique within the organisation. Guards the double-clicked
+   * button and the retried request; see 20260922c/d.
+   */
+  idempotency_key?: string;
 }
 
 interface RegistrationRow {
@@ -242,6 +279,24 @@ serve(async (req: Request) => {
     // server will honour instead of deriving its own.
     const preview = body.preview === true;
 
+    // CREDIT INSTEAD OF REFUND. `!preview` for the same reason the withdraw
+    // branch carries it: a preview promises no side effects, and this branch
+    // writes a credit row and cancels a registration.
+    const issueCredit = !preview && body.issue_credit === true;
+    const creditReason = (body.credit_reason || '').toString().trim();
+    const idempotencyKey = (body.idempotency_key || '').toString().trim() || null;
+
+    // VALIDATED AGAINST THE DATABASE'S OWN LIST, not against a second copy of
+    // it. `family_credits_reason_known` allows four values; only these two are
+    // reachable from a cancellation, and letting the other two through here
+    // would record a cancellation credit as goodwill. An unrecognised value is
+    // rejected rather than defaulted, because the two legitimate values have
+    // OPPOSITE defaults in the money layer and quietly picking one for the
+    // operator is picking which side the family's money falls on.
+    if (issueCredit && creditReason !== 'business_cancelled' && creditReason !== 'family_cancelled') {
+      return json({ error: 'invalid_credit_reason' }, 400);
+    }
+
     if (!registrationId) return json({ error: 'missing_registration_id' }, 400);
 
     // WITHDRAWING WITH NOTHING TO REFUND IS LEGITIMATE, and until 2026-09-22 it
@@ -267,7 +322,14 @@ serve(async (req: Request) => {
     // omitted amount is a caller error and still gets `invalid_amount`.
     const rawAmount = (body as Record<string, unknown>).amount_cents;
     const amountProvided = rawAmount !== undefined && rawAmount !== null && rawAmount !== '';
+    // `!issueCredit` closes a silent-success seam. A credit is always sent with
+    // cancel_registration, so a credit whose amount arrived as 0 would otherwise
+    // match this branch exactly: the family would be withdrawn, 200 returned,
+    // and the credit they were promised never written - the failure mode being
+    // invisible precisely because the response says it worked. Excluded here, a
+    // zero-amount credit falls through to `invalid_amount` and says so.
     const withdrawOnly = !preview &&
+      !issueCredit &&
       cancelRegistration &&
       amountProvided &&
       Number.isFinite(amountCents) &&
@@ -363,6 +425,121 @@ serve(async (req: Request) => {
         pending_charges_stopped: pausedRows?.length ?? 0,
         pending_cents_stopped: (pausedRows ?? []).reduce((s, r) => s + (r.amount_cents || 0), 0),
       });
+    }
+
+    // ── AN ALREADY-ISSUED CREDIT IS ANSWERED BEFORE THE CEILING IS CONSULTED ─
+    //
+    // This has to run here, above the money maths, and staging proved why. The
+    // ceiling check further down is `amountCents > eligible`, and a credit
+    // CONSUMES the ceiling - so the moment the first credit is written, eligible
+    // is legitimately 0 and the identical retry is rejected with
+    // `amount_exceeds_eligible` before the idempotency handling is ever reached.
+    // The operator double-clicks "Give $240 credit" and the second click tells
+    // them "that's more than is left to refund", which is alarming, sounds like
+    // the credit failed, and is the precise case the idempotency key exists to
+    // make boring. No money was ever duplicated - the unique index saw to that -
+    // but "it worked" reported as an error is its own defect.
+    //
+    // THE WITHDRAWAL IS STILL RE-RUN rather than short-circuited away. A first
+    // attempt can write the credit and then fail to pause the installments
+    // (`credit_issued_pause_failed`), and the operator's response to that is to
+    // press the button again. If this block returned success without retrying
+    // the pause, that retry would silently do nothing and the family's card
+    // would still be charged on schedule - turning a visible, recoverable
+    // failure into the invisible one. Both calls are idempotent, so re-running
+    // costs nothing when the first attempt did complete.
+    if (issueCredit && idempotencyKey) {
+      // SCOPED TO THIS REGISTRATION, AND TO A LIVE CREDIT. The unique index is
+      // only (organization_id, idempotency_key), so matching on those alone
+      // trusts the caller to have picked a key it never used elsewhere. Two
+      // ways that bites: a key reused against a DIFFERENT registration would
+      // withdraw THAT family and answer with the first one's credit, reporting
+      // a credit that does not exist for them; and a VOIDED credit - withdrawn
+      // as issued in error, and deliberately excluded from the ceiling below -
+      // would come back as a success and withdraw a family against a credit
+      // worth nothing. Neither is reachable from the drawer today, which mints
+      // a fresh key per opening, but the function is the contract and the next
+      // caller is not bound by this UI.
+      const { data: prior, error: priorErr } = await supabase
+        .from('family_credits')
+        .select('id, amount_cents, reason')
+        .eq('organization_id', reg.organization_id)
+        .eq('idempotency_key', idempotencyKey)
+        .eq('source_registration_id', registrationId)
+        .neq('status', 'void')
+        .maybeSingle();
+      // A failed lookup is NOT "no prior credit". Falling through on an error
+      // would attempt a second insert, which the unique index catches anyway -
+      // so this carries on rather than failing the request, and the index stays
+      // the thing that actually guarantees it.
+      if (priorErr) console.error('[credit] idempotency lookup failed:', priorErr);
+
+      const priorRow = prior as { id: string; amount_cents: number; reason: string } | null;
+      if (priorRow) {
+        const nowIso = new Date().toISOString();
+        const { pausedRows, pauseError, cancelError } =
+          await stopChargesAndCancel(supabase, registrationId, nowIso);
+        if (pauseError) {
+          console.error('[credit] retry: pausing pending installments failed:', pauseError);
+          return json({
+            error: 'credit_issued_pause_failed',
+            credit_id: priorRow.id,
+            credited_cents: priorRow.amount_cents,
+          }, 500);
+        }
+        if (cancelError) {
+          console.error('[credit] retry: registration cancel failed:', cancelError);
+          return json({
+            error: 'credit_issued_cancel_failed_charges_stopped',
+            credit_id: priorRow.id,
+            credited_cents: priorRow.amount_cents,
+            pending_charges_stopped: pausedRows.length,
+          }, 500);
+        }
+        // THE EVENT IS WRITTEN ON THIS PATH TOO. Without it the cancellations
+        // that went WRONG are precisely the ones missing from the churn
+        // history: a first attempt that wrote the credit and failed the pause
+        // returns 500 before reaching the log, and the retry that actually
+        // completes the withdrawal used to return straight from here. The
+        // dedupeKey is the same one the main branch uses, so a retry after a
+        // fully successful first attempt records nothing new - which is the
+        // behaviour that key exists for.
+        await logEnrollmentEvent(supabase, {
+          organizationId: reg.organization_id,
+          parentId: reg.parent_id,
+          studentId: reg.student_id,
+          programId: reg.program_id,
+          campSessionId: reg.camp_session_id,
+          registrationId: registrationId,
+          actionType: ENROLLMENT_ACTIONS.CANCELLED,
+          metadata: {
+            via: 'credit_no_refund',
+            reason,
+            // The STORED reason, like the amount beside it.
+            credit_reason: priorRow.reason,
+            credited_cents: priorRow.amount_cents,
+            credit_id: priorRow.id,
+          },
+          dedupeKey: `cancelled:${registrationId}:credit_no_refund`,
+        });
+
+        return json({
+          credited: true,
+          credit_id: priorRow.id,
+          // THE LEDGER, NOT THE REQUEST - for both of these. They are the same
+          // on a genuine retry, and when they differ the honest answer is what
+          // was actually written. `reason` matters most: it is the only record
+          // of which side ended the enrollment, and the money layer's rules for
+          // the two are opposites, so echoing the request back would let a
+          // caller believe the ledger says something it does not.
+          credited_cents: priorRow.amount_cents,
+          credit_reason: priorRow.reason,
+          already_existed: true,
+          refunded_cents: 0,
+          pending_charges_stopped: pausedRows?.length ?? 0,
+          pending_cents_stopped: (pausedRows ?? []).reduce((s, r) => s + (r.amount_cents || 0), 0),
+        });
+      }
     }
 
     // ── refund policy: who is made whole on a refund ──────────────────────
@@ -559,6 +736,10 @@ serve(async (req: Request) => {
     //
     // Absorb orgs (fee_pass_through=false — including J2S on prod) charged base
     // only, so the share equals amount_cents and nothing changes for them.
+    //
+    // Set when ANY slot's charged total could not be read. Only the credit path
+    // treats it as fatal; see the catch below for why the two paths differ.
+    let ceilingReadFailed = false;
     for (const slot of piSlots) {
       try {
         const pi = await stripe.paymentIntents.retrieve(
@@ -609,9 +790,19 @@ serve(async (req: Request) => {
         const share = Math.round((chargedTotal * slot.amount) / baseOnPi);
         if (share > slot.amount) slot.amount = share;
       } catch (ceilErr) {
-        // Non-fatal: fall back to the base amount, which is the pre-existing
-        // behaviour. It can under-refund a pass-through family, so it is worth
-        // seeing in the logs, but it must not block a refund entirely.
+        // Non-fatal FOR A REFUND: fall back to the base amount, which is the
+        // pre-existing behaviour. It can under-refund a pass-through family, so
+        // it is worth seeing in the logs, but it must not block a refund
+        // entirely.
+        //
+        // FATAL FOR A CREDIT, and the asymmetry is the whole point. A refund
+        // has a second opinion - `stripe.refunds.create` talks to the same
+        // charge, so an unreadable or wrong PI fails there and no money moves.
+        // The credit path makes NO Stripe call at all, so this catch is the
+        // last thing standing between "we could not read what they paid" and a
+        // debt recorded against a charge nobody could see. The credit branch
+        // below refuses rather than guessing.
+        ceilingReadFailed = true;
         console.error('[refund] could not read the charged total for', slot.pi, ceilErr);
       }
     }
@@ -631,7 +822,99 @@ serve(async (req: Request) => {
     // ── eligibility check ─────────────────────────────────────────────────
     const totalPaid = piSlots.reduce((s, p) => s + p.amount, 0);
     const totalRefunded = Object.values(refundedAgg).reduce((s, v) => s + v, 0);
-    const eligible = totalPaid - totalRefunded;
+
+    // CREDITS COUNT AGAINST THE SAME CEILING AS REFUNDS, and this is the seam
+    // that makes the credit path safe to add at all. `eligible` used to mean
+    // "paid minus what we sent back to the card", which was the whole truth
+    // while a refund was the only way money could leave a registration. It no
+    // longer is. Without this line an operator could credit a family $240 and
+    // then refund them $240 against the same charge - the ceiling would report
+    // the full amount still available both times, because no Stripe refund
+    // exists to subtract - and the business would be out $240 it never took.
+    //
+    // Scoped to THIS registration, because that is what `eligible` is about. A
+    // credit the family holds from some other class is their money and has
+    // nothing to do with what this charge can still return.
+    //
+    // 'void' is excluded because a voided credit was withdrawn as issued in
+    // error, so it never consumed anything. Every other status is subtracted,
+    // including 'spent'.
+    //
+    // A REFUND TAKEN OUTSIDE ENROPS IS NOT SEEN HERE, AND THAT GAP IS OPEN.
+    // This ceiling protects one order only. Refund first, then try to credit:
+    // blocked, because `totalRefunded` includes the rows the Stripe webhook
+    // writes. Credit first, then refund in the STRIPE DASHBOARD: nothing stops
+    // it and nothing notices. The family keeps an `active` credit with no
+    // expiry AND has the cash. Today that is reachable, because a family who
+    // changes their mind after taking a credit has no in-product way back -
+    // cash-out is not built - so the dashboard is exactly where an operator
+    // would go.
+    //
+    // Nothing sets a credit's status to 'refunded' today; only the unbuilt
+    // cash-out path would. So this expression cannot currently double-count,
+    // and when cash-out lands it will - a credit cashed back to the card will
+    // produce BOTH a `refunds` row and a 'refunded' credit. That future
+    // double-count fails safe (it under-states what is left), but it is still
+    // wrong, and the cash-out chunk owns both halves of this.
+    const { data: creditRows, error: creditReadErr } = await supabase
+      .from('family_credits')
+      .select('amount_cents')
+      .eq('source_registration_id', registrationId)
+      .neq('status', 'void');
+    if (creditReadErr) {
+      // FAIL CLOSED. Not being able to see what has already been credited is
+      // not the same as nothing having been credited, and the branch that must
+      // not run on a wrong zero is the one that hands money back.
+      console.error('[refund] credit lookup failed:', creditReadErr);
+      return json({ error: 'lookup_failed' }, 500);
+    }
+    const totalCredited = ((creditRows as Array<{ amount_cents: number }> | null) ?? [])
+      .reduce((s, r) => s + (r.amount_cents || 0), 0);
+
+    // THE CEILING COMES FROM THE DATABASE, because there must be exactly one of
+    // it. This line used to be `totalPaid - totalRefunded - totalCredited`, a
+    // fourth copy of a rule the migration writes once - and it had already
+    // drifted, counting only `status = 'succeeded'` refunds while every SQL
+    // caller counted reservations too. An operator was shown a number the
+    // server was certain to refuse, told to reopen, and shown the same number
+    // again: a loop with no exit and a false explanation.
+    //
+    // `registration_available_cents` is now that one implementation, and it
+    // answers the honest question - is this money reserved or gone - rather
+    // than the proxy "is the row not failed". Both writers call it under the
+    // lock; this call is the same rule, read before the lock, so it stays a
+    // pre-check and the writers remain the guard.
+    const { data: availData, error: availErr } = await supabase
+      .rpc('registration_available_cents', {
+        p_registration_id: registrationId,
+        p_paid_cents: totalPaid,
+      });
+    if (availErr || typeof availData !== 'number') {
+      // FAIL CLOSED, for the same reason the credit read above does: not being
+      // able to compute what is left is not the same as everything being left,
+      // and this number gates the branch that hands money back.
+      console.error('[refund] ceiling read failed:', availErr);
+      return json({ error: 'lookup_failed' }, 500);
+    }
+    const eligible = availData;
+
+    // TWO DIFFERENT FACTS, REPORTED SEPARATELY, because collapsing them makes
+    // the screen lie in a way that repairs itself and so never gets reported.
+    //
+    // `total_refunded_cents` stays SUCCEEDED-ONLY. It sits under the words
+    // "Already refunded", which mean the family has the money. Deriving it from
+    // the ceiling instead would have folded in reservations: an operator whose
+    // colleague's refund died mid-flight would read "Already refunded $240" two
+    // minutes later, and "Already refunded $0" thirty minutes after that. A
+    // money figure that reverts on its own is worse than no figure.
+    //
+    // `held_cents` is the rest of the gap - money reserved or unresolved, not
+    // yet known to have moved. It explains why `eligible` is lower than
+    // paid-minus-refunded without claiming the family was paid.
+    // `totalRefunded` above is this same sum and is reused rather than
+    // recomputed - a previous pass left two names for one value in the round
+    // whose whole point was removing a duplicated money figure.
+    const heldCents = Math.max(0, totalPaid - totalCredited - totalRefunded - eligible);
 
     // PREVIEW: return the numbers and refund nothing. The drawer used to
     // recompute this from installments/registrations itself, which meant the
@@ -639,11 +922,66 @@ serve(async (req: Request) => {
     // same fee shortfall as the server. Now there is ONE implementation and the
     // UI displays what the server will actually allow.
     if (preview) {
+      // IS THE CLASS ITSELF CANCELLED? This pre-selects refund-or-credit in the
+      // drawer, and NOTHING MORE. It is a correlate, not a proof: a family who
+      // withdrew before the class was pulled would look business_cancelled by
+      // this test, and the two answers have opposite defaults. So it is
+      // returned as the plain fact it is - "this class is cancelled" - and the
+      // operator states which kind of cancellation it was.
+      //
+      // BOTH SHAPES OF ENROLLMENT, because a registration is either a program or
+      // a camp session and checking only one of them makes this flag lie rather
+      // than merely miss. Production carries 11 cancelled camp sessions; for
+      // every one of them, reading `programs` alone returns false and the drawer
+      // would tell the operator "this class is still running" about a class it
+      // had itself cancelled. Both tables spell it 'cancelled'.
+      // NULL means "could not find out", and it is a THIRD answer, not a
+      // quiet false. A discarded error here would hand the drawer a confident
+      // "this class is still running" about a class it never managed to read -
+      // the same shape as the `.in()` failure, where a swallowed error read as
+      // "nobody was mailed". It matters more than usual because the sentence it
+      // drives is the operator's prompt for the one fact nothing else records:
+      // which side ended the enrollment. Unknown means the drawer asks instead
+      // of assuming.
+      let programCancelled: boolean | null = false;
+      if (reg.program_id) {
+        const { data: progRow, error: progErr } = await supabase
+          .from('programs')
+          .select('status')
+          .eq('id', reg.program_id)
+          .maybeSingle();
+        programCancelled = progErr
+          ? null
+          : (progRow as { status?: string } | null)?.status === 'cancelled';
+      } else if (reg.camp_session_id) {
+        const { data: campRow, error: campErr } = await supabase
+          .from('camp_sessions')
+          .select('status')
+          .eq('id', reg.camp_session_id)
+          .maybeSingle();
+        programCancelled = campErr
+          ? null
+          : (campRow as { status?: string } | null)?.status === 'cancelled';
+      }
       return json({
         preview: true,
         eligible_cents: eligible,
         total_paid_cents: totalPaid,
         total_refunded_cents: totalRefunded,
+        // Shown so the ceiling explains itself. An operator who sees "$240 paid,
+        // $0 refunded, $0 left" with no third number has been told a riddle.
+        total_credited_cents: totalCredited,
+        // Reserved or unresolved: counted against the ceiling, but NOT money we
+        // can say the family has.
+        held_cents: heldCents,
+        program_cancelled: programCancelled,
+        // WHETHER A CREDIT IS EVEN POSSIBLE ON THIS REGISTRATION. The credit
+        // path refuses when the real charge could not be read from Stripe,
+        // because it would otherwise record a debt against a number it guessed.
+        // Surfacing it here lets the drawer withhold the option and say why,
+        // instead of letting an operator fill the form in and meet a 503 at the
+        // one moment they think they are finished.
+        charge_readable: !ceilingReadFailed,
         // v4 section 2 / section 8: the drawer and the refund receipt both need
         // to say WHY our fee refund is the size it is. DB-only, so preview stays
         // a cheap call - the Stripe read that turns this into cents happens on
@@ -661,7 +999,214 @@ serve(async (req: Request) => {
         eligible_cents: eligible,
         total_paid_cents: totalPaid,
         total_refunded_cents: totalRefunded,
+        total_credited_cents: totalCredited,
+        held_cents: heldCents,
       }, 400);
+    }
+
+    // ── CREDIT INSTEAD OF REFUND: no money moves, so no Stripe call is made ──
+    //
+    // Placed here for the same reason the withdraw branch is placed where it
+    // is: AFTER authorization and AFTER the ceiling has been proved against the
+    // real charged total, and BEFORE the first line that touches Stripe. There
+    // is no path from here to a refund or an application fee.
+    //
+    // It sits LOWER than the withdraw branch on purpose. Withdrawing needs no
+    // money facts, so it can return before any of them are gathered; a credit
+    // does, because the amount it writes is a claim about money the family
+    // actually paid. The DB's registrations.amount_cents is the BASE price and
+    // understates what was charged whenever the family pays the enrops service
+    // fee, so crediting from it would quietly short every such family. The
+    // number used here is the same Stripe-derived `eligible` the refund path
+    // honours - one ceiling, one implementation, both paths.
+    //
+    // ORDER: the credit is written FIRST, then the charges are stopped and the
+    // registration cancelled. That is the opposite of the withdraw branch and
+    // it is deliberate, because the two fail in opposite directions:
+    //   - credit written, withdrawal fails -> the family has their money
+    //     recorded and is still on the roster. Visible on the next look, and
+    //     pressing the button again is safe because the write is idempotent.
+    //   - withdrawal done, credit write fails -> the family has been removed
+    //     from the class and NOTHING anywhere records that they are owed $240.
+    // The second is unrecoverable without someone remembering it happened, so
+    // the money is recorded before the seat is freed.
+    if (issueCredit) {
+      const nowIso = new Date().toISOString();
+
+      // parent_id is what the credit is keyed on, with the organisation. A
+      // registration without one cannot produce a credit anybody could ever
+      // spend, so this fails rather than writing an orphan row.
+      if (!reg.parent_id) {
+        return json({ error: 'registration_has_no_parent' }, 400);
+      }
+
+      // WE MUST HAVE READ WHAT THEY ACTUALLY PAID. A credit is a debt this
+      // business now owes a family, and the only thing that justifies its size
+      // is the real charge. When the charge could not be read the ceiling
+      // silently fell back to the DB's base amount, which is not the same
+      // number whenever the family paid the enrops service fee - and unlike a
+      // refund, nothing downstream will catch it, because this path never
+      // contacts Stripe again. Refusing costs the operator a retry; guessing
+      // writes a wrong debt that nobody can detect afterwards.
+      if (ceilingReadFailed) {
+        return json({ error: 'charge_unreadable_credit_refused' }, 503);
+      }
+
+      // THE WRITE GOES THROUGH issue_family_credit, NOT A BARE INSERT.
+      //
+      // The TypeScript ceiling above is a pre-check, not a guard: it is read,
+      // then one to three seconds of Stripe calls happen, and only then would a
+      // bare insert land. Two drawer mounts - two tabs, or two admins - mint
+      // DIFFERENT idempotency keys, so the unique index does not hold them
+      // against each other. Both read $240 available, both pass the check, both
+      // insert, and a family who paid $240 is owed $480. A refund cannot fail
+      // this way because Stripe refuses to over-refund the charge; the credit
+      // path has no such second opinion, so the real guard has to live in the
+      // write itself.
+      //
+      // The function takes an advisory lock on the REGISTRATION, answers
+      // idempotency, re-reads what has already been credited, re-checks the
+      // ceiling and inserts - all in one transaction. Same lock shape the
+      // waitlist has used since 20260819d.
+      //
+      // IT IS GIVEN GROSS PAID, AND NOTHING ELSE PRE-SUBTRACTED. Both refunds
+      // and credits are re-read inside the lock, because the copies this
+      // function holds were read BEFORE its one-to-three-second Stripe
+      // round-trip: a refund reserved in that window was invisible to the old
+      // `p_paid_minus_refunded_cents`, so a simultaneous refund and credit
+      // could each take the same $240. Only `paid` still comes from here,
+      // because only this side can read the real charged total from Stripe.
+      const { data: creditRpc, error: creditErr } = await supabase
+        .rpc('issue_family_credit', {
+          p_organization_id: reg.organization_id,
+          p_parent_id: reg.parent_id,
+          p_registration_id: registrationId,
+          p_amount_cents: amountCents,
+          p_reason: creditReason,
+          // expires_at is never set. Section 6: "No expiration on any credit."
+          p_note: reason,
+          p_idempotency_key: idempotencyKey,
+          p_paid_cents: totalPaid,
+        });
+
+      // A set-returning function comes back as an array of one row.
+      const creditOut = (Array.isArray(creditRpc) ? creditRpc[0] : creditRpc) as
+        { credit_id?: string; amount_cents?: number; already_existed?: boolean; reason?: string } | null;
+      const creditId: string | null = creditOut?.credit_id ?? null;
+      const creditAlreadyExisted = creditOut?.already_existed === true;
+      // What the LEDGER holds, which on a retry is the original amount and not
+      // the one just asked for.
+      const creditedCents = creditOut?.amount_cents ?? amountCents;
+      // Likewise the stored reason. On a retry it can differ from what this
+      // request sent, and `reason` is the only record of which side ended the
+      // enrollment - so the response must report the ledger, not the request.
+      const creditedReason = creditOut?.reason ?? creditReason;
+
+      if (creditErr || !creditId) {
+        console.error('[credit] issuing the credit failed:', creditErr);
+        // FC001 is the function's own class - deliberately not a P0xxx, which
+        // belongs to plpgsql and would also catch every bare RAISE in the call
+        // chain. It means another caller took the ceiling first, between this
+        // request's read and its write, which is precisely the race the lock
+        // exists to turn into a clean refusal.
+        if (creditErr?.code === 'FC001') {
+          // RE-READ, rather than echoing `eligible`. That variable was computed
+          // before the RPC, and FC001 means precisely that it is out of date -
+          // so returning it would contradict the refusal in the same response
+          // ("there isn't enough left" alongside a number saying there is).
+          // A failed re-read returns null: not knowing is its own answer and is
+          // better than a figure we cannot stand behind.
+          const { data: freshAvail } = await supabase
+            .rpc('registration_available_cents', {
+              p_registration_id: registrationId,
+              p_paid_cents: totalPaid,
+            });
+          return json({
+            error: 'amount_exceeds_eligible_now',
+            eligible_cents: typeof freshAvail === 'number' ? freshAvail : null,
+          }, 409);
+        }
+        // FC002/FC003 mean the KEY is unusable, not that the money is wrong, and
+        // the two need different words: one is a key that belonged to a credit
+        // somebody withdrew, the other a key already spent on a different
+        // registration. Both are unreachable from the drawer, which mints a
+        // fresh key per opening - they exist so the next caller of this function
+        // gets a sentence instead of a constraint name.
+        if (creditErr?.code === 'FC002' || creditErr?.code === 'FC003') {
+          return json({ error: 'idempotency_key_unusable', detail: creditErr.code }, 409);
+        }
+        // NOTHING has happened yet - the family is still enrolled and still
+        // scheduled to be charged. Say that, rather than implying a half-done
+        // state the operator would go looking for.
+        return json({ error: 'credit_write_failed' }, 500);
+      }
+
+      const { pausedRows, pauseError, cancelError } =
+        await stopChargesAndCancel(supabase, registrationId, nowIso);
+
+      if (pauseError) {
+        console.error('[credit] pausing pending installments failed:', pauseError);
+        // The CREDIT EXISTS by this point and the helper refused to cancel a
+        // registration whose charges it could not stop. Both halves of that
+        // have to be said: the money is recorded, and the family is still
+        // enrolled and still due to be charged.
+        return json({
+          error: 'credit_issued_pause_failed',
+          credit_id: creditId,
+          credited_cents: creditedCents,
+        }, 500);
+      }
+      if (cancelError) {
+        console.error('[credit] registration cancel failed:', cancelError);
+        return json({
+          error: 'credit_issued_cancel_failed_charges_stopped',
+          credit_id: creditId,
+          credited_cents: creditedCents,
+          pending_charges_stopped: pausedRows.length,
+        }, 500);
+      }
+
+      await logEnrollmentEvent(supabase, {
+        organizationId: reg.organization_id,
+        parentId: reg.parent_id,
+        studentId: reg.student_id,
+        programId: reg.program_id,
+        campSessionId: reg.camp_session_id,
+        registrationId: registrationId,
+        actionType: ENROLLMENT_ACTIONS.CANCELLED,
+        // Distinct from both 'refund' and 'withdraw_no_refund': no money went
+        // back to the family, but money IS owed to them, and a churn read that
+        // cannot tell those apart is reading the wrong thing. The operator's
+        // stated cancellation kind is carried because it is the one fact here
+        // that no other row records in this shape.
+        metadata: {
+          via: 'credit_no_refund',
+          reason,
+          credit_reason: creditedReason,
+          credited_cents: creditedCents,
+          credit_id: creditId,
+        },
+        // Scoped by `via`, like the withdraw branch: a later refund-and-cancel
+        // on the same registration must not dedupe itself away against this.
+        dedupeKey: `cancelled:${registrationId}:credit_no_refund`,
+      });
+
+      return json({
+        credited: true,
+        credit_id: creditId,
+        // What the ledger holds. On a retry answered by the function's own
+        // idempotency branch this is the ORIGINAL amount, not the one this
+        // request asked for - and the drawer repeats this number to the
+        // operator, who repeats it to the family.
+        credited_cents: creditedCents,
+        credit_reason: creditedReason,
+        // So a retry can say "already done" rather than claiming a second
+        // credit was just issued.
+        already_existed: creditAlreadyExisted,
+        refunded_cents: 0,
+        pending_charges_stopped: pausedRows?.length ?? 0,
+        pending_cents_stopped: (pausedRows ?? []).reduce((s, r) => s + (r.amount_cents || 0), 0),
+      });
     }
 
     // ── walk PIs newest-first, refunding from each ────────────────────────
@@ -700,6 +1245,16 @@ serve(async (req: Request) => {
     // refunded. We stop refunding further slots, but the bookkeeping below still
     // has to record what did move.
     let feeLookupAborted = false;
+    // Set when a slot could not be RESERVED after an earlier slot had already
+    // been refunded - the ceiling moved under us mid-walk, or the reserve write
+    // failed. Same contract as feeLookupAborted: stop reserving further slots,
+    // but let the bookkeeping below record everything that did move.
+    let reserveAbortedCode: string | null = null;
+    // Set when Stripe refused or never answered on a slot AFTER an earlier slot
+    // had already been refunded. Same contract again: stop, but let the
+    // bookkeeping below record what did move. `unknown` carries whether we know
+    // the money did not go - the operator's next step differs entirely.
+    let stripeFailedAfterMoneyMoved: { code: string; message: string; unknown: boolean } | null = null;
     // Set when the family was refunded but the withdrawal write failed. The
     // instalment pause and the receipt still have to run - a refunded family
     // whose future instalments keep charging is the worst outcome here.
@@ -713,29 +1268,58 @@ serve(async (req: Request) => {
       if (availableOnPi <= 0) continue;
       const refundThisPi = Math.min(remaining, availableOnPi);
 
-      // Insert pending row first so we have an ID for idempotency
-      const { data: rowData, error: insErr } = await supabase
-        .from('refunds')
-        .insert({
-          registration_id: registrationId,
-          organization_id: reg.organization_id,
-          stripe_payment_intent_id: slot.pi,
-          amount_cents: refundThisPi,
-          reason,
-          refunded_by_user_id: callerAuthId,
-          cancelled_registration: cancelRegistration,
-          status: 'pending',
-        })
-        .select('id')
-        .single();
-      if (insErr || !rowData) {
-        console.error('[refund] failed to insert refunds row:', insErr);
-        return json({
-          error: 'refund_row_insert_failed',
-          partial: refundsCreated.length > 0 ? refundsCreated : undefined,
-        }, 500);
+      // RESERVE THE SLOT UNDER THE SHARED LOCK, then call Stripe.
+      //
+      // This was a bare INSERT. The row itself is unchanged - same columns,
+      // same 'pending' status, still written BEFORE the Stripe call so there is
+      // an id to be idempotent against. What is added is that the write now
+      // happens inside `pg_advisory_xact_lock('family_credit:<registration>')`,
+      // the same key a credit takes, and re-checks the ceiling under it.
+      //
+      // Without that, the two paths could not see each other: `eligible` up
+      // above was computed before this function's one-to-three-second Stripe
+      // round-trip, so a credit issued in that window was invisible here and a
+      // refund reserved in that window was invisible to the credit. Each would
+      // pass its own check and the family would end up with the cash AND a
+      // credit for the same dollars. Now whichever commits second is refused.
+      const { data: reservedId, error: insErr } = await supabase
+        .rpc('reserve_refund_slot', {
+          p_registration_id: registrationId,
+          p_organization_id: reg.organization_id,
+          p_stripe_payment_intent_id: slot.pi,
+          p_amount_cents: refundThisPi,
+          p_reason: reason,
+          p_refunded_by_user_id: callerAuthId,
+          p_cancelled_registration: cancelRegistration,
+          p_paid_cents: totalPaid,
+        });
+      if (insErr || !reservedId) {
+        console.error('[refund] reserving the refund slot failed:', insErr);
+        // ONCE MONEY HAS MOVED, WE DO NOT RETURN FROM INSIDE THE LOOP.
+        //
+        // Everything that finishes a refund - advancing payment_status,
+        // pausing the instalments, cancelling the registration, the receipt,
+        // the enrolment event - lives BELOW this loop. Returning here with
+        // slot 1 already refunded in Stripe skips all of it, which is the
+        // 2026-09-08 shape: a family refunded on their card while the roster
+        // still shows them enrolled and their remaining instalments keep
+        // charging. The fee-lookup handler forty lines down already solved
+        // this; FC004 is far likelier to fire than that one, because it is the
+        // designed outcome of the race the lock exists to catch.
+        //
+        // So: refuse outright only while nothing has moved. Otherwise record
+        // why we stopped, break, and let the bookkeeping below run over the
+        // slots that did succeed.
+        const stoppedCode = insErr?.code === 'FC004'
+          ? 'amount_exceeds_eligible_now'
+          : 'refund_row_insert_failed';
+        if (refundsCreated.length === 0) {
+          return json({ error: stoppedCode }, insErr?.code === 'FC004' ? 409 : 500);
+        }
+        reserveAbortedCode = stoppedCode;
+        break;
       }
-      const refundRowId = (rowData as { id: string }).id;
+      const refundRowId = reservedId as string;
 
       // ── read the REAL numbers off the charge, never recompute them ───────
       // A provider's rates can change between the charge and the refund; the
@@ -936,38 +1520,123 @@ serve(async (req: Request) => {
         });
         remaining -= refundThisPi;
       } catch (err) {
-        const stripeErr = err as { message?: string; raw?: { message?: string; code?: string } };
+        const stripeErr = err as {
+          message?: string; type?: string;
+          raw?: { message?: string; code?: string; type?: string };
+        };
         const errMsg = stripeErr.raw?.message ?? stripeErr.message ?? 'unknown';
         const errCode = stripeErr.raw?.code ?? 'unknown';
+        // Stripe's error CLASS, which is what separates "the card was declined"
+        // from "we never heard back". Read from both shapes because the Deno
+        // client surfaces it on the error and on `raw` depending on the failure.
+        const errType = stripeErr.type ?? stripeErr.raw?.type ?? '';
         console.error('[refund] stripe.refunds.create failed:', errCode, errMsg);
-        await supabase
+
+        // MARKING THIS 'failed' RELEASES THE MONEY, so only do it when Stripe
+        // actually told us the refund did not happen.
+        //
+        // A connection error or a timeout is NOT that answer - Stripe may well
+        // have processed the refund and lost the reply. Marking such a row
+        // 'failed' hands the ceiling back, and the operator can then give the
+        // same dollars away a second time as a credit. That is a real
+        // double-spend, and unlike a second refund (which Stripe itself would
+        // refuse on an already-refunded charge) the credit path never contacts
+        // Stripe, so nothing catches it.
+        //
+        // Left 'pending', the row keeps holding its share of the ceiling, and
+        // the webhook promotes it to 'succeeded' when Stripe tells us the
+        // refund was real. If it never happened, no webhook arrives, the row
+        // keeps no stripe_refund_id, and the 30-minute reservation window in
+        // `registration_available_cents` releases it on its own.
+        // THE TEST IS INVERTED ON PURPOSE: definitive is the allowlist, and
+        // everything else is ambiguous. Listing the ambiguous cases instead
+        // failed OPEN - anything the list missed got marked 'failed', which
+        // RELEASES the ceiling, which is the double-spend. Deno's own fetch
+        // wording ("connection closed before message completed") matched none
+        // of the patterns I had written. These five classes are the ones where
+        // Stripe has told us the refund did not happen; if it is not one of
+        // them, we do not know, and not knowing must hold the money.
+        const DEFINITIVE_STRIPE_FAILURES = [
+          'StripeCardError',
+          'StripeInvalidRequestError',
+          'StripeAuthenticationError',
+          'StripePermissionError',
+          'StripeRateLimitError',
+        ];
+        const ambiguous = !DEFINITIVE_STRIPE_FAILURES.includes(errType);
+        const { error: markErr } = await supabase
           .from('refunds')
-          .update({ status: 'failed', failure_reason: `${errCode}: ${errMsg}` })
+          .update(
+            ambiguous
+              ? { failure_reason: `UNRESOLVED ${errCode}: ${errMsg} - left pending; Stripe may have processed this` }
+              : { status: 'failed', failure_reason: `${errCode}: ${errMsg}` },
+          )
           .eq('id', refundRowId);
-        return json({
-          error: 'stripe_refund_failed',
-          stripe_code: errCode,
-          stripe_message: errMsg,
-          partial: refundsCreated.length > 0 ? refundsCreated : undefined,
-        }, 502);
+        // The old code discarded this error. A failed write here decides
+        // whether the money is released or held, so it does not get to be
+        // silent - and on the definitive branch a miss leaves the row pending,
+        // which is the safe direction but still needs someone to know.
+        if (markErr) console.error('[refund] could not record the Stripe failure on the refunds row:', markErr);
+
+        // SAME RULE AS THE TWO SIBLINGS ABOVE, which I stated and then failed to
+        // apply to this one: once money has moved we do not return from inside
+        // the loop. Returning here with an earlier slot already refunded skips
+        // payment_status, the instalment pause, the cancel, the receipt and the
+        // enrolment event - a family refunded on their card, still on the
+        // roster, still being charged. That is the 2026-09-08 signature, and
+        // the drawer would tell them "nothing was charged back" on top of it.
+        if (refundsCreated.length === 0) {
+          return json({
+            error: 'stripe_refund_failed',
+            stripe_code: errCode,
+            stripe_message: errMsg,
+            // The drawer must not promise "nothing was charged back" when we do
+            // not actually know that.
+            outcome_unknown: ambiguous || undefined,
+          }, 502);
+        }
+        stripeFailedAfterMoneyMoved = { code: errCode, message: errMsg, unknown: ambiguous };
+        break;
       }
     }
 
     if (remaining > 0) {
       // Shouldn't happen — we pre-checked eligibility. But guard anyway.
-      console.error(`[refund] inconsistency: ${remaining} cents remaining after walking all PIs`);
+      // NOT an inconsistency when a slot deliberately stopped the walk - that is
+      // now a designed outcome, and FC004 is the expected result of the race the
+      // lock exists to catch, so logging it as a contradiction would cry wolf on
+      // the normal partial path.
+      if (reserveAbortedCode || stripeFailedAfterMoneyMoved || feeLookupAborted) {
+        console.warn(`[refund] stopped partway with ${remaining} cents unrefunded (${reserveAbortedCode ?? (stripeFailedAfterMoneyMoved ? 'stripe_failed' : 'fee_lookup_aborted')})`);
+      } else {
+        console.error(`[refund] inconsistency: ${remaining} cents remaining after walking all PIs`);
+      }
     }
 
     // ── advance registrations.payment_status ──────────────────────────────
-    // After this refund pass, compute the new total refunded against this
-    // registration. If we've now refunded the entire eligible amount, the
-    // registration is 'refunded'. Otherwise 'partial'. (Eligible = totalPaid
-    // pre-this-call; we just consumed (amountCents - remaining) of it.)
-    const newTotalRefunded = totalRefunded + (amountCents - remaining);
-    const newPaymentStatus =
-      newTotalRefunded >= totalPaid ? 'refunded' :
-      newTotalRefunded > 0          ? 'partial'  :
-      reg.payment_status;
+    // ONE RULE, IN THE DATABASE, because this was written twice - here and in
+    // stripe-webhook - and both copies spelled it `refunded >= paid` with no
+    // credits subtracted. A registration settled by a MIX of refund and credit
+    // could therefore never reach 'refunded': $240 paid, $120 credited, $120
+    // refunded left nothing refundable and still read 'partial', permanently,
+    // implying more was still to come back.
+    //
+    // Read AFTER the refunds rows were written, so the function sees this
+    // call's money without being handed a total to trust. The stale
+    // `totalRefunded + (amountCents - remaining)` arithmetic it replaces was
+    // built on a figure read before the Stripe round-trip.
+    const { data: psData, error: psReadErr } = await supabase
+      .rpc('registration_payment_status_after_refund', {
+        p_registration_id: registrationId,
+        p_paid_cents: totalPaid,
+      });
+    if (psReadErr) {
+      // Non-fatal and loud: the money has moved and the rest of the bookkeeping
+      // must still run. A silent miss here is how a refunded family keeps
+      // reading as paid.
+      console.error('[refund] payment_status rule read failed:', psReadErr);
+    }
+    const newPaymentStatus = (psData as string | null) ?? reg.payment_status;
     if (newPaymentStatus && newPaymentStatus !== reg.payment_status) {
       const { error: psErr } = await supabase
         .from('registrations')
@@ -1023,9 +1692,12 @@ serve(async (req: Request) => {
       actionType: ENROLLMENT_ACTIONS.REFUNDED,
       metadata: {
         amount_refunded_cents: refundedThisCall,
-        total_refunded_cents: newTotalRefunded,
+        total_refunded_cents: totalRefunded + refundedThisCall,
         total_paid_cents: totalPaid,
-        partial: newTotalRefunded < totalPaid,
+        // The STATUS the rule arrived at, rather than this event re-deriving
+        // "is it partial" from its own arithmetic - a third spelling of a rule
+        // that already had two too many.
+        partial: newPaymentStatus === 'partial',
         withdrew: cancelRegistration,
       },
       dedupeKey: `refunded:${refundsCreated.map((r) => r.refund_row_id).join('_')}`,
@@ -1243,7 +1915,13 @@ serve(async (req: Request) => {
     return json({
       success: true,
       refunds: refundsCreated,
-      total_refunded_cents: refundedThisCall,
+      // TWO FIGURES, EACH NAMED FOR WHAT IT IS. `total_refunded_cents` used to
+      // carry this call's amount here while carrying the registration's
+      // lifetime total on the preview - one field, two meanings, and the
+      // partial-refund copy read it as a lifetime figure and told the operator
+      // a number that was short by every earlier refund.
+      refunded_this_call_cents: refundedThisCall,
+      total_refunded_cents: totalRefunded + refundedThisCall,
       cancelled: cancelRegistration,
       // Surfaced so the drawer can say "refunded, but we could not email them"
       // instead of implying the family was told.
@@ -1278,6 +1956,21 @@ serve(async (req: Request) => {
       // same way rather than as failures of the refund itself.
       cancel_failed: cancelFailedReason ?? undefined,
       fee_lookup_aborted: feeLookupAborted || undefined,
+      // The refund stopped partway because a later slot could not be reserved.
+      // Reported on a SUCCESSFUL response on purpose: money did move, and the
+      // withdrawal and instalment pause did run, so calling the whole thing a
+      // failure would send the operator back to press Refund on a charge that
+      // has already been partly returned.
+      reserve_aborted: reserveAbortedCode ?? undefined,
+      // Stripe refused, or never answered, on a later slot. Reported on a
+      // successful response for the same reason as reserve_aborted: money did
+      // move and the seat was handled, so calling the whole call a failure
+      // sends the operator back to refund a charge that is already part-done.
+      // Flat, not nested: the parity ratchet reads top-level keys out of this
+      // literal, and a nested object hides its contents from the one guard that
+      // exists to notice new warnings.
+      stripe_aborted: stripeFailedAfterMoneyMoved?.message ?? undefined,
+      stripe_aborted_unknown: stripeFailedAfterMoneyMoved?.unknown || undefined,
     });
   } catch (err) {
     console.error('[refund] fatal:', err);

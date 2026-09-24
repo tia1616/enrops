@@ -3,6 +3,7 @@ import { Link, useNavigate, useOutletContext } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { supportEmailOf } from '../../lib/supportContact.js';
+import { formatMoney } from '../../lib/pricing.js';
 import { formatTermLabel } from '../../lib/terms.js';
 import { getUserRoles } from '../../lib/useUserRoles.js';
 import { renderWaiverText } from '../../lib/waiverText.js';
@@ -172,6 +173,13 @@ export default function Dashboard() {
   const [savingPrefs, setSavingPrefs] = useState(false);
   const [prefsSaved, setPrefsSaved] = useState(false);
   const [weeklyClasses, setWeeklyClasses] = useState([]); // org's recurring class schedule (outside-registration tenants), safe public view
+  // Credit this family holds WITH THIS PROVIDER. Money layer section 6 requires
+  // credits to show on the family's own account; until this, the ledger was
+  // written by the operator and readable by nobody, so a family could be owed
+  // money and have no way on earth to find out. Every comparable platform makes
+  // the account the place you see a balance, so this is the surface that matters
+  // more than any notification.
+  const [creditCents, setCreditCents] = useState(0);
 
   const toggleCard = useCallback((id) => {
     setExpandedCards((prev) => {
@@ -243,6 +251,28 @@ export default function Dashboard() {
         .select('id, title, day_of_week, start_time, end_time, location_text')
         .eq('organization_id', org.id);
       setWeeklyClasses(wc || []);
+
+      // CREDIT WITH THIS PROVIDER, and the org filter is the whole point rather
+      // than a habit. Ten parents on production have children at TWO different
+      // organisations, and credits are keyed on (organization_id, parent_id)
+      // precisely so one provider's credit can never be spent at another's.
+      // Showing an unfiltered balance here would undo that in the one place the
+      // family actually looks. RLS already limits the rows to this parent
+      // (`parents_read_own_credits`); this narrows them to this provider.
+      //
+      // 'active' only: 'spent' is already used, 'refunded' was paid back in
+      // cash, and 'void' was issued in error. A failed read leaves the balance
+      // at 0 and the card simply does not render - a family being shown a
+      // wrong balance is worse than being shown none, and the operator's own
+      // money screen is the authority either way.
+      const { data: creditRows, error: creditErr } = await supabase
+        .from('family_credits')
+        .select('amount_cents')
+        .eq('organization_id', org.id)
+        .eq('parent_id', p.id)
+        .eq('status', 'active');
+      if (creditErr) console.warn('[dashboard] credit balance unavailable:', creditErr.message);
+      setCreditCents((creditRows || []).reduce((s, c) => s + (c.amount_cents || 0), 0));
 
       // 2a. Afterschool registrations
       const { data: asRegs } = await supabase
@@ -613,6 +643,40 @@ export default function Dashboard() {
           Hi {parent?.first_name || 'there'}!
         </h1>
       </div>
+
+      {/* CREDIT BALANCE. Hidden at zero, like every other conditional card here:
+          a family who has never been credited should not be taught a concept
+          they will never meet.
+
+          THE SECOND SENTENCE IS TODAY'S TRUTH AND HAS A SHELF LIFE. Credits
+          cannot yet be applied at checkout, so promising that it "comes off
+          your next registration" would be a lie the product cannot keep. It
+          says to get in touch instead. When the checkout path lands, this line
+          changes to the automatic behaviour and the support nudge goes away -
+          it is deliberately the only sentence that needs revisiting.
+
+          Cash-out is NOT offered here even though section 6 grants it, because
+          the operator currently has no way to honour it: issuing a credit
+          consumes the refundable ceiling, so the refund drawer offers them $0
+          until the credit is voided, and there is no void surface yet. A card
+          that invited a request nobody can service would be worse than silence. */}
+      {creditCents > 0 && (
+        <div className="mb-4 rounded-2xl border border-j2s-purple/15 bg-white p-5 shadow-card">
+          <p className="text-xs font-bold uppercase tracking-widest text-j2s-purple">
+            Your credit with {org.name}
+          </p>
+          {/* formatMoney takes CENTS and divides internally - passing dollars
+              here would have shown $2.94 for a $293.55 credit. */}
+          <p className="mt-1 font-titan text-2xl text-j2s-ink">{formatMoney(creditCents)}</p>
+          <p className="mt-2 text-sm text-j2s-ink/70">
+            This never expires. Get in touch at{' '}
+            <a href={`mailto:${supportEmail}`} className="font-semibold text-j2s-purple underline">
+              {supportEmail}
+            </a>{' '}
+            and we&rsquo;ll put it towards your next class.
+          </p>
+        </div>
+      )}
 
       {/* The ONE truth for what a family can register for is the org's
           active_registration_term — the same term the catalog serves. This used

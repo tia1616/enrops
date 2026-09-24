@@ -1816,6 +1816,11 @@ function ActivityTab({ org }) {
   const expected = Number(summary.expected_soon_cents || 0);
   const paidFam = Number(summary.paid_count || 0);
   const external = Number(summary.external_count || 0);
+  // Money layer section 6: "A credit is money owed, not revenue. It shows on the
+  // money dashboard and is not zeroed." Deliberately NOT subtracted from
+  // `collected` - the business really did take that cash and still holds it;
+  // what this adds is the obligation attached to it.
+  const creditOwed = Number(summary.credit_outstanding_cents || 0);
 
   return (
     <Card>
@@ -1831,6 +1836,18 @@ function ActivityTab({ org }) {
       <div style={{ display: "flex", gap: 22, flexWrap: "wrap", margin: "12px 0 16px" }}>
         <RAStat label="Refunded" value={fmtCents(refunded)} />
         {expected > 0 && <RAStat label="Expected soon" value={fmtCents(expected)} note="installments due" />}
+        {/* Hidden at zero, like "Expected soon" - an operator who has never
+            issued a credit does not need a permanent $0.00 explaining a feature
+            they have not used.
+
+            THE NOTE IS NOT DECORATION. Every other figure in this band is scoped
+            to the period selector; this one is a running balance and ignores it,
+            because a credit issued last term is still owed today and must not
+            vanish when someone switches to "last 30 days". Saying "all time"
+            is what stops the number reading as a bug when it does not move. */}
+        {creditOwed > 0 && (
+          <RAStat label="Credit owed" value={fmtCents(creditOwed)} note="to families, all time" />
+        )}
         <RAStat label="Paid families" value={String(paidFam)} />
       </div>
 
@@ -2180,6 +2197,13 @@ function RefundsTab({ org }) {
                     No enrops service fee to return on this one
                   </span>
                 )}
+                {/* There is deliberately no 'not_attempted' branch. An earlier
+                    pass added one, on the assumption that a refund whose
+                    request died before returning the fee had to be flagged for
+                    a human. It does not: the webhook now resumes that fee
+                    return itself, so the row ends 'returned', 'nothing_owed' or
+                    'failed' like any other. A fourth state would only ever have
+                    described a gap we have since closed. */}
                 {r.status === "succeeded" && r.fee_return_outcome !== "failed" && r.platform_fee_refunded_cents > 0 && (
                   <span style={{ display: "block", color: MUTED, fontSize: 11.5, marginTop: 2 }}>
                     {fmtCents(r.platform_fee_refunded_cents)} of the enrops service fee returned to you

@@ -445,7 +445,36 @@ function CampRow({ camp, onUpload, onEmail, orgId, onRosterChanged, canManage })
 // always travel together: prod carries 5 rows with the status and no timestamp,
 // which is exactly why the query's `.is("cancelled_at", null)` filter alone does
 // not catch them.
+//
+// IT IS ALSO THE CLIENT-SIDE SPELLING OF A SERVER RULE, since the class counts
+// below use it to decide whether to OFFER "Message families":
+// `program_message_recipients` selects its cancelled audience with exactly
+// `r.cancelled_at is not null or r.status = 'cancelled'`. This decides whether
+// the button appears; that function decides who actually receives the message.
+// Two spellings of one audience is how the button comes back while the composer
+// still reports nobody to send to.
+//
+// AND IT IS NOT THE NEGATION OF isOnRoster(), which asks only "paid, or
+// confirmed, or ACH processing" and knows nothing about cancellation - so a
+// cancelled registration that was paid answers TRUE to both. Wherever the two
+// are used together, test this one FIRST.
 const isCancelledReg = (r) => !!r?.cancelled_at || r?.status === "cancelled";
+
+// IS THERE ANYBODY TO MESSAGE - which is NOT the same question as "is anybody
+// enrolled", and used to be answered as though it were.
+//
+// Every gate below asked `enrolled > 0`, so the last family to leave a class
+// took the "Message families" button and its tick box away with them. The
+// families were still reachable the whole time - the composer offers them
+// behind "Also include families who have left or been refunded" - but the only
+// door to that composer had just closed. Jessica hit it on 2026-09-23 by
+// crediting the only child in a class, and it was never specific to credits: a
+// refund or a plain withdrawal of the last family did the same thing, and had
+// been doing it on prod.
+//
+// One definition because five places ask it, and five spellings is how the row
+// renders a tick box the send then silently drops.
+const canMessageProgram = (p) => (p?.enrolled ?? 0) > 0 || (p?.departed ?? 0) > 0;
 
 // target = { column: 'camp_session_id' | 'program_id', id }. Shared by the
 // camp roster and the afterschool program roster so both edit through one
@@ -2492,19 +2521,32 @@ function AfterschoolRostersSection({ org, canEdit }) {
         if (pErr) throw pErr;
         const ids = (progRows ?? []).map((p) => p.id);
         const counts = new Map();
+        const departed = new Map();
         const lastEmailed = new Map();
         if (ids.length > 0) {
+          // THE CANCELLED ROWS ARE NOW FETCHED, not filtered out in the query,
+          // because the screen has to count them: a class whose last family has
+          // left still has somebody to message. Waitlist is no longer filtered
+          // here either - a waitlisted family who cancelled belongs to the
+          // departed audience, and the server's rule does not exempt them.
           const { data: regs } = await supabase
             .from("registrations")
-            .select("program_id, status, payment_status, ach_payment_state")
-            .in("program_id", ids)
-            .neq("status", WAITLIST_STATUS)
-            .is("cancelled_at", null);
+            .select("program_id, status, payment_status, ach_payment_state, cancelled_at")
+            .in("program_id", ids);
           for (const r of regs ?? []) {
-            // Was a fourth hand-written copy of "paid or confirmed". This count
-            // and the roster list it labels must move together or the screen
-            // contradicts itself again, so both now call the one function.
-            if (isOnRoster(r)) {
+            // DEPARTED IS TESTED FIRST, AND THAT ORDER IS LOAD-BEARING.
+            // isOnRoster() knows nothing about cancellation, so a cancelled
+            // registration that was paid answers true to it. The query used to
+            // remove those rows before they got here; now that they arrive,
+            // asking isOnRoster first would count every refunded and credited
+            // family as still enrolled - on prod, silently inflating the
+            // enrolled number on every class anyone has ever left.
+            if (isCancelledReg(r)) {
+              departed.set(r.program_id, (departed.get(r.program_id) ?? 0) + 1);
+            } else if (r.status !== WAITLIST_STATUS && isOnRoster(r)) {
+              // Was a fourth hand-written copy of "paid or confirmed". This count
+              // and the roster list it labels must move together or the screen
+              // contradicts itself again, so both now call the one function.
               counts.set(r.program_id, (counts.get(r.program_id) ?? 0) + 1);
             }
           }
@@ -2525,7 +2567,7 @@ function AfterschoolRostersSection({ org, canEdit }) {
           // scattered a school's classes through the list. Jessica, 2026-08-31:
           // "it's hard to find the school i'm looking for."
           setPrograms(sortRosterPrograms((progRows ?? [])
-            .map((p) => ({ ...p, enrolled: counts.get(p.id) ?? 0, last_emailed_at: lastEmailed.get(p.id) ?? null }))));
+            .map((p) => ({ ...p, enrolled: counts.get(p.id) ?? 0, departed: departed.get(p.id) ?? 0, last_emailed_at: lastEmailed.get(p.id) ?? null }))));
         }
       } catch (e) {
         if (!cancelled) { setError(e.message ?? "Couldn't load after-school programs."); setPrograms([]); }
@@ -2537,13 +2579,19 @@ function AfterschoolRostersSection({ org, canEdit }) {
   // Re-count one program's enrolled after an edit/import. Same isOnRoster rule
   // as the initial count above and the roster list itself - three readers, one
   // definition, so a re-count after an edit cannot disagree with the first load.
+  //
+  // IT RECOUNTS THE DEPARTED TOO, and that is the whole point of the change.
+  // This runs immediately after a refund, credit or withdrawal. Updating only
+  // `enrolled` would drop the last family to 0 and leave `departed` at whatever
+  // the page loaded with - so the one moment the operator needs the button to
+  // appear is the one moment it would not, and a reload would then "fix" it.
+  // Both numbers move together or the screen lies in exactly the live moment
+  // this feature exists for.
   function refreshProgramCount(programId, bump = 0) {
     supabase
       .from("registrations")
-      .select("status, payment_status, ach_payment_state")
+      .select("status, payment_status, ach_payment_state, cancelled_at")
       .eq("program_id", programId)
-      .neq("status", WAITLIST_STATUS)
-      .is("cancelled_at", null)
       .then(({ data, error }) => {
         // A FAILED READ IS NOT AN EMPTY CLASS. This destructured only `data`, so
         // any error - an RLS hiccup, a dropped connection - produced `n = 0` and
@@ -2559,7 +2607,12 @@ function AfterschoolRostersSection({ org, canEdit }) {
           }
           return;
         }
-        const n = (data ?? []).filter(isOnRoster).length;
+        // Departed first, for the same reason as the initial count: a cancelled
+        // row that was paid satisfies isOnRoster().
+        const gone = (data ?? []).filter(isCancelledReg).length;
+        const n = (data ?? []).filter(
+          (r) => !isCancelledReg(r) && r.status !== WAITLIST_STATUS && isOnRoster(r),
+        ).length;
         // THE NOTE DIES WITH THE FACT IT REPORTS. It says a ticked class no
         // longer has anyone on its roster; a re-upload that puts families back
         // makes that false while leaving the sentence on screen, next to a row
@@ -2574,7 +2627,7 @@ function AfterschoolRostersSection({ org, canEdit }) {
           pickNoteIds.current.delete(programId);
           if (pickNoteIds.current.size === 0) clearPickNote();
         }
-        setPrograms((ps) => (ps ?? []).map((p) => p.id === programId ? { ...p, enrolled: n, refresh_token: (p.refresh_token || 0) + bump } : p));
+        setPrograms((ps) => (ps ?? []).map((p) => p.id === programId ? { ...p, enrolled: n, departed: gone, refresh_token: (p.refresh_token || 0) + bump } : p));
       });
   }
 
@@ -2614,7 +2667,7 @@ function AfterschoolRostersSection({ org, canEdit }) {
   // whole point. Deriving during render makes the desync window not exist
   // rather than closing it quickly.
   const messageableIds = useMemo(
-    () => new Set((programs ?? []).filter((p) => p.enrolled > 0).map((p) => p.id)),
+    () => new Set((programs ?? []).filter(canMessageProgram).map((p) => p.id)),
     [programs],
   );
   const pickedLive = useMemo(
@@ -2641,7 +2694,7 @@ function AfterschoolRostersSection({ org, canEdit }) {
   // unreachable, so the case it existed to explain happened in silence.
   useEffect(() => {
     if (!programs || picked.size === 0) return;
-    const messageable = new Set(programs.filter((p) => p.enrolled > 0).map((p) => p.id));
+    const messageable = new Set(programs.filter(canMessageProgram).map((p) => p.id));
     const dropped = [...picked].filter((id) => !messageable.has(id));
     if (dropped.length === 0) return;
     // Functional, like every other writer of this Set, so a checkbox click in
@@ -2779,7 +2832,7 @@ function AfterschoolRostersSection({ org, canEdit }) {
           the note. Search for a school whose one class empties, and the tick
           vanished with no button, no Clear and no sentence: precisely the
           silence the note was added to break. */}
-      {canEdit && programs !== null && (pickedLive.size > 0 || pickNote || visible.some((p) => p.enrolled > 0)) && (
+      {canEdit && programs !== null && (pickedLive.size > 0 || pickNote || visible.some(canMessageProgram)) && (
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
           <button
             type="button"
@@ -2800,7 +2853,17 @@ function AfterschoolRostersSection({ org, canEdit }) {
                 // "this class is off, the other two are on" is one message -
                 // but it must be visible in the composer, not only on the row
                 // the operator ticked two searches ago.
-                .map((p) => ({ id: p.id, curriculum: p.curriculum, status: p.status }));
+                //
+                // THE COUNTS TRAVEL TOO. This list is narrowed to the fields
+                // the composer needs, and `defaultIncludeCancelled` below reads
+                // `enrolled`/`departed` off it - so leaving them out did not
+                // make the pre-tick wrong, it made it permanently FALSE, a
+                // guard that could never fire. Anything added to that condition
+                // has to be added here and in the per-row handler.
+                .map((p) => ({
+                  id: p.id, curriculum: p.curriculum, status: p.status,
+                  enrolled: p.enrolled, departed: p.departed,
+                }));
               // Belt and braces: unreachable while the button is disabled on an
               // empty selection AND the effect above drops ids the moment they
               // stop qualifying. Kept because what it prevents - a composer
@@ -2840,6 +2903,26 @@ function AfterschoolRostersSection({ org, canEdit }) {
               saying "your class starts at 3pm next week", and its paid families
               would be told about a class that is not happening. Pick it
               knowingly or not at all. */}
+          {/* A CLASS EVERYBODY HAS LEFT IS NOT SWEPT IN, for the same reason a
+              cancelled one is not: not because it cannot be messaged, but
+              because "all" must not quietly include a class whose audience this
+              batch will not carry.
+
+              I moved this to canMessageProgram and a review caught it. The tick
+              box is global to the SEND: `include_cancelled` is one flag for the
+              whole batch, so a departed-only class swept in beside eleven live
+              ones sits in a send where that flag is off - it resolves to zero
+              recipients, returns no_recipients, and the operator reads
+              "partial" across twelve classes while the withdrawn family THIS
+              WHOLE CHANGE EXISTS TO REACH is the one nobody told. Ticking it
+              made the omission silent; before, the absent box made it visible.
+
+              So Select all means "my live classes", and a departed-only class
+              is reached the two deliberate ways: its own row button, which
+              pre-ticks the audience correctly because the selection is then
+              all-empty, or by ticking it by hand. Its row already says "Nobody
+              is enrolled now. You can still message everyone who registered",
+              which is the reason it was skipped, sitting next to the box. */}
           {visible.some((p) => p.enrolled > 0 && p.status !== "cancelled" && !pickedLive.has(p.id)) && (
             <button type="button"
               onClick={() => {
@@ -2903,7 +2986,13 @@ function AfterschoolRostersSection({ org, canEdit }) {
               }}
               onMessage={() => {
                 setMessagingSource("row");
-                setMessagingPrograms([{ id: p.id, curriculum: p.curriculum, status: p.status }]);
+                // enrolled/departed travel with it - see the selection path
+                // above. This is the handler Jessica opened the composer from,
+                // and dropping them here is what made the pre-tick dead.
+                setMessagingPrograms([{
+                  id: p.id, curriculum: p.curriculum, status: p.status,
+                  enrolled: p.enrolled, departed: p.departed,
+                }]);
               }}
             />
           ))}
@@ -2916,6 +3005,18 @@ function AfterschoolRostersSection({ org, canEdit }) {
         <MessageFamiliesModal
           programs={messagingPrograms}
           orgId={org?.id}
+          // EVERY class in the selection, not some. On a class everybody has
+          // left this is the difference between a working composer and a dead
+          // one - the audience is empty until this is ticked. But the tick is
+          // GLOBAL to the batch, so defaulting it on for a mixed selection
+          // would quietly widen the audience of the live classes too and mail
+          // their refunded families a message meant for the ones still in the
+          // room. All-empty is the only case where it cannot do that.
+          defaultIncludeCancelled={
+            (messagingPrograms ?? []).length > 0 &&
+            (messagingPrograms ?? []).every((p) => (p?.enrolled ?? 0) === 0) &&
+            (messagingPrograms ?? []).some((p) => (p?.departed ?? 0) > 0)
+          }
           // A SELECTION THAT HAS BEEN USED IS SPENT. Closing used to clear only
           // the open message, so classes that had already been messaged stayed
           // ticked: tick three, send, then later tick two more meaning to reach
@@ -3030,7 +3131,7 @@ function ProgramRosterRow({ program: p, orgId, orgSlug, canEdit, expanded, onTog
             drops, which is the kind of quiet nothing this screen avoids
             elsewhere. Sits OUTSIDE the expand button, or clicking it would
             expand the row instead of ticking. */}
-        {canEdit && p.enrolled > 0 && (
+        {canEdit && canMessageProgram(p) && (
           <input
             type="checkbox"
             checked={!!picked}
@@ -3068,9 +3169,43 @@ function ProgramRosterRow({ program: p, orgId, orgSlug, canEdit, expanded, onTog
                 Class cancelled — open the roster to refund families.
               </span>
             )}
-            {isCancelled && !(p.enrolled > 0) && (
+            {/* "Nobody was enrolled" is a claim about the PAST read off a count
+                of the PRESENT, so a class everybody had been refunded out of
+                said nobody had ever been in it - next to a button offering to
+                write to those very people.
+
+                AND THE REPLACEMENT DOES NOT SAY "EVERYBODY HAS LEFT" EITHER.
+                `departed` is the server's cancelled audience, which on prod is
+                74/108 unfinished checkouts that were cancelled without ever
+                being paid or confirmed - people who submitted the form and
+                walked away, not families who attended and left. Nothing stored
+                separates the two: `cancelled_at` is set on both, there is no
+                cancellation-reason column, and 65 of them have no payment trail
+                at all. Rather than invent a classifier that would disagree with
+                the server's audience, the sentence says only what is true of
+                everyone in it - they registered, and nobody is in the class
+                now. The composer then lists them individually before anything
+                sends. */}
+            {isCancelled && !(p.enrolled > 0) && p.departed > 0 && (
+              <span style={{ fontSize: 11, color: MUTED, alignSelf: "center" }}>
+                Class cancelled — nobody is enrolled now. You can still message everyone who registered.
+              </span>
+            )}
+            {isCancelled && !(p.enrolled > 0) && !(p.departed > 0) && (
               <span style={{ fontSize: 11, color: MUTED, alignSelf: "center" }}>
                 Class cancelled — nobody was enrolled.
+              </span>
+            )}
+            {/* THE SAME ROW STATE ON A CLASS THAT IS STILL RUNNING. Every
+                sentence above is gated on isCancelled, but canMessageProgram is
+                not - so a running class whose families have all withdrawn
+                rendered "0 enrolled" beside a Message families button with
+                nothing saying who it would reach. That is the state Jessica hit
+                on 2026-09-23 by crediting the only child in an open class, so it
+                is the likeliest one, not an edge case. */}
+            {!isCancelled && !(p.enrolled > 0) && p.departed > 0 && (
+              <span style={{ fontSize: 11, color: MUTED, alignSelf: "center" }}>
+                Nobody is enrolled now. You can still message everyone who registered.
               </span>
             )}
             {canEdit && !isCancelled && (
@@ -3096,8 +3231,11 @@ function ProgramRosterRow({ program: p, orgId, orgSlug, canEdit, expanded, onTog
                 send already lives ("Email roster →", to the partner), so the two
                 read as a pair. Removed from the class page rather than added
                 here, so there is still one place to do this. */}
-            {canEdit && p.enrolled > 0 && (
-              <button type="button" onClick={onMessage} style={{ padding: "6px 12px", background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }} title="Write one message to this class's families. You see exactly who would get it before anything sends.">
+            {/* canMessageProgram, NOT enrolled > 0: a class everybody has left
+                still has families to reach, and this is the only door to the
+                composer that can reach them. */}
+            {canEdit && canMessageProgram(p) && (
+              <button type="button" onClick={onMessage} style={{ padding: "6px 12px", background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }} title={p.enrolled > 0 ? "Write one message to this class's families. You see exactly who would get it before anything sends." : "Nobody is enrolled now. You can still message everyone who registered - you see exactly who would get it before anything sends."}>
                 Message families →
               </button>
             )}
