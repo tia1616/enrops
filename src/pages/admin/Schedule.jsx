@@ -15,6 +15,8 @@ import { resolveBoardSendIntro } from "../../lib/boardSendCopy.js";
 import HatGuide from "../../components/HatGuide";
 import Chevron from "../../components/Chevron.jsx";
 import TabStrip from "../../components/TabStrip.jsx";
+import ModalShell from "../../components/ModalShell.jsx";
+import CampSessionForm from "./camps/CampSessionForm.jsx";
 import { useAdminNarrow } from "../../lib/adminViewport.js";
 import NotifyRemovalModal from "./NotifyRemovalModal";
 import AssignSubModal from "./AssignSubModal";
@@ -479,6 +481,10 @@ export default function Schedule() {
   const [reassigningChangeRequestId, setReassigningChangeRequestId] = useState(null);
   const [emailActivityOpen, setEmailActivityOpen] = useState(false);
   const [newCycleOpen, setNewCycleOpen] = useState(false);
+  // null = closed. { session: null } = adding a camp, { session: row } = editing
+  // one. Until 2026-09-24 there was no way to create a camp in the product at
+  // all - every camp_sessions row was written by hand in SQL.
+  const [campForm, setCampForm] = useState(null);
   // Open-survey dialog state. mode 'choose' shows the preview/test/send buttons +
   // optional deadline picker; mode 'result' shows the send outcome.
   const [surveyDialog, setSurveyDialog] = useState(null); // { mode: 'choose' | 'result', payload: any }
@@ -2332,6 +2338,7 @@ export default function Schedule() {
         onSwitchCycle={setSelectedCycleId}
         onSwitchToAfterschool={(t) => { setScheduleMode("afterschool"); setSelectedTerm(t); }}
         onOpenNewCycle={() => setNewCycleOpen(true)}
+        onAddCamp={() => setCampForm({ session: null })}
         phaseLabel={derivedPhase}
         counts={counts}
         missingSurveys={state.missingSurveys}
@@ -2488,6 +2495,21 @@ export default function Schedule() {
             setNewCycleOpen(false);
             if (c.cycle_type === "afterschool") { setScheduleMode("afterschool"); setSelectedTerm(c.name); }
             else { setSelectedCycleId(c.id); }
+          }}
+        />
+      )}
+      {campForm && (
+        <CampSessionForm
+          orgId={org?.id}
+          cycle={cycle}
+          session={campForm.session}
+          onClose={() => setCampForm(null)}
+          onSaved={async () => {
+            setCampForm(null);
+            // The board holds camps, assignments and enrolment counts together,
+            // so a new camp has to come back through the same load the rest of
+            // the screen was built from rather than being spliced into state.
+            await loadAll();
           }}
         />
       )}
@@ -2761,7 +2783,7 @@ function toggleSet(s, key) {
   return next;
 }
 
-function HeaderStrip({ cycle, allCycles, afterschoolTerms = [], onSwitchCycle, onSwitchToAfterschool, onOpenNewCycle, phaseLabel, counts, missingSurveys, lastOp, onUndo, busy, canApprove, canSend, canRematch, onApprove, onSurveyClick, onSendClick, onPreviewClick, onRerunAgent, nextReminders, onOpenEmailActivity, onArchiveCycle, onUnarchiveCycle }) {
+function HeaderStrip({ cycle, allCycles, afterschoolTerms = [], onSwitchCycle, onSwitchToAfterschool, onOpenNewCycle, onAddCamp, phaseLabel, counts, missingSurveys, lastOp, onUndo, busy, canApprove, canSend, canRematch, onApprove, onSurveyClick, onSendClick, onPreviewClick, onRerunAgent, nextReminders, onOpenEmailActivity, onArchiveCycle, onUnarchiveCycle }) {
   const otherCycles = (allCycles ?? []).filter((c) => c.id !== cycle.id);
   const hasOtherViews = otherCycles.length > 0 || (afterschoolTerms ?? []).length > 0;
   return (
@@ -2835,6 +2857,28 @@ function HeaderStrip({ cycle, allCycles, afterschoolTerms = [], onSwitchCycle, o
             padding: "3px 8px",
             borderRadius: 999,
           }}>{phaseLabel || cycle.status}</span>
+          {/* Archived cycles are history - adding a camp to one would put a
+              camp nobody is running onto a board nobody is working. */}
+          {onAddCamp && cycle.status !== "archived" && (
+            <button
+              type="button"
+              onClick={onAddCamp}
+              title="Add a camp to this cycle"
+              style={{
+                background: "transparent",
+                border: "none",
+                color: PURPLE,
+                fontSize: 13,
+                fontWeight: 500,
+                fontFamily: "inherit",
+                cursor: "pointer",
+                padding: "2px 4px",
+                textDecoration: "underline",
+              }}
+            >
+              + Add camp
+            </button>
+          )}
           {onOpenNewCycle && (
             <button
               type="button"
@@ -5801,52 +5845,9 @@ function DialogChoice({ title, subtitle, onClick, disabled, tone }) {
   );
 }
 
-function ModalShell({ title, children, onClose, maxWidth = 480 }) {
-  return (
-    <div
-      onClick={onClose}
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.32)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        zIndex: 60,
-        padding: 16,
-      }}
-    >
-      <div onClick={(e) => e.stopPropagation()} style={{
-        width: "100%",
-        maxWidth,
-        maxHeight: "90vh",
-        background: "#fff",
-        border: `1px solid ${RULE}`,
-        borderRadius: 12,
-        boxShadow: "0 10px 40px rgba(0,0,0,0.18)",
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-      }}>
-        <div style={{
-          padding: "14px 20px",
-          borderBottom: `1px solid ${RULE}`,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          flexShrink: 0,
-          background: "#fff",
-        }}>
-          <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: INK }}>{title}</h2>
-          <button type="button" onClick={onClose} aria-label="Close" style={{ background: "transparent", border: "none", fontSize: 22, color: MUTED, cursor: "pointer", lineHeight: 1, padding: 4 }}>×</button>
-        </div>
-        <div style={{ overflowY: "auto", flex: 1, minHeight: 0 }}>
-          {children}
-        </div>
-      </div>
-    </div>
-  );
-}
+// ModalShell moved to src/components/ModalShell.jsx on 2026-09-24 so the camp
+// form could use the same frame without this file and that one importing each
+// other. Imported at the top; the nine call sites below are unchanged.
 
 function CandidatePicker({
   session, currentAssignment, role = "lead", instructors, availabilityByInstructor,
