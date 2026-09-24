@@ -136,13 +136,13 @@ serve(async (req: Request) => {
         console.error('[respond-to-sub-offer] accept rpc failed:', acceptErr);
         return json({ error: 'update_failed', detail: acceptErr.message }, 500);
       }
-      // `losers` is typed in, not cast away. accept_sub_offer builds it on every
-      // winning accept for exactly one reason -- its own header says the list is
-      // returned "so the edge fn can email them 'already covered'" -- and the
-      // narrower cast that used to be here silently dropped it, so the people
-      // closed out of a class-day were never told by any channel. They kept a
-      // live "Can you sub on Tuesday?" email with a working-looking Accept
-      // button for a day that was gone.
+      // `losers` is typed in rather than cast away, and then deliberately not
+      // acted on -- see the note further down. accept_sub_offer builds the list
+      // on every winning accept and its own 20260723c header says it exists "so
+      // the edge fn can email them 'already covered'", which is a plan this
+      // product decided against: first-come platforms do not email the people
+      // who missed out. Naming the field keeps that a visible choice instead of
+      // a payload nobody noticed.
       const result = (outcome ?? {}) as {
         outcome?: string;
         status?: string;
@@ -196,20 +196,26 @@ serve(async (req: Request) => {
         console.error('[respond-to-sub-offer] coordination email failed:', e);
       }
 
-      // ── tell the people who did not get it ──
-      // Their offer rows were closed inside accept_sub_offer's transaction, so
-      // the card simply disappears from their portal at the next load. Without
-      // this they are never told anything at all: the only message they hold is
-      // the original ask, and somebody who replied "yes, I'll take it" by email
-      // rather than clicking Accept has blocked the afternoon out and may turn
-      // up. Same reasoning as the accept path's own consolation notice, for the
-      // people who never click.
-      try {
-        await notifyLosers(supabase, subRow, result.losers ?? []);
-      } catch (e) {
-        console.error('[respond-to-sub-offer] loser notification failed:', e);
-      }
-
+      // THE PEOPLE WHO DID NOT GET IT ARE NOT EMAILED. DELIBERATE - do not
+      // "fix" this.
+      //
+      // `result.losers` is populated and goes unused on purpose. A review found
+      // the gap and I built the email; Jessica removed it, and she is right:
+      // the product decision was made from how this works everywhere else.
+      // Frontline Absence Management, Red Rover, Deputy, When I Work, Homebase,
+      // Connecteam and Workforce.com are all first-come and NONE of them emails
+      // the people who missed out - they find out when they open the app, and
+      // Deputy is the one that documents the wording for a late clicker. An
+      // extra email to everybody who was not picked is a thing nobody does,
+      // which is the tell that it is wrong.
+      //
+      // The channel is the PORTAL: a loser who clicks Accept gets
+      // {ok:true, status:'covered_by_other'} at HTTP 200 and a plain notice
+      // saying somebody was faster. Chunk 3 makes that visible without a click.
+      //
+      // The losers payload stays typed above rather than cast away, because the
+      // RPC really does return it and a future reader should see that it is
+      // unused by choice, not by accident.
       return json({ ok: true, status: 'confirmed' });
     }
 
@@ -398,87 +404,6 @@ async function loadClassContext(
     }
   }
   return out;
-}
-
-// Told to everybody whose offer was closed out when somebody else accepted
-// first. Short on purpose: there is nothing for them to do, and the one thing
-// they need is to stop holding the afternoon.
-//
-// Each person is mailed SEPARATELY rather than bcc'd as a group, because these
-// are colleagues who were quietly competing for the same day and a shared
-// recipient list would show each of them who else was asked and who was slower.
-async function notifyLosers(
-  supabase: ReturnType<typeof adminClient>,
-  subRow: { parent_assignment_id: string; parent_assignment_type: string; date: string; organization_id: string },
-  losers: Array<{ email: string | null; first_name: string | null; preferred_name: string | null }>,
-) {
-  const withEmail = losers.filter((l) => l.email);
-  if (withEmail.length === 0) {
-    if (losers.length > 0) {
-      console.warn('[notifyLosers] closed-out subs have no email on file; nobody told', {
-        count: losers.length,
-      });
-    }
-    return;
-  }
-
-  const ctx = await loadClassContext(supabase, subRow.parent_assignment_type, subRow.parent_assignment_id);
-  const [{ data: org }, { data: branding }] = await Promise.all([
-    supabase.from('organizations').select('name').eq('id', subRow.organization_id).maybeSingle(),
-    supabase.from('org_branding').select('email_from_name').eq('organization_id', subRow.organization_id).maybeSingle(),
-  ]);
-  const senderFirstName = (branding?.email_from_name ?? org?.name ?? '').split(' ')[0] || 'the team';
-  const friendlyDate = fmtDate(subRow.date);
-  const className = ctx.curriculumName || 'that class';
-  const brand = await loadOrgBrand(supabase, subRow.organization_id);
-  const fromEmail = formatFromAddress(brand);
-
-  const subject = `${friendlyDate.replace(/^[A-Za-z]+, /, '')} is covered - thanks for considering it`;
-
-  for (const loser of withEmail) {
-    const first = loser.preferred_name || loser.first_name || 'there';
-    const html = `<!doctype html>
-<html><body style="margin:0;background:#FBFBFB;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#1a1a1a;">
-  <div style="max-width:560px;margin:0 auto;padding:24px;">
-    <p style="font-size:15px;line-height:1.55;margin:0 0 14px;">Hi ${escapeHtml(first)},</p>
-    <p style="font-size:15px;line-height:1.55;margin:0 0 14px;">Quick update: <strong>${escapeHtml(className)}</strong>${ctx.locationName ? ` at <strong>${escapeHtml(ctx.locationName)}</strong>` : ''} on <strong>${escapeHtml(friendlyDate)}</strong> has been covered by someone else, so please don't hold the time.</p>
-    <p style="font-size:15px;line-height:1.55;margin:0 0 14px;">Nothing for you to do. Thanks for being willing, and sorry for the back and forth.</p>
-    <p style="font-size:14px;line-height:1.55;margin:18px 0 0;">- ${escapeHtml(senderFirstName)}${org?.name ? ` @ ${escapeHtml(org.name)}` : ''}</p>
-  </div>
-</body></html>`;
-    const text = [
-      `Hi ${first},`,
-      ``,
-      `Quick update: ${className}${ctx.locationName ? ` at ${ctx.locationName}` : ''} on ${friendlyDate} has been covered by someone else, so please don't hold the time.`,
-      ``,
-      `Nothing for you to do. Thanks for being willing, and sorry for the back and forth.`,
-      ``,
-      `- ${senderFirstName}${org?.name ? ` @ ${org.name}` : ''}`,
-    ].join('\n');
-
-    // One person's bounce must not stop the rest being told.
-    try {
-      const r = await fetch('https://api.resend.com/emails', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
-        // tenant_reply_to, not reply_to: the latter falls back to the PLATFORM
-        // address when a tenant has none of its own, so an instructor hitting
-        // Reply on "your day was covered" would be writing to Enrops about
-        // another company's class instead of to the office that asked them.
-        // Undefined is the honest answer when the tenant has no mailbox.
-        body: JSON.stringify({
-          from: fromEmail, to: loser.email,
-          reply_to: brand.tenant_reply_to ?? undefined,
-          subject, html, text,
-        }),
-      });
-      if (!r.ok) {
-        console.error('[notifyLosers] resend failed:', r.status, (await r.text()).slice(0, 300));
-      }
-    } catch (e) {
-      console.error('[notifyLosers] resend threw:', e);
-    }
-  }
 }
 
 // 3-way coordination email fired when a sub ACCEPTS an offer. TO: regular
