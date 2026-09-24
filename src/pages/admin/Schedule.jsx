@@ -2414,6 +2414,7 @@ export default function Schedule() {
           getValidationFor={getValidationFor}
           dragStateRef={dragStateRef}
           onDrop={handleDrop}
+          onEditCamp={(session) => setCampForm({ session })}
           onNeedsHireClick={(session) => setCandidatesFor({ session, currentAssignment: null, role: "lead" })}
           onInstructorClick={(session, currentAssignment, roleHint, dayDate) => setCandidatesFor({
             session,
@@ -3407,7 +3408,7 @@ function Legend() {
   );
 }
 
-function WeeklyGrid({ week, items, cycleType, recentlyUpdated, subsByKey, getValidationFor, dragStateRef, onDrop, onNeedsHireClick, onInstructorClick, onSubClick, onChangeRequestClick }) {
+function WeeklyGrid({ week, items, cycleType, recentlyUpdated, subsByKey, getValidationFor, dragStateRef, onDrop, onNeedsHireClick, onInstructorClick, onSubClick, onChangeRequestClick, onEditCamp }) {
   // Sort camps globally by (location, session-time) so they share a row across all
   // five day columns. Each row renders cells per weekday: an actual card when the
   // camp meets that day, an em-dash placeholder otherwise. A gold line separates
@@ -3592,6 +3593,7 @@ function WeeklyGrid({ week, items, cycleType, recentlyUpdated, subsByKey, getVal
                         onSubClick(session, parentAssignment, addDaysIso(week?.starts_on, WEEKDAYS.indexOf(d)))
                       }
                       onChangeRequestClick={onChangeRequestClick}
+                      onEditCamp={cycleType === "summer_camp" ? onEditCamp : undefined}
                     />
                   ) : (
                     // Unreachable on a phone - visibleRows has already dropped
@@ -3618,7 +3620,7 @@ function WeeklyGrid({ week, items, cycleType, recentlyUpdated, subsByKey, getVal
   );
 }
 
-function ProgramCard({ item, dayDate, subsByKey, cardBg, flash, getValidationFor, dragStateRef, onDrop, onNeedsHireClick, onInstructorClick, onSubClick, onChangeRequestClick }) {
+function ProgramCard({ item, dayDate, subsByKey, cardBg, flash, getValidationFor, dragStateRef, onDrop, onNeedsHireClick, onInstructorClick, onSubClick, onChangeRequestClick, onEditCamp }) {
   const { session, status, assignment, allAssignments, activeAssignments, leadSubNeeded = [], devSubNeeded = [] } = item;
   const [dropEffect, setDropEffect] = useState(null); // "ok" | "warn" | "block" | "self" | null
   const [hoverResult, setHoverResult] = useState(null); // full validation result during drag
@@ -3760,8 +3762,33 @@ function ProgramCard({ item, dayDate, subsByKey, cardBg, flash, getValidationFor
         undefined
       }
     >
-      <div style={{ fontSize: 13, fontWeight: 700, color: INK, lineHeight: 1.3 }}>
-        {session.curriculum_name || "(unnamed)"}
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 8 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: INK, lineHeight: 1.3 }}>
+          {session.curriculum_name || "(unnamed)"}
+        </div>
+        {/* stopPropagation because the card itself is clickable in three states
+            (needs hire, change requested, deadline passed) and is a drag target.
+            Editing the camp must never be mistaken for one of those. */}
+        {onEditCamp && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onEditCamp(session); }}
+            title="Edit this camp's details"
+            style={{
+              background: "transparent",
+              border: "none",
+              color: MUTED,
+              fontSize: 11,
+              fontFamily: "inherit",
+              cursor: "pointer",
+              padding: 0,
+              flexShrink: 0,
+              textDecoration: "underline",
+            }}
+          >
+            Edit
+          </button>
+        )}
       </div>
       <div style={{ fontSize: 11, color: MUTED, lineHeight: 1.3 }}>
         {titleCase(session.session_type)}
