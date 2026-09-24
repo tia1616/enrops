@@ -117,6 +117,22 @@ export default function CampSessionForm({ orgId, cycle, session = null, onClose,
   const [loadingLists, setLoadingLists] = useState(true);
   const [loadingRow, setLoadingRow] = useState(Boolean(session?.id));
   const loading = loadingLists || loadingRow;
+  // The camp as it was when this form opened, for the three fields the form
+  // DERIVES rather than edits: the two dates (derived from the chosen week) and
+  // the camp's display name (derived from the chosen curriculum). Null when
+  // adding, because there is nothing to preserve.
+  //
+  // WHY THIS EXISTS. Re-reading the row stopped an edit blanking columns the
+  // form never shows. It did NOT stop an edit overwriting fields the form
+  // recomputes, and on prod that is most of them: 6 of 51 camps deliberately run
+  // a partial week (a Mon/Wed camp whose ends_on is before its week's Friday),
+  // and 44 of 51 carry a display name different from their curriculum's internal
+  // title. Recomputing on every save silently rewrote both. So the stored value
+  // wins unless the operator actually changed the field it is derived from.
+  const [baseline, setBaseline] = useState(null);
+  // How many instructors are already on this camp (proposed, confirmed,
+  // published - anything not withdrawn). Gates moving it, below.
+  const [assignedInstructors, setAssignedInstructors] = useState(0);
   const [loadError, setLoadError] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
@@ -198,12 +214,12 @@ export default function CampSessionForm({ orgId, cycle, session = null, onClose,
       setLoadingRow(true);
       const { data, error } = await supabase
         .from("camp_sessions")
-        .select("id, location_id, week_num, session_type, curriculum_id, curriculum_category, start_time, end_time, class_days, ages_min, ages_max, max_capacity, price_cents, early_bird_price_cents, early_bird_deadline, notes")
+        .select("id, location_id, location_name, week_num, starts_on, ends_on, session_type, curriculum_id, curriculum_name, curriculum_category, start_time, end_time, class_days, ages_min, ages_max, max_capacity, price_cents, early_bird_price_cents, early_bird_deadline, notes")
         .eq("id", session.id)
         .single();
       if (cancelled) return;
       if (error) {
-        setLoadError(`Could not open that camp: `);
+        setLoadError(`Could not open that camp: ${error.message}`);
         setLoadingRow(false);
         return;
       }
@@ -230,6 +246,28 @@ export default function CampSessionForm({ orgId, cycle, session = null, onClose,
       // values, and picking a curriculum must not silently rewrite the capacity
       // or ages of a camp that is already running.
       setTouched(new Set(Object.keys(EMPTY)));
+      // Is anyone already on this camp? Moving a camp that has instructors is
+      // not a form problem, it is a payroll one - see the submit guard.
+      const { count: assignedCount } = await supabase
+        .from("camp_assignments")
+        .select("id", { count: "exact", head: true })
+        .eq("camp_session_id", session.id)
+        .neq("status", "withdrawn");
+      if (cancelled) return;
+      setAssignedInstructors(assignedCount ?? 0);
+      setBaseline({
+        week_num: data.week_num ?? "",
+        starts_on: data.starts_on,
+        ends_on: data.ends_on,
+        curriculum_id: data.curriculum_id ?? "",
+        curriculum_name: data.curriculum_name,
+        location_id: data.location_id ?? "",
+        location_name: data.location_name,
+        // Raw, NOT the Mon-Fri the day buttons fall back to showing. NULL and
+        // Mon-Fri are different instructions downstream, so the difference has
+        // to survive a save that never touched the days - see the submit.
+        class_days: data.class_days,
+      });
       setLoadingRow(false);
     })();
     return () => { cancelled = true; };
@@ -286,14 +324,23 @@ export default function CampSessionForm({ orgId, cycle, session = null, onClose,
     }));
   }
 
+  // Turning a day ON used to rebuild the list from WEEKDAYS, which silently
+  // DELETED anything this form has no chip for. class_days is a plain text[]
+  // with no constraint to Mon-Fri: a weekend camp storing 'saturday' would load
+  // with every chip off, and the first click on any chip would drop the Saturday
+  // the camp actually runs - and with it the instructor's pay for that day and
+  // its share of a refund. Keep whatever is already there, add the one day, and
+  // sort into the canonical order with unknown days last.
   function toggleDay(day) {
     setTouched((t) => new Set(t).add("class_days"));
-    setForm((f) => ({
-      ...f,
-      class_days: f.class_days.includes(day)
-        ? f.class_days.filter((d) => d !== day)
-        : WEEKDAYS.map((d) => d.value).filter((d) => f.class_days.includes(d) || d === day),
-    }));
+    setForm((f) => {
+      if (f.class_days.includes(day)) {
+        return { ...f, class_days: f.class_days.filter((d) => d !== day) };
+      }
+      const order = WEEKDAYS.map((d) => d.value);
+      const rank = (d) => (order.indexOf(d) === -1 ? order.length : order.indexOf(d));
+      return { ...f, class_days: [...f.class_days, day].sort((a, b) => rank(a) - rank(b)) };
+    });
   }
 
   function handleMoney(name, value) {
@@ -304,6 +351,35 @@ export default function CampSessionForm({ orgId, cycle, session = null, onClose,
   }
 
   const selectedWeek = weeks.find((w) => String(w.num) === String(form.week_num)) ?? null;
+
+  // The dates this camp will actually be stored with - the week's, unless the
+  // week is untouched and the row already carried its own (a partial week).
+  const effectiveRange = useMemo(() => {
+    const weekSame = baseline && String(baseline.week_num) === String(form.week_num);
+    if (weekSame) return { starts_on: baseline.starts_on, ends_on: baseline.ends_on };
+    return selectedWeek ? { starts_on: selectedWeek.starts_on, ends_on: selectedWeek.ends_on } : null;
+  }, [baseline, form.week_num, selectedWeek]);
+
+  // Does the camp meet on ANY date inside its own range? A camp that ends on a
+  // Wednesday but is set to meet Thursday and Friday meets on no date at all,
+  // and nothing downstream says so: the pay cron seeds no day, so the instructor
+  // teaches and Payroll stays empty, and refund proration reads an empty
+  // schedule as "unknown" and hands back 100% of the enrops margin on every
+  // cancellation. Cheap to catch here, expensive to find later.
+  const meetsNoDay = useMemo(() => {
+    if (!effectiveRange?.starts_on || !effectiveRange?.ends_on) return false;
+    if (form.class_days.length === 0) return false; // its own error already
+    const names = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+    const wanted = new Set(form.class_days.map((d) => String(d).trim().toLowerCase()));
+    const cursor = new Date(`${effectiveRange.starts_on}T00:00:00Z`);
+    const end = new Date(`${effectiveRange.ends_on}T00:00:00Z`);
+    if (Number.isNaN(cursor.getTime()) || Number.isNaN(end.getTime())) return false;
+    for (let i = 0; i < 400 && cursor.getTime() <= end.getTime(); i++) {
+      if (wanted.has(names[cursor.getUTCDay()])) return false;
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+    return true;
+  }, [effectiveRange, form.class_days]);
 
   // Every rule here mirrors a constraint on camp_sessions. Catching them in the
   // form is the difference between a sentence the operator can act on and a raw
@@ -320,6 +396,26 @@ export default function CampSessionForm({ orgId, cycle, session = null, onClose,
       e.push("The end time has to be after the start time.");
     }
     if (form.class_days.length === 0) e.push("Pick at least one day the camp meets.");
+    if (meetsNoDay && effectiveRange) {
+      e.push(`This camp runs ${effectiveRange.starts_on} to ${effectiveRange.ends_on}, and none of the days you picked fall in it. Pick a day inside those dates.`);
+    }
+    // MOVING A CAMP THAT ALREADY HAS INSTRUCTORS IS A PAYROLL PROBLEM, not a
+    // scheduling one. Substitutions and delivery confirmations are keyed by
+    // CALENDAR DATE (the pay view joins `sub.date = c.session_date`), so new
+    // dates orphan every sub row: the join misses, pay falls back to the
+    // original instructor, and the substitute who actually taught is not paid.
+    // The instructor was also emailed the old dates and nothing here re-sends.
+    // None of that is fixable from this form, so it refuses the move and leaves
+    // the operator to withdraw the assignments first - deliberately, and
+    // knowing what it costs.
+    if (baseline && assignedInstructors > 0) {
+      if (String(baseline.week_num) !== String(form.week_num)) {
+        e.push(`This camp already has ${assignedInstructors} instructor${assignedInstructors === 1 ? "" : "s"} on it, so its week cannot be changed here. Take them off the camp first, or make a new camp in the other week.`);
+      }
+      if (baseline.location_id !== form.location_id) {
+        e.push(`This camp already has ${assignedInstructors} instructor${assignedInstructors === 1 ? "" : "s"} on it, so its site cannot be changed here. Take them off the camp first, or make a new camp at the other site.`);
+      }
+    }
     const capacity = intOrNull(form.max_capacity);
     if (capacity != null && capacity <= 0) {
       e.push("Leave the class size blank for no limit, or set it above zero.");
@@ -336,7 +432,7 @@ export default function CampSessionForm({ orgId, cycle, session = null, onClose,
       e.push("An early bird deadline needs an early bird price.");
     }
     return e;
-  }, [form, selectedWeek]);
+  }, [form, selectedWeek, meetsNoDay, effectiveRange, baseline, assignedInstructors]);
 
   async function handleSubmit() {
     setSaveError("");
@@ -348,22 +444,61 @@ export default function CampSessionForm({ orgId, cycle, session = null, onClose,
       if (!location) throw new Error("That site is no longer in your list. Pick another.");
       if (!curriculum) throw new Error("That curriculum is no longer published. Pick another.");
 
+      // THE TWO DERIVED FIELDS KEEP THEIR STORED VALUE UNLESS THEIR SOURCE MOVED.
+      //
+      // Dates: a camp is not obliged to fill its week. Six camps on prod run a
+      // partial one - a Mon/Wed camp whose ends_on falls before its week's
+      // Friday - and rebuilding the dates from the week on every save would
+      // quietly stretch them back out. Only a week the operator actually changed
+      // re-derives them.
+      //
+      // Name: curriculum_name is what families and instructors READ - it is the
+      // title on the board, the printed schedule, rosters, and the offer and
+      // patch-offer emails. On prod 44 of 51 camps carry a name deliberately
+      // different from their curriculum's internal title, so syncing it on every
+      // save would rename most of the catalogue behind the operator's back. Only
+      // a curriculum they actually changed re-derives it.
+      // Name: location_name is the SAME problem and a worse one, because it is an
+      // identity key, not just a label. apps-script-roster-sync branches on
+      // `location_name.toLowerCase() === 'lacamas lodge'` and then finds the
+      // sibling weeks with .eq('location_name', ...) and .eq('curriculum_name',
+      // ...). Seven camps on prod store a shorter venue name than
+      // program_locations holds ("Lacamas Lodge" vs "Camas P&R: Lacamas Lodge"),
+      // so rewriting it on an unrelated edit would break the Lacamas roster
+      // fan-out and un-group that camp from its siblings.
+      const weekUnchanged = baseline && String(baseline.week_num) === String(form.week_num);
+      const curriculumUnchanged = baseline && baseline.curriculum_id === form.curriculum_id;
+      const locationUnchanged = baseline && baseline.location_id === form.location_id;
+
+      // class_days: NULL and Mon-Fri are NOT the same instruction. The day
+      // buttons show Mon-Fri when a row stores nothing, but for refund proration
+      // a NULL means every day in the range counts (the widest reading, the one
+      // that refunds most), while the pay cron seeds nothing at all for an empty
+      // list. Writing the displayed default back would move real money. So an
+      // untouched set of days keeps exactly what was stored, NULL included.
+      const displayedDays = Array.isArray(baseline?.class_days) && baseline.class_days.length
+        ? baseline.class_days
+        : WEEKDAYS.map((d) => d.value);
+      const daysUnchanged = baseline
+        && form.class_days.length === displayedDays.length
+        && form.class_days.every((d) => displayedDays.includes(d));
+
       // location_name is NOT NULL and denormalised alongside location_id - the
       // schedule board, rosters and the matcher's venue-region map all read the
       // name. Writing one without the other is what leaves a camp unplaceable.
       const payload = {
         location_id: location.id,
-        location_name: location.name,
+        location_name: locationUnchanged ? baseline.location_name : location.name,
         week_num: selectedWeek.num,
-        starts_on: selectedWeek.starts_on,
-        ends_on: selectedWeek.ends_on,
+        starts_on: weekUnchanged ? baseline.starts_on : selectedWeek.starts_on,
+        ends_on: weekUnchanged ? baseline.ends_on : selectedWeek.ends_on,
         session_type: form.session_type,
         curriculum_id: curriculum.id,
-        curriculum_name: curriculum.name,
+        curriculum_name: curriculumUnchanged ? baseline.curriculum_name : curriculum.name,
         curriculum_category: form.curriculum_category,
         start_time: form.start_time,
         end_time: form.end_time,
-        class_days: form.class_days,
+        class_days: daysUnchanged ? baseline.class_days : form.class_days,
         ages_min: intOrNull(form.ages_min),
         ages_max: intOrNull(form.ages_max),
         max_capacity: intOrNull(form.max_capacity),
@@ -377,12 +512,24 @@ export default function CampSessionForm({ orgId, cycle, session = null, onClose,
         // Named columns only. A whole-row write here would reset the fields this
         // form does not own - current_enrollment, enrollment_synced_at, status,
         // parent_session_id - and silently undo a roster sync or a cancellation.
-        const { error } = await supabase
+        // .select() is what makes a refused write VISIBLE. An update whose rows
+        // are all filtered away - by RLS, or by a camp deleted in another tab -
+        // comes back with error null and no rows, so without asking for the row
+        // back this reported success, closed the modal and reloaded a board that
+        // had not changed. camp_sessions writes are owner/admin only, while the
+        // board and its Edit links render for every org member, so that silent
+        // path is reachable today. The insert below was already honest by
+        // accident: .single() errors when nothing comes back.
+        const { data: updated, error } = await supabase
           .from("camp_sessions")
           .update({ ...payload, updated_at: new Date().toISOString() })
           .eq("id", session.id)
-          .eq("organization_id", orgId);
+          .eq("organization_id", orgId)
+          .select("id");
         if (error) throw error;
+        if (!updated || updated.length === 0) {
+          throw new Error("That camp could not be saved. You may not have permission to change camps, or it was removed while you had it open.");
+        }
         onSaved?.({ id: session.id, mode: "edit" });
       } else {
         const { data, error } = await supabase
