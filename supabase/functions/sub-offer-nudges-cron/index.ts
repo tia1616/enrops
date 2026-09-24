@@ -75,6 +75,8 @@ interface Slot {
   stage: string;
   audience: 'instructors' | 'provider';
   people: Array<{ id: string; email: string; name: string }>;
+  /** How many are still deciding, counted BEFORE addresses are resolved. */
+  expected: number;
 }
 
 serve(async (req: Request) => {
@@ -161,6 +163,7 @@ serve(async (req: Request) => {
         stage: spec.stage,
         audience: spec.audience,
         people: [],
+        expected: 0,
       });
       for (const r of list) if (r.sub_instructor_id) instructorIds.add(r.sub_instructor_id);
     }
@@ -169,14 +172,27 @@ serve(async (req: Request) => {
     }
 
     // ── names and addresses for everyone still deciding ──
-    const { data: people } = await supabase
+    // The error is CHECKED, not discarded. If this lookup fails, every slot
+    // resolves to zero people, every instructor stage claims its row and sends
+    // nothing, and - because a claimed stage is never revisited - those people
+    // are never chased at all. A silent failure here is indistinguishable from
+    // "nobody to tell", so it must stop the run instead of proceeding.
+    const { data: people, error: peopleErr } = await supabase
       .from('instructors')
       .select('id, first_name, last_name, preferred_name, email')
       .in('id', Array.from(instructorIds));
+    if (peopleErr) {
+      console.error('[sub-offer-nudges-cron] instructor lookup failed:', peopleErr);
+      return json({ error: 'instructor_lookup_failed', detail: peopleErr.message }, 500);
+    }
     const byInstructor = new Map((people ?? []).map((p) => [p.id, p]));
     for (const s of slots) {
       const list = pendingBySlot.get(`${s.parent_assignment_id}|${s.parent_assignment_type}|${s.date}`) ?? [];
       for (const r of list) {
+        // Counted whether or not we can reach them, so that "5 were asked and
+        // we could only mail 3" is recorded as a failure rather than rounding
+        // itself away into a tidy-looking two-person nudge.
+        if (r.sub_instructor_id) s.expected++;
         const p = r.sub_instructor_id ? byInstructor.get(r.sub_instructor_id) : null;
         if (p?.email) {
           s.people.push({
@@ -189,25 +205,55 @@ serve(async (req: Request) => {
     }
 
     // ── already chased at this stage? ──
-    const { data: already } = await supabase
+    // Checked for the same reason: a swallowed error here empties `chased`, so
+    // every already-done stage re-qualifies. The unique index would refuse the
+    // duplicate claim and nothing would double-send, but the run would then be
+    // reporting work it did not do.
+    // `recipients` is selected because two different questions are asked of
+    // this log below, and only one of them is about the row existing.
+    const { data: already, error: alreadyErr } = await supabase
       .from('sub_offer_nudges')
-      .select('parent_assignment_id, parent_assignment_type, date, stage')
+      .select('parent_assignment_id, parent_assignment_type, date, stage, recipients')
       .in('organization_id', orgIds)
       .in('date', targetDates);
+    // Logged, NOT fatal. This lookup is not what prevents a double send - the
+    // unique index is, and a duplicate claim is refused by the database no
+    // matter what this returns. Aborting the run over it would cost every
+    // tenant their rung for the day, and on an exact-day ladder a missed rung
+    // is not retried tomorrow: tomorrow is a different rung. Degrading costs
+    // some refused inserts and a reminder sentence left out, both harmless.
+    if (alreadyErr) {
+      console.error('[sub-offer-nudges-cron] nudge-log lookup failed, continuing:', alreadyErr);
+    }
     const chased = new Set((already ?? []).map((n) =>
       `${n.parent_assignment_id}|${n.parent_assignment_type}|${n.date}|${n.stage}`));
+    // DELIVERED, not merely attempted. A stage is claimed BEFORE its emails go,
+    // so a row exists even when every one of those sends failed - which is the
+    // exact state the failure-recording above is built to capture. Telling a
+    // provider "we sent them a reminder yesterday" on the strength of a row
+    // that reached nobody would be the false sentence this was meant to avoid.
+    const reachedSomeone = new Set((already ?? [])
+      .filter((n) => ((n as { recipients?: number }).recipients ?? 0) > 0)
+      .map((n) => `${n.parent_assignment_id}|${n.parent_assignment_type}|${n.date}|${n.stage}`));
     const due = slots.filter((s) =>
       !chased.has(`${s.parent_assignment_id}|${s.parent_assignment_type}|${s.date}|${s.stage}`));
 
     if (dryRun) {
+      // COUNTS, NEVER ADDRESSES. verify_jwt is satisfied by the anon key, which
+      // ships in every browser bundle, and this function has no caller-identity
+      // check of its own - so anything returned here is readable by anybody who
+      // can guess an organisation id. Returning instructor emails and the
+      // provider's alert address would hand over a tenant's roster to a
+      // stranger. The sibling offer-reminders-cron answers with ids and reasons
+      // for the same reason; counts are enough to verify a run.
       return json({
         ok: true, dry_run: true, today, orgs_enabled: orgs.length,
         would_send: due.map((s) => ({
           date: s.date, stage: s.stage, audience: s.audience,
-          organization_id: s.organization_id,
-          recipients: s.audience === 'provider'
-            ? [orgs.find((o) => o.id === s.organization_id)?.alert_email].filter(Boolean)
-            : s.people.map((p) => p.email),
+          recipient_count: s.audience === 'provider'
+            ? (orgs.find((o) => o.id === s.organization_id)?.alert_email ? 1 : 0)
+            : s.people.length,
+          still_deciding: s.expected,
         })),
         sent: 0,
       });
@@ -240,20 +286,26 @@ serve(async (req: Request) => {
         continue;
       }
 
-      const ctx = await classContext(supabase, s.parent_assignment_type, s.parent_assignment_id);
-      const brand = await loadOrgBrand(supabase, s.organization_id);
-      const from = formatFromAddress(brand);
-      const when = fmtDate(s.date);
-      const what = ctx.curriculum || 'a class';
-      const where = ctx.location ? ` at ${ctx.location}` : '';
-      const portal = org.slug ? `${PUBLIC_SITE_URL}/${org.slug}/instructor` : PUBLIC_SITE_URL;
-      const board = `${PUBLIC_SITE_URL}/admin/schedule`;
-
       let recipients = 0;
       let attempted = 0;
       let errText: string | null = null;
 
+      // EVERYTHING between the claim and the completion is inside this try.
+      // These lookups are network calls: a DNS failure or a timeout THROWS
+      // rather than returning an error object, and before this the throw
+      // escaped to the outer catch - abandoning the loop, so every LATER
+      // class-day in the run went unchased, in silence, while this one kept a
+      // claimed row that could never be retried.
       try {
+        const ctx = await classContext(supabase, s.parent_assignment_type, s.parent_assignment_id);
+        const brand = await loadOrgBrand(supabase, s.organization_id);
+        const from = formatFromAddress(brand);
+        const when = fmtDate(s.date);
+        const what = ctx.curriculum || 'a class';
+        const where = ctx.location ? ` at ${ctx.location}` : '';
+        const portal = org.slug ? `${PUBLIC_SITE_URL}/${org.slug}/instructor` : PUBLIC_SITE_URL;
+        const board = `${PUBLIC_SITE_URL}/admin/schedule`;
+
         if (s.audience === 'instructors') {
           const second = s.stage === 'instructor_2';
           for (const p of s.people) {
@@ -262,12 +314,19 @@ serve(async (req: Request) => {
                  `If you can take it, open your portal and accept. If you can't, decline so we stop asking.`]
               : [`Just a nudge: we're still looking for cover for ${what}${where} on ${when}.`,
                  `If you can do it, open your portal and accept. If not, decline and we'll ask elsewhere.`];
-            const ok = await send(from, p.email, brand.tenant_reply_to ?? undefined,
-              second ? `Still need cover: ${when.replace(/^[A-Za-z]+, /, '')}`
-                     : `Still looking for cover: ${when.replace(/^[A-Za-z]+, /, '')}`,
-              shell(p.name, lines, portal, 'Open your portal', org.name));
+            // Per-person, so one unreachable address cannot cost the people
+            // after it in the list their only nudge. The stage is claimed
+            // already; whoever is skipped here is skipped for good.
             attempted++;
-            if (ok) recipients++;
+            try {
+              const ok = await send(from, p.email, brand.tenant_reply_to ?? undefined,
+                second ? `Still need cover: ${when.replace(/^[A-Za-z]+, /, '')}`
+                       : `Still looking for cover: ${when.replace(/^[A-Za-z]+, /, '')}`,
+                shell(p.name, lines, portal, 'Open your portal', org.name));
+              if (ok) recipients++;
+            } catch (e) {
+              console.error('[sub-offer-nudges-cron] send threw for one instructor:', e, s.date);
+            }
           }
         } else {
           const to = org.alert_email;
@@ -276,17 +335,34 @@ serve(async (req: Request) => {
             const second = s.stage === 'provider_2';
             const n = s.people.length;
             const who = n === 1 ? '1 person has' : `${n} people have`;
+            // Only claim the reminder went if the log says it did. The ladder
+            // puts an instructor nudge the day before each provider email, but
+            // nothing GUARANTEES it ran: offers sent seven days out skip the
+            // T-8 rung entirely, and a tenant switched on mid-ladder has no
+            // earlier rung either. Asserting it anyway would put a sentence she
+            // can see is false into the first email she reads.
+            const reminded = reachedSomeone.has(
+              `${s.parent_assignment_id}|${s.parent_assignment_type}|${s.date}|` +
+              `${second ? 'instructor_2' : 'instructor_1'}`);
+            const nudgedLine = reminded ? ' We sent them a reminder yesterday.' : '';
             const lines = second
               ? [`${what}${where} on ${when} still has nobody covering it, and it's 3 days away.`,
-                 `${who} been asked and nobody has answered. At this range it's worth deciding: chase them directly, ask somebody else, or cover it yourself.`]
+                 `${who} been asked and nobody has answered.${nudgedLine} At this range it's worth deciding: chase them directly, ask somebody else, or cover it yourself.`]
               : [`Nobody has answered yet for ${what}${where} on ${when}.`,
-                 `${who} been asked. We nudged them yesterday. Nothing needs doing yet - this is so it doesn't go quiet on you.`];
-            const ok = await send(from, to, brand.tenant_reply_to ?? undefined,
-              second ? `Still no sub for ${when.replace(/^[A-Za-z]+, /, '')}`
-                     : `No reply yet on ${when.replace(/^[A-Za-z]+, /, '')}`,
-              shell('there', lines, board, 'Open the schedule', org.name));
+                 `${who} been asked.${nudgedLine} Nothing needs doing yet - this is so it doesn't go quiet on you.`];
+            // Counted BEFORE the call and wrapped, exactly as the instructor
+            // path is. send() can throw now that it has a timeout, and counting
+            // afterwards would drop this attempt from the tally entirely.
             attempted++;
-            if (ok) recipients++;
+            try {
+              const ok = await send(from, to, brand.tenant_reply_to ?? undefined,
+                second ? `Still no sub for ${when.replace(/^[A-Za-z]+, /, '')}`
+                       : `No reply yet on ${when.replace(/^[A-Za-z]+, /, '')}`,
+                shell('there', lines, board, 'Open the schedule', org.name));
+              if (ok) recipients++;
+            } catch (e) {
+              console.error('[sub-offer-nudges-cron] provider send threw:', e, s.date);
+            }
           }
         }
       } catch (e) {
@@ -298,12 +374,37 @@ serve(async (req: Request) => {
       // Resend rejecting an address leaves recipients short of attempted, and a
       // row saying `recipients: 0, error: null` would be the log quietly
       // claiming the nudge went out.
-      if (!errText && recipients < attempted) {
-        errText = `${attempted - recipients} of ${attempted} sends were rejected`;
+      // Every way this stage can have fallen short of the people it was for,
+      // recorded together rather than first-one-wins. These are not mutually
+      // exclusive - a stage can both fail to reach some addresses and have
+      // others rejected - and whichever got skipped would have been the half
+      // nobody found out about.
+      const problems: string[] = [];
+      if (errText) problems.push(errText);
+      if (recipients < attempted) {
+        problems.push(`${attempted - recipients} of ${attempted} messages were not delivered`);
       }
-      await supabase.from('sub_offer_nudges')
+      // Counted against WHO WAS SUPPOSED TO BE CHASED, not against who we
+      // managed to look up. The previous shape of this check only fired when
+      // nobody at all resolved, so the commoner case - one stale address out of
+      // five - wrote a tidy row claiming four successes and no problem, while a
+      // real person waited to be asked and never was.
+      if (s.audience === 'instructors' && s.expected > s.people.length) {
+        problems.push(
+          `${s.expected - s.people.length} of ${s.expected} still deciding had no usable email address`);
+      }
+      errText = problems.length ? problems.join('; ') : null;
+      const { error: doneErr } = await supabase.from('sub_offer_nudges')
         .update({ recipients, error_text: errText, completed_at: new Date().toISOString() })
         .eq('id', (claim as { id: string }).id);
+      // Checked, because the alternative is a row frozen in the claim's own
+      // shape - no completed_at, no error - which reads as "still in flight"
+      // forever even though the emails really went. It cannot be retried (the
+      // claim holds the unique index), so the log must at least say so.
+      if (doneErr) {
+        console.error('[sub-offer-nudges-cron] completion update failed; emails DID go:',
+          doneErr, { date: s.date, stage: s.stage, recipients });
+      }
 
       sent += recipients;
       results.push({ date: s.date, stage: s.stage, audience: s.audience, recipients, error: errText });
@@ -318,16 +419,27 @@ serve(async (req: Request) => {
 
 async function send(from: string, to: string, replyTo: string | undefined,
                     subject: string, html: string): Promise<boolean> {
-  const r = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
-    body: JSON.stringify({ from, to, reply_to: replyTo, subject, html }),
-  });
-  if (!r.ok) {
-    console.error('[sub-offer-nudges-cron] resend failed:', r.status, (await r.text()).slice(0, 300));
-    return false;
+  // Bounded. Without a timeout one hung connection holds the whole run open
+  // until the platform kills the invocation, and every class-day after it in
+  // the queue is dropped for the day - which, on an exact-day ladder, means
+  // dropped for good.
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), 15_000);
+  try {
+    const r = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
+      body: JSON.stringify({ from, to, reply_to: replyTo, subject, html }),
+      signal: abort.signal,
+    });
+    if (!r.ok) {
+      console.error('[sub-offer-nudges-cron] resend failed:', r.status, (await r.text()).slice(0, 300));
+      return false;
+    }
+    return true;
+  } finally {
+    clearTimeout(timer);
   }
-  return true;
 }
 
 function shell(greeting: string, lines: string[], url: string, cta: string, orgName: string | null) {
