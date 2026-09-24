@@ -974,7 +974,12 @@ const chip = {
   fontFamily: "inherit", cursor: "pointer",
 };
 
-function SeatRadio({ checked, onChange, disabled, title, sub }) {
+// EXPORTED because the credits panel on Finances needs the identical control: a
+// forced choice with a subtitle, on the other money screen an operator uses in
+// the same sitting. It was reimplemented there as a bare <button>, which looked
+// close enough and exposed no selected state to a screen reader at all. One
+// control, one place - and the real radio input is the accessible half.
+export function SeatRadio({ checked, onChange, disabled, title, sub }) {
   return (
     <label style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "8px 10px", border: `1px solid ${checked ? PURPLE : RULE}`, borderRadius: 7, marginBottom: 6, cursor: disabled ? "not-allowed" : "pointer", background: checked ? "rgba(28,0,79,0.04)" : "#fff" }}>
       <input type="radio" checked={checked} onChange={onChange} disabled={disabled} style={{ marginTop: 2 }} />

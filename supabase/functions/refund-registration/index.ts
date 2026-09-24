@@ -850,17 +850,24 @@ serve(async (req: Request) => {
     // cash-out is not built - so the dashboard is exactly where an operator
     // would go.
     //
-    // Nothing sets a credit's status to 'refunded' today; only the unbuilt
-    // cash-out path would. So this expression cannot currently double-count,
-    // and when cash-out lands it will - a credit cashed back to the card will
-    // produce BOTH a `refunds` row and a 'refunded' credit. That future
-    // double-count fails safe (it under-states what is left), but it is still
-    // wrong, and the cash-out chunk owns both halves of this.
+    // CASH-OUT HAS LANDED, AND THIS IS THE OTHER HALF THE OLD COMMENT PROMISED.
+    // It used to exclude only 'void' and warned that the cash-out chunk owned
+    // both halves; the first attempt fixed the SQL and left this, so the ceiling
+    // (from registration_available_cents) released a cashed-out credit while
+    // this figure still counted it. The drawer then rendered "Paid $240 ·
+    // Already credited $240 · Refundable $240" - three numbers that cannot all
+    // be true - and heldCents clamped the contradiction to zero so nothing
+    // showed. Caught by /code-review max, 2026-09-24.
+    //
+    // THE LIST IS THE CEILING'S LIST, deliberately: 'void' was never owed,
+    // 'refunded' has a refunds row standing for the same money, and
+    // 'refund_pending' is about to. Anything that stops blocking a refund must
+    // also stop counting as already-credited, or the two disagree again.
     const { data: creditRows, error: creditReadErr } = await supabase
       .from('family_credits')
       .select('amount_cents')
       .eq('source_registration_id', registrationId)
-      .neq('status', 'void');
+      .not('status', 'in', '("void","refunded","refund_pending")');
     if (creditReadErr) {
       // FAIL CLOSED. Not being able to see what has already been credited is
       // not the same as nothing having been credited, and the branch that must
@@ -1679,6 +1686,36 @@ serve(async (req: Request) => {
     // A refund — and especially a withdrawal — is a real churn signal worth
     // capturing. logEnrollmentEvent swallows its own errors.
     const refundedThisCall = refundsCreated.reduce((s, r) => s + r.amount_cents, 0);
+
+    // ── discharge any credit this refund was paying back ──────────────────
+    // THE SECOND HALF OF A CASH-OUT, and the only place allowed to say a family
+    // was paid. When an operator chooses "they took the money instead" the
+    // credit becomes `refund_pending`: it stops blocking a refund but STAYS
+    // OWED on every screen, so an operator who never finishes still owes it and
+    // can still see it. This is what finishes it, and it runs only here,
+    // AFTER Stripe actually paid.
+    //
+    // It closes at most what was really refunded, so a partial refund leaves
+    // the remainder owed rather than discharging the lot. It is deliberately
+    // NOT gated on `cancelRegistration` or on the credit being this call's
+    // reason - any refund big enough to cover a pending credit on this
+    // registration settles it, which is the same money either way.
+    //
+    // FAIL-SAFE AND LOUD, like the payment_status read above: the money has
+    // already moved, so a failure here must not fail the request. The cost of
+    // missing it is a credit that still reads as owed - visible, and fixable by
+    // hand - which is the right direction to fail in.
+    if (refundedThisCall > 0) {
+      const { error: closeErr } = await supabase
+        .rpc('close_refund_pending_credit', {
+          p_registration_id: registrationId,
+          p_refunded_cents: refundedThisCall,
+        });
+      if (closeErr) {
+        console.error('[refund] close_refund_pending_credit failed (non-fatal):', closeErr);
+      }
+    }
+
     const eventBase = {
       organizationId: reg.organization_id,
       parentId: reg.parent_id,
