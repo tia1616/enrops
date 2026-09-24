@@ -2903,21 +2903,32 @@ function AfterschoolRostersSection({ org, canEdit }) {
               saying "your class starts at 3pm next week", and its paid families
               would be told about a class that is not happening. Pick it
               knowingly or not at all. */}
-          {/* canMessageProgram, matching the tick boxes it sweeps. It used to
-              say `enrolled > 0`, which was the same expression the boxes used -
-              so "all" really did mean every box on screen. Now that a class
-              everybody has left renders a box too, leaving this on `enrolled`
-              would tick every row EXCEPT that one and leave it sitting there
-              visibly unticked with no reason given: the operator reads a
-              rendering glitch, sends, and the withdrawn family this change
-              exists to reach is the one left out. The cancelled-class exclusion
-              above is deliberate and stays. */}
-          {visible.some((p) => canMessageProgram(p) && p.status !== "cancelled" && !pickedLive.has(p.id)) && (
+          {/* A CLASS EVERYBODY HAS LEFT IS NOT SWEPT IN, for the same reason a
+              cancelled one is not: not because it cannot be messaged, but
+              because "all" must not quietly include a class whose audience this
+              batch will not carry.
+
+              I moved this to canMessageProgram and a review caught it. The tick
+              box is global to the SEND: `include_cancelled` is one flag for the
+              whole batch, so a departed-only class swept in beside eleven live
+              ones sits in a send where that flag is off - it resolves to zero
+              recipients, returns no_recipients, and the operator reads
+              "partial" across twelve classes while the withdrawn family THIS
+              WHOLE CHANGE EXISTS TO REACH is the one nobody told. Ticking it
+              made the omission silent; before, the absent box made it visible.
+
+              So Select all means "my live classes", and a departed-only class
+              is reached the two deliberate ways: its own row button, which
+              pre-ticks the audience correctly because the selection is then
+              all-empty, or by ticking it by hand. Its row already says "Nobody
+              is enrolled now. You can still message everyone who registered",
+              which is the reason it was skipped, sitting next to the box. */}
+          {visible.some((p) => p.enrolled > 0 && p.status !== "cancelled" && !pickedLive.has(p.id)) && (
             <button type="button"
               onClick={() => {
                 setPicked((prev) => new Set([
                   ...prev,
-                  ...visible.filter((p) => canMessageProgram(p) && p.status !== "cancelled").map((p) => p.id),
+                  ...visible.filter((p) => p.enrolled > 0 && p.status !== "cancelled").map((p) => p.id),
                 ]));
                 clearPickNote();
               }}
