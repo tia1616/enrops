@@ -17,8 +17,11 @@
 // and must not have ours typed into their form.
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../../lib/supabase.js";
-import { isUnset } from "../../../lib/grades.js";
+import { isUnset, GRADE_OPTIONS, rangeBackwards, rangeBackwardsMessage } from "../../../lib/grades.js";
 import ModalShell from "../../../components/ModalShell.jsx";
+import AddSchoolModal from "../schools/AddSchoolModal.jsx";
+import FamiliesPayNote, { useOrgFeeConfig } from "../../../components/FamiliesPayNote.jsx";
+import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -69,6 +72,7 @@ const CATEGORIES = [
 
 const EMPTY = {
   location_id: "",
+  room: "",
   week_num: "",
   session_type: "",
   curriculum_id: "",
@@ -76,12 +80,28 @@ const EMPTY = {
   start_time: "",
   end_time: "",
   class_days: WEEKDAYS.map((d) => d.value),
+  // "grade" or "age" - the editor's MODE, not a claim about the camp. Mirrors the
+  // program wizard, which defaults to grade and writes NULL for whichever pair is
+  // not in use. Camps could only ever say ages before this, which made the
+  // pricing sheet's "App Builders Camp, Grades 4 to 6" unsayable.
+  age_format: "grade",
+  // null, not 0: Kindergarten IS 0, so a truthiness check would delete it. See
+  // isUnset in lib/grades.js - the one definition of "not stated" in the codebase.
+  grade_min: null,
+  grade_max: null,
   ages_min: "",
   ages_max: "",
   max_capacity: "",
+  short_description: "",
   price_cents: null,
   early_bird_price_cents: null,
   early_bird_deadline: "",
+  // false = we sell it. true = the partner or venue takes the registration and
+  // we never put a checkout on it. The column existed on camp_sessions and
+  // nothing ever set it; the other two arrived with this form.
+  runs_own_registration: false,
+  external_registration_url: "",
+  list_in_public_catalog: false,
   notes: "",
 };
 
@@ -96,8 +116,12 @@ function centsToDollars(cents) {
   return cents == null ? "" : (cents / 100).toFixed(2);
 }
 
-export default function CampSessionForm({ orgId, cycle, session = null, onClose, onSaved }) {
+export default function CampSessionForm({ org, orgId, cycle, session = null, onClose, onSaved }) {
   const isEdit = Boolean(session?.id);
+  // The all-in price note reads the org's fee config by slug, the same way the
+  // program wizard does, so the two screens cannot disagree about what a family
+  // actually pays.
+  const feeConfig = useOrgFeeConfig(org?.slug);
 
   const [form, setForm] = useState(EMPTY);
   // Which fields the operator has typed in themselves. A prefill must never
@@ -108,6 +132,15 @@ export default function CampSessionForm({ orgId, cycle, session = null, onClose,
 
   const [locations, setLocations] = useState([]);
   const [curricula, setCurricula] = useState([]);
+  // Districts and partners exist only to feed the inline "Add a site" modal, the
+  // same one the program wizard opens. Non-blocking if they fail, but NOT
+  // harmless: AddSchoolModal's District field is required and matches against
+  // this list, so an empty list pushes the operator into creating a duplicate
+  // district that dies on the unique index. Surfaced, not swallowed.
+  const [districts, setDistricts] = useState([]);
+  const [partners, setPartners] = useState([]);
+  const [districtsWarning, setDistrictsWarning] = useState("");
+  const [addingSite, setAddingSite] = useState(false);
   // Start/end times this org has actually used, per session type, so the form can
   // default without inventing hours for somebody else's business.
   const [timeDefaults, setTimeDefaults] = useState({});
@@ -133,6 +166,16 @@ export default function CampSessionForm({ orgId, cycle, session = null, onClose,
   // How many instructors are already on this camp (proposed, confirmed,
   // published - anything not withdrawn). Gates moving it, below.
   const [assignedInstructors, setAssignedInstructors] = useState(0);
+  // Children already registered for this camp. The move guard covers them too:
+  // re-dating a camp 8 children are booked into changes the dates their families
+  // were given, with nothing emailing them, and shifts the refund proration for
+  // registrations already taken. 46 of 51 prod camps have registrations and 6 of
+  // those have no instructor at all, so an instructor-only guard would simply
+  // not fire for them.
+  const [enrolledChildren, setEnrolledChildren] = useState(0);
+  // True when a count could not be read, so the refusal message can say it is
+  // being careful rather than claiming a number it does not have.
+  const [moveLockUnknown, setMoveLockUnknown] = useState(false);
   const [loadError, setLoadError] = useState("");
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState("");
@@ -151,7 +194,7 @@ export default function CampSessionForm({ orgId, cycle, session = null, onClose,
       setLoadingLists(true);
       setLoadError("");
       try {
-        const [locRes, curRes, timeRes] = await Promise.all([
+        const [locRes, curRes, timeRes, distRes, partRes] = await Promise.all([
           supabase
             .from("program_locations")
             .select("id, name")
@@ -169,6 +212,16 @@ export default function CampSessionForm({ orgId, cycle, session = null, onClose,
             .select("session_type, start_time, end_time, starts_on")
             .eq("organization_id", orgId)
             .order("starts_on", { ascending: false }),
+          supabase
+            .from("districts")
+            .select("id, name, district_type")
+            .eq("organization_id", orgId)
+            .order("name"),
+          supabase
+            .from("partners")
+            .select("id, partner_name")
+            .eq("organization_id", orgId)
+            .order("partner_name"),
         ]);
         if (cancelled) return;
         if (locRes.error) throw locRes.error;
@@ -180,6 +233,12 @@ export default function CampSessionForm({ orgId, cycle, session = null, onClose,
 
         setLocations(locRes.data ?? []);
         setCurricula(curRes.data ?? []);
+        setDistricts(distRes.data ?? []);
+        setPartners(partRes.data ?? []);
+        if (distRes.error) {
+          console.warn("[CampSessionForm] districts unavailable:", distRes.error.message);
+          setDistrictsWarning("Your districts could not be loaded, so the district picker below is empty. Reload before adding a site, or you may create a duplicate district.");
+        }
 
         const byType = {};
         for (const row of timeRes.data ?? []) {
@@ -214,7 +273,7 @@ export default function CampSessionForm({ orgId, cycle, session = null, onClose,
       setLoadingRow(true);
       const { data, error } = await supabase
         .from("camp_sessions")
-        .select("id, location_id, location_name, week_num, starts_on, ends_on, session_type, curriculum_id, curriculum_name, curriculum_category, start_time, end_time, class_days, ages_min, ages_max, max_capacity, price_cents, early_bird_price_cents, early_bird_deadline, notes")
+        .select("id, location_id, location_name, room, week_num, starts_on, ends_on, session_type, curriculum_id, curriculum_name, curriculum_category, start_time, end_time, class_days, age_format, grade_min, grade_max, ages_min, ages_max, max_capacity, short_description, price_cents, early_bird_price_cents, early_bird_deadline, runs_own_registration, external_registration_url, list_in_public_catalog, notes")
         .eq("id", session.id)
         .single();
       if (cancelled) return;
@@ -225,6 +284,17 @@ export default function CampSessionForm({ orgId, cycle, session = null, onClose,
       }
       setForm({
         location_id: data.location_id ?? "",
+        room: data.room ?? "",
+        // A camp saved before this form knew about grades has age_format NULL.
+        // Default the MODE to whichever pair actually holds values, so an
+        // ages-based camp opens on ages rather than on an empty grade picker.
+        age_format: data.age_format ?? ((data.grade_min != null || data.grade_max != null) ? "grade" : "age"),
+        grade_min: data.grade_min,
+        grade_max: data.grade_max,
+        short_description: data.short_description ?? "",
+        runs_own_registration: data.runs_own_registration ?? false,
+        external_registration_url: data.external_registration_url ?? "",
+        list_in_public_catalog: data.list_in_public_catalog ?? false,
         week_num: data.week_num ?? "",
         session_type: data.session_type ?? "",
         curriculum_id: data.curriculum_id ?? "",
@@ -246,15 +316,35 @@ export default function CampSessionForm({ orgId, cycle, session = null, onClose,
       // values, and picking a curriculum must not silently rewrite the capacity
       // or ages of a camp that is already running.
       setTouched(new Set(Object.keys(EMPTY)));
-      // Is anyone already on this camp? Moving a camp that has instructors is
-      // not a form problem, it is a payroll one - see the submit guard.
-      const { count: assignedCount } = await supabase
-        .from("camp_assignments")
-        .select("id", { count: "exact", head: true })
-        .eq("camp_session_id", session.id)
-        .neq("status", "withdrawn");
+      // Is anyone already on this camp - an instructor, or a child? Moving a
+      // camp with either is not a form problem, it is a payroll and a families
+      // problem - see the submit guard.
+      //
+      // THIS COUNT FAILS CLOSED. Reading only `count` and defaulting a failure
+      // to 0 made the guard fail OPEN: one dropped request and the form would
+      // cheerfully let someone re-date a camp with instructors on it, which is
+      // the exact corruption the guard exists to stop. An unknown count is
+      // treated as "somebody is on this camp" instead, so the worst a failure
+      // costs is a refused move.
+      const [assignRes, regRes] = await Promise.all([
+        supabase
+          .from("camp_assignments")
+          .select("id", { count: "exact", head: true })
+          .eq("camp_session_id", session.id)
+          .neq("status", "withdrawn"),
+        supabase
+          .from("registrations")
+          .select("id", { count: "exact", head: true })
+          .eq("camp_session_id", session.id),
+      ]);
       if (cancelled) return;
-      setAssignedInstructors(assignedCount ?? 0);
+      if (assignRes.error || regRes.error) {
+        console.warn("[CampSessionForm] could not count who is on this camp:",
+          assignRes.error?.message ?? regRes.error?.message);
+        setMoveLockUnknown(true);
+      }
+      setAssignedInstructors(assignRes.error ? 1 : (assignRes.count ?? 0));
+      setEnrolledChildren(regRes.error ? 1 : (regRes.count ?? 0));
       setBaseline({
         week_num: data.week_num ?? "",
         starts_on: data.starts_on,
@@ -343,6 +433,34 @@ export default function CampSessionForm({ orgId, cycle, session = null, onClose,
     });
   }
 
+  async function reloadDistricts() {
+    const { data } = await supabase
+      .from("districts")
+      .select("id, name, district_type")
+      .eq("organization_id", orgId)
+      .order("name");
+    setDistricts(data ?? []);
+    if (data?.length) setDistrictsWarning("");
+  }
+
+  // A site created inline is selected straight away, so the operator lands back
+  // on the camp with the site they just made already chosen. The room is cleared
+  // because it belonged to the previous venue - same reasoning as the program
+  // wizard's handleSchoolCreated.
+  async function handleSiteCreated({ locationId }) {
+    setAddingSite(false);
+    const { data } = await supabase
+      .from("program_locations")
+      .select("id, name")
+      .eq("organization_id", orgId)
+      .order("name");
+    setLocations(data ?? []);
+    if (locationId) {
+      setTouched((t) => new Set(t).add("location_id").add("room"));
+      setForm((f) => ({ ...f, location_id: locationId, room: "" }));
+    }
+  }
+
   function handleMoney(name, value) {
     if (value === "" || value === null) { field(name, null); return; }
     const num = Number(value);
@@ -408,21 +526,44 @@ export default function CampSessionForm({ orgId, cycle, session = null, onClose,
     // None of that is fixable from this form, so it refuses the move and leaves
     // the operator to withdraw the assignments first - deliberately, and
     // knowing what it costs.
-    if (baseline && assignedInstructors > 0) {
+    if (baseline && (assignedInstructors > 0 || enrolledChildren > 0)) {
+      const who = moveLockUnknown
+        ? "people may already be on this camp"
+        : [
+            assignedInstructors > 0 ? `${assignedInstructors} instructor${assignedInstructors === 1 ? "" : "s"}` : null,
+            enrolledChildren > 0 ? `${enrolledChildren} ${enrolledChildren === 1 ? "child" : "children"}` : null,
+          ].filter(Boolean).join(" and ");
+      const lead = moveLockUnknown
+        ? "We could not check who is on this camp, so"
+        : `This camp already has ${who} on it, so`;
       if (String(baseline.week_num) !== String(form.week_num)) {
-        e.push(`This camp already has ${assignedInstructors} instructor${assignedInstructors === 1 ? "" : "s"} on it, so its week cannot be changed here. Take them off the camp first, or make a new camp in the other week.`);
+        e.push(`${lead} its week cannot be changed here. Take them off the camp first, or make a new camp in the other week.`);
       }
       if (baseline.location_id !== form.location_id) {
-        e.push(`This camp already has ${assignedInstructors} instructor${assignedInstructors === 1 ? "" : "s"} on it, so its site cannot be changed here. Take them off the camp first, or make a new camp at the other site.`);
+        e.push(`${lead} its site cannot be changed here. Take them off the camp first, or make a new camp at the other site.`);
       }
     }
     const capacity = intOrNull(form.max_capacity);
     if (capacity != null && capacity <= 0) {
       e.push("Leave the class size blank for no limit, or set it above zero.");
     }
-    const aMin = intOrNull(form.ages_min);
-    const aMax = intOrNull(form.ages_max);
-    if (aMin != null && aMax != null && aMin > aMax) e.push("The youngest age has to be below the oldest.");
+    // Only the pair actually in use is checked - the other is written as NULL,
+    // so a stale value behind the unselected tab must not block the save.
+    // rangeBackwards/rangeBackwardsMessage are the shared helpers the program
+    // wizard uses, so both builders phrase a backwards range identically.
+    if (form.age_format === "grade") {
+      if (rangeBackwards(form.grade_min, form.grade_max)) e.push(rangeBackwardsMessage("grades"));
+    } else {
+      const aMin = intOrNull(form.ages_min);
+      const aMax = intOrNull(form.ages_max);
+      if (aMin != null && aMax != null && aMin > aMax) e.push(rangeBackwardsMessage("ages"));
+    }
+    // A partner-run camp with nowhere to send families is a dead end on the
+    // catalog. Mirrors the program wizard's pairing of the two fields.
+    if (form.runs_own_registration && form.list_in_public_catalog
+      && !form.external_registration_url.trim()) {
+      e.push("This camp is listed but registers somewhere else, so it needs the link families should follow.");
+    }
     // camp_sessions_eb_lower_than_regular / _eb_deadline_requires_eb_price.
     if (form.early_bird_price_cents != null && form.price_cents != null
       && form.early_bird_price_cents >= form.price_cents) {
@@ -432,7 +573,7 @@ export default function CampSessionForm({ orgId, cycle, session = null, onClose,
       e.push("An early bird deadline needs an early bird price.");
     }
     return e;
-  }, [form, selectedWeek, meetsNoDay, effectiveRange, baseline, assignedInstructors]);
+  }, [form, selectedWeek, meetsNoDay, effectiveRange, baseline, assignedInstructors, enrolledChildren, moveLockUnknown]);
 
   async function handleSubmit() {
     setSaveError("");
@@ -496,12 +637,25 @@ export default function CampSessionForm({ orgId, cycle, session = null, onClose,
         curriculum_id: curriculum.id,
         curriculum_name: curriculumUnchanged ? baseline.curriculum_name : curriculum.name,
         curriculum_category: form.curriculum_category,
+        room: form.room.trim() || null,
         start_time: form.start_time,
         end_time: form.end_time,
         class_days: daysUnchanged ? baseline.class_days : form.class_days,
-        ages_min: intOrNull(form.ages_min),
-        ages_max: intOrNull(form.ages_max),
+        // Exactly one vocabulary is stored; the other pair is cleared. Same rule
+        // and same intOrNull as the program wizard, so Kindergarten (grade 0)
+        // survives - a truthiness check here would delete it.
+        age_format: form.age_format,
+        grade_min: form.age_format === "grade" ? intOrNull(form.grade_min) : null,
+        grade_max: form.age_format === "grade" ? intOrNull(form.grade_max) : null,
+        ages_min: form.age_format === "age" ? intOrNull(form.ages_min) : null,
+        ages_max: form.age_format === "age" ? intOrNull(form.ages_max) : null,
         max_capacity: intOrNull(form.max_capacity),
+        short_description: form.short_description.trim() || null,
+        runs_own_registration: form.runs_own_registration,
+        external_registration_url: form.runs_own_registration
+          ? (form.external_registration_url.trim() || null)
+          : null,
+        list_in_public_catalog: form.runs_own_registration ? !!form.list_in_public_catalog : false,
         price_cents: form.price_cents,
         early_bird_price_cents: form.early_bird_price_cents,
         early_bird_deadline: form.early_bird_deadline || null,
@@ -544,6 +698,10 @@ export default function CampSessionForm({ orgId, cycle, session = null, onClose,
           .select("id")
           .single();
         if (error) throw error;
+        // Same conversion signal the program wizard fires when a program is
+        // saved live. A camp has no draft state - camp_sessions.status is only
+        // active or cancelled - so creating one IS the live save.
+        pixelWorkflowCreated();
         onSaved?.({ id: data.id, mode: "create" });
       }
     } catch (e) {
@@ -593,11 +751,42 @@ export default function CampSessionForm({ orgId, cycle, session = null, onClose,
     );
   }
 
+  // The same inline site builder the program wizard opens, not a second one.
+  // Rendered instead of the form rather than on top of it: both are modals, and
+  // stacking two scrims puts the camp form's close-on-scrim-click underneath.
+  //
+  // CHECKED BEFORE the prerequisite empty state below, not after. Having no
+  // sites yet is exactly when somebody needs to add one, and an empty state
+  // that returned first would make the button it offers unreachable.
+  if (addingSite) {
+    return (
+      <AddSchoolModal
+        org={org}
+        districts={districts}
+        partners={partners}
+        districtsWarning={districtsWarning}
+        onClose={() => setAddingSite(false)}
+        onDistrictsChanged={reloadDistricts}
+        onCreated={handleSiteCreated}
+      />
+    );
+  }
+
   if (locations.length === 0 || curricula.length === 0) {
     return (
       <ModalShell title={title} onClose={onClose} maxWidth={620}>
         <div style={{ padding: 24, fontSize: 14, color: INK, lineHeight: 1.6 }}>
-          {locations.length === 0 && <p style={{ marginTop: 0 }}>You need at least one site before you can put a camp anywhere. Add one under Schools &amp; sites.</p>}
+          {locations.length === 0 && (
+            <p style={{ marginTop: 0 }}>
+              You need at least one site before you can put a camp anywhere.{" "}
+              <button
+                type="button"
+                onClick={() => setAddingSite(true)}
+                style={{ background: "transparent", border: "none", color: BRIGHT, fontSize: 14, fontFamily: "inherit", cursor: "pointer", padding: 0, textDecoration: "underline" }}
+              >Add one now</button>{" "}
+              without leaving this screen.
+            </p>
+          )}
           {curricula.length === 0 && <p style={{ marginBottom: 0 }}>You need a published curriculum before you can schedule a camp. Publish one under Curricula.</p>}
         </div>
       </ModalShell>
@@ -616,11 +805,26 @@ export default function CampSessionForm({ orgId, cycle, session = null, onClose,
         </div>
 
         <div>
-          <label style={labelStyle} htmlFor="camp-site">Site</label>
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+            <label style={labelStyle} htmlFor="camp-site">Site</label>
+            <button
+              type="button"
+              onClick={() => setAddingSite(true)}
+              style={{ background: "transparent", border: "none", color: BRIGHT, fontSize: 12, fontFamily: "inherit", cursor: "pointer", padding: 0, marginBottom: 4 }}
+            >+ Add a site</button>
+          </div>
           <select id="camp-site" value={form.location_id} onChange={(e) => field("location_id", e.target.value)} style={fieldStyle}>
             <option value="">Pick a site…</option>
             {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
           </select>
+          {districtsWarning && (
+            <div style={{ fontSize: 12, color: DANGER, marginTop: 6 }}>{districtsWarning}</div>
+          )}
+        </div>
+
+        <div>
+          <label style={labelStyle} htmlFor="camp-room">Room (optional)</label>
+          <input id="camp-room" type="text" value={form.room} onChange={(e) => field("room", e.target.value)} style={fieldStyle} placeholder="Leave blank to use the site's usual room" />
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
@@ -707,14 +911,65 @@ export default function CampSessionForm({ orgId, cycle, session = null, onClose,
               {CATEGORIES.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
             </select>
           </div>
-          <div>
-            <label style={labelStyle} htmlFor="camp-ages-min">Youngest age</label>
-            <input id="camp-ages-min" type="number" min="0" value={form.ages_min} onChange={(e) => field("ages_min", e.target.value)} style={fieldStyle} />
+          <div style={{ gridColumn: "span 2" }}>
+            <label style={labelStyle}>Who it is for</label>
+            <div style={{ display: "flex", gap: 6 }}>
+              {[{ v: "grade", l: "By grade" }, { v: "age", l: "By age" }].map((o) => (
+                <button
+                  key={o.v}
+                  type="button"
+                  onClick={() => field("age_format", o.v)}
+                  style={{
+                    flex: 1,
+                    padding: "8px 0",
+                    background: form.age_format === o.v ? `${PURPLE}10` : "#fff",
+                    border: `1px solid ${form.age_format === o.v ? PURPLE : RULE}`,
+                    borderRadius: 6,
+                    color: form.age_format === o.v ? PURPLE : MUTED,
+                    fontWeight: form.age_format === o.v ? 700 : 500,
+                    fontFamily: "inherit",
+                    fontSize: 13,
+                    cursor: "pointer",
+                  }}
+                >{o.l}</button>
+              ))}
+            </div>
           </div>
-          <div>
-            <label style={labelStyle} htmlFor="camp-ages-max">Oldest age</label>
-            <input id="camp-ages-max" type="number" min="0" value={form.ages_max} onChange={(e) => field("ages_max", e.target.value)} style={fieldStyle} />
+        </div>
+
+        {form.age_format === "grade" ? (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div>
+              <label style={labelStyle} htmlFor="camp-grade-min">Lowest grade</label>
+              <select id="camp-grade-min" value={form.grade_min ?? ""} onChange={(e) => field("grade_min", e.target.value === "" ? null : Number(e.target.value))} style={fieldStyle}>
+                <option value="">Not stated</option>
+                {GRADE_OPTIONS.map((g) => <option key={g.value} value={g.value}>{g.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label style={labelStyle} htmlFor="camp-grade-max">Highest grade</label>
+              <select id="camp-grade-max" value={form.grade_max ?? ""} onChange={(e) => field("grade_max", e.target.value === "" ? null : Number(e.target.value))} style={fieldStyle}>
+                <option value="">Not stated</option>
+                {GRADE_OPTIONS.map((g) => <option key={g.value} value={g.value}>{g.label}</option>)}
+              </select>
+            </div>
           </div>
+        ) : (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div>
+              <label style={labelStyle} htmlFor="camp-ages-min">Youngest age</label>
+              <input id="camp-ages-min" type="number" min="0" value={form.ages_min} onChange={(e) => field("ages_min", e.target.value)} style={fieldStyle} />
+            </div>
+            <div>
+              <label style={labelStyle} htmlFor="camp-ages-max">Oldest age</label>
+              <input id="camp-ages-max" type="number" min="0" value={form.ages_max} onChange={(e) => field("ages_max", e.target.value)} style={fieldStyle} />
+            </div>
+          </div>
+        )}
+
+        <div>
+          <label style={labelStyle} htmlFor="camp-blurb">Short description (families see this)</label>
+          <textarea id="camp-blurb" rows={2} value={form.short_description} onChange={(e) => field("short_description", e.target.value)} style={{ ...fieldStyle, resize: "vertical" }} />
         </div>
 
         <div>
@@ -741,6 +996,48 @@ export default function CampSessionForm({ orgId, cycle, session = null, onClose,
             <label style={labelStyle} htmlFor="camp-eb-date">Early bird ends</label>
             <input id="camp-eb-date" type="date" value={form.early_bird_deadline} onChange={(e) => field("early_bird_deadline", e.target.value)} style={fieldStyle} />
           </div>
+        </div>
+
+        {/* What a family is actually charged, fee included - the same component
+            and the same fee config the program wizard uses, so the two screens
+            cannot quote different all-in prices for the same number typed. */}
+        <FamiliesPayNote priceCents={form.price_cents} feeConfig={feeConfig} style={{ color: INK }} />
+
+        <div style={{ background: CREAM, border: `1px solid ${RULE}`, borderRadius: 6, padding: 12 }}>
+          <label style={{ display: "flex", gap: 8, alignItems: "flex-start", cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={form.runs_own_registration}
+              onChange={(e) => field("runs_own_registration", e.target.checked)}
+              style={{ marginTop: 3 }}
+            />
+            <span style={{ fontSize: 13, color: INK, lineHeight: 1.5 }}>
+              <strong>The site takes the registrations, not us.</strong> Use this when a
+              parks department or partner sells the camp themselves. We will not take
+              payment for it.
+            </span>
+          </label>
+          {form.runs_own_registration && (
+            <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 10 }}>
+              <label style={{ display: "flex", gap: 8, alignItems: "flex-start", cursor: "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={form.list_in_public_catalog}
+                  onChange={(e) => field("list_in_public_catalog", e.target.checked)}
+                  style={{ marginTop: 3 }}
+                />
+                <span style={{ fontSize: 13, color: INK, lineHeight: 1.5 }}>
+                  Still show it on our page, with a link out to them.
+                </span>
+              </label>
+              {form.list_in_public_catalog && (
+                <div>
+                  <label style={labelStyle} htmlFor="camp-ext-url">Where families register</label>
+                  <input id="camp-ext-url" type="url" value={form.external_registration_url} onChange={(e) => field("external_registration_url", e.target.value)} style={fieldStyle} placeholder="https://" />
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         <div>

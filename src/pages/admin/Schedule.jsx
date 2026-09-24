@@ -2501,6 +2501,7 @@ export default function Schedule() {
       )}
       {campForm && (
         <CampSessionForm
+          org={org}
           orgId={org?.id}
           cycle={cycle}
           session={campForm.session}
