@@ -1636,6 +1636,10 @@ function ActivityTab({ org }) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [stripeBusy, setStripeBusy] = useState(false);
   const [stripeErr, setStripeErr] = useState("");
+  // Bumped when a credit is settled, so the "Credit owed" figure above the list
+  // recomputes. Without it the panel would empty while the total kept claiming
+  // the money was still owed - the two would contradict each other on screen.
+  const [reloadToken, setReloadToken] = useState(0);
 
   // Term list + default, from the SHARED org_terms helper.
   //
@@ -1707,7 +1711,7 @@ function ActivityTab({ org }) {
       else { const r = aRes.data ?? []; setRows(r); setHasMore(r.length === RA_PAGE); setOffset(r.length); }
     })();
     return () => { alive = false; };
-  }, [org?.id, period]);
+  }, [org?.id, period, reloadToken]);
 
   async function loadMore() {
     if (loadingMore || !org?.id || !period) return;
@@ -1892,6 +1896,13 @@ function ActivityTab({ org }) {
         {stripeErr && <span style={{ color: RED, marginLeft: 8 }}>{stripeErr}</span>}
       </div>
 
+      {/* ABOVE Activity, not inside it. Activity is what HAPPENED - payments and
+          refunds in the selected period. This is what is still OWED, it ignores
+          the period selector exactly as its total does, and it is the only
+          screen with an action on it. Mixing the two would put a button on a
+          history feed. */}
+      <CreditsOwed org={org} onSettled={() => setReloadToken((t) => t + 1)} />
+
       {/* Activity feed */}
       <h3 style={{ margin: "0 0 8px", fontSize: 14, color: INK, fontWeight: 700 }}>Activity</h3>
       {actErr && <div style={{ background: `${RED}1A`, color: RED, padding: 10, borderRadius: 6, fontSize: 12.5, marginBottom: 10 }}>{actErr}</div>}
@@ -1913,6 +1924,176 @@ function ActivityTab({ org }) {
         </div>
       )}
     </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// CREDITS OWED - the list, and the two ways a credit can end
+// ---------------------------------------------------------------------------
+// Until this existed a credit could be ISSUED and nothing else. An operator who
+// issued one by mistake, or whose family said "actually I would rather have the
+// money", had no route through the product at all - it was a database edit by
+// hand. Jeff is being told to send those to Jessica, which is the shape of a
+// missing screen.
+//
+// ONLY ACTIVE CREDITS ARE LISTED, and that is what makes this panel agree with
+// the "Credit owed" figure directly above it. A settled credit is history: it
+// lives in the finance export and keeps its movement row. Listing settled rows
+// here would show money as owed that is not.
+//
+// THE MONEY BAR IS NOT RE-IMPLEMENTED HERE. `settle_family_credit` proves
+// can_handle_money itself before it writes, so this screen cannot be the thing
+// that authorises. The buttons are only ever reached from the money tab, which
+// an operator without that bar cannot load in the first place.
+function CreditsOwed({ org, onSettled }) {
+  const [credits, setCredits] = useState(null);   // null = loading
+  const [err, setErr] = useState("");
+  const [openId, setOpenId] = useState(null);     // which row is expanded
+  const [kind, setKind] = useState(null);         // 'refunded' | 'void'
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [tick, setTick] = useState(0);            // local reload after a settle
+
+  useEffect(() => {
+    if (!org?.id) { setCredits(null); return; }
+    let cancelled = false;
+    (async () => {
+      setErr("");
+      const { data, error } = await supabase
+        .from("family_credits")
+        .select("id, amount_cents, reason, created_at, parents ( first_name, last_name ), registrations ( programs ( curriculum ), camp_sessions ( curriculum_name ) )")
+        .eq("organization_id", org.id)
+        .eq("status", "active")
+        .order("created_at", { ascending: false });
+      if (cancelled) return;
+      // A FAILED READ IS NOT "NOTHING IS OWED". Saying so out loud matters more
+      // here than on most lists: an empty panel under a non-zero "Credit owed"
+      // figure would read as a contradiction the operator has to resolve.
+      if (error) {
+        console.error("[Finances] credits load failed:", error);
+        setErr("Couldn't load the list of credits. The total above is still right.");
+        setCredits([]);
+        return;
+      }
+      setCredits(data ?? []);
+    })();
+    return () => { cancelled = true; };
+  }, [org?.id, tick]);
+
+  async function settle(creditId) {
+    if (!kind || busy) return;
+    setBusy(true);
+    const { error } = await supabase.rpc("settle_family_credit", {
+      p_credit_id: creditId,
+      p_new_status: kind,
+      p_note: note.trim() || null,
+    });
+    setBusy(false);
+    if (error) {
+      // FC009 is the one an operator will actually meet: somebody else settled
+      // this credit while the panel was open. Say that, rather than the raw
+      // database sentence, because the fix is "refresh", not "try again".
+      const already = String(error.code || "") === "FC009";
+      alert(already
+        ? "This credit has already been ended, probably in another tab or by someone else. Refreshing the list."
+        : `Couldn't end this credit: ${error.message || "unknown error"}`);
+      if (already) { setOpenId(null); setKind(null); setNote(""); setTick((t) => t + 1); if (onSettled) onSettled(); }
+      return;
+    }
+    setOpenId(null); setKind(null); setNote("");
+    setTick((t) => t + 1);
+    if (onSettled) onSettled();
+  }
+
+  if (credits === null) return null;              // loading: the total above is enough
+  if (credits.length === 0 && !err) return null;  // nothing owed: no empty panel
+
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <h3 style={{ margin: "0 0 8px", fontSize: 14, color: INK, fontWeight: 700 }}>Credit owed to families</h3>
+      {err && <div style={{ background: `${RED}1A`, color: RED, padding: 10, borderRadius: 6, fontSize: 12.5, marginBottom: 10 }}>{err}</div>}
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {credits.map((c) => {
+          const p = c.parents ?? {};
+          const who = `${p.first_name ?? ""} ${p.last_name ?? ""}`.trim() || "A family";
+          const reg = c.registrations ?? {};
+          const klass = reg.programs?.curriculum ?? reg.camp_sessions?.curriculum_name ?? "";
+          const when = c.created_at ? new Date(c.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
+          const isOpen = openId === c.id;
+          return (
+            <div key={c.id} style={{ border: `1px solid ${RULE}`, borderRadius: 8, padding: "10px 12px", background: "#fff" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                <div style={{ fontSize: 13, color: INK }}>
+                  <strong>{who}</strong>
+                  {klass ? <span style={{ color: MUTED }}> · {klass}</span> : null}
+                  <span style={{ color: MUTED }}>
+                    {" · "}{c.reason === "business_cancelled" ? "we cancelled" : c.reason === "family_cancelled" ? "they cancelled" : c.reason}
+                    {when ? ` · ${when}` : ""}
+                  </span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <strong style={{ fontSize: 13, whiteSpace: "nowrap" }}>{fmtCents(c.amount_cents)}</strong>
+                  <button type="button"
+                    onClick={() => { setOpenId(isOpen ? null : c.id); setKind(null); setNote(""); }}
+                    style={{ padding: "5px 10px", background: "transparent", color: INK, border: `1px solid ${RULE}`, borderRadius: 5, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>
+                    {isOpen ? "Cancel" : "End this credit"}
+                  </button>
+                </div>
+              </div>
+
+              {isOpen && (
+                <div style={{ marginTop: 10, borderTop: `1px solid ${RULE}`, paddingTop: 10 }}>
+                  <div style={{ fontSize: 12.5, color: INK, fontWeight: 600, marginBottom: 6 }}>What happened?</div>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    <SettleChoice
+                      checked={kind === "refunded"} onSelect={() => setKind("refunded")} disabled={busy}
+                      title="They took the money instead"
+                      /* THE SENTENCE THAT STOPS THE WORST MISTAKE. This records
+                         the credit as paid back; it does NOT send any money, and
+                         an operator who stops here has taken the credit away and
+                         given them nothing. It is also the step that frees the
+                         amount up, which is why it has to come first. */
+                      sub="This does NOT send any money. It records that you are paying them back, and frees the amount up so you can refund them from the class roster. Do that next."
+                    />
+                    <SettleChoice
+                      checked={kind === "void"} onSelect={() => setKind("void")} disabled={busy}
+                      title="I issued it by mistake"
+                      sub="Removes the credit. The family is no longer owed it. Nothing is sent to them, so tell them if they already know about it."
+                    />
+                  </div>
+                  <input
+                    value={note} onChange={(e) => setNote(e.target.value)} disabled={busy}
+                    placeholder="Add a note (optional, but it is the only record of why)"
+                    style={{ width: "100%", marginTop: 10, padding: "7px 9px", border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 12.5, fontFamily: "inherit", boxSizing: "border-box" }}
+                  />
+                  <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center" }}>
+                    <button type="button" onClick={() => settle(c.id)} disabled={!kind || busy}
+                      style={{ padding: "7px 14px", background: kind && !busy ? BRIGHT : "transparent", color: kind && !busy ? "#fff" : MUTED, border: kind && !busy ? "none" : `1px solid ${RULE}`, borderRadius: 6, fontSize: 12.5, fontWeight: 600, fontFamily: "inherit", cursor: kind && !busy ? "pointer" : "not-allowed" }}>
+                      {busy ? "Saving…" : "Confirm"}
+                    </button>
+                    <span style={{ fontSize: 11.5, color: MUTED }}>Nothing is emailed to the family either way.</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// One choice in the settle panel. Its own component so the two read identically
+// and neither can drift into looking more default than the other - there is no
+// safe default here, and the copy has to carry equal weight.
+function SettleChoice({ checked, onSelect, disabled, title, sub }) {
+  return (
+    <button type="button" onClick={onSelect} disabled={disabled}
+      style={{ textAlign: "left", padding: "8px 10px", borderRadius: 6, cursor: disabled ? "not-allowed" : "pointer", fontFamily: "inherit",
+               border: `1px solid ${checked ? BRIGHT : RULE}`, background: checked ? `${BRIGHT}0F` : "transparent" }}>
+      <div style={{ fontSize: 12.5, fontWeight: 700, color: INK }}>{title}</div>
+      <div style={{ fontSize: 11.5, color: MUTED, marginTop: 2, lineHeight: 1.5 }}>{sub}</div>
+    </button>
   );
 }
 
