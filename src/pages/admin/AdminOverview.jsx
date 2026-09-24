@@ -1117,6 +1117,10 @@ function TodayAgenda({ org }) {
 // open-hires comes in as a prop from the existing JS calc so it stays byte-identical
 // to the schedule board's counter. Empty -> the section hides itself entirely.
 const IMPORTANT_CAP = 5;
+// Cards that report the screen could not READ something, rather than reporting a
+// fact about the business. Snoozing one restores the exact silence it exists to
+// break, so these carry no dismiss controls and ignore any stored dismissal.
+const NEVER_DISMISSABLE = new Set(["sub_coverage_unknown"]);
 const dismissBtn = { fontSize: 12, color: MUTED, background: "none", border: "none", cursor: "pointer", padding: 0 };
 
 function daysUntil(dateStr) {
@@ -1150,12 +1154,37 @@ function buildImportant(sig, openHires, subSignals, deliverySignals) {
       cta: { to: "/admin/schedule", label: "Open the schedule →" },
     });
   }
-  // Genuinely uncovered — a sub said no and nobody's filling in. Urgent act.
-  if (subSignals?.uncovered > 0) out.push({
+  // Somebody said no and nobody has accepted. Urgent act. This counts days that
+  // are genuinely uncovered AND days still at risk — a day two people have
+  // already turned down belongs here even while a third offer is unanswered,
+  // because "just waiting to hear back" is not true of a day that has already
+  // been refused twice.
+  // Counted in COVERAGE SLOTS, the same unit NeedsCoverBanner shows and the same
+  // unit the operator acts in: one class needing somebody on one date. The two
+  // surfaces must never print different numbers for the same data.
+  const needsCoverDays = (subSignals?.uncovered ?? 0) + (subSignals?.atRisk ?? 0);
+  if (needsCoverDays > 0) out.push({
     key: "needs_cover", kind: "act", prio: 3,
-    title: subSignals.uncovered === 1 ? "A class day has no one to cover it" : `${subSignals.uncovered} class days have no one to cover them`,
-    detail: "A sub said no and nobody's filling in yet — line up another sub, or have the lead take it.",
+    title: needsCoverDays === 1 ? "A class day has no one to cover it" : `${needsCoverDays} class days have no one to cover them`,
+    // Was "Someone said no and nobody has accepted yet". That is now false of
+    // most of what lands here: a day whose cover was RELEASED (nobody refused
+    // anything) and a day whose offer email never left (nobody was even asked)
+    // both count in `uncovered`. The sentence has to be true of every day it
+    // indicts, so it says the one thing all of them share.
+    detail: "Nobody is covering these yet — line up a sub, or have the lead take it.",
     cta: { to: "/admin/schedule", label: "Find a sub →" },
+  });
+  // Its own card, not folded into the one above: on these days NOBODY has been
+  // asked, so "someone said no" would be false of every one of them. The
+  // instructor told you in their availability survey and nothing has happened
+  // since, which is a different job from chasing a refusal.
+  if (subSignals?.leadOut > 0) out.push({
+    key: "lead_marked_out", kind: "act", prio: 3,
+    title: subSignals.leadOut === 1
+      ? "An instructor is out on a day they teach"
+      : `${subSignals.leadOut} class days have an instructor who said they're out`,
+    detail: "They marked it in their availability and nobody has been asked to cover yet.",
+    cta: { to: "/admin/schedule", label: "Ask a sub →" },
   });
   // A welcome/reminder couldn't reach a family (bad address, or exhausted retries).
   // Silent-miss prevention: surface it where the admin lands, linking to the
@@ -1169,12 +1198,25 @@ function buildImportant(sig, openHires, subSignals, deliverySignals) {
     detail: "A welcome or reminder couldn't reach them. See exactly who to follow up with.",
     cta: { to: "/admin/family-comms/automations", label: "Review →" },
   });
-  // Offer still out — calmer FYI, not an urgent act.
-  if (subSignals?.awaiting > 0) out.push({
+  // Offers out and nobody has said no. Calmer FYI, not an urgent act.
+  // This counts OFFERS, not days: one day can be offered to three people, and
+  // "a sub offer is still out" would be false with three people holding one.
+  if (subSignals?.awaitingOffers > 0) out.push({
     key: "sub_pending", kind: "fyi", prio: 9,
-    title: subSignals.awaiting === 1 ? "A sub offer is still out" : `${subSignals.awaiting} sub offers are still out`,
-    detail: "You've asked someone to cover a day — just waiting to hear back.",
+    title: subSignals.awaitingOffers === 1 ? "A sub offer is still out" : `${subSignals.awaitingOffers} sub offers are still out`,
+    detail: subSignals.awaitingOffers === 1
+      ? "You've asked someone to cover a day — just waiting to hear back."
+      : `Asked across ${subSignals.awaitingDays === 1 ? "one class day" : `${subSignals.awaitingDays} class days`} — nobody has answered yet.`,
     cta: { to: "/admin/schedule", label: "View schedule →" },
+  });
+  // The coverage read itself failed. Say so: zero uncovered days and a failed
+  // lookup are indistinguishable in the counters above, and the quiet one reads
+  // as "everything is covered".
+  if (subSignals?.failed) out.push({
+    key: "sub_coverage_unknown", kind: "act", prio: 3,
+    title: "We couldn't check sub coverage",
+    detail: "This screen can't tell you whether any class day needs a sub right now. Reload, and open the schedule if it keeps failing.",
+    cta: { to: "/admin/schedule", label: "Open the schedule →" },
   });
   if (sig?.low_enrollment > 0) out.push({
     key: "low_enrollment", kind: "act", prio: 4,
@@ -1225,7 +1267,7 @@ function buildImportant(sig, openHires, subSignals, deliverySignals) {
 function ImportantToday({ org, user, openHires }) {
   const [sig, setSig] = useState(null);               // get_home_signals row
   const [dismissals, setDismissals] = useState(null); // Map signal_key -> row
-  const [subSignals, setSubSignals] = useState(null); // { uncovered, awaiting }
+  const [subSignals, setSubSignals] = useState(null); // { uncovered, atRisk, awaitingOffers, awaitingDays, failed }
   const [deliverySignals, setDeliverySignals] = useState(null); // { needsYou }
   const [showAll, setShowAll] = useState(false);
 
@@ -1238,8 +1280,10 @@ function ImportantToday({ org, user, openHires }) {
         supabase.from("homescreen_dismissals").select("signal_key, dismissed_until, permanent").eq("organization_id", org.id),
         // Sub-coverage via the shared get_sub_coverage RPC (single source of truth
         // with NeedsCoverBanner). Returns only slots on LIVE parents, already split
-        // into 'uncovered' (declined, no one coming) and 'awaiting' (offer still
-        // out) — so cancelled/withdrawn/deleted classes can't inflate this card.
+        // into 'uncovered' (somebody said no, nothing out), 'at_risk' (somebody
+        // said no and an offer IS out) and 'awaiting' (offers out, nobody has
+        // said no) — so cancelled/withdrawn/deleted classes can't inflate this
+        // card. One row is one COVERAGE SLOT: a class needing somebody on a date.
         supabase.rpc("get_sub_coverage", { p_org: org.id }),
         // Failed sends (RLS members_read_* scopes to this org; the partial index
         // automation_run_recipients_failed_idx serves this). We classify
@@ -1264,12 +1308,26 @@ function ImportantToday({ org, user, openHires }) {
       else setSig(Array.isArray(sigRes.data) ? sigRes.data[0] || {} : sigRes.data || {});
       setDismissals(new Map((disRes.data ?? []).map((r) => [r.signal_key, r])));
 
-      let uncovered = 0, awaiting = 0;
-      for (const r of subsRes.data ?? []) {
-        if (r.state === "uncovered") uncovered++;
-        else if (r.state === "awaiting") awaiting++;
+      // A failed coverage read is NOT "everything is covered". Counted rows and
+      // an error are indistinguishable once both are zero, so carry the failure
+      // through and let buildImportant say it out loud.
+      if (subsRes.error) {
+        console.error("[admin/overview] sub coverage load failed", subsRes.error);
+        setSubSignals({ uncovered: 0, atRisk: 0, leadOut: 0, awaitingOffers: 0, awaitingDays: 0, failed: true });
+      } else {
+        // Days for the urgent counts; OFFERS for the waiting count, since one
+        // day can carry several. Rows are per coverage slot, so a camp day with
+        // a lead and a developing instructor both out counts as the two people
+        // it genuinely needs.
+        let uncovered = 0, atRisk = 0, leadOut = 0, awaitingOffers = 0, awaitingDays = 0;
+        for (const r of subsRes.data ?? []) {
+          if (r.state === "uncovered") uncovered++;
+          else if (r.state === "at_risk") atRisk++;
+          else if (r.state === "lead_out") leadOut++;
+          else if (r.state === "awaiting") { awaitingDays++; awaitingOffers += (r.offers_out ?? 1); }
+        }
+        setSubSignals({ uncovered, atRisk, leadOut, awaitingOffers, awaitingDays, failed: false });
       }
-      setSubSignals({ uncovered, awaiting });
 
       const needsYou = (failRes.data ?? []).filter((r) => classifyFailure(r).needsYou).length;
       setDeliverySignals({ needsYou });
@@ -1291,6 +1349,10 @@ function ImportantToday({ org, user, openHires }) {
 
   const now = Date.now();
   const all = buildImportant(sig, openHires, subSignals, deliverySignals).filter((s) => {
+    // A card that says "I could not check" must not be snoozeable. Hiding it
+    // for 24h leaves a homescreen byte-identical to a fully covered week, which
+    // is the exact silence the card exists to break.
+    if (NEVER_DISMISSABLE.has(s.key)) return true;
     const d = dismissals.get(s.key);
     if (!d) return true;
     if (d.permanent) return false;
@@ -1319,8 +1381,10 @@ function ImportantToday({ org, user, openHires }) {
               {it.cta && (
                 <Link to={it.cta.to} style={{ fontSize: 12.5, fontWeight: 600, color: BRIGHT, textDecoration: "none" }}>{it.cta.label}</Link>
               )}
-              <button onClick={() => dismiss(it, false)} style={dismissBtn}>Not now</button>
-              {it.kind === "fyi" && <button onClick={() => dismiss(it, true)} style={dismissBtn}>Dismiss</button>}
+              {!NEVER_DISMISSABLE.has(it.key) && (
+                <button onClick={() => dismiss(it, false)} style={dismissBtn}>Not now</button>
+              )}
+              {it.kind === "fyi" && !NEVER_DISMISSABLE.has(it.key) && <button onClick={() => dismiss(it, true)} style={dismissBtn}>Dismiss</button>}
             </div>
           </div>
         ))}

@@ -182,13 +182,33 @@ serve(async (req: Request) => {
     }
 
     // Flip substitution to taught.
-    const { error: subUpdErr } = await supabase
+    //
+    // GUARDED ON confirmed, not on id alone. The status was read ~6 round trips
+    // ago and a cover can now be RELEASED by an admin in that window: this
+    // update would then stamp 'taught' straight over 'cancelled'. The day would
+    // go back to reading covered on every board, the pay line would pay this
+    // sub, and both they and the regular instructor have already been emailed
+    // that the day was cancelled and not to hold the time.
+    //
+    // Same guard the rest of this build now carries on every status write
+    // (respond-to-sub-offer's decline, create-assignment-substitution's stamp,
+    // cancel-sub-cover's release). This was the one that got missed.
+    const { data: taughtRows, error: subUpdErr } = await supabase
       .from('assignment_substitutions')
       .update({ status: 'taught', updated_at: nowIso })
-      .eq('id', substitutionId);
+      .eq('id', substitutionId)
+      .eq('status', 'confirmed')
+      .select('id');
     if (subUpdErr) {
       console.error('[confirm-sub-delivery] substitution update failed:', subUpdErr);
       // Confirmation row already written — leave it; admin can reconcile.
+    } else if (!taughtRows || taughtRows.length === 0) {
+      // The cover moved underneath us. Say so loudly: the delivery
+      // confirmation HAS been written, so this day now has a pay record whose
+      // substitution says something else, and a person needs to look at it.
+      console.error('[confirm-sub-delivery] cover was no longer confirmed when marking taught; delivery row written but substitution NOT flipped', {
+        substitution_id: substitutionId,
+      });
     }
 
     return json({ ok: true, status: 'taught', pay_amount_cents: payCents });

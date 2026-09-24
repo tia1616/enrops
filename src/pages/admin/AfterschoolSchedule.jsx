@@ -23,6 +23,7 @@ import { resolveBoardSendIntro } from "../../lib/boardSendCopy.js";
 import { classifyOther } from "../../lib/scheduleConflicts.js";
 import { programScheduleSummary } from "../../lib/programSchedule.js";
 import { parseBonusDollars } from "../../lib/bonusAmount.js";
+import { aggregateSubOffers, subSlotLabel, slotNeedsCover, subDisplayName, SUB_ACTIVE_STATUSES } from "../../lib/subCoverage.js";
 // Replaces a local gradeLabel() that has been deleted with its last caller. It
 // rendered "?" for a missing grade - printing a question mark where the answer is
 // "they didn't say" - which is the exact behaviour the shared module was written
@@ -54,7 +55,7 @@ const LOCATION_PALETTE = ["#F2E4D2", "#E5EDDC", "#DDE7F0", "#ECDFEC", "#F0E0E0",
 const STATUS_RANK = { published: 4, confirmed: 3, change_requested: 2, proposed: 1, withdrawn: 0, declined: 0 };
 
 // Sub statuses that are "live" — shown on the board, counted by the filter. Excludes declined/missed.
-const SUB_SHOWN_STATUSES = new Set(["pending", "confirmed", "taught"]);
+// One spelling, in src/lib/subCoverage.js, shared with the camp board.
 
 // --- Calendar-week helpers (UTC-based so they never shift across the user's tz). ---
 // These bucket CANONICAL session dates (from derive_program_session_dates) into weeks;
@@ -640,7 +641,11 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       if (assignmentIds.length) {
         const { data: subRows, error: subErr } = await supabase
           .from("assignment_substitutions")
-          .select("id, parent_assignment_id, date, status, sub_tier, sub_instructor_id, sub:instructors!sub_instructor_id(first_name, last_name)")
+          // email_sent_at is load-bearing, not decoration: aggregateSubSlot
+          // counts an offer only once its email has actually left, so a row
+          // arriving here without this column reads as "written but never
+          // sent" and every live offer would draw as a day needing cover.
+          .select("id, parent_assignment_id, date, status, decline_reason, sub_tier, sub_instructor_id, email_sent_at, cover_still_needed, sub:instructors!sub_instructor_id(first_name, last_name, preferred_name)")
           .eq("parent_assignment_type", "program")
           .in("parent_assignment_id", assignmentIds);
         if (subErr) console.warn("[AfterschoolSchedule] sub load failed:", subErr.message);
@@ -806,23 +811,52 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     return m;
   }, [state]);
 
-  // program_id -> { ids:Set<instructor_id>, names:string[], subs:[{name,date,status}] } for live subs.
+  // program_id -> { ids:Set<instructor_id>, names:string[], subs:[{date, slot}] }.
   // Powers the card sub indicator and lets the instructor filter surface a program a person only SUBs.
+  //
+  // `subs` holds one entry per CLASS-DAY, not per offer. A day offered to three
+  // people is ONE sub day with three offers out — listing it three times would
+  // tell the operator three different people are subbing the same class.
+  // `ids`/`names` stay per PERSON, so the filter still finds everyone who was
+  // asked, including each candidate still deciding.
   const subInfoByProgram = useMemo(() => {
     const m = new Map();
     if (state.status !== "ready") return m;
+    const today = todayIso();
     const asgToProgram = new Map(state.assignments.map((a) => [a.id, a.program_id]));
-    for (const s of state.substitutions ?? []) {
-      if (!SUB_SHOWN_STATUSES.has(s.status)) continue;
-      const pid = asgToProgram.get(s.parent_assignment_id);
+    for (const slot of aggregateSubOffers(state.substitutions ?? []).values()) {
+      const first = slot.rows[0];
+      const pid = asgToProgram.get(first.parent_assignment_id);
       if (!pid) continue;
+      const live = slot.rows.filter((r) => SUB_ACTIVE_STATUSES.has(r.status));
+      const label = subSlotLabel(slot);
+      // A day everyone declined draws no sub, but it MUST still be recorded:
+      // leaving it out is what let a class summarise itself as settled on the
+      // strength of the days it could see while one of its days had nobody.
+      //
+      // Only a day that has NOT HAPPENED YET can need cover. This query fetches
+      // the whole term with no date bound, so without this a class would wear a
+      // coral "needs cover" for a Tuesday three weeks ago that the lead ended up
+      // taking -- and the banner at the top of this same page, which the
+      // database filters to today onward, would say nothing. Two surfaces, same
+      // page, contradicting each other, is how an alarm stops being believed.
+      const needsCover = slotNeedsCover(slot) && first.date >= today;
+      if (!label && !needsCover) continue;
       if (!m.has(pid)) m.set(pid, { ids: new Set(), names: [], subs: [] });
       const entry = m.get(pid);
-      if (s.sub_instructor_id) entry.ids.add(s.sub_instructor_id);
-      const nm = [s.sub?.first_name, s.sub?.last_name].filter(Boolean).join(" ");
-      if (nm) entry.names.push(nm);
-      entry.subs.push({ name: nm || "Sub", date: s.date, status: s.status });
+      for (const r of live) {
+        if (r.sub_instructor_id) entry.ids.add(r.sub_instructor_id);
+        // BOTH spellings go in the search haystack. The card shows the preferred
+        // name, but an operator searches for whichever one they know -- and the
+        // legal name is the one on the contract, on payroll and in the
+        // instructors list.
+        for (const nm of [subDisplayName(r.sub), [r.sub?.first_name, r.sub?.last_name].filter(Boolean).join(" ")]) {
+          if (nm && nm !== "Sub" && !entry.names.includes(nm)) entry.names.push(nm);
+        }
+      }
+      entry.subs.push({ date: first.date, slot, label, needsCover });
     }
+    for (const entry of m.values()) entry.subs.sort((a, b) => a.date.localeCompare(b.date));
     return m;
   }, [state]);
 
@@ -2485,6 +2519,11 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           instructors={state.instructors}
           onClose={() => setAssignSubFor(null)}
           onSubmitted={() => { setAssignSubFor(null); loadAll(); }}
+          // A release changes the day without ending the operator's task: the
+          // next thing they do is ask somebody else. Reload the board and leave
+          // the dialog open — onSubmitted above closes it, which is right for a
+          // send and wrong here.
+          onChanged={() => { loadAll(); }}
         />
       )}
 
@@ -3245,16 +3284,38 @@ function ProgramCard({ program, loc, tint, status, flags, lead, sub, subNeeded, 
 // card button (not nested) so it stays independently clickable and valid HTML.
 function SubLineAS({ subs, onClick }) {
   const list = subs ?? [];
-  let label, color;
+  // Days that still need somebody are counted separately from days that have a
+  // sub on them, because the two must never be summarised as one number.
+  const needing = list.filter((d) => d.needsCover);
+  const covered = list.filter((d) => d.label);
+  // `label` is the part that may be truncated; `marker` is pinned and never is.
+  // Anything that tells the operator the STATE of the day goes in the marker —
+  // a clipped name is a nuisance, a clipped "needs cover" is a lie.
+  let label, marker = null, color;
   if (list.length === 0) {
     color = MUTED; label = "+ Sub day";
-  } else if (list.length === 1) {
-    const s = list[0];
-    const confirmed = s.status === "confirmed" || s.status === "taught";
-    color = confirmed ? OK_GREEN : VIOLET;
-    label = `Sub ${s.name}${confirmed ? " ✓" : " · pending"}`;
+  } else if (needing.length > 0 && covered.length === 0) {
+    // Every sub day on this class is one nobody took. The old card drew the
+    // same neutral "+ Sub day" here as on a class that never needed one.
+    color = CORAL;
+    label = needing.length === 1 ? "Needs a sub" : `${needing.length} days`;
+    marker = needing.length === 1 ? null : "need a sub";
+  } else if (covered.length === 1 && needing.length === 0) {
+    // One class-day, nothing outstanding: the shared rule words it.
+    const one = covered[0].label;
+    color = one.tone === "confirmed" ? OK_GREEN : one.tone === "uncovered" ? CORAL : VIOLET;
+    label = `Sub ${one.text}`;
+    marker = one.note ? `${one.marker} · ${one.note}` : one.marker;
   } else {
-    color = OK_GREEN; label = `${list.length} sub days`;
+    // Several sub days. Green ONLY when every day this class has is settled —
+    // including the days that draw no sub of their own, which is what a class
+    // used to hide an uncovered day behind.
+    const allSettled = needing.length === 0
+      && covered.every((d) => d.label.tone === "confirmed");
+    color = needing.length > 0 ? CORAL : allSettled ? OK_GREEN : VIOLET;
+    const total = covered.length + needing.length;
+    label = `${total} sub days`;
+    marker = needing.length > 0 ? `· ${needing.length} need cover` : null;
   }
   return (
     <button
@@ -3267,9 +3328,11 @@ function SubLineAS({ subs, onClick }) {
         border: "none", borderTop: `1px solid ${RULE}`,
         cursor: "pointer", fontFamily: "inherit", textAlign: "left",
         fontSize: 10, fontWeight: 600, color, whiteSpace: "nowrap", overflow: "hidden",
+        gap: 4,
       }}
     >
       <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
+      {marker && <span style={{ flexShrink: 0 }}>{marker}</span>}
     </button>
   );
 }

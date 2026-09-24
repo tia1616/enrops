@@ -1,0 +1,272 @@
+// ONE rule for "who is covering this class-day", shared by the camp board
+// (Schedule.jsx) and the after-school board (AfterschoolSchedule.jsx).
+//
+// WHY THIS MODULE EXISTS. Both boards used to index substitution rows straight
+// into a map keyed by class-day, which is only correct while the database
+// allows ONE offer per class-day. The first-come sub build lets an operator
+// offer one day to several people at once, and at that point:
+//   * the camp board's `map.set(key, row)` keeps whichever row happened to load
+//     last, so the card names an arbitrary one of three candidates; and
+//   * the after-school card lists all three as if three different people were
+//     subbing the same class.
+// Neither is a crash. Both are the board stating something untrue about who is
+// covering a class, which is worse.
+//
+// The precedence below deliberately MIRRORS the get_sub_coverage RPC
+// (migration 20260923b) that feeds the homescreen card and NeedsCoverBanner:
+// somebody confirmed wins; otherwise offers still out; otherwise declines.
+// The two live on different data paths (the boards already hold the rows; the
+// banner asks the database), so they cannot be one query -- keeping the rule in
+// one module on this side is what stops the two boards drifting from each other
+// and from the server.
+
+import { displayFullName } from './instructorName.js';
+
+// Statuses a board surfaces at all. A declined offer leaves the regular
+// instructor covering the day, so it is not drawn on the card.
+export const SUB_ACTIVE_STATUSES = new Set(["pending", "confirmed", "taught"]);
+
+export function subSlotKey(parentAssignmentId, date) {
+  return `${parentAssignmentId}:${date}`;
+}
+
+// How many DIFFERENT PEOPLE are represented by these rows. Counting rows would
+// be a proxy: re-offering the same day to the same person after they declined
+// leaves two rows for one human, and every sentence built on this ("3 offers
+// out", "2 people declined") is about people, not rows.
+function distinctPeople(rows) {
+  const ids = new Set();
+  let unknown = 0;
+  for (const r of rows) {
+    if (r.sub_instructor_id) ids.add(r.sub_instructor_id);
+    else unknown += 1;   // no id to dedupe on: count it as its own person
+  }
+  return ids.size + unknown;
+}
+
+// rows: assignment_substitutions rows for one class-day, any statuses.
+// Returns the slot's single honest answer, or null when there are no rows.
+//
+// `sub` and `sub_instructor_id` are named after the row fields on purpose: a
+// slot owned by exactly one person is drop-in compatible with the single row
+// the callers used to hold. They are NULL when several offers are out, because
+// there is no one person to name yet -- callers must render the count instead.
+export function aggregateSubSlot(rows) {
+  const all = rows ?? [];
+  if (all.length === 0) return null;
+
+  // A PERSON who turned the class down. Somebody auto-declined for LOSING a
+  // first-come race carries decline_reason='covered_by_other' -- they said yes
+  // and were closed out by somebody faster, so counting them here would report
+  // a refusal that never happened. The RPC (migration 20260923b) filters the
+  // same value; these two halves must agree or the card and the banner above it
+  // will disagree about the same day.
+  const declined = all.filter((r) => r.status === "declined"
+    && r.decline_reason !== "covered_by_other");
+  const declineCount = distinctPeople(declined);
+
+  // AN OFFER IS NOT AN ASK UNTIL ITS EMAIL HAS LEFT. The row is written before
+  // the email is sent and, when Resend fails, deleted again -- but a row can
+  // still outlive a failed send (the delete itself failing, a function timing
+  // out mid-flight). Counting those as live offers is how a class-day nobody
+  // has been contacted about reads as "Offered, waiting" and files itself under
+  // the calm state. get_sub_coverage filters on the same column, and the two
+  // halves have to agree or the card and the banner above it describe the same
+  // day differently.
+  const pendingAsked = all.filter((r) => r.status === "pending" && r.email_sent_at);
+  const pendingUnsent = all.filter((r) => r.status === "pending" && !r.email_sent_at);
+
+  // A cover an admin released AND still wants somebody for. The day is open
+  // again and nobody is coming -- the one state that used to fall through every
+  // branch here and draw nothing at all, because it is produced by the winner's
+  // REMOVAL rather than by anybody refusing.
+  //
+  // cover_still_needed === false is the other half of that decision and must
+  // NOT alarm: the commonest reason to release a cover is that the regular
+  // instructor is teaching the class after all, and a day nobody needs a sub
+  // for would otherwise sit on the banner shouting until the date passed, with
+  // no dismiss and no way to make it true. An alarm that cannot be cleared
+  // teaches an operator to ignore the alarm.
+  const cancelled = all.filter((r) => r.status === "cancelled"
+    && r.cover_still_needed !== false);
+  const cancelledCount = distinctPeople(cancelled);
+
+  // A confirmed sub wins the day. 'taught' is the SAME person one step later.
+  // Migration 20260923d made two settled rows on one day impossible, so this can
+  // no longer be ambiguous in practice -- but the preference stays EXPLICIT
+  // rather than taking whichever row the database returned first, because
+  // neither board query orders its rows and correctness here should not rest on
+  // an index somewhere else continuing to exist.
+  const winner = all.find((r) => r.status === "confirmed")
+    ?? all.find((r) => r.status === "taught")
+    ?? null;
+  if (winner) {
+    // Offers that are still live ALONGSIDE a winner: the accept path declines
+    // the siblings it can lock, so a skipped one stays pending. The day is
+    // covered, but somebody is still holding an unanswered email and the card
+    // has to be able to say so.
+    const stillOut = distinctPeople(pendingAsked);
+    return {
+      status: winner.status,
+      sub: winner.sub ?? null,
+      sub_instructor_id: winner.sub_instructor_id ?? null,
+      offersOut: stillOut,
+      declineCount,
+      cancelledCount,
+      needsCover: false,
+      rows: all,
+    };
+  }
+
+  if (pendingAsked.length > 0) {
+    const people = distinctPeople(pendingAsked);
+    const only = people === 1 ? pendingAsked[0] : null;
+    return {
+      status: "pending",
+      sub: only ? (only.sub ?? null) : null,
+      sub_instructor_id: only ? (only.sub_instructor_id ?? null) : null,
+      offersOut: people,
+      declineCount,
+      cancelledCount,
+      // Somebody said no, or a cover was released, and a fresh offer is out.
+      // Mirrors the RPC's 'at_risk': waiting, but not calmly.
+      needsCover: declineCount > 0 || cancelledCount > 0,
+      rows: all,
+    };
+  }
+
+  // Nobody is confirmed and not one live, actually-sent offer remains. The card
+  // draws nothing (SUB_ACTIVE_STATUSES excludes every status below), exactly as
+  // it already did for a day everybody turned down -- the regular instructor is
+  // still the name on the schedule. That the day NEEDS somebody is carried by
+  // `needsCover` and surfaced by the banner and the homescreen count.
+  //
+  // The status must never fall through to "pending" here. A day whose only
+  // pending rows were never emailed would then be drawn as "Sub - pending",
+  // naming nobody, for a class no one has been contacted about.
+  const fallbackStatus = declined.length > 0 ? "declined"
+    : cancelled.length > 0 ? "cancelled"
+    : pendingUnsent.length > 0 ? "unsent"
+    : all[0].status;
+
+  return {
+    status: fallbackStatus,
+    sub: null,
+    sub_instructor_id: null,
+    offersOut: 0,
+    declineCount,
+    cancelledCount,
+    // Three ways to arrive here and all of them need a person: somebody
+    // refused, a cover was released, or a row exists whose offer email never
+    // left. The last one used to read as calm, which is the worst of the three.
+    needsCover: declineCount > 0 || cancelledCount > 0 || pendingUnsent.length > 0,
+    rows: all,
+  };
+}
+
+// rows: every substitution row a board loaded. Returns Map<"assignmentId:date", slot>.
+export function aggregateSubOffers(rows) {
+  const byKey = new Map();
+  for (const r of rows ?? []) {
+    if (!r?.parent_assignment_id || !r?.date) continue;
+    const key = subSlotKey(r.parent_assignment_id, r.date);
+    const bucket = byKey.get(key);
+    if (bucket) bucket.push(r);
+    else byKey.set(key, [r]);
+  }
+  const out = new Map();
+  for (const [key, group] of byKey) {
+    const slot = aggregateSubSlot(group);
+    if (slot) out.set(key, slot);
+  }
+  return out;
+}
+
+// The name a person reads off a sub row. ONE spelling, from the shared helper
+// that already owns preferred-name handling -- the coverage RPC resolves names
+// the same way, so a card and the banner above it must not call the same
+// instructor two different things.
+export function subDisplayName(sub) {
+  return displayFullName(sub) || "Sub";
+}
+
+// The one thing a card says about a class-day's coverage.
+//   text   - the subject: a person's name, or a count when there is no one
+//            person to name yet
+//   marker - the state, kept SEPARATE so a caller can pin it against
+//            truncation; a clipped name is a nuisance, a clipped state marker
+//            makes "covered" and "still waiting" look identical
+//   tone   - 'confirmed' | 'pending' | 'uncovered'
+// Returns null only when the day has nothing to say at all.
+//
+// Every branch has to be TRUE in the state that selects it: a name must never
+// appear while several people are still deciding, and nothing may read as
+// settled while a day still needs somebody.
+export function subSlotLabel(slot) {
+  // A declined or missed day draws no sub on the card -- the regular instructor
+  // is still the one on the schedule. That the day NEEDS somebody is a separate
+  // question, answered by slotNeedsCover() below, because a card that quietly
+  // draws nothing is how an uncovered day hides in plain sight.
+  if (!slot || !SUB_ACTIVE_STATUSES.has(slot.status)) return null;
+
+  // The marker is PINNED against truncation by its callers, so it stays short.
+  // Anything longer belongs in `note`, which a caller shows only where it has
+  // the room -- a marker long enough to evict the name is the same defect as a
+  // marker short enough to be clipped.
+  if (slot.status === "confirmed" || slot.status === "taught") {
+    return {
+      text: subDisplayName(slot.sub),
+      marker: "✓",
+      // Covered, but somebody is still holding an unanswered offer.
+      note: slot.offersOut > 0
+        ? (slot.offersOut === 1 ? "1 still to answer" : `${slot.offersOut} still to answer`)
+        : null,
+      tone: "confirmed",
+    };
+  }
+
+  if (slot.status === "pending") {
+    // Somebody has already said no on this day and an offer is still out: the
+    // day is AT RISK, not calmly waiting, and it must not read like a healthy
+    // first offer. Mirrors the RPC's 'at_risk' state (migration 20260923b).
+    // A released cover puts the day in the same place a refusal does: an offer
+    // is out, but the day has already lost somebody once.
+    const atRisk = slot.declineCount > 0 || slot.cancelledCount > 0;
+    const who = slot.offersOut > 1
+      ? `${slot.offersOut} people asked`
+      : subDisplayName(slot.sub);
+    const note = slot.declineCount > 0
+      ? (slot.declineCount === 1 ? "1 said no" : `${slot.declineCount} said no`)
+      : (slot.cancelledCount > 0 ? "cover was cancelled" : null);
+    return {
+      text: who,
+      marker: atRisk ? "· needs cover" : "· pending",
+      note,
+      tone: atRisk ? "uncovered" : "pending",
+    };
+  }
+
+  return null;
+}
+
+// Does this class-day still need somebody? True when nobody is confirmed and at
+// least one person has turned it down -- the state the card draws nothing for.
+// Callers that summarise SEVERAL days (the after-school card's "N sub days")
+// must consult this, or they report a class as settled on the strength of the
+// days they can see while one of its days has nobody coming.
+export function slotNeedsCover(slot) {
+  if (!slot) return false;
+  // Decided once, in aggregateSubSlot, where every row of the class-day is in
+  // hand. This used to re-derive the answer from declineCount alone, which is
+  // why a day whose sub had been released -- nobody refused, nobody is coming
+  // -- came back false and vanished from every count that asks this question.
+  return slot.needsCover === true;
+}
+
+// The whole label as one string, for callers that cannot pin the marker
+// separately. Keep the two halves defined in one place so they cannot drift.
+export function subSlotLabelText(slot) {
+  const label = subSlotLabel(slot);
+  if (!label) return null;
+  return `${label.text} ${label.marker}`.trim();
+}

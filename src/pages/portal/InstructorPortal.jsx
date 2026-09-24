@@ -125,6 +125,20 @@ function portalReturnUrl() {
   return `${window.location.origin}${window.location.pathname}`;
 }
 
+// The body of a failed edge-function call.
+//
+// supabase.functions.invoke returns { data: null, error: FunctionsHttpError }
+// for ANY non-2xx response — it only parses the body inside its `response.ok`
+// branch — so `data` is null on every error path and a branch keyed on
+// `data?.error` can never run. This file had four such branches; the only one
+// that ever fired was the race outcome, and that only because the server
+// deliberately returns it as a 200. The real body is on the error's context,
+// which is the shape AfterschoolSchedule.jsx:1527 and CalendarsList.jsx:854
+// already use — this file should have copied it from there.
+async function fnErrorBody(fnErr) {
+  try { return (await fnErr?.context?.json?.()) ?? null; } catch { return null; }
+}
+
 export default function InstructorPortal() {
   // Unified home for everything instructor: sign-in, onboarding wizard,
   // schedule, profile. The phase machine routes between sub-states.
@@ -156,6 +170,9 @@ export default function InstructorPortal() {
   const [sendBusy, setSendBusy] = useState(false);
   const [sendMsg, setSendMsg] = useState("");
   const [error, setError] = useState("");
+  // Something the instructor should read that is NOT a failure. Kept separate
+  // from `error` so it does not render in the coral you-did-something-wrong box.
+  const [notice, setNotice] = useState("");
   // Set when the signed-in address has no instructor record (link-instructor
   // 404), or belongs to someone else's record (409). Holds the address they
   // ACTUALLY signed in with, which is the one fact that lets them fix it
@@ -756,7 +773,13 @@ export default function InstructorPortal() {
   async function loadSubAssignments(instructorId) {
     const { data: rows, error: sErr } = await supabase
       .from("assignment_substitutions")
-      .select("id, date, status, sub_tier, notes, email_sent_at, parent_assignment_id, parent_assignment_type")
+      // decline_reason is what lets a CLOSED-OUT offer say so instead of
+      // vanishing: it is read by closedOutOffers below, and a field read but
+      // not selected is undefined rather than an error, which is how a branch
+      // quietly stops firing. declined_at is deliberately NOT selected — the
+      // card does not say when, and a column nothing reads is a claim that the
+      // next person has to check.
+      .select("id, date, status, sub_tier, notes, email_sent_at, decline_reason, parent_assignment_id, parent_assignment_type")
       .eq("sub_instructor_id", instructorId)
       .order("date", { ascending: true });
     if (sErr) {
@@ -1041,6 +1064,11 @@ export default function InstructorPortal() {
 
   async function handleSubMarkTaught(substitutionId) {
     setSubActingOn({ id: substitutionId, action: "mark" });
+    // Clear the notice as well as the error, for the same reason the response
+    // handler does: "someone else accepted this one first" is about a DIFFERENT
+    // day, and leaving it sitting above the page while they mark a day they
+    // really did teach is the sibling handler's rule applied inconsistently.
+    setNotice("");
     setError("");
     try {
       const { data, error: fnErr } = await supabase.functions.invoke(
@@ -1048,7 +1076,11 @@ export default function InstructorPortal() {
         { body: { substitution_id: substitutionId } },
       );
       if (fnErr || data?.error) {
-        throw new Error(data?.detail || data?.error || fnErr?.message || "Couldn't mark this day.");
+        const body = await fnErrorBody(fnErr);
+        throw new Error(
+          body?.detail || body?.error || data?.detail || data?.error
+            || fnErr?.message || "Couldn't mark this day.",
+        );
       }
       await loadSubAssignments(instructor.instructor_id);
     } catch (err) {
@@ -1060,6 +1092,9 @@ export default function InstructorPortal() {
 
   async function handleSubResponse(substitutionId, action, declineReason) {
     setSubActingOn({ id: substitutionId, action });
+    // Clear last time's notice too, or "someone else got that one" follows them
+    // around the portal after they have moved on to a different offer.
+    setNotice("");
     setError("");
     try {
       const { data, error: fnErr } = await supabase.functions.invoke(
@@ -1067,17 +1102,50 @@ export default function InstructorPortal() {
         { body: { substitution_id: substitutionId, action, decline_reason: declineReason || undefined } },
       );
       if (fnErr || data?.error) {
-        if (data?.error === "already_responded") {
+        // Read the CODE off the error body, not off `data` — see fnErrorBody.
+        const body = await fnErrorBody(fnErr);
+        const code = body?.error ?? data?.error;
+        if (code === "already_responded") {
           // Stale tab — refetch and move on.
           await loadSubAssignments(instructor.instructor_id);
           return;
         }
-        if (data?.error === "forbidden") {
+        if (code === "forbidden") {
           setError("That sub offer is no longer available.");
           await loadSubAssignments(instructor.instructor_id);
           return;
         }
-        throw new Error(data?.error || fnErr?.message || "Couldn't send your response.");
+        if (code === "time_conflict") {
+          // They are already covering another class that overlaps this one.
+          // Nothing is broken and nothing they can fix by retrying, so this is
+          // an explanation, not a failure they should read as their fault.
+          setNotice(body?.detail
+            || "You're already covering another class that overlaps this one, so we couldn't add it. Contact the office if that's wrong.");
+          await loadSubAssignments(instructor.instructor_id);
+          return;
+        }
+        throw new Error(
+          body?.detail || code || fnErr?.message || "Couldn't send your response.",
+        );
+      }
+      // SOMEBODY ELSE GOT THERE FIRST. A day can be offered to several people
+      // and the first to accept takes it, so this is an ordinary outcome and the
+      // server deliberately reports it as a success, not an error — which means
+      // it arrives HERE, above the optimistic update below. Without this branch
+      // that update marks the card "confirmed" for a class they did not get, and
+      // the only thing that corrects it is a background refetch that says
+      // nothing. They said yes; they are owed the real answer.
+      if (data?.already_covered || data?.status === "covered_by_other") {
+        setSubAssignments((prev) => prev.filter((s) => s.id !== substitutionId));
+        // Worded for what they actually did. The same server answer arrives
+        // whether they pressed Accept or Decline — the offer was closed out
+        // before either — and thanking somebody for saying yes when they just
+        // said no is worse than saying nothing.
+        setNotice(action === "accept"
+          ? "Someone else accepted this one first, so it's covered. Thanks for saying yes — nothing else to do."
+          : "That one's already covered by someone else, so there's nothing to decline.");
+        await loadSubAssignments(instructor.instructor_id);
+        return;
       }
       // Optimistic local update so the card moves immediately — the re-fetch
       // below confirms, but avoids a stale-read window where the pending card
@@ -1396,6 +1464,28 @@ export default function InstructorPortal() {
   const currentAssignments = assignments.filter((a) => !isArchived(a));
   const pastAssignments = assignments.filter(isArchived);
   const confirmedSubCount = subAssignments.filter((s) => s.status === "confirmed" || s.status === "taught").length;
+  // Offers closed out because somebody else accepted first, for a day that has
+  // not happened yet. 'covered_by_other' is written by accept_sub_offer alone —
+  // it is the product's record that this person LOST A RACE, not that they
+  // refused anything — so it is the only decline worth showing back to them.
+  //
+  // ...AND NOT a class-day they hold a LIVE row for. An admin can release a
+  // cover and ask the closed-out person again, which leaves them holding BOTH
+  // the old closed row and a fresh pending offer for the same day. Without this
+  // the portal would show a live "can you cover this?" card and, above it,
+  // "someone else accepted this one first, so it's covered" — about the same
+  // class, on the same screen. The instructor would believe the second one.
+  const liveSlotKeys = new Set(
+    subAssignments
+      .filter((s) => s.status === "pending" || s.status === "confirmed" || s.status === "taught")
+      .map((s) => `${s.parent_assignment_id}:${s.date}`),
+  );
+  const closedOutOffers = subAssignments.filter((s) => (
+    s.status === "declined"
+    && s.decline_reason === "covered_by_other"
+    && s.date >= todayLocalISO()
+    && !liveSlotKeys.has(`${s.parent_assignment_id}:${s.date}`)
+  ));
   const totalCount = currentAssignments.length + confirmedSubCount;
   const needsResponse = currentAssignments.filter(
     (a) => a.status === "published" || a.status === "change_requested"
@@ -1733,6 +1823,16 @@ export default function InstructorPortal() {
         </div>
       )}
 
+      {/* Not everything worth saying is a failure. Losing a first-come race is a
+          normal outcome — somebody was simply quicker — and putting it in the
+          coral box above would tell an instructor who did nothing wrong that
+          something went wrong. */}
+      {notice && (
+        <div style={{ background: '#eef2ff', border: '1px solid #c7d0f5', color: '#333', padding: 12, borderRadius: 8, marginBottom: 14, fontSize: 13 }}>
+          {notice}
+        </div>
+      )}
+
       {cprPill && (
         <button
           type="button"
@@ -1793,6 +1893,29 @@ export default function InstructorPortal() {
               onAccept={() => handleSubResponse(s.id, "accept")}
               onDecline={(reason) => handleSubResponse(s.id, "decline", reason)}
             />
+          ))}
+        </Section>
+      )}
+
+      {/* OFFERS SOMEBODY ELSE TOOK.
+          A class-day can be offered to several people and the first to accept
+          gets it; the rest are closed out in the same transaction. Until now
+          their card simply DISAPPEARED at the next load — this section renders
+          only pending and confirmed rows — so an instructor who had been asked
+          on Monday found nothing on Tuesday and no sentence anywhere telling
+          them why. The one person who learned the truth was whoever clicked
+          Accept too late and got the notice at the top of the page.
+
+          Only days that HAVE NOT HAPPENED YET. Once the class is past, "someone
+          else covered it" is history and belongs nowhere near the list of
+          things they are meant to act on.
+
+          Only covered_by_other, never a decline they gave themselves: they know
+          what they turned down, and repeating it back reads like an accusation. */}
+      {closedOutOffers.length > 0 && (
+        <Section title="Already covered by someone else">
+          {closedOutOffers.map((s) => (
+            <CoveredElsewhereCard key={s.id} sub={s} />
           ))}
         </Section>
       )}
@@ -2149,6 +2272,44 @@ function Section({ title, children }) {
 // Mark Taught button (date-of or after). The component reads from either
 // sub.camp_parent (camp sub) or sub.program_parent (afterschool sub) — set
 // by loadSubAssignments.
+// A day this instructor was asked about and somebody else got. Deliberately
+// plain and actionless: there is nothing for them to do, and the only thing
+// they need is to stop holding the afternoon. It reads as an answer to a
+// question they were asked, not as a rejection — they very likely said yes and
+// were simply slower, which is the whole point of asking several people.
+function CoveredElsewhereCard({ sub }) {
+  const isCamp = sub.parent_assignment_type === "camp";
+  const sess = isCamp ? sub.camp_parent?.camp_sessions ?? null : null;
+  const prog = !isCamp ? sub.program_parent?.programs ?? null : null;
+  const loc = isCamp ? sess?.program_locations ?? null : prog?.program_locations ?? null;
+  const curriculumName = isCamp ? (sess?.curriculum_name ?? "that camp") : (prog?.curriculum ?? "that class");
+  const venueName = loc?.name ?? (isCamp ? sess?.location_name : null) ?? "";
+  const friendlyDate = sub.date
+    ? new Date(`${sub.date}T00:00:00`).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })
+    : "";
+
+  return (
+    <div style={{
+      background: CREAM, border: `1px solid ${RULE}`, borderRadius: 12,
+      padding: "14px 18px", marginBottom: 10,
+    }}>
+      <div style={{ fontSize: 15, fontWeight: 600, color: MUTED }}>{curriculumName}</div>
+      <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>
+        {friendlyDate}{venueName ? ` · ${venueName}` : ""}
+      </div>
+      {/* About THEIR OFFER, not about the state of the day. "So it's covered"
+          was a claim that can go stale the moment an admin releases the cover,
+          and this card has no way of knowing that happened — the instructor
+          cannot see anybody else's rows. What stays true for ever is that
+          somebody was quicker and their own offer was closed. */}
+      <div style={{ fontSize: 13, color: INK, marginTop: 8 }}>
+        Somebody else got to this one first, so your offer was closed. Nothing for you
+        to do — thanks for being willing.
+      </div>
+    </div>
+  );
+}
+
 function SubOfferCard({ sub, busy, busyAction, onAccept, onDecline, readOnly, onOpen, coInstructors = [] }) {
   const [declineOpen, setDeclineOpen] = useState(false);
   const [reason, setReason] = useState("");
