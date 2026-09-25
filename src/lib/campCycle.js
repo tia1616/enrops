@@ -59,11 +59,19 @@ export async function ensureCampCycle(supabase, { orgId, termCode, startsOn, end
   const campStart = String(startsOn).slice(0, 10);
   const campEnd = String(endsOn || startsOn).slice(0, 10);
 
+  // "FA26 camps", never "FA26". scheduling_cycles has a UNIQUE index on
+  // (organization_id, name), and a term usually ALREADY has an after-school cycle
+  // under its plain code - J2S has exactly that - so naming the camp cycle after
+  // the bare term would collide and the save would die on the insert. The suffix
+  // also reads correctly in the board's term picker, which lists camp cycles and
+  // after-school terms side by side and would otherwise show the same label twice.
+  const cycleName = `${termCode} camps`;
+
   const { data: existing, error: findErr } = await supabase
     .from("scheduling_cycles")
     .select("id, starts_on, ends_on, weeks")
     .eq("organization_id", orgId)
-    .eq("name", termCode)
+    .eq("name", cycleName)
     .eq("cycle_type", "summer_camp")
     .maybeSingle();
   if (findErr) throw findErr;
@@ -81,7 +89,7 @@ export async function ensureCampCycle(supabase, { orgId, termCode, startsOn, end
       .from("scheduling_cycles")
       .insert({
         organization_id: orgId,
-        name: termCode,
+        name: cycleName,
         cycle_type: "summer_camp",
         starts_on: rangeStart,
         ends_on: rangeEnd,
