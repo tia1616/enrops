@@ -506,6 +506,75 @@ comment on function public.release_family_credit_hold(text) is
   'Gives back the credit held under one application key when the checkout did not complete (session expired or the family cancelled). Returns the cents released. Deletes ONLY kind=''reserved'': an ''applied'' row under the same key means the family paid, and removing it would return credit they have already spent. Safe to call for a key that held nothing.';
 
 -- ---------------------------------------------------------------------------
+-- 5b. THE ZERO-DOLLAR CHECKOUT, WHERE CREDIT COVERS THE WHOLE ORDER
+-- ---------------------------------------------------------------------------
+-- There is no Stripe session on this path, so there is no webhook coming to
+-- finish the job: the credit is spent and the seat is confirmed here or not
+-- at all. Doing that as two statements from an edge function leaves a window
+-- in which one has happened and the other has not, and BOTH torn states cost
+-- somebody real money:
+--
+--   credit spent, registration not confirmed -> the family paid and has no seat
+--   registration confirmed, credit not spent -> the business gave a class away
+--
+-- Neither is acceptable and there is no "safer half" to order first, so the
+-- pair is not ordered - it is made atomic. A plpgsql function is one
+-- transaction, so the credit movement and the status change commit together
+-- or neither does.
+--
+-- Scoped to ONE registration deliberately. A three-child cart calls this three
+-- times, and if the second call fails the first child is confirmed with their
+-- credit correctly spent while the third is untouched - a partial cart, which
+-- an operator can read and finish. Wrapping the whole cart would instead make
+-- one child's problem silently undo two children who were already fine.
+
+create or replace function public.confirm_registration_paid_by_credit(
+  p_organization_id uuid,
+  p_parent_id uuid,
+  p_registration_id uuid,
+  p_amount_cents integer,
+  p_application_key text
+)
+returns integer
+language plpgsql
+security definer
+set search_path to 'public', 'pg_temp'
+as $function$
+declare
+  v_applied integer;
+begin
+  -- apply_family_credit carries the org/parent proof, the pot lock and the
+  -- idempotency answer. Calling it rather than repeating any of that is what
+  -- keeps one rule in one place; this function adds only the confirmation.
+  select a.applied_cents into v_applied
+  from public.apply_family_credit(
+    p_organization_id, p_parent_id, p_registration_id,
+    p_amount_cents, p_application_key, 'applied', null
+  ) a;
+
+  -- The credit must actually cover it. If the balance moved between the
+  -- edge function's read and this write, the honest answer is to fail the
+  -- whole transaction - the caller then falls back to charging the family -
+  -- rather than confirm a seat that nothing paid for.
+  if coalesce(v_applied, 0) < p_amount_cents then
+    raise exception 'confirm_registration_paid_by_credit: credit covered only % of % on registration %',
+      coalesce(v_applied, 0), p_amount_cents, p_registration_id
+      using errcode = 'FC014';
+  end if;
+
+  update public.registrations
+     set status = 'confirmed',
+         payment_status = 'paid'
+   where id = p_registration_id;
+
+  return v_applied;
+end;
+$function$;
+
+comment on function public.confirm_registration_paid_by_credit(uuid, uuid, uuid, integer, text) is
+  'Spends credit on ONE registration and confirms it, atomically, for the checkout where credit covers the whole order and no Stripe session exists. Both torn states cost somebody money - credit spent with no seat, or a seat given away free - so the pair is made atomic rather than ordered. Raises FC014 and rolls back if the credit no longer covers the amount, leaving the caller to charge instead. Delegates the org/parent proof, the pot lock and idempotency to apply_family_credit.';
+
+-- ---------------------------------------------------------------------------
 -- 6. GIVING IT BACK WHEN A CREDIT-FUNDED REGISTRATION IS REFUNDED
 -- ---------------------------------------------------------------------------
 -- THE SEAM THIS CLOSES. A family funds a $400 registration with $240 of
@@ -643,6 +712,7 @@ comment on function public.restore_family_credit_for_registration(uuid, integer,
 revoke all on function public.family_credit_balance_cents(uuid) from public, anon, authenticated;
 revoke all on function public.family_credit_available_cents(uuid, uuid) from public, anon, authenticated;
 revoke all on function public.apply_family_credit(uuid, uuid, uuid, integer, text, text, integer) from public, anon, authenticated;
+revoke all on function public.confirm_registration_paid_by_credit(uuid, uuid, uuid, integer, text) from public, anon, authenticated;
 revoke all on function public.capture_family_credit_hold(text) from public, anon, authenticated;
 revoke all on function public.release_family_credit_hold(text) from public, anon, authenticated;
 revoke all on function public.restore_family_credit_for_registration(uuid, integer, text) from public, anon, authenticated;
