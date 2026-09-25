@@ -1259,6 +1259,11 @@ serve(async (req: Request) => {
     // instalment pause and the receipt still have to run - a refunded family
     // whose future instalments keep charging is the worst outcome here.
     let cancelFailedReason: string | null = null;
+    // The credit leg of this refund. Reported back so the drawer can say what
+    // came back as credit, not just what went to the card - a family who paid
+    // partly on account needs to see both halves or the total looks short.
+    let creditRestoredCents = 0;
+    let creditRestoreFailedReason: string | null = null;
     let remaining = amountCents;
 
     for (const slot of piSlots) {
@@ -1647,6 +1652,65 @@ serve(async (req: Request) => {
       }
     }
 
+    // ── give back the CREDIT leg of a part-credit registration ────────────
+    // THE SEAM THIS CLOSES, and it is the one that quietly costs a family real
+    // money. A $400 class funded by $240 of account credit and $160 on a card
+    // only ever showed Stripe $160. totalPaid is read from Stripe, so the
+    // ceiling above correctly offers $160 back - and the $240 the family also
+    // handed over has, until now, simply evaporated on a refund. Nothing on
+    // either side of the ledger remembered it.
+    //
+    // The cash leg comes back as cash and the credit leg comes back as credit.
+    // Keeping them separate is what stops the two ledgers contaminating each
+    // other: no cash is invented for money that never reached Stripe, and no
+    // credit is invented for money that did.
+    //
+    // PROPORTIONAL TO THE CASH ACTUALLY REFUNDED. Refund all $160 and all $240
+    // comes back; refund half and half does. That keeps a cancellation policy
+    // that retains part of the fee working the same way on both legs, instead
+    // of handing back a full credit on a half refund.
+    //
+    // restore_family_credit_for_registration is bounded per credit by what was
+    // applied to THIS registration less what has already been returned, so a
+    // second refund on the same registration cannot give back more than the
+    // family put in, and a retry gives back nothing twice.
+    const refundedNowCents = amountCents - remaining;
+    if (refundedNowCents > 0 && totalPaid > 0) {
+      const { data: creditAppliedRaw } = await supabase
+        .from('family_credit_movements')
+        .select('amount_cents')
+        .eq('registration_id', registrationId)
+        .eq('kind', 'applied');
+      const creditApplied = (creditAppliedRaw || [])
+        .reduce((s: number, m: { amount_cents: number }) => s + (m.amount_cents || 0), 0);
+
+      if (creditApplied > 0) {
+        const share = Math.min(
+          creditApplied,
+          Math.round((creditApplied * refundedNowCents) / totalPaid),
+        );
+        if (share > 0) {
+          const { data: restoredRaw, error: restoreErr } = await supabase
+            .rpc('restore_family_credit_for_registration', {
+              p_registration_id: registrationId,
+              p_amount_cents: share,
+              p_note: 'returned when this registration was refunded',
+            });
+          if (restoreErr) {
+            // LOUD, and surfaced to the operator rather than only logged: the
+            // cash has already gone back, so the family is now owed credit that
+            // nothing has recorded. That is exactly the silent hole this whole
+            // function exists to close.
+            console.error('[refund] could not return the family credit leg:', restoreErr);
+            creditRestoreFailedReason =
+              `the cash refund went through, but ${(share / 100).toFixed(2)} of account credit could not be returned - record it by hand`;
+          } else {
+            creditRestoredCents = Number(restoredRaw) || 0;
+          }
+        }
+      }
+    }
+
     // ── optionally cancel the registration ────────────────────────────────
     if (cancelRegistration) {
       const nowIso = new Date().toISOString();
@@ -1955,6 +2019,10 @@ serve(async (req: Request) => {
       // The two other "money moved but a later step did not" cases, reported the
       // same way rather than as failures of the refund itself.
       cancel_failed: cancelFailedReason ?? undefined,
+      // The credit half of this refund. Present only when there was one, so an
+      // all-cash refund's response is byte-identical to what it was before.
+      credit_restored_cents: creditRestoredCents > 0 ? creditRestoredCents : undefined,
+      credit_restore_failed: creditRestoreFailedReason ?? undefined,
       fee_lookup_aborted: feeLookupAborted || undefined,
       // The refund stopped partway because a later slot could not be reserved.
       // Reported on a SUCCESSFUL response on purpose: money did move, and the

@@ -471,6 +471,24 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
           `Check the amount actually refunded before trying again.`,
         );
       }
+      if (data?.credit_restore_failed) {
+        // THE LOUD ONE. The card refund succeeded, so every other signal on this
+        // screen says "done" - while the family is owed credit that nothing has
+        // recorded. An operator who is not told here will never find out.
+        notes.push(
+          `The card refund went through, but this family also paid with account credit and that ` +
+          `part could not be returned (${data.credit_restore_failed}). They are owed it — put it ` +
+          `back by hand before closing this.`,
+        );
+      } else if (data?.credit_restored_cents) {
+        // Not a warning: a fact the operator needs in order to answer "how much
+        // did they get back?". The card figure alone understates it, because
+        // the credit leg never went near Stripe.
+        notes.push(
+          `${fmtCents(data.credit_restored_cents)} of this went back as account credit, not to ` +
+          `their card — that part was paid from their balance.`,
+        );
+      }
       if (data?.stripe_aborted) {
         // Stripe refused, or never answered, on a later payment. The earlier
         // ones DID go back and the seat was handled, so this is a note on a

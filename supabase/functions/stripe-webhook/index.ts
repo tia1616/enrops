@@ -97,6 +97,7 @@ import { isEmailAllowed } from '../_shared/emailGuard.ts';
 import { logTransactionalSend, formatSendError } from '../_shared/sendLog.ts';
 import { maybeAlertOperatorFlagged } from '../_shared/operatorFlagAlert.ts';
 import { alertMarginShortfall } from '../_shared/marginShortfallAlert.ts';
+import { decodeCreditAllocation } from '../_shared/creditAllocation.ts';
 import {
   settlementForCheckoutCompleted,
   SETTLEMENT_ON_ASYNC_SUCCESS,
@@ -201,8 +202,17 @@ serve(async (req) => {
       }
 
       // Look up org and load full brand context (FROM, colors, logo, alert email).
-      const { data: regForOrg } = await admin.from('registrations').select('organization_id').eq('id', regIds[0]).single();
+      //
+      // parent_id rides along for the credit capture below: a family credit is
+      // keyed on (organization_id, parent_id), and apply_family_credit proves
+      // the registration really belongs to that pair before it spends anything.
+      // create-checkout refuses to apply credit to a cart whose registrations
+      // disagree about whose they are, so one lookup answers for the cart - and
+      // if that ever stopped being true the RPC raises FC013 rather than
+      // spending the wrong family's balance.
+      const { data: regForOrg } = await admin.from('registrations').select('organization_id, parent_id').eq('id', regIds[0]).single();
       const orgId = regForOrg?.organization_id;
+      const cartParentId = (regForOrg as { parent_id?: string | null } | null)?.parent_id ?? null;
 
       const brand = await loadOrgBrand(admin, orgId);
       // The tenant's OWN inbox, or null. NOT brand.alert_email: every alert
@@ -246,6 +256,71 @@ serve(async (req) => {
         // intended. Refunds read this instead of the org's current charge model.
         stripe_charge_account_id: (event.account as string | null) ?? null,
       }).in('id', regIds);
+
+      // --- FAMILY CREDIT: turn the hold into a spend (chunk 3b) ---------------
+      // AFTER the confirmation write, deliberately. Both orders can tear, but
+      // they tear differently: capture-then-confirm can leave a family whose
+      // credit is gone and who has no seat, while confirm-then-capture leaves a
+      // family correctly enrolled and a spend that can still be recorded. Stripe
+      // retries this handler on a non-2xx and both writes are idempotent, so the
+      // usual outcome of a failure here is that the retry finishes the job.
+      //
+      // CAPTURED FOR AN ACH SESSION TOO, not just a settled card. The seat is
+      // already held optimistically on this event, and the hold expires with the
+      // checkout window - so waiting for async_payment_succeeded, days later,
+      // would mean the hold had lapsed and the family's credit had quietly
+      // drifted back to spendable while they believed it spent. The bounce case
+      // is handled where the seat is: async_payment_failed gives the credit back.
+      const creditKey = meta.credit_key || '';
+      if (creditKey) {
+        const expectedCredit = Number(meta.credit_cents || '0') || 0;
+        const { data: capturedRaw, error: captureErr } = await admin.rpc(
+          'capture_family_credit_hold',
+          { p_application_key: creditKey },
+        );
+        const captured = Number(capturedRaw) || 0;
+
+        if (captureErr) {
+          console.error(
+            `[webhook] could not capture credit hold ${creditKey} for ${regIds.join(',')}:`,
+            captureErr.message,
+          );
+        }
+
+        // THE SELF-HEALING HALF, and the reason the allocation travels in
+        // metadata. A hold can be gone by now - it lapsed, or another attempt on
+        // the same cart released it - and the family has just been charged a
+        // price that already had the credit taken off it. Capturing nothing
+        // would hand them the discount for free. So anything the capture did not
+        // cover is applied outright, from the allocation this session was
+        // actually priced with. apply_family_credit is idempotent on
+        // (key, registration), so where capture DID convert the rows this is a
+        // no-op rather than a second spend.
+        if (!captureErr && captured < expectedCredit) {
+          const shortfall = decodeCreditAllocation(meta.credit_alloc);
+          console.warn(
+            `[webhook] credit hold ${creditKey} captured ${captured} of ${expectedCredit}; ` +
+            `applying the remainder outright across ${shortfall.length} registration(s)`,
+          );
+          for (const part of shortfall) {
+            const { error: applyErr } = await admin.rpc('apply_family_credit', {
+              p_organization_id: orgId,
+              p_parent_id: cartParentId,
+              p_registration_id: part.registrationId,
+              p_amount_needed_cents: part.creditCents,
+              p_application_key: creditKey,
+              p_kind: 'applied',
+              p_hold_minutes: null,
+            });
+            if (applyErr) {
+              console.error(
+                `[webhook] could not apply credit for registration ${part.registrationId}:`,
+                applyErr.message,
+              );
+            }
+          }
+        }
+      }
 
       if (confirmErr) {
         // The family HAS paid. Do not swallow this: alert loudly with
@@ -817,6 +892,30 @@ serve(async (req) => {
       const { data: regForOrg } = await admin.from('registrations').select('organization_id').eq('id', regIds[0]).single();
       const brand = await loadOrgBrand(admin, regForOrg?.organization_id);
       await admin.from('registrations').update({ ...SETTLEMENT_ON_ASYNC_FAILURE }).in('id', regIds);
+
+      // THE CREDIT GOES BACK WHEN THE TRANSFER BOUNCES. It was captured
+      // optimistically on checkout.session.completed, alongside the seat, because
+      // the hold expires with the checkout window and ACH settles days later. No
+      // money ever arrived, so the credit the family spent has to be theirs
+      // again - otherwise a bounced payment costs them their balance AND leaves
+      // them unpaid. Bounded by what was actually applied to each registration,
+      // so a retried webhook cannot hand back more than was taken.
+      if (meta.credit_key) {
+        for (const part of decodeCreditAllocation(meta.credit_alloc)) {
+          const { error: restoreErr } = await admin.rpc('restore_family_credit_for_registration', {
+            p_registration_id: part.registrationId,
+            p_amount_cents: part.creditCents,
+            p_note: 'returned when the bank transfer did not clear',
+          });
+          if (restoreErr) {
+            console.error(
+              `[webhook] could not return credit on registration ${part.registrationId} after an ACH failure:`,
+              restoreErr.message,
+            );
+          }
+        }
+      }
+
       await sendOperatorAlert({
         brand,
         // Tenant inbox only: the body below names the family and quotes their

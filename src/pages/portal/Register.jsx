@@ -665,6 +665,20 @@ export default function Register() {
         window.location.href = `/${ORG_SLUG}/register/success?comp=1${isEmbed ? '&embed=1' : ''}`;
         return;
       }
+      if (coData.credit_covered) {
+        // The family's account credit covered the whole thing, so there was no
+        // Stripe session to send them to - create-checkout already confirmed the
+        // registrations. Same navigation reasoning as the comp branch above.
+        //
+        // A SEPARATE FLAG FROM comp, not a reuse of it. A comp is a class the
+        // business gave away; this is a class the family paid for with money
+        // they were already owed, and the success page has to be able to say
+        // which of those happened.
+        const paid = coData.credit_cents ? `&credit_cents=${coData.credit_cents}` : '';
+        window.location.href =
+          `/${ORG_SLUG}/register/success?credit=1${paid}${isEmbed ? '&embed=1' : ''}`;
+        return;
+      }
       if (coData.url) {
         goToPayment(coData.url);
       } else {
