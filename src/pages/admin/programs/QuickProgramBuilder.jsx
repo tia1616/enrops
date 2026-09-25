@@ -37,6 +37,7 @@ import {
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib/programText.js";
 import { GRADE_OPTIONS, audiencePatch, rangeBackwards, rangeBackwardsMessage } from "../../../lib/grades.js";
+import { ensureCampCycle, deriveSessionType } from "../../../lib/campCycle.js";
 import {
   publishBlockedByStripe,
   PUBLISH_GATE_CTA_SAVE,
@@ -66,6 +67,17 @@ const RED = "#b53737";
 // on the public catalog. Lowercase silently breaks the match (see the note in
 // ProgramWizardNew). Keep these Title-Case.
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
+// LOWERCASE, unlike DAYS above. camp_sessions.class_days stores lowercase names
+// and the pay cron matches on them; the two columns genuinely disagree about
+// case, so the two lists are separate on purpose rather than one being wrong.
+const CAMP_DAYS = [
+  { value: "monday", label: "Mon" },
+  { value: "tuesday", label: "Tue" },
+  { value: "wednesday", label: "Wed" },
+  { value: "thursday", label: "Thu" },
+  { value: "friday", label: "Fri" },
+];
 
 // Indexed by Date.getDay() (0 = Sunday). Used to warn when the chosen first
 // class date's weekday doesn't match the selected day-of-week — the session
@@ -221,12 +233,25 @@ export default function QuickProgramBuilder() {
   // shape never sees the choice; one who runs both picks per program.
   const cadence = profile.program_cadence;
   const [mode, setMode] = useState(cadence === "one_off" ? "one_off" : "weekly");
+  // Camp-only fields. Days default to Mon-Fri, the shape of almost every camp;
+  // a holiday week is the operator turning one off.
+  const [campDays, setCampDays] = useState(() => CAMP_DAYS.map((d) => d.value));
+  const [campEndDate, setCampEndDate] = useState("");
   useEffect(() => {
     if (cadence === "one_off") setMode("one_off");
     else if (cadence === "weekly_term") setMode("weekly");
   }, [cadence]);
   const isOneOff = mode === "one_off";
-  const showModeToggle = cadence === "both";
+  // A camp is the same thing to an operator - something families register for -
+  // that happens on several days of ONE week instead of one day a week. It writes
+  // a camp_sessions row, because programs derive their dates by stepping forward
+  // seven days at a time and cannot express consecutive days.
+  const isCamp = mode === "camp";
+  // ALWAYS shown now. It used to appear only for cadence 'both', so an org that
+  // said "weekly series" at signup could never reach the other options - a hidden
+  // gate that made camps unreachable for most tenants. Cadence still picks the
+  // DEFAULT below; it no longer decides what exists.
+  const showModeToggle = true;
 
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState("");
@@ -558,7 +583,8 @@ export default function QuickProgramBuilder() {
   // operator with none can create one without leaving this form.
   const valid =
     name.trim() !== "" && priceValid && spotsNum >= 1 && !audienceBackwards &&
-    (isOneOff ? !!startDate : !!day) && !!locationId;
+    // A camp is placed by its dates and the days it runs, not by a weekday.
+    (isCamp ? (!!startDate && campDays.length > 0) : isOneOff ? !!startDate : !!day) && !!locationId;
 
   // Create PUBLISHES, so it carries the Stripe gate; Save as draft does not and
   // must stay fully available — "you can't publish yet" has to never mean "you
@@ -863,6 +889,61 @@ export default function QuickProgramBuilder() {
         // builder is the same kind of row.
         status: asDraft ? "draft" : "open",
       };
+      // A CAMP is the same job for the operator and a different row underneath.
+      // programs derive their dates by stepping forward seven days at a time, so
+      // a Monday-to-Thursday camp cannot be one; it goes to camp_sessions, which
+      // is built for a block of consecutive days. The cycle and week number the
+      // board needs are worked out from the term rather than asked for.
+      if (isCamp) {
+        const loc = locations.find((l) => l.id === locationId);
+        if (!loc) throw new Error("Pick a site for this camp.");
+        if (!startDate) throw new Error("A camp needs a first day.");
+        if (!campDays.length) throw new Error("Pick at least one day the camp runs.");
+        const campEnd = campEndDate || startDate;
+        if (campEnd < startDate) throw new Error("The last day has to be on or after the first day.");
+        const { cycleId, weekNum } = await ensureCampCycle(supabase, {
+          orgId: org.id,
+          termCode: org.active_registration_term,
+          startsOn: startDate,
+          endsOn: campEnd,
+        });
+        const { data: campRow, error: campErr } = await supabase
+          .from("camp_sessions")
+          .insert({
+            organization_id: org.id,
+            cycle_id: cycleId,
+            week_num: weekNum,
+            location_id: loc.id,
+            location_name: loc.name,
+            room: room.trim() || null,
+            curriculum_name: name.trim(),
+            // NULL, not a guess. The category only feeds instructor matching, and
+            // this builder's orgs do not run it - see 20260925a.
+            curriculum_category: null,
+            session_type: deriveSessionType(startTime, endTime),
+            starts_on: startDate,
+            ends_on: campEnd,
+            start_time: startTime || null,
+            end_time: endTime || null,
+            class_days: campDays,
+            short_description: description.trim() || null,
+            max_capacity: spotsNum,
+            price_cents: priceCents,
+            ...audiencePatch(audienceMode, { gradeMin, gradeMax, ageMin, ageMax }),
+            // camp_sessions has no draft state - status is active or cancelled -
+            // so a camp saved as a draft is simply not created yet.
+            status: "active",
+          })
+          .select("id")
+          .single();
+        if (campErr) throw campErr;
+        if (!asDraft) pixelWorkflowCreated();
+        setCreatedStatus("open");
+        setCreatedId(campRow.id);
+        recordBuildTiming(campRow.id);
+        return;
+      }
+
       const { data, error } = await supabase
         .from("programs")
         .insert(payload)
@@ -2058,9 +2139,9 @@ export default function QuickProgramBuilder() {
             else just gets the fields that match how they work. */}
         {showModeToggle && (
           <div>
-            <div style={labelStyle}>Is this a weekly series or a one-off?</div>
+            <div style={labelStyle}>What kind of thing is this?</div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {[{ v: "weekly", l: "Weekly series" }, { v: "one_off", l: "One-off workshop" }].map((o) => {
+              {[{ v: "weekly", l: "Weekly series" }, { v: "one_off", l: "One-off workshop" }, { v: "camp", l: "Camp" }].map((o) => {
                 const on = mode === o.v;
                 return (
                   <button
@@ -2083,7 +2164,38 @@ export default function QuickProgramBuilder() {
           </div>
         )}
 
-        {!isOneOff && (
+        {isCamp && (
+          <div>
+            <label style={labelStyle}>Days it runs</label>
+            <div style={{ display: "flex", gap: 6 }}>
+              {CAMP_DAYS.map((d) => {
+                const on = campDays.includes(d.value);
+                return (
+                  <button
+                    key={d.value}
+                    type="button"
+                    onClick={() => setCampDays((prev) => (
+                      prev.includes(d.value)
+                        ? prev.filter((x) => x !== d.value)
+                        : CAMP_DAYS.map((x) => x.value).filter((x) => prev.includes(x) || x === d.value)
+                    ))}
+                    aria-pressed={on}
+                    style={{
+                      flex: 1, padding: "9px 0", borderRadius: 8, cursor: "pointer", fontFamily: "inherit",
+                      fontSize: 13, fontWeight: on ? 700 : 500,
+                      background: on ? "#EEEDFE" : "#fff",
+                      color: on ? "#26215C" : MUTED,
+                      border: `1px solid ${on ? BRIGHT : RULE}`,
+                    }}
+                  >{d.label}</button>
+                );
+              })}
+            </div>
+            <div style={helpStyle}>Turn off any day it does not run, like a holiday in the middle of the week.</div>
+          </div>
+        )}
+
+        {!isOneOff && !isCamp && (
           <div>
             <label style={labelStyle} htmlFor="qpb-day">Day of the week</label>
             <select
@@ -2138,6 +2250,30 @@ export default function QuickProgramBuilder() {
               {firstDateWeekday
                 ? `A single session on this ${firstDateWeekday}.`
                 : "The day this workshop runs."}
+            </div>
+          </div>
+        ) : isCamp ? (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+            <div>
+              <label style={labelStyle} htmlFor="qpb-start-date">First day</label>
+              <input
+                id="qpb-start-date"
+                type="date"
+                style={inputStyle}
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+              />
+            </div>
+            <div>
+              <label style={labelStyle} htmlFor="qpb-camp-end">Last day</label>
+              <input
+                id="qpb-camp-end"
+                type="date"
+                style={inputStyle}
+                value={campEndDate}
+                onChange={(e) => setCampEndDate(e.target.value)}
+              />
+              <div style={helpStyle}>Usually the same week.</div>
             </div>
           </div>
         ) : (

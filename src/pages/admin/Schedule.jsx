@@ -17,6 +17,7 @@ import Chevron from "../../components/Chevron.jsx";
 import TabStrip from "../../components/TabStrip.jsx";
 import ModalShell from "../../components/ModalShell.jsx";
 import CampSessionForm from "./camps/CampSessionForm.jsx";
+import { computeWeeks } from "../../lib/campCycle.js";
 import { useAdminNarrow } from "../../lib/adminViewport.js";
 import NotifyRemovalModal from "./NotifyRemovalModal";
 import AssignSubModal from "./AssignSubModal";
@@ -5347,31 +5348,10 @@ function NewCycleModal({ orgId, onClose, onCreated }) {
 // Given a start + end ISO date, generate the list of Mon-Fri weeks fully contained
 // in that range. Skips a partial last week if the term ends mid-week. Matches the
 // shape stored in scheduling_cycles.weeks (jsonb array of {num, starts_on, ends_on}).
-function computeWeeks(startISO, endISO) {
-  const start = new Date(`${startISO}T00:00:00`);
-  const end = new Date(`${endISO}T00:00:00`);
-  const cursor = new Date(start);
-  const dow = cursor.getDay(); // 0=Sun, 1=Mon, ...
-  const daysToMon = (1 - dow + 7) % 7;
-  cursor.setDate(cursor.getDate() + daysToMon);
-
-  const weeks = [];
-  let num = 1;
-  while (cursor <= end) {
-    const wStart = new Date(cursor);
-    const wEnd = new Date(cursor);
-    wEnd.setDate(wEnd.getDate() + 4);
-    if (wEnd > end) break;
-    weeks.push({
-      num,
-      starts_on: wStart.toISOString().slice(0, 10),
-      ends_on: wEnd.toISOString().slice(0, 10),
-    });
-    num++;
-    cursor.setDate(cursor.getDate() + 7);
-  }
-  return weeks;
-}
+// computeWeeks moved to src/lib/campCycle.js on 2026-09-25 and is imported at the
+// top. The Programs builder creates camp cycles too now, and two spellings of
+// "which Mon-Fri span is week 3" is how a camp made in one screen lands in the
+// wrong column of the other.
 
 // Cycle-wide email activity log: every offer / patch / reminder / reply that touched
 // any assignment in this cycle. Reads directly from instructor_offer_messages —
