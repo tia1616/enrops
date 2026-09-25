@@ -510,8 +510,46 @@ serve(async (req: Request) => {
         }, 400);
       }
 
-      const [returned, returnFailed] =
-        await restoreCreditLeg(amountCents, 'returned to the family by the operator');
+      // IDEMPOTENT ON THE OPERATOR'S KEY, like every other money write here.
+      // The RPC's applied-minus-restored bound stops a repeat exceeding the
+      // LEG, but not the operator's INTENT: returning $120 of a $240 leg and
+      // then being retried - browser resend, proxy retry, a second press once
+      // `busy` clears - handed back the whole $240. The drawer mints a fresh
+      // key each time it opens, so a genuine SECOND decision carries a new key
+      // and is still allowed.
+      //
+      // Matched on the movement's note rather than a column, because
+      // family_credit_movements has no idempotency_key and this only has to
+      // recognise a replay of the same press; the amount is bounded regardless.
+      const returnNote = idempotencyKey
+        ? `operator return ${idempotencyKey}`
+        : 'returned to the family by the operator';
+      if (idempotencyKey) {
+        const { data: priorReturn } = await supabase
+          .from('family_credit_movements')
+          .select('amount_cents')
+          .eq('registration_id', registrationId)
+          .eq('kind', 'restored')
+          .eq('note', returnNote);
+        const already = ((priorReturn ?? []) as Array<{ amount_cents: number }>)
+          .reduce((s, m) => s + (m.amount_cents || 0), 0);
+        if (already > 0) {
+          // Answers with what was ACTUALLY written, not what this request asked
+          // for - the same rule issue_credit follows on a retry, and for the
+          // same reason: the operator repeats this number to the family.
+          return json({
+            credit_returned: true,
+            credit_returned_cents: already,
+            credit_returnable_cents: creditReturnable,
+            already_existed: true,
+            refunded_cents: 0,
+            cancelled: false,
+            pending_charges_stopped: 0,
+          });
+        }
+      }
+
+      const [returned, returnFailed] = await restoreCreditLeg(amountCents, returnNote);
       if (returnFailed) {
         // NOTHING has happened - the RPC is the only write on this path and it
         // rolled back. Say so plainly rather than implying a half-done state.

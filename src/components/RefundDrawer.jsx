@@ -458,7 +458,12 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
           cancel_registration: isCreditReturn
             ? seatChoice === "withdraw"
             : (isCredit ? true : (withdrawNoRefund ? true : seatChoice === "withdraw")),
-          ...(isCreditReturn ? { return_credit: true } : null),
+          // The SAME key the credit path sends, minted fresh each time the
+          // drawer opens. Without it a retried request returned the credit a
+          // second time - bounded by what was applied, but not by what the
+          // operator chose. A genuine second decision reopens the drawer and
+          // gets a new key.
+          ...(isCreditReturn ? { return_credit: true, idempotency_key: idempotencyKey } : null),
           ...(isCredit
             ? {
               issue_credit: true,

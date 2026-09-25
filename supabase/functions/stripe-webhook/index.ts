@@ -973,16 +973,46 @@ serve(async (req) => {
       // again - otherwise a bounced payment costs them their balance AND leaves
       // them unpaid. Bounded by what was actually applied to each registration,
       // so a retried webhook cannot hand back more than was taken.
+      //
+      // READ FROM THE LEDGER, NOT FROM THE METADATA. This used to loop
+      // decodeCreditAllocation(meta.credit_alloc) - and create-checkout
+      // deliberately writes that field EMPTY when the allocation exceeds
+      // Stripe's 500-character metadata limit, which a cart of about eleven
+      // credit-taking registrations does. Capture is unaffected (it is keyed on
+      // credit_key alone), so on such a cart the credit was taken at
+      // session.completed and then, on a bounce, nothing gave it back: the
+      // family lost the balance AND got no class, silently.
+      //
+      // The movements are the durable record and cannot be truncated, so the
+      // amount to return is read from them per registration. Still bounded by
+      // applied-minus-already-restored inside the RPC, so a retried webhook
+      // cannot hand back more than was taken.
       if (meta.credit_key) {
-        for (const part of decodeCreditAllocation(meta.credit_alloc)) {
+        const { data: appliedRows, error: appliedErr } = await admin
+          .from('family_credit_movements')
+          .select('registration_id, amount_cents')
+          .in('registration_id', regIds)
+          .eq('kind', 'applied');
+        if (appliedErr) {
+          console.error(
+            `[webhook] could not read the credit applied to ${regIds.join(',')} after an ACH failure:`,
+            appliedErr.message,
+          );
+        }
+        const appliedByReg = new Map<string, number>();
+        for (const m of ((appliedRows ?? []) as Array<{ registration_id: string; amount_cents: number }>)) {
+          appliedByReg.set(m.registration_id, (appliedByReg.get(m.registration_id) || 0) + (m.amount_cents || 0));
+        }
+        for (const [regId, cents] of appliedByReg) {
+          if (cents <= 0) continue;
           const { error: restoreErr } = await admin.rpc('restore_family_credit_for_registration', {
-            p_registration_id: part.registrationId,
-            p_amount_cents: part.creditCents,
+            p_registration_id: regId,
+            p_amount_cents: cents,
             p_note: 'returned when the bank transfer did not clear',
           });
           if (restoreErr) {
             console.error(
-              `[webhook] could not return credit on registration ${part.registrationId} after an ACH failure:`,
+              `[webhook] could not return credit on registration ${regId} after an ACH failure:`,
               restoreErr.message,
             );
           }

@@ -496,7 +496,19 @@ serve(async (req) => {
     if (creditPlan.totalCents >= serverSum && serverSum > 0 && gift.chargedCents === 0) {
       const confirmed: string[] = [];
       for (const entry of creditPlan.alloc!.entries) {
-        if (entry.amountCents <= 0) continue;
+        // EVERY registration, INCLUDING a zero-priced one. Skipping those left
+        // a free line sitting at pending/unpaid while its siblings confirmed -
+        // a free trial class beside a credit-covered paid one would never reach
+        // a roster, and the family saw the success page for both. The comp
+        // branch above has never had this hole: it confirms every id in one
+        // update.
+        //
+        // A zero amount is safe to pass: apply_family_credit returns early with
+        // applied_cents 0 and writes no movement, and
+        // confirm_registration_paid_by_credit's `applied < amount` check is
+        // 0 < 0, so it falls through to the status update. The seat is
+        // confirmed and no credit is spent, which is exactly right for a line
+        // that costs nothing.
         const { error: spendErr } = await guardAdmin.rpc('confirm_registration_paid_by_credit', {
           p_organization_id: giftOrgId,
           p_parent_id: cartParentId,
@@ -1385,8 +1397,15 @@ serve(async (req) => {
         // with the cart (about 45 per registration that took credit, so it
         // fits ten). Past that it is dropped rather than truncated: a
         // half-written allocation would be read back as a real one and restore
-        // the wrong amounts. Losing it costs only the webhook's self-healing
-        // fallback - the capture itself is keyed on credit_key and still works.
+        // the wrong amounts.
+        //
+        // WHAT DROPPING IT COSTS, stated accurately - an earlier version of
+        // this comment said "only the webhook's self-healing fallback", and
+        // that was wrong in a way that lost a family money. Capture is keyed on
+        // credit_key alone and is unaffected. The self-heal does lose its
+        // input. The ACH-bounce restore USED to lose its input too, which meant
+        // a big cart's credit was taken and never returned; that path now reads
+        // the movements instead, so it no longer depends on this field.
         credit_alloc: creditAllocEncoded.length <= 500 ? creditAllocEncoded : '',
       },
       payment_intent_data: piData,
