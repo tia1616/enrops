@@ -271,8 +271,22 @@ serve(async (req) => {
       // would mean the hold had lapsed and the family's credit had quietly
       // drifted back to spendable while they believed it spent. The bounce case
       // is handled where the seat is: async_payment_failed gives the credit back.
+      // AND ONLY IF THE SEAT ACTUALLY LANDED. The ordering above is worth
+      // nothing without this test: confirmErr was being collected and then not
+      // read until further down, so a failed confirmation still fell through
+      // into the capture and produced the precise torn state the ordering is
+      // supposed to prevent - credit spent, no seat. The error branch below
+      // alerts the operator and Stripe retries the delivery, so leaving the
+      // hold intact is the recoverable choice: it either captures on the retry
+      // or expires and the family keeps their credit.
       const creditKey = meta.credit_key || '';
-      if (creditKey) {
+      if (creditKey && confirmErr) {
+        console.error(
+          `[webhook] NOT capturing credit hold ${creditKey}: the registrations did not confirm ` +
+          `(${confirmErr.message}). The hold is left to expire so the family keeps their credit.`,
+        );
+      }
+      if (creditKey && !confirmErr) {
         const expectedCredit = Number(meta.credit_cents || '0') || 0;
         const { data: capturedRaw, error: captureErr } = await admin.rpc(
           'capture_family_credit_hold',
@@ -287,23 +301,31 @@ serve(async (req) => {
           );
         }
 
-        // THE SELF-HEALING HALF, and the reason the allocation travels in
-        // metadata. A hold can be gone by now - it lapsed, or another attempt on
-        // the same cart released it - and the family has just been charged a
-        // price that already had the credit taken off it. Capturing nothing
-        // would hand them the discount for free. So anything the capture did not
-        // cover is applied outright, from the allocation this session was
-        // actually priced with. apply_family_credit is idempotent on
-        // (key, registration), so where capture DID convert the rows this is a
-        // no-op rather than a second spend.
+        // THE SELF-HEALING HALF, and it heals exactly one shape - which is
+        // narrower than an earlier version of this comment claimed.
+        //
+        // IT WORKS when the reservation rows are GONE: released by another
+        // attempt on the same cart, so nothing under this key exists and
+        // apply_family_credit writes fresh rows. The family has just been
+        // charged a price that already had the credit taken off it, so without
+        // this they would get the discount for free.
+        //
+        // IT CANNOT WORK when capture converted a LAPSED hold for less than it
+        // held: those rows are now kind='applied' under the same
+        // (key, registration), so apply_family_credit answers already_existed
+        // and writes nothing. That is the correct outcome - the balance really
+        // was spent elsewhere, so there is nothing left to take - but it means
+        // the business has absorbed the difference, and that must not be a log
+        // line nobody reads.
         if (!captureErr && captured < expectedCredit) {
           const shortfall = decodeCreditAllocation(meta.credit_alloc);
           console.warn(
             `[webhook] credit hold ${creditKey} captured ${captured} of ${expectedCredit}; ` +
-            `applying the remainder outright across ${shortfall.length} registration(s)`,
+            `attempting the remainder outright across ${shortfall.length} registration(s)`,
           );
+          let recovered = 0;
           for (const part of shortfall) {
-            const { error: applyErr } = await admin.rpc('apply_family_credit', {
+            const { data: applyRows, error: applyErr } = await admin.rpc('apply_family_credit', {
               p_organization_id: orgId,
               p_parent_id: cartParentId,
               p_registration_id: part.registrationId,
@@ -317,6 +339,36 @@ serve(async (req) => {
                 `[webhook] could not apply credit for registration ${part.registrationId}:`,
                 applyErr.message,
               );
+              continue;
+            }
+            const row = Array.isArray(applyRows) ? applyRows[0] : applyRows;
+            const r = row as { applied_cents?: number; already_existed?: boolean } | null;
+            if (!r?.already_existed) recovered += Number(r?.applied_cents ?? 0);
+          }
+
+          // STILL SHORT AFTER THE ATTEMPT = the business funded a discount the
+          // family's balance did not cover. Tell the operator: this is their
+          // money, the family is correctly enrolled, and nothing else on any
+          // screen will ever show it.
+          const stillShort = expectedCredit - captured - recovered;
+          if (stillShort > 0) {
+            console.error(
+              `[webhook] credit shortfall ${stillShort} on ${creditKey} (regs ${regIds.join(',')}) - ` +
+              `the checkout was discounted by more than the family's balance covered`,
+            );
+            if (alertEmail) {
+              await sendOperatorAlert({
+                brand,
+                to: alertEmail,
+                subject: 'A registration was discounted by more account credit than was available',
+                body: `A family checked out with account credit, but by the time the payment completed their balance `
+                  + `no longer covered the whole discount. The registration is confirmed and paid, and the shortfall `
+                  + `of $${(stillShort / 100).toFixed(2)} has been absorbed rather than charged to them.\n\n`
+                  + `Registration IDs: ${regIds.join(', ')}\n`
+                  + `Discount applied at checkout: $${(expectedCredit / 100).toFixed(2)}\n`
+                  + `Credit actually taken: $${((expectedCredit - stillShort) / 100).toFixed(2)}\n\n`
+                  + `No action is needed for the family. Review it if this repeats.`,
+              });
             }
           }
         }

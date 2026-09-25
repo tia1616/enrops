@@ -91,11 +91,18 @@ export function allocateCreditAcrossLines(
  * The cart's application key: the one string that identifies this family's
  * draw on their credit for this set of registrations.
  *
- * DERIVED FROM THE CART, NOT RANDOM, and that is deliberate. A random key per
- * attempt would mean a family who abandons checkout and immediately tries
- * again finds their own credit held by the attempt they just walked away from.
- * Keyed on the cart, the second attempt reuses the first attempt's hold
- * instead of stacking a second one on top of it.
+ * DERIVED FROM THE CART, NOT RANDOM, so that a retry of the SAME registration
+ * rows re-uses its own hold rather than stacking a second one on top of it,
+ * and so that a replayed webhook lands on the rows it already wrote.
+ *
+ * WHAT IT DOES NOT DO, because an earlier version of this comment claimed it
+ * did: it does not make a family's SECOND ATTEMPT at the same cart re-use the
+ * first attempt's hold. Register.jsx calls create-registration on every Pay
+ * click, so the second attempt carries NEW registration ids and therefore a
+ * new key. The abandoned attempt's hold stays on their balance until it
+ * expires with the checkout window. create-checkout detects that case - credit
+ * on file but nothing spendable - and refuses with an explanation rather than
+ * charging full price in silence.
  *
  * Sorted for the same reason the allocation is: the same cart must produce the
  * same key however PostgREST happened to order the rows.

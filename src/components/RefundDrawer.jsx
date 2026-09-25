@@ -476,9 +476,10 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
         // screen says "done" - while the family is owed credit that nothing has
         // recorded. An operator who is not told here will never find out.
         notes.push(
-          `The card refund went through, but this family also paid with account credit and that ` +
-          `part could not be returned (${data.credit_restore_failed}). They are owed it — put it ` +
-          `back by hand before closing this.`,
+          `The card refund went through, but this family also paid with account credit and ` +
+          `${fmtCents(data.credit_restore_failed_cents)} of it could not be returned ` +
+          `(${data.credit_restore_failed}). They are owed it — put it back by hand before ` +
+          `closing this.`,
         );
       } else if (data?.credit_restored_cents) {
         // Not a warning: a fact the operator needs in order to answer "how much

@@ -759,13 +759,24 @@ serve(async (req: Request) => {
     // Only pay-in-full registrations can be affected - credit is refused on a
     // payment plan - so this touches one slot, but it is written to drain
     // across slots rather than assuming that stays true.
+    // GROSS applied, NOT applied-minus-restored, and the difference is money.
+    // This number answers "how much of the price never reached Stripe", which
+    // is a fact about the original charge and does not change when credit is
+    // later handed back - returning credit gives the family no additional CASH
+    // to refund. Netting it off made the slot shrink less on every subsequent
+    // refund, which inflated totalPaid and then under-restored through the
+    // `creditApplied * refundedNow / totalPaid` share below:
+    //   $400 class, $240 credit + $160 card, refunded $80 twice.
+    //   Netted: second pass sees totalPaid 280 and restores 69, not 120 -
+    //   the family ends $51.43 short with no third refund able to recover it,
+    //   and `eligible` reads $200 when Stripe has $80 left.
     const { data: ceilingCreditRows } = await supabase
       .from('family_credit_movements')
-      .select('amount_cents, kind')
+      .select('amount_cents')
       .eq('registration_id', registrationId)
-      .in('kind', ['applied', 'restored']);
-    const creditOnThisReg = ((ceilingCreditRows ?? []) as Array<{ amount_cents: number; kind: string }>)
-      .reduce((s, m) => s + (m.kind === 'applied' ? (m.amount_cents || 0) : -(m.amount_cents || 0)), 0);
+      .eq('kind', 'applied');
+    const creditOnThisReg = ((ceilingCreditRows ?? []) as Array<{ amount_cents: number }>)
+      .reduce((s, m) => s + (m.amount_cents || 0), 0);
     if (creditOnThisReg > 0) {
       let toDrain = creditOnThisReg;
       for (const slot of piSlots) {
@@ -828,15 +839,18 @@ serve(async (req: Request) => {
           // owed. Using gross bases while the charge is net of credit would
           // hand every child too small a share, and the shares would not sum
           // to the charge.
+          //
+          // GROSS applied here too, matching the slot: what a child owed in
+          // cash is a fact about the original charge, and a later restore does
+          // not change it.
           const { data: sharerCredits } = await supabase
             .from('family_credit_movements')
-            .select('registration_id, amount_cents, kind')
+            .select('registration_id, amount_cents')
             .in('registration_id', regRows.map((r) => r.id))
-            .in('kind', ['applied', 'restored']);
+            .eq('kind', 'applied');
           const creditByReg = new Map<string, number>();
-          for (const m of ((sharerCredits ?? []) as Array<{ registration_id: string; amount_cents: number; kind: string }>)) {
-            const delta = m.kind === 'applied' ? (m.amount_cents || 0) : -(m.amount_cents || 0);
-            creditByReg.set(m.registration_id, (creditByReg.get(m.registration_id) || 0) + delta);
+          for (const m of ((sharerCredits ?? []) as Array<{ registration_id: string; amount_cents: number }>)) {
+            creditByReg.set(m.registration_id, (creditByReg.get(m.registration_id) || 0) + (m.amount_cents || 0));
           }
           baseOnPi = regRows.reduce(
             (s, r) => s + Math.max(0, (r.amount_cents || 0) - Math.max(0, creditByReg.get(r.id) || 0)),
@@ -1037,6 +1051,13 @@ serve(async (req: Request) => {
         // Shown so the ceiling explains itself. An operator who sees "$240 paid,
         // $0 refunded, $0 left" with no third number has been told a riddle.
         total_credited_cents: totalCredited,
+        // WHAT THE FAMILY PAID FROM THEIR BALANCE rather than on a card.
+        // Without this the operator reads "Paid $160" on a $400 class and has
+        // no way to tell whether that is the whole story - and every figure
+        // above is now NET of this one, so the ceiling looks wrong instead of
+        // explained. Same reason total_credited_cents is here: a number that
+        // makes another number make sense.
+        credit_paid_cents: creditOnThisReg,
         // Reserved or unresolved: counted against the ceiling, but NOT money we
         // can say the family has.
         held_cents: heldCents,
@@ -1260,9 +1281,45 @@ serve(async (req: Request) => {
         dedupeKey: `cancelled:${registrationId}:credit_no_refund`,
       });
 
+      // GIVE BACK THE CREDIT LEG TOO. The credit just issued covers the CASH
+      // the family paid - `eligible` is now netted of credit, correctly, so on
+      // a $400 class funded by $240 credit and $160 card it is $160. Their
+      // $240 is still recorded as spent, so without this the family hands over
+      // $400 and ends up holding $160.
+      //
+      // Restoring rather than inflating the new credit is what keeps the two
+      // ledgers honest: the original credit goes back to being their original
+      // credit, and the new one is only ever the cash. The registration is
+      // being cancelled outright here, so the whole applied amount comes back -
+      // there is no partial-refund proportion to take, which is the difference
+      // between this and the cash-refund path below.
+      let creditLegRestored = 0;
+      let creditLegFailed: string | null = null;
+      {
+        const { data: restoredRaw, error: restoreLegErr } = await supabase
+          .rpc('restore_family_credit_for_registration', {
+            p_registration_id: registrationId,
+            p_amount_cents: creditOnThisReg,
+            p_note: 'returned when this registration was credited instead of refunded',
+          });
+        if (restoreLegErr) {
+          console.error('[refund] could not return the family credit leg on the credit path:', restoreLegErr);
+          creditLegFailed =
+            `a credit was recorded for the cash they paid, but ${(creditOnThisReg / 100).toFixed(2)} they had already paid from their balance could not be returned - put it back by hand`;
+        } else {
+          creditLegRestored = Number(restoredRaw) || 0;
+        }
+      }
+
       return json({
         credited: true,
         credit_id: creditId,
+        // The OTHER half of what they get back: credit they had already spent
+        // on this registration, returned to their balance. Present only when
+        // there was some, so an ordinary credit-instead-of-refund response is
+        // unchanged.
+        credit_restored_cents: creditLegRestored > 0 ? creditLegRestored : undefined,
+        credit_restore_failed: creditLegFailed ?? undefined,
         // What the ledger holds. On a retry answered by the function's own
         // idempotency branch this is the ORIGINAL amount, not the one this
         // request asked for - and the drawer repeats this number to the
@@ -1333,6 +1390,10 @@ serve(async (req: Request) => {
     // partly on account needs to see both halves or the total looks short.
     let creditRestoredCents = 0;
     let creditRestoreFailedReason: string | null = null;
+    // How much the family is owed when the restore failed. Carried separately
+    // from the reason so the drawer can print it as money - it is the number
+    // the operator has to put back by hand.
+    let creditRestoreFailedCents = 0;
     let remaining = amountCents;
 
     for (const slot of piSlots) {
@@ -1771,8 +1832,14 @@ serve(async (req: Request) => {
             // nothing has recorded. That is exactly the silent hole this whole
             // function exists to close.
             console.error('[refund] could not return the family credit leg:', restoreErr);
-            creditRestoreFailedReason =
-              `the cash refund went through, but ${(share / 100).toFixed(2)} of account credit could not be returned - record it by hand`;
+            // A SHORT FRAGMENT, not a sentence: the drawer wraps this in its
+            // own sentence, and a sentence inside a sentence reads as a bug.
+            // Every other reason string on this response is a fragment for the
+            // same reason. The amount lives in the drawer's copy too, with its
+            // dollar sign - this is the one number the operator has to re-enter
+            // by hand, so it must not arrive naked.
+            creditRestoreFailedReason = `the ledger write failed`;
+            creditRestoreFailedCents = share;
           } else {
             creditRestoredCents = Number(restoredRaw) || 0;
           }
@@ -2092,6 +2159,7 @@ serve(async (req: Request) => {
       // all-cash refund's response is byte-identical to what it was before.
       credit_restored_cents: creditRestoredCents > 0 ? creditRestoredCents : undefined,
       credit_restore_failed: creditRestoreFailedReason ?? undefined,
+      credit_restore_failed_cents: creditRestoreFailedCents > 0 ? creditRestoreFailedCents : undefined,
       fee_lookup_aborted: feeLookupAborted || undefined,
       // The refund stopped partway because a later slot could not be reserved.
       // Reported on a SUCCESSFUL response on purpose: money did move, and the

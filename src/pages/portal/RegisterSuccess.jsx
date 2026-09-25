@@ -275,8 +275,8 @@ export default function RegisterSuccess() {
                 the page claiming otherwise. */}
             {paidByCredit ? (
               <>
-                Your account credit covered this in full, so no card was charged and there
-                &rsquo;s no card receipt or sign-in link yet.{' '}
+                Your account credit covered this in full, so no card was charged and
+                there&rsquo;s no card receipt or sign-in link yet.{' '}
                 {org?.name || 'Your program provider'} has your registration and will be in
                 touch with class details.
               </>

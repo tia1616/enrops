@@ -232,6 +232,110 @@ comment on function public.my_family_credit_balance_cents(uuid) is
   'The signed-in family''s own spendable credit at one business, for the parent portal. Takes no parent_id on purpose - it resolves the caller via current_parent_id(), so there is no argument a signed-in user could point at another family. Delegates to family_credit_available_cents so the balance rule has exactly one implementation. Returns 0 for a caller who is not a parent.';
 
 -- ---------------------------------------------------------------------------
+-- 3c. THE OPERATOR'S "CREDIT OWED" HAS THE SAME BUG THE PORTAL CARD HAD
+-- ---------------------------------------------------------------------------
+-- get_revenue_summary's credit_outstanding_cents summed family_credits
+-- .amount_cents over status='active'. Exactly like the parent portal, that was
+-- the whole truth until a credit could be partly spent - and it is the same
+-- error in the opposite direction: the business is shown a LIABILITY it no
+-- longer owes. A $240 credit with $90 left still reported $240 on the money
+-- dashboard, which is section 6's "money owed, not revenue" reporting a debt
+-- that has been half discharged.
+--
+-- Fixing only the family's half and not the operator's would have been the
+-- classic miss: one fix, two places that needed it.
+--
+-- Everything else in this function is byte-identical to what is on prod today;
+-- only the final expression changes, from SUM(fc.amount_cents) to
+-- SUM(family_credit_balance_cents(fc.id)).
+
+create or replace function public.get_revenue_summary(
+  p_org uuid,
+  p_from timestamp with time zone default null::timestamp with time zone,
+  p_to timestamp with time zone default null::timestamp with time zone,
+  p_term text default null::text
+)
+returns table(collected_cents bigint, refunded_cents bigint, expected_soon_cents bigint,
+              paid_count bigint, external_count bigint, has_enrops_payments boolean,
+              credit_outstanding_cents bigint)
+language plpgsql
+stable
+security definer
+set search_path to 'public', 'pg_temp'
+as $function$
+BEGIN
+  IF NOT can_handle_money(p_org) THEN
+    RAISE EXCEPTION 'forbidden' USING ERRCODE = '42501';
+  END IF;
+
+  RETURN QUERY
+  WITH term_prog AS (
+    SELECT id FROM programs WHERE organization_id = p_org AND (p_term IS NULL OR term = p_term)
+  ),
+  pif AS (
+    SELECT r.id, r.amount_cents, r.parent_id
+    FROM registrations r
+    WHERE r.organization_id = p_org
+      AND r.payment_method = 'stripe'
+      AND r.payment_status IN ('paid','partial','refunded')
+      AND (p_from IS NULL OR r.registered_at >= p_from)
+      AND (p_to   IS NULL OR r.registered_at <  p_to)
+      AND (p_term IS NULL OR r.program_id IN (SELECT id FROM term_prog))
+  ),
+  inst_paid AS (
+    SELECT i.amount_cents, r.parent_id
+    FROM installments i JOIN registrations r ON r.id = i.registration_id
+    WHERE i.organization_id = p_org AND i.status = 'paid'
+      AND (p_from IS NULL OR i.paid_at >= p_from)
+      AND (p_to   IS NULL OR i.paid_at <  p_to)
+      AND (p_term IS NULL OR r.program_id IN (SELECT id FROM term_prog))
+  ),
+  ref AS (
+    SELECT rf.amount_cents
+    FROM refunds rf
+    WHERE rf.organization_id = p_org AND rf.status = 'succeeded'
+      AND (p_from IS NULL OR rf.succeeded_at >= p_from)
+      AND (p_to   IS NULL OR rf.succeeded_at <  p_to)
+      AND (p_term IS NULL OR rf.registration_id IN
+            (SELECT r.id FROM registrations r WHERE r.program_id IN (SELECT id FROM term_prog)))
+  ),
+  inst_pending AS (
+    SELECT i.amount_cents
+    FROM installments i
+    WHERE i.organization_id = p_org AND i.status = 'pending'
+      AND (p_term IS NULL OR i.registration_id IN
+            (SELECT r.id FROM registrations r WHERE r.program_id IN (SELECT id FROM term_prog)))
+  ),
+  ext AS (
+    SELECT r.id
+    FROM registrations r
+    WHERE r.organization_id = p_org AND r.payment_method IS NULL
+      AND (p_from IS NULL OR r.registered_at >= p_from)
+      AND (p_to   IS NULL OR r.registered_at <  p_to)
+      AND (p_term IS NULL OR r.program_id IN (SELECT id FROM term_prog))
+  ),
+  paid_families AS (
+    SELECT parent_id FROM pif       WHERE parent_id IS NOT NULL
+    UNION
+    SELECT parent_id FROM inst_paid WHERE parent_id IS NOT NULL
+  )
+  SELECT
+    (COALESCE((SELECT SUM(amount_cents) FROM pif),0)
+      + COALESCE((SELECT SUM(amount_cents) FROM inst_paid),0)
+      - COALESCE((SELECT SUM(amount_cents) FROM ref),0))::bigint,
+    COALESCE((SELECT SUM(amount_cents) FROM ref),0)::bigint,
+    COALESCE((SELECT SUM(amount_cents) FROM inst_pending),0)::bigint,
+    (SELECT COUNT(*) FROM paid_families)::bigint,
+    (SELECT COUNT(*) FROM ext)::bigint,
+    EXISTS (SELECT 1 FROM registrations r
+            WHERE r.organization_id = p_org AND r.payment_method = 'stripe'
+              AND r.payment_status IN ('paid','partial','refunded')),
+    COALESCE((SELECT SUM(public.family_credit_balance_cents(fc.id)) FROM family_credits fc
+              WHERE fc.organization_id = p_org AND fc.status = 'active'),0)::bigint;
+END
+$function$;
+
+-- ---------------------------------------------------------------------------
 -- 4. SPENDING IT. The guard lives IN the write.
 -- ---------------------------------------------------------------------------
 -- Called ONCE PER REGISTRATION with that registration's share of the order.
