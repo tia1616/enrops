@@ -1304,8 +1304,12 @@ serve(async (req: Request) => {
           });
         if (restoreLegErr) {
           console.error('[refund] could not return the family credit leg on the credit path:', restoreLegErr);
-          creditLegFailed =
-            `a credit was recorded for the cash they paid, but ${(creditOnThisReg / 100).toFixed(2)} they had already paid from their balance could not be returned - put it back by hand`;
+          // A FRAGMENT AND A SEPARATE AMOUNT, matching the cash-refund path.
+          // Both responses are rendered by the SAME handler in RefundDrawer, so
+          // a full sentence here would be read out inside the drawer's own
+          // sentence, and omitting the cents would print a broken figure on the
+          // one number the operator has to put back by hand.
+          creditLegFailed = `the ledger write failed`;
         } else {
           creditLegRestored = Number(restoredRaw) || 0;
         }
@@ -1320,6 +1324,7 @@ serve(async (req: Request) => {
         // unchanged.
         credit_restored_cents: creditLegRestored > 0 ? creditLegRestored : undefined,
         credit_restore_failed: creditLegFailed ?? undefined,
+        credit_restore_failed_cents: creditLegFailed ? creditOnThisReg : undefined,
         // What the ledger holds. On a retry answered by the function's own
         // idempotency branch this is the ORIGINAL amount, not the one this
         // request asked for - and the drawer repeats this number to the

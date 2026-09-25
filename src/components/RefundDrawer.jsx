@@ -471,23 +471,30 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
           `Check the amount actually refunded before trying again.`,
         );
       }
+      // BOTH OUTCOMES LAND HERE. This one handler renders the cash-refund
+      // response AND the credit-instead-of-refund response, so the wording has
+      // to branch on which happened - "went back to their card" is simply false
+      // on the credit path, where nothing touched a card at all.
       if (data?.credit_restore_failed) {
-        // THE LOUD ONE. The card refund succeeded, so every other signal on this
-        // screen says "done" - while the family is owed credit that nothing has
-        // recorded. An operator who is not told here will never find out.
+        // THE LOUD ONE. The rest of the action succeeded, so every other signal
+        // on this screen says "done" - while the family is owed credit that
+        // nothing has recorded. An operator who is not told here never finds out.
         notes.push(
-          `The card refund went through, but this family also paid with account credit and ` +
+          `This family had also paid with account credit, and ` +
           `${fmtCents(data.credit_restore_failed_cents)} of it could not be returned ` +
           `(${data.credit_restore_failed}). They are owed it — put it back by hand before ` +
           `closing this.`,
         );
       } else if (data?.credit_restored_cents) {
         // Not a warning: a fact the operator needs in order to answer "how much
-        // did they get back?". The card figure alone understates it, because
-        // the credit leg never went near Stripe.
+        // did they get back?". On the refund path the card figure alone
+        // understates it, because the credit leg never went near Stripe.
         notes.push(
-          `${fmtCents(data.credit_restored_cents)} of this went back as account credit, not to ` +
-          `their card — that part was paid from their balance.`,
+          data?.credited
+            ? `${fmtCents(data.credit_restored_cents)} of account credit they had already spent on `
+              + `this registration has also been returned to their balance.`
+            : `${fmtCents(data.credit_restored_cents)} of this went back as account credit, not to `
+              + `their card — that part was paid from their balance.`,
         );
       }
       if (data?.stripe_aborted) {
