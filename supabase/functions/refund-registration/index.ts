@@ -737,6 +737,43 @@ serve(async (req: Request) => {
     // Absorb orgs (fee_pass_through=false — including J2S on prod) charged base
     // only, so the share equals amount_cents and nothing changes for them.
     //
+    // ── CREDIT MAKES THE BASE AN UNSAFE FLOOR, so lower it first ──────────
+    //
+    // The loop below only ever RAISES a slot toward the real charge, never
+    // lowers it, and that was right for as long as the charge was always at
+    // least the base: a pass-through org charges base + fee, so the base is a
+    // safe floor. CREDIT INVERTS THAT. A $400 class paid with $300 of account
+    // credit and $101 on a card leaves Stripe holding $101 against a $400 base,
+    // and keeping the base would offer $400 back.
+    //
+    // The cash refund itself would survive that - stripe.refunds.create refuses
+    // to return more than the charge, which is the "second opinion" the catch
+    // below relies on. THE CREDIT PATH WOULD NOT. issue_family_credit reads this
+    // same ceiling and makes no Stripe call at all, so an over-stated ceiling
+    // there mints liability out of nothing: a $400 credit recorded against a
+    // family who paid $101.
+    //
+    // So the base is reduced to the family's CASH obligation before the raise.
+    // Only pay-in-full registrations can be affected - credit is refused on a
+    // payment plan - so this touches one slot, but it is written to drain
+    // across slots rather than assuming that stays true.
+    const { data: ceilingCreditRows } = await supabase
+      .from('family_credit_movements')
+      .select('amount_cents, kind')
+      .eq('registration_id', registrationId)
+      .in('kind', ['applied', 'restored']);
+    const creditOnThisReg = ((ceilingCreditRows ?? []) as Array<{ amount_cents: number; kind: string }>)
+      .reduce((s, m) => s + (m.kind === 'applied' ? (m.amount_cents || 0) : -(m.amount_cents || 0)), 0);
+    if (creditOnThisReg > 0) {
+      let toDrain = creditOnThisReg;
+      for (const slot of piSlots) {
+        if (toDrain <= 0) break;
+        const take = Math.min(slot.amount, toDrain);
+        slot.amount -= take;
+        toDrain -= take;
+      }
+    }
+
     // Set when ANY slot's charged total could not be read. Only the credit path
     // treats it as fatal; see the catch below for why the two paths differ.
     let ceilingReadFailed = false;
@@ -779,10 +816,30 @@ serve(async (req: Request) => {
           // shared this checkout, not just this one.
           const { data: regSharers } = await supabase
             .from('registrations')
-            .select('amount_cents')
+            .select('id, amount_cents')
             .eq('stripe_payment_intent_id', slot.pi);
-          const regRows = ((regSharers ?? []) as unknown) as Array<{ amount_cents: number | null }>;
-          baseOnPi = regRows.reduce((s, r) => s + (r.amount_cents || 0), 0);
+          const regRows = ((regSharers ?? []) as unknown) as Array<{ id: string; amount_cents: number | null }>;
+
+          // NET OF EACH CHILD'S OWN CREDIT, for the same reason the slot was
+          // lowered above: this is the denominator that splits one charge
+          // across a multi-child cart, so it has to be the cash each child
+          // owed. Using gross bases while the charge is net of credit would
+          // hand every child too small a share, and the shares would not sum
+          // to the charge.
+          const { data: sharerCredits } = await supabase
+            .from('family_credit_movements')
+            .select('registration_id, amount_cents, kind')
+            .in('registration_id', regRows.map((r) => r.id))
+            .in('kind', ['applied', 'restored']);
+          const creditByReg = new Map<string, number>();
+          for (const m of ((sharerCredits ?? []) as Array<{ registration_id: string; amount_cents: number; kind: string }>)) {
+            const delta = m.kind === 'applied' ? (m.amount_cents || 0) : -(m.amount_cents || 0);
+            creditByReg.set(m.registration_id, (creditByReg.get(m.registration_id) || 0) + delta);
+          }
+          baseOnPi = regRows.reduce(
+            (s, r) => s + Math.max(0, (r.amount_cents || 0) - Math.max(0, creditByReg.get(r.id) || 0)),
+            0,
+          );
         }
         if (baseOnPi <= 0) continue;
 
