@@ -929,7 +929,22 @@ export default function QuickProgramBuilder() {
             short_description: description.trim() || null,
             max_capacity: spotsNum,
             price_cents: priceCents,
-            ...audiencePatch(audienceMode, { gradeMin, gradeMax, ageMin, ageMax }),
+            // Same helper, different column names. programs calls the age pair
+            // age_min/age_max; camp_sessions calls it ages_min/ages_max. Spreading
+            // the patch straight in fails with "could not find the 'age_max'
+            // column" - caught by actually saving one. The RULE (which pair is
+            // written, which is nulled) still comes from the one helper; only the
+            // names are adapted.
+            ...(() => {
+              const a = audiencePatch(audienceMode, { gradeMin, gradeMax, ageMin, ageMax });
+              return {
+                age_format: a.age_format,
+                grade_min: a.grade_min,
+                grade_max: a.grade_max,
+                ages_min: a.age_min,
+                ages_max: a.age_max,
+              };
+            })(),
             // camp_sessions has no draft state - status is active or cancelled -
             // so a camp saved as a draft is simply not created yet.
             status: "active",
