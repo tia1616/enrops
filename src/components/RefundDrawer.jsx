@@ -195,6 +195,8 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
   // class reads as a bug - and an operator applying a percentage policy would
   // take their percentage of the wrong number.
   const [creditPaidCents, setCreditPaidCents] = useState(0);
+  // Of that, what can still be handed back - the rest has already been returned.
+  const [creditReturnableCents, setCreditReturnableCents] = useState(0);
   // Money counted against the ceiling that we cannot say the family has: a
   // refund reserved and still in flight, or one Stripe never answered on.
   // Without it the summary band is a riddle - paid $240, refunded $0,
@@ -220,6 +222,27 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
   // Reading `eligible_cents` keeps one implementation, the same reason the
   // drawer stopped deriving this locally in the first place.
   const refundableCents = Math.max(0, eligibleCents);
+
+  // RETURNING CREDIT THE FAMILY ALREADY SPENT. Offered only when there is no
+  // cash to give back and they did pay with credit - which is exactly the
+  // registration bought outright with a balance, where every other outcome on
+  // this screen is a dead end because Stripe never saw a payment.
+  //
+  // NOT offered alongside a cash refund, on purpose. When there IS cash, the
+  // refund and credit paths already return the credit leg proportionally on
+  // their own, so a second control here would be a second way to do one thing
+  // and the two could disagree.
+  //
+  // DECLARED HERE, above `overMax` and `nothingToRefund`, because both of them
+  // read `givebackCents` - a const read before its own declaration in a
+  // component body is a ReferenceError on every render that no test can see.
+  const returnableCredit = Math.max(0, creditReturnableCents);
+  const isCreditReturn = returnableCredit > 0 && refundableCents <= 0;
+  // THE ONE CEILING THIS SCREEN WORKS TO, whichever kind of money is going
+  // back. Everything downstream - the amount cap, the "Full" chip, whether
+  // there is anything to do at all - reads this instead of asking the question
+  // twice and getting two answers.
+  const givebackCents = isCreditReturn ? returnableCredit : refundableCents;
 
   // Load eligibility + admin fee on open.
   useEffect(() => {
@@ -262,6 +285,7 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
         setEligibleCents(elig.eligible_cents);
         setCreditedCents(elig.total_credited_cents || 0);
         setCreditPaidCents(elig.credit_paid_cents || 0);
+        setCreditReturnableCents(elig.credit_returnable_cents || 0);
         setHeldCents(elig.held_cents || 0);
         // Pre-selects the cancellation kind IF the operator goes on to choose
         // credit. Not a claim on its own, and it decides nothing until then.
@@ -317,7 +341,7 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
     return Math.round(n * 100);
   })();
 
-  const overMax = amountCents > refundableCents;
+  const overMax = amountCents > givebackCents;
 
   // NOTHING TO REFUND IS NOT NOTHING TO DO. A family that leaves before a later
   // term has been charged has no money coming back, but their PENDING
@@ -325,7 +349,7 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
   // drawer. Until 2026-09-22 this state hid the submit button entirely, so the
   // operator's only options were to leave the charges running or have someone
   // edit the database by hand.
-  const nothingToRefund = refundableCents <= 0;
+  const nothingToRefund = givebackCents <= 0;
 
   // WITHDRAW WITHOUT REFUNDING. Two different situations, one action:
   //   - there is nothing to refund (a later term never charged), or
@@ -387,7 +411,7 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
         (amountCents > 0 && !overMax &&
           (seatChoice === "keep" || seatChoice === "withdraw"))));
 
-  function setFull() { setAmountStr((refundableCents / 100).toFixed(2)); }
+  function setFull() { setAmountStr((givebackCents / 100).toFixed(2)); }
   function setKeepFee() { setAmountStr((Math.max(0, refundableCents - adminFeeCents) / 100).toFixed(2)); }
 
   async function submit() {
@@ -405,7 +429,10 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
           reason: reason.trim() || undefined,
           // A credit always withdraws, so this is true without consulting the
           // seat choice - which is not even shown in that mode.
-          cancel_registration: isCredit ? true : (withdrawNoRefund ? true : seatChoice === "withdraw"),
+          cancel_registration: isCreditReturn
+            ? seatChoice === "withdraw"
+            : (isCredit ? true : (withdrawNoRefund ? true : seatChoice === "withdraw")),
+          ...(isCreditReturn ? { return_credit: true } : null),
           ...(isCredit
             ? {
               issue_credit: true,
@@ -537,6 +564,33 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
       // THE HEADLINE HAS TO MATCH WHAT ACTUALLY HAPPENED. "The family has their
       // money back" is false on a credit - the money is precisely what they did
       // NOT get back - and it is the sentence an operator would repeat to them.
+      // RETURNING CREDIT IS AS SILENT AS ISSUING ONE, so it alerts for the same
+      // reason: nothing in this flow emails the family, and Stripe will not,
+      // because no card was ever charged. This sentence is the only thing
+      // standing between them and never learning their money is back.
+      if (isCreditReturn) {
+        const back = data?.credit_returned_cents ?? amountCents;
+        const left = data?.credit_returnable_cents ?? 0;
+        const seatFreedOnReturn = seatChoice === "withdraw" && !data?.cancel_failed;
+        alert(
+          [
+            `${fmtCents(back)} has gone back onto this family's account credit.`,
+            left > 0
+              ? `${fmtCents(left)} of what they paid for this class is still with you.`
+              : `That is everything they paid for this class.`,
+            seatFreedOnReturn
+              ? `Their spot has been freed. They will not appear on the roster, so to message them turn on "families who have left or been refunded" in Message families.`
+              : null,
+            `No card was charged for this class, so Stripe will not email them — telling them is yours to do.`,
+            data?.cancel_failed
+              ? `Their spot could not be freed (${data.cancel_failed}). They are still on the roster — withdraw them manually.`
+              : null,
+          ].filter(Boolean).join("\n\n"),
+        );
+        onDone?.();
+        onClose?.();
+        return;
+      }
       if (isCredit) {
         // ALWAYS alerts, unlike the refund path, and that is the point. A refund
         // announces itself: the family sees it on their card. A credit is
@@ -685,7 +739,15 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
                   On hold <strong style={{ color: AMBER }}>{fmtCents(heldCents)}</strong>
                 </span>
               )}
-              <span style={{ color: MUTED }}>Refundable <strong style={{ color: OK }}>{fmtCents(refundableCents)}</strong></span>
+              {/* On a registration bought entirely with credit there is nothing
+                  refundable and never will be - Stripe saw no payment. Showing
+                  "Refundable $0.00" next to "Paid with credit $240.00" reads as
+                  a broken screen; naming what CAN go back is the honest line. */}
+              {isCreditReturn ? (
+                <span style={{ color: MUTED }}>Returnable as credit <strong style={{ color: OK }}>{fmtCents(returnableCredit)}</strong></span>
+              ) : (
+                <span style={{ color: MUTED }}>Refundable <strong style={{ color: OK }}>{fmtCents(refundableCents)}</strong></span>
+              )}
             </div>
 
             {nothingToRefund ? (
@@ -738,7 +800,7 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
               <>
                 {/* Amount */}
                 <label style={{ display: "block", fontSize: 12.5, fontWeight: 600, color: INK, marginTop: 16, marginBottom: 6 }}>
-                  {isCredit ? "Credit amount" : "Refund amount"}
+                  {isCreditReturn ? "Amount to return" : isCredit ? "Credit amount" : "Refund amount"}
                 </label>
                 <div style={{ position: "relative", display: "inline-block" }}>
                   <span style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: MUTED, fontSize: 14 }}>$</span>
@@ -756,7 +818,7 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
                       above a "Give $240 credit" button is the screen telling an
                       operator two different things about one press. */}
                   <button type="button" onClick={setFull} disabled={busy} style={chip}>
-                    {isCredit ? "Full credit" : "Full refund"} ({fmtCents(refundableCents)})
+                    {isCreditReturn ? "Return it all" : isCredit ? "Full credit" : "Full refund"} ({fmtCents(givebackCents)})
                   </button>
                   {showKeepFee && (
                     <button type="button" onClick={setKeepFee} disabled={busy} style={chip}>
@@ -788,7 +850,7 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
                 </div>
                 {overMax && (
                   <div style={{ color: RED, fontSize: 12, marginTop: 6 }}>
-                    That's more than is refundable ({fmtCents(refundableCents)}).
+                    {isCreditReturn ? "That's more credit than they have left on this registration" : "That's more than is refundable"} ({fmtCents(givebackCents)}).
                   </div>
                 )}
 
@@ -969,7 +1031,9 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
                     arm, reintroduced by adding a third outcome to a two-way
                     branch. */}
                 <p style={{ color: MUTED, fontSize: 11.5, marginTop: 10, lineHeight: 1.5 }}>
-                  {isCredit
+                  {isCreditReturn
+                    ? "This family paid for this class out of their account credit, so there is no card payment to reverse — the credit simply goes back onto their balance. Nothing leaves your Stripe balance, and Stripe does not email them. Telling them is yours to do."
+                    : isCredit
                     ? "No money leaves your Stripe balance, and Stripe does not write to the family — it only emails them when a real refund happens. Telling them about the credit is yours to do."
                     : withdrawNoRefund
                       ? "No money moves, so the family is not emailed — Stripe only writes to them when a refund actually happens. Tell them yourself if they should know."
@@ -998,7 +1062,9 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
                   operator reads before money is decided, so it names the actual
                   outcome rather than a generic "Confirm" - and "Refund $240" on
                   a press that gives no refund is the lie this guards against. */}
-              {isCredit
+              {isCreditReturn
+                ? (busy ? "Returning credit…" : `Return ${fmtCents(amountCents)} to their credit`)
+                : isCredit
                 ? (busy ? "Issuing credit…" : `Give ${fmtCents(amountCents)} credit`)
                 : withdrawNoRefund
                   ? (busy ? "Withdrawing…" : "Withdraw without refunding")

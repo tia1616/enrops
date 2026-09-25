@@ -13,6 +13,7 @@
 //   reason?: string,                // internal note; not emailed to parent
 //   cancel_registration?: boolean,  // also flip status to 'cancelled' + pause future installments
 //   issue_credit?: boolean,         // record an enrops credit INSTEAD of refunding
+//   return_credit?: boolean,        // give back credit the family already SPENT here
 //   credit_reason?: 'business_cancelled' | 'family_cancelled',
 //   idempotency_key?: string,       // required in practice for issue_credit
 // }
@@ -135,6 +136,17 @@ interface Body {
    * call is made on this path at all.
    */
   issue_credit?: boolean;
+  /**
+   * RETURN CREDIT THE FAMILY ALREADY SPENT on this registration, to their
+   * balance. The mirror image of issue_credit, and not the same operation:
+   * issue_credit converts CASH the business holds into a credit, while this
+   * gives back credit the family had already handed over. `amount_cents` is
+   * the amount of that leg to return.
+   *
+   * It is the only outcome available on a registration bought entirely with
+   * credit, where there is no Stripe payment for the refund paths to work on.
+   */
+  return_credit?: boolean;
   /**
    * Which kind of cancellation this was, as the OPERATOR states it - not as the
    * platform guesses it. `programs.status = 'cancelled'` only correlates: a
@@ -283,6 +295,28 @@ serve(async (req: Request) => {
     // branch carries it: a preview promises no side effects, and this branch
     // writes a credit row and cancels a registration.
     const issueCredit = !preview && body.issue_credit === true;
+
+    // RETURN THE CREDIT LEG. A separate intent from issue_credit, and the
+    // distinction is the whole point:
+    //
+    //   issue_credit   - turn CASH the business collected into a credit.
+    //   return_credit  - give back credit the family ALREADY SPENT here.
+    //
+    // This is what every comparable platform does. Shopify states it plainly:
+    // store credit is a refund DESTINATION, and an order paid with store credit
+    // refunds back to store credit. Jackrabbit and iClassPro reach the same
+    // place from the other direction - a family has one running ledger, so
+    // unwinding a charge simply restores the balance. Enrops keeps discrete
+    // credit rows rather than a ledger, so the restore has to be asked for
+    // explicitly; this is that ask.
+    //
+    // WITHOUT IT a registration bought entirely with credit cannot be unwound
+    // at all: there is no Stripe payment, so `nothing_paid` refuses the refund
+    // and the family's money has nowhere to go. That is not a corner case - a
+    // family whose class is cancelled gets a credit and spends it on the next
+    // class of the same price, which is the ordinary journey this feature
+    // exists to serve.
+    const returnCredit = !preview && body.return_credit === true;
     const creditReason = (body.credit_reason || '').toString().trim();
     const idempotencyKey = (body.idempotency_key || '').toString().trim() || null;
 
@@ -353,11 +387,21 @@ serve(async (req: Request) => {
     // back later does not change.
     const { data: creditLegRows } = await supabase
       .from('family_credit_movements')
-      .select('amount_cents')
+      .select('amount_cents, kind')
       .eq('registration_id', registrationId)
-      .eq('kind', 'applied');
-    const creditOnThisReg = ((creditLegRows ?? []) as Array<{ amount_cents: number }>)
+      .in('kind', ['applied', 'restored']);
+    const creditLegMovements = (creditLegRows ?? []) as Array<{ amount_cents: number; kind: string }>;
+    const creditOnThisReg = creditLegMovements
+      .filter((m) => m.kind === 'applied')
       .reduce((s, m) => s + (m.amount_cents || 0), 0);
+    // WHAT IS STILL OUT THERE to give back, as opposed to what was originally
+    // paid with credit. The gross figure above is the ceiling's input and must
+    // stay gross; THIS one is what an operator can still return, and it is the
+    // number the drawer offers.
+    const creditAlreadyReturned = creditLegMovements
+      .filter((m) => m.kind === 'restored')
+      .reduce((s, m) => s + (m.amount_cents || 0), 0);
+    const creditReturnable = Math.max(0, creditOnThisReg - creditAlreadyReturned);
 
     /**
      * Give the credit leg back. Safe to call more than once and on
@@ -423,6 +467,92 @@ serve(async (req: Request) => {
     // registration whose card is still charged on a date months away, which is
     // the single worst thing this function can produce and nobody would notice
     // until the money left.
+    // ── RETURN CREDIT THE FAMILY ALREADY SPENT ON THIS REGISTRATION ───────
+    //
+    // Sits ABOVE every ceiling read on purpose: this outcome is about money
+    // that never went near Stripe, so none of the charge arithmetic below
+    // applies to it and making it wait for a Stripe round-trip would only give
+    // it new ways to fail.
+    //
+    // MONEY FIRST, SEAT SECOND - the same order the issue-credit path uses and
+    // the opposite of the withdraw path's. A return recorded with the seat
+    // still filled is an inconsistency an operator can see and finish; a seat
+    // freed with the money unreturned is invisible and the family is simply
+    // short.
+    if (returnCredit) {
+      if (creditReturnable <= 0) {
+        // Not an error the operator caused - say what is true rather than
+        // echoing a constraint. Covers both "they never used credit here" and
+        // "it has already been given back".
+        return json({
+          error: 'no_credit_to_return',
+          credit_returnable_cents: 0,
+        }, 400);
+      }
+      if (amountCents > creditReturnable) {
+        return json({
+          error: 'amount_exceeds_credit_returnable',
+          credit_returnable_cents: creditReturnable,
+        }, 400);
+      }
+
+      const [returned, returnFailed] =
+        await restoreCreditLeg(amountCents, 'returned to the family by the operator');
+      if (returnFailed) {
+        // NOTHING has happened - the RPC is the only write on this path and it
+        // rolled back. Say so plainly rather than implying a half-done state.
+        return json({ error: 'credit_return_failed' }, 500);
+      }
+
+      let returnCancelFailed: string | null = null;
+      let returnPaused = 0;
+      if (cancelRegistration) {
+        const nowIso = new Date().toISOString();
+        const { pausedRows, pauseError, cancelError } =
+          await stopChargesAndCancel(supabase, registrationId, nowIso);
+        returnPaused = pausedRows?.length ?? 0;
+        // NOT a 500, and not a rollback. The money is back in their balance,
+        // which is the part that cannot be left half-done; the seat is a task
+        // the operator can still finish, and telling them the whole thing
+        // failed would send them to press the button again and return the
+        // credit twice.
+        if (pauseError) {
+          console.error('[return-credit] pausing pending installments failed:', pauseError);
+          returnCancelFailed =
+            `could not stop this registration's future payments (${pauseError}) - it was left active on purpose; try again`;
+        } else if (cancelError) {
+          console.error('[return-credit] registration cancel failed:', cancelError);
+          returnCancelFailed = cancelError;
+        }
+      }
+
+      await logEnrollmentEvent(supabase, {
+        organizationId: reg.organization_id,
+        parentId: reg.parent_id,
+        studentId: reg.student_id,
+        programId: reg.program_id,
+        campSessionId: reg.camp_session_id,
+        registrationId: registrationId,
+        actionType: ENROLLMENT_ACTIONS.CANCELLED,
+        // Its own `via`, because this is neither a refund (no money left the
+        // business) nor a withdrawal (money DID move back to the family). A
+        // churn read that cannot tell the three apart is reading the wrong
+        // thing, and the dedupeKey is scoped the same way for the same reason.
+        metadata: { via: 'credit_returned', reason, credit_returned_cents: returned },
+        dedupeKey: `cancelled:${registrationId}:credit_returned`,
+      });
+
+      return json({
+        credit_returned: true,
+        credit_returned_cents: returned,
+        credit_returnable_cents: Math.max(0, creditReturnable - returned),
+        refunded_cents: 0,
+        cancelled: cancelRegistration && !returnCancelFailed,
+        cancel_failed: returnCancelFailed ?? undefined,
+        pending_charges_stopped: returnPaused,
+      });
+    }
+
     if (withdrawOnly) {
       const nowIso = new Date().toISOString();
 
@@ -772,7 +902,11 @@ serve(async (req: Request) => {
     // A REAL refund with nothing paid is still 400 - there is nothing to refund
     // and saying so is right. (A withdrawal never reaches here: it returns long
     // before this line.)
-    if (piSlots.length === 0 && !preview) {
+    // `returnCredit` is exempt, and that exemption is the fix. "Nothing paid"
+    // means nothing reached STRIPE, which is exactly the state a registration
+    // bought with account credit is in - the family paid in full, just not with
+    // a card. Refusing here is what made their money unreachable.
+    if (piSlots.length === 0 && !preview && !returnCredit) {
       return json({ error: 'nothing_paid' }, 400);
     }
 
@@ -1112,6 +1246,11 @@ serve(async (req: Request) => {
         // explained. Same reason total_credited_cents is here: a number that
         // makes another number make sense.
         credit_paid_cents: creditOnThisReg,
+        // What the operator can still hand back to their balance, as opposed to
+        // what they originally paid with credit. On a registration bought
+        // entirely with credit this is the ONLY returnable figure - eligible
+        // and total_paid are both zero, because Stripe never saw a penny.
+        credit_returnable_cents: creditReturnable,
         // Reserved or unresolved: counted against the ceiling, but NOT money we
         // can say the family has.
         held_cents: heldCents,
