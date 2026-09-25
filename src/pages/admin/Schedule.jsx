@@ -126,6 +126,20 @@ const WEEKDAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "
 // on the autumn survey is still away when a winter break camp lands on those
 // days. Unioned rather than term-matched on purpose - the break falls between
 // two terms, so matching by term code would have found nothing.
+// instructor_id -> every date they blocked on ANY after-school term survey.
+// One spelling, called from both the board memo and the component lookup: this
+// was written out twice, and a future change to how blocked dates are gathered
+// would otherwise have to be made in both, leaving the camp card and the
+// candidate picker disagreeing about who is available.
+function buildTermBlackoutMap(rows) {
+  const m = new Map();
+  for (const row of rows ?? []) {
+    if (!Array.isArray(row.unavailable_dates) || !row.unavailable_dates.length) continue;
+    m.set(row.instructor_id, (m.get(row.instructor_id) ?? []).concat(row.unavailable_dates));
+  }
+  return m;
+}
+
 function campUnavailableConflicts(av, session, extraDates = []) {
   const own = Array.isArray(av?.unavailable_dates) ? av.unavailable_dates : [];
   const blackout = [...new Set([...own, ...(extraDates ?? [])].map((d) => String(d).slice(0, 10)))];
@@ -888,13 +902,7 @@ export default function Schedule() {
     if (state.status !== "ready") return null;
     const { sessions, assignments, availability, termBlackouts } = state;
     const availMap = new Map((availability ?? []).map((r) => [r.instructor_id, r]));
-    // Same union as termBlackoutsByInstructor, built here because this memo
-    // reads straight off `state` rather than the component's lookup maps.
-    const termBlackoutMap = new Map();
-    for (const row of termBlackouts ?? []) {
-      if (!Array.isArray(row.unavailable_dates) || !row.unavailable_dates.length) continue;
-      termBlackoutMap.set(row.instructor_id, (termBlackoutMap.get(row.instructor_id) ?? []).concat(row.unavailable_dates));
-    }
+    const termBlackoutMap = buildTermBlackoutMap(termBlackouts);
     const annotate = (a) => {
       const av = availMap.get(a.instructor_id);
       return {
@@ -959,19 +967,12 @@ export default function Schedule() {
     if (state.status !== "ready") return new Map();
     return new Map((state.availability ?? []).map((r) => [r.instructor_id, r]));
   }, [state]);
-  // instructor_id -> every date they blocked on ANY after-school term survey.
-  // A separate map rather than folded into availabilityByInstructor: that map
-  // answers "did this person fill in THIS cycle's survey", and an after-school
-  // row must never make the answer yes.
+  // Kept separate from availabilityByInstructor rather than folded into it:
+  // that map answers "did this person fill in THIS cycle's survey", and an
+  // after-school row must never make the answer yes.
   const termBlackoutsByInstructor = useMemo(() => {
     if (state.status !== "ready") return new Map();
-    const m = new Map();
-    for (const row of state.termBlackouts ?? []) {
-      if (!Array.isArray(row.unavailable_dates) || !row.unavailable_dates.length) continue;
-      const prev = m.get(row.instructor_id) ?? [];
-      m.set(row.instructor_id, prev.concat(row.unavailable_dates));
-    }
-    return m;
+    return buildTermBlackoutMap(state.termBlackouts);
   }, [state]);
   const locPrefLookup = useMemo(() => {
     if (state.status !== "ready") return new Map();
@@ -6053,10 +6054,15 @@ function CandidatePicker({
       if (curPref === "not_preferred") score -= 1;
       if (avail.needs_confirmation) score -= 0.5;
 
-      out.push({ instructor: inst, score, locPref, curPref, fullDayCapable: sessionTypes.includes("full_day"), needsConfirmation: !!avail.needs_confirmation, warningsForBanner });
+      // dateConflicts rides on the row, NOT only in warningsForBanner. That
+      // array is handed to onPick and dropped - the handler takes one argument
+      // and passes null into handlePick's _warningsIgnored slot - so anything
+      // that lives there alone is never seen by anyone. The other warnings each
+      // have a row badge and survive that; this one did not until now.
+      out.push({ instructor: inst, score, locPref, curPref, fullDayCapable: sessionTypes.includes("full_day"), needsConfirmation: !!avail.needs_confirmation, dateConflicts, warningsForBanner });
     }
     return out.sort((a, b) => b.score - a.score);
-  }, [session, currentAssignment, currentInstructorId, otherRoleInstructorId, instructors, availabilityByInstructor, locPrefLookup, curPrefLookup, allAssignments, declinedInstructorIds]);
+  }, [session, currentAssignment, currentInstructorId, otherRoleInstructorId, instructors, availabilityByInstructor, termBlackoutsByInstructor, locPrefLookup, curPrefLookup, allAssignments, declinedInstructorIds]);
 
   async function submitNewInstructor() {
     if (!addForm.firstName.trim()) {
@@ -6376,7 +6382,7 @@ function CandidatePicker({
               No eligible instructors. Check that the team has completed availability surveys and supports this session type — or add a new instructor below.
             </div>
           ) : (
-            candidates.map(({ instructor, locPref, curPref, fullDayCapable, needsConfirmation, warningsForBanner }) => (
+            candidates.map(({ instructor, locPref, curPref, fullDayCapable, needsConfirmation, dateConflicts, warningsForBanner }) => (
               <div key={instructor.id} style={{
                 display: "flex",
                 alignItems: "center",
@@ -6398,6 +6404,9 @@ function CandidatePicker({
                     {curPref === "not_preferred" && <Badge color={VIOLET}>Curriculum: not preferred</Badge>}
                     {fullDayCapable && (session.session_type === "morning" || session.session_type === "afternoon") && <Badge color={VIOLET}>Full-day capable</Badge>}
                     {needsConfirmation && <Badge color={VIOLET}>Unconfirmed availability</Badge>}
+                    {/* CORAL, not VIOLET: the others are preferences, this one
+                        says the person is not there on a day the camp runs. */}
+                    {dateConflicts?.length > 0 && <Badge color={CORAL}>Out {listDates(dateConflicts)} — needs a sub</Badge>}
                   </div>
                 </div>
                 <button
