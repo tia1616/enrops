@@ -735,7 +735,9 @@ serve(async (req: Request) => {
     // base amounts that made it up.
     //
     // Absorb orgs (fee_pass_through=false — including J2S on prod) charged base
-    // only, so the share equals amount_cents and nothing changes for them.
+    // only, so the share equals the base and nothing changes for them. On a
+    // registration part-paid with account credit "the base" is the netted one
+    // the block below computes, not registrations.amount_cents.
     //
     // ── CREDIT MAKES THE BASE AN UNSAFE FLOOR, so lower it first ──────────
     //
@@ -843,7 +845,14 @@ serve(async (req: Request) => {
         }
         if (baseOnPi <= 0) continue;
 
-        // Never LOWER a ceiling: if the maths ever disagrees, keep the base.
+        // Never LOWER a ceiling HERE: if the maths ever disagrees, keep the base.
+        //
+        // "The base" now means the CREDIT-NETTED base, not the registration's
+        // gross price - the block above already subtracted whatever the family
+        // paid out of their account balance, because credit is the one thing
+        // that can make the charge smaller than the gross price and so makes
+        // the gross price an unsafe floor. This line is still a raise-only
+        // step; what it refuses to go below is the family's CASH obligation.
         const share = Math.round((chargedTotal * slot.amount) / baseOnPi);
         if (share > slot.amount) slot.amount = share;
       } catch (ceilErr) {
@@ -1072,10 +1081,13 @@ serve(async (req: Request) => {
     // money facts, so it can return before any of them are gathered; a credit
     // does, because the amount it writes is a claim about money the family
     // actually paid. The DB's registrations.amount_cents is the BASE price and
-    // understates what was charged whenever the family pays the enrops service
-    // fee, so crediting from it would quietly short every such family. The
-    // number used here is the same Stripe-derived `eligible` the refund path
-    // honours - one ceiling, one implementation, both paths.
+    // disagrees with the charge in BOTH directions: it understates what was
+    // taken whenever the family pays the enrops service fee, so crediting from
+    // it would quietly short them - and it OVERSTATES it whenever part of the
+    // price was paid from account credit Stripe never saw, so crediting from it
+    // would record a debt the family never funded. The number used here is the
+    // same Stripe-derived `eligible` the refund path honours, netted of credit
+    // where there is any - one ceiling, one implementation, both paths.
     //
     // ORDER: the credit is written FIRST, then the charges are stopped and the
     // registration cancelled. That is the opposite of the withdraw branch and

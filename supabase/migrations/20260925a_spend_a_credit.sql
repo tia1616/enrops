@@ -192,6 +192,46 @@ comment on function public.family_credit_available_cents(uuid, uuid) is
   'Total spendable credit for one family at ONE business, in cents. Keyed on (organization_id, parent_id) and never on parent alone: ten production parents have children at two businesses, and a parent-keyed balance would let one operator''s credit be spent at another''s. Sums family_credit_balance_cents over status=''active'' credits - a positive allowlist, so a status added later is not silently spendable.';
 
 -- ---------------------------------------------------------------------------
+-- 3b. WHAT THE FAMILY THEMSELVES SEES
+-- ---------------------------------------------------------------------------
+-- Chunk 3a's portal card summed family_credits.amount_cents over status
+-- 'active'. That was the whole truth right up until this migration, because
+-- nothing could take money OFF a credit - a credit was whole or it was gone.
+--
+-- IT IS NOW A LIE IN THE FAMILY'S FAVOUR, which is the worst direction. Spend
+-- $150 of a $240 credit and the credit stays 'active' with $90 left, while the
+-- card still reads $240. The family plans around money they have spent.
+--
+-- So the portal is moved onto the same arithmetic as the spend path. This
+-- wrapper exists rather than granting the two-argument function to
+-- `authenticated`, because that one takes a parent_id and would let any
+-- signed-in user read any other family's balance. This one takes no parent at
+-- all: it resolves the caller through current_parent_id(), exactly as the
+-- parents_see_own_regs policy does, so there is no argument to tamper with.
+--
+-- It DELEGATES rather than reimplements. One balance rule, one place - a second
+-- spelling in JavaScript is how the refund-rate figure came to disagree with
+-- itself across an email and a screen.
+
+create or replace function public.my_family_credit_balance_cents(
+  p_organization_id uuid
+)
+returns integer
+language sql
+stable
+security definer
+set search_path to 'public', 'pg_temp'
+as $function$
+  select case
+           when public.current_parent_id() is null then 0
+           else public.family_credit_available_cents(p_organization_id, public.current_parent_id())
+         end;
+$function$;
+
+comment on function public.my_family_credit_balance_cents(uuid) is
+  'The signed-in family''s own spendable credit at one business, for the parent portal. Takes no parent_id on purpose - it resolves the caller via current_parent_id(), so there is no argument a signed-in user could point at another family. Delegates to family_credit_available_cents so the balance rule has exactly one implementation. Returns 0 for a caller who is not a parent.';
+
+-- ---------------------------------------------------------------------------
 -- 4. SPENDING IT. The guard lives IN the write.
 -- ---------------------------------------------------------------------------
 -- Called ONCE PER REGISTRATION with that registration's share of the order.
@@ -711,6 +751,11 @@ comment on function public.restore_family_credit_for_registration(uuid, integer,
 
 revoke all on function public.family_credit_balance_cents(uuid) from public, anon, authenticated;
 revoke all on function public.family_credit_available_cents(uuid, uuid) from public, anon, authenticated;
+-- The portal wrapper is the ONE exception, and it is safe to grant precisely
+-- because it takes no parent_id: it can only ever answer for the caller.
+-- anon is still revoked BY NAME - a revoke from public does not remove it.
+revoke all on function public.my_family_credit_balance_cents(uuid) from public, anon;
+grant execute on function public.my_family_credit_balance_cents(uuid) to authenticated;
 revoke all on function public.apply_family_credit(uuid, uuid, uuid, integer, text, text, integer) from public, anon, authenticated;
 revoke all on function public.confirm_registration_paid_by_credit(uuid, uuid, uuid, integer, text) from public, anon, authenticated;
 revoke all on function public.capture_family_credit_hold(text) from public, anon, authenticated;
