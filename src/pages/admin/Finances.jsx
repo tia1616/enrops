@@ -27,12 +27,11 @@
 // (stripe_account_id + the three platform fee rate cols) for non-admins.
 // "Connect Stripe" / "Open Dashboard" actions go through edge functions.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useOutletContext, useSearchParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { pixelStripeConnected } from "../../lib/metaPixel.js";
 import EnnieTip from "../../components/EnnieTip.jsx";
-import { SeatRadio } from "../../components/RefundDrawer.jsx";
 import { STRIPE_CONNECT_ESTIMATE_SENTENCE } from "../../lib/stripeConnectEstimate.js";
 import { describeOrgSaveFailure } from "../../lib/orgSaveErrors.js";
 import { fetchOrgTerms } from "../../lib/terms.js";
@@ -1637,10 +1636,6 @@ function ActivityTab({ org }) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [stripeBusy, setStripeBusy] = useState(false);
   const [stripeErr, setStripeErr] = useState("");
-  // Bumped when a credit is settled, so the "Credit owed" figure above the list
-  // recomputes. Without it the panel would empty while the total kept claiming
-  // the money was still owed - the two would contradict each other on screen.
-  const [reloadToken, setReloadToken] = useState(0);
 
   // Term list + default, from the SHARED org_terms helper.
   //
@@ -1713,38 +1708,6 @@ function ActivityTab({ org }) {
     })();
     return () => { alive = false; };
   }, [org?.id, period]);
-
-  // REFRESH THE TOTAL IN PLACE after a credit is settled, and deliberately
-  // WITHOUT nulling it first. The effect above starts by setting summary to
-  // null, which takes the "Loading…" early return - so bumping this token
-  // through that effect unmounted the credits panel in the middle of the
-  // operator's action, cancelled its own in-flight refetch, remounted it and
-  // fetched twice. It also re-ran the activity feed, which contains no credit
-  // rows at all, throwing away every "Load more" page. Only the total can
-  // change here, so only the total is re-read.
-  // Gated on the token having actually CHANGED, not merely being non-zero. With
-  // `reloadToken === 0` as the test, every later period change ran this effect
-  // AND the one above, firing two identical get_revenue_summary calls and
-  // racing their writes for the rest of the session.
-  const lastReload = useRef(0);
-  useEffect(() => {
-    if (!org?.id || !period) return;
-    if (reloadToken === lastReload.current) return;
-    lastReload.current = reloadToken;
-    if (reloadToken === 0) return;
-    let alive = true;
-    const { from, to, term } = bounds(period);
-    (async () => {
-      const { data, error } = await supabase.rpc("get_revenue_summary",
-        { p_org: org.id, p_from: from, p_to: to, p_term: term });
-      if (!alive) return;
-      // A failed refresh leaves the previous total on screen rather than
-      // blanking the page: it is stale by one action, not wrong by a page.
-      if (error) { console.error("[Activity] summary refresh", error); return; }
-      setSummary(data?.[0] ?? null);
-    })();
-    return () => { alive = false; };
-  }, [org?.id, period, reloadToken]);
 
   async function loadMore() {
     if (loadingMore || !org?.id || !period) return;
@@ -1821,18 +1784,7 @@ function ActivityTab({ org }) {
     return <Card>{header}<div style={{ color: MUTED, fontSize: 13, padding: "24px 0" }}>Loading…</div></Card>;
   }
   if (summary === undefined) {
-    // THE CREDITS PANEL SURVIVES A FAILED SUMMARY. It used to sit below this
-    // return, so any hiccup in the revenue read - which RAISEs on a money-role
-    // wobble - removed the only way to end a credit anywhere in the product:
-    // exactly the dead end this feature was built to fix. The panel reads
-    // family_credits directly and does not need the summary at all.
-    return (
-      <Card>
-        {header}
-        <div style={{ background: `${RED}1A`, color: RED, padding: 10, borderRadius: 6, fontSize: 12.5, marginBottom: 14 }}>{sumErr}</div>
-        <CreditsOwed org={org} reloadToken={reloadToken} onSettled={() => setReloadToken((t) => t + 1)} />
-      </Card>
-    );
+    return <Card>{header}<div style={{ background: `${RED}1A`, color: RED, padding: 10, borderRadius: 6, fontSize: 12.5 }}>{sumErr}</div></Card>;
   }
 
   // ---- empty states ----
@@ -1940,13 +1892,6 @@ function ActivityTab({ org }) {
         {stripeErr && <span style={{ color: RED, marginLeft: 8 }}>{stripeErr}</span>}
       </div>
 
-      {/* ABOVE Activity, not inside it. Activity is what HAPPENED - payments and
-          refunds in the selected period. This is what is still OWED, it ignores
-          the period selector exactly as its total does, and it is the only
-          screen with an action on it. Mixing the two would put a button on a
-          history feed. */}
-      <CreditsOwed org={org} reloadToken={reloadToken} onSettled={() => setReloadToken((t) => t + 1)} />
-
       {/* Activity feed */}
       <h3 style={{ margin: "0 0 8px", fontSize: 14, color: INK, fontWeight: 700 }}>Activity</h3>
       {actErr && <div style={{ background: `${RED}1A`, color: RED, padding: 10, borderRadius: 6, fontSize: 12.5, marginBottom: 10 }}>{actErr}</div>}
@@ -1971,236 +1916,6 @@ function ActivityTab({ org }) {
   );
 }
 
-// ---------------------------------------------------------------------------
-// CREDITS OWED - the list, and the two ways a credit can end
-// ---------------------------------------------------------------------------
-// Until this existed a credit could be ISSUED and nothing else. An operator who
-// issued one by mistake, or whose family said "actually I would rather have the
-// money", had no route through the product at all - it was a database edit by
-// hand. Jeff is being told to send those to Jessica, which is the shape of a
-// missing screen.
-//
-// ONLY ACTIVE CREDITS ARE LISTED, and that is what makes this panel agree with
-// the "Credit owed" figure directly above it. A settled credit is history: it
-// lives in the finance export and keeps its movement row. Listing settled rows
-// here would show money as owed that is not.
-//
-// THE MONEY BAR IS NOT RE-IMPLEMENTED HERE. `settle_family_credit` proves
-// can_handle_money itself before it writes, so this screen cannot be the thing
-// that authorises. The buttons are only ever reached from the money tab, which
-// an operator without that bar cannot load in the first place.
-function CreditsOwed({ org, onSettled, reloadToken }) {
-  const [credits, setCredits] = useState(null);   // null = loading
-  // TWO ERRORS, NOT ONE, and they cannot share a slot. A failed settle must
-  // ALSO refresh the list (the row on screen is stale), and that refresh clears
-  // the load error - so a single state meant the message explaining the refusal
-  // was wiped in the same tick by the refresh it triggered. The operator saw the
-  // row change with no reason given. Same shape as the dead pre-tick.
-  const [err, setErr] = useState("");             // the LIST failed to load
-  const [actionErr, setActionErr] = useState(""); // a SETTLE was refused
-  const [openId, setOpenId] = useState(null);     // which row is expanded
-  const [kind, setKind] = useState(null);         // 'refund_pending' | 'void'
-  const [note, setNote] = useState("");
-  const [busy, setBusy] = useState(false);
-  // No local reload token: the parent's is the single one, so a settle cannot
-  // trigger two overlapping fetches of the same list.
-
-  useEffect(() => {
-    if (!org?.id) { setCredits(null); return; }
-    let cancelled = false;
-    (async () => {
-      setErr("");
-      const { data, error } = await supabase
-        .from("family_credits")
-        .select("id, amount_cents, status, reason, created_at, source_registration_id, parents ( first_name, last_name ), registrations ( programs ( curriculum ), camp_sessions ( curriculum_name ) )")
-        .eq("organization_id", org.id)
-        // BOTH states the business still OWES. 'refund_pending' is the one the
-        // operator has promised to pay back and has not yet - it must not
-        // disappear from this list the moment they promise, which is exactly
-        // the failure the first version of this screen shipped with.
-        .in("status", ["active", "refund_pending"])
-        .order("created_at", { ascending: false });
-      if (cancelled) return;
-      // A FAILED READ IS NOT "NOTHING IS OWED". Saying so out loud matters more
-      // here than on most lists: an empty panel under a non-zero "Credit owed"
-      // figure would read as a contradiction the operator has to resolve.
-      if (error) {
-        console.error("[Finances] credits load failed:", error);
-        setErr("Couldn't load the list of credits. The total above is still right.");
-        setCredits([]);
-        return;
-      }
-      setCredits(data ?? []);
-    })();
-    return () => { cancelled = true; };
-  }, [org?.id, reloadToken]);
-
-  // `busy` is read from the render closure, so two clicks in one frame both
-  // passed this test. The database refuses the second (FC009), so no money was
-  // ever at risk - but the operator was then told somebody else had done it.
-  // The ref closes the window so the message is only ever shown when it is true.
-  const inFlight = useRef(false);
-
-  async function settle(creditId, newStatus) {
-    if (!newStatus || busy || inFlight.current) return;
-    inFlight.current = true;
-    setBusy(true);
-    setActionErr("");
-    const { error } = await supabase.rpc("settle_family_credit", {
-      p_credit_id: creditId,
-      p_new_status: newStatus,
-      p_note: note.trim() || null,
-    });
-    setBusy(false);
-    inFlight.current = false;
-    if (error) {
-      // INLINE, not an alert. This file uses a red banner everywhere else, and
-      // an alert is a blocking modal that some browsers suppress and that
-      // leaves no trace once dismissed - on the one action that changes what a
-      // family is owed.
-      const code = String(error.code || "");
-      setActionErr(
-        code === "FC009"
-          ? "This credit was already changed, probably in another tab or by someone else. The list below has been refreshed."
-          : code === "FC010"
-            ? "Part of this credit has already been used against a class, so it can't be ended here. Tell me and I'll sort it."
-            : code === "FC008"
-              ? "You don't have permission to change credits for this business."
-              : "Couldn't change this credit. Nothing was saved, so it's safe to try again.",
-      );
-      // Even a refusal refreshes: FC009 means the row on screen is stale.
-      if (onSettled) onSettled();
-      return;
-    }
-    setOpenId(null); setKind(null); setNote("");
-    if (onSettled) onSettled();
-  }
-
-  if (credits === null) return null;                            // loading: the total above is enough
-  // An action error keeps the panel on screen even with nothing left to list -
-  // otherwise a refusal on the last credit would take its own explanation away.
-  if (credits.length === 0 && !err && !actionErr) return null;
-
-  return (
-    <div style={{ marginBottom: 18 }}>
-      <h3 style={{ margin: "0 0 8px", fontSize: 14, color: INK, fontWeight: 700 }}>Credit owed to families</h3>
-      {err && <div style={{ background: `${RED}1A`, color: RED, padding: 10, borderRadius: 6, fontSize: 12.5, marginBottom: 10 }}>{err}</div>}
-      {actionErr && <div style={{ background: `${RED}1A`, color: RED, padding: 10, borderRadius: 6, fontSize: 12.5, marginBottom: 10 }}>{actionErr}</div>}
-      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {credits.map((c) => {
-          const p = c.parents ?? {};
-          const who = `${p.first_name ?? ""} ${p.last_name ?? ""}`.trim() || "A family";
-          const reg = c.registrations ?? {};
-          const klass = reg.programs?.curriculum ?? reg.camp_sessions?.curriculum_name ?? "";
-          const when = c.created_at ? new Date(c.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "";
-          const isOpen = openId === c.id;
-          const pending = c.status === "refund_pending";
-          // The credit outlives the enrollment record on purpose (the column is
-          // ON DELETE SET NULL), so there may be no class to send anyone to.
-          // Saying "refund them from the class roster" in that state sends the
-          // operator somewhere that does not exist.
-          const hasRoster = !!c.source_registration_id;
-          return (
-            <div key={c.id} style={{ border: `1px solid ${RULE}`, borderRadius: 8, padding: "10px 12px", background: "#fff" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
-                <div style={{ fontSize: 13, color: INK }}>
-                  <strong>{who}</strong>
-                  {klass ? <span style={{ color: MUTED }}> · {klass}</span> : null}
-                  <span style={{ color: MUTED }}>
-                    {" · "}{c.reason === "business_cancelled" ? "we cancelled" : c.reason === "family_cancelled" ? "they cancelled" : c.reason}
-                    {when ? ` · ${when}` : ""}
-                  </span>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  {/* THE BADGE IS THE WHOLE POINT OF THE REDESIGN. A credit the
-                      operator has promised to pay back stays on this list,
-                      keeps counting in the total above, and says so - so an
-                      interruption leaves a visible debt instead of a silent
-                      one. */}
-                  {pending && (
-                    <span style={{ fontSize: 11, fontWeight: 700, color: AMBER, border: `1px solid ${AMBER}`, borderRadius: 4, padding: "2px 6px", whiteSpace: "nowrap" }}>
-                      Waiting for your refund
-                    </span>
-                  )}
-                  <strong style={{ fontSize: 13, whiteSpace: "nowrap" }}>{fmtCents(c.amount_cents)}</strong>
-                  <button type="button"
-                    onClick={() => { setOpenId(isOpen ? null : c.id); setKind(null); setNote(""); }}
-                    style={{ padding: "5px 10px", background: "transparent", color: INK, border: `1px solid ${RULE}`, borderRadius: 5, fontSize: 12, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>
-                    {isOpen ? "Cancel" : pending ? "Change this" : "End this credit"}
-                  </button>
-                </div>
-              </div>
-
-              {pending && !isOpen && (
-                <div style={{ marginTop: 8, fontSize: 12, color: INK, lineHeight: 1.6 }}>
-                  You marked this to be paid back. It is still owed until you actually refund
-                  {hasRoster ? " them from the class roster" : " them"} - this line disappears on its own once that refund goes through.
-                </div>
-              )}
-
-              {isOpen && (
-                <div style={{ marginTop: 10, borderTop: `1px solid ${RULE}`, paddingTop: 10 }}>
-                  <div style={{ fontSize: 12.5, color: INK, fontWeight: 600, marginBottom: 6 }}>
-                    {pending ? "Change this credit" : "What happened?"}
-                  </div>
-                  <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                    {pending ? (
-                      // UNDO. The previous version had none, so a mis-click
-                      // between two deliberately equal-weight buttons was
-                      // permanent - the by-hand database edit this screen
-                      // exists to remove, reintroduced for its own errors.
-                      <SeatRadio
-                        checked={kind === "active"} onChange={() => setKind("active")} disabled={busy}
-                        title="Put it back - I am not refunding them after all"
-                        sub="The credit goes back to being owed as class value, exactly as it was. Nothing is sent to the family."
-                      />
-                    ) : (
-                      <>
-                        <SeatRadio
-                          checked={kind === "refund_pending"} onChange={() => setKind("refund_pending")} disabled={busy}
-                          title="They want the money instead"
-                          /* NO LONGER CLAIMS ANYTHING WAS PAID. The first
-                             version marked the credit refunded here, which
-                             removed it from this list and from the total before
-                             a penny moved. It now stays owed and visible until
-                             a real refund closes it. */
-                          sub={hasRoster
-                            ? "Keeps it owed, and frees the amount so you can refund them from the class roster. It stays on this list until that refund actually goes through."
-                            : "Keeps it owed and frees the amount so it can be refunded. This class no longer exists, so tell me and I will help you pay them."}
-                        />
-                        <SeatRadio
-                          checked={kind === "void"} onChange={() => setKind("void")} disabled={busy}
-                          title="I issued it by mistake"
-                          sub="Removes the credit. The family is no longer owed it. Nothing is sent to them, so tell them if they already know about it. You can put it back afterwards."
-                        />
-                      </>
-                    )}
-                  </div>
-                  <input
-                    value={note} onChange={(e) => setNote(e.target.value)} disabled={busy}
-                    placeholder="Add a note (optional, but it is the only record of why)"
-                    style={{ width: "100%", marginTop: 10, padding: "7px 9px", border: `1px solid ${RULE}`, borderRadius: 6, fontSize: 12.5, fontFamily: "inherit", boxSizing: "border-box" }}
-                  />
-                  <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center" }}>
-                    <button type="button" onClick={() => settle(c.id, kind)} disabled={!kind || busy}
-                      style={{ padding: "7px 14px", background: kind && !busy ? BRIGHT : "transparent", color: kind && !busy ? "#fff" : MUTED, border: kind && !busy ? "none" : `1px solid ${RULE}`, borderRadius: 6, fontSize: 12.5, fontWeight: 600, fontFamily: "inherit", cursor: kind && !busy ? "pointer" : "not-allowed" }}>
-                      {busy ? "Saving…" : "Confirm"}
-                    </button>
-                    <span style={{ fontSize: 11.5, color: MUTED }}>Nothing is emailed to the family either way.</span>
-                  </div>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// One choice in the settle panel. Its own component so the two read identically
-// and neither can drift into looking more default than the other - there is no
-// safe default here, and the copy has to carry equal weight.
 function RAStat({ label, value, note }) {
   return (
     <div>
