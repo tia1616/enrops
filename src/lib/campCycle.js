@@ -11,6 +11,36 @@
 // One cycle per (org, term code), reused by every camp in that term, widened when
 // a camp falls outside its current range.
 
+// The weekdays a camp can run, LOWERCASE, because that is what
+// camp_sessions.class_days stores and what the pay cron matches on. Shared so the
+// two camp forms cannot drift - programs.day_of_week is Title-Case and the two
+// columns genuinely disagree, which is exactly the kind of difference that gets
+// "tidied up" into a bug.
+export const CAMP_WEEKDAYS = [
+  { value: "monday", label: "Mon" },
+  { value: "tuesday", label: "Tue" },
+  { value: "wednesday", label: "Wed" },
+  { value: "thursday", label: "Thu" },
+  { value: "friday", label: "Fri" },
+];
+
+/**
+ * Turn a day on or off, keeping the canonical Mon-Fri order.
+ *
+ * Written out separately in two forms before this, and the two copies had already
+ * diverged: one was fixed to stop the add branch DELETING days it has no button
+ * for (a weekend camp storing 'saturday' lost it on the first click, and with it
+ * that day's pay and its share of a refund), the other still rebuilt from the
+ * weekday list. Both write the same column, read by the same cron.
+ */
+export function toggleCampDay(days, day) {
+  const list = Array.isArray(days) ? days : [];
+  if (list.includes(day)) return list.filter((d) => d !== day);
+  const order = CAMP_WEEKDAYS.map((d) => d.value);
+  const rank = (d) => (order.indexOf(d) === -1 ? order.length : order.indexOf(d));
+  return [...list, day].sort((a, b) => rank(a) - rank(b));
+}
+
 // Mon-Fri weeks inside a date range. Shared with the schedule board's New Cycle
 // modal rather than spelled a second time - a cycle built here and a cycle built
 // there must agree about what "week 3" means, or a camp lands in the wrong column.
@@ -96,9 +126,14 @@ export async function ensureCampCycle(supabase, { orgId, termCode, startsOn, end
 
   let cycleId = existing?.id ?? null;
   if (!cycleId) {
+    // upsert, not insert. scheduling_cycles is UNIQUE on (organization_id, name),
+    // and two admins adding the term's FIRST camp within a few seconds both read
+    // no row and both write one - the loser used to get a raw constraint error
+    // and lose the form. ignoreDuplicates means the loser simply gets no row back
+    // and re-reads below, which is the correct answer: the cycle now exists.
     const { data, error } = await supabase
       .from("scheduling_cycles")
-      .insert({
+      .upsert({
         organization_id: orgId,
         name: cycleName,
         cycle_type: "summer_camp",
@@ -109,11 +144,26 @@ export async function ensureCampCycle(supabase, { orgId, termCode, startsOn, end
         // org that later turns the board on finds it in the state it expects.
         status: "collecting",
         auto_reminders_enabled: false,
-      })
+      }, { onConflict: "organization_id,name", ignoreDuplicates: true })
       .select("id")
-      .single();
+      .maybeSingle();
     if (error) throw error;
-    cycleId = data.id;
+    cycleId = data?.id ?? null;
+    if (!cycleId) {
+      // Somebody else created it between our read and our write. Re-read rather
+      // than fail: the cycle we wanted now exists, which is the outcome we were
+      // after. maybeSingle, because a genuinely missing row here means something
+      // else is wrong and should surface as the explicit error below.
+      const { data: raced, error: reReadErr } = await supabase
+        .from("scheduling_cycles")
+        .select("id")
+        .eq("organization_id", orgId)
+        .eq("name", cycleName)
+        .maybeSingle();
+      if (reReadErr) throw reReadErr;
+      if (!raced?.id) throw new Error("Could not set up a term for this camp. Try saving it again.");
+      cycleId = raced.id;
+    }
   } else if (rangeStart !== existing.starts_on || rangeEnd !== existing.ends_on) {
     // Widen, and renumber the weeks to match. Deliberately not silent about
     // failing: a cycle whose weeks do not cover this camp cannot place it.

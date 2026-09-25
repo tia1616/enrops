@@ -19,6 +19,7 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../../lib/supabase.js";
 import { isUnset, GRADE_OPTIONS, rangeBackwards, rangeBackwardsMessage } from "../../../lib/grades.js";
 import ModalShell from "../../../components/ModalShell.jsx";
+import { CAMP_WEEKDAYS, toggleCampDay } from "../../../lib/campCycle.js";
 import AddSchoolModal from "../schools/AddSchoolModal.jsx";
 import FamiliesPayNote, { useOrgFeeConfig } from "../../../components/FamiliesPayNote.jsx";
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
@@ -52,13 +53,10 @@ const SESSION_TYPES = [
 // sort is the one that does not normalise - it positions by indexOf against a
 // lowercase list, so a capitalised day sorts to the front of the printed
 // schedule. Cosmetic, but there is no reason to write the odd spelling.
-const WEEKDAYS = [
-  { value: "monday", label: "Mon" },
-  { value: "tuesday", label: "Tue" },
-  { value: "wednesday", label: "Wed" },
-  { value: "thursday", label: "Thu" },
-  { value: "friday", label: "Fri" },
-];
+// The list itself now lives in lib/campCycle.js, imported as WEEKDAYS so the
+// call sites below are unchanged. The Programs builder renders the same days and
+// used to spell them out a second time.
+const WEEKDAYS = CAMP_WEEKDAYS;
 
 // camp_sessions_curriculum_category_check. Prefilled from the chosen curriculum's
 // own category, which uses this same vocabulary - but curricula.category is
@@ -423,14 +421,7 @@ export default function CampSessionForm({ org, orgId, cycle, session = null, onC
   // sort into the canonical order with unknown days last.
   function toggleDay(day) {
     setTouched((t) => new Set(t).add("class_days"));
-    setForm((f) => {
-      if (f.class_days.includes(day)) {
-        return { ...f, class_days: f.class_days.filter((d) => d !== day) };
-      }
-      const order = WEEKDAYS.map((d) => d.value);
-      const rank = (d) => (order.indexOf(d) === -1 ? order.length : order.indexOf(d));
-      return { ...f, class_days: [...f.class_days, day].sort((a, b) => rank(a) - rank(b)) };
-    });
+    setForm((f) => ({ ...f, class_days: toggleCampDay(f.class_days, day) }));
   }
 
   async function reloadDistricts() {

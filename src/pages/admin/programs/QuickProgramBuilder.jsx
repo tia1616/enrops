@@ -37,7 +37,7 @@ import {
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib/programText.js";
 import { GRADE_OPTIONS, audiencePatch, rangeBackwards, rangeBackwardsMessage } from "../../../lib/grades.js";
-import { ensureCampCycle, deriveSessionType } from "../../../lib/campCycle.js";
+import { ensureCampCycle, deriveSessionType, CAMP_WEEKDAYS, toggleCampDay } from "../../../lib/campCycle.js";
 import {
   publishBlockedByStripe,
   PUBLISH_GATE_CTA_SAVE,
@@ -68,16 +68,10 @@ const RED = "#b53737";
 // ProgramWizardNew). Keep these Title-Case.
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
-// LOWERCASE, unlike DAYS above. camp_sessions.class_days stores lowercase names
-// and the pay cron matches on them; the two columns genuinely disagree about
-// case, so the two lists are separate on purpose rather than one being wrong.
-const CAMP_DAYS = [
-  { value: "monday", label: "Mon" },
-  { value: "tuesday", label: "Tue" },
-  { value: "wednesday", label: "Wed" },
-  { value: "thursday", label: "Thu" },
-  { value: "friday", label: "Fri" },
-];
+// The camp weekday list lives in lib/campCycle.js as CAMP_WEEKDAYS - lowercase,
+// unlike DAYS above, because camp_sessions.class_days and programs.day_of_week
+// genuinely disagree about case. Imported rather than re-spelled: this was a
+// third copy.
 
 // Indexed by Date.getDay() (0 = Sunday). Used to warn when the chosen first
 // class date's weekday doesn't match the selected day-of-week — the session
@@ -235,9 +229,16 @@ export default function QuickProgramBuilder() {
   const [mode, setMode] = useState(cadence === "one_off" ? "one_off" : "weekly");
   // Camp-only fields. Days default to Mon-Fri, the shape of almost every camp;
   // a holiday week is the operator turning one off.
-  const [campDays, setCampDays] = useState(() => CAMP_DAYS.map((d) => d.value));
+  const [campDays, setCampDays] = useState(() => CAMP_WEEKDAYS.map((d) => d.value));
   const [campEndDate, setCampEndDate] = useState("");
+  // Seeds the default ONCE, when the org's cadence first arrives. It used to run
+  // on every change of `cadence`, and `cadence` changes when the profile finishes
+  // loading - so an operator who picked Camp in that first moment watched the
+  // weekly fields come back with no error and no explanation.
+  const seededModeRef = useRef(false);
   useEffect(() => {
+    if (seededModeRef.current || !cadence) return;
+    seededModeRef.current = true;
     if (cadence === "one_off") setMode("one_off");
     else if (cadence === "weekly_term") setMode("weekly");
   }, [cadence]);
@@ -583,8 +584,13 @@ export default function QuickProgramBuilder() {
   // operator with none can create one without leaving this form.
   const valid =
     name.trim() !== "" && priceValid && spotsNum >= 1 && !audienceBackwards &&
-    // A camp is placed by its dates and the days it runs, not by a weekday.
-    (isCamp ? (!!startDate && campDays.length > 0) : isOneOff ? !!startDate : !!day) && !!locationId;
+    // A camp is placed by its dates and the days it runs, not by a weekday - and
+    // its TIMES are required, unlike a class's. camp_sessions.start_time and
+    // end_time are NOT NULL, so leaving them blank got the operator a raw
+    // not-null constraint error on save. programs.start_time is nullable, which
+    // is why the weekly path never had to ask.
+    (isCamp ? (!!startDate && campDays.length > 0 && !!startTime && !!endTime)
+      : isOneOff ? !!startDate : !!day) && !!locationId;
 
   // Create PUBLISHES, so it carries the Stripe gate; Save as draft does not and
   // must stay fully available — "you can't publish yet" has to never mean "you
@@ -945,15 +951,19 @@ export default function QuickProgramBuilder() {
                 ages_max: a.age_max,
               };
             })(),
-            // camp_sessions has no draft state - status is active or cancelled -
-            // so a camp saved as a draft is simply not created yet.
-            status: "active",
+            // Exactly what the programs payload above does. camp_sessions gained
+            // 'draft' in 20260925b for this: Save as draft used to write 'active'
+            // whichever button was pressed, so drafting a camp published it.
+            status: asDraft ? "draft" : "active",
           })
           .select("id")
           .single();
         if (campErr) throw campErr;
         if (!asDraft) pixelWorkflowCreated();
-        setCreatedStatus("open");
+        // asDraft, not a hardcoded "open" - the success screen reads this to
+        // decide between "Your program is live" and the draft wording, and a
+        // drafted camp was telling the operator it was live.
+        setCreatedStatus(asDraft ? "draft" : "open");
         setCreatedId(campRow.id);
         recordBuildTiming(campRow.id);
         return;
@@ -2183,17 +2193,13 @@ export default function QuickProgramBuilder() {
           <div>
             <label style={labelStyle}>Days it runs</label>
             <div style={{ display: "flex", gap: 6 }}>
-              {CAMP_DAYS.map((d) => {
+              {CAMP_WEEKDAYS.map((d) => {
                 const on = campDays.includes(d.value);
                 return (
                   <button
                     key={d.value}
                     type="button"
-                    onClick={() => setCampDays((prev) => (
-                      prev.includes(d.value)
-                        ? prev.filter((x) => x !== d.value)
-                        : CAMP_DAYS.map((x) => x.value).filter((x) => prev.includes(x) || x === d.value)
-                    ))}
+                    onClick={() => setCampDays((prev) => toggleCampDay(prev, d.value))}
                     aria-pressed={on}
                     style={{
                       flex: 1, padding: "9px 0", borderRadius: 8, cursor: "pointer", fontFamily: "inherit",

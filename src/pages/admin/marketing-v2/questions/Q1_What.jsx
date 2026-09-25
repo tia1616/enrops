@@ -527,10 +527,12 @@ function CampsPicker({ orgId, selected, onChange }) {
       .from("camp_sessions")
       .select("id, week_num, session_type, location_name, curriculum_name, curriculum_id, starts_on, ends_on, current_enrollment, status, curricula(class_size_min, class_size_max)")
       .eq("organization_id", orgId)
-      // Cancelled camps can't be advertised — the email render excludes them,
-      // so don't offer them for selection (picking them silently derives an
-      // area with no camps to show).
-      .neq("status", "cancelled")
+      // Only camps that are actually sellable can be advertised. This was
+      // `.neq("status", "cancelled")`, which meant "anything that is not
+      // cancelled" - and the moment camps gained a 'draft' state (20260925b) that
+      // silently started offering drafts as something to advertise. An allow-list
+      // cannot acquire a new value behind your back; a deny-list can.
+      .eq("status", "active")
       .gte("starts_on", todayIso())
       .order("starts_on")
       .order("location_name")

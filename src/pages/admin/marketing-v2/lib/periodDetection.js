@@ -82,6 +82,11 @@ export async function detectPeriods(orgId) {
         .from("camp_sessions")
         .select("id, week_num, session_type, location_name, curriculum_name, curriculum_id, starts_on, ends_on, current_enrollment, status, curricula(class_size_min, class_size_max)")
         .eq("organization_id", orgId)
+        // Sellable camps only. This had NO status filter, so it counted
+        // cancelled camps as in flight and, once camps gained a 'draft' state
+        // (20260925b), would have counted drafts too - a term would look like it
+        // had camps running when they were all still being set up.
+        .eq("status", "active")
         .gte("starts_on", todayIso())
         .order("starts_on"),
       // Registrations across the org — used for confirmed-enrollment counts on
