@@ -362,8 +362,13 @@ serve(async (req: Request) => {
     // and the credit they were promised never written - the failure mode being
     // invisible precisely because the response says it worked. Excluded here, a
     // zero-amount credit falls through to `invalid_amount` and says so.
+    // `!returnCredit` for the same reason `!issueCredit` is here: a zero-amount
+    // credit return is a caller error, not a silent withdrawal. Without it a
+    // return_credit request carrying amount 0 was reclassified as a withdrawal,
+    // skipped `invalid_amount`, and came back 200.
     const withdrawOnly = !preview &&
       !issueCredit &&
+      !returnCredit &&
       cancelRegistration &&
       amountProvided &&
       Number.isFinite(amountCents) &&
@@ -480,6 +485,15 @@ serve(async (req: Request) => {
     // freed with the money unreturned is invisible and the family is simply
     // short.
     if (returnCredit) {
+      // A ZERO RETURN IS NOT A RETURN, and it must not be answered with success.
+      // `withdrawOnly` above matches any zero-amount cancel request, which let a
+      // zero slip past the `invalid_amount` gate entirely and reach here - so
+      // this branch cannot rely on that gate and checks for itself. Without it
+      // the seat was freed, nothing was given back, and the response said
+      // `credit_returned: true`.
+      if (!Number.isFinite(amountCents) || amountCents <= 0) {
+        return json({ error: 'invalid_amount' }, 400);
+      }
       if (creditReturnable <= 0) {
         // Not an error the operator caused - say what is true rather than
         // echoing a constraint. Covers both "they never used credit here" and
@@ -526,21 +540,29 @@ serve(async (req: Request) => {
         }
       }
 
-      await logEnrollmentEvent(supabase, {
-        organizationId: reg.organization_id,
-        parentId: reg.parent_id,
-        studentId: reg.student_id,
-        programId: reg.program_id,
-        campSessionId: reg.camp_session_id,
-        registrationId: registrationId,
-        actionType: ENROLLMENT_ACTIONS.CANCELLED,
-        // Its own `via`, because this is neither a refund (no money left the
-        // business) nor a withdrawal (money DID move back to the family). A
-        // churn read that cannot tell the three apart is reading the wrong
-        // thing, and the dedupeKey is scoped the same way for the same reason.
-        metadata: { via: 'credit_returned', reason, credit_returned_cents: returned },
-        dedupeKey: `cancelled:${registrationId}:credit_returned`,
-      });
+      // ONLY WHEN THE SEAT WAS ACTUALLY FREED. This path allows keeping the
+      // spot - a family can be handed their credit back and stay enrolled - and
+      // logging CANCELLED for one of those puts a still-active registration in
+      // the churn history as cancelled. Worse, the dedupeKey would then swallow
+      // the REAL cancellation when it came, so the event that mattered would
+      // record nothing.
+      if (cancelRegistration && !returnCancelFailed) {
+        await logEnrollmentEvent(supabase, {
+          organizationId: reg.organization_id,
+          parentId: reg.parent_id,
+          studentId: reg.student_id,
+          programId: reg.program_id,
+          campSessionId: reg.camp_session_id,
+          registrationId: registrationId,
+          actionType: ENROLLMENT_ACTIONS.CANCELLED,
+          // Its own `via`, because this is neither a refund (no money left the
+          // business) nor a withdrawal (money DID move back to the family). A
+          // churn read that cannot tell the three apart is reading the wrong
+          // thing, and the dedupeKey is scoped the same way for the same reason.
+          metadata: { via: 'credit_returned', reason, credit_returned_cents: returned },
+          dedupeKey: `cancelled:${registrationId}:credit_returned`,
+        });
+      }
 
       return json({
         credit_returned: true,
@@ -655,13 +677,32 @@ serve(async (req: Request) => {
       if (priorRow) {
         const nowIso = new Date().toISOString();
 
-        // RESTORE BEFORE THE PAUSE, and before either of the 500s below. The
-        // first attempt may have died on exactly those returns without ever
-        // giving the credit leg back, and this retry is the operator doing what
-        // those errors told them to do. Idempotent, so a first attempt that DID
-        // restore contributes nothing here.
-        const [retryRestored, retryFailed] =
-          await restoreCreditLeg(creditOnThisReg, 'returned when this registration was credited instead of refunded');
+        // THIS RETRY DOES NOT RESTORE, and that is the fix rather than the gap.
+        //
+        // It used to call restoreCreditLeg(creditOnThisReg) - the WHOLE leg -
+        // while the first attempt restores only the policy SHARE
+        // (creditOnThisReg * credited / eligible). On a $400 class funded $240
+        // credit + $160 card where the operator credits $80 and keeps $80, the
+        // first attempt returns $120 and this branch then returned the other
+        // $120: $320 given back on a decision to give back $200. A plain
+        // network-timeout retry after a fully successful first attempt did the
+        // same thing.
+        //
+        // It cannot simply recompute the share either: `eligible` is derived
+        // from the Stripe ceiling far below this point and is not available
+        // here, so any figure this branch invents is a guess about someone's
+        // money.
+        //
+        // What it does instead is REPORT. The first attempt restores before it
+        // pauses or cancels, so by the time a prior credit exists the restore
+        // has almost always already happened; the only gap is a crash between
+        // the two writes. So read what was actually returned and say so - and
+        // if it is zero on a registration that did use credit, say THAT, loudly,
+        // rather than papering over it with an amount nobody decided.
+        const retryRestored = creditAlreadyReturned;
+        const retryFailed = (creditOnThisReg > 0 && creditAlreadyReturned === 0)
+          ? 'the first attempt recorded the credit but did not return their spent balance'
+          : null;
 
         const { pausedRows, pauseError, cancelError } =
           await stopChargesAndCancel(supabase, registrationId, nowIso);

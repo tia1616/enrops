@@ -69,6 +69,12 @@ export default function Register() {
   // logged in first. Signed out, the credit is still APPLIED; they see it as
   // "Account credit" on the Stripe page instead.
   const [familyCreditCents, setFamilyCreditCents] = useState(0);
+  // WHOSE balance that is. The figure is resolved from the SESSION, but
+  // create-checkout applies credit to the parent create-registration resolves
+  // from the EMAIL TYPED INTO THIS FORM - two different keys. A signed-in
+  // parent registering under a second guardian's address, or with a typo,
+  // would otherwise be shown "- $240.00" and then charged the full amount.
+  const [creditForEmail, setCreditForEmail] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   // The error banner, so a failure can be scrolled to the family. See the effect below.
@@ -404,7 +410,10 @@ export default function Register() {
         const { data: bal, error: balErr } = await supabase
           .rpc('my_family_credit_balance_cents', { p_organization_id: org.id });
         if (balErr) console.warn('[register] credit balance unavailable:', balErr.message);
-        else setFamilyCreditCents(Number(bal) || 0);
+        else {
+          setFamilyCreditCents(Number(bal) || 0);
+          setCreditForEmail((sess.session.user?.email || '').trim().toLowerCase() || null);
+        }
       }
     } catch (e) {
       console.warn('[register] credit balance lookup failed:', e?.message);
@@ -866,8 +875,20 @@ export default function Register() {
                 // the quote and the charge are built from one schedule.
                 installmentSplits={installmentSchedule?.perLineSplits || null}
                 org={{ ...org, ...(feeConfig || {}) }}
-                // Only ever non-zero for a SIGNED-IN parent. See the fetch.
-                familyCreditCents={familyCreditCents}
+                // Only ever non-zero for a SIGNED-IN parent whose session email
+                // is the one they are registering under. The balance is read
+                // from the session; the credit is APPLIED to whoever
+                // create-registration resolves from the typed email, so if the
+                // two differ the figure would be a promise this checkout will
+                // not keep. Withheld rather than shown wrong - they still get
+                // the credit if it does turn out to be theirs, on the Stripe
+                // page.
+                familyCreditCents={
+                  creditForEmail &&
+                  creditForEmail === (cart?.parent?.email || '').trim().toLowerCase()
+                    ? familyCreditCents
+                    : 0
+                }
                 cancellationPolicy={cancellationPolicy}
                 // Passed as its own prop rather than spread into `org`: the
                 // whole object is the config, and flattening it would put

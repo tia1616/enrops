@@ -151,7 +151,13 @@ export default function StepPay({
   //     there is nothing for the gift to ride on. It is also, plainly, not the
   //     family to ask.
   const fund = scholarshipFund?.enabled ? scholarshipFund : null;
-  const canAskForGift = !!fund && !useInstallments && displayAmount > 0;
+  // POST-CREDIT, not the gross price. `displayAmount > 0` was the right test
+  // when the only way to owe nothing was a $0 cart; a family whose credit
+  // covers the whole thing owes nothing either, and offering them the donation
+  // sends a $0 order to Stripe with a gift attached - the one case
+  // create-checkout deliberately refuses. StepPay has never shown this ask at a
+  // $0 total, and a credit-covered total is a $0 total.
+  const canAskForGift = !!fund && !useInstallments && (displayAmount - creditAppliedCents) > 0;
   const [giftCents, setGiftCents] = useState(0);
   const [customGift, setCustomGift] = useState('');
   const [customOpen, setCustomOpen] = useState(false);
@@ -205,7 +211,12 @@ export default function StepPay({
             whole thing - there is no Stripe page on that path, the registration
             is confirmed outright. Promising a payment screen they never see is
             the kind of small lie that makes a family think it failed. */}
-        {chargedToday <= 0 && creditAppliedCents > 0
+        {/* `+ giftCharged`, because a donation keeps them on the Stripe path.
+            create-checkout only takes the no-Stripe branch when the gift is
+            zero, so claiming "nothing to pay" above a $10 headline would be
+            wrong twice over - about the amount and about the page they are
+            about to see. */}
+        {chargedToday + giftCharged <= 0 && creditAppliedCents > 0
           ? <>Your account credit covers this in full, so there&rsquo;s nothing to pay. Your spot is held from here.</>
           : <>We&rsquo;ll send you over to Stripe to complete your payment. Your spot is held from here.</>}
       </p>

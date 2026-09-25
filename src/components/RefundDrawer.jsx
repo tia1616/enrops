@@ -96,6 +96,15 @@ function humanError(code, payload) {
       return `The ${fmtCents(payload?.credited_cents)} credit IS recorded and their scheduled payments ARE stopped${payload?.pending_charges_stopped ? ` (${payload.pending_charges_stopped})` : ""}, but freeing their spot didn't work. Refresh the roster and, if they're still listed, use Remove.`;
     case "invalid_credit_reason":
       return "Choose whether you cancelled the class or the family did, then try again.";
+    // THE RETURN-CREDIT PATH'S OUTCOMES. Same rule as the credit path above:
+    // each says what DID happen as well as what did not, because the operator's
+    // next move differs.
+    case "no_credit_to_return":
+      return "This family didn't pay for this class with account credit, or it has already been given back. Nothing was changed.";
+    case "amount_exceeds_credit_returnable":
+      return `That's more credit than they have left on this class. The most you can return is ${fmtCents(payload?.credit_returnable_cents)}.`;
+    case "credit_return_failed":
+      return "We couldn't put the credit back on their account, so nothing was changed — they're still enrolled and the credit is still spent. Try again.";
     case "charge_unreadable_credit_refused":
       return "We couldn't read this family's original payment from Stripe, so we haven't recorded a credit — we'd be guessing at the amount. Nothing was changed. Try again in a minute, and if it keeps failing, refund them instead.";
     case "idempotency_key_unusable":
@@ -323,8 +332,19 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
         // operator there are no scheduled charges when it simply could not look.
         setPendingChargesUnknown(!!pendingErr);
         setPendingCharges(pendingErr ? [] : (pendingRows || []));
-        // Default the field to the full refundable amount.
-        setAmountStr(((Math.max(0, elig.eligible_cents)) / 100).toFixed(2));
+        // Default the field to the full amount that can go back - which on a
+        // registration bought with account credit is NOT `eligible_cents`.
+        //
+        // Seeding from eligible alone opened this drawer at $0.00 on exactly
+        // those registrations, and $0.00 is a submittable amount: picking "free
+        // their spot" made `withdrawNoRefund` true, the button read "Return
+        // $0.00 to their credit", and one click withdrew the child, returned
+        // nothing and reported success. The field has to open at what the
+        // operator is actually there to give back.
+        const seedCents = Math.max(0, elig.eligible_cents || 0) > 0
+          ? Math.max(0, elig.eligible_cents || 0)
+          : Math.max(0, elig.credit_returnable_cents || 0);
+        setAmountStr((seedCents / 100).toFixed(2));
       } catch (e) {
         if (alive) setLoadErr("Couldn't load this registration's payment details. Close and try again.");
         console.error("[RefundDrawer] load failed", e);
@@ -392,7 +412,13 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
   // stopped, exactly as a refund-and-withdraw does. There is no keep-their-spot
   // credit in this chunk: that would be a goodwill credit, which the database
   // has a separate reason for and no surface issues yet.
-  const withdrawNoRefund = !isCredit && (nothingToRefund || (seatChoice === "withdraw" && typedZero));
+  // `!isCreditReturn` as well as `!isCredit`. Withdraw-without-refunding is the
+  // answer when there is genuinely nothing to give back; on a credit-funded
+  // registration there IS something, and letting this branch win meant a typed
+  // zero silently turned "return their credit" into "free the seat and keep
+  // it" - with the button still reading "Return $0.00 to their credit".
+  const withdrawNoRefund = !isCredit && !isCreditReturn
+    && (nothingToRefund || (seatChoice === "withdraw" && typedZero));
 
   // Flattened: the old nested ternary's true-branch was a tautology. Inside it
   // `withdrawNoRefund` holds, and if `nothingToRefund` is false the other
@@ -959,12 +985,12 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
                   <div style={{ fontSize: 12.5, fontWeight: 600, color: INK, marginBottom: 8 }}>Their spot</div>
                   <SeatRadio
                     checked={seatChoice === "keep"} onChange={() => setSeatChoice("keep")} disabled={busy}
-                    title="Refund only — keep their spot"
+                    title={isCreditReturn ? "Return their credit — keep their spot" : "Refund only — keep their spot"}
                     sub="They stay on the roster. Use for discounts or a refund issued by mistake on your end."
                   />
                   <SeatRadio
                     checked={seatChoice === "withdraw"} onChange={() => setSeatChoice("withdraw")} disabled={busy}
-                    title="Refund and withdraw — free their spot"
+                    title={isCreditReturn ? "Return their credit and withdraw — free their spot" : "Refund and withdraw — free their spot"}
                     sub="Cancels the registration, opens the seat, and stops any future payments."
                   />
 
@@ -976,7 +1002,7 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
                   {withdrawNoRefund && (
                     <div style={{ marginTop: 10, padding: "10px 12px", background: "#fff7ed", border: "1px solid #fed7aa", borderRadius: 8, color: "#7c2d12", fontSize: 12.5, lineHeight: 1.5 }} role="alert">
                       <div>
-                        You typed $0, so <strong>no money goes back to the family</strong>. Their {fmtCents(refundableCents)} stays with you, and their spot is freed.
+                        You typed $0, so <strong>no money goes back to the family</strong>. Their {fmtCents(givebackCents)} stays with you, and their spot is freed.
                       </div>
                       {pendingChargesUnknown ? (
                         <div style={{ marginTop: 6 }}>
