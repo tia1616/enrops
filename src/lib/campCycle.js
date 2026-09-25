@@ -48,6 +48,17 @@ function mondayOf(iso) {
   return d.toISOString().slice(0, 10);
 }
 
+// The Friday of a date's week. A CYCLE is measured in whole Mon-Fri weeks even
+// when the camp inside it is not: computeWeeks drops any span that does not hold
+// a full one, so a Monday-to-Thursday camp - a holiday week, the exact case this
+// was built for - produced a cycle with ZERO weeks and a camp that could never
+// appear on the board. The camp still runs four days; its class_days say so.
+function fridayOf(iso) {
+  const d = new Date(`${mondayOf(iso)}T00:00:00`);
+  d.setDate(d.getDate() + 4);
+  return d.toISOString().slice(0, 10);
+}
+
 /**
  * Find or create this term's camp cycle and say which week the camp falls in.
  *
@@ -80,7 +91,7 @@ export async function ensureCampCycle(supabase, { orgId, termCode, startsOn, end
   // whole Mon-Fri spans, so the range is widened to the camp's Monday at the
   // earliest - otherwise the camp's own week is not a full week and gets dropped.
   const rangeStart = mondayOf(existing?.starts_on && existing.starts_on < campStart ? existing.starts_on : campStart);
-  const rangeEnd = existing?.ends_on && existing.ends_on > campEnd ? existing.ends_on : campEnd;
+  const rangeEnd = fridayOf(existing?.ends_on && existing.ends_on > campEnd ? existing.ends_on : campEnd);
   const weeks = computeWeeks(rangeStart, rangeEnd);
 
   let cycleId = existing?.id ?? null;
