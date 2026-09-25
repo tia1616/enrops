@@ -275,15 +275,23 @@ serve(async (req) => {
       // nothing without this test: confirmErr was being collected and then not
       // read until further down, so a failed confirmation still fell through
       // into the capture and produced the precise torn state the ordering is
-      // supposed to prevent - credit spent, no seat. The error branch below
-      // alerts the operator and Stripe retries the delivery, so leaving the
-      // hold intact is the recoverable choice: it either captures on the retry
-      // or expires and the family keeps their credit.
+      // supposed to prevent - credit spent, no seat.
+      //
+      // AND THERE IS NO RETRY COMING. An earlier version of this comment said
+      // Stripe would redeliver; it will not. The confirmErr branch below
+      // deliberately swallows the error so the rest of the handler still runs,
+      // and this function returns 200. So this choice is final: the hold lapses
+      // and the family keeps their credit, while the business has taken a card
+      // payment discounted by it. That is the right way round - the family is
+      // never out of pocket for our failure - but it is a real cost and it must
+      // be in the alert the operator gets, not only in a log line.
       const creditKey = meta.credit_key || '';
+      const creditCentsMeta = Number(meta.credit_cents || '0') || 0;
       if (creditKey && confirmErr) {
         console.error(
           `[webhook] NOT capturing credit hold ${creditKey}: the registrations did not confirm ` +
-          `(${confirmErr.message}). The hold is left to expire so the family keeps their credit.`,
+          `(${confirmErr.message}). The hold will lapse and the family keeps their credit; the ` +
+          `${creditCentsMeta} discount already given is absorbed. No Stripe retry follows a 200.`,
         );
       }
       if (creditKey && !confirmErr) {
@@ -391,6 +399,19 @@ serve(async (req) => {
             `Stripe session: ${session.id}`,
             `Payment intent: ${session.payment_intent}`,
             `Database error: ${confirmErr.message}`,
+            // THE CREDIT HALF, named here because this alert is the only thing
+            // that will ever mention it. The hold was deliberately not captured
+            // (no seat, so no spend), and it lapses on its own - so the family
+            // keeps this money AND has it off the price they were charged.
+            ...(creditKey && creditCentsMeta > 0
+              ? [
+                  ``,
+                  `They also used $${(creditCentsMeta / 100).toFixed(2)} of account credit on this checkout.`,
+                  `That credit has NOT been taken and will return to their balance, but the payment`,
+                  `was already discounted by it. Once you have fixed the registration, decide whether`,
+                  `to take the credit or leave the difference.`,
+                ]
+              : []),
             ``,
             `Fix the underlying cause, then set these registrations to confirmed/paid manually.`,
           ].join('\n'),

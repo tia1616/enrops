@@ -190,6 +190,11 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
   const [cancelKind, setCancelKind] = useState(null); // 'business_cancelled' | 'family_cancelled'
   const [programCancelled, setProgramCancelled] = useState(false);
   const [creditedCents, setCreditedCents] = useState(0);
+  // What the family paid from their account balance rather than on a card.
+  // Every figure beside it is NET of this, so without it "Paid $160" on a $400
+  // class reads as a bug - and an operator applying a percentage policy would
+  // take their percentage of the wrong number.
+  const [creditPaidCents, setCreditPaidCents] = useState(0);
   // Money counted against the ceiling that we cannot say the family has: a
   // refund reserved and still in flight, or one Stripe never answered on.
   // Without it the summary band is a riddle - paid $240, refunded $0,
@@ -256,6 +261,7 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
         setRefundedCents(refunded);
         setEligibleCents(elig.eligible_cents);
         setCreditedCents(elig.total_credited_cents || 0);
+        setCreditPaidCents(elig.credit_paid_cents || 0);
         setHeldCents(elig.held_cents || 0);
         // Pre-selects the cancellation kind IF the operator goes on to choose
         // credit. Not a claim on its own, and it decides nothing until then.
@@ -659,6 +665,17 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
                   refunded, $0 you can refund" reads as a bug rather than as
                   money already given back another way. */}
               {creditedCents > 0 && <span style={{ color: MUTED }}>Already credited <strong style={{ color: INK }}>{fmtCents(creditedCents)}</strong></span>}
+              {/* PAID FROM THEIR BALANCE, shown for the same reason "Already
+                  credited" is: every other figure on this row is net of it, so
+                  leaving it out makes the ceiling look wrong instead of
+                  explained. It is also the number an operator needs before
+                  typing a partial amount - whatever they enter is matched
+                  proportionally out of this leg too. */}
+              {creditPaidCents > 0 && (
+                <span style={{ color: MUTED }} title="Paid from this family's account credit, not on a card. Whatever you give back is matched proportionally out of this too.">
+                  Paid with credit <strong style={{ color: INK }}>{fmtCents(creditPaidCents)}</strong>
+                </span>
+              )}
               {/* Deliberately NOT called "refunded": nobody can say this money
                   reached the family. It is shown because otherwise the
                   refundable figure is short by an amount with no explanation

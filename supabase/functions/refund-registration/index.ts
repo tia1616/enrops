@@ -339,6 +339,53 @@ serve(async (req: Request) => {
       return json({ error: 'invalid_amount' }, 400);
     }
 
+    // ── HOW MUCH OF THIS REGISTRATION THE FAMILY PAID FROM THEIR BALANCE ──
+    //
+    // READ HERE, ABOVE EVERY BRANCH, because three different exits need it and
+    // two of them run long before the Stripe ceiling is built. It was first
+    // computed down beside the ceiling, which left the credit-instead-of-refund
+    // path restoring nothing on its pause-failed and cancel-failed returns AND
+    // on the retry those returns invite - the family's credit leg silently lost
+    // on every route except one happy path.
+    //
+    // GROSS applied, deliberately: this answers "how much of the price never
+    // reached Stripe", a fact about the original charge that handing credit
+    // back later does not change.
+    const { data: creditLegRows } = await supabase
+      .from('family_credit_movements')
+      .select('amount_cents')
+      .eq('registration_id', registrationId)
+      .eq('kind', 'applied');
+    const creditOnThisReg = ((creditLegRows ?? []) as Array<{ amount_cents: number }>)
+      .reduce((s, m) => s + (m.amount_cents || 0), 0);
+
+    /**
+     * Give the credit leg back. Safe to call more than once and on
+     * registrations that never used credit: the RPC returns 0 for a
+     * zero amount and is bounded per credit by applied-minus-already-restored,
+     * so the retry paths below can all call it without double-counting.
+     *
+     * Returns [restoredCents, failureFragment]. The fragment is a FRAGMENT, not
+     * a sentence - RefundDrawer wraps it in its own.
+     */
+    const restoreCreditLeg = async (
+      cents: number,
+      note: string,
+    ): Promise<[number, string | null]> => {
+      if (cents <= 0) return [0, null];
+      const { data: restoredRaw, error: restoreErr } = await supabase
+        .rpc('restore_family_credit_for_registration', {
+          p_registration_id: registrationId,
+          p_amount_cents: cents,
+          p_note: note,
+        });
+      if (restoreErr) {
+        console.error('[refund] could not return the family credit leg:', restoreErr);
+        return [0, 'the ledger write failed'];
+      }
+      return [Number(restoredRaw) || 0, null];
+    };
+
     // ── load registration ─────────────────────────────────────────────────
     const { data: regData, error: regErr } = await supabase
       .from('registrations')
@@ -477,6 +524,15 @@ serve(async (req: Request) => {
       const priorRow = prior as { id: string; amount_cents: number; reason: string } | null;
       if (priorRow) {
         const nowIso = new Date().toISOString();
+
+        // RESTORE BEFORE THE PAUSE, and before either of the 500s below. The
+        // first attempt may have died on exactly those returns without ever
+        // giving the credit leg back, and this retry is the operator doing what
+        // those errors told them to do. Idempotent, so a first attempt that DID
+        // restore contributes nothing here.
+        const [retryRestored, retryFailed] =
+          await restoreCreditLeg(creditOnThisReg, 'returned when this registration was credited instead of refunded');
+
         const { pausedRows, pauseError, cancelError } =
           await stopChargesAndCancel(supabase, registrationId, nowIso);
         if (pauseError) {
@@ -535,6 +591,9 @@ serve(async (req: Request) => {
           credited_cents: priorRow.amount_cents,
           credit_reason: priorRow.reason,
           already_existed: true,
+          credit_restored_cents: retryRestored > 0 ? retryRestored : undefined,
+          credit_restore_failed: retryFailed ?? undefined,
+          credit_restore_failed_cents: retryFailed ? creditOnThisReg : undefined,
           refunded_cents: 0,
           pending_charges_stopped: pausedRows?.length ?? 0,
           pending_cents_stopped: (pausedRows ?? []).reduce((s, r) => s + (r.amount_cents || 0), 0),
@@ -770,13 +829,8 @@ serve(async (req: Request) => {
     //   Netted: second pass sees totalPaid 280 and restores 69, not 120 -
     //   the family ends $51.43 short with no third refund able to recover it,
     //   and `eligible` reads $200 when Stripe has $80 left.
-    const { data: ceilingCreditRows } = await supabase
-      .from('family_credit_movements')
-      .select('amount_cents')
-      .eq('registration_id', registrationId)
-      .eq('kind', 'applied');
-    const creditOnThisReg = ((ceilingCreditRows ?? []) as Array<{ amount_cents: number }>)
-      .reduce((s, m) => s + (m.amount_cents || 0), 0);
+    // creditOnThisReg is read once, near the top, so that every exit can use it
+    // - see the comment there for why.
     if (creditOnThisReg > 0) {
       let toDrain = creditOnThisReg;
       for (const slot of piSlots) {
@@ -1231,6 +1285,24 @@ serve(async (req: Request) => {
         return json({ error: 'credit_write_failed' }, 500);
       }
 
+      // GIVE BACK THE CREDIT LEG, and do it HERE - above the pause and cancel
+      // returns below, not after them. The credit just issued covers the CASH
+      // the family paid, because `eligible` is netted of credit; their own
+      // spent balance is a separate leg and without this they hand over $400
+      // and keep $160.
+      //
+      // PROPORTIONAL TO WHAT IS BEING GIVEN BACK, not the whole leg. amountCents
+      // here is operator-typed and can be less than `eligible` - a policy that
+      // retains half, or the "keep the admin fee" chip. Restoring the full leg
+      // on a part credit made the two buttons disagree by real money: on a $400
+      // class funded $240 credit + $160 card with half retained, refunding $80
+      // returned $200 while crediting $80 returned $320.
+      const creditLegShare = eligible > 0
+        ? Math.min(creditOnThisReg, Math.round((creditOnThisReg * creditedCents) / eligible))
+        : creditOnThisReg;
+      const [creditLegRestored, creditLegFailed] =
+        await restoreCreditLeg(creditLegShare, 'returned when this registration was credited instead of refunded');
+
       const { pausedRows, pauseError, cancelError } =
         await stopChargesAndCancel(supabase, registrationId, nowIso);
 
@@ -1281,40 +1353,8 @@ serve(async (req: Request) => {
         dedupeKey: `cancelled:${registrationId}:credit_no_refund`,
       });
 
-      // GIVE BACK THE CREDIT LEG TOO. The credit just issued covers the CASH
-      // the family paid - `eligible` is now netted of credit, correctly, so on
-      // a $400 class funded by $240 credit and $160 card it is $160. Their
-      // $240 is still recorded as spent, so without this the family hands over
-      // $400 and ends up holding $160.
-      //
-      // Restoring rather than inflating the new credit is what keeps the two
-      // ledgers honest: the original credit goes back to being their original
-      // credit, and the new one is only ever the cash. The registration is
-      // being cancelled outright here, so the whole applied amount comes back -
-      // there is no partial-refund proportion to take, which is the difference
-      // between this and the cash-refund path below.
-      let creditLegRestored = 0;
-      let creditLegFailed: string | null = null;
-      {
-        const { data: restoredRaw, error: restoreLegErr } = await supabase
-          .rpc('restore_family_credit_for_registration', {
-            p_registration_id: registrationId,
-            p_amount_cents: creditOnThisReg,
-            p_note: 'returned when this registration was credited instead of refunded',
-          });
-        if (restoreLegErr) {
-          console.error('[refund] could not return the family credit leg on the credit path:', restoreLegErr);
-          // A FRAGMENT AND A SEPARATE AMOUNT, matching the cash-refund path.
-          // Both responses are rendered by the SAME handler in RefundDrawer, so
-          // a full sentence here would be read out inside the drawer's own
-          // sentence, and omitting the cents would print a broken figure on the
-          // one number the operator has to put back by hand.
-          creditLegFailed = `the ledger write failed`;
-        } else {
-          creditLegRestored = Number(restoredRaw) || 0;
-        }
-      }
-
+      // The credit leg was already returned above, before the pause/cancel
+      // returns, so that a failure there does not lose it.
       return json({
         credited: true,
         credit_id: creditId,
@@ -1324,7 +1364,10 @@ serve(async (req: Request) => {
         // unchanged.
         credit_restored_cents: creditLegRestored > 0 ? creditLegRestored : undefined,
         credit_restore_failed: creditLegFailed ?? undefined,
-        credit_restore_failed_cents: creditLegFailed ? creditOnThisReg : undefined,
+        // The SHARE, not the whole leg - and only when there was one, so a
+        // transport error on a registration that used no credit cannot make the
+        // drawer announce "$0.00 could not be returned".
+        credit_restore_failed_cents: creditLegFailed && creditLegShare > 0 ? creditLegShare : undefined,
         // What the ledger holds. On a retry answered by the function's own
         // idempotency branch this is the ORIGINAL amount, not the one this
         // request asked for - and the drawer repeats this number to the
@@ -1810,45 +1853,22 @@ serve(async (req: Request) => {
     // second refund on the same registration cannot give back more than the
     // family put in, and a retry gives back nothing twice.
     const refundedNowCents = amountCents - remaining;
-    if (refundedNowCents > 0 && totalPaid > 0) {
-      const { data: creditAppliedRaw } = await supabase
-        .from('family_credit_movements')
-        .select('amount_cents')
-        .eq('registration_id', registrationId)
-        .eq('kind', 'applied');
-      const creditApplied = (creditAppliedRaw || [])
-        .reduce((s: number, m: { amount_cents: number }) => s + (m.amount_cents || 0), 0);
-
-      if (creditApplied > 0) {
-        const share = Math.min(
-          creditApplied,
-          Math.round((creditApplied * refundedNowCents) / totalPaid),
-        );
-        if (share > 0) {
-          const { data: restoredRaw, error: restoreErr } = await supabase
-            .rpc('restore_family_credit_for_registration', {
-              p_registration_id: registrationId,
-              p_amount_cents: share,
-              p_note: 'returned when this registration was refunded',
-            });
-          if (restoreErr) {
-            // LOUD, and surfaced to the operator rather than only logged: the
-            // cash has already gone back, so the family is now owed credit that
-            // nothing has recorded. That is exactly the silent hole this whole
-            // function exists to close.
-            console.error('[refund] could not return the family credit leg:', restoreErr);
-            // A SHORT FRAGMENT, not a sentence: the drawer wraps this in its
-            // own sentence, and a sentence inside a sentence reads as a bug.
-            // Every other reason string on this response is a fragment for the
-            // same reason. The amount lives in the drawer's copy too, with its
-            // dollar sign - this is the one number the operator has to re-enter
-            // by hand, so it must not arrive naked.
-            creditRestoreFailedReason = `the ledger write failed`;
-            creditRestoreFailedCents = share;
-          } else {
-            creditRestoredCents = Number(restoredRaw) || 0;
-          }
-        }
+    if (refundedNowCents > 0 && totalPaid > 0 && creditOnThisReg > 0) {
+      // creditOnThisReg is the GROSS applied leg, read once at the top. It must
+      // stay gross here: it is the same number the ceiling was lowered by, and
+      // the two disagreeing is what short-changed a second refund.
+      const share = Math.min(
+        creditOnThisReg,
+        Math.round((creditOnThisReg * refundedNowCents) / totalPaid),
+      );
+      // LOUD on failure, not just logged: the cash has already gone back, so
+      // the family would be owed credit that nothing has recorded - exactly the
+      // silent hole this whole block exists to close.
+      const [restored, failed] = await restoreCreditLeg(share, 'returned when this registration was refunded');
+      creditRestoredCents = restored;
+      if (failed) {
+        creditRestoreFailedReason = failed;
+        creditRestoreFailedCents = share;
       }
     }
 

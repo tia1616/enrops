@@ -427,20 +427,32 @@ serve(async (req) => {
         // Refusing is the kinder half of the trade: they wait, rather than pay
         // money they did not need to and have to ask for it back.
         if (available <= 0) {
-          const { count: liveCredits } = await guardAdmin
+          const { count: liveCredits, error: liveErr } = await guardAdmin
             .from('family_credits')
             .select('id', { count: 'exact', head: true })
             .eq('organization_id', giftOrgId)
             .eq('parent_id', cartParentId)
             .eq('status', 'active');
-          if ((liveCredits ?? 0) > 0) {
+          // A FAILED COUNT IS NOT "NO CREDIT". Discarding this error made the
+          // guard fail OPEN into precisely the silent full-price charge it was
+          // written to remove: null becomes 0, the test is false, and the
+          // family pays in full with no message. Treated as "they have credit",
+          // so the worst case is one honest retry instead of a silent loss.
+          if (liveErr) {
+            console.error('[create-checkout] credit presence check failed:', liveErr.message);
+          }
+          if (liveErr || (liveCredits ?? 0) > 0) {
             console.warn(
               `[create-checkout] parent ${cartParentId} at org ${giftOrgId} holds credit but 0 is ` +
               `spendable - an earlier checkout still holds it. Refusing rather than charging full price.`,
             );
             return json({
-              error: 'Your account credit is still tied up in a checkout you started a few minutes ago. '
-                + 'Please wait a moment and try again, and we will apply it.',
+              // SAYS HOW LONG, because "a moment" invited a retry loop and each
+              // retry mints a fresh set of pending registrations and seat holds
+              // before it gets here. An honest upper bound sends them away once
+              // instead of five times.
+              error: `Your account credit is still tied up in a checkout you started earlier. `
+                + `It frees up within ${CHECKOUT_WINDOW_MINUTES} minutes - please try again then and we will apply it.`,
               credit_held_elsewhere: true,
             }, 409);
           }
