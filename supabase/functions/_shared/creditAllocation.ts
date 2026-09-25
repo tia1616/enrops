@@ -58,11 +58,31 @@ export interface CreditAllocation {
 export function allocateCreditAcrossLines(
   lines: CreditLine[],
   availableCents: number,
+  /**
+   * The order to fill in, as a list of registration ids - normally the
+   * `registration_ids` array exactly as create-registration returned it.
+   *
+   * PASS IT. Without it this falls back to sorting by id, which is only
+   * deterministic, not MEANINGFUL: the Pay step has to be able to predict the
+   * same split to show the family what they will pay, and it knows its cart
+   * order, not what ids the server will mint. create-registration pushes ids in
+   * cart order, so that array is both stable and reproducible on the client.
+   *
+   * Anything in `lines` but missing from `order` is filled last, in id order,
+   * so a mismatch degrades to the old behaviour rather than dropping a line.
+   */
+  order?: string[],
 ): CreditAllocation {
-  // Sorted, ALWAYS. See the header: `.in()` row order is not a fact.
-  const ordered = [...lines].sort((a, b) =>
-    a.registrationId < b.registrationId ? -1 : a.registrationId > b.registrationId ? 1 : 0
-  );
+  // NEVER the raw `lines` order: those rows come from a PostgREST `.in()`
+  // query, whose row order is not a fact. Either the caller's explicit order or
+  // a sort - never arrival.
+  const rank = new Map<string, number>((order ?? []).map((id, i) => [id, i]));
+  const ordered = [...lines].sort((a, b) => {
+    const ra = rank.has(a.registrationId) ? rank.get(a.registrationId)! : Number.MAX_SAFE_INTEGER;
+    const rb = rank.has(b.registrationId) ? rank.get(b.registrationId)! : Number.MAX_SAFE_INTEGER;
+    if (ra !== rb) return ra - rb;
+    return a.registrationId < b.registrationId ? -1 : a.registrationId > b.registrationId ? 1 : 0;
+  });
 
   let left = Number.isFinite(availableCents) && availableCents > 0
     ? Math.floor(availableCents)

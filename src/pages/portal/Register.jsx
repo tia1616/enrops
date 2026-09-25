@@ -56,6 +56,19 @@ export default function Register() {
   // This provider's published cancellation/refund policy, shown on the pay step
   // before any money is taken (v4 section 6). null = none published.
   const [cancellationPolicy, setCancellationPolicy] = useState(null);
+  // THIS FAMILY'S SPENDABLE CREDIT WITH THIS PROVIDER, and 0 unless they are
+  // SIGNED IN. It is display only - create-checkout reads the balance itself
+  // and never trusts a number from the browser - but a family should not first
+  // learn what they are paying on the Stripe page.
+  //
+  // ONLY WHEN SIGNED IN, and that is a deliberate limit rather than an
+  // oversight. Registration here is a guest flow, so the only way to tell a
+  // signed-out visitor their balance would be to look it up by the email they
+  // typed - which would let anyone probe any address for a balance. Every
+  // comparable platform shows this figure, and every one of them has the family
+  // logged in first. Signed out, the credit is still APPLIED; they see it as
+  // "Account credit" on the Stripe page instead.
+  const [familyCreditCents, setFamilyCreditCents] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   // The error banner, so a failure can be scrolled to the family. See the effect below.
@@ -376,6 +389,26 @@ export default function Register() {
     // pay step simply omits the block rather than inventing a policy, because a
     // made-up cancellation term is far worse than none.
     setCancellationPolicy(cancelPolicyRes?.data?.content_markdown || null);
+
+    // THE FAMILY'S OWN CREDIT WITH THIS PROVIDER. The RPC takes no parent id -
+    // it resolves the caller from their session - so a signed-out visitor
+    // simply gets nothing back and there is no address to probe with.
+    //
+    // FAILS TO SILENCE, never to a guess. If this read does not work the Pay
+    // step shows no credit line, and create-checkout still applies the credit
+    // from its own read of the ledger. Showing a family a balance we are not
+    // sure of is worse than showing none.
+    try {
+      const { data: sess } = await supabase.auth.getSession();
+      if (sess?.session && org?.id) {
+        const { data: bal, error: balErr } = await supabase
+          .rpc('my_family_credit_balance_cents', { p_organization_id: org.id });
+        if (balErr) console.warn('[register] credit balance unavailable:', balErr.message);
+        else setFamilyCreditCents(Number(bal) || 0);
+      }
+    } catch (e) {
+      console.warn('[register] credit balance lookup failed:', e?.message);
+    }
     // Thread the org's sibling % onto the cart so the review screen matches the
     // server charge. undefined (older org-fee-config) -> pricing.js keeps the 10% default.
     setSiblingPct(feeRes?.data?.sibling_discount_pct);
@@ -833,6 +866,8 @@ export default function Register() {
                 // the quote and the charge are built from one schedule.
                 installmentSplits={installmentSchedule?.perLineSplits || null}
                 org={{ ...org, ...(feeConfig || {}) }}
+                // Only ever non-zero for a SIGNED-IN parent. See the fetch.
+                familyCreditCents={familyCreditCents}
                 cancellationPolicy={cancellationPolicy}
                 // Passed as its own prop rather than spread into `org`: the
                 // whole object is the config, and flattening it would put

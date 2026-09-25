@@ -44,9 +44,9 @@ const C = 'cccc0003-0000-4000-8000-000000000003';
   check('never allocates more than the line costs', r.totalCreditCents === 5000 && r.totalChargeCents === 0);
 }
 
-// 4) ORDER INDEPENDENCE. This is the one that matters: PostgREST `.in()`
-//    returns rows in no particular order, so the same cart presented two ways
-//    must allocate identically or the webhook restores the wrong child.
+// 4) ROW ORDER MUST NOT DECIDE ANYTHING. PostgREST `.in()` returns rows in no
+//    particular order, so the same cart presented two ways must allocate
+//    identically or the webhook restores the wrong child.
 {
   const forward = allocateCreditAcrossLines(
     [{ registrationId: A, amountCents: 10000 }, { registrationId: B, amountCents: 10000 }, { registrationId: C, amountCents: 10000 }],
@@ -59,6 +59,43 @@ const C = 'cccc0003-0000-4000-8000-000000000003';
   check('row order does not change the allocation',
     JSON.stringify(forward.entries) === JSON.stringify(shuffled.entries),
     JSON.stringify(shuffled.entries.map((e) => e.creditCents)));
+}
+
+// 4b) AN EXPLICIT ORDER WINS, and survives the rows arriving shuffled. This is
+//     what lets the Pay step predict the same split the server will make: it
+//     knows its cart order, not the ids the server will mint.
+{
+  const wanted = [C, A, B];
+  const a = allocateCreditAcrossLines(
+    [{ registrationId: A, amountCents: 10000 }, { registrationId: B, amountCents: 10000 }, { registrationId: C, amountCents: 10000 }],
+    15000, wanted,
+  );
+  const b = allocateCreditAcrossLines(
+    [{ registrationId: B, amountCents: 10000 }, { registrationId: C, amountCents: 10000 }, { registrationId: A, amountCents: 10000 }],
+    15000, wanted,
+  );
+  const byId = Object.fromEntries(a.entries.map((e) => [e.registrationId, e.creditCents]));
+  check('the named order is filled first', byId[C] === 10000 && byId[A] === 5000 && byId[B] === 0,
+    JSON.stringify(byId));
+  check('and shuffled rows give the same answer',
+    JSON.stringify(a.entries) === JSON.stringify(b.entries));
+  check('it differs from the id-order default, so the order is really being used',
+    JSON.stringify(a.entries) !== JSON.stringify(
+      allocateCreditAcrossLines(
+        [{ registrationId: A, amountCents: 10000 }, { registrationId: B, amountCents: 10000 }, { registrationId: C, amountCents: 10000 }],
+        15000,
+      ).entries));
+}
+
+// 4c) A line missing from the order is filled LAST, not dropped.
+{
+  const r = allocateCreditAcrossLines(
+    [{ registrationId: A, amountCents: 10000 }, { registrationId: B, amountCents: 10000 }],
+    20000, [B],
+  );
+  const byId = Object.fromEntries(r.entries.map((e) => [e.registrationId, e.creditCents]));
+  check('an unlisted line still gets its share', byId[B] === 10000 && byId[A] === 10000);
+  check('nothing is dropped', r.totalCreditCents === 20000);
 }
 
 // 5) The key is order-stable too, for the same reason.

@@ -19,6 +19,7 @@ export default function StepPay({
   org,
   cancellationPolicy,
   scholarshipFund,
+  familyCreditCents = 0,
 }) {
   // The policy is authored as markdown and rendered properly on its own page.
   // Here it is an inline preview inside a checkout step, so the few markers a
@@ -72,7 +73,33 @@ export default function StepPay({
   // floor three times - both of which a fee on the cart total gets wrong, in
   // opposite directions. pricing.lines carries the per-registration amounts
   // the Review step already priced, so nothing new has to be derived here.
-  const cartLineAmounts = (pricing?.lines || []).map((l) => l.amount_cents);
+  // ACCOUNT CREDIT COMES OFF THE LINES BEFORE THE FEE IS SIZED, because that is
+  // what the server does and the money doc requires: "the fee is charged once
+  // per dollar of family money. A credit spent on a new registration does not
+  // carry a second fee on the same dollars." Sizing the fee on the gross price
+  // here would quote a family more than Stripe will actually charge them.
+  //
+  // FILLED IN CART ORDER, which is the same order create-checkout uses - it
+  // allocates by the `registration_ids` array, and create-registration pushes
+  // those ids in cart order. That is the only ordering both sides can agree on:
+  // this screen cannot know what ids the server will mint.
+  //
+  // NEVER on a payment plan. create-checkout refuses credit there, so showing
+  // it would promise a discount the charge will not contain.
+  const creditOfferedCents = useInstallments ? 0 : Math.max(0, familyCreditCents || 0);
+  const grossLineAmounts = (pricing?.lines || []).map((l) => l.amount_cents);
+  const creditAppliedCents = Math.min(
+    creditOfferedCents,
+    grossLineAmounts.reduce((s, a) => s + (a || 0), 0),
+  );
+  const cartLineAmounts = (() => {
+    let left = creditAppliedCents;
+    return grossLineAmounts.map((a) => {
+      const take = Math.min(a || 0, left);
+      left -= take;
+      return (a || 0) - take;
+    });
+  })();
   const cartFeeFor = (bank) => cartFeeOnLines(cartLineAmounts, org, { isBank: bank });
 
   // Payment plans: each registration's fee split across THAT registration's
@@ -101,7 +128,11 @@ export default function StepPay({
   const chargedForIndex = (i) => installmentSchedule[i].amount_cents + feeForIndex(i);
 
   const feeToday = useInstallments ? feeForIndex(0) : cartFeeFor(isBank);
-  const chargedToday = useInstallments ? chargedForIndex(0) : displayAmount + feeToday;
+  // The credit comes off the headline as well as off the fee base, or the big
+  // number on this screen would be higher than the one on the Stripe page.
+  const chargedToday = useInstallments
+    ? chargedForIndex(0)
+    : displayAmount - creditAppliedCents + feeToday;
   // The standard (card) fee, and what paying by bank takes off it. Never
   // negative: if a config ever made ACH the dearer method, we show no discount
   // rather than inventing a card penalty.
@@ -170,8 +201,13 @@ export default function StepPay({
         Ready to pay
       </h1>
       <p className="mt-2 text-j2s-ink/70">
-        We'll send you over to Stripe to complete your payment. Your spot is held
-        from here.
+        {/* "We'll send you over to Stripe" is false when the credit covers the
+            whole thing - there is no Stripe page on that path, the registration
+            is confirmed outright. Promising a payment screen they never see is
+            the kind of small lie that makes a family think it failed. */}
+        {chargedToday <= 0 && creditAppliedCents > 0
+          ? <>Your account credit covers this in full, so there&rsquo;s nothing to pay. Your spot is held from here.</>
+          : <>We&rsquo;ll send you over to Stripe to complete your payment. Your spot is held from here.</>}
       </p>
 
       <div className="mt-8 rounded-2xl border-2 border-j2s-purple bg-gradient-to-br from-j2s-purple to-j2s-purple-dark p-8 text-center text-white shadow-pop">
@@ -196,6 +232,15 @@ export default function StepPay({
             {/* Named as its own addition for the same reason the fee line is:
                 every part of the headline figure has to be accounted for. */}
             + {formatMoney(giftCharged)} scholarship fund donation
+          </p>
+        )}
+        {creditAppliedCents > 0 && (
+          /* Named as its own subtraction, like the bank discount below, so the
+             breakdown still adds up to the headline. Shown only to a signed-in
+             family: a signed-out one still gets the credit applied, and sees it
+             as "Account credit" on the Stripe page. */
+          <p className="mt-1 text-sm font-bold text-white">
+            &minus; {formatMoney(creditAppliedCents)} from your account credit
           </p>
         )}
         {bankDiscountToday > 0 && (

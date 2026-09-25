@@ -469,6 +469,12 @@ serve(async (req) => {
               amountCents: (r.amount_cents as number) || 0,
             })),
             available,
+            // FILLED IN THE ORDER THE CART WAS BUILT, not in id order. The Pay
+            // step has to predict this split to tell the family what they will
+            // pay, and it knows its own cart order - it cannot know what ids
+            // the server minted. create-registration pushes ids in cart order,
+            // so this array is the one ordering both sides can agree on.
+            registration_ids as string[],
           );
           if (alloc.totalCreditCents > 0) {
             creditPlan.alloc = alloc;
