@@ -1,4 +1,4 @@
--- 20260925a_spend_a_credit.sql
+-- 20260925c_spend_a_credit.sql
 -- Credits chunk 3b: a family can SPEND a credit at checkout.
 --
 -- WHAT THIS ADDS, and the one idea the whole file turns on:
