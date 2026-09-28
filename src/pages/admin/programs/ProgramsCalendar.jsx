@@ -757,6 +757,7 @@ export default function ProgramsCalendar() {
             grade_min, grade_max, age_min, age_max, age_format,
             runs_own_registration, external_registration_url, list_in_public_catalog,
             first_session_date, session_count, schedule_mode, end_date, organization_id,
+            class_days,
             facility_requested_at, facility_approved_at, facility_notes,
             program_location_id,
             program_locations (id, name, district)
@@ -1058,6 +1059,32 @@ export default function ProgramsCalendar() {
           >
             + New program
           </Link>
+          {/* CAMPS HAVE ONE FORM AND TWO DOORS. A lean tenant reaches camp mode
+              by the toggle inside the builder their "+ New program" already
+              opens. A legacy tenant's "+ New program" goes to the classic wizard,
+              which has no camp mode - so without this button J2S cannot create a
+              camp at all, which is exactly what Jessica hit. Linking to the one
+              camp implementation rather than building a second one inside the
+              wizard, which would drift from it the first time either is fixed. */}
+          {org?.instructor_pay_model !== "enrops_platform" && (
+            <Link
+              to="/admin/programs/quick-new?mode=camp"
+              style={{
+                padding: "8px 14px",
+                background: "#fff",
+                color: BRIGHT,
+                border: `1px solid ${BRIGHT}`,
+                borderRadius: 8,
+                fontSize: 14,
+                fontWeight: 600,
+                textDecoration: "none",
+                display: "inline-block",
+                marginLeft: 8,
+              }}
+            >
+              + Add camp
+            </Link>
+          )}
           <select value={term ?? ""} onChange={(e) => setTerm(e.target.value)} style={selectStyle}>
             {!term && <option value="">{termsLoaded ? "No terms yet" : "Loading terms…"}</option>}
             {termOptions.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
@@ -2090,6 +2117,13 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
       p_early_release_start_time: draft.early_release_start_time
         ? to12hText(draft.early_release_start_time)
         : null,
+      // A CAMP is a range program that meets on several weekdays. Without this
+      // the preview takes the weekly arm, counts only day_of_week (a camp's
+      // FIRST day), and this count is materialized straight into session_count
+      // by the save below -- so editing a ten-day Mon-Fri camp's price would
+      // silently store "2 sessions". Read from the saved row, not the draft:
+      // class_days is not editable here, and the patch never writes it.
+      p_class_days: program.class_days ?? null,
     }).then(({ data, error }) => {
       if (!alive) return;
       setRangeLoading(false);
@@ -2098,7 +2132,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
     return () => { alive = false; };
     // early_release_start_time is a dependency for the same reason: typing it
     // changes the count this preview is about to hand to the save.
-  }, [draft.schedule_mode, draft.day_of_week, draft.first_session_date, draft.end_date, draft.program_location_id, draft.early_release_start_time, program.organization_id, program.term]);
+  }, [draft.schedule_mode, draft.day_of_week, draft.first_session_date, draft.end_date, draft.program_location_id, draft.early_release_start_time, program.organization_id, program.term, program.class_days]);
 
   function set(field, value) {
     setDraft((d) => ({ ...d, [field]: value }));
@@ -2970,6 +3004,13 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
             curriculum: program.curriculum,
             status: program.status,
             term: program.term,
+            // ShareProgram exempts camps from the term gate, because the catalog
+            // shows an open camp until its last day whatever term is on sale.
+            // Without this field it cannot tell, so a camp filed to WI27 was
+            // told "there's no public link to share yet ... it turns on when
+            // that term's registration opens" while families could already
+            // register for it.
+            class_days: program.class_days,
             runs_own_registration: program.runs_own_registration,
             external_registration_url: program.external_registration_url,
           }}

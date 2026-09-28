@@ -49,5 +49,27 @@ eq('day: null count -> plural', formatDayLabel({ day_of_week: 'Monday', session_
 eq('day: no day -> null (never "nulls")', formatDayLabel({ day_of_week: null, session_count: 8 }), null);
 eq('day: undefined program', formatDayLabel(undefined), null);
 
+// --- formatDayLabel, CAMPS (class_days set) ---
+// A camp's day_of_week is NOT NULL and holds its FIRST day, so class_days has to
+// win. Without that a Mon-Fri camp advertised itself as "Mondays" on the public
+// catalog card, above its Register button - a parent reads a weekly Monday class
+// and buys a week of full-day camp.
+eq('camp: contiguous run -> range',
+  formatDayLabel({ day_of_week: 'Monday', session_count: 10, class_days: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'] }), 'Mon-Fri');
+eq('camp: out-of-order input still reads in calendar order',
+  formatDayLabel({ day_of_week: 'Wednesday', session_count: 3, class_days: ['friday', 'wednesday', 'thursday'] }), 'Wed-Fri');
+// A holiday week is the case the camp form was built for: a gap must NOT be
+// flattened into a range, or the card promises a day the camp does not meet.
+eq('camp: gap -> list, never a range that lies',
+  formatDayLabel({ day_of_week: 'Monday', session_count: 3, class_days: ['monday', 'tuesday', 'thursday'] }), 'Mon, Tue, Thu');
+eq('camp: single day -> that day, not a range',
+  formatDayLabel({ day_of_week: 'Monday', session_count: 1, class_days: ['monday'] }), 'Mon');
+// Empty / unrecognised class_days must fall back to the weekly label rather than
+// returning '' , which the card would render as a stray separator dot.
+eq('camp: empty class_days falls back to the weekly label',
+  formatDayLabel({ day_of_week: 'Monday', session_count: 8, class_days: [] }), 'Mondays');
+eq('camp: junk class_days falls back to the weekly label',
+  formatDayLabel({ day_of_week: 'Monday', session_count: 8, class_days: ['funday'] }), 'Mondays');
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

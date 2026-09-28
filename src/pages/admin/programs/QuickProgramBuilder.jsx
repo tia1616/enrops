@@ -16,8 +16,13 @@
 // The operator never sees "term" — it's enrichment-provider vocabulary, not theirs.
 
 import { useEffect, useRef, useState } from "react";
-import { useNavigate, useOutletContext } from "react-router-dom";
+import { useNavigate, useOutletContext, useSearchParams } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
+import { formatTermLabel } from "../../../lib/terms.js";
+// campTermForDate lives beside the other camp helpers in programSchedule.js,
+// which imports nothing - terms.js pulls in the supabase client, so anything
+// defined there cannot be unit-tested by the repo's plain-node runner.
+import { campTermForDate, firstMeetingDayOnOrAfter } from "../../../lib/programSchedule.js";
 import ShareProgram from "../../../components/ShareProgram.jsx";
 import FamiliesPayNote, { useOrgFeeConfig } from "../../../components/FamiliesPayNote.jsx";
 import ProgramSteps from "../../../components/ProgramSteps.jsx";
@@ -37,7 +42,10 @@ import {
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib/programText.js";
 import { GRADE_OPTIONS, audiencePatch, rangeBackwards, rangeBackwardsMessage } from "../../../lib/grades.js";
-import { ensureCampCycle, deriveSessionType, CAMP_WEEKDAYS, toggleCampDay } from "../../../lib/campCycle.js";
+// Only the weekday list and its toggle are still shared. ensureCampCycle and
+// deriveSessionType went with the camp_sessions write: a camp is a program now,
+// so it has a term instead of a cycle and needs no week number or session type.
+import { CAMP_WEEKDAYS, toggleCampDay } from "../../../lib/campCycle.js";
 import {
   publishBlockedByStripe,
   PUBLISH_GATE_CTA_SAVE,
@@ -226,11 +234,28 @@ export default function QuickProgramBuilder() {
   // Weekly series vs one-off workshop. An operator who told us they only run one
   // shape never sees the choice; one who runs both picks per program.
   const cadence = profile.program_cadence;
-  const [mode, setMode] = useState(cadence === "one_off" ? "one_off" : "weekly");
+  // ?mode=camp is how a LEGACY tenant reaches this form at all. J2S's "+ New
+  // program" goes to the classic wizard, which has no camp mode - so camps have
+  // ONE implementation (this one) and two doors into it, rather than a second
+  // camp form built inside the wizard that would drift from this one.
+  const [searchParams] = useSearchParams();
+  const modeParam = searchParams.get("mode");
+  const [mode, setMode] = useState(
+    modeParam === "camp" ? "camp" : cadence === "one_off" ? "one_off" : "weekly",
+  );
   // Camp-only fields. Days default to Mon-Fri, the shape of almost every camp;
   // a holiday week is the operator turning one off.
   const [campDays, setCampDays] = useState(() => CAMP_WEEKDAYS.map((d) => d.value));
   const [campEndDate, setCampEndDate] = useState("");
+  // A CAMP'S SEASON COMES FROM ITS DATES. Nothing to ask.
+  //
+  // This was a dropdown for about an hour. Jessica: "why does it still ask which
+  // term? aren't dates enough? and summer won't have a term." Right on both
+  // counts - a camp on 21 December is a winter camp because of when it is, and
+  // she runs no summer after-school term, so a picker built from her terms had
+  // nothing correct to offer a July camp. campTermForDate answers it from the
+  // first day, and org_terms() grows the list from the programs themselves, so a
+  // season she has never run appears the moment a camp lands in it.
   // Seeds the default ONCE, when the org's cadence first arrives. It used to run
   // on every change of `cadence`, and `cadence` changes when the profile finishes
   // loading - so an operator who picked Camp in that first moment watched the
@@ -239,20 +264,54 @@ export default function QuickProgramBuilder() {
   useEffect(() => {
     if (seededModeRef.current || !cadence) return;
     seededModeRef.current = true;
+    // An explicit ?mode=camp is the operator's choice and outranks the org's
+    // cadence default - otherwise arriving from "+ Add camp" would snap back to
+    // Weekly the moment the profile finished loading, which is the exact bug
+    // this ref was added to stop.
+    if (modeParam === "camp") return;
     if (cadence === "one_off") setMode("one_off");
     else if (cadence === "weekly_term") setMode("weekly");
-  }, [cadence]);
+  }, [cadence, modeParam]);
   const isOneOff = mode === "one_off";
+  // The term this program will be filed under. ONE definition, read by the save,
+  // the date preview and the share panel, so none of them can disagree.
+  // FROM THE DAY THE CAMP ACTUALLY MEETS, not the day that was typed.
+  //
+  // An operator can type a start that is not a meeting day - "the week of the
+  // 30th", Tuesday to Friday - and the saved first_session_date is then the
+  // Tuesday. Deriving the season from the typed Monday filed a camp that runs
+  // entirely in December under FALL, silently, with no dropdown left to correct
+  // it. That only affects HER schedule (families are never filtered by a camp's
+  // term), but it is exactly the mis-filing this derivation exists to prevent:
+  // she would open the winter board to staff it and not find it there.
+  //
+  // The readback below reads this same value, so the screen and the saved row
+  // cannot disagree.
+  const campFirstMeetingDay = firstMeetingDayOnOrAfter(startDate, campDays);
+  // Falls back to the active term only when there is no first day yet - the form
+  // cannot be submitted in that state, so it never reaches a saved row.
+  const effectiveTerm = mode === "camp"
+    ? (campTermForDate(campFirstMeetingDay) || org.active_registration_term)
+    : org.active_registration_term;
   // A camp is the same thing to an operator - something families register for -
   // that happens on several days of ONE week instead of one day a week. It writes
-  // a camp_sessions row, because programs derive their dates by stepping forward
-  // seven days at a time and cannot express consecutive days.
+  // a PROGRAM, like every other mode here: the date functions learned to walk
+  // consecutive days (20260925d), so class_days is the whole difference.
   const isCamp = mode === "camp";
-  // ALWAYS shown now. It used to appear only for cadence 'both', so an org that
+  // Shown by default. It used to appear only for cadence 'both', so an org that
   // said "weekly series" at signup could never reach the other options - a hidden
   // gate that made camps unreachable for most tenants. Cadence still picks the
   // DEFAULT below; it no longer decides what exists.
-  const showModeToggle = true;
+  //
+  // THE ONE EXCEPTION is a legacy tenant who arrived through "+ Add camp". That
+  // button exists only because the classic wizard has no camp mode; this form is
+  // the camp door, not a second builder for their weekly classes. Leaving the
+  // toggle on would let them switch to "Weekly series" here and create a class
+  // through a form that never asks for a curriculum - exactly the gate
+  // ProgramWizardNew exists to enforce for these orgs. They still reach the full
+  // builder from "+ New program"; this door is camps only.
+  const campOnlyDoor = modeParam === "camp" && org?.instructor_pay_model !== "enrops_platform";
+  const showModeToggle = !campOnlyDoor;
 
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState("");
@@ -585,10 +644,11 @@ export default function QuickProgramBuilder() {
   const valid =
     name.trim() !== "" && priceValid && spotsNum >= 1 && !audienceBackwards &&
     // A camp is placed by its dates and the days it runs, not by a weekday - and
-    // its TIMES are required, unlike a class's. camp_sessions.start_time and
-    // end_time are NOT NULL, so leaving them blank got the operator a raw
-    // not-null constraint error on save. programs.start_time is nullable, which
-    // is why the weekly path never had to ask.
+    // its TIMES are required, unlike a class's. programs.start_time is nullable,
+    // so this is a product rule rather than a column one, and it is deliberately
+    // kept now that a camp writes to programs: a weekly class at a school has an
+    // implied window (right after the bell), while a camp is a whole day a family
+    // arranges childcare around. "9-3 or 9-12?" is the first thing they ask.
     (isCamp ? (!!startDate && campDays.length > 0 && !!startTime && !!endTime)
       : isOneOff ? !!startDate : !!day) && !!locationId;
 
@@ -842,9 +902,13 @@ export default function QuickProgramBuilder() {
     try {
       const payload = {
         organization_id: org.id,
-        // Stamp the org's active term so the program lands in the public catalog
-        // and the share link resolves. Operator never picks this.
-        term: org.active_registration_term,
+        // A weekly class or one-off is built for the term you are selling, so it
+        // takes the org's active term and the operator never picks it. A CAMP is
+        // built during the PREVIOUS term and belongs to the one its dates fall
+        // in, so it carries the term chosen on the form. ONE expression, so the
+        // saved row and the preview below cannot disagree about which term this
+        // is - see effectiveTerm.
+        term: effectiveTerm,
         curriculum: name.trim(), // NOT NULL display name; no curriculum record
         curriculum_id: null,
         // Optional; NULL (not "") so the catalog card's `short_description &&`
@@ -895,78 +959,73 @@ export default function QuickProgramBuilder() {
         // builder is the same kind of row.
         status: asDraft ? "draft" : "open",
       };
-      // A CAMP is the same job for the operator and a different row underneath.
-      // programs derive their dates by stepping forward seven days at a time, so
-      // a Monday-to-Thursday camp cannot be one; it goes to camp_sessions, which
-      // is built for a block of consecutive days. The cycle and week number the
-      // board needs are worked out from the term rather than asked for.
+      // A CAMP IS A PROGRAM that runs on consecutive days. It used to be a row in
+      // camp_sessions - the Squarespace-era shape, which never had to sell
+      // anything - and the whole difference now is four fields on the SAME
+      // payload, so a camp inherits the catalog, native checkout and the fee
+      // engine, rosters, payroll, refund proration, the family emails and
+      // instructor scheduling without any of it being written twice.
+      //
+      //   class_days     the days it meets; NULL on a weekly class
+      //   schedule_mode  'range' - the count is DERIVED from the dates, not typed
+      //   end_date       a camp stops at its last day; a closed day is not made up
+      //   session_count  how many days it actually meets, from the date walk
+      //
+      // Those are enforced together by programs_class_days_need_range_mode and
+      // programs_class_days_need_end_date, so a camp cannot be half-written.
       if (isCamp) {
-        const loc = locations.find((l) => l.id === locationId);
-        if (!loc) throw new Error("Pick a site for this camp.");
         if (!startDate) throw new Error("A camp needs a first day.");
         if (!campDays.length) throw new Error("Pick at least one day the camp runs.");
         const campEnd = campEndDate || startDate;
         if (campEnd < startDate) throw new Error("The last day has to be on or after the first day.");
-        const { cycleId, weekNum } = await ensureCampCycle(supabase, {
-          orgId: org.id,
-          termCode: org.active_registration_term,
-          startsOn: startDate,
-          endsOn: campEnd,
-        });
-        const { data: campRow, error: campErr } = await supabase
-          .from("camp_sessions")
-          .insert({
-            organization_id: org.id,
-            cycle_id: cycleId,
-            week_num: weekNum,
-            location_id: loc.id,
-            location_name: loc.name,
-            room: room.trim() || null,
-            curriculum_name: name.trim(),
-            // NULL, not a guess. The category only feeds instructor matching, and
-            // this builder's orgs do not run it - see 20260925a.
-            curriculum_category: null,
-            session_type: deriveSessionType(startTime, endTime),
-            starts_on: startDate,
-            ends_on: campEnd,
-            start_time: startTime || null,
-            end_time: endTime || null,
-            class_days: campDays,
-            short_description: description.trim() || null,
-            max_capacity: spotsNum,
-            price_cents: priceCents,
-            // Same helper, different column names. programs calls the age pair
-            // age_min/age_max; camp_sessions calls it ages_min/ages_max. Spreading
-            // the patch straight in fails with "could not find the 'age_max'
-            // column" - caught by actually saving one. The RULE (which pair is
-            // written, which is nulled) still comes from the one helper; only the
-            // names are adapted.
-            ...(() => {
-              const a = audiencePatch(audienceMode, { gradeMin, gradeMax, ageMin, ageMax });
-              return {
-                age_format: a.age_format,
-                grade_min: a.grade_min,
-                grade_max: a.grade_max,
-                ages_min: a.age_min,
-                ages_max: a.age_max,
-              };
-            })(),
-            // Exactly what the programs payload above does. camp_sessions gained
-            // 'draft' in 20260925b for this: Save as draft used to write 'active'
-            // whichever button was pressed, so drafting a camp published it.
-            status: asDraft ? "draft" : "active",
-          })
-          .select("id")
-          .single();
-        if (campErr) throw campErr;
-        if (!asDraft) pixelWorkflowCreated();
-        // asDraft, not a hardcoded "open" - the success screen reads this to
-        // decide between "Your program is live" and the draft wording, and a
-        // drafted camp was telling the operator it was live.
-        setCreatedStatus(asDraft ? "draft" : "open");
-        setCreatedId(campRow.id);
-        recordBuildTiming(campRow.id);
-        return;
+
+        // Ask the database the same question the saved camp will answer. This is
+        // the RPC the Scheduled Programs editor already uses for range programs,
+        // and it shares the camp branch with derive_program_session_dates, so the
+        // count stored here cannot disagree with the dates families are shown.
+        // Deriving it in JS would be a second spelling of the rule.
+        const { data: campPreview, error: campPreviewErr } = await supabase.rpc(
+          "preview_program_range_schedule",
+          {
+            p_organization_id: org.id,
+            p_location_id: locationId,
+            // The term the camp is being FILED under, not the one currently on
+            // sale - the same value the insert below stamps, so the count the
+            // preview returns is the count the saved camp derives.
+            p_term: effectiveTerm,
+            // A camp has no single weekday; its days are class_days. The function
+            // only requires day_of_week on the weekly arm.
+            p_day_of_week: null,
+            p_start_date: startDate,
+            p_end_date: campEnd,
+            p_early_release_start_time: null,
+            p_class_days: campDays,
+          },
+        );
+        if (campPreviewErr) throw campPreviewErr;
+        const campCount = Number(campPreview?.count ?? 0);
+        const campFirst = campPreview?.first_session ?? null;
+        // Reachable without a typo: pick Sat/Sun for a Mon-Fri week, or a window
+        // the site is closed through. Say which knob is wrong rather than saving
+        // a camp with no days, which session_count > 0 would reject as a raw
+        // constraint error anyway.
+        if (!campCount || !campFirst) {
+          throw new Error("None of the days you picked fall between the first and last day. Check the dates and the days.");
+        }
+
+        payload.class_days = campDays;
+        payload.schedule_mode = "range";
+        payload.end_date = campEnd;
+        payload.session_count = campCount;
+        // The camp's first ACTUAL meeting day, not the typed start: an operator
+        // who types a Sunday for a Mon-Fri camp would otherwise store a
+        // first_session_date that is not a day of the camp. Same rule the range
+        // editor follows.
+        payload.first_session_date = campFirst;
+        // NOT NULL, and Title-Case like every other writer (the public catalog
+        // matches it with `=`). A camp's is its FIRST day, the way a one-off
+        // workshop derives its day from its date.
+        payload.day_of_week = WEEKDAY_NAMES[new Date(`${campFirst}T00:00:00`).getDay()];
       }
 
       const { data, error } = await supabase
@@ -1463,7 +1522,15 @@ export default function QuickProgramBuilder() {
             charges are off (=== false), so an unresolved check never downgrades
             the wording for an operator who is actually connected. */}
         <div style={{ fontSize: 22, fontWeight: 700, color: INK, marginBottom: 8 }}>
-          {notConnected ? "Your program is almost live." : "Your program is live."}
+          {notConnected
+            ? `Your ${isCamp ? "camp" : "program"} is almost live.`
+            // A CAMP IS LIVE IMMEDIATELY whatever term it carries, so the
+            // out-of-term heading is for classes only. "Live" would otherwise
+            // contradict the line underneath, which tells a class's operator
+            // families cannot see it until that term opens.
+            : !isCamp && effectiveTerm && effectiveTerm !== org.active_registration_term
+              ? `Saved to ${formatTermLabel(effectiveTerm)}.`
+              : `Your ${isCamp ? "camp" : "program"} is live.`}
         </div>
 
         {/* WHICH STEP IS CURRENT DEPENDS ON STRIPE, since the publish gate
@@ -1512,8 +1579,30 @@ export default function QuickProgramBuilder() {
           </>
         ) : (
           <p style={{ color: MUTED, fontSize: 14, lineHeight: 1.6, margin: "0 0 20px" }}>
-            Families can register now. Share the link below — you'll see sign-ups show
-            up as they come in.
+            {/* A CAMP IS NEVER WAITING FOR A TERM. It shows on the Camps tab the
+                moment it is published and drops off after its last day, so the
+                out-of-term wording below is for CLASSES only - saying it about a
+                camp would tell the operator to sit on a link that already
+                works. */}
+            {!isCamp && effectiveTerm && effectiveTerm !== org.active_registration_term ? (
+              <>
+                Saved to {formatTermLabel(effectiveTerm)}. Your registration page is
+                showing {formatTermLabel(org.active_registration_term)} right now, so
+                families will see this when you open{" "}
+                {formatTermLabel(effectiveTerm)} for registration.
+              </>
+            ) : isCamp ? (
+              <>
+                Families can register now — camps show on your registration page as
+                soon as they're published, whatever term is open, and come off it
+                after the camp's last day.
+              </>
+            ) : (
+              <>
+                Families can register now. Share the link below — you'll see sign-ups
+                show up as they come in.
+              </>
+            )}
           </p>
         )}
 
@@ -1552,7 +1641,16 @@ export default function QuickProgramBuilder() {
                 id: createdId,
                 curriculum: name.trim(),
                 status: "open",
-                term: org.active_registration_term,
+                // The term it was actually filed under. ShareProgram compares
+                // this against activeTerm to decide whether the link is live, so
+                // handing it the active term would claim a WI27 class is on sale
+                // during FA26.
+                term: effectiveTerm,
+                // A camp is not served by term, so ShareProgram must be able to
+                // TELL it is one - this object is synthetic, and without
+                // class_days every camp link would be withheld as "not open to
+                // families yet" when in fact the catalog shows it immediately.
+                class_days: isCamp ? campDays : null,
                 runs_own_registration: false,
               }}
             />
@@ -1687,7 +1785,11 @@ export default function QuickProgramBuilder() {
           "?" is genuinely good for here is the question the copy cannot answer
           without bloating every field - whether any of this is permanent. */}
       <div style={{ fontSize: 22, fontWeight: 700, color: INK, marginBottom: 4, display: "flex", alignItems: "center", gap: 2 }}>
-        Create a program
+        {/* Names what is being made. With the mode toggle hidden on the
+            camps-only door there is otherwise nothing on screen saying this is a
+            camp, and the fields alone (days it runs, first/last day) are a weak
+            signal next to a heading that says "program". */}
+        {campOnlyDoor ? "Create a camp" : "Create a program"}
         <EnnieTip title="Can I change this later?">
           Yes &mdash; the name, price, times and dates can all be edited after you
           publish. Families who already registered keep the price they paid.
@@ -2296,6 +2398,26 @@ export default function QuickProgramBuilder() {
               />
               <div style={helpStyle}>Usually the same week.</div>
             </div>
+            {/* NOT A QUESTION - a readback. The season is decided by the first day
+                the camp MEETS, and saying so beats asking: it shows the operator
+                where the camp will sit on their own schedule without making them
+                work it out. Reads the same value the save stamps, so the two
+                cannot disagree. Silent when there is no date yet, because there
+                is nothing true to say.
+
+                A camp's term does NOT gate what families see - camps are sold by
+                their dates - so the second sentence says so plainly rather than
+                leaving an operator to assume a season she has not opened yet is
+                holding her camp back. */}
+            {effectiveTerm && mode === "camp" && campFirstMeetingDay && (
+              <div style={{ gridColumn: "1 / -1" }}>
+                <div style={helpStyle}>
+                  Sits with your <strong>{formatTermLabel(effectiveTerm)}</strong> schedule,
+                  from the first day it meets. Families can register as soon as you
+                  publish it, whatever term is open.
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>

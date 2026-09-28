@@ -36,6 +36,22 @@ export function nsdWeekdaysStrictlyBetween(aIso: string, bIso: string): number {
   return count;
 }
 
+// A program with class_days runs on consecutive days: it is a CAMP, and a camp
+// ignores the school district calendar entirely (school being out is the reason
+// it runs). Mirrors the branch in derive_program_session_dates, which treats a
+// non-empty class_days as the consecutive case.
+//
+// This exists because "the programs table is afterschool" stopped being true on
+// 2026-09-25. Three places in the cron assumed it: the no_school_day resolver
+// would have emailed camp families that camp was cancelled on days it was
+// running, and two welcome/check-in resolvers would have called a Mon-Fri camp
+// "Mondays" and its dates "weekly sessions". One predicate so those three
+// cannot drift apart.
+export function isCampProgram(program: { class_days?: unknown } | null | undefined): boolean {
+  const days = program?.class_days;
+  return Array.isArray(days) && days.length > 0;
+}
+
 // Mirror of the SQL term_to_school_year(): FA26 → "2026-2027", WI27/SP27 →
 // "2026-2027", SU/unknown → null. Kept in TS so the resolver can match a
 // program's term to a district_calendar.school_year without a round-trip.
