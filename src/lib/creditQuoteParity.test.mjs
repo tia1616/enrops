@@ -19,6 +19,7 @@
 // config where order genuinely changes the answer.
 
 import { cartFeeOnLines } from './platformFee.js';
+import { spreadCreditAcrossLines } from './creditSpread.js';
 
 let failures = 0;
 function check(label, cond, detail) {
@@ -27,16 +28,14 @@ function check(label, cond, detail) {
 }
 
 /**
- * StepPay's spread, lifted verbatim from the component so a change there that
- * is not mirrored here shows up as a failure rather than as a wrong quote.
+ * THE REAL CLIENT SPREAD, imported rather than copied. Both the Review step
+ * and the Pay step call this exact function, so a change to it that breaks
+ * agreement with the server fails here instead of quoting a family a number
+ * they are not charged. An earlier draft re-implemented it in this file, which
+ * would have gone on passing after the component changed.
  */
-function stepPaySpread(grossLineAmounts, creditCents) {
-  let left = Math.min(creditCents, grossLineAmounts.reduce((s, a) => s + (a || 0), 0));
-  return grossLineAmounts.map((a) => {
-    const take = Math.min(a || 0, left);
-    left -= take;
-    return (a || 0) - take;
-  });
+function clientSpread(grossLineAmounts, creditCents) {
+  return spreadCreditAcrossLines(grossLineAmounts, creditCents).lineAmounts;
 }
 
 /**
@@ -91,7 +90,7 @@ const CLAMPED = {
   const ids = ['r1', 'r2', 'r3'];
   const lines = gross.map((amount, i) => ({ id: ids[i], amount }));
   for (const credit of [0, 1, 9000, 24000, 30000, 51000, 99999]) {
-    const mine = stepPaySpread(gross, credit);
+    const mine = clientSpread(gross, credit);
     const theirs = serverSpread(lines, credit, ids);
     check(`spread agrees at ${credit}`, JSON.stringify(mine) === JSON.stringify(theirs),
       JSON.stringify(mine));
@@ -108,7 +107,7 @@ const CLAMPED = {
   const gross = [24000, 24000, 24000];             // fall, winter, spring
   const ids = ['vip-fall', 'vip-winter', 'vip-spring'];
   const lines = gross.map((amount, i) => ({ id: ids[i], amount }));
-  const mine = stepPaySpread(gross, 30000);
+  const mine = clientSpread(gross, 30000);
   const theirs = serverSpread(lines, 30000, ids);
   check('a VIP bundle spreads identically on both sides',
     JSON.stringify(mine) === JSON.stringify(theirs), JSON.stringify(mine));
@@ -122,7 +121,7 @@ const CLAMPED = {
   const gross = [24000, 18000];
   const ids = ['r1', 'r2'];
   const lines = gross.map((amount, i) => ({ id: ids[i], amount }));
-  const mine = stepPaySpread(gross, 20000);
+  const mine = clientSpread(gross, 20000);
   const reversed = serverSpread(lines, 20000, ['r2', 'r1']);
   check('a mismatched fill order is detected, not tolerated',
     JSON.stringify(mine) !== JSON.stringify(reversed),

@@ -732,6 +732,23 @@ export default function Register() {
     }
   }
 
+  // THE CREDIT FIGURE BOTH STEPS QUOTE, derived once so Review and Pay cannot
+  // be given different answers.
+  //
+  // Non-zero only for a SIGNED-IN parent whose session email is the one they
+  // are registering under. The balance is read from the SESSION; the credit is
+  // applied to whoever create-registration resolves from the TYPED EMAIL, so
+  // when those differ the figure would be a promise this checkout will not
+  // keep - which is exactly what happened on staging on 2026-09-28, where a
+  // signed-in parent registered under a second row of their own and saw
+  // nothing. Withheld rather than shown wrong; the credit still applies if it
+  // does turn out to be theirs, and shows on the Stripe page.
+  const quotableCreditCents =
+    creditForEmail &&
+    creditForEmail === (cart?.parent?.email || '').trim().toLowerCase()
+      ? familyCreditCents
+      : 0;
+
   if (loading) {
     return (
       <div className="flex min-h-[50vh] items-center justify-center">
@@ -814,6 +831,10 @@ export default function Register() {
               // the per-registration splits to compute exactly what Pay will.
               installmentSplits={installmentSchedule?.perLineSplits || null}
               org={{ ...org, ...(feeConfig || {}) }}
+              // The SAME figure the Pay step gets. Review used to know nothing
+              // about credit, so it quoted the gross total on the screen where
+              // a family decides to commit and the next screen contradicted it.
+              familyCreditCents={quotableCreditCents}
               onPromoApply={async (code) => {
                 setPromoInput(code);
                 const { data } = await supabase
@@ -875,20 +896,7 @@ export default function Register() {
                 // the quote and the charge are built from one schedule.
                 installmentSplits={installmentSchedule?.perLineSplits || null}
                 org={{ ...org, ...(feeConfig || {}) }}
-                // Only ever non-zero for a SIGNED-IN parent whose session email
-                // is the one they are registering under. The balance is read
-                // from the session; the credit is APPLIED to whoever
-                // create-registration resolves from the typed email, so if the
-                // two differ the figure would be a promise this checkout will
-                // not keep. Withheld rather than shown wrong - they still get
-                // the credit if it does turn out to be theirs, on the Stripe
-                // page.
-                familyCreditCents={
-                  creditForEmail &&
-                  creditForEmail === (cart?.parent?.email || '').trim().toLowerCase()
-                    ? familyCreditCents
-                    : 0
-                }
+                familyCreditCents={quotableCreditCents}
                 cancellationPolicy={cancellationPolicy}
                 // Passed as its own prop rather than spread into `org`: the
                 // whole object is the config, and flattening it would put

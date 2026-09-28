@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { formatMoney } from '../../../lib/pricing.js';
 import { cartFeeOnLines, cartInstallmentFeeShares } from '../../../lib/platformFee.js';
+import { spreadCreditAcrossLines } from '../../../lib/creditSpread.js';
 import { formatStartDate } from '../../../lib/programSchedule.js';
 import {
   coverFeeCents,
@@ -86,20 +87,14 @@ export default function StepPay({
   //
   // NEVER on a payment plan. create-checkout refuses credit there, so showing
   // it would promise a discount the charge will not contain.
-  const creditOfferedCents = useInstallments ? 0 : Math.max(0, familyCreditCents || 0);
+  // ONE spread, shared with the Review step. It lived inline here, and the
+  // step BEFORE this one went on quoting the gross total - a family holding
+  // $240 was told $10.10 on Review and charged $0.00. Two screens in one flow
+  // disagreeing about what someone owes is worse than either being wrong
+  // alone, because the family cannot tell which to believe.
   const grossLineAmounts = (pricing?.lines || []).map((l) => l.amount_cents);
-  const creditAppliedCents = Math.min(
-    creditOfferedCents,
-    grossLineAmounts.reduce((s, a) => s + (a || 0), 0),
-  );
-  const cartLineAmounts = (() => {
-    let left = creditAppliedCents;
-    return grossLineAmounts.map((a) => {
-      const take = Math.min(a || 0, left);
-      left -= take;
-      return (a || 0) - take;
-    });
-  })();
+  const { lineAmounts: cartLineAmounts, creditApplied: creditAppliedCents } =
+    spreadCreditAcrossLines(grossLineAmounts, useInstallments ? 0 : familyCreditCents);
   const cartFeeFor = (bank) => cartFeeOnLines(cartLineAmounts, org, { isBank: bank });
 
   // Payment plans: each registration's fee split across THAT registration's
