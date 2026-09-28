@@ -429,6 +429,15 @@ export default function Home() {
           // the same missing filter; both fixed together so one cannot drift
           // back on its own.
           .eq('status', 'open')
+          // A BUNDLE LEG IS A TERM OF WEEKLY CLASSES, NEVER A CAMP. Since
+          // 2026-09-25 a camp is a program too (class_days set) with a real term
+          // and a day_of_week holding its FIRST day, so a winter break camp at
+          // this school starting on a Monday would be advertised as the WINTER
+          // LEG of the year-long bundle for a Monday class. Third instance of
+          // this "which rows may be sold as a leg" filter, and the same pairing
+          // rule as the status one above: Register.jsx's bundle lookup carries
+          // it too, and the two must not drift apart.
+          .is('class_days', null)
           .in('term', [bundleTerms.winter, bundleTerms.spring])
         : Promise.resolve({ data: null }),
       // Recurring weekly classes for outside-registration tenants (no term/checkout).

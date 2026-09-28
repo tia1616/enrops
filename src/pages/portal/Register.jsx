@@ -284,6 +284,14 @@ export default function Register() {
         // inventing a second rule -- status is nullable, and a NULL-status row
         // is not open and must not be sold either, which .eq gives us.
         .eq('status', 'open')
+        // A BUNDLE LEG IS A TERM OF WEEKLY CLASSES, NEVER A CAMP. Since
+        // 2026-09-25 a camp is a program too (class_days set), and it has a real
+        // term and a day_of_week holding its FIRST day - so a WI27 winter break
+        // camp at this school starting on a Monday matches every other filter
+        // here and would be sold as the WINTER LEG of a year-long bundle. The
+        // family would be charged for a week of camp instead of the winter
+        // class they were buying. class_days IS NULL is what "weekly" means.
+        .is('class_days', null)
         .in('term', [bundleTerms.winter, bundleTerms.spring]);
       const winter = matches?.find((p) => p.term === bundleTerms.winter);
       const spring = matches?.find((p) => p.term === bundleTerms.spring);
