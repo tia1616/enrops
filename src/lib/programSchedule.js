@@ -130,3 +130,50 @@ export function formatDayLabel(program) {
   if (!day) return null;
   return Number(program?.session_count) === 1 ? day : `${day}s`;
 }
+
+// THE SEASON A CAMP BELONGS TO, FROM ITS OWN FIRST DAY. "2026-12-21" -> "WI27".
+//
+// programs.term is NOT NULL, so every camp needs one - but a camp should never
+// be ASKED for it. Jessica, 2026-09-28: "why does it still ask which term?
+// aren't dates enough? and summer won't have a term." Both true: the dates
+// already say which season it is, and she runs no summer after-school term to
+// pick from.
+//
+// Nothing breaks by deriving a term she has never configured, because the term
+// list is not configuration: org_terms() builds it by grouping the org's own
+// programs, so the first July camp simply makes "Summer 2027" exist.
+//
+// THE SEASONS HERE ARE CAMP SEASONS, NOT TERM SEASONS, and that is deliberate.
+// December sits inside the FALL after-school term (J2S's FA26 runs sessions into
+// January), but a camp on 21 December is a WINTER BREAK camp and belongs on the
+// winter schedule - which is exactly what Jessica asked for: "i want them as
+// part of the winter schedule". The same rule puts a late-March camp in Spring,
+// where spring break actually falls, and June through August in Summer. Mapping
+// by the school term instead would file winter break under Fall and spring break
+// under Winter, which is nobody's idea of either.
+//
+//   Dec, Jan, Feb -> WI    (December takes the FOLLOWING year: Dec 2026 = WI27)
+//   Mar, Apr, May -> SP
+//   Jun, Jul, Aug -> SU
+//   Sep, Oct, Nov -> FA
+//
+// Returns null for anything that is not a YYYY-MM-DD date, so a caller can fall
+// back rather than write a bad term.
+export function campTermForDate(iso) {
+  if (typeof iso !== "string") return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso.trim());
+  if (!m) return null;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  if (month < 1 || month > 12 || Number(m[3]) < 1 || Number(m[3]) > 31) return null;
+
+  let season;
+  let termYear = year;
+  if (month === 12) { season = "WI"; termYear = year + 1; }
+  else if (month <= 2) season = "WI";
+  else if (month <= 5) season = "SP";
+  else if (month <= 8) season = "SU";
+  else season = "FA";
+
+  return `${season}${String(termYear % 100).padStart(2, "0")}`;
+}

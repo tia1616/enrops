@@ -18,7 +18,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useOutletContext, useSearchParams } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
-import { fetchOrgTerms, formatTermLabel } from "../../../lib/terms.js";
+import { formatTermLabel } from "../../../lib/terms.js";
+// campTermForDate lives beside the other camp helpers in programSchedule.js,
+// which imports nothing - terms.js pulls in the supabase client, so anything
+// defined there cannot be unit-tested by the repo's plain-node runner.
+import { campTermForDate } from "../../../lib/programSchedule.js";
 import ShareProgram from "../../../components/ShareProgram.jsx";
 import FamiliesPayNote, { useOrgFeeConfig } from "../../../components/FamiliesPayNote.jsx";
 import ProgramSteps from "../../../components/ProgramSteps.jsx";
@@ -243,33 +247,15 @@ export default function QuickProgramBuilder() {
   // a holiday week is the operator turning one off.
   const [campDays, setCampDays] = useState(() => CAMP_WEEKDAYS.map((d) => d.value));
   const [campEndDate, setCampEndDate] = useState("");
-  // CAMPS PICK THEIR OWN TERM; weekly classes still take the org's active one.
-  // A weekly class is built for the term you are selling, so stamping the active
-  // term is right. A CAMP is built DURING the previous term - winter break camps
-  // get finalised while Fall is still the open term - so stamping the active one
-  // would file a December camp under Fall, where it never appears when the winter
-  // switch is flipped. Jessica, 2026-09-28: "but the dates fall in winter term. i
-  // choose the dates and the term when i add a program, right?" She does, in the
-  // classic wizard; this makes it true here too, for the mode that needs it.
-  const [campTerm, setCampTerm] = useState("");
-  const [termChoices, setTermChoices] = useState([]); // [{ value, label }]
-  useEffect(() => {
-    if (!org?.id) return;
-    let alive = true;
-    (async () => {
-      const { terms } = await fetchOrgTerms(org.id);
-      if (!alive) return;
-      const opts = (terms ?? [])
-        .map((t) => t.term)
-        .filter(Boolean)
-        .map((t) => ({ value: t, label: formatTermLabel(t) }));
-      setTermChoices(opts);
-      // Default to the org's active term so the field is never empty, but leave
-      // it editable - the whole point is that a camp is usually NOT in it.
-      setCampTerm((prev) => prev || org.active_registration_term || opts[0]?.value || "");
-    })();
-    return () => { alive = false; };
-  }, [org?.id, org?.active_registration_term]);
+  // A CAMP'S SEASON COMES FROM ITS DATES. Nothing to ask.
+  //
+  // This was a dropdown for about an hour. Jessica: "why does it still ask which
+  // term? aren't dates enough? and summer won't have a term." Right on both
+  // counts - a camp on 21 December is a winter camp because of when it is, and
+  // she runs no summer after-school term, so a picker built from her terms had
+  // nothing correct to offer a July camp. campTermForDate answers it from the
+  // first day, and org_terms() grows the list from the programs themselves, so a
+  // season she has never run appears the moment a camp lands in it.
   // Seeds the default ONCE, when the org's cadence first arrives. It used to run
   // on every change of `cadence`, and `cadence` changes when the profile finishes
   // loading - so an operator who picked Camp in that first moment watched the
@@ -289,8 +275,10 @@ export default function QuickProgramBuilder() {
   const isOneOff = mode === "one_off";
   // The term this program will be filed under. ONE definition, read by the save,
   // the date preview and the share panel, so none of them can disagree.
+  // Falls back to the active term only when there is no first day yet - the form
+  // cannot be submitted in that state, so it never reaches a saved row.
   const effectiveTerm = mode === "camp"
-    ? (campTerm || org.active_registration_term)
+    ? (campTermForDate(startDate) || org.active_registration_term)
     : org.active_registration_term;
   // A camp is the same thing to an operator - something families register for -
   // that happens on several days of ONE week instead of one day a week. It writes
@@ -2404,27 +2392,17 @@ export default function QuickProgramBuilder() {
                 when the winter switch is flipped. Full width under the dates
                 because it is a consequence of them: you pick the dates, then say
                 which term they belong to. */}
-            {termChoices.length > 0 && (
+            {/* NOT A QUESTION - a readback. The season is decided by the first
+                day, and saying so beats asking: it shows the operator where the
+                camp will sit on their schedule without making them work it out.
+                Silent when there is no date yet, because there is nothing true
+                to say. */}
+            {campTermForDate(startDate) && (
               <div style={{ gridColumn: "1 / -1" }}>
-                <label style={labelStyle} htmlFor="qpb-camp-term">Which term</label>
-                <select
-                  id="qpb-camp-term"
-                  style={inputStyle}
-                  value={campTerm}
-                  onChange={(e) => setCampTerm(e.target.value)}
-                >
-                  {termChoices.map((t) => (
-                    <option key={t.value} value={t.value}>{t.label}</option>
-                  ))}
-                </select>
-                {/* This no longer gates whether families can see the camp -
-                    camps are sold by their dates, not by the open term - so the
-                    help must not promise otherwise. What the term still does is
-                    file the camp with that season's after-school on your
-                    schedule. */}
                 <div style={helpStyle}>
-                  Which season this camp belongs to on your schedule. Families can
-                  register as soon as you publish it, whatever term is open.
+                  Sits with your <strong>{formatTermLabel(campTermForDate(startDate))}</strong> schedule,
+                  from the first day. Families can register as soon as you publish
+                  it, whatever term is open.
                 </div>
               </div>
             )}
