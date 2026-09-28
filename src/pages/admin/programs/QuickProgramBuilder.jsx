@@ -297,11 +297,20 @@ export default function QuickProgramBuilder() {
   // a PROGRAM, like every other mode here: the date functions learned to walk
   // consecutive days (20260925d), so class_days is the whole difference.
   const isCamp = mode === "camp";
-  // ALWAYS shown now. It used to appear only for cadence 'both', so an org that
+  // Shown by default. It used to appear only for cadence 'both', so an org that
   // said "weekly series" at signup could never reach the other options - a hidden
   // gate that made camps unreachable for most tenants. Cadence still picks the
   // DEFAULT below; it no longer decides what exists.
-  const showModeToggle = true;
+  //
+  // THE ONE EXCEPTION is a legacy tenant who arrived through "+ Add camp". That
+  // button exists only because the classic wizard has no camp mode; this form is
+  // the camp door, not a second builder for their weekly classes. Leaving the
+  // toggle on would let them switch to "Weekly series" here and create a class
+  // through a form that never asks for a curriculum - exactly the gate
+  // ProgramWizardNew exists to enforce for these orgs. They still reach the full
+  // builder from "+ New program"; this door is camps only.
+  const campOnlyDoor = modeParam === "camp" && org?.instructor_pay_model !== "enrops_platform";
+  const showModeToggle = !campOnlyDoor;
 
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState("");
@@ -1758,7 +1767,11 @@ export default function QuickProgramBuilder() {
           "?" is genuinely good for here is the question the copy cannot answer
           without bloating every field - whether any of this is permanent. */}
       <div style={{ fontSize: 22, fontWeight: 700, color: INK, marginBottom: 4, display: "flex", alignItems: "center", gap: 2 }}>
-        Create a program
+        {/* Names what is being made. With the mode toggle hidden on the
+            camps-only door there is otherwise nothing on screen saying this is a
+            camp, and the fields alone (days it runs, first/last day) are a weak
+            signal next to a heading that says "program". */}
+        {campOnlyDoor ? "Create a camp" : "Create a program"}
         <EnnieTip title="Can I change this later?">
           Yes &mdash; the name, price, times and dates can all be edited after you
           publish. Families who already registered keep the price they paid.

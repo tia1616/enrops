@@ -638,6 +638,19 @@ export default function Home() {
     if (!programId || !programs.length || !schools.length || selectedSchool) return;
     const prog = programs.find((p) => p.id === programId);
     if (!prog) return; // not in the current catalog (e.g. a non-FA26 program) — show normal catalog
+    // A SHARED CAMP LINK OPENS THE CAMPS TAB, not a school.
+    //
+    // Camps were taken out of every school-derived list because they are not
+    // school-bound, so selecting this program's venue here would pick a "school"
+    // that is no longer among the options and then filter the class list to
+    // nothing: the family following the link the operator put on a flyer landed
+    // on "No open programs at this school yet", with the camp one tab away.
+    // Reproduced on staging before this guard existed.
+    if (isCampProgram(prog)) {
+      setCatalogTab('camps');
+      setHighlightProgram(programId);
+      return;
+    }
     const school = schools.find((s) => s.id === prog.program_location_id);
     if (!school) return;
     setSelectedDistrict(districtOf(school) || OTHER_DISTRICT);
@@ -664,7 +677,10 @@ export default function Home() {
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     const t = setTimeout(() => setHighlightProgram(''), 3000);
     return () => clearTimeout(t);
-  }, [highlightProgram, programsAtSchool]);
+    // finderListed, not programsAtSchool: a highlighted CAMP renders from that
+    // list, so keying on the class list alone would run this before the camp
+    // card exists and never again.
+  }, [highlightProgram, finderListed]);
 
   function startRegistration(programId, isVip = false) {
     if (!keepCart) clearCart();
