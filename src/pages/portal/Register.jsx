@@ -445,11 +445,38 @@ export default function Register() {
   // on the page explaining why - see src/lib/registerAdvance.js. Derived on every
   // render rather than held in state, so the sentence cannot lag what the parent
   // has already typed.
+  // A CAMP DOES NOT HAVE A HOMEROOM TEACHER.
+  //
+  // Homeroom is a configured standard question, seeded ON and REQUIRED for J2S,
+  // and it earns that for after-school: instructors collecting children from
+  // classrooms had nothing to go on for a third of the FA26 roster without it.
+  // A camp runs at a parks-and-rec site or a community centre, where there is no
+  // classroom to collect from and the child's school is beside the point - so
+  // the question has no answer, and being required it stopped the registration
+  // dead. Jessica, 2026-09-28: "drop homeroom for camps."
+  //
+  // ONLY WHEN EVERY ITEM IS A CAMP, which is the safe direction: a cart holding
+  // a camp AND an after-school class still asks, because the class still needs
+  // it. Under-collecting for a mixed cart would put the instructor back where
+  // the question was added to rescue them.
+  //
+  // Derived ONCE and handed to both readers - the form renders from it and
+  // registerAdvance blocks on it - so the asterisk and the gate cannot disagree
+  // about whether the question exists. That pairing is called out in both files.
+  const activeChildIsCampOnly =
+    (activeChild?.items?.length ?? 0) > 0
+    && activeChild.items.every((it) => isCampProgram(it?.program));
+  const regFieldsForChild = useMemo(() => {
+    if (!activeChildIsCampOnly || !regFields?.std?.homeroom_teacher) return regFields;
+    const { homeroom_teacher: _dropped, ...std } = regFields.std;
+    return { ...regFields, std };
+  }, [regFields, activeChildIsCampOnly]);
+
   const advanceBlocker = advanceProblem({
     step,
     activeChild,
     parent: cart.parent,
-    regFields,
+    regFields: regFieldsForChild,
     waivers,
     conflicts: pickupDnrConflicts(activeChild.authorized_pickup, activeChild.do_not_release),
     // Named in the grade-gate sentence, so a blocked family is told WHO to ask
@@ -811,7 +838,9 @@ export default function Register() {
               student={activeChild.student}
               onUpdate={updateActiveStudent}
               childIndex={activeChild.child_index}
-              regFields={regFields}
+              // The camp-aware set: homeroom is gone when every item is a camp,
+              // so the field and the Continue gate agree. See regFieldsForChild.
+              regFields={regFieldsForChild}
               child={activeChild}
               onUpdateChild={updateActiveChild}
               lean={isLean}
