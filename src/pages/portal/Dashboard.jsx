@@ -257,22 +257,28 @@ export default function Dashboard() {
       // organisations, and credits are keyed on (organization_id, parent_id)
       // precisely so one provider's credit can never be spent at another's.
       // Showing an unfiltered balance here would undo that in the one place the
-      // family actually looks. RLS already limits the rows to this parent
-      // (`parents_read_own_credits`); this narrows them to this provider.
+      // family actually looks. The org is still passed explicitly for exactly
+      // that reason; the PARENT is no longer passed at all, because the
+      // function resolves it from the session (see below).
       //
-      // 'active' only: 'spent' is already used, 'refunded' was paid back in
-      // cash, and 'void' was issued in error. A failed read leaves the balance
-      // at 0 and the card simply does not render - a family being shown a
-      // wrong balance is worse than being shown none, and the operator's own
-      // money screen is the authority either way.
+      // 'active' only, which the function enforces: 'spent' has nothing left on
+      // it, 'refunded' was paid back in cash, and 'void' was issued in error. A
+      // failed read leaves the balance at 0 and the card simply does not render
+      // - a family being shown a wrong balance is worse than being shown none,
+      // and the operator's own money screen is the authority either way.
       const { data: creditRows, error: creditErr } = await supabase
-        .from('family_credits')
-        .select('amount_cents')
-        .eq('organization_id', org.id)
-        .eq('parent_id', p.id)
-        .eq('status', 'active');
+        .rpc('my_family_credit_balance_cents', { p_organization_id: org.id });
       if (creditErr) console.warn('[dashboard] credit balance unavailable:', creditErr.message);
-      setCreditCents((creditRows || []).reduce((s, c) => s + (c.amount_cents || 0), 0));
+      // SUMMING family_credits.amount_cents WAS RIGHT UNTIL CREDIT COULD BE
+      // SPENT. A credit stays 'active' while it still has money on it, so a
+      // family who had spent $150 of a $240 credit was shown $240 - the card
+      // was telling them they had money they had already used.
+      //
+      // The RPC resolves the caller through current_parent_id() and takes no
+      // parent_id, so it can only ever answer for whoever is signed in, and it
+      // delegates to the same balance function the checkout spends against.
+      // One balance rule, one implementation.
+      setCreditCents(Number(creditRows) || 0);
 
       // 2a. Afterschool registrations
       const { data: asRegs } = await supabase

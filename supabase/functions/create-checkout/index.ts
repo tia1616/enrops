@@ -69,6 +69,12 @@ import { buildChargeRouting, ConnectOrgConfig } from '../_shared/connectChargePa
 import { UPLIFT_METADATA_KEY } from '../_shared/chargeFeeFacts.ts';
 import { passThroughLineItemForAmount } from '../_shared/passThroughFee.ts';
 import { cartFeeCents, allocateCartFeeByLine } from '../_shared/cartFee.ts';
+import {
+  allocateCreditAcrossLines,
+  creditApplicationKey,
+  encodeCreditAllocation,
+  CreditAllocation,
+} from '../_shared/creditAllocation.ts';
 import { withResolvedFee, loadPlatformFeeDefaults } from '../_shared/feeConfig.ts';
 import { allocateFeeAcrossInstallments } from '../_shared/feeAllocation.ts';
 import { logEnrollmentEvent, ENROLLMENT_ACTIONS } from '../_shared/logEnrollmentEvent.ts';
@@ -119,8 +125,56 @@ const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 // given up, write to them" are different questions and deserve different
 // answers - mailing somebody 30 minutes after they stepped away is nagging.
 const CHECKOUT_WINDOW_MINUTES = 30;
+// How much longer the CREDIT hold lives than the Stripe session it backs. The
+// hold must outlive the session (equal is not good enough - see the hold call),
+// and expiry is the only thing that ever releases it: there is no
+// checkout.session.expired handler, and releaseCreditHold runs only on this
+// function's own failure paths. So this is also how long a family who abandons
+// Stripe genuinely waits, and the refusal below must quote the sum, not the
+// session window.
+const CREDIT_HOLD_SURPLUS_MINUTES = 15;
+const CREDIT_HOLD_MINUTES = CHECKOUT_WINDOW_MINUTES + CREDIT_HOLD_SURPLUS_MINUTES;
 const checkoutExpiresAt = () =>
   Math.floor(Date.now() / 1000) + CHECKOUT_WINDOW_MINUTES * 60;
+
+/**
+ * Hand a family's held credit back, on every path where the checkout it was
+ * held for will not happen.
+ *
+ * NEVER THROWS. It is called from failure paths that are already returning an
+ * error, and a throw here would replace a clear message to the family with a
+ * 500 - while the hold it failed to release expires by itself within the
+ * checkout window anyway. So a failure is logged loudly and swallowed.
+ *
+ * Safe when nothing was held: release_family_credit_hold deletes only
+ * reservations and returns 0 for an unknown key, so calling it on an all-cash
+ * checkout is a no-op rather than a mistake.
+ */
+// Typed structurally on the one method it uses, rather than on
+// SupabaseClient: the two clients in this file are created with different
+// generic parameters, and naming a concrete client type here would make the
+// helper usable from only one of them.
+// PromiseLike, not Promise: supabase-js returns a thenable query builder from
+// .rpc(), which awaits identically but is not a Promise instance.
+interface RpcCapable {
+  rpc(fn: string, args: Record<string, unknown>): PromiseLike<{ error: { message: string } | null }>;
+}
+
+async function releaseCreditHold(
+  admin: RpcCapable,
+  key: string,
+  held = true,
+): Promise<void> {
+  if (!held || !key) return;
+  try {
+    const { error } = await admin.rpc('release_family_credit_hold', { p_application_key: key });
+    if (error) {
+      console.error(`[create-checkout] could not release credit hold ${key}:`, error.message);
+    }
+  } catch (e) {
+    console.error(`[create-checkout] could not release credit hold ${key}:`, (e as Error).message);
+  }
+}
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
@@ -165,6 +219,12 @@ serve(async (req) => {
       use_installments,
       installment_schedule,
       payment_method,
+      // The account-credit balance the BROWSER priced this cart with. Never
+      // trusted as money - the spendable figure is always re-read from the
+      // database below - it is only used to notice that what the family was
+      // quoted is no longer deliverable, so they get an honest refusal
+      // instead of a silent charge for more than the screen said.
+      quoted_credit_cents,
       // Scholarship fund. `donation_cents` is the gift the family chose; the fee
       // cover and the charged total are computed HERE from the org's own config
       // row, never accepted from the browser. This is the one number in the
@@ -191,7 +251,12 @@ serve(async (req) => {
       // organization_id rides along so the scholarship-fund config can be read
       // from the SAME rows the total is derived from - the gift is bounded by
       // the org that owns these registrations, never by an org the client names.
-      .select('id, amount_cents, organization_id')
+      //
+      // parent_id rides along for the same reason: a family credit is keyed on
+      // (organization_id, parent_id), and the parent whose balance is about to
+      // be spent must come from the registration rows the server holds, never
+      // from anything the browser sent.
+      .select('id, amount_cents, organization_id, parent_id')
       .in('id', registration_ids);
     if (regAmtErr) return json({ error: 'Could not verify the order total. Please try again.' }, 500);
     const serverSum = (regAmtRows || []).reduce((s, r) => s + (r.amount_cents || 0), 0);
@@ -308,6 +373,318 @@ serve(async (req) => {
       if (Math.abs(clientTotal - serverSum) > 1 || Math.abs(lineSum - serverSum) > 1) {
         return json({ error: 'That price is out of date — please refresh your cart and try again.', price_mismatch: true }, 409);
       }
+    }
+
+    // --- FAMILY CREDIT (chunk 3b) ---------------------------------------------
+    // AFTER the price guard, deliberately. The guard proves the browser and the
+    // server agree on the FULL price; credit is then taken off that agreed
+    // figure by the server alone. Doing it the other way round would mean the
+    // guard comparing a discounted client total against an undiscounted server
+    // one, and every credit checkout would 409.
+    //
+    // THE BROWSER SENDS NOTHING ABOUT CREDIT. Not the balance, not the amount to
+    // apply, not which credits to draw on. All of it is read here from the
+    // registration rows the server already loaded and from the ledger. This is
+    // the same rule the donation follows for its bounds, and for the same
+    // reason: a client-supplied discount is a client-supplied price.
+    const creditPlan = {
+      key: creditApplicationKey(registration_ids as string[]),
+      alloc: null as CreditAllocation | null,
+      totalCents: 0,
+      parentId: null as string | null,
+      // Set once a hold exists, so every later failure path knows to release it.
+      held: false,
+    };
+
+    // ONE PARENT, PROVEN FROM THE ROWS. A cart is always one family today, but
+    // "always" is not a guard. If these registrations disagree about whose they
+    // are, no credit is applied at all - the family pays full price and nothing
+    // is spent out of anyone's balance.
+    const parentIds = Array.from(
+      new Set((regAmtRows || []).map((r) => (r as { parent_id: string | null }).parent_id ?? null)),
+    );
+    const cartParentId = parentIds.length === 1 ? parentIds[0] : null;
+
+    // CREDIT IS NOT OFFERED ON A PAYMENT PLAN, and it is refused rather than
+    // silently dropped. Splitting a credit across three dated charges is a
+    // separate money question - which charge does it come off, and what happens
+    // to the fee already snapshotted onto the plan - and guessing it here would
+    // bake an answer into a payment plan the family cannot undo. The donation
+    // path takes the same line on the same branch, for the same reason.
+    const creditEligible = !use_installments && !!cartParentId && !!giftOrgId;
+
+    if (creditEligible) {
+      const { data: availRaw, error: availErr } = await guardAdmin.rpc(
+        'family_credit_available_cents',
+        { p_organization_id: giftOrgId, p_parent_id: cartParentId },
+      );
+      if (availErr) {
+        // FAIL TO FULL PRICE, not to a free class. A balance we cannot read is
+        // a balance we must not spend; the family is charged what they agreed
+        // to and their credit is untouched and still there next time.
+        console.error('[create-checkout] credit balance lookup failed:', availErr.message);
+      } else {
+        const available = Number(availRaw) || 0;
+
+        // THEY HAVE CREDIT BUT NONE OF IT IS SPENDABLE RIGHT NOW, which means
+        // their own earlier attempt is still holding it. Say so instead of
+        // charging full price in silence.
+        //
+        // This is reachable in the ordinary way, not a corner: every Pay click
+        // calls create-registration first, so a family who backs out of Stripe
+        // and immediately retries arrives with NEW registration ids and a new
+        // cart key, while the abandoned attempt's hold sits on their balance
+        // for the rest of the checkout window. Without this they are quietly
+        // charged the full amount and told nothing - the exact silent-failure
+        // shape that costs somebody money and produces a support call instead
+        // of an error.
+        //
+        // Refusing is the kinder half of the trade: they wait, rather than pay
+        // money they did not need to and have to ask for it back.
+        // ZERO WAS THE WRONG TEST. The comment above says this guard exists so
+        // a family is never "quietly charged the full amount and told nothing"
+        // - but `available <= 0` only catches the case where the earlier
+        // attempt held ALL of it. A PARTIAL hold sails straight through and
+        // produces the same silent surprise with a smaller number on it:
+        // balance $240, cart $200, they reach Stripe and back out, click Pay
+        // again without reloading so the page still shows $0.00 owed, and the
+        // server now sees $40 spendable, applies $40, and sends them to Stripe
+        // for $160 after telling them twice they owed nothing.
+        //
+        // So the test is "can we still deliver what we quoted", which needs to
+        // know what was quoted. The browser sends the balance it priced the
+        // cart with; anything it can usefully spend is capped by the cart, so
+        // that is the figure to compare. An older cached client sends nothing
+        // and falls back to the original zero test rather than breaking.
+        const quotedCreditCents = Math.max(0, Math.floor(Number(quoted_credit_cents) || 0));
+        const quotedUsable = Math.min(quotedCreditCents, serverSum);
+        const shortOfQuote = quotedUsable > 0 && available < quotedUsable;
+
+        // A SHORTFALL IS ONLY WORTH REFUSING IF A HOLD CAUSED IT, and proving
+        // that takes a look at the ledger rather than an inference from two
+        // numbers being different.
+        //
+        // The two figures come from DIFFERENT KEYS: the browser's quote is
+        // this SESSION's parent row (my_family_credit_balance_cents resolves
+        // via current_parent_id), while `available` is the parent
+        // create-registration resolved from the TYPED EMAIL. A family with two
+        // parent rows at one org - which has actually happened on staging -
+        // makes those disagree permanently. Refusing on the difference alone
+        // would leave them unable to register at all, ever, which is far worse
+        // than the silent partial charge this guard exists to stop. Before
+        // this guard existed that family simply got whatever their cart row
+        // held, so falling back to that is no worse than the old behaviour.
+        let heldElsewhere = false;
+        if (shortOfQuote && available > 0) {
+          const { data: creditIdRows, error: idsErr } = await guardAdmin
+            .from('family_credits')
+            .select('id')
+            .eq('organization_id', giftOrgId)
+            .eq('parent_id', cartParentId)
+            .eq('status', 'active');
+          const creditIds = ((creditIdRows ?? []) as Array<{ id: string }>).map((r) => r.id);
+          if (idsErr) {
+            // Cannot prove either way. Treat as held: one honest retry beats
+            // charging more than the screen promised.
+            console.error('[create-checkout] credit id lookup failed:', idsErr.message);
+            heldElsewhere = true;
+          } else if (creditIds.length > 0) {
+            const { count: liveHolds, error: holdsErr } = await guardAdmin
+              .from('family_credit_movements')
+              .select('id', { count: 'exact', head: true })
+              .in('credit_id', creditIds)
+              .eq('kind', 'reserved')
+              .gt('expires_at', new Date().toISOString());
+            if (holdsErr) {
+              console.error('[create-checkout] live hold check failed:', holdsErr.message);
+              heldElsewhere = true;
+            } else {
+              heldElsewhere = (liveHolds ?? 0) > 0;
+            }
+          }
+        }
+
+        if (available <= 0 || heldElsewhere) {
+          const { count: liveCredits, error: liveErr } = await guardAdmin
+            .from('family_credits')
+            .select('id', { count: 'exact', head: true })
+            .eq('organization_id', giftOrgId)
+            .eq('parent_id', cartParentId)
+            .eq('status', 'active');
+          // A FAILED COUNT IS NOT "NO CREDIT". Discarding this error made the
+          // guard fail OPEN into precisely the silent full-price charge it was
+          // written to remove: null becomes 0, the test is false, and the
+          // family pays in full with no message. Treated as "they have credit",
+          // so the worst case is one honest retry instead of a silent loss.
+          if (liveErr) {
+            console.error('[create-checkout] credit presence check failed:', liveErr.message);
+          }
+          if (liveErr || (liveCredits ?? 0) > 0) {
+            console.warn(
+              `[create-checkout] parent ${cartParentId} at org ${giftOrgId} holds credit but 0 is ` +
+              `spendable - an earlier checkout still holds it. Refusing rather than charging full price.`,
+            );
+            return json({
+              // SAYS HOW LONG, because "a moment" invited a retry loop and each
+              // retry mints a fresh set of pending registrations and seat holds
+              // before it gets here. An honest upper bound sends them away once
+              // instead of five times.
+              // COVERS BOTH CAUSES NOW. Since this guard also fires when the
+              // balance merely shrank below what the screen quoted, "tied up
+              // in an earlier checkout" would be a confident wrong answer for
+              // a family who simply spent it in another tab. Name both and
+              // tell them what to do either way.
+              // QUOTES THE HOLD WINDOW, NOT THE SESSION WINDOW. It said 30
+              // minutes while the hold now lives 45, so a family who came
+              // back when told to was refused again - and the comment above
+              // explains that each of those retries mints another set of
+              // pending registrations and seat holds. Expiry is the only
+              // thing that releases a hold, so this number has to be the
+              // hold's own.
+              error: `Your account credit has changed since this page loaded - either an earlier checkout `
+                + `is still holding it, or it was used somewhere else. Please reload and try again; if it is `
+                + `held, it frees up within ${CREDIT_HOLD_MINUTES} minutes and we will apply it then.`,
+              credit_held_elsewhere: true,
+            }, 409);
+          }
+        }
+
+        // The Stripe-minimum trim lives inside allocateCreditAcrossLines, with
+        // the rest of the split, so the browser's copy of that rule and this
+        // one cannot drift. See STRIPE_MIN_CHARGE_CENTS there.
+        if (available > 0) {
+          // The lines come from regAmtRows - the SERVER's amounts, carrying real
+          // registration ids. line_items is the browser's copy and has no ids at
+          // all, so mapping credit onto it would mean trusting cart position to
+          // name a child. That is the shape that once bound the wrong sibling.
+          const alloc = allocateCreditAcrossLines(
+            (regAmtRows || []).map((r) => ({
+              registrationId: r.id as string,
+              amountCents: (r.amount_cents as number) || 0,
+            })),
+            available,
+            // FILLED IN THE ORDER THE CART WAS BUILT, not in id order. The Pay
+            // step has to predict this split to tell the family what they will
+            // pay, and it knows its own cart order - it cannot know what ids
+            // the server minted. create-registration pushes ids in cart order,
+            // so this array is the one ordering both sides can agree on.
+            registration_ids as string[],
+          );
+          if (alloc.totalCreditCents > 0) {
+            creditPlan.alloc = alloc;
+            creditPlan.totalCents = alloc.totalCreditCents;
+            creditPlan.parentId = cartParentId;
+          }
+        }
+      }
+    }
+
+    // --- THE ZERO-DOLLAR CHECKOUT, PAID ENTIRELY BY CREDIT ---------------------
+    // Distinct from the comp branch above, which fires when the registrations
+    // THEMSELVES cost nothing. Here they cost real money and the family already
+    // has that money on account, so there is nothing left for Stripe to charge.
+    //
+    // A gift keeps the family on the Stripe path: credit never funds a donation
+    // (the allocation only ever covers registration lines), so if they added one
+    // there is still a real amount to collect.
+    if (creditPlan.totalCents >= serverSum && serverSum > 0 && gift.chargedCents === 0) {
+      const confirmed: string[] = [];
+      for (const entry of creditPlan.alloc!.entries) {
+        // EVERY registration, INCLUDING a zero-priced one. Skipping those left
+        // a free line sitting at pending/unpaid while its siblings confirmed -
+        // a free trial class beside a credit-covered paid one would never reach
+        // a roster, and the family saw the success page for both. The comp
+        // branch above has never had this hole: it confirms every id in one
+        // update.
+        //
+        // A zero amount is safe to pass: apply_family_credit returns early with
+        // applied_cents 0 and writes no movement, and
+        // confirm_registration_paid_by_credit's `applied < amount` check is
+        // 0 < 0, so it falls through to the status update. The seat is
+        // confirmed and no credit is spent, which is exactly right for a line
+        // that costs nothing.
+        const { error: spendErr } = await guardAdmin.rpc('confirm_registration_paid_by_credit', {
+          p_organization_id: giftOrgId,
+          p_parent_id: cartParentId,
+          p_registration_id: entry.registrationId,
+          p_amount_cents: entry.amountCents,
+          p_application_key: creditPlan.key,
+        });
+        if (spendErr) {
+          // The RPC is atomic per registration, so this child is untouched -
+          // no credit spent, no seat confirmed. Children already settled stay
+          // settled, which is the honest partial state for an operator to read.
+          // FC014 means the balance moved under us; anything else is worse.
+          console.error(
+            `[create-checkout] credit checkout failed on registration ${entry.registrationId}:`,
+            spendErr.message,
+          );
+          return json({
+            error: confirmed.length
+              ? 'Part of your registration went through, but we could not finish the rest. Please contact the provider before trying again.'
+              : 'We could not apply your account credit just now. Please try again.',
+            credit_failed: true,
+            registration_ids: confirmed,
+          }, 409);
+        }
+        confirmed.push(entry.registrationId);
+      }
+
+      // COUNT THE PROMO REDEMPTION, exactly as the comp branch above does and
+      // as the webhook does for a Stripe checkout. This branch returns before
+      // Stripe, so the webhook never runs for it - without this a limited-use
+      // code on a cart that credit then covers is never counted against its
+      // own limit and can be reused for ever. Same fail-safe shape as the comp
+      // branch: never fatal, because the family is already enrolled and paid.
+      try {
+        const { data: creditRegRows } = await guardAdmin
+          .from('registrations')
+          .select('promo_code_used, parent_id')
+          .in('id', confirmed);
+        const code = (creditRegRows || []).find((r) => r.promo_code_used)?.promo_code_used;
+        if (code && giftOrgId) {
+          const { data: codeRow } = await guardAdmin
+            .from('promo_codes').select('id')
+            .eq('organization_id', giftOrgId).eq('code', code).maybeSingle();
+          if (codeRow) {
+            const { error: insErr } = await guardAdmin.from('promo_redemptions').insert({
+              organization_id: giftOrgId,
+              promo_code_id: codeRow.id,
+              parent_id: cartParentId,
+              redemption_key: `credit:${confirmed[0]}`,
+            });
+            if (!insErr) {
+              await guardAdmin.rpc('increment_promo_used_count', { p_code_id: codeRow.id });
+            } else if (!/duplicate key|unique/i.test(insErr.message || '')) {
+              console.warn('credit redemption insert failed:', insErr.message);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn('credit redemption counting failed (non-fatal):', (e as Error).message);
+      }
+
+      // intelligence: a credit-funded enrollment still has to show up, exactly
+      // as the comp branch logs its own. amount_total_cents is 0 because no
+      // money moved; credit_cents says how much of THIS registration was paid
+      // from the balance - the cart total would make every child in a
+      // three-child cart claim the whole draw.
+      for (const entry of creditPlan.alloc!.entries) {
+        if (!confirmed.includes(entry.registrationId)) continue;
+        await logEnrollmentEvent(guardAdmin, {
+          actionType: ENROLLMENT_ACTIONS.PAYMENT_COMPLETED,
+          organizationId: giftOrgId,
+          registrationId: entry.registrationId,
+          metadata: { amount_total_cents: 0, paid_by_credit: true, credit_cents: entry.creditCents },
+          dedupeKey: `payment_completed:credit:${entry.registrationId}`,
+        });
+      }
+
+      return json({
+        credit_covered: true,
+        credit_cents: creditPlan.totalCents,
+        registration_ids: confirmed,
+      });
     }
 
     let aggregated: AggregatedEntry[] | null = null;
@@ -844,7 +1221,14 @@ serve(async (req) => {
     // With no gift, chargeBase === total_cents and the override equals what the
     // function would have computed anyway, so every existing charge is
     // byte-for-byte unchanged.
-    const chargeBaseStd = total_cents + gift.chargedCents;
+    // CREDIT COMES OFF THE BASE BEFORE THE FEE IS SIZED. The money doc,
+    // section 6: "The fee is charged once per dollar of family money. A credit
+    // spent on a new registration does not carry a second fee on the same
+    // dollars." Those dollars already paid an enrops fee when they were first
+    // charged, so sizing the fee on the full price would bill the family twice
+    // for the same money.
+    const creditAppliedStd = creditPlan.totalCents;
+    const chargeBaseStd = total_cents - creditAppliedStd + gift.chargedCents;
 
     // THE MARGIN IS NOW ALWAYS AN OVERRIDE, and that is the change.
     //
@@ -862,9 +1246,22 @@ serve(async (req) => {
     // agree line by line, which is exactly what a per-line fee depends on. A
     // client that moved $100 from one line to another would pass the guard and
     // change what it owes.
+    //
+    // AND EACH LINE IS NET OF ITS OWN CREDIT, matched BY REGISTRATION ID, never
+    // by position. The allocation and these rows both carry real ids, so the
+    // two are joined on identity; line_items has no id at all, which is why the
+    // credit never touches it. A per-line fee computed on a gross line would
+    // charge a family whose credit covered a child in full a fee on a class
+    // they paid nothing new for.
+    const creditByRegStd = new Map<string, number>(
+      (creditPlan.alloc?.entries ?? []).map((e) => [e.registrationId, e.creditCents]),
+    );
     const cartLinesStd = (regAmtRows || []).map((r) => ({
       registrationId: r.id as string,
-      amountCents: (r.amount_cents as number) || 0,
+      amountCents: Math.max(
+        0,
+        ((r.amount_cents as number) || 0) - (creditByRegStd.get(r.id as string) ?? 0),
+      ),
     }));
     const cartFeeStd = orgConfigStd
       ? cartFeeCents(cartLinesStd, selectedMethod, orgConfigStd)
@@ -935,7 +1332,129 @@ serve(async (req) => {
       },
     };
 
-    const session = await stripe.checkout.sessions.create({
+    // --- THE CREDIT DISCOUNT AND ITS HOLD --------------------------------------
+    // The credit is expressed to Stripe as a one-shot coupon rather than by
+    // quietly shrinking the line amounts, for two reasons. The family SEES
+    // "Account credit" and the amount on the Stripe page and on the Stripe
+    // receipt, which is what section 6 asks for; and the line items keep saying
+    // what each class actually costs, so a receipt still reconciles against the
+    // programme's price.
+    //
+    // The coupon can never eat a donation: the allocation above only ever draws
+    // against registration lines, so amount_off is at most the registrations'
+    // subtotal and the gift is always paid in real money.
+    const creditAllocEncoded = creditPlan.alloc && creditAppliedStd > 0
+      ? encodeCreditAllocation(creditPlan.alloc)
+      : '';
+    if (creditAllocEncoded.length > 500) {
+      console.warn(
+        `[create-checkout] credit allocation for ${creditPlan.key} is ${creditAllocEncoded.length} ` +
+        `chars and will not fit in Stripe metadata; the webhook's self-healing fallback is off for ` +
+        `this checkout (capture still works).`,
+      );
+    }
+    let creditCoupon: { id: string } | null = null;
+    if (creditAppliedStd > 0) {
+      // HOLD FIRST, THEN DISCOUNT WHAT WAS ACTUALLY HELD. The other order - the
+      // one this code had - creates the coupon from a PLANNED figure read
+      // seconds earlier, and those seconds contain a fee calculation, a config
+      // read and a Stripe round-trip.
+      //
+      // apply_family_credit DOES NOT RAISE when it can only get part of what
+      // was asked: it returns a smaller applied_cents. Checking only the error
+      // therefore misses the whole failure. Two tabs on different carts both
+      // read $300 available; the first holds it; the second's hold quietly
+      // returns 0 while its session is still discounted $300, and the family
+      // pays $300 less than they owe with nothing recording it.
+      //
+      // So the hold is taken first and its RETURN VALUE is the source of truth.
+      let heldTotal = 0;
+      for (const entry of creditPlan.alloc!.entries) {
+        if (entry.creditCents <= 0) continue;
+        const { data: holdRows, error: holdErr } = await guardAdmin.rpc('apply_family_credit', {
+          p_organization_id: orgIdStd,
+          p_parent_id: creditPlan.parentId,
+          p_registration_id: entry.registrationId,
+          p_amount_needed_cents: entry.creditCents,
+          p_application_key: creditPlan.key,
+          p_kind: 'reserved',
+          // THE HOLD MUST OUTLIVE THE SESSION, the same invariant line 109
+          // states for the seat hold, and for the same reason. This stamp is
+          // taken here; the Stripe session's expires_at is computed further
+          // down, AFTER a coupon round-trip - so an exactly-equal window means
+          // the credit becomes spendable again a few hundred milliseconds
+          // before the page that depends on it dies. A second tab opened in
+          // that gap takes the balance, and completing the first, still-live
+          // page then captures a lapsed hold: v_room resolves to 0, the
+          // reservation is deleted, and the family is charged a price
+          // discounted by credit that was never spent. The surplus costs
+          // nothing - release and capture both handle a hold that outlives
+          // its session.
+          p_hold_minutes: CREDIT_HOLD_MINUTES,
+        });
+        creditPlan.held = true;
+        if (holdErr) {
+          console.error('[create-checkout] could not hold the family credit:', holdErr.message);
+          await releaseCreditHold(guardAdmin, creditPlan.key);
+          return json({
+            error: 'We could not apply your account credit just now. Please try again.',
+            credit_failed: true,
+          }, 409);
+        }
+        const row = Array.isArray(holdRows) ? holdRows[0] : holdRows;
+        heldTotal += Number((row as { applied_cents?: number } | null)?.applied_cents ?? 0);
+      }
+
+      // THE PRICE WAS BUILT ON creditAppliedStd, so anything else is a price we
+      // cannot honour. The fee, the charge base and the line amounts were all
+      // computed from the planned figure further up; re-deriving them here
+      // would be a second pricing path, and charging the planned discount while
+      // holding less would give the family a discount the business funds.
+      //
+      // Refusing costs one retry, and the retry is CORRECT rather than lucky:
+      // the release below puts the partial hold back, so the next attempt reads
+      // a true balance. This is the same shape as the zero-dollar path's FC014.
+      if (heldTotal !== creditAppliedStd) {
+        console.warn(
+          `[create-checkout] credit moved under this checkout: planned ${creditAppliedStd}, ` +
+          `held ${heldTotal} for ${creditPlan.key}. Refusing rather than discounting what is not held.`,
+        );
+        await releaseCreditHold(guardAdmin, creditPlan.key);
+        return json({
+          error: 'Your account credit changed while you were checking out. Please try again and we will re-apply it.',
+          credit_failed: true,
+        }, 409);
+      }
+
+      try {
+        creditCoupon = await stripe.coupons.create({
+          amount_off: heldTotal,
+          currency: 'usd',
+          duration: 'once',
+          max_redemptions: 1,
+          name: 'Account credit',
+          metadata: {
+            enrops_credit_key: creditPlan.key,
+            enrops_org_id: orgIdStd ?? '',
+          },
+        }, acctStd);
+      } catch (couponErr) {
+        // REFUSE, do not quietly charge full price. The family was shown a
+        // credit on the Pay step; taking the full amount instead would be the
+        // silent failure that costs them money and tells them nothing. The hold
+        // is given back so the retry sees their credit again.
+        console.error('[create-checkout] could not create the credit discount:', couponErr);
+        await releaseCreditHold(guardAdmin, creditPlan.key);
+        return json({
+          error: 'We could not apply your account credit just now. Please try again.',
+          credit_failed: true,
+        }, 503);
+      }
+    }
+
+    let session;
+    try {
+      session = await stripe.checkout.sessions.create({
       // Single method, chosen by the family up front, so application_fee_amount
       // (set above with selectedMethod) matches what Stripe actually charges.
       // us_bank_account requires a Customer to store the debit mandate, so
@@ -943,7 +1462,21 @@ serve(async (req) => {
       payment_method_types: [selectedMethod],
       line_items: stripeLineItems,
       mode: 'payment',
+      // The credit, shown to the family as a discount rather than hidden in a
+      // shrunken price. Omitted entirely (not an empty array) when there is no
+      // credit, so every existing checkout builds the identical request.
+      ...(creditCoupon ? { discounts: [{ coupon: creditCoupon.id }] } : {}),
       // Matches the seat hold. See CHECKOUT_WINDOW_MINUTES.
+      //
+      // THE CREDIT HOLD DELIBERATELY OUTLIVES THIS by CREDIT_HOLD_SURPLUS_MINUTES.
+      // This comment used to say it used the SAME window, "because the minute
+      // the family can no longer pay this session is the minute their credit
+      // should be theirs to spend again" - which sounds right and is wrong.
+      // Equal is not good enough: this expiry is computed after a Stripe
+      // coupon round-trip, so an equal window frees the credit a moment BEFORE
+      // the page that depends on it dies, and a second tab opened in that gap
+      // can take it while the first session is still payable. See the hold
+      // call for the whole failure.
       //
       // ACH IS NOT SHORTENED BY THIS. expires_at governs how long the family has
       // to SUBMIT the checkout, not how long a submitted bank transfer takes to
@@ -966,9 +1499,36 @@ serve(async (req) => {
         // existing metadata parsing sees nothing new.
         donation_gift_cents: gift.giftCents > 0 ? String(gift.giftCents) : '',
         donation_covered_fee_cents: gift.coveredFeeCents > 0 ? String(gift.coveredFeeCents) : '',
+        // The webhook turns the hold into a spend using THIS key, and the
+        // allocation rides with it so the webhook never has to re-derive a
+        // money split that was already decided here. Empty strings when no
+        // credit was used, so the existing metadata parsing sees nothing new.
+        credit_key: creditAppliedStd > 0 ? creditPlan.key : '',
+        credit_cents: creditAppliedStd > 0 ? String(creditAppliedStd) : '',
+        // Stripe caps a metadata VALUE at 500 characters, and this one grows
+        // with the cart (about 45 per registration that took credit, so it
+        // fits ten). Past that it is dropped rather than truncated: a
+        // half-written allocation would be read back as a real one and restore
+        // the wrong amounts.
+        //
+        // WHAT DROPPING IT COSTS, stated accurately - an earlier version of
+        // this comment said "only the webhook's self-healing fallback", and
+        // that was wrong in a way that lost a family money. Capture is keyed on
+        // credit_key alone and is unaffected. The self-heal does lose its
+        // input. The ACH-bounce restore USED to lose its input too, which meant
+        // a big cart's credit was taken and never returned; that path now reads
+        // the movements instead, so it no longer depends on this field.
+        credit_alloc: creditAllocEncoded.length <= 500 ? creditAllocEncoded : '',
       },
       payment_intent_data: piData,
     }, acctStd);
+    } catch (sessionErr) {
+      // The session never came into being, so the credit behind its price must
+      // not stay held. Releasing touches ONLY reservations, so there is nothing
+      // here that could claw back a spend.
+      await releaseCreditHold(guardAdmin, creditPlan.key, creditPlan.held);
+      throw sessionErr;
+    }
 
     // Record WHERE this charge lives, before the family is redirected. See the
     // installments branch above for why this is written now instead of being
@@ -990,6 +1550,8 @@ serve(async (req) => {
       } catch (expireErr) {
         console.error('Failed to expire unrecorded session:', expireErr);
       }
+      // The session is being killed, so the credit behind its price goes back.
+      await releaseCreditHold(adminStd, creditPlan.key, creditPlan.held);
       return json({ error: 'Could not start checkout. Please try again.' }, 500);
     }
 
@@ -1020,6 +1582,7 @@ serve(async (req) => {
         } catch (expireErr) {
           console.error('Failed to expire session after donation insert failure:', expireErr);
         }
+        await releaseCreditHold(adminStd, creditPlan.key, creditPlan.held);
         return json({ error: 'Could not add your donation right now. Please try again.' }, 500);
       }
     }

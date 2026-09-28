@@ -13,6 +13,19 @@ export default function RegisterSuccess() {
   const [searchParams] = useSearchParams();
   const sessionId = searchParams.get('session_id');
   const comp = searchParams.get('comp') === '1'; // $0 scholarship — no payment
+  // Paid entirely out of the family's account credit. STRUCTURALLY the same as
+  // comp - create-checkout returns before Stripe, so stripe-webhook never runs
+  // and there is no receipt and no magic link - but a DIFFERENT FACT about the
+  // family, and the page must not conflate the two. A comp is a class the
+  // business gave away; this is a class the family paid for with money they
+  // were already owed. Telling someone who has just spent $240 of their own
+  // credit that "there was nothing to pay" is the kind of wrong that makes
+  // people ring up.
+  const paidByCredit = searchParams.get('credit') === '1';
+  const creditCents = Number(searchParams.get('credit_cents') || '0') || 0;
+  // Use noStripe wherever the reason is "Stripe never ran"; use comp or
+  // paidByCredit only where the reason is WHY it never ran.
+  const noStripe = comp || paidByCredit;
   const { user, signInWithGoogle } = useAuth();
   const { clearCart, cart } = useCart();
 
@@ -163,7 +176,11 @@ export default function RegisterSuccess() {
           You're registered!
         </h1>
         <p className="mt-4 text-lg text-white/90">
-          {comp
+          {paidByCredit
+            ? (creditCents > 0
+                ? `Your spot is confirmed — paid with $${(creditCents / 100).toFixed(2)} of your account credit.`
+                : 'Your spot is confirmed — paid with your account credit.')
+            : comp
             /* Was "Sign in below to see your schedule and class details." A $0
                registration returns from create-checkout BEFORE Stripe (index.ts:182),
                so stripe-webhook never runs: no receipt, no magic link, and no account
@@ -241,7 +258,7 @@ export default function RegisterSuccess() {
       {!user ? (
         <div className="mt-8 rounded-3xl border border-j2s-purple/10 bg-white p-8 shadow-card">
           <h2 className="font-titan text-2xl text-j2s-ink">
-            {comp ? 'Your registration is saved' : 'Check your email'}
+            {noStripe ? 'Your registration is saved' : 'Check your email'}
           </h2>
           {/* NAME THE ADDRESS ONLY WHEN WE HAVE A USABLE ONE. This used to read
               "We sent a sign-in link to your inbox" whenever the cart was gone,
@@ -256,7 +273,14 @@ export default function RegisterSuccess() {
                 wider gap — comp families getting no confirmation and no dashboard
                 at all — is a money-path change tracked separately; this only stops
                 the page claiming otherwise. */}
-            {comp ? (
+            {paidByCredit ? (
+              <>
+                Your account credit covered this in full, so no card was charged and
+                there&rsquo;s no card receipt or sign-in link yet.{' '}
+                {org?.name || 'Your program provider'} has your registration and will be in
+                touch with class details.
+              </>
+            ) : comp ? (
               <>
                 There was nothing to pay, so there&rsquo;s no receipt to send and no sign-in link
                 yet. {org?.name || 'Your program provider'} has your registration and will be in
@@ -285,7 +309,7 @@ export default function RegisterSuccess() {
               sent, or a sign-in that cannot reach a registration on prod (the
               claim_parent_record link is staging-only, verified 2026-08-10). Offering
               them would be the "silent wall" pattern - a door that opens onto nothing. */}
-          {!comp && (
+          {!noStripe && (
           <div className="mt-6 space-y-4">
             {/* NO RESEND BUTTON HERE, deliberately. Jessica, 2026-08-07, on being
                 shown that the resend arrived from Supabase rather than the provider:
@@ -418,7 +442,7 @@ export default function RegisterSuccess() {
           email to reply to, so the sentence cannot be made true — and the block
           above already tells a comp family the provider will be in touch, so a
           second "they'll be in touch" here would just say it twice. */}
-      {!comp && (
+      {!noStripe && (
         <p className="mt-8 text-center text-sm text-j2s-ink/60">
           Questions? Just reply to your confirmation email
           {org?.name ? <> and it goes straight to {org.name}</> : <> and it goes straight to your program provider</>}.
