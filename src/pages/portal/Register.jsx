@@ -56,6 +56,25 @@ export default function Register() {
   // This provider's published cancellation/refund policy, shown on the pay step
   // before any money is taken (v4 section 6). null = none published.
   const [cancellationPolicy, setCancellationPolicy] = useState(null);
+  // THIS FAMILY'S SPENDABLE CREDIT WITH THIS PROVIDER, and 0 unless they are
+  // SIGNED IN. It is display only - create-checkout reads the balance itself
+  // and never trusts a number from the browser - but a family should not first
+  // learn what they are paying on the Stripe page.
+  //
+  // ONLY WHEN SIGNED IN, and that is a deliberate limit rather than an
+  // oversight. Registration here is a guest flow, so the only way to tell a
+  // signed-out visitor their balance would be to look it up by the email they
+  // typed - which would let anyone probe any address for a balance. Every
+  // comparable platform shows this figure, and every one of them has the family
+  // logged in first. Signed out, the credit is still APPLIED; they see it as
+  // "Account credit" on the Stripe page instead.
+  const [familyCreditCents, setFamilyCreditCents] = useState(0);
+  // WHOSE balance that is. The figure is resolved from the SESSION, but
+  // create-checkout applies credit to the parent create-registration resolves
+  // from the EMAIL TYPED INTO THIS FORM - two different keys. A signed-in
+  // parent registering under a second guardian's address, or with a typo,
+  // would otherwise be shown "- $240.00" and then charged the full amount.
+  const [creditForEmail, setCreditForEmail] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   // The error banner, so a failure can be scrolled to the family. See the effect below.
@@ -384,6 +403,29 @@ export default function Register() {
     // pay step simply omits the block rather than inventing a policy, because a
     // made-up cancellation term is far worse than none.
     setCancellationPolicy(cancelPolicyRes?.data?.content_markdown || null);
+
+    // THE FAMILY'S OWN CREDIT WITH THIS PROVIDER. The RPC takes no parent id -
+    // it resolves the caller from their session - so a signed-out visitor
+    // simply gets nothing back and there is no address to probe with.
+    //
+    // FAILS TO SILENCE, never to a guess. If this read does not work the Pay
+    // step shows no credit line, and create-checkout still applies the credit
+    // from its own read of the ledger. Showing a family a balance we are not
+    // sure of is worse than showing none.
+    try {
+      const { data: sess } = await supabase.auth.getSession();
+      if (sess?.session && org?.id) {
+        const { data: bal, error: balErr } = await supabase
+          .rpc('my_family_credit_balance_cents', { p_organization_id: org.id });
+        if (balErr) console.warn('[register] credit balance unavailable:', balErr.message);
+        else {
+          setFamilyCreditCents(Number(bal) || 0);
+          setCreditForEmail((sess.session.user?.email || '').trim().toLowerCase() || null);
+        }
+      }
+    } catch (e) {
+      console.warn('[register] credit balance lookup failed:', e?.message);
+    }
     // Thread the org's sibling % onto the cart so the review screen matches the
     // server charge. undefined (older org-fee-config) -> pricing.js keeps the 10% default.
     setSiblingPct(feeRes?.data?.sibling_discount_pct);
@@ -673,6 +715,20 @@ export default function Register() {
         window.location.href = `/${ORG_SLUG}/register/success?comp=1${isEmbed ? '&embed=1' : ''}`;
         return;
       }
+      if (coData.credit_covered) {
+        // The family's account credit covered the whole thing, so there was no
+        // Stripe session to send them to - create-checkout already confirmed the
+        // registrations. Same navigation reasoning as the comp branch above.
+        //
+        // A SEPARATE FLAG FROM comp, not a reuse of it. A comp is a class the
+        // business gave away; this is a class the family paid for with money
+        // they were already owed, and the success page has to be able to say
+        // which of those happened.
+        const paid = coData.credit_cents ? `&credit_cents=${coData.credit_cents}` : '';
+        window.location.href =
+          `/${ORG_SLUG}/register/success?credit=1${paid}${isEmbed ? '&embed=1' : ''}`;
+        return;
+      }
       if (coData.url) {
         goToPayment(coData.url);
       } else {
@@ -683,6 +739,23 @@ export default function Register() {
       setSubmitting(false);
     }
   }
+
+  // THE CREDIT FIGURE BOTH STEPS QUOTE, derived once so Review and Pay cannot
+  // be given different answers.
+  //
+  // Non-zero only for a SIGNED-IN parent whose session email is the one they
+  // are registering under. The balance is read from the SESSION; the credit is
+  // applied to whoever create-registration resolves from the TYPED EMAIL, so
+  // when those differ the figure would be a promise this checkout will not
+  // keep - which is exactly what happened on staging on 2026-09-28, where a
+  // signed-in parent registered under a second row of their own and saw
+  // nothing. Withheld rather than shown wrong; the credit still applies if it
+  // does turn out to be theirs, and shows on the Stripe page.
+  const quotableCreditCents =
+    creditForEmail &&
+    creditForEmail === (cart?.parent?.email || '').trim().toLowerCase()
+      ? familyCreditCents
+      : 0;
 
   if (loading) {
     return (
@@ -766,6 +839,10 @@ export default function Register() {
               // the per-registration splits to compute exactly what Pay will.
               installmentSplits={installmentSchedule?.perLineSplits || null}
               org={{ ...org, ...(feeConfig || {}) }}
+              // The SAME figure the Pay step gets. Review used to know nothing
+              // about credit, so it quoted the gross total on the screen where
+              // a family decides to commit and the next screen contradicted it.
+              familyCreditCents={quotableCreditCents}
               onPromoApply={async (code) => {
                 setPromoInput(code);
                 const { data } = await supabase
@@ -827,6 +904,7 @@ export default function Register() {
                 // the quote and the charge are built from one schedule.
                 installmentSplits={installmentSchedule?.perLineSplits || null}
                 org={{ ...org, ...(feeConfig || {}) }}
+                familyCreditCents={quotableCreditCents}
                 cancellationPolicy={cancellationPolicy}
                 // Passed as its own prop rather than spread into `org`: the
                 // whole object is the config, and flattening it would put

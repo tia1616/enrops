@@ -149,7 +149,17 @@ Deno.serve(async (req: Request) => {
     // until a credit is actually issued, because the table is empty until then.
     const types = Array.isArray(body.record_types) && body.record_types.length
       ? new Set(body.record_types)
-      : new Set(['registration', 'contractor_payout', 'family_credit']);
+      // `family_credit_used` and `family_credit_returned` are in the default set
+      // for the same reason `family_credit` is, and it is the other half of the
+      // same obligation. Exporting only the issuing shows a liability that is
+      // never discharged: a credit issued in one period and spent in the next
+      // sits on the books for ever, and the bookkeeper has no row to close it
+      // with. Empty until a credit is actually spent, so nothing changes for
+      // anyone before then.
+      : new Set([
+        'registration', 'contractor_payout',
+        'family_credit', 'family_credit_used', 'family_credit_returned',
+      ]);
 
     const rows: string[][] = [];
 
@@ -279,6 +289,73 @@ Deno.serve(async (req: Request) => {
           `${c.status ?? ''}${c.reason ? ` (${c.reason})` : ''}`,
           '', // stripe_object_id - a credit never touches Stripe
           c.id,
+        ]);
+      }
+    }
+
+    // ── credit SPENT and credit GIVEN BACK (the liability moving) ─────────
+    //
+    // The row above records a credit being CREATED. These record it being used
+    // up and, where a registration was unwound, handed back. Without them the
+    // export only ever grows the obligation: a $240 credit issued in September
+    // and spent in October shows as $240 owed in both files, and nothing in
+    // either says it was settled.
+    //
+    // TWO TYPES, NOT ONE SIGNED COLUMN, matching how this file already
+    // distinguishes contractor_payout from registration: direction is carried
+    // by `type`, and a second convention would be worse than the one it has.
+    //
+    // DATED BY THE MOVEMENT, not by the credit it belongs to, because the whole
+    // point is that the two fall in different periods.
+    //
+    // Reservations are deliberately absent. A hold is not a movement of money -
+    // it is a checkout in progress, it expires on its own, and putting it in a
+    // bookkeeper's file would report spending that may never happen.
+    if (types.has('family_credit_used') || types.has('family_credit_returned')) {
+      const wantedKinds = [
+        ...(types.has('family_credit_used') ? ['applied'] : []),
+        ...(types.has('family_credit_returned') ? ['restored'] : []),
+      ];
+      const { data: moves, error: mvErr } = await supabase
+        .from('family_credit_movements')
+        .select(`
+          id, amount_cents, kind, created_at,
+          family_credits ( reason, parents ( first_name, last_name ) ),
+          registrations ( programs ( curriculum, term ), camp_sessions ( curriculum_name ) )
+        `)
+        .eq('organization_id', orgId)
+        .in('kind', wantedKinds)
+        .gte('created_at', fromInstant)
+        .lt('created_at', toInstant)
+        .order('created_at', { ascending: true });
+      if (mvErr) {
+        console.error('[export-finances] family_credit_movements query failed:', mvErr.message);
+        return json({ error: 'query_failed', detail: 'family_credit_movements' }, 500);
+      }
+      for (const m of (moves ?? []) as any[]) {
+        const credit = m.family_credits ?? {};
+        const parent = credit.parents ?? {};
+        const counterparty = `${parent.first_name ?? ''} ${parent.last_name ?? ''}`.trim();
+        const reg = m.registrations ?? {};
+        const program = reg.programs?.curriculum ?? reg.camp_sessions?.curriculum_name ?? '';
+        rows.push([
+          localDateOf(m.created_at, tz),
+          m.kind === 'restored' ? 'family_credit_returned' : 'family_credit_used',
+          String(m.amount_cents ?? ''),
+          '', // stripe_fee_cents - spending a credit makes no Stripe call
+          '', // application_fee_cents - the fee was charged on the cash leg, not this
+          '', // net_cents - nothing settles; this moves an obligation, not money
+          counterparty,
+          program,
+          reg.programs?.term ?? orgTerm,
+          // What the credit was FOR, carried through from the credit itself, so
+          // a row here can be matched to the row that created it without a join
+          // the bookkeeper has to do by hand.
+          m.kind === 'restored'
+            ? `returned${credit.reason ? ` (${credit.reason})` : ''}`
+            : `spent${credit.reason ? ` (${credit.reason})` : ''}`,
+          '', // stripe_object_id - never touches Stripe
+          m.id,
         ]);
       }
     }

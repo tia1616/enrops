@@ -97,6 +97,7 @@ import { isEmailAllowed } from '../_shared/emailGuard.ts';
 import { logTransactionalSend, formatSendError } from '../_shared/sendLog.ts';
 import { maybeAlertOperatorFlagged } from '../_shared/operatorFlagAlert.ts';
 import { alertMarginShortfall } from '../_shared/marginShortfallAlert.ts';
+import { decodeCreditAllocation } from '../_shared/creditAllocation.ts';
 import {
   settlementForCheckoutCompleted,
   SETTLEMENT_ON_ASYNC_SUCCESS,
@@ -201,8 +202,17 @@ serve(async (req) => {
       }
 
       // Look up org and load full brand context (FROM, colors, logo, alert email).
-      const { data: regForOrg } = await admin.from('registrations').select('organization_id').eq('id', regIds[0]).single();
+      //
+      // parent_id rides along for the credit capture below: a family credit is
+      // keyed on (organization_id, parent_id), and apply_family_credit proves
+      // the registration really belongs to that pair before it spends anything.
+      // create-checkout refuses to apply credit to a cart whose registrations
+      // disagree about whose they are, so one lookup answers for the cart - and
+      // if that ever stopped being true the RPC raises FC013 rather than
+      // spending the wrong family's balance.
+      const { data: regForOrg } = await admin.from('registrations').select('organization_id, parent_id').eq('id', regIds[0]).single();
       const orgId = regForOrg?.organization_id;
+      const cartParentId = (regForOrg as { parent_id?: string | null } | null)?.parent_id ?? null;
 
       const brand = await loadOrgBrand(admin, orgId);
       // The tenant's OWN inbox, or null. NOT brand.alert_email: every alert
@@ -247,6 +257,131 @@ serve(async (req) => {
         stripe_charge_account_id: (event.account as string | null) ?? null,
       }).in('id', regIds);
 
+      // --- FAMILY CREDIT: turn the hold into a spend (chunk 3b) ---------------
+      // AFTER the confirmation write, deliberately. Both orders can tear, but
+      // they tear differently: capture-then-confirm can leave a family whose
+      // credit is gone and who has no seat, while confirm-then-capture leaves a
+      // family correctly enrolled and a spend that can still be recorded. Stripe
+      // retries this handler on a non-2xx and both writes are idempotent, so the
+      // usual outcome of a failure here is that the retry finishes the job.
+      //
+      // CAPTURED FOR AN ACH SESSION TOO, not just a settled card. The seat is
+      // already held optimistically on this event, and the hold expires with the
+      // checkout window - so waiting for async_payment_succeeded, days later,
+      // would mean the hold had lapsed and the family's credit had quietly
+      // drifted back to spendable while they believed it spent. The bounce case
+      // is handled where the seat is: async_payment_failed gives the credit back.
+      // AND ONLY IF THE SEAT ACTUALLY LANDED. The ordering above is worth
+      // nothing without this test: confirmErr was being collected and then not
+      // read until further down, so a failed confirmation still fell through
+      // into the capture and produced the precise torn state the ordering is
+      // supposed to prevent - credit spent, no seat.
+      //
+      // AND THERE IS NO RETRY COMING. An earlier version of this comment said
+      // Stripe would redeliver; it will not. The confirmErr branch below
+      // deliberately swallows the error so the rest of the handler still runs,
+      // and this function returns 200. So this choice is final: the hold lapses
+      // and the family keeps their credit, while the business has taken a card
+      // payment discounted by it. That is the right way round - the family is
+      // never out of pocket for our failure - but it is a real cost and it must
+      // be in the alert the operator gets, not only in a log line.
+      const creditKey = meta.credit_key || '';
+      const creditCentsMeta = Number(meta.credit_cents || '0') || 0;
+      if (creditKey && confirmErr) {
+        console.error(
+          `[webhook] NOT capturing credit hold ${creditKey}: the registrations did not confirm ` +
+          `(${confirmErr.message}). The hold will lapse and the family keeps their credit; the ` +
+          `${creditCentsMeta} discount already given is absorbed. No Stripe retry follows a 200.`,
+        );
+      }
+      if (creditKey && !confirmErr) {
+        const expectedCredit = Number(meta.credit_cents || '0') || 0;
+        const { data: capturedRaw, error: captureErr } = await admin.rpc(
+          'capture_family_credit_hold',
+          { p_application_key: creditKey },
+        );
+        const captured = Number(capturedRaw) || 0;
+
+        if (captureErr) {
+          console.error(
+            `[webhook] could not capture credit hold ${creditKey} for ${regIds.join(',')}:`,
+            captureErr.message,
+          );
+        }
+
+        // THE SELF-HEALING HALF, and it heals exactly one shape - which is
+        // narrower than an earlier version of this comment claimed.
+        //
+        // IT WORKS when the reservation rows are GONE: released by another
+        // attempt on the same cart, so nothing under this key exists and
+        // apply_family_credit writes fresh rows. The family has just been
+        // charged a price that already had the credit taken off it, so without
+        // this they would get the discount for free.
+        //
+        // IT CANNOT WORK when capture converted a LAPSED hold for less than it
+        // held: those rows are now kind='applied' under the same
+        // (key, registration), so apply_family_credit answers already_existed
+        // and writes nothing. That is the correct outcome - the balance really
+        // was spent elsewhere, so there is nothing left to take - but it means
+        // the business has absorbed the difference, and that must not be a log
+        // line nobody reads.
+        if (!captureErr && captured < expectedCredit) {
+          const shortfall = decodeCreditAllocation(meta.credit_alloc);
+          console.warn(
+            `[webhook] credit hold ${creditKey} captured ${captured} of ${expectedCredit}; ` +
+            `attempting the remainder outright across ${shortfall.length} registration(s)`,
+          );
+          let recovered = 0;
+          for (const part of shortfall) {
+            const { data: applyRows, error: applyErr } = await admin.rpc('apply_family_credit', {
+              p_organization_id: orgId,
+              p_parent_id: cartParentId,
+              p_registration_id: part.registrationId,
+              p_amount_needed_cents: part.creditCents,
+              p_application_key: creditKey,
+              p_kind: 'applied',
+              p_hold_minutes: null,
+            });
+            if (applyErr) {
+              console.error(
+                `[webhook] could not apply credit for registration ${part.registrationId}:`,
+                applyErr.message,
+              );
+              continue;
+            }
+            const row = Array.isArray(applyRows) ? applyRows[0] : applyRows;
+            const r = row as { applied_cents?: number; already_existed?: boolean } | null;
+            if (!r?.already_existed) recovered += Number(r?.applied_cents ?? 0);
+          }
+
+          // STILL SHORT AFTER THE ATTEMPT = the business funded a discount the
+          // family's balance did not cover. Tell the operator: this is their
+          // money, the family is correctly enrolled, and nothing else on any
+          // screen will ever show it.
+          const stillShort = expectedCredit - captured - recovered;
+          if (stillShort > 0) {
+            console.error(
+              `[webhook] credit shortfall ${stillShort} on ${creditKey} (regs ${regIds.join(',')}) - ` +
+              `the checkout was discounted by more than the family's balance covered`,
+            );
+            if (alertEmail) {
+              await sendOperatorAlert({
+                brand,
+                to: alertEmail,
+                subject: 'A registration was discounted by more account credit than was available',
+                body: `A family checked out with account credit, but by the time the payment completed their balance `
+                  + `no longer covered the whole discount. The registration is confirmed and paid, and the shortfall `
+                  + `of $${(stillShort / 100).toFixed(2)} has been absorbed rather than charged to them.\n\n`
+                  + `Registration IDs: ${regIds.join(', ')}\n`
+                  + `Discount applied at checkout: $${(expectedCredit / 100).toFixed(2)}\n`
+                  + `Credit actually taken: $${((expectedCredit - stillShort) / 100).toFixed(2)}\n\n`
+                  + `No action is needed for the family. Review it if this repeats.`,
+              });
+            }
+          }
+        }
+      }
+
       if (confirmErr) {
         // The family HAS paid. Do not swallow this: alert loudly with
         // everything a human needs to fix it by hand, and keep going so the
@@ -264,6 +399,19 @@ serve(async (req) => {
             `Stripe session: ${session.id}`,
             `Payment intent: ${session.payment_intent}`,
             `Database error: ${confirmErr.message}`,
+            // THE CREDIT HALF, named here because this alert is the only thing
+            // that will ever mention it. The hold was deliberately not captured
+            // (no seat, so no spend), and it lapses on its own - so the family
+            // keeps this money AND has it off the price they were charged.
+            ...(creditKey && creditCentsMeta > 0
+              ? [
+                  ``,
+                  `They also used $${(creditCentsMeta / 100).toFixed(2)} of account credit on this checkout.`,
+                  `That credit has NOT been taken and will return to their balance, but the payment`,
+                  `was already discounted by it. Once you have fixed the registration, decide whether`,
+                  `to take the credit or leave the difference.`,
+                ]
+              : []),
             ``,
             `Fix the underlying cause, then set these registrations to confirmed/paid manually.`,
           ].join('\n'),
@@ -817,6 +965,60 @@ serve(async (req) => {
       const { data: regForOrg } = await admin.from('registrations').select('organization_id').eq('id', regIds[0]).single();
       const brand = await loadOrgBrand(admin, regForOrg?.organization_id);
       await admin.from('registrations').update({ ...SETTLEMENT_ON_ASYNC_FAILURE }).in('id', regIds);
+
+      // THE CREDIT GOES BACK WHEN THE TRANSFER BOUNCES. It was captured
+      // optimistically on checkout.session.completed, alongside the seat, because
+      // the hold expires with the checkout window and ACH settles days later. No
+      // money ever arrived, so the credit the family spent has to be theirs
+      // again - otherwise a bounced payment costs them their balance AND leaves
+      // them unpaid. Bounded by what was actually applied to each registration,
+      // so a retried webhook cannot hand back more than was taken.
+      //
+      // READ FROM THE LEDGER, NOT FROM THE METADATA. This used to loop
+      // decodeCreditAllocation(meta.credit_alloc) - and create-checkout
+      // deliberately writes that field EMPTY when the allocation exceeds
+      // Stripe's 500-character metadata limit, which a cart of about eleven
+      // credit-taking registrations does. Capture is unaffected (it is keyed on
+      // credit_key alone), so on such a cart the credit was taken at
+      // session.completed and then, on a bounce, nothing gave it back: the
+      // family lost the balance AND got no class, silently.
+      //
+      // The movements are the durable record and cannot be truncated, so the
+      // amount to return is read from them per registration. Still bounded by
+      // applied-minus-already-restored inside the RPC, so a retried webhook
+      // cannot hand back more than was taken.
+      if (meta.credit_key) {
+        const { data: appliedRows, error: appliedErr } = await admin
+          .from('family_credit_movements')
+          .select('registration_id, amount_cents')
+          .in('registration_id', regIds)
+          .eq('kind', 'applied');
+        if (appliedErr) {
+          console.error(
+            `[webhook] could not read the credit applied to ${regIds.join(',')} after an ACH failure:`,
+            appliedErr.message,
+          );
+        }
+        const appliedByReg = new Map<string, number>();
+        for (const m of ((appliedRows ?? []) as Array<{ registration_id: string; amount_cents: number }>)) {
+          appliedByReg.set(m.registration_id, (appliedByReg.get(m.registration_id) || 0) + (m.amount_cents || 0));
+        }
+        for (const [regId, cents] of appliedByReg) {
+          if (cents <= 0) continue;
+          const { error: restoreErr } = await admin.rpc('restore_family_credit_for_registration', {
+            p_registration_id: regId,
+            p_amount_cents: cents,
+            p_note: 'returned when the bank transfer did not clear',
+          });
+          if (restoreErr) {
+            console.error(
+              `[webhook] could not return credit on registration ${regId} after an ACH failure:`,
+              restoreErr.message,
+            );
+          }
+        }
+      }
+
       await sendOperatorAlert({
         brand,
         // Tenant inbox only: the body below names the family and quotes their

@@ -13,6 +13,7 @@ import { formatMoney, INSTALLMENT_MIN_CENTS } from '../../../lib/pricing.js';
 // the other way round would be a card SURCHARGE, which is restricted by card
 // network rules and by state law.
 import { cartFeeOnLines, cartInstallmentFeeShares } from '../../../lib/platformFee.js';
+import { spreadCreditAcrossLines } from '../../../lib/creditSpread.js';
 import { programScheduleSummary, formatStartDate, formatDayLabel } from '../../../lib/programSchedule.js';
 import { dismissalSummary } from '../../../lib/dismissal.js';
 import { gradeFitProblem } from '../../../lib/grades.js';
@@ -46,11 +47,24 @@ export default function StepReview({
   // or a NaN - the fee helpers return 0 for a config they cannot read, which
   // is the same thing an absorb org shows.
   org = {},
+  // The signed-in family's spendable credit with this provider, in cents.
+  // 0 for a signed-out visitor - see Register.jsx for why it is withheld
+  // rather than guessed.
+  familyCreditCents = 0,
 }) {
-  // The fee, per registration line, exactly as the Pay step and the server
-  // will compute it - same helper, same per-line rule, so the two screens
-  // cannot disagree about what this cart costs.
-  const cartLineAmounts = (pricing?.lines || []).map((l) => l.amount_cents);
+  // ACCOUNT CREDIT COMES OFF BEFORE THE FEE, exactly as the Pay step and
+  // create-checkout do it. This screen used to know nothing about credit, and
+  // the comment here used to claim the two screens "cannot disagree about what
+  // this cart costs" - which stopped being true the moment the Pay step
+  // learned about credit and this one did not. A family holding $240 looking
+  // at a $10 class was quoted $10.10 here and charged $0.00, on the screen
+  // where they decide to commit.
+  //
+  // Not a payment plan: create-checkout refuses credit there, so quoting it
+  // would promise a discount the charge will not contain.
+  const grossLineAmounts = (pricing?.lines || []).map((l) => l.amount_cents);
+  const { lineAmounts: cartLineAmounts, creditApplied: creditAppliedCents } =
+    spreadCreditAcrossLines(grossLineAmounts, cart?.payment_plan ? 0 : familyCreditCents);
   const reviewFeeCents = cartFeeOnLines(cartLineAmounts, org, { isBank: false });
   const bankSavingCents = Math.max(
     0,
@@ -373,6 +387,19 @@ export default function StepReview({
               above a larger Total with nothing to explain the gap reads as a
               mistake. Renders only when there is a fee: an operator who absorbs
               it - J2S today - sees exactly the screen they see now. */}
+          {/* ABOVE the fee, because the fee is charged on what is left after
+              it - the money doc's "charged once per dollar of family money".
+              Listing it below would read as though the fee were computed on
+              the full price and the credit taken off afterwards, which is not
+              what either this screen or the charge does. */}
+          {creditAppliedCents > 0 && (
+            <div className="flex justify-between">
+              <span className="text-white/70">Your account credit</span>
+              <span className="text-j2s-orange">
+                -{formatMoney(creditAppliedCents)}
+              </span>
+            </div>
+          )}
           {reviewFeeCents > 0 && (
             <div className="flex justify-between">
               <span className="text-white/70">enrops service fee</span>
@@ -384,9 +411,17 @@ export default function StepReview({
           <div className="flex items-center justify-between">
             <span className="font-titan text-xl">Total</span>
             <span className="font-titan text-3xl text-j2s-orange">
-              {formatMoney(pricing.total_cents + reviewFeeCents)}
+              {formatMoney(pricing.total_cents - creditAppliedCents + reviewFeeCents)}
             </span>
           </div>
+          {/* Says what happens next, because a $0 total with a Continue button
+              underneath reads as a broken screen. There is no Stripe page on
+              that path - create-checkout confirms the registration outright. */}
+          {creditAppliedCents > 0 && pricing.total_cents - creditAppliedCents + reviewFeeCents <= 0 && (
+            <p className="mt-2 text-xs text-white/60">
+              Your credit covers this in full, so there&rsquo;s nothing to pay.
+            </p>
+          )}
           {/* Only when bank ACTUALLY saves something. Every org on the old 1%
               terms has the same rate on both rails, so promising a saving
               there would be a promise the next screen does not keep - and the
