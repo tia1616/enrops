@@ -3004,6 +3004,13 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
             curriculum: program.curriculum,
             status: program.status,
             term: program.term,
+            // ShareProgram exempts camps from the term gate, because the catalog
+            // shows an open camp until its last day whatever term is on sale.
+            // Without this field it cannot tell, so a camp filed to WI27 was
+            // told "there's no public link to share yet ... it turns on when
+            // that term's registration opens" while families could already
+            // register for it.
+            class_days: program.class_days,
             runs_own_registration: program.runs_own_registration,
             external_registration_url: program.external_registration_url,
           }}

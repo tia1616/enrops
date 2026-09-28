@@ -4,6 +4,7 @@ import { supabase, API_BASE } from '../../lib/supabase.js';
 import { advanceProblem } from '../../lib/registerAdvance.js';
 import { VIP_PRICE_PER_TERM_CENTS } from '../../lib/pricing.js';
 import { schoolYearTermsForFall } from '../../lib/terms.js';
+import { isCampProgram } from '../../lib/programSchedule.js';
 import { useCart } from '../../context/CartContext.jsx';
 import StepIndicator from '../../components/StepIndicator.jsx';
 import StepStudent from './register-steps/StepStudent.jsx';
@@ -265,7 +266,11 @@ export default function Register() {
     const school = schools.find((s) => s.id === program.program_location_id);
     if (school) setActiveChildSchool(school);
 
-    if (!vipFromUrl) {
+    // A CAMP CANNOT ANCHOR A YEAR-LONG BUNDLE. The catalog no longer offers the
+    // VIP button on a camp, so ?vip=1 should never arrive with one - but the
+    // flag comes from the URL, and this is the checkout path, so it fails closed
+    // here too rather than trusting the page that sent them.
+    if (!vipFromUrl || isCampProgram(program)) {
       setActiveChildItem({ program, isVip: false });
       return;
     }

@@ -536,7 +536,14 @@ export default function Home() {
     const futureTerms = futureRes?.data;
     const bundles = {};
     if (pg && pg.length && bundleTerms) {
-      pg.forEach((fall) => {
+      // A CAMP IS NEVER A BUNDLE LEG - INCLUDING THE FIRST ONE. The winter and
+      // spring lookups already refuse camps; this is the ANCHOR, and it was
+      // missed. Camps entered this list the moment the catalog stopped filtering
+      // them by term, so a two-day Thanksgiving camp at a school whose Thursday
+      // has a WI27 and an SP27 class rendered "Your child's full school year"
+      // with a $727.20 Lock in VIP spot button. The family would be buying a
+      // year-long commitment whose first term is two days of camp.
+      pg.filter((p) => !isCampProgram(p)).forEach((fall) => {
         const winter = futureTerms?.find(
           (f) => f.term === bundleTerms.winter && f.program_location_id === fall.program_location_id && f.day_of_week === fall.day_of_week,
         );
