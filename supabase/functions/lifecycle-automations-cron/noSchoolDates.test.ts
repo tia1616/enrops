@@ -8,6 +8,7 @@ import {
   nsdWeekdaysStrictlyBetween,
   periodFires,
   formatDateList,
+  isCampProgram,
 } from "./noSchoolDates.ts";
 
 Deno.test("cleanNoSchoolDates drops junk, past dates; sorts ascending", () => {
@@ -91,6 +92,25 @@ Deno.test("termToSchoolYear mirrors the SQL function", () => {
   // and SQL mirrors never classify a malformed term differently.
   assertEquals(termToSchoolYear("FA26x"), null);
   assertEquals(termToSchoolYear("FA2 "), null);
+});
+
+Deno.test("isCampProgram keeps camps out of the school calendar", () => {
+  // The whole point: a WI27 camp IS a school-year term, so term alone can never
+  // exclude it. Only class_days can. If this ever regresses, the no_school_day
+  // automation tells camp families their camp is cancelled on days it runs.
+  assertEquals(termToSchoolYear("WI27"), "2026-2027");
+  assertEquals(isCampProgram({ class_days: ["monday", "tuesday", "wednesday", "thursday", "friday"] }), true);
+  assertEquals(isCampProgram({ class_days: ["monday"] }), true);
+
+  // A weekly after-school class: class_days is NULL, and it must stay in scope.
+  assertEquals(isCampProgram({ class_days: null }), false);
+  assertEquals(isCampProgram({}), false);
+  assertEquals(isCampProgram(null), false);
+  assertEquals(isCampProgram(undefined), false);
+
+  // An empty array is NOT a camp — it matches the SQL, where v_consecutive
+  // requires array_length > 0 and an empty class_days takes the weekly path.
+  assertEquals(isCampProgram({ class_days: [] }), false);
 });
 
 Deno.test("nsdWeekdayLower is timezone-stable", () => {

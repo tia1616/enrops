@@ -757,6 +757,7 @@ export default function ProgramsCalendar() {
             grade_min, grade_max, age_min, age_max, age_format,
             runs_own_registration, external_registration_url, list_in_public_catalog,
             first_session_date, session_count, schedule_mode, end_date, organization_id,
+            class_days,
             facility_requested_at, facility_approved_at, facility_notes,
             program_location_id,
             program_locations (id, name, district)
@@ -2090,6 +2091,13 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
       p_early_release_start_time: draft.early_release_start_time
         ? to12hText(draft.early_release_start_time)
         : null,
+      // A CAMP is a range program that meets on several weekdays. Without this
+      // the preview takes the weekly arm, counts only day_of_week (a camp's
+      // FIRST day), and this count is materialized straight into session_count
+      // by the save below -- so editing a ten-day Mon-Fri camp's price would
+      // silently store "2 sessions". Read from the saved row, not the draft:
+      // class_days is not editable here, and the patch never writes it.
+      p_class_days: program.class_days ?? null,
     }).then(({ data, error }) => {
       if (!alive) return;
       setRangeLoading(false);
@@ -2098,7 +2106,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
     return () => { alive = false; };
     // early_release_start_time is a dependency for the same reason: typing it
     // changes the count this preview is about to hand to the save.
-  }, [draft.schedule_mode, draft.day_of_week, draft.first_session_date, draft.end_date, draft.program_location_id, draft.early_release_start_time, program.organization_id, program.term]);
+  }, [draft.schedule_mode, draft.day_of_week, draft.first_session_date, draft.end_date, draft.program_location_id, draft.early_release_start_time, program.organization_id, program.term, program.class_days]);
 
   function set(field, value) {
     setDraft((d) => ({ ...d, [field]: value }));
