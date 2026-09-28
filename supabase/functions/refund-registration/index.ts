@@ -390,11 +390,26 @@ serve(async (req: Request) => {
     // GROSS applied, deliberately: this answers "how much of the price never
     // reached Stripe", a fact about the original charge that handing credit
     // back later does not change.
-    const { data: creditLegRows } = await supabase
+    const { data: creditLegRows, error: creditLegErr } = await supabase
       .from('family_credit_movements')
       .select('amount_cents, kind')
       .eq('registration_id', registrationId)
       .in('kind', ['applied', 'restored']);
+    // FAIL CLOSED - but NOT from here. An empty answer does not mean "no
+    // credit was used", it means we cannot see; a wrong zero leaves the slot
+    // bases gross, so `totalPaid` counts money that never reached Stripe and
+    // issue_family_credit is handed a paid figure that includes the credit
+    // leg - $400 of new credit minted for a family who paid $160 in cash. The
+    // slot-lowering comment below calls that minting liability out of nothing.
+    //
+    // The refusal is DEFERRED to just after authorization, because returning
+    // from here was too wide: this read sits above the registration_not_found
+    // check and above the org_members check, so a transient database blip
+    // answered a non-member probing a stranger's id with a 500 instead of a
+    // 403 - and it blocked the withdraw-only branch, which never reads this
+    // value and is the one button that stops a family's scheduled charges.
+    if (creditLegErr) console.error('[refund] credit leg lookup failed:', creditLegErr);
+    const creditLegUnreadable = !!creditLegErr;
     const creditLegMovements = (creditLegRows ?? []) as Array<{ amount_cents: number; kind: string }>;
     const creditOnThisReg = creditLegMovements
       .filter((m) => m.kind === 'applied')
@@ -459,6 +474,18 @@ serve(async (req: Request) => {
       .maybeSingle();
     if (!cmData) return FORBIDDEN;
 
+    // NOW fail closed on an unreadable credit leg - after the caller has been
+    // proved to be a member of this org and the registration proved to exist,
+    // and exempting the one branch that never reads it. Everything past this
+    // line either sizes a refund ceiling from `creditOnThisReg` or hands back
+    // `creditReturnable`, and both must refuse rather than act on a zero they
+    // are not sure of. Withdraw-only moves no money at all and is the button
+    // that stops a family's scheduled charges, so a transient read failure
+    // must not take it away.
+    if (creditLegUnreadable && !withdrawOnly) {
+      return json({ error: 'lookup_failed' }, 500);
+    }
+
     // ── WITHDRAW ONLY: no money moves, so no Stripe call is made at all ───
     // Placed here deliberately: AFTER authorization, and BEFORE every line that
     // touches Stripe. There is no path from here to a charge, a refund or an
@@ -494,22 +521,6 @@ serve(async (req: Request) => {
       if (!Number.isFinite(amountCents) || amountCents <= 0) {
         return json({ error: 'invalid_amount' }, 400);
       }
-      if (creditReturnable <= 0) {
-        // Not an error the operator caused - say what is true rather than
-        // echoing a constraint. Covers both "they never used credit here" and
-        // "it has already been given back".
-        return json({
-          error: 'no_credit_to_return',
-          credit_returnable_cents: 0,
-        }, 400);
-      }
-      if (amountCents > creditReturnable) {
-        return json({
-          error: 'amount_exceeds_credit_returnable',
-          credit_returnable_cents: creditReturnable,
-        }, 400);
-      }
-
       // IDEMPOTENT ON THE OPERATOR'S KEY, like every other money write here.
       // The RPC's applied-minus-restored bound stops a repeat exceeding the
       // LEG, but not the operator's INTENT: returning $120 of a $240 leg and
@@ -521,39 +532,97 @@ serve(async (req: Request) => {
       // Matched on the movement's note rather than a column, because
       // family_credit_movements has no idempotency_key and this only has to
       // recognise a replay of the same press; the amount is bounded regardless.
+      //
+      // IT RUNS BEFORE THE AMOUNT GATES, not after, because those gates read
+      // `creditReturnable` - which the FIRST attempt already reduced. A replay
+      // of a full return would otherwise be refused with `no_credit_to_return`,
+      // telling the operator their return failed when it is the one thing that
+      // definitely worked. Recognise the replay first, validate a fresh request
+      // second.
       const returnNote = idempotencyKey
         ? `operator return ${idempotencyKey}`
         : 'returned to the family by the operator';
+      let alreadyReturned = 0;
       if (idempotencyKey) {
-        const { data: priorReturn } = await supabase
+        const { data: priorReturn, error: priorErr } = await supabase
           .from('family_credit_movements')
           .select('amount_cents')
           .eq('registration_id', registrationId)
           .eq('kind', 'restored')
           .eq('note', returnNote);
-        const already = ((priorReturn ?? []) as Array<{ amount_cents: number }>)
-          .reduce((s, m) => s + (m.amount_cents || 0), 0);
-        if (already > 0) {
-          // Answers with what was ACTUALLY written, not what this request asked
-          // for - the same rule issue_credit follows on a retry, and for the
-          // same reason: the operator repeats this number to the family.
-          return json({
-            credit_returned: true,
-            credit_returned_cents: already,
-            credit_returnable_cents: creditReturnable,
-            already_existed: true,
-            refunded_cents: 0,
-            cancelled: false,
-            pending_charges_stopped: 0,
-          });
+        if (priorErr) {
+          // FAIL CLOSED. This read is the ONLY thing standing between a retry
+          // and a second return, and a guard that answers "no prior return"
+          // when it cannot see is not a guard - it is the $240-on-a-$120
+          // decision this block exists to prevent, now with an error in the
+          // log to explain it afterwards. Same direction as the credit-leg and
+          // ceiling reads.
+          console.error('[return-credit] prior-return lookup failed:', priorErr);
+          return json({ error: 'lookup_failed' }, 500);
         }
+        alreadyReturned = ((priorReturn ?? []) as Array<{ amount_cents: number }>)
+          .reduce((s, m) => s + (m.amount_cents || 0), 0);
       }
 
-      const [returned, returnFailed] = await restoreCreditLeg(amountCents, returnNote);
-      if (returnFailed) {
-        // NOTHING has happened - the RPC is the only write on this path and it
-        // rolled back. Say so plainly rather than implying a half-done state.
-        return json({ error: 'credit_return_failed' }, 500);
+      // A REPLAY SKIPS THE MONEY, NOT THE SEAT. The first attempt can die
+      // between the restore and the cancel - a timeout, a cold-start kill, a
+      // dropped response - and the operator is then told to try again. Short-
+      // circuiting the whole branch on the key meant that retry returned 200
+      // having done nothing: the child stayed on the roster, no CANCELLED event
+      // was written, and the family's card kept collecting the remaining
+      // instalments on dates months out. The sibling issue_credit retry at the
+      // bottom of this file already says exactly this about its own pause, so
+      // the two paths now answer the question the same way.
+      let returned = alreadyReturned;
+      if (alreadyReturned <= 0) {
+        if (creditReturnable <= 0) {
+          // Not an error the operator caused - say what is true rather than
+          // echoing a constraint. Covers both "they never used credit here" and
+          // "it has already been given back".
+          return json({
+            error: 'no_credit_to_return',
+            credit_returnable_cents: 0,
+          }, 400);
+        }
+        if (amountCents > creditReturnable) {
+          return json({
+            error: 'amount_exceeds_credit_returnable',
+            credit_returnable_cents: creditReturnable,
+          }, 400);
+        }
+
+        const [justReturned, returnFailed] = await restoreCreditLeg(amountCents, returnNote);
+        if (returnFailed) {
+          // NOTHING has happened - the RPC is the only write on this path and it
+          // rolled back. Say so plainly rather than implying a half-done state.
+          return json({ error: 'credit_return_failed' }, 500);
+        }
+        returned = justReturned;
+
+        // ZERO BACK IS NOT A SUCCESSFUL RETURN OF ZERO. The probe above is a
+        // read and the RPC is a separate write, so two presses of the same key
+        // can both pass the probe; the RPC's applied-minus-restored bound then
+        // serialises them and the loser legitimately gets 0. Reporting that
+        // literally told the operator "$0.00 has gone back onto this family's
+        // account credit" and "$240.00 is still with you" immediately after the
+        // $240 went back - both false, and they would have gone looking for a
+        // failure that did not happen. Re-read the ledger and answer with what
+        // is actually there.
+        if (returned <= 0) {
+          const { data: afterRows, error: afterErr } = await supabase
+            .from('family_credit_movements')
+            .select('amount_cents')
+            .eq('registration_id', registrationId)
+            .eq('kind', 'restored')
+            .eq('note', returnNote);
+          if (afterErr) {
+            console.error('[return-credit] post-write re-read failed:', afterErr);
+            return json({ error: 'lookup_failed' }, 500);
+          }
+          alreadyReturned = ((afterRows ?? []) as Array<{ amount_cents: number }>)
+            .reduce((s, m) => s + (m.amount_cents || 0), 0);
+          returned = alreadyReturned;
+        }
       }
 
       let returnCancelFailed: string | null = null;
@@ -605,7 +674,18 @@ serve(async (req: Request) => {
       return json({
         credit_returned: true,
         credit_returned_cents: returned,
-        credit_returnable_cents: Math.max(0, creditReturnable - returned),
+        // NOT `creditReturnable - returned` on a replay. That figure was read
+        // at the top of THIS invocation, so on a retry the first attempt's
+        // restore is already subtracted out of it; taking `returned` off again
+        // would under-report what is left and the operator quotes that number
+        // to the family.
+        credit_returnable_cents: alreadyReturned > 0
+          ? creditReturnable
+          : Math.max(0, creditReturnable - returned),
+        // Says this was a REPLAY, not a second return, so the drawer can tell
+        // the operator that rather than implying two returns happened. The
+        // issue_credit path already answers this way.
+        already_existed: alreadyReturned > 0,
         refunded_cents: 0,
         cancelled: cancelRegistration && !returnCancelFailed,
         cancel_failed: returnCancelFailed ?? undefined,
@@ -820,11 +900,21 @@ serve(async (req: Request) => {
     // false → provider out the full app fee; true → provider net $0.
     // Legacy own-platform orgs (J2S, stripe_fee_payer='platform' or unset) keep the
     // prior behavior (false) — their app fee is internal, so this is unchanged.
-    const { data: orgFeeRow } = await supabase
+    const { data: orgFeeRow, error: orgFeeErr } = await supabase
       .from('organizations')
       .select('stripe_fee_payer')
       .eq('id', reg.organization_id)
       .maybeSingle();
+    if (orgFeeErr) {
+      // FAIL CLOSED - this decides WHO BEARS Stripe's fee, which sizes the
+      // fee refund. An empty answer reads as the legacy platform-pays shape,
+      // so a tenant-pays org has its whole application fee treated as margin
+      // and enrops hands back the Stripe-fee uplift Stripe never returns.
+      // Fails against us rather than the family, which is exactly why it
+      // would never have been reported.
+      console.error('[refund] org fee-payer lookup failed:', orgFeeErr);
+      return json({ error: 'lookup_failed' }, 500);
+    }
     const orgFee = orgFeeRow as { stripe_fee_payer?: string } | null;
 
     // ── Phase 2: which account the refund is created on ───────────────────
@@ -917,10 +1007,21 @@ serve(async (req: Request) => {
     // ── collect paid PIs for this registration ────────────────────────────
     // Pattern: installments table is the primary source. If no installments
     // rows exist (single-pay registration), fall back to registrations.
-    const { data: instData } = await supabase
+    const { data: instData, error: instErr } = await supabase
       .from('installments')
       .select('id, installment_number, amount_cents, status, stripe_payment_intent_id, paid_at, stripe_charge_account_id')
       .eq('registration_id', registrationId);
+    if (instErr) {
+      // FAIL CLOSED - this read BUILDS the ceiling. An empty answer on a
+      // payment plan falls through to the single-slot branch and makes one
+      // slot worth the registration's FULL price against a payment intent
+      // that only ever covered one instalment: a $600 plan with $200
+      // collected would offer a $600 refund, and issue_family_credit makes no
+      // Stripe call, so nothing downstream would second-guess it. Same class
+      // as the credit-leg read above, on a larger number.
+      console.error('[refund] installment lookup failed:', instErr);
+      return json({ error: 'lookup_failed' }, 500);
+    }
     const installments = (instData as InstallmentRow[] | null) ?? [];
     const paidInstallments = installments.filter(
       (i) => i.status === 'paid' && i.stripe_payment_intent_id,
@@ -981,10 +1082,16 @@ serve(async (req: Request) => {
     // A REAL refund with nothing paid is still 400 - there is nothing to refund
     // and saying so is right. (A withdrawal never reaches here: it returns long
     // before this line.)
-    // `returnCredit` is exempt, and that exemption is the fix. "Nothing paid"
-    // means nothing reached STRIPE, which is exactly the state a registration
-    // bought with account credit is in - the family paid in full, just not with
-    // a card. Refusing here is what made their money unreachable.
+    // `returnCredit` is exempt because "nothing paid" means nothing reached
+    // STRIPE, which is exactly the state a registration bought with account
+    // credit is in - the family paid in full, just not with a card.
+    //
+    // BUT THE EXEMPTION IS NOT WHAT SAVES IT, and an earlier version of this
+    // comment said it was. The return-credit branch returns its own JSON some
+    // five hundred lines above this line, so it can never arrive here at all;
+    // the PLACEMENT is the fix and `!returnCredit` is belt-and-braces. Kept,
+    // because it costs nothing and the branch could move - but do not read it
+    // as the protection, or moving that branch below this gate will look safe.
     if (piSlots.length === 0 && !preview && !returnCredit) {
       return json({ error: 'nothing_paid' }, 400);
     }
@@ -1155,11 +1262,21 @@ serve(async (req: Request) => {
     }
 
     // ── compute already-refunded per PI for this registration ─────────────
-    const { data: refundedData } = await supabase
+    const { data: refundedData, error: refundedErr } = await supabase
       .from('refunds')
       .select('stripe_payment_intent_id, amount_cents')
       .eq('registration_id', registrationId)
       .eq('status', 'succeeded');
+    if (refundedErr) {
+      // FAIL CLOSED - this is what has ALREADY been given back. Reading it as
+      // empty makes every payment intent look untouched, so `availableOnPi`
+      // reopens the whole slot and the preview tells the operator "$0 already
+      // refunded" on a registration that has had $240 back. Only the
+      // under-lock re-check in reserve_refund_slot stands behind it, and a
+      // guard of last resort is not a reason to hand it a wrong number.
+      console.error('[refund] prior-refund lookup failed:', refundedErr);
+      return json({ error: 'lookup_failed' }, 500);
+    }
     const refundedAgg: Record<string, number> = {};
     for (const row of ((refundedData as RefundedAgg[] | null) ?? [])) {
       const r = row as unknown as { stripe_payment_intent_id: string; amount_cents: number };
@@ -1647,6 +1764,12 @@ serve(async (req: Request) => {
     // bookkeeping below record what did move. `unknown` carries whether we know
     // the money did not go - the operator's next step differs entirely.
     let stripeFailedAfterMoneyMoved: { code: string; message: string; unknown: boolean } | null = null;
+    // Credit belonging to a slice whose cash refund Stripe never confirmed.
+    // `remaining` is only decremented on success, so these cents are excluded
+    // from refundedNowCents and the proportional restore below never covers
+    // them - and nothing heals it later, because charge.refunded has no credit
+    // restore. Reported to the operator so it can be returned by hand.
+    let unresolvedCreditCents = 0;
     // Set when the family was refunded but the withdrawal write failed. The
     // instalment pause and the receipt still have to run - a refunded family
     // whose future instalments keep charging is the worst outcome here.
@@ -1965,6 +2088,35 @@ serve(async (req: Request) => {
           'StripeRateLimitError',
         ];
         const ambiguous = !DEFINITIVE_STRIPE_FAILURES.includes(errType);
+
+        // THE CREDIT HALF OF AN UNRESOLVED SLICE HAS NO SELF-HEALING ROUTE.
+        // `remaining` is only decremented on a confirmed success, so this
+        // slice is excluded from `refundedNowCents` below and the proportional
+        // credit restore never covers it. If the webhook later promotes this
+        // row to 'succeeded', nothing goes back and looks for the credit: the
+        // only restore_family_credit_for_registration call in stripe-webhook
+        // is in the ACH-bounce branch, and charge.refunded has none. So the
+        // family can end up with the cash and permanently short their credit
+        // share, with the pending reservation holding the ceiling so a retry
+        // is refused. Naming the figure on the row is what makes that
+        // recoverable by hand - the operator can return it from the drawer
+        // once Stripe settles. Recorded rather than restored here on purpose:
+        // we do not know yet whether the cash refund happened, and returning
+        // the credit for a refund that did not occur is the double-spend this
+        // whole branch exists to avoid.
+        // TOLD TO THE OPERATOR, NOT WRITTEN ON THE ROW. My first attempt at
+        // this appended the sentence to `failure_reason`, which was wrong
+        // twice over: `parents_see_own_refunds` (20260527_refunds_table.sql)
+        // grants a parent SELECT on their own refund row with no column
+        // restriction, so the family could read a plain-English statement
+        // that the business owes them money - and NO operator surface selects
+        // that column at all, so the one audience who could act on it would
+        // never have seen it. It travels in the response instead, which is
+        // already how this function reports a part-finished refund.
+        unresolvedCreditCents += (ambiguous && creditOnThisReg > 0 && totalPaid > 0)
+          ? Math.round((creditOnThisReg * refundThisPi) / totalPaid)
+          : 0;
+
         const { error: markErr } = await supabase
           .from('refunds')
           .update(
@@ -1994,6 +2146,7 @@ serve(async (req: Request) => {
             // The drawer must not promise "nothing was charged back" when we do
             // not actually know that.
             outcome_unknown: ambiguous || undefined,
+            credit_not_returned_cents: unresolvedCreditCents || undefined,
           }, 502);
         }
         stripeFailedAfterMoneyMoved = { code: errCode, message: errMsg, unknown: ambiguous };
@@ -2418,6 +2571,12 @@ serve(async (req: Request) => {
       // literal, and a nested object hides its contents from the one guard that
       // exists to notice new warnings.
       stripe_aborted: stripeFailedAfterMoneyMoved?.message ?? undefined,
+      // Account credit on a slice Stripe never confirmed, which the
+      // proportional restore below could not cover and which nothing heals
+      // later. Flat and top-level for the same reason as stripe_aborted: the
+      // parity ratchet reads these keys, and this is a warning the operator
+      // has to act on - it is the family's own money, still with the business.
+      credit_not_returned_cents: unresolvedCreditCents || undefined,
       stripe_aborted_unknown: stripeFailedAfterMoneyMoved?.unknown || undefined,
     });
   } catch (err) {

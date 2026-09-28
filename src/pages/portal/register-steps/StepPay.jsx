@@ -93,6 +93,11 @@ export default function StepPay({
   // disagreeing about what someone owes is worse than either being wrong
   // alone, because the family cannot tell which to believe.
   const grossLineAmounts = (pricing?.lines || []).map((l) => l.amount_cents);
+  // `useInstallments` here is belt-and-braces: Register.jsx has already
+  // resolved plan eligibility and hands this step a zero on a plan. Kept
+  // because it is the SAME rule spelled the same way, not a second opinion -
+  // the Review step's different spelling of it is what let the two screens
+  // disagree about one cart.
   const { lineAmounts: cartLineAmounts, creditApplied: creditAppliedCents } =
     spreadCreditAcrossLines(grossLineAmounts, useInstallments ? 0 : familyCreditCents);
   const cartFeeFor = (bank) => cartFeeOnLines(cartLineAmounts, org, { isBank: bank });

@@ -1,22 +1,26 @@
-// The Pay step quotes a family a total BEFORE it has registration ids, by
-// predicting how create-checkout will spread their account credit across the
-// cart. That prediction is only correct while two things agree:
+// What the family is quoted once their account credit comes off the cart, and
+// how the enrops service fee reacts to the split.
 //
-//   1. the ORDER credit is filled in - StepPay fills `pricing.lines` in cart
-//      order, create-checkout fills `registration_ids` in the order
-//      create-registration pushed them;
-//   2. the ARITHMETIC - greedy, each line filled before the next.
+// WHAT THIS FILE IS NOT, ANY MORE. It used to be named for client/server
+// parity and it could not deliver it: the "server" it compared against was a
+// hand-written mirror of allocateCreditAcrossLines living in this same file,
+// so check 4 compared that copy against itself and every assertion stayed
+// green if the real server changed its fill order, its id tie-break, or its
+// Stripe-minimum trim. Worse, it would not have caught the bug that was live
+// while it sat here passing: the Review step spelling the payment-plan gate
+// differently from the Pay step.
 //
-// Both are true today and neither is pinned by anything, which is exactly the
-// shape that rots. If the two ever diverge the family is quoted a number they
-// are not charged, and today's fee config hides it: at a flat 1% with no floor
-// and no binding cap the total fee is linear, so ANY split gives the same
-// answer. The money doc's $1.99 floor and $14.99 cap make the split matter, so
-// this would first go wrong on the day pricing changes - long after the code
-// that broke it.
+// REAL PARITY NOW LIVES IN supabase/functions/_shared/tests/
+// creditSpreadTwinParity.test.ts, which imports the ACTUAL server module and
+// the ACTUAL browser module and compares their answers. That is the file to
+// change if the split rule changes.
 //
-// So this file pins the arithmetic directly, and pins it AT a clamped fee
-// config where order genuinely changes the answer.
+// WHAT IS LEFT HERE IS STILL WORTH HAVING, and the twin cannot do it: the fee
+// is a browser-side concern on these screens, and the credit split CHANGES the
+// fee once the money doc's floor and cap bite. Today's flat 1% with no floor
+// and no binding cap makes the total fee linear, so any split gives the same
+// answer and a divergence would hide until the day pricing changes. So this
+// pins the fee against a CLAMPED config where the split genuinely matters.
 
 import { cartFeeOnLines } from './platformFee.js';
 import { spreadCreditAcrossLines } from './creditSpread.js';
@@ -25,37 +29,6 @@ let failures = 0;
 function check(label, cond, detail) {
   console.log(`${cond ? 'PASS' : 'FAIL'}  ${label}${detail ? '  ' + detail : ''}`);
   if (!cond) failures++;
-}
-
-/**
- * THE REAL CLIENT SPREAD, imported rather than copied. Both the Review step
- * and the Pay step call this exact function, so a change to it that breaks
- * agreement with the server fails here instead of quoting a family a number
- * they are not charged. An earlier draft re-implemented it in this file, which
- * would have gone on passing after the component changed.
- */
-function clientSpread(grossLineAmounts, creditCents) {
-  return spreadCreditAcrossLines(grossLineAmounts, creditCents).lineAmounts;
-}
-
-/**
- * The server's spread, mirroring allocateCreditAcrossLines filling in the order
- * given. Written independently rather than imported, because the server copy is
- * .ts under supabase/functions and this runner is plain node - two spellings of
- * one rule is the risk, so the test's job is to prove they still agree.
- */
-function serverSpread(lines, creditCents, order) {
-  const rank = new Map(order.map((id, i) => [id, i]));
-  const ordered = [...lines].sort((a, b) => rank.get(a.id) - rank.get(b.id));
-  let left = Math.min(creditCents, lines.reduce((s, l) => s + l.amount, 0));
-  const out = new Map();
-  for (const l of ordered) {
-    const take = Math.min(l.amount, left);
-    left -= take;
-    out.set(l.id, l.amount - take);
-  }
-  // back into the caller's line order, which is what the fee is computed over
-  return lines.map((l) => out.get(l.id));
 }
 
 // A config where the clamps BITE, so the split actually changes the fee. This
@@ -82,50 +55,46 @@ const CLAMPED = {
   check('the clamped config is order-sensitive, so this test can fail', a !== b, `${a} vs ${b}`);
 }
 
-// 2) THE REAL CHECK. Same cart, same credit: the Pay step's spread and the
-//    server's spread must produce the same per-line amounts, and therefore the
-//    same fee, when the server's fill order matches cart order.
+// 2) THE FEE FOLLOWS THE CREDIT DOWN. The money doc's rule is that the fee is
+//    charged once per dollar of FAMILY money, so a line the credit zeroes must
+//    stop carrying a fee - including its per-line floor, which is the part that
+//    would otherwise keep charging $1.99 for a class that now costs nothing.
 {
   const gross = [24000, 18000, 9000];
-  const ids = ['r1', 'r2', 'r3'];
-  const lines = gross.map((amount, i) => ({ id: ids[i], amount }));
-  for (const credit of [0, 1, 9000, 24000, 30000, 51000, 99999]) {
-    const mine = clientSpread(gross, credit);
-    const theirs = serverSpread(lines, credit, ids);
-    check(`spread agrees at ${credit}`, JSON.stringify(mine) === JSON.stringify(theirs),
-      JSON.stringify(mine));
-    check(`fee agrees at ${credit}`,
-      cartFeeOnLines(mine, CLAMPED, { isBank: false }) === cartFeeOnLines(theirs, CLAMPED, { isBank: false }));
+  const full = cartFeeOnLines(gross, CLAMPED, { isBank: false });
+  let prev = full;
+  for (const credit of [9000, 24000, 30000, 51000]) {
+    const { lineAmounts } = spreadCreditAcrossLines(gross, credit);
+    const fee = cartFeeOnLines(lineAmounts, CLAMPED, { isBank: false });
+    check(`more credit never costs more fee (credit ${credit})`, fee <= prev, `${fee} <= ${prev}`);
+    prev = fee;
   }
+  const { lineAmounts: allCovered } = spreadCreditAcrossLines(gross, 51000);
+  check('a fully covered cart carries no fee at all',
+    cartFeeOnLines(allCovered, CLAMPED, { isBank: false }) === 0);
 }
 
-// 3) A VIP bundle is ONE cart item but THREE registrations. create-registration
-//    expands it (children -> items -> [fall, winter, spring]) and pushes the ids
-//    in that order, and pricing.js emits three lines in the same order. Pinned
-//    here because the quote silently depends on it.
+// 3) A VIP bundle is ONE cart item but THREE registrations, and the credit
+//    lands on the EARLIEST terms rather than being spread thin - one sentence
+//    a parent can be told ("it covered Fall, and $60 of Winter").
 {
-  const gross = [24000, 24000, 24000];             // fall, winter, spring
-  const ids = ['vip-fall', 'vip-winter', 'vip-spring'];
-  const lines = gross.map((amount, i) => ({ id: ids[i], amount }));
-  const mine = clientSpread(gross, 30000);
-  const theirs = serverSpread(lines, 30000, ids);
-  check('a VIP bundle spreads identically on both sides',
-    JSON.stringify(mine) === JSON.stringify(theirs), JSON.stringify(mine));
-  check('and the credit lands on the EARLIEST terms, not spread thin',
-    mine[0] === 0 && mine[1] === 18000 && mine[2] === 24000, JSON.stringify(mine));
+  const { lineAmounts, creditApplied } = spreadCreditAcrossLines([24000, 24000, 24000], 30000);
+  check('a VIP bundle fills earliest-first',
+    JSON.stringify(lineAmounts) === JSON.stringify([0, 18000, 24000]), JSON.stringify(lineAmounts));
+  check('and spends exactly what was offered', creditApplied === 30000, String(creditApplied));
 }
 
-// 4) If the server's order ever stops matching cart order, this test must go
-//    red rather than quietly passing - proof the comparison is load-bearing.
+// 4) THE STRIPE FLOOR. Credit that would leave 1-49 cents owing is trimmed so
+//    the family pays the 50-cent minimum and keeps the rest, because Stripe
+//    refuses the charge otherwise and the retry loop that produced had no exit.
 {
-  const gross = [24000, 18000];
-  const ids = ['r1', 'r2'];
-  const lines = gross.map((amount, i) => ({ id: ids[i], amount }));
-  const mine = clientSpread(gross, 20000);
-  const reversed = serverSpread(lines, 20000, ['r2', 'r1']);
-  check('a mismatched fill order is detected, not tolerated',
-    JSON.stringify(mine) !== JSON.stringify(reversed),
-    `${JSON.stringify(mine)} vs ${JSON.stringify(reversed)}`);
+  const { lineAmounts, creditApplied } = spreadCreditAcrossLines([22800], 22780);
+  check('a sub-50c residual is trimmed away, not sent to Stripe',
+    lineAmounts[0] === 50 && creditApplied === 22750,
+    `owed ${lineAmounts[0]}, spent ${creditApplied}`);
+  const exact = spreadCreditAcrossLines([22800], 22800);
+  check('and covering the cart outright still goes to zero',
+    exact.lineAmounts[0] === 0 && exact.creditApplied === 22800);
 }
 
 console.log('');

@@ -529,6 +529,20 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
           `withdraw them manually. Any pending instalments have been stopped.`,
         );
       }
+      if (data?.credit_not_returned_cents) {
+        // THE FAMILY'S OWN MONEY, STILL WITH THE BUSINESS. Stripe never
+        // confirmed one slice of this refund, so it stays pending - and the
+        // credit share of that slice was deliberately NOT given back, because
+        // returning credit for a refund that may not have happened is the
+        // double-spend this whole path guards against. Nothing heals it
+        // later: the webhook restores credit on a bounced bank transfer, not
+        // on a refund it promotes. So it is the operator's to finish.
+        notes.push(
+          `${fmtCents(data.credit_not_returned_cents)} of this was paid with account credit and has NOT ` +
+          `been given back, because Stripe never confirmed that part of the refund. Once it shows as ` +
+          `refunded in Stripe, return that credit from this drawer — nothing will do it automatically.`,
+        );
+      }
       if (data?.fee_lookup_aborted) {
         notes.push(
           `Part of this payment could not be read from Stripe, so refunding stopped partway. ` +
@@ -602,10 +616,20 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
       if (isCreditReturn) {
         const back = data?.credit_returned_cents ?? amountCents;
         const left = data?.credit_returnable_cents ?? 0;
-        const seatFreedOnReturn = seatChoice === "withdraw" && !data?.cancel_failed;
+        // ASK WHETHER IT WAS CANCELLED, don't infer it from the absence of a
+        // failure. `!cancel_failed` was true on a replayed request too - the
+        // server recognises the operator's key, skips the write it already
+        // did, and answers `cancelled: false` with no failure to report - so
+        // an operator retrying after a dropped response was told the spot had
+        // been freed when the child was still on the roster. The server states
+        // this outcome directly; read that.
+        const seatFreedOnReturn = !!data?.cancelled;
+        const seatStillFilled = seatChoice === "withdraw" && !data?.cancelled;
         alert(
           [
-            `${fmtCents(back)} has gone back onto this family's account credit.`,
+            data?.already_existed
+              ? `${fmtCents(back)} was already returned to this family's account credit — this did not return it a second time.`
+              : `${fmtCents(back)} has gone back onto this family's account credit.`,
             left > 0
               ? `${fmtCents(left)} of what they paid for this class is still with you.`
               : `That is everything they paid for this class.`,
@@ -615,7 +639,14 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
             `No card was charged for this class, so Stripe will not email them — telling them is yours to do.`,
             data?.cancel_failed
               ? `Their spot could not be freed (${data.cancel_failed}). They are still on the roster — withdraw them manually.`
-              : null,
+              // THE SILENT CASE, which is the one that bit. Withdraw was
+              // asked for, the server did not report a failure, and it still
+              // did not cancel - the replay path. Without this sentence the
+              // operator closes the drawer believing the child is off the
+              // roster.
+              : seatStillFilled
+                ? `Their spot was NOT freed — they are still on the roster. Withdraw them manually.`
+                : null,
           ].filter(Boolean).join("\n\n"),
         );
         onDone?.();

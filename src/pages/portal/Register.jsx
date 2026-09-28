@@ -2,8 +2,9 @@ import React, { useEffect, useState, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams, useOutletContext } from 'react-router-dom';
 import { supabase, API_BASE } from '../../lib/supabase.js';
 import { advanceProblem } from '../../lib/registerAdvance.js';
-import { VIP_PRICE_PER_TERM_CENTS } from '../../lib/pricing.js';
+import { VIP_PRICE_PER_TERM_CENTS, INSTALLMENT_MIN_CENTS } from '../../lib/pricing.js';
 import { schoolYearTermsForFall } from '../../lib/terms.js';
+import { spreadCreditAcrossLines } from '../../lib/creditSpread.js';
 import { useCart } from '../../context/CartContext.jsx';
 import StepIndicator from '../../components/StepIndicator.jsx';
 import StepStudent from './register-steps/StepStudent.jsx';
@@ -80,6 +81,43 @@ export default function Register() {
   // The error banner, so a failure can be scrolled to the family. See the effect below.
   const errorRef = useRef(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // READ AGAIN, not once. A `function` rather than a const so the loader above
+  // can call it without depending on declaration order.
+  //
+  // The balance used to be fetched once on mount and quoted for the life of
+  // the page. A family with the cart open in one tab who spent their credit in
+  // another was still shown the old figure on both steps and then met a
+  // different number on the Stripe page, with nothing explaining it. Refreshing
+  // when they reach the deciding screens closes most of that window; the rest
+  // is closed on the server, which refuses rather than silently charging more
+  // when the balance no longer covers what was quoted (see quoted_credit_cents).
+  //
+  // FAILS TO SILENCE, never to a guess - an unreadable balance leaves whatever
+  // was last known rather than flashing a zero mid-checkout, and create-checkout
+  // applies the credit from its own read of the ledger regardless.
+  async function refreshFamilyCredit() {
+    try {
+      const { data: sess } = await supabase.auth.getSession();
+      if (sess?.session && org?.id) {
+        const { data: bal, error: balErr } = await supabase
+          .rpc('my_family_credit_balance_cents', { p_organization_id: org.id });
+        if (balErr) console.warn('[register] credit balance unavailable:', balErr.message);
+        else {
+          setFamilyCreditCents(Number(bal) || 0);
+          setCreditForEmail((sess.session.user?.email || '').trim().toLowerCase() || null);
+        }
+      } else {
+        // NO SESSION MEANS NO CREDIT TO QUOTE. Leaving the old figure on screen
+        // would go on promising a discount to someone who signed out in another
+        // tab - and would keep sending it as the quote.
+        setFamilyCreditCents(0);
+        setCreditForEmail(null);
+      }
+    } catch (e) {
+      console.warn('[register] credit balance lookup failed:', e?.message);
+    }
+  }
 
   // Compute installment schedule for cart total split 3 ways.
   // - Standard term: charge 1 today, charge 2 = first_session + 28 days, charge 3 = first_session + 56 days.
@@ -199,9 +237,52 @@ export default function Register() {
     };
   }, [pricing]);
 
+  // IS THIS A PAYMENT PLAN? ONE SPELLING, ONE PLACE - declared here, beside
+  // the schedule it depends on, so every reader below gets the same answer.
+  // It used to be spelled out separately in handleCheckout and in StepPay
+  // (`payment_plan && installmentSchedule`) and differently again in the
+  // Review step (`payment_plan` alone). Those disagree whenever the flag is
+  // stuck true with no schedule, which is reachable: the flag is a bare
+  // toggle kept in sessionStorage, and adding a class with no first session
+  // date drops the schedule to null AND hides the checkbox, so the family
+  // cannot untick it. Review then quoted the gross total while Pay and the
+  // actual charge applied the credit - two screens disagreeing about what
+  // someone owes, which is the defect this chunk exists to fix.
+  // TWO QUESTIONS, ONE SOURCE. "Can we offer a plan?" decides whether the
+  // checkbox renders; "is this a plan?" decides the charge and whether credit
+  // applies. They must be the same condition plus the family's own tick, or
+  // the screens offer one thing and the money does another.
+  //
+  // THE MINIMUM IS PART OF IT, and leaving it out was the fourth spelling of
+  // this rule. The Review step hid the checkbox below $200 while this stayed
+  // true, so: tick the plan on a $300 two-child cart, remove a child down to
+  // $120, and the checkbox vanishes with the flag still set - the family
+  // cannot untick it. They were then put on a three-instalment plan for a cart
+  // the product says is too small, AND had their account credit withheld on
+  // both screens with nothing explaining why. create-checkout enforces no
+  // minimum of its own, so this was the only gate.
+  const canOfferPaymentPlan =
+    !!installmentSchedule && (pricing?.total_cents ?? 0) >= INSTALLMENT_MIN_CENTS;
+  const usingPaymentPlan = canOfferPaymentPlan && !!cart.payment_plan;
+
   useEffect(() => {
     load();
   }, []);
+
+  // ONE FRESH READ, ON THE WAY INTO REVIEW. Step 3 is Review, the first screen
+  // that quotes a total; step 4 is Pay.
+  //
+  // DELIBERATELY NOT ALSO ON STEP 4. Refreshing on both re-created the very
+  // defect this chunk exists to close, in time instead of in space: Review
+  // would say "Total $0.00, credit -$240.00", and entering Pay would silently
+  // repaint to $146.84 because the balance moved, with nothing on screen
+  // saying why. One read before the first quote means both screens show the
+  // same number, and anything that changes after it is caught on the server,
+  // which refuses rather than charging more than was promised.
+  useEffect(() => {
+    if (step === 3) refreshFamilyCredit();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step]);
 
   // /register requires a ?program= param. School + program selection lives on
   // /j2s — anyone landing here without a program (including browser-back from
@@ -404,20 +485,7 @@ export default function Register() {
     // step shows no credit line, and create-checkout still applies the credit
     // from its own read of the ledger. Showing a family a balance we are not
     // sure of is worse than showing none.
-    try {
-      const { data: sess } = await supabase.auth.getSession();
-      if (sess?.session && org?.id) {
-        const { data: bal, error: balErr } = await supabase
-          .rpc('my_family_credit_balance_cents', { p_organization_id: org.id });
-        if (balErr) console.warn('[register] credit balance unavailable:', balErr.message);
-        else {
-          setFamilyCreditCents(Number(bal) || 0);
-          setCreditForEmail((sess.session.user?.email || '').trim().toLowerCase() || null);
-        }
-      }
-    } catch (e) {
-      console.warn('[register] credit balance lookup failed:', e?.message);
-    }
+    await refreshFamilyCredit();
     // Thread the org's sibling % onto the cart so the review screen matches the
     // server charge. undefined (older org-fee-config) -> pricing.js keeps the 10% default.
     setSiblingPct(feeRes?.data?.sibling_discount_pct);
@@ -580,7 +648,13 @@ export default function Register() {
           parent: cart.parent,
           children: cart.children,
           promo_code: cart.promo?.code || null,
-          payment_plan: cart.payment_plan,
+          // THE SAME DERIVATION AS EVERYWHERE ELSE, not the raw flag. This was
+          // the one caller the unification missed. create-registration stamps
+          // payment_method 'stripe_installments' from it, so a stuck flag with
+          // no schedule labelled the rows as a plan while the cart was charged
+          // in full and partly with account credit - rows describing a plan
+          // that does not exist, with no instalments behind them.
+          payment_plan: usingPaymentPlan,
           pricing_snapshot: pricing,
           // Set when the family arrived from a waitlist invite email. The server
           // re-resolves it and credits the ONE seat their waitlist row is already
@@ -601,7 +675,8 @@ export default function Register() {
       // rows. Fall back to the client pricing if an older function is deployed
       // (identical numbers when there's no promo).
       const serverPricing = regData.pricing;
-      const useInstallments = !!(cart.payment_plan && installmentSchedule);
+      // The one derivation, shared with both steps - see usingPaymentPlan.
+      const useInstallments = usingPaymentPlan;
       const checkoutLineItems =
         serverPricing?.lines?.length
           ? serverPricing.lines.map((l) => ({
@@ -632,6 +707,15 @@ export default function Register() {
         success_path: `/${ORG_SLUG}/register/success`,
         cancel_path: `/${ORG_SLUG}/register`,
         payment_method: paymentMethod,
+        // WHAT THE SCREENS PROMISED, so the server can refuse rather than
+        // quietly charge more. Not money and never treated as money -
+        // create-checkout re-reads the spendable balance itself - but without
+        // it the server cannot tell "this family has some credit" from "this
+        // family was shown a figure we can no longer honour". A balance that
+        // shrank between page load and Pay (an earlier attempt still holding
+        // it, or another tab spending it) otherwise produced a Stripe page for
+        // more than the screen said, with no warning.
+        quoted_credit_cents: creditQuotedCents,
       };
       // Deliberately OUTSIDE line_items and total_cents. Those two are checked
       // against the registration rows by create-checkout's price guard, and a
@@ -697,6 +781,14 @@ export default function Register() {
       });
       const coData = await coResp.json();
       if (!coResp.ok || coData.error) {
+        // RE-READ THE BALANCE BEFORE THEY CAN PRESS AGAIN. This refusal means
+        // the quote we sent no longer matches what is spendable, and without
+        // this the next click resends the SAME stale figure and is refused
+        // identically - a loop, and each turn of it mints another set of
+        // pending registrations and seat holds on the way. Refreshing makes
+        // the second attempt honest: either it now fits, or the screens show
+        // the smaller number the family will actually get.
+        if (coData.credit_held_elsewhere) await refreshFamilyCredit();
         throw new Error(coData.error || 'Could not start checkout.');
       }
       if (coData.comp) {
@@ -748,6 +840,23 @@ export default function Register() {
     creditForEmail === (cart?.parent?.email || '').trim().toLowerCase()
       ? familyCreditCents
       : 0;
+
+  // THE CREDIT FIGURE THE STEPS ARE HANDED, already resolved - eligibility is
+  // decided HERE, once, and neither step re-decides it. create-checkout
+  // refuses credit on a payment plan, so a plan quotes zero on every screen.
+  const creditForCart = usingPaymentPlan ? 0 : quotableCreditCents;
+
+  // WHAT THE SCREENS ACTUALLY SAY, which is not the same as the balance. The
+  // spread caps the credit at the cart total and trims it back off Stripe's
+  // 50-cent floor, so the figure printed on Review and Pay can be lower than
+  // what the family holds. Sending the raw balance made the server compare
+  // the wrong pair: a family quoted "-$227.50, you owe $0.50" who then spent
+  // 30 cents elsewhere was refused, even though the total they were shown was
+  // still deliverable. Send the promise, not the wallet.
+  const creditQuotedCents = spreadCreditAcrossLines(
+    (pricing?.lines || []).map((l) => l.amount_cents),
+    creditForCart,
+  ).creditApplied;
 
   if (loading) {
     return (
@@ -834,7 +943,10 @@ export default function Register() {
               // The SAME figure the Pay step gets. Review used to know nothing
               // about credit, so it quoted the gross total on the screen where
               // a family decides to commit and the next screen contradicted it.
-              familyCreditCents={quotableCreditCents}
+              familyCreditCents={creditForCart}
+              // One answer to "may we offer a plan", shared with the rule that
+              // decides whether the charge is one. See canOfferPaymentPlan.
+              canOfferPaymentPlan={canOfferPaymentPlan}
               onPromoApply={async (code) => {
                 setPromoInput(code);
                 const { data } = await supabase
@@ -896,7 +1008,7 @@ export default function Register() {
                 // the quote and the charge are built from one schedule.
                 installmentSplits={installmentSchedule?.perLineSplits || null}
                 org={{ ...org, ...(feeConfig || {}) }}
-                familyCreditCents={quotableCreditCents}
+                familyCreditCents={creditForCart}
                 cancellationPolicy={cancellationPolicy}
                 // Passed as its own prop rather than spread into `org`: the
                 // whole object is the config, and flattening it would put

@@ -51,6 +51,10 @@ export default function StepReview({
   // 0 for a signed-out visitor - see Register.jsx for why it is withheld
   // rather than guessed.
   familyCreditCents = 0,
+  // Whether a payment plan may be OFFERED at all - schedule present and the
+  // cart above the minimum. Decided in Register.jsx so the checkbox and the
+  // charge cannot answer it differently. Undefined falls back below.
+  canOfferPaymentPlan,
 }) {
   // ACCOUNT CREDIT COMES OFF BEFORE THE FEE, exactly as the Pay step and
   // create-checkout do it. This screen used to know nothing about credit, and
@@ -60,11 +64,16 @@ export default function StepReview({
   // at a $10 class was quoted $10.10 here and charged $0.00, on the screen
   // where they decide to commit.
   //
-  // Not a payment plan: create-checkout refuses credit there, so quoting it
-  // would promise a discount the charge will not contain.
+  // THIS STEP DOES NOT DECIDE ELIGIBILITY, it renders what it is given.
+  // create-checkout refuses credit on a payment plan, and Register.jsx
+  // resolves that once (see usingPaymentPlan there) before handing the figure
+  // to both steps. This line used to ask `cart?.payment_plan` on its own
+  // while the Pay step and the charge asked `payment_plan && installment-
+  // Schedule`; when the flag is stuck true with no schedule those differ, and
+  // the two screens quoted different totals for one cart.
   const grossLineAmounts = (pricing?.lines || []).map((l) => l.amount_cents);
   const { lineAmounts: cartLineAmounts, creditApplied: creditAppliedCents } =
-    spreadCreditAcrossLines(grossLineAmounts, cart?.payment_plan ? 0 : familyCreditCents);
+    spreadCreditAcrossLines(grossLineAmounts, familyCreditCents);
   const reviewFeeCents = cartFeeOnLines(cartLineAmounts, org, { isBank: false });
   const bankSavingCents = Math.max(
     0,
@@ -104,10 +113,17 @@ export default function StepReview({
     setValidating(false);
   }
 
-  // Installments only available if (a) we have a valid schedule from Register.jsx,
-  // and (b) the total is above the minimum threshold.
-  const canUseInstallments =
-    !!installmentSchedule && pricing.total_cents >= INSTALLMENT_MIN_CENTS;
+  // WHETHER A PLAN CAN BE OFFERED IS DECIDED IN Register.jsx, once, and this
+  // step renders the answer. It used to re-derive it here - a valid schedule
+  // plus the minimum - while Register decided the MONEY side from the schedule
+  // alone. The two then disagreed for any cart that fell below the minimum
+  // after the box was ticked: the checkbox vanished here while the charge
+  // still behaved like a plan and withheld the family's credit.
+  //
+  // Falls back to the old local derivation only if the prop is absent, so an
+  // older caller keeps working rather than losing its checkbox.
+  const canUseInstallments = canOfferPaymentPlan
+    ?? (!!installmentSchedule && pricing.total_cents >= INSTALLMENT_MIN_CENTS);
 
   return (
     <div>
