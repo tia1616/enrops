@@ -16,8 +16,9 @@
 // The operator never sees "term" — it's enrichment-provider vocabulary, not theirs.
 
 import { useEffect, useRef, useState } from "react";
-import { useNavigate, useOutletContext } from "react-router-dom";
+import { useNavigate, useOutletContext, useSearchParams } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
+import { fetchOrgTerms, formatTermLabel } from "../../../lib/terms.js";
 import ShareProgram from "../../../components/ShareProgram.jsx";
 import FamiliesPayNote, { useOrgFeeConfig } from "../../../components/FamiliesPayNote.jsx";
 import ProgramSteps from "../../../components/ProgramSteps.jsx";
@@ -229,11 +230,46 @@ export default function QuickProgramBuilder() {
   // Weekly series vs one-off workshop. An operator who told us they only run one
   // shape never sees the choice; one who runs both picks per program.
   const cadence = profile.program_cadence;
-  const [mode, setMode] = useState(cadence === "one_off" ? "one_off" : "weekly");
+  // ?mode=camp is how a LEGACY tenant reaches this form at all. J2S's "+ New
+  // program" goes to the classic wizard, which has no camp mode - so camps have
+  // ONE implementation (this one) and two doors into it, rather than a second
+  // camp form built inside the wizard that would drift from this one.
+  const [searchParams] = useSearchParams();
+  const modeParam = searchParams.get("mode");
+  const [mode, setMode] = useState(
+    modeParam === "camp" ? "camp" : cadence === "one_off" ? "one_off" : "weekly",
+  );
   // Camp-only fields. Days default to Mon-Fri, the shape of almost every camp;
   // a holiday week is the operator turning one off.
   const [campDays, setCampDays] = useState(() => CAMP_WEEKDAYS.map((d) => d.value));
   const [campEndDate, setCampEndDate] = useState("");
+  // CAMPS PICK THEIR OWN TERM; weekly classes still take the org's active one.
+  // A weekly class is built for the term you are selling, so stamping the active
+  // term is right. A CAMP is built DURING the previous term - winter break camps
+  // get finalised while Fall is still the open term - so stamping the active one
+  // would file a December camp under Fall, where it never appears when the winter
+  // switch is flipped. Jessica, 2026-09-28: "but the dates fall in winter term. i
+  // choose the dates and the term when i add a program, right?" She does, in the
+  // classic wizard; this makes it true here too, for the mode that needs it.
+  const [campTerm, setCampTerm] = useState("");
+  const [termChoices, setTermChoices] = useState([]); // [{ value, label }]
+  useEffect(() => {
+    if (!org?.id) return;
+    let alive = true;
+    (async () => {
+      const { terms } = await fetchOrgTerms(org.id);
+      if (!alive) return;
+      const opts = (terms ?? [])
+        .map((t) => t.term)
+        .filter(Boolean)
+        .map((t) => ({ value: t, label: formatTermLabel(t) }));
+      setTermChoices(opts);
+      // Default to the org's active term so the field is never empty, but leave
+      // it editable - the whole point is that a camp is usually NOT in it.
+      setCampTerm((prev) => prev || org.active_registration_term || opts[0]?.value || "");
+    })();
+    return () => { alive = false; };
+  }, [org?.id, org?.active_registration_term]);
   // Seeds the default ONCE, when the org's cadence first arrives. It used to run
   // on every change of `cadence`, and `cadence` changes when the profile finishes
   // loading - so an operator who picked Camp in that first moment watched the
@@ -242,10 +278,20 @@ export default function QuickProgramBuilder() {
   useEffect(() => {
     if (seededModeRef.current || !cadence) return;
     seededModeRef.current = true;
+    // An explicit ?mode=camp is the operator's choice and outranks the org's
+    // cadence default - otherwise arriving from "+ Add camp" would snap back to
+    // Weekly the moment the profile finished loading, which is the exact bug
+    // this ref was added to stop.
+    if (modeParam === "camp") return;
     if (cadence === "one_off") setMode("one_off");
     else if (cadence === "weekly_term") setMode("weekly");
-  }, [cadence]);
+  }, [cadence, modeParam]);
   const isOneOff = mode === "one_off";
+  // The term this program will be filed under. ONE definition, read by the save,
+  // the date preview and the share panel, so none of them can disagree.
+  const effectiveTerm = mode === "camp"
+    ? (campTerm || org.active_registration_term)
+    : org.active_registration_term;
   // A camp is the same thing to an operator - something families register for -
   // that happens on several days of ONE week instead of one day a week. It writes
   // a PROGRAM, like every other mode here: the date functions learned to walk
@@ -846,9 +892,13 @@ export default function QuickProgramBuilder() {
     try {
       const payload = {
         organization_id: org.id,
-        // Stamp the org's active term so the program lands in the public catalog
-        // and the share link resolves. Operator never picks this.
-        term: org.active_registration_term,
+        // A weekly class or one-off is built for the term you are selling, so it
+        // takes the org's active term and the operator never picks it. A CAMP is
+        // built during the PREVIOUS term and belongs to the one its dates fall
+        // in, so it carries the term chosen on the form. ONE expression, so the
+        // saved row and the preview below cannot disagree about which term this
+        // is - see effectiveTerm.
+        term: effectiveTerm,
         curriculum: name.trim(), // NOT NULL display name; no curriculum record
         curriculum_id: null,
         // Optional; NULL (not "") so the catalog card's `short_description &&`
@@ -929,7 +979,10 @@ export default function QuickProgramBuilder() {
           {
             p_organization_id: org.id,
             p_location_id: locationId,
-            p_term: org.active_registration_term,
+            // The term the camp is being FILED under, not the one currently on
+            // sale - the same value the insert below stamps, so the count the
+            // preview returns is the count the saved camp derives.
+            p_term: effectiveTerm,
             // A camp has no single weekday; its days are class_days. The function
             // only requires day_of_week on the weekly arm.
             p_day_of_week: null,
@@ -1459,7 +1512,14 @@ export default function QuickProgramBuilder() {
             charges are off (=== false), so an unresolved check never downgrades
             the wording for an operator who is actually connected. */}
         <div style={{ fontSize: 22, fontWeight: 700, color: INK, marginBottom: 8 }}>
-          {notConnected ? "Your program is almost live." : "Your program is live."}
+          {notConnected
+            ? "Your program is almost live."
+            : effectiveTerm && effectiveTerm !== org.active_registration_term
+              // "Live" would contradict the line underneath, which tells them
+              // families cannot see it until that term opens. A program filed to
+              // a future term is SAVED, not live.
+              ? `Saved to ${formatTermLabel(effectiveTerm)}.`
+              : "Your program is live."}
         </div>
 
         {/* WHICH STEP IS CURRENT DEPENDS ON STRIPE, since the publish gate
@@ -1508,8 +1568,19 @@ export default function QuickProgramBuilder() {
           </>
         ) : (
           <p style={{ color: MUTED, fontSize: 14, lineHeight: 1.6, margin: "0 0 20px" }}>
-            Families can register now. Share the link below — you'll see sign-ups show
-            up as they come in.
+            {effectiveTerm && effectiveTerm !== org.active_registration_term ? (
+              <>
+                Saved to {formatTermLabel(effectiveTerm)}. Your registration page is
+                showing {formatTermLabel(org.active_registration_term)} right now, so
+                families will see this when you open{" "}
+                {formatTermLabel(effectiveTerm)} for registration.
+              </>
+            ) : (
+              <>
+                Families can register now. Share the link below — you'll see sign-ups
+                show up as they come in.
+              </>
+            )}
           </p>
         )}
 
@@ -1548,7 +1619,11 @@ export default function QuickProgramBuilder() {
                 id: createdId,
                 curriculum: name.trim(),
                 status: "open",
-                term: org.active_registration_term,
+                // The term it was actually filed under. ShareProgram compares
+                // this against activeTerm to decide whether the link is live, so
+                // handing it the active term would claim a WI27 camp is on sale
+                // during FA26.
+                term: effectiveTerm,
                 runs_own_registration: false,
               }}
             />
@@ -2292,6 +2367,33 @@ export default function QuickProgramBuilder() {
               />
               <div style={helpStyle}>Usually the same week.</div>
             </div>
+            {/* TERM, CAMPS ONLY. A weekly class is built for the term you are
+                selling and never asks. A camp is built during the PREVIOUS term -
+                winter break camps get finalised while Fall is still open - so
+                without this a December camp files under Fall and never appears
+                when the winter switch is flipped. Full width under the dates
+                because it is a consequence of them: you pick the dates, then say
+                which term they belong to. */}
+            {termChoices.length > 0 && (
+              <div style={{ gridColumn: "1 / -1" }}>
+                <label style={labelStyle} htmlFor="qpb-camp-term">Which term</label>
+                <select
+                  id="qpb-camp-term"
+                  style={inputStyle}
+                  value={campTerm}
+                  onChange={(e) => setCampTerm(e.target.value)}
+                >
+                  {termChoices.map((t) => (
+                    <option key={t.value} value={t.value}>{t.label}</option>
+                  ))}
+                </select>
+                <div style={helpStyle}>
+                  {campTerm && campTerm !== org.active_registration_term
+                    ? `Families will see this when you open ${formatTermLabel(campTerm)} for registration.`
+                    : "Which term this camp is sold under. A winter break camp belongs to winter, even if you are adding it now."}
+                </div>
+              </div>
+            )}
           </div>
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>

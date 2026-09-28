@@ -242,5 +242,54 @@ eq('null catalog is not an error', buildCatalogPicker(null, null, {}).visiblePro
   eq('undefined in, empty out', groupingDistricts(undefined), []);
 }
 
+// --- camps are NOT school-bound --------------------------------------------
+// Jessica, 2026-09-28: "camps should not be associated with any district. they
+// don't usually run at schools, they run at parks and rec and community centers
+// mostly." The district -> school gate exists so a family is never offered an
+// after-school class at a school their child does not attend. A camp has no such
+// constraint, and putting one behind that gate hides it from everyone except the
+// single site it happens to sit at.
+{
+  const camp = (id, locId, locName, districtId, days) => ({
+    ...prog(id, locId, locName, districtId, 45000),
+    class_days: days,
+  });
+  const WITH_CAMPS = [
+    ...JEFF,
+    camp('c1', 'l-parkrec', 'Parks & Rec Community Center', null, ['monday', 'tuesday', 'wednesday', 'thursday', 'friday']),
+    camp('c2', 'l-oak', 'Oak Creek Elementary', D.losd, ['monday', 'tuesday']),
+  ];
+
+  const none = buildCatalogPicker(WITH_CAMPS, NAMES, { district: '', school: '' });
+  eq('camps show with NO school picked', none.camps.map((p) => p.id), ['c1', 'c2']);
+  eq('...while classes are still gated to zero', none.visiblePrograms.length, 0);
+
+  const picked = buildCatalogPicker(WITH_CAMPS, NAMES, { district: 'PPS', school: 'l-rieke' });
+  eq('camps are not filtered by the picked school', picked.camps.map((p) => p.id), ['c1', 'c2']);
+  eq('...and a camp never leaks into the class list', picked.visiblePrograms.map((p) => p.id), ['p2']);
+
+  // A camp-only venue must not appear in the SCHOOL dropdown, where it would read
+  // as somewhere a child could be enrolled for after-school all term.
+  eq('a camp-only venue is not offered as a school',
+    picked.locOptions.some((l) => l.id === 'l-parkrec'), false);
+  // ...but a school that hosts BOTH still appears, on the strength of its class.
+  eq('a school hosting a class and a camp is still a school',
+    picked.locOptions.some((l) => l.id === 'l-oak'), true);
+
+  // An empty class_days is NOT a camp - same rule as the SQL, where the
+  // consecutive branch needs array_length > 0.
+  const emptyDays = buildCatalogPicker(
+    [...JEFF, { ...prog('p9', 'l-rieke', 'Rieke Elementary', D.pps, 29900), class_days: [] }],
+    NAMES, { district: 'PPS', school: 'l-rieke' },
+  );
+  eq('empty class_days is a class, not a camp', emptyDays.camps.length, 0);
+  eq('...and stays in the gated class list', emptyDays.visiblePrograms.map((p) => p.id), ['p2', 'p9']);
+
+  // An org with no camps must behave exactly as it did before this existed.
+  const noCamps = buildCatalogPicker(JEFF, NAMES, { district: 'PPS', school: 'l-rieke' });
+  eq('no camps -> empty camps list', noCamps.camps, []);
+  eq('no camps -> classes unchanged', noCamps.visiblePrograms.map((p) => p.id), ['p2']);
+}
+
 console.log(`\n${fail === 0 ? 'ALL PASS' : 'FAILURES'}  (${pass} passed, ${fail} failed)`);
 process.exit(fail === 0 ? 0 : 1);

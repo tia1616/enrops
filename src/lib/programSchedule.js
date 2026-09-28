@@ -74,6 +74,18 @@ export function programScheduleSummary(program, now = new Date()) {
   return parts.length ? parts.join(` ${SEP} `) : null;
 }
 
+// A camp is a program that runs on CONSECUTIVE DAYS: programs.class_days lists
+// the days it meets, and is NULL on a weekly class. Same test as the SQL, where
+// the consecutive branch of derive_program_session_dates needs array_length > 0,
+// so an empty array is a weekly class in both places.
+//
+// ONE definition, because "is this a camp?" now decides school-binding on the
+// public catalog, the day label on its card, and which list it lands in - and
+// three spellings of it would drift the first time one was fixed.
+export function isCampProgram(program) {
+  return Array.isArray(program?.class_days) && program.class_days.length > 0;
+}
+
 // Short labels for a camp's day list, in calendar order. Lowercase keys because
 // that is what programs.class_days stores (there is a CHECK constraint on it).
 const CLASS_DAY_ORDER = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];

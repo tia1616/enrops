@@ -1059,6 +1059,32 @@ export default function ProgramsCalendar() {
           >
             + New program
           </Link>
+          {/* CAMPS HAVE ONE FORM AND TWO DOORS. A lean tenant reaches camp mode
+              by the toggle inside the builder their "+ New program" already
+              opens. A legacy tenant's "+ New program" goes to the classic wizard,
+              which has no camp mode - so without this button J2S cannot create a
+              camp at all, which is exactly what Jessica hit. Linking to the one
+              camp implementation rather than building a second one inside the
+              wizard, which would drift from it the first time either is fixed. */}
+          {org?.instructor_pay_model !== "enrops_platform" && (
+            <Link
+              to="/admin/programs/quick-new?mode=camp"
+              style={{
+                padding: "8px 14px",
+                background: "#fff",
+                color: BRIGHT,
+                border: `1px solid ${BRIGHT}`,
+                borderRadius: 8,
+                fontSize: 14,
+                fontWeight: 600,
+                textDecoration: "none",
+                display: "inline-block",
+                marginLeft: 8,
+              }}
+            >
+              + Add camp
+            </Link>
+          )}
           <select value={term ?? ""} onChange={(e) => setTerm(e.target.value)} style={selectStyle}>
             {!term && <option value="">{termsLoaded ? "No terms yet" : "Loading terms…"}</option>}
             {termOptions.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
