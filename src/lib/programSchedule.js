@@ -131,6 +131,43 @@ export function formatDayLabel(program) {
   return Number(program?.session_count) === 1 ? day : `${day}s`;
 }
 
+// The first day on or after `iso` that the camp actually MEETS.
+//
+// An operator can legitimately type a start that is not a meeting day - "the
+// camp runs the week of the 30th", Tuesday to Friday - and the saved
+// first_session_date is then the Tuesday, not the Monday they typed. Anything
+// deriving from the start date has to walk to that day first, or it is
+// describing a day the camp does not run.
+//
+// Closures are NOT applied here, deliberately. This answers "which day does
+// this camp intend to start", which is what the season and the operator-facing
+// readback are about; the authoritative session list still comes from
+// derive_program_session_dates, which knows the site's closures. Keeping the two
+// separate is why this is safe to use for display: it cannot contradict the
+// saved dates, because it is not claiming to be them.
+//
+// Returns null when there is no date or no days, so a caller renders nothing.
+export function firstMeetingDayOnOrAfter(iso, classDays) {
+  if (typeof iso !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(iso.trim())) return null;
+  const days = Array.isArray(classDays)
+    ? classDays.map((d) => String(d).trim().toLowerCase()).filter(Boolean)
+    : [];
+  if (days.length === 0) return null;
+  const d = new Date(`${iso.trim()}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return null;
+  // Seven steps is the whole week, so a day that is in the list is always found.
+  for (let i = 0; i < 7; i += 1) {
+    if (days.includes(CLASS_DAY_ORDER[(d.getDay() + 6) % 7])) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+    d.setDate(d.getDate() + 1);
+  }
+  return null;
+}
+
 // THE SEASON A CAMP BELONGS TO, FROM ITS OWN FIRST DAY. "2026-12-21" -> "WI27".
 //
 // programs.term is NOT NULL, so every camp needs one - but a camp should never

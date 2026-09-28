@@ -22,7 +22,7 @@ import { formatTermLabel } from "../../../lib/terms.js";
 // campTermForDate lives beside the other camp helpers in programSchedule.js,
 // which imports nothing - terms.js pulls in the supabase client, so anything
 // defined there cannot be unit-tested by the repo's plain-node runner.
-import { campTermForDate } from "../../../lib/programSchedule.js";
+import { campTermForDate, firstMeetingDayOnOrAfter } from "../../../lib/programSchedule.js";
 import ShareProgram from "../../../components/ShareProgram.jsx";
 import FamiliesPayNote, { useOrgFeeConfig } from "../../../components/FamiliesPayNote.jsx";
 import ProgramSteps from "../../../components/ProgramSteps.jsx";
@@ -275,10 +275,23 @@ export default function QuickProgramBuilder() {
   const isOneOff = mode === "one_off";
   // The term this program will be filed under. ONE definition, read by the save,
   // the date preview and the share panel, so none of them can disagree.
+  // FROM THE DAY THE CAMP ACTUALLY MEETS, not the day that was typed.
+  //
+  // An operator can type a start that is not a meeting day - "the week of the
+  // 30th", Tuesday to Friday - and the saved first_session_date is then the
+  // Tuesday. Deriving the season from the typed Monday filed a camp that runs
+  // entirely in December under FALL, silently, with no dropdown left to correct
+  // it. That only affects HER schedule (families are never filtered by a camp's
+  // term), but it is exactly the mis-filing this derivation exists to prevent:
+  // she would open the winter board to staff it and not find it there.
+  //
+  // The readback below reads this same value, so the screen and the saved row
+  // cannot disagree.
+  const campFirstMeetingDay = firstMeetingDayOnOrAfter(startDate, campDays);
   // Falls back to the active term only when there is no first day yet - the form
   // cannot be submitted in that state, so it never reaches a saved row.
   const effectiveTerm = mode === "camp"
-    ? (campTermForDate(startDate) || org.active_registration_term)
+    ? (campTermForDate(campFirstMeetingDay) || org.active_registration_term)
     : org.active_registration_term;
   // A camp is the same thing to an operator - something families register for -
   // that happens on several days of ONE week instead of one day a week. It writes
@@ -2385,24 +2398,23 @@ export default function QuickProgramBuilder() {
               />
               <div style={helpStyle}>Usually the same week.</div>
             </div>
-            {/* TERM, CAMPS ONLY. A weekly class is built for the term you are
-                selling and never asks. A camp is built during the PREVIOUS term -
-                winter break camps get finalised while Fall is still open - so
-                without this a December camp files under Fall and never appears
-                when the winter switch is flipped. Full width under the dates
-                because it is a consequence of them: you pick the dates, then say
-                which term they belong to. */}
-            {/* NOT A QUESTION - a readback. The season is decided by the first
-                day, and saying so beats asking: it shows the operator where the
-                camp will sit on their schedule without making them work it out.
-                Silent when there is no date yet, because there is nothing true
-                to say. */}
-            {campTermForDate(startDate) && (
+            {/* NOT A QUESTION - a readback. The season is decided by the first day
+                the camp MEETS, and saying so beats asking: it shows the operator
+                where the camp will sit on their own schedule without making them
+                work it out. Reads the same value the save stamps, so the two
+                cannot disagree. Silent when there is no date yet, because there
+                is nothing true to say.
+
+                A camp's term does NOT gate what families see - camps are sold by
+                their dates - so the second sentence says so plainly rather than
+                leaving an operator to assume a season she has not opened yet is
+                holding her camp back. */}
+            {effectiveTerm && mode === "camp" && campFirstMeetingDay && (
               <div style={{ gridColumn: "1 / -1" }}>
                 <div style={helpStyle}>
-                  Sits with your <strong>{formatTermLabel(campTermForDate(startDate))}</strong> schedule,
-                  from the first day. Families can register as soon as you publish
-                  it, whatever term is open.
+                  Sits with your <strong>{formatTermLabel(effectiveTerm)}</strong> schedule,
+                  from the first day it meets. Families can register as soon as you
+                  publish it, whatever term is open.
                 </div>
               </div>
             )}
