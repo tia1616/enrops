@@ -1522,13 +1522,14 @@ export default function QuickProgramBuilder() {
             the wording for an operator who is actually connected. */}
         <div style={{ fontSize: 22, fontWeight: 700, color: INK, marginBottom: 8 }}>
           {notConnected
-            ? "Your program is almost live."
-            : effectiveTerm && effectiveTerm !== org.active_registration_term
-              // "Live" would contradict the line underneath, which tells them
-              // families cannot see it until that term opens. A program filed to
-              // a future term is SAVED, not live.
+            ? `Your ${isCamp ? "camp" : "program"} is almost live.`
+            // A CAMP IS LIVE IMMEDIATELY whatever term it carries, so the
+            // out-of-term heading is for classes only. "Live" would otherwise
+            // contradict the line underneath, which tells a class's operator
+            // families cannot see it until that term opens.
+            : !isCamp && effectiveTerm && effectiveTerm !== org.active_registration_term
               ? `Saved to ${formatTermLabel(effectiveTerm)}.`
-              : "Your program is live."}
+              : `Your ${isCamp ? "camp" : "program"} is live.`}
         </div>
 
         {/* WHICH STEP IS CURRENT DEPENDS ON STRIPE, since the publish gate
@@ -1577,12 +1578,23 @@ export default function QuickProgramBuilder() {
           </>
         ) : (
           <p style={{ color: MUTED, fontSize: 14, lineHeight: 1.6, margin: "0 0 20px" }}>
-            {effectiveTerm && effectiveTerm !== org.active_registration_term ? (
+            {/* A CAMP IS NEVER WAITING FOR A TERM. It shows on the Camps tab the
+                moment it is published and drops off after its last day, so the
+                out-of-term wording below is for CLASSES only - saying it about a
+                camp would tell the operator to sit on a link that already
+                works. */}
+            {!isCamp && effectiveTerm && effectiveTerm !== org.active_registration_term ? (
               <>
                 Saved to {formatTermLabel(effectiveTerm)}. Your registration page is
                 showing {formatTermLabel(org.active_registration_term)} right now, so
                 families will see this when you open{" "}
                 {formatTermLabel(effectiveTerm)} for registration.
+              </>
+            ) : isCamp ? (
+              <>
+                Families can register now — camps show on your registration page as
+                soon as they're published, whatever term is open, and come off it
+                after the camp's last day.
               </>
             ) : (
               <>
@@ -1630,9 +1642,14 @@ export default function QuickProgramBuilder() {
                 status: "open",
                 // The term it was actually filed under. ShareProgram compares
                 // this against activeTerm to decide whether the link is live, so
-                // handing it the active term would claim a WI27 camp is on sale
+                // handing it the active term would claim a WI27 class is on sale
                 // during FA26.
                 term: effectiveTerm,
+                // A camp is not served by term, so ShareProgram must be able to
+                // TELL it is one - this object is synthetic, and without
+                // class_days every camp link would be withheld as "not open to
+                // families yet" when in fact the catalog shows it immediately.
+                class_days: isCamp ? campDays : null,
                 runs_own_registration: false,
               }}
             />
@@ -2400,10 +2417,14 @@ export default function QuickProgramBuilder() {
                     <option key={t.value} value={t.value}>{t.label}</option>
                   ))}
                 </select>
+                {/* This no longer gates whether families can see the camp -
+                    camps are sold by their dates, not by the open term - so the
+                    help must not promise otherwise. What the term still does is
+                    file the camp with that season's after-school on your
+                    schedule. */}
                 <div style={helpStyle}>
-                  {campTerm && campTerm !== org.active_registration_term
-                    ? `Families will see this when you open ${formatTermLabel(campTerm)} for registration.`
-                    : "Which term this camp is sold under. A winter break camp belongs to winter, even if you are adding it now."}
+                  Which season this camp belongs to on your schedule. Families can
+                  register as soon as you publish it, whatever term is open.
                 </div>
               </div>
             )}

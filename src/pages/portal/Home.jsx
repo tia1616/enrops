@@ -324,6 +324,11 @@ export default function Home() {
     // this page reads from this same value, so the page can't claim one season
     // while listing another's programs.
     const catalogTerm = org.active_registration_term;
+    // Local date, not toISOString(): a family in Portland at 5pm on the camp's
+    // last day is already "tomorrow" in UTC, and the camp would vanish from the
+    // page while it was still running.
+    const now = new Date();
+    const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
     // Winter/Spring codes for the VIP bundle lookup, derived from the open term.
     //
@@ -413,7 +418,29 @@ export default function Home() {
         // p.program_locations?.name (the class meta line below) is untouched.
         .select('*, program_locations:program_locations_public(name, district_id)')
         .eq('organization_id', org.id)
-        .eq('term', catalogTerm)
+        // A CLASS BELONGS TO A TERM. A CAMP BELONGS TO ITS DATES.
+        //
+        // Families browse and register one term at a time, which is right for
+        // weekly classes: a Fall class is not on sale during Winter. A camp is a
+        // dated block, and every provider sells those ahead of the season -
+        // summer camp goes on sale in March. Term-gating a camp meant a winter
+        // break camp could only be sold once the WINTER switch was flipped,
+        // which is often weeks before it runs and sometimes after.
+        //
+        // Jessica, 2026-09-28: "yes - don't link camps to terms."
+        //
+        // A camp still CARRIES a term (it is how the schedule board groups it
+        // with that season's after-school), it just no longer decides whether
+        // families can see it. What bounds a camp instead is its own last day:
+        // once it has finished it drops off the page on its own, with no switch
+        // to remember.
+        // BOTH ARMS ARE EXCLUSIVE ON class_days, deliberately. Written first as
+        // `term.eq.X OR (is a camp AND not finished)`, which let a FINISHED camp
+        // back in through the term arm - an August camp was still on sale in
+        // September because it happened to carry the open term. A class is
+        // selected by its term and a camp by its dates, and neither rule may
+        // pick up the other's rows.
+        .or(`and(class_days.is.null,term.eq.${catalogTerm}),and(class_days.not.is.null,end_date.gte.${todayIso})`)
         .eq('status', 'open')
         // Native programs (we run checkout) OR partner-run programs the operator
         // explicitly listed with a registration link (shown as a link-out, no checkout).
@@ -1548,10 +1575,18 @@ export default function Home() {
                                 column; when it's the only option (no VIP bundle), drop
                                 the "only". Season comes from the open term — when Winter
                                 is open this must read "Winter", not "Fall". */}
+                            {/* seasonName is the ORG's open term, which is the
+                                right label for a class and wrong for a camp: a
+                                winter break camp sold during Fall registration
+                                would be badged "Fall". A camp is sold by its
+                                dates, which the line above already gives, so it
+                                takes no season at all. */}
                             <p className="font-titan text-xs uppercase tracking-widest text-j2s-ink/50">
-                              {seasonName
-                                ? (vipEligible ? `${seasonName} only` : seasonName)
-                                : (vipEligible ? 'This term only' : 'This term')}
+                              {isCampProgram(p)
+                                ? 'Camp'
+                                : seasonName
+                                  ? (vipEligible ? `${seasonName} only` : seasonName)
+                                  : (vipEligible ? 'This term only' : 'This term')}
                             </p>
                             <div className="mt-2">
                               {/* All-in on BOTH numbers, including the struck
@@ -1573,7 +1608,14 @@ export default function Home() {
                                 </p>
                               )}
                             </div>
-                            <p className="mt-1 text-xs text-j2s-ink/60">{termLabel}</p>
+                            {/* The open term under the price tells a family which
+                                term they are buying. A camp is not bought by
+                                term - it is bought by its dates, already on the
+                                line above - so labelling a February camp
+                                "Fall 2026" is just wrong. */}
+                            {!isCampProgram(p) && (
+                              <p className="mt-1 text-xs text-j2s-ink/60">{termLabel}</p>
+                            )}
                             {/* #8: Early-bird on both cards */}
                             {fallShowsEarlyBird && fallEarlyBirdLabel && (
                               <p className="mt-2 text-xs font-semibold text-j2s-orange-dark">
@@ -1595,9 +1637,13 @@ export default function Home() {
                                 onClick={() => startRegistration(p.id, false)}
                                 className="btn-j2s-secondary mt-4 w-full text-sm"
                               >
-                                {seasonName
-                                  ? (vipEligible ? `Register for ${seasonName.toLowerCase()} only` : `Register for ${seasonName.toLowerCase()}`)
-                                  : (vipEligible ? 'Register for this term only' : 'Register')}
+                                {isCampProgram(p)
+                                  // Same reason as the badge above: "Register for
+                                  // fall" on a December camp is simply untrue.
+                                  ? 'Register'
+                                  : seasonName
+                                    ? (vipEligible ? `Register for ${seasonName.toLowerCase()} only` : `Register for ${seasonName.toLowerCase()}`)
+                                    : (vipEligible ? 'Register for this term only' : 'Register')}
                               </button>
                             )}
                           </div>
