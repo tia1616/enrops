@@ -55,6 +55,7 @@ import {
   type CommsAttachment,
 } from "../_shared/attachments.ts";
 import { cleanNoSchoolDates, toClosurePeriods, termToSchoolYear, nsdWeekdayLower, nsdDate, periodFires, formatDateList, isCampProgram } from "./noSchoolDates.ts";
+import { classProgramsOnly, classRegistrationsOnly, campRegistrationsOnly } from "./campAudience.ts";
 import {
   orgToday,
   orgHour,
@@ -1123,6 +1124,11 @@ async function runPreview(supabase: SupabaseClient, params: PreviewParams): Prom
   return { ok: true, subject: rendered.subject, body_html: rendered.html, used_real_data: rendered.used_real_data };
 }
 
+// The welcome mails, and only these, put the room on the venue line. Named once
+// so the preview and the live resolvers cannot drift apart again by one of them
+// listing a template key the other forgot.
+const WELCOME_TEMPLATE_KEYS = new Set(["welcome_afterschool", "welcome_camp"]);
+
 // Resolve the REAL content fields for a test send from one chosen camp/program.
 // Mirrors the field mappings in resolveWelcomeAudience exactly so the preview
 // matches a live send. Returns only the content fields (family names + resume
@@ -1187,17 +1193,25 @@ async function resolveTestEntryContent(
     return {
       program_name: prog.curriculum ?? "your program",
       program_start_date: prog.first_session_date ? formatDate(prog.first_session_date) : "",
-      program_end_date: sessions.length > 0 ? formatDate(sessions[sessions.length - 1]) : "",
+      // A camp's real send reads programs.end_date (resolveCampProgramWelcome),
+      // so the preview must too — otherwise a site closure that drops the last
+      // session makes the previewed end date differ from the one that ships.
+      program_end_date: isCampProgram(prog)
+        ? (prog.end_date ? formatDate(prog.end_date) : "")
+        : (sessions.length > 0 ? formatDate(sessions[sessions.length - 1]) : ""),
       program_time: timeClause(prog.start_time, prog.end_time, true),
       // A camp has day_of_week set (it is NOT NULL and holds the FIRST day), so
       // the label has to be suppressed here rather than by recurringDayLabel's
       // empty-in-empty-out guard: a Mon-Fri camp would otherwise read "Mondays".
       program_day: isCampProgram(prog) ? "" : recurringDayLabel(prog.day_of_week),
       is_camp: isCampProgram(prog),
-      // Room only for the welcome mail, matching resolveWelcomeAudience. The
-      // check-in and recap sends do not carry it (Jessica, 2026-09-09), and the
-      // no-school notice cannot: its one vars object feeds the instructor copy.
-      location_name: (templateKey === "welcome_afterschool"
+      // Room only for the WELCOME mails, matching resolveWelcomeAudience — both
+      // of them. welcome_camp was missing here, so a camp previewed as "Capitol
+      // Library" and shipped as "Capitol Library, Room 12": the exact preview/send
+      // drift this resolver exists to prevent. The check-in and recap sends do
+      // not carry the room (Jessica, 2026-09-09), and the no-school notice cannot:
+      // its one vars object feeds the instructor copy.
+      location_name: (WELCOME_TEMPLATE_KEYS.has(templateKey ?? "")
         ? venueLabel(prog.program_locations?.name, prog.room, prog.program_locations?.room_number)
         : prog.program_locations?.name) ?? "",
       final_showcase_raw: prog.curricula?.final_showcase ?? "",
@@ -1308,8 +1322,8 @@ async function resolveWelcomeAudience(
     // derive_program_session_dates call below - same order as the recap
     // resolver. Doing it after would still suppress the email but would keep
     // paying one RPC per excluded program.
-    const mailable = data.filter((r: any) =>
-      r.parents?.email && r.students?.id && !isPartnerRun(r.programs) && !isCampProgram(r.programs));
+    const mailable = classRegistrationsOnly(data)
+      .filter((r: any) => r.parents?.email && r.students?.id && !isPartnerRun(r.programs));
 
     const sessionsByProgram = new Map<string, string[]>();
     const uniqueProgramIds = Array.from(new Set(mailable.map((r: any) => r.programs?.id).filter(Boolean)));
@@ -1590,9 +1604,8 @@ async function resolveCampProgramWelcome(
 
   // Narrowed BEFORE the per-program RPC, same order as the afterschool branch,
   // so a partner-run camp costs neither an email nor a derive call.
-  const mailable = Array.from(mergedById.values())
-    .filter((r: any) =>
-      r.parents?.email && r.students?.id && !isPartnerRun(r.programs) && isCampProgram(r.programs));
+  const mailable = campRegistrationsOnly(Array.from(mergedById.values()))
+    .filter((r: any) => r.parents?.email && r.students?.id && !isPartnerRun(r.programs));
   if (mailable.length === 0) return [];
 
   // derive_program_session_dates is camp-aware: it walks class_days between
@@ -1692,16 +1705,13 @@ async function resolveCheckInAudience(
     .lte("programs.first_session_date", latest);
   if (error) throw error;
 
-  return (data ?? [])
-    // CLASSES ONLY — Jessica's call, 2026-09-29. This fires N days (default 14)
-    // AFTER the first session, which is worth asking a family six weeks into a
-    // term and meaningless to a camp family: a 3-day camp ended 11 days before
-    // this would land. Camps inherited it silently when a camp became a program;
-    // nobody chose it. isCampProgram decides, not a SQL test on class_days —
-    // see the welcome resolver for why those two are not the same question.
-    // class_days is selected above so this filter has a value to read.
-    .filter((r: any) =>
-      r.parents?.email && r.students?.id && !isPartnerRun(r.programs) && !isCampProgram(r.programs))
+  // CLASSES ONLY — Jessica's call, 2026-09-29. This fires N days (default 14)
+  // AFTER the first session, which is worth asking a family six weeks into a
+  // term and meaningless to a camp family: a 3-day camp ended 11 days before
+  // this would land. Camps inherited it silently when a camp became a program;
+  // nobody chose it. class_days is selected above so the rule has a value to read.
+  return classRegistrationsOnly(data)
+    .filter((r: any) => r.parents?.email && r.students?.id && !isPartnerRun(r.programs))
     .map((r: any) => ({
       context_key: `program:${r.programs.id}:parent:${r.parents.id}:student:${r.students.id}:check_in`,
       parent_id: r.parents.id,
@@ -2073,7 +2083,7 @@ async function runPartnerRosterAutomation(
   // closed. Camps inherited this silently when a camp became a program.
   // isCampProgram is the one definition of "is a camp"; a SQL test on class_days
   // is not the same question, because '{}' passes the CHECK and means class.
-  const dayOnePrograms: any[] = (programs ?? []).filter((p: any) => !isCampProgram(p));
+  const dayOnePrograms: any[] = classProgramsOnly(programs);
 
   // Idempotency: check which programs already had a roster sent today
   const programIds = dayOnePrograms.map((p: any) => p.id);
@@ -2243,7 +2253,7 @@ async function runRosterChangeResends(
   // CLASSES ONLY — same rule as phase 1. A re-send is still a roster to a school
   // partner, so excluding camps from phase 1 alone would have let a camp reach
   // the school by the back door the moment its roster changed.
-  const classPrograms = (programs as any[]).filter((p: any) => !isCampProgram(p));
+  const classPrograms = classProgramsOnly(programs as any[]);
   if (classPrograms.length === 0) return out;
 
   const programIds = classPrograms.map((p: any) => p.id);
