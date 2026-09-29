@@ -13,7 +13,7 @@ import {
   mapRow,
   mergeLeads,
   normaliseEmail,
-  parseGradeFromText,
+  parseGradesFromText,
   parseInterests,
   parseLeadRow,
   resolvePlace,
@@ -28,6 +28,7 @@ const LOCATIONS: LocationRow[] = [
   { name: 'Buckman Elementary', name_aliases: ['Buckman', 'Buckman Elementary School'], area: 'Portland' },
   { name: 'Hiteon', name_aliases: [], area: 'Beaverton' },
   { name: 'Orenco', name_aliases: [], area: 'Hillsboro' },
+  { name: 'Lake Grove Elementary', name_aliases: ['Lake Grove'], area: 'Lake Oswego' },
   { name: 'Camas P&R: Lacamas Lodge', name_aliases: ['Lacamas Lodge'], area: 'Camas' },
   { name: 'testing', name_aliases: [], area: null },
 ];
@@ -99,12 +100,26 @@ Deno.test('a left-hand "Email Opt-In" column is what first-match-wins binds', ()
   assertEquals(m.email?.includes('@'), false);
 });
 
-Deno.test('mapRow does not mistake the no-school column for the after-school one', () => {
-  // "school" appears in BOTH the place column and the grade column header;
-  // the place rule needs "city" too, so neither steals the other.
-  const m = mapRow(sheetRow('A B', 'a@b.com', 'Beaverton', '1st grade', 'Winter break camps'));
-  assertEquals(m.school_or_city, 'Beaverton');
+Deno.test('the place question survives losing "or your city" from its wording', () => {
+  // The headers are Squarespace's, not ours. When this rule required BOTH
+  // "school" and "city", an edit to the question dropped the answer on the
+  // floor with no signal at all - every lead filed with no school, no area.
+  const m = mapRow({
+    "Your child's school": 'Orenco',
+    'Email': 'a@b.com',
+    'Your childs grade and anything we should know': '1st grade',
+  });
+  assertEquals(m.school_or_city, 'Orenco');
   assertEquals(m.grade_notes, '1st grade');
+});
+
+Deno.test('a child-name column does not become the parent name', () => {
+  const m = mapRow({
+    "Your child's name": 'Donovan',
+    'Your name parent or guardian': 'Sarah Granelli',
+    'Email': 'a@b.com',
+  });
+  assertEquals(m.parent_name, 'Sarah Granelli');
 });
 
 // ---------------------------------------------------------------------------
@@ -166,21 +181,38 @@ Deno.test('parseInterests on an empty answer yields nothing', () => {
 // Grade
 // ---------------------------------------------------------------------------
 
-Deno.test('parseGradeFromText reads a grade out of a sentence', () => {
-  assertEquals(parseGradeFromText('Kindergarten'), 0);
-  assertEquals(parseGradeFromText('1st grader (Donovan), interested in robotics'), 1);
-  assertEquals(parseGradeFromText('2nd grade loves building legos'), 2);
-  assertEquals(parseGradeFromText('going into 5th'), 5);
-  assertEquals(parseGradeFromText('grade 3'), 3);
-  assertEquals(parseGradeFromText('Pre-K'), -1);
-  assertEquals(parseGradeFromText('K, and he is shy'), 0);
+Deno.test('parseGradesFromText reads a grade out of a sentence', () => {
+  assertEquals(parseGradesFromText('Kindergarten'), [0]);
+  assertEquals(parseGradesFromText('1st grader (Donovan), interested in robotics'), [1]);
+  assertEquals(parseGradesFromText('2nd grade loves building legos'), [2]);
+  assertEquals(parseGradesFromText('going into 5th'), [5]);
+  assertEquals(parseGradesFromText('grade 3'), [3]);
+  assertEquals(parseGradesFromText('Pre-K'), [-1]);
+  assertEquals(parseGradesFromText('K, and he is shy'), [0]);
 });
 
-Deno.test('parseGradeFromText refuses to guess', () => {
-  assertEquals(parseGradeFromText(''), null);
-  assertEquals(parseGradeFromText('loves building legos'), null);
+Deno.test('a family with two children keeps BOTH grades', () => {
+  // The whole point: tagging only the first grade makes the family invisible
+  // to a send aimed at the second child's year, and nothing would ever show it.
+  assertEquals(parseGradesFromText('twins, K and 2'), [0, 2]);
+  assertEquals(parseGradesFromText('PreK and 3rd'), [-1, 3]);
+  assertEquals(parseGradesFromText('3rd and 5th'), [3, 5]);
+});
+
+Deno.test('a number that is not a grade is not read as one', () => {
+  // "room 12" would otherwise tag a twelfth-grader onto a third-grader's family.
+  assertEquals(parseGradesFromText('grade 3, room 12'), [3]);
+  // A bare number with nothing else IS the grade - that is the "5" case.
+  assertEquals(parseGradesFromText('5'), [5]);
+});
+
+Deno.test('parseGradesFromText refuses to guess', () => {
+  assertEquals(parseGradesFromText(''), []);
+  assertEquals(parseGradesFromText('loves building legos'), []);
   // A lone "k" inside a word must not read as Kindergarten.
-  assertEquals(parseGradeFromText('knows a lot about rockets'), null);
+  assertEquals(parseGradesFromText('knows a lot about rockets'), []);
+  // A birth year is not a grade.
+  assertEquals(parseGradesFromText('born 2019'), []);
 });
 
 Deno.test('gradeTag spells the tag the way the list already spells it', () => {
@@ -219,6 +251,32 @@ Deno.test('a place we do not operate in is kept as a city with no area', () => {
   assertEquals(resolvePlace('Salem', LOCATIONS), {
     school_name: null, city: 'Salem', geo_segment: null,
   });
+});
+
+Deno.test('a school named inside a sentence is still found', () => {
+  // One comma-less piece, so the exact matcher tests the whole sentence and
+  // misses. Nothing stores the sentence, so without this the school is gone
+  // from enrops entirely - not just from this field.
+  assertEquals(resolvePlace('we live in Portland but go to Buckman', LOCATIONS), {
+    school_name: 'Buckman Elementary', city: null, geo_segment: 'Portland',
+  });
+});
+
+Deno.test('a shrug is not a city', () => {
+  // These used to land verbatim in the city column and show up on the contact
+  // list as if they were places.
+  assertEquals(resolvePlace('N/A', LOCATIONS), {
+    school_name: null, city: null, geo_segment: null,
+  });
+  assertEquals(resolvePlace('none yet - preschool', LOCATIONS).city, null);
+  assertEquals(
+    resolvePlace('honestly we have not picked a school yet, still deciding', LOCATIONS).city,
+    null,
+  );
+});
+
+Deno.test('a real two-word city still counts as a city', () => {
+  assertEquals(resolvePlace('Lake Oswego', LOCATIONS).city, 'Lake Oswego');
 });
 
 Deno.test('a location with no area contributes no area', () => {

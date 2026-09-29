@@ -42,10 +42,18 @@ const HEADER_RULES: Array<{ field: LeadField; test: (k: string) => boolean }> = 
   { field: 'synced_at', test: (k) => k === 'syncedat' },
   { field: 'email', test: (k) => k.includes('email') },
   { field: 'submitted_on', test: (k) => k.includes('submitted') },
-  { field: 'school_or_city', test: (k) => k.includes('school') && k.includes('city') },
+  // Deliberately EITHER word, not both. Requiring both made this the only
+  // two-keyword rule in the table, so an edit to the question that dropped
+  // "or your city" would have matched no rule at all and silently thrown the
+  // answer away — every lead filed with no school and no area, with nothing
+  // anywhere saying so. "grade" is excluded because the grade question is the
+  // only other one that could ever carry the word "school".
+  { field: 'school_or_city', test: (k) => (k.includes('school') || k.includes('city')) && !k.includes('grade') },
   { field: 'grade_notes', test: (k) => k.includes('grade') },
   { field: 'interests', test: (k) => k.includes('tellyou') || k.includes('interested') },
-  { field: 'parent_name', test: (k) => k.includes('name') },
+  // "child" excluded so that adding a "Your child's name" question to the form
+  // cannot land the CHILD's name in parent_name just because it sorts first.
+  { field: 'parent_name', test: (k) => k.includes('name') && !k.includes('child') },
   { field: 'source', test: (k) => k === 'source' },
 ];
 
@@ -145,9 +153,15 @@ export function parseInterests(raw: unknown): InterestParse {
     const p = piece.trim();
     if (!p) continue;
     const s = p.toLowerCase();
-    const rule = INTEREST_RULES.find((r) => r.test(s));
-    if (rule) {
-      if (!tags.includes(rule.tag)) tags.push(rule.tag);
+    // EVERY rule a piece satisfies, not just the first. The real form joins its
+    // checkboxes with commas so one piece is normally one option — but a person
+    // typing "After school and no school days" into one line means both, and
+    // taking only the first match would drop half their answer with no trace
+    // (it is not "unmapped" either, because a rule DID match). The rules are
+    // written narrowly enough that a genuine single option still yields one tag.
+    const hits = INTEREST_RULES.filter((r) => r.test(s));
+    if (hits.length > 0) {
+      for (const rule of hits) if (!tags.includes(rule.tag)) tags.push(rule.tag);
     } else {
       unmapped.push(p);
     }
@@ -160,29 +174,46 @@ export function parseInterests(raw: unknown): InterestParse {
 // ---------------------------------------------------------------------------
 
 // The grade column is free text — "Kindergarten", "1st grader (Donovan),
-// interested in robotics", "2nd grade loves building legos". parseGrade owns
-// the K=0 / Pre-K=-1 vocabulary (one rule, one place); this function's only job
-// is to find the token inside the sentence and hand it over.
+// interested in robotics", "2nd grade loves building legos", "twins, K and 2".
+// parseGrade owns the K=0 / Pre-K=-1 vocabulary (one rule, one place); this
+// function's only job is to find the grades inside the sentence and hand each
+// one over.
 //
-// It never guesses: a sentence with no recognisable grade returns null, because
-// a wrong grade tag on a first-access send is worse than no tag.
-export function parseGradeFromText(raw: unknown): number | null {
+// IT RETURNS EVERY GRADE IT FINDS, not the first. A family with two children
+// writes "PreK and 3rd", and tagging only the PreK would quietly make that
+// family invisible to a third-grade send — a miss nobody would ever notice,
+// because the contact looks perfectly well-formed.
+//
+// It still never guesses: a sentence with no recognisable grade returns [],
+// because a wrong grade tag on a first-access send is worse than no tag.
+export function parseGradesFromText(raw: unknown): number[] {
   const text = String(raw ?? '').trim();
-  if (!text) return null;
+  if (!text) return [];
+  const found: number[] = [];
+  const add = (g: number | null) => {
+    if (g !== null && !found.includes(g)) found.push(g);
+  };
 
   // Word forms first, for the same reason parseGrade tests them first.
-  const wordMatch = text.match(/\b(pre\s*[-_]?\s*k(?:indergarten)?|kindergarten|kinder|kg)\b/i);
-  if (wordMatch) return parseGrade(wordMatch[1]);
+  for (const m of text.matchAll(/\b(pre\s*[-_]?\s*k(?:indergarten)?|kindergarten|kinder|kg)\b/gi)) {
+    add(parseGrade(m[1]));
+  }
   // A bare "K" only counts when it stands alone as a word — otherwise every
   // sentence containing the letter would read as Kindergarten.
-  if (/(^|\s)k(\s|$|,|\.)/i.test(text)) return parseGrade('k');
+  if (/(^|[\s,(])k([\s,.)]|$)/i.test(text)) add(parseGrade('k'));
 
-  // Then a number, optionally ordinal, optionally preceded by "grade".
-  // Bounded to two digits so a year ("born 2019") cannot be read as a grade.
-  const numMatch = text.match(/\b(?:grade\s*)?(\d{1,2})\s*(?:st|nd|rd|th)?\b/i);
-  if (numMatch) return parseGrade(numMatch[1]);
+  // Then the numbers. A NUMBER ALONE IS NOT A GRADE: "grade 3, room 12" must
+  // not tag a twelfth-grader. A digit counts only when the text says it is a
+  // grade — an ordinal suffix ("5th"), the word grade before it ("grade 3") —
+  // or when it is the only number in the answer, which is the "5" case.
+  const numMatches = [...text.matchAll(/\b(?:(grade|grader|grades)\s*)?(\d{1,2})\s*(st|nd|rd|th)?\b/gi)];
+  const soleNumber = numMatches.length === 1;
+  for (const m of numMatches) {
+    const qualified = Boolean(m[1]) || Boolean(m[3]) || soleNumber;
+    if (qualified) add(parseGrade(m[2]));
+  }
 
-  return null;
+  return found;
 }
 
 // -1 → grade-PreK, 0 → grade-K, n → grade-n. Matches the tags already applied
@@ -210,16 +241,29 @@ export interface PlaceResolution {
   geo_segment: string | null;
 }
 
-// Borrowed from marketing-draft-campaign's expandSchoolNameVariants — a parent
-// types "Ainsworth elementary" and the catalog says "Ainsworth". Same list, so
-// the two stay readable against each other.
+// A parent types "Ainsworth elementary" and the catalog says "Ainsworth".
+//
+// THIS IS A COPY of marketing-draft-campaign's SCHOOL_SUFFIX_PATTERNS, kept
+// character-for-character in step with it on purpose: that function decides who
+// a school-targeted CAMPAIGN reaches, this one decides what school_name a lead
+// is filed under, and if the two lists disagree a lead can be filed under a
+// name the campaign will not look for. The first draft of this file had six of
+// its eleven patterns and claimed to be "the same list" — a location called
+// "Lincoln Charter School" would have been found by the campaign and missed
+// here. They live in separate edge functions (separate deploy units), so this
+// is a copy rather than a shared import; if you change one, change both.
 const SCHOOL_SUFFIX_PATTERNS: RegExp[] = [
   /\s+elementary\s+school$/i,
   /\s+elementary$/i,
   /\s+middle\s+school$/i,
+  /\s+middle$/i,
   /\s+high\s+school$/i,
-  /\s+school$/i,
+  /\s+charter\s+school$/i,
+  /\s+charter$/i,
+  /\s+magnet\s+school$/i,
+  /\s+magnet$/i,
   /\s+academy$/i,
+  /\s+school$/i,
 ];
 
 function variants(name: string): string[] {
@@ -276,7 +320,7 @@ export function resolvePlace(raw: unknown, locations: LocationRow[]): PlaceResol
 
   for (const piece of pieces) {
     if (schoolName === null) {
-      const hits = matchLocation(piece, byVariant);
+      const hits = matchLocation(piece, byVariant) ?? matchLocationInSentence(piece, byVariant);
       if (hits) {
         const areas = new Set(hits.map((h) => (h.area ?? '').trim()).filter(Boolean));
         if (areas.size === 1) {
@@ -296,13 +340,22 @@ export function resolvePlace(raw: unknown, locations: LocationRow[]): PlaceResol
 
   // Whatever was not the school is the city. If it names an area we operate in
   // and we have no area yet, it also sets geo_segment.
+  //
+  // A PARAGRAPH HAS NO CITY IN IT. Judging each comma-piece on its own is not
+  // enough — "honestly we have not picked a school yet, still deciding" ends in
+  // a two-word fragment that passes every per-piece test and lands "still
+  // deciding" in the city column. So the whole answer is judged too: past a
+  // handful of words it is prose, and prose yields no city. Recognised areas
+  // are exempt, because those are matched against the catalog rather than
+  // guessed at.
+  const wholeAnswerIsProse = text.split(/\s+/).length > 6;
   let city: string | null = null;
   for (const piece of leftovers) {
     const canonicalArea = areaByLower.get(piece.toLowerCase());
     if (canonicalArea) {
       city = city ?? canonicalArea;
       geoSegment = geoSegment ?? canonicalArea;
-    } else {
+    } else if (!wholeAnswerIsProse && looksLikeAPlaceName(piece)) {
       city = city ?? piece;
     }
   }
@@ -316,11 +369,66 @@ export function resolvePlace(raw: unknown, locations: LocationRow[]): PlaceResol
 // Elementary School" row: stopping at the first hit would pick whichever
 // spelling happened to match first, so the caller could not see that the two
 // are the same place in the same area.
+// Placeholders and prose are NOT cities. Without this, "N/A" and "we live in
+// Portland but go to Buckman" both land verbatim in the city column, which then
+// shows up as a city on the operator's contact list and in any city-shaped
+// export. A city is short: if the leftover reads like a sentence or like a
+// shrug, record nothing rather than record rubbish.
+const CITY_PLACEHOLDERS = new Set([
+  'n/a', 'na', 'none', 'none yet', 'no', 'nope', 'unknown', 'tbd', 'not sure',
+  'not applicable', '-', '--', '?', 'x', 'idk',
+]);
+// A shrug with a clause tacked on is still a shrug: "none yet - preschool",
+// "not sure yet", "no school yet". Matched on the OPENING word so the tail does
+// not rescue it.
+const CITY_NEGATION_OPENERS = /^(n\/?a|none|no|not|unknown|tbd|idk|nothing|undecided)\b/i;
+
+function looksLikeAPlaceName(s: string): boolean {
+  const t = s.trim();
+  if (!t) return false;
+  if (CITY_PLACEHOLDERS.has(t.toLowerCase())) return false;
+  if (CITY_NEGATION_OPENERS.test(t)) return false;
+  // A real city name is at most a few words ("Lake Oswego", "Oregon City",
+  // "Forest Grove"). Anything longer is the parent telling us a story.
+  if (t.split(/\s+/).length > 4) return false;
+  // Must contain a letter — "12", "???" are not places.
+  return /[a-z]/i.test(t);
+}
+
+// Exact match: every variant of what the parent typed, against every variant of
+// every catalog name.
 function matchLocation(piece: string, byVariant: Map<string, LocationRow[]>): LocationRow[] | null {
   const hits: LocationRow[] = [];
   const seen = new Set<LocationRow>();
   for (const v of variants(piece)) {
     for (const loc of byVariant.get(v) ?? []) {
+      if (seen.has(loc)) continue;
+      seen.add(loc);
+      hits.push(loc);
+    }
+  }
+  return hits.length > 0 ? hits : null;
+}
+
+// LAST RESORT: the parent answered in a sentence. "we live in Portland but go
+// to Buckman" is one comma-less piece, so the exact matcher above tests the
+// whole sentence, misses, and the school is lost — and because nothing stores
+// the sentence, it is lost from enrops entirely, not just from this field.
+//
+// So when the exact pass finds nothing, look for a catalog name INSIDE the
+// text. Two constraints keep this from inventing matches: the name has to
+// appear on whole-word boundaries (so "OES" cannot be found inside "shoes"),
+// and resolvePlace still refuses the result unless every location it matched
+// sits in ONE area. Only ever reached after an exact match has failed.
+function matchLocationInSentence(piece: string, byVariant: Map<string, LocationRow[]>): LocationRow[] | null {
+  const haystack = ` ${piece.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()} `;
+  if (haystack.trim().split(/\s+/).length < 2) return null; // not a sentence
+  const hits: LocationRow[] = [];
+  const seen = new Set<LocationRow>();
+  for (const [variant, locs] of byVariant) {
+    const needle = ` ${variant.replace(/[^a-z0-9]+/g, ' ').trim()} `;
+    if (needle.trim() === '' || !haystack.includes(needle)) continue;
+    for (const loc of locs) {
       if (seen.has(loc)) continue;
       seen.add(loc);
       hits.push(loc);
@@ -364,10 +472,12 @@ export function parseLeadRow(
 
   const place = resolvePlace(f.school_or_city, locations);
   const interests = parseInterests(f.interests);
-  const gt = gradeTag(parseGradeFromText(f.grade_notes));
 
   const tags = [WEBSITE_NOTIFY_TAG, ...interests.tags];
-  if (gt) tags.push(gt);
+  for (const g of parseGradesFromText(f.grade_notes)) {
+    const gt = gradeTag(g);
+    if (gt) tags.push(gt);
+  }
 
   return {
     kind: 'lead',
