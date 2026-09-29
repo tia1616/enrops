@@ -1177,7 +1177,7 @@ async function resolveTestEntryContent(
   if (programId) {
     const { data: p, error } = await supabase
       .from("programs")
-      .select(`id, curriculum, day_of_week, class_days, first_session_date, start_time, end_time, program_location_id, curriculum_id, room,
+      .select(`id, curriculum, day_of_week, class_days, first_session_date, end_date, start_time, end_time, program_location_id, curriculum_id, room,
         program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions, room_number ),
         curricula ( final_showcase, mid_term_skills, final_recap_skills )`)
       .eq("id", programId)
