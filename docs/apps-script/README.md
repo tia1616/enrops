@@ -1,4 +1,20 @@
-# Apps Script roster sync
+# Apps Script integrations
+
+Two Google Apps Scripts live in a tenant's own Google account and push
+data into Enrops. Both authenticate the same way — the tenant's opaque
+`organizations.apps_script_sync_secret` — and neither needs a Supabase
+login.
+
+| Script | Sheet it is bound to | Enrops function | Trigger |
+| --- | --- | --- | --- |
+| `roster-sync.gs` | the Squarespace camp-export Drive folder | `apps-script-roster-sync` | on change of "All Orders" |
+| `website-lead-intake.gs` | "J2S Get Notified Submissions" | `website-lead-intake` | time-driven, every 5 min |
+
+Install steps for each are the comment block at the top of that `.gs`
+file. The rest of this README covers the roster sync; the lead intake is
+documented at the bottom.
+
+## Roster sync
 
 A Google Apps Script that pushes per-camp Squarespace roster data into
 Enrops on a schedule. Lives in the tenant's own Google account; calls
@@ -49,7 +65,45 @@ update the `ROSTER_SYNC_SECRET` script property, rerun
 
 - `roster-sync.gs` — the Apps Script source. Tenants paste this into a
   new Apps Script project. Includes inline setup comments.
+- `website-lead-intake.gs` — the "Get Notified" lead sync. See below.
 - This README — context for future maintainers.
+
+## Website lead intake
+
+The tenant's site has a "Get Notified" form (for J2S,
+journeytosteam.com/notify). Squarespace appends every submission to a
+Google Sheet. `website-lead-intake.gs` is bound to that sheet, runs on a
+five-minute timer, and POSTs the un-synced rows to the
+`website-lead-intake` edge function, which writes them to
+`marketing_recipients`.
+
+Three things about it that are easy to get wrong:
+
+- **It cannot be an `onFormSubmit` trigger.** Squarespace appends rows
+  through the Sheets API, not through a Google Form, so that trigger
+  never fires. The timer is the only thing that sees the rows.
+- **It never touches Squarespace's columns.** It adds one column,
+  `synced_at`, at the far right of the sheet, and that is the only cell
+  it ever writes.
+- **A row is stamped only when Enrops says it handled it.** Created,
+  merged, unchanged, and the deliberate skips (test row, unusable
+  address, unsubscribed address) all stamp. A failure leaves the cell
+  empty and the row is retried on the next run, so nothing is lost to a
+  transient error — and nothing is imported twice, because the edge
+  function fills blanks and unions tags rather than overwriting.
+
+Every contact it creates carries the tag `website-notify`, plus one tag
+per interest ticked (`after-school`, `winter-break-camps`,
+`no-school-day-camps`, `spring-break-camps`, `summer-camps-2027`,
+`birthday-parties`) and a `grade-K` / `grade-1` / … tag when the grade
+answer is readable. A first-access campaign targets these through the
+campaign builder's existing "A group / tag…" audience scope — pick
+`website-notify` for everyone who signed up, or an interest tag for the
+people who asked about that one thing.
+
+There is no notes column on `marketing_recipients`, so the free-text
+"anything we should know" answer stays in the sheet; only the grade is
+lifted out of it.
 
 ## When this goes away
 
