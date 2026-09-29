@@ -853,7 +853,13 @@ export default function Finances() {
     // Re-READ rather than assuming the write means they are current now. The
     // published version can have moved between the read and the press.
     setTosStatus(await fetchTermsOfServiceStatus(org.id));
+    // CLEAR BOTH SLOTS, because the block writes to whichever one the operator
+    // was looking at. Clearing only `error` left the fee toggle still saying
+    // "accept the terms before changing money settings" AFTER they had accepted
+    // and while the toggle worked again - an instruction to do the thing they
+    // just did, contradicting the control beside it.
     setError(null);
+    setFeeError(null);
     setSavedToast("Terms accepted");
     setTimeout(() => setSavedToast(null), 2200);
   }
@@ -1078,9 +1084,14 @@ export default function Finances() {
             Accept the updated enrops terms to change money settings
           </div>
           <p style={{ fontSize: 13, color: INK, lineHeight: 1.5, margin: "0 0 10px" }}>
+            {/* Deliberately NOT a list of the three settings by name. The
+                ratchet enforces that every money write consults the gate, but it
+                cannot read this sentence - so an enumeration would go silently
+                wrong the day a fourth setting is gated, telling an operator the
+                block does not apply to the thing blocking them. */}
             Everything else on this page still works, and nothing about your
-            programs or families changes. This applies to who pays the enrops
-            service fee, your statement descriptor and your withdrawal admin fee.
+            programs or families changes. This applies to the money settings
+            below.
           </p>
           {canAcceptTerms ? (
             <button

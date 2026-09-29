@@ -98,6 +98,34 @@ create trigger org_terms_acceptances_no_delete
   before delete on public.org_terms_acceptances
   for each row execute function public.org_terms_acceptances_append_only();
 
+-- AND TRUNCATE, WHICH THE TWO ABOVE DO NOT COVER. They are FOR EACH ROW, and
+-- TRUNCATE fires neither - so "append-only, not even for service_role" was false
+-- for the one operation that removes every row at once. service_role held the
+-- privilege and every edge function runs as service_role, so a cleanup script
+-- walking tables would have destroyed the only record of what each business
+-- agreed to, silently. Statement-level trigger AND the privilege revoked: the
+-- trigger is the guarantee, the revoke makes the refusal happen a step earlier.
+create or replace function public.org_terms_acceptances_no_truncate()
+returns trigger
+language plpgsql
+as $$
+begin
+  raise exception
+    'org_terms_acceptances is append-only and cannot be truncated: it is the only record of what each business agreed to'
+    using errcode = 'TR002';
+end;
+$$;
+
+comment on function public.org_terms_acceptances_no_truncate() is
+  'Refuses TRUNCATE on org_terms_acceptances, including from service_role. The row-level triggers cover UPDATE and DELETE; TRUNCATE fires neither, which is how an append-only table loses every row at once.';
+
+drop trigger if exists org_terms_acceptances_no_truncate on public.org_terms_acceptances;
+create trigger org_terms_acceptances_no_truncate
+  before truncate on public.org_terms_acceptances
+  for each statement execute function public.org_terms_acceptances_no_truncate();
+
+revoke truncate on public.org_terms_acceptances from service_role;
+
 -- ── who may read and write it ──────────────────────────────────────────────
 alter table public.org_terms_acceptances enable row level security;
 
