@@ -53,8 +53,14 @@
 // touching Stripe (no key needed), --json=<path> to write the result, and
 // --destination-account / --direct-account to pin the connected accounts
 // instead of discovering them. Pin BOTH or neither: one pin plus discovery can
-// resolve the two roles to the same account, so it is refused. Every flag needs
-// its value with an equals sign; a bare flag is refused rather than ignored.
+// resolve the two roles to the same account, so it is refused.
+//
+// ARGUMENT HANDLING REFUSES RATHER THAN IGNORES, in all four shapes: an
+// unrecognised or mistyped flag name, a value with no flag (the
+// space-instead-of-equals mistake), a value-taking flag given with no value,
+// and a value on `--dry-run`, which is a bare boolean and takes none. Every one
+// of those used to be swallowed somewhere, and a swallowed argument reads as a
+// run that was configured the way the operator intended when it was not.
 //
 // --allow-write is only needed for --json, and the permission is checked BEFORE
 // the first charge: a missing flag must not surface after seventeen charges
@@ -148,37 +154,94 @@ import {
 
 // ── arguments ──────────────────────────────────────────────────────────────
 
-function flag(name: string): string | null {
+function readFlag(name: string): string | null {
   const hit = Deno.args.find((a) => a === `--${name}` || a.startsWith(`--${name}=`));
   if (!hit) return null;
   const eq = hit.indexOf('=');
   return eq === -1 ? '' : hit.slice(eq + 1);
 }
 
-const DRY_RUN = flag('dry-run') !== null;
-const JSON_OUT = flag('json');
-const PINNED_DESTINATION = flag('destination-account');
-const PINNED_DIRECT = flag('direct-account');
+/**
+ * Every argument this script understands, read in one place.
+ *
+ * THE KEY IS THE READER, deliberately. An earlier version kept a separate
+ * KNOWN_FLAGS list, which closed the drift in one direction only - asking for an
+ * unlisted flag became a compile error, but ADDING a name to the list and
+ * forgetting to wire a reader would have been accepted and silently ignored,
+ * which is the exact bug the list was added to fix ("an ignored pin reads as a
+ * pinned run"). Here a name cannot exist without being read, because naming it
+ * IS reading it.
+ *
+ * `null` means absent, `''` means given with no value.
+ */
+const ARGS = {
+  'dry-run': readFlag('dry-run'),
+  'json': readFlag('json'),
+  'destination-account': readFlag('destination-account'),
+  'direct-account': readFlag('direct-account'),
+} as const;
 
-// A FLAG GIVEN WITHOUT ITS VALUE IS A TYPO, NOT A DEFAULT, and it is checked
-// here for every value-taking flag rather than separately per flag.
+const KNOWN_FLAGS = Object.keys(ARGS);
+
+// EVERY ARGUMENT IS ACCOUNTED FOR, and this is the last member of a family that
+// bit twice. A bare `--json` parsed as the empty string and silently skipped the
+// artifact; one account pin plus discovery could resolve both roles to one
+// account. The survivor was a MISTYPED NAME: `--destination_account=acct_X` with
+// underscores matched nothing, so both pins read as null, the both-or-neither
+// check was satisfied BECAUSE NEITHER WAS SET, and discovery quietly picked its
+// own two accounts while the operator believed they had pinned them.
 //
-// `--json` with a space instead of an equals sign used to parse as the empty
-// string, which is falsy, so both the write-permission pre-check and the write
-// itself were skipped in silence: seventeen real charges, "REPLAY PASSED", and
-// no artifact, with nothing said. The account flags had the same shape and were
-// fixed in their own function, which is how this one survived - so the rule now
-// lives in ONE place for all three.
-for (const [name, value] of [
-  ['json', JSON_OUT],
-  ['destination-account', PINNED_DESTINATION],
-  ['direct-account', PINNED_DIRECT],
-] as const) {
-  if (value === '') {
+// The two shapes get DIFFERENT messages on purpose. Lumping them together made
+// `--json out.json` - the space-instead-of-equals mistake that caused the silent
+// run in the first place - report "unrecognised argument: out.json", blaming the
+// one token the operator typed correctly.
+const stray = Deno.args.filter((a) => !a.startsWith('--'));
+if (stray.length) {
+  console.error(
+    `value with no flag: ${stray.join(' ')}\n` +
+      'Every flag takes its value with an equals sign, e.g. --json=path.json',
+  );
+  Deno.exit(2);
+}
+const unrecognised = Deno.args.filter((a) =>
+  !KNOWN_FLAGS.some((k) => a === `--${k}` || a.startsWith(`--${k}=`))
+);
+if (unrecognised.length) {
+  console.error(
+    `unrecognised argument(s): ${unrecognised.join(' ')}\n` +
+      `this script takes only: ${KNOWN_FLAGS.map((f) => `--${f}`).join(', ')}\n` +
+      'Refusing rather than ignoring them - an ignored pin reads as a pinned run.',
+  );
+  Deno.exit(2);
+}
+
+// `--dry-run` IS A BOOLEAN AND TAKES NO VALUE. `--dry-run=false` used to enable
+// the dry run and exit 0 - the same exit code a genuine REPLAY PASSED produces -
+// so anything gating on the status rather than reading the banner recorded a
+// pass for a run that never touched Stripe. Loud on a terminal, silent in a
+// wrapper.
+if (ARGS['dry-run'] !== null && ARGS['dry-run'] !== '') {
+  console.error(
+    '--dry-run takes no value. Pass --dry-run to print the plan, or leave it off to run.',
+  );
+  Deno.exit(2);
+}
+
+// A VALUE-TAKING FLAG GIVEN WITHOUT ITS VALUE IS A TYPO, NOT A DEFAULT.
+// `--json` alone parsed as the empty string, which is falsy, so both the
+// write-permission pre-check and the write itself were skipped in silence:
+// seventeen real charges, "REPLAY PASSED", and no artifact, with nothing said.
+for (const name of ['json', 'destination-account', 'direct-account'] as const) {
+  if (ARGS[name] === '') {
     console.error(`--${name} needs a value, e.g. --${name}=<value>. Refusing rather than ignoring it.`);
     Deno.exit(2);
   }
 }
+
+const DRY_RUN = ARGS['dry-run'] !== null;
+const JSON_OUT = ARGS.json;
+const PINNED_DESTINATION = ARGS['destination-account'];
+const PINNED_DIRECT = ARGS['direct-account'];
 
 // ── the plan, printable without a key ──────────────────────────────────────
 // Above the key resolution on purpose: --dry-run must work on a machine that
@@ -541,24 +604,16 @@ async function replayRow(row: SeptemberRow, accounts: Accounts): Promise<RowResu
   let feeAttemptFailed = false;
   let feeErrorMessage: string | null = null;
   if (owedCents > 0 && facts.applicationFeeId) {
+    let feeCallSucceeded = false;
+    let observedAmount: unknown = undefined;
     try {
       const feeRefund = await stripe.applicationFees.createRefund(
         facts.applicationFeeId,
         { amount: owedCents },
         { idempotencyKey: `${RUN_ID}_appfee_${row.day}_${row.who}` },
       );
-      // OBSERVED, NOT ASSUMED. This used to fall back to `owedCents` - the
-      // number we ASKED for - so a response without an amount would have been
-      // reported as money returned and then compared against the table, which
-      // is the request checked against itself. The whole point of a sandbox
-      // replay is that the figures come back from Stripe.
-      if (typeof feeRefund.amount !== 'number') {
-        throw new Error(
-          `${row.who}: Stripe returned a fee refund with no amount, so there is no ` +
-            'observed figure to report.',
-        );
-      }
-      returnedCents = feeRefund.amount;
+      observedAmount = feeRefund.amount;
+      feeCallSucceeded = true;
     } catch (err) {
       // A STRIPE REJECTION AND A BROKEN HARNESS ARE NOT THE SAME EVENT, and
       // this catch used to treat them as one. On the three rows that expect
@@ -584,6 +639,33 @@ async function replayRow(row: SeptemberRow, accounts: Accounts): Promise<RowResu
       returnedCents = 0;
       feeAttemptFailed = true;
       feeErrorMessage = stripeMessage(err);
+    }
+
+    // OBSERVED, NOT ASSUMED - AND CHECKED OUTSIDE THE try ON PURPOSE.
+    //
+    // `returnedCents` used to fall back to `owedCents`, the number we ASKED
+    // for, which is the request compared against the table rather than against
+    // Stripe. The first attempt at fixing that threw from INSIDE the try above,
+    // where the catch immediately swallowed it and re-scored the row as "the
+    // fee return threw" - on TWELVE rows it printed my own error text as though
+    // Stripe had said it, and on the three `failed` rows it escaped only because
+    // a plain Error has no `.type`. (Twelve, not fourteen: the month is 12
+    // affected + 3 escaping + 2 that never reach this block at all, because
+    // Dillard and Snowley carry no application fee. A blast radius that does not
+    // survive counting is the kind of number this file has already had to
+    // correct once.) A guard that works by accident is not a guard, and a guard
+    // inside the try it guards is not outside it.
+    //
+    // Stripe accepting the call and returning an unreadable figure is not a
+    // failed fee return. It is the run having nothing to report, so it stops.
+    if (feeCallSucceeded) {
+      if (typeof observedAmount !== 'number') {
+        throw new Error(
+          `${row.who}: Stripe accepted the fee refund but returned no readable amount ` +
+            `(${JSON.stringify(observedAmount)}), so there is no observed figure to report.`,
+        );
+      }
+      returnedCents = observedAmount;
     }
   }
 
@@ -648,6 +730,26 @@ if (JSON_OUT) {
     );
     Deno.exit(2);
   }
+
+  // STAMP THE ARTIFACT AS UNFINISHED BEFORE THE FIRST CHARGE.
+  //
+  // Every guard in this script throws, and a throw skips the write at the end -
+  // correctly, since there is no verdict to write. But it also LEAVES THE
+  // PREVIOUS RUN'S FILE at that path, so someone opening it after a run that
+  // died reads a stale `"passed": true` and believes it describes today. For a
+  // file whose entire job is to say whether the money came back, a stale pass is
+  // the worst thing it can say. Writing `passed: false` now means a crashed run
+  // leaves a file that is honest about having no result.
+  await Deno.writeTextFile(
+    JSON_OUT,
+    JSON.stringify({
+      runId: RUN_ID,
+      startedAt: new Date().toISOString(),
+      status: 'started',
+      passed: false,
+      note: 'This run did not finish. A completed run overwrites this file.',
+    }, null, 2),
+  );
 }
 
 const accounts = await resolveAccounts();
