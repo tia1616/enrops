@@ -210,9 +210,22 @@ serve(async (req) => {
       // disagree about whose they are, so one lookup answers for the cart - and
       // if that ever stopped being true the RPC raises FC013 rather than
       // spending the wrong family's balance.
-      const { data: regForOrg } = await admin.from('registrations').select('organization_id, parent_id').eq('id', regIds[0]).single();
+      const { data: regForOrg, error: regForOrgErr } = await admin
+        .from('registrations').select('organization_id, parent_id').eq('id', regIds[0]).single();
       const orgId = regForOrg?.organization_id;
       const cartParentId = (regForOrg as { parent_id?: string | null } | null)?.parent_id ?? null;
+      // A FAILED READ HERE POISONS THE SHORTFALL VERDICT further down. Without
+      // a parent id the self-heal's apply_family_credit raises FC013 on every
+      // leg, `recovered` stays 0, and the operator is emailed that the business
+      // absorbed the whole discount - when the credit may have been perfectly
+      // recoverable and nothing was actually wrong. Recorded so that verdict
+      // can say it is unsure rather than assert a figure it cannot support.
+      if (regForOrgErr) {
+        console.error(
+          `[webhook] could not resolve org/parent for ${regIds[0]}:`,
+          regForOrgErr.message,
+        );
+      }
 
       const brand = await loadOrgBrand(admin, orgId);
       // The tenant's OWN inbox, or null. NOT brand.alert_email: every alert
@@ -307,6 +320,30 @@ serve(async (req) => {
             `[webhook] could not capture credit hold ${creditKey} for ${regIds.join(',')}:`,
             captureErr.message,
           );
+          // AND TELL SOMEBODY, because the guard below skips both the self-heal
+          // and the shortfall alert when this errors, and the handler then
+          // returns 200 so Stripe never retries. The money is already wrong at
+          // that point: Stripe has taken a payment discounted by the credit,
+          // the reservation rows stay 'reserved' and lapse at expires_at, and
+          // the balance goes back to the family. They keep the credit AND the
+          // discount, and a console line is the only trace. This is the same
+          // rule the shortfall alert twenty lines down already follows - it
+          // simply was not wired to this branch.
+          if (alertEmail) {
+            await sendOperatorAlert({
+              brand,
+              to: alertEmail,
+              subject: 'A registration was paid partly with account credit that was not deducted',
+              body: `A family checked out using account credit and the payment succeeded, but the step that `
+                + `deducts the credit from their balance failed. Their registration is confirmed and paid.\n\n`
+                + `What this means: the discount came off what they were charged, but the credit was not taken `
+                + `off their account, so they still have it to spend again.\n\n`
+                + `Registration IDs: ${regIds.join(', ')}\n`
+                + `Discount applied at checkout: $${(expectedCredit / 100).toFixed(2)}\n\n`
+                + `Someone should reduce that family's credit by this amount, or accept it as a goodwill `
+                + `discount. Nothing else will do it automatically.`,
+            });
+          }
         }
 
         // THE SELF-HEALING HALF, and it heals exactly one shape - which is
@@ -325,7 +362,54 @@ serve(async (req) => {
         // was spent elsewhere, so there is nothing left to take - but it means
         // the business has absorbed the difference, and that must not be a log
         // line nobody reads.
+        // A CAPTURE THAT RETURNS 0 HAS TWO MEANINGS AND ONLY ONE IS A PROBLEM.
+        // capture_family_credit_hold loops `kind = 'reserved'` under this key.
+        // The first delivery flips every one of those rows to 'applied', so a
+        // REDELIVERY matches nothing and returns 0 - a correct, idempotent
+        // no-op. Read as "captured nothing" it produced a shortfall email to
+        // the tenant saying the business had absorbed the entire discount and
+        // that the credit actually taken was $0.00, both untrue, repeated for
+        // the three days Stripe retries. Nothing dedupes this branch on
+        // event.id (only account.updated does), and two endpoints are
+        // registered on this URL, so redelivery is ordinary rather than rare.
+        //
+        // So before concluding anything, ask the ledger what is already spent
+        // under this key. That is the same durable record the ACH-bounce
+        // restore now reads, and it cannot be truncated the way metadata can.
+        let alreadyApplied = 0;
+        // Same doubt, second cause: with no parent id resolved, the self-heal
+        // below cannot even attempt a recovery, so a `recovered` of 0 says
+        // nothing about whether money was really absorbed. Either unknown
+        // makes the verdict unsure.
+        let applianceUnconfirmed = !!regForOrgErr || !cartParentId;
         if (!captureErr && captured < expectedCredit) {
+          const { data: appliedUnderKey, error: appliedKeyErr } = await admin
+            .from('family_credit_movements')
+            .select('amount_cents')
+            .eq('application_key', creditKey)
+            .eq('kind', 'applied');
+          if (appliedKeyErr) {
+            // FAIL TOWARD TELLING SOMEBODY. We cannot confirm the credit was
+            // already taken, and staying quiet would hide a real shortfall -
+            // money the business absorbed that nothing else on any screen
+            // reports. The alert says it is unconfirmed rather than asserting
+            // a figure we could not verify.
+            console.error(
+              `[webhook] could not confirm credit already applied under ${creditKey}:`,
+              appliedKeyErr.message,
+            );
+            applianceUnconfirmed = true;
+          } else {
+            alreadyApplied = ((appliedUnderKey ?? []) as Array<{ amount_cents: number }>)
+              .reduce((s, m) => s + (m.amount_cents || 0), 0);
+          }
+        }
+        // What this key has actually taken off the family, however many times
+        // the webhook has run. On a redelivery `captured` is 0 and this is the
+        // full amount, so the branch below simply does not fire.
+        const effectivelyCaptured = Math.max(captured, alreadyApplied);
+
+        if (!captureErr && effectivelyCaptured < expectedCredit) {
           const shortfall = decodeCreditAllocation(meta.credit_alloc);
           console.warn(
             `[webhook] credit hold ${creditKey} captured ${captured} of ${expectedCredit}; ` +
@@ -358,7 +442,7 @@ serve(async (req) => {
           // family's balance did not cover. Tell the operator: this is their
           // money, the family is correctly enrolled, and nothing else on any
           // screen will ever show it.
-          const stillShort = expectedCredit - captured - recovered;
+          const stillShort = expectedCredit - effectivelyCaptured - recovered;
           if (stillShort > 0) {
             console.error(
               `[webhook] credit shortfall ${stillShort} on ${creditKey} (regs ${regIds.join(',')}) - ` +
@@ -375,6 +459,11 @@ serve(async (req) => {
                   + `Registration IDs: ${regIds.join(', ')}\n`
                   + `Discount applied at checkout: $${(expectedCredit / 100).toFixed(2)}\n`
                   + `Credit actually taken: $${((expectedCredit - stillShort) / 100).toFixed(2)}\n\n`
+                  + (applianceUnconfirmed
+                    ? `Please treat these figures as unconfirmed: the credit ledger could not be re-read when this `
+                      + `was written, so it is possible the credit was taken correctly and this notice is wrong. `
+                      + `It is being sent anyway rather than risk staying quiet about money the business absorbed.\n\n`
+                    : '')
                   + `No action is needed for the family. Review it if this repeats.`,
               });
             }
@@ -987,16 +1076,41 @@ serve(async (req) => {
       // amount to return is read from them per registration. Still bounded by
       // applied-minus-already-restored inside the RPC, so a retried webhook
       // cannot hand back more than was taken.
+      // WHAT HAPPENED TO THE CREDIT, tracked rather than logged, because the
+      // alert below is the only thing a human reads and it used to say nothing
+      // about credit at all. Both halves of this - the read and each write -
+      // used to be console.error and carry on, followed by a 200 that tells
+      // Stripe never to retry. That is a silent path to a family losing their
+      // balance AND getting no class, which is the exact outcome reading the
+      // ledger instead of the metadata was meant to close.
+      let creditRestoredCents = 0;
+      const creditProblems: string[] = [];
+
       if (meta.credit_key) {
         const { data: appliedRows, error: appliedErr } = await admin
           .from('family_credit_movements')
           .select('registration_id, amount_cents')
           .in('registration_id', regIds)
+          // SCOPED TO THIS CHECKOUT'S KEY, not just to these registrations.
+          // No other draw can reach these ids today, so this changes no
+          // behaviour - but "no other draw can reach them" is a fact about
+          // today's call sites, and the point of reading the ledger was to be
+          // authoritative rather than nearly right. create-checkout passes
+          // this same key as p_application_key when it takes the hold, and
+          // capture rewrites kind and amount but never the key, so an applied
+          // row always still carries it.
+          .eq('application_key', meta.credit_key)
           .eq('kind', 'applied');
         if (appliedErr) {
           console.error(
             `[webhook] could not read the credit applied to ${regIds.join(',')} after an ACH failure:`,
             appliedErr.message,
+          );
+          // An unreadable ledger is not an empty one. Say so in the alert
+          // rather than letting an empty map mean "no credit to give back".
+          creditProblems.push(
+            `The credit ledger could not be read (${appliedErr.message}), so NO credit was returned. `
+            + `Check whether this family paid with account credit and return it by hand if so.`,
           );
         }
         const appliedByReg = new Map<string, number>();
@@ -1005,16 +1119,32 @@ serve(async (req) => {
         }
         for (const [regId, cents] of appliedByReg) {
           if (cents <= 0) continue;
-          const { error: restoreErr } = await admin.rpc('restore_family_credit_for_registration', {
-            p_registration_id: regId,
-            p_amount_cents: cents,
-            p_note: 'returned when the bank transfer did not clear',
-          });
+          const { data: restoredRaw, error: restoreErr } = await admin.rpc(
+            'restore_family_credit_for_registration',
+            {
+              p_registration_id: regId,
+              p_amount_cents: cents,
+              p_note: 'returned when the bank transfer did not clear',
+            },
+          );
           if (restoreErr) {
             console.error(
               `[webhook] could not return credit on registration ${regId} after an ACH failure:`,
               restoreErr.message,
             );
+            creditProblems.push(
+              `$${(cents / 100).toFixed(2)} on registration ${regId} could NOT be returned (${restoreErr.message}).`,
+            );
+          } else {
+            // WHAT CAME BACK, NOT WHAT WE ASKED FOR. The RPC is bounded by
+            // applied-minus-already-restored and answers 0 - with NO error -
+            // when there is nothing left to give back. Summing the request
+            // instead meant a redelivered async_payment_failed (nothing
+            // dedupes these branches on event.id, and two endpoints are
+            // registered on this URL) sent the operator a second email saying
+            // the credit "has been put back on their account automatically"
+            // when this run put back nothing.
+            creditRestoredCents += Number(restoredRaw) || 0;
           }
         }
       }
@@ -1025,7 +1155,17 @@ serve(async (req) => {
         // email address. The cascade would have handed both to Enrops.
         to: brand.tenant_alert_email,
         subject: 'Bank transfer (ACH) failed — follow up needed',
-        body: `A family's bank transfer did not clear (e.g. insufficient funds). The seat is still held (confirmed) but unpaid. Registration IDs: ${regIds.join(', ')}. Parent: ${meta.parent_name || ''} ${session.customer_email || meta.parent_email || ''}. Contact the family to arrange payment, or release the seat.`,
+        // THE CREDIT PARAGRAPH IS NOT OPTIONAL WHEN CREDIT WAS INVOLVED. The
+        // sibling alert on the successful path already reports the credit half;
+        // this one, where the family's own money is at stake, said nothing -
+        // so a failed restore reached nobody at all.
+        body: `A family's bank transfer did not clear (e.g. insufficient funds). The seat is still held (confirmed) but unpaid. Registration IDs: ${regIds.join(', ')}. Parent: ${meta.parent_name || ''} ${session.customer_email || meta.parent_email || ''}. Contact the family to arrange payment, or release the seat.`
+          + (creditProblems.length > 0
+            ? `\n\nACCOUNT CREDIT NEEDS ATTENTION:\n- ${creditProblems.join('\n- ')}`
+            : creditRestoredCents > 0
+              ? `\n\nThis family had paid $${(creditRestoredCents / 100).toFixed(2)} of this with account credit. `
+                + `That has been put back on their account automatically - no action needed for it.`
+              : ''),
       });
       // intelligence: log the failure half of the funnel (fail-safe; metadata is IDs/facts only, no PII)
       for (const regId of regIds) {
@@ -1714,7 +1854,17 @@ async function recordExternalRefund(
   let chargedForReg = 0;
   let baseForReg = 0;
   try {
-    const { data: paidRows } = await admin
+    // THESE THREE READS DECIDE WHAT THE FAMILY IS TOLD, so they may not fail
+    // quietly. The money doc's section 6 leaves exactly one blocker-1 item
+    // open - "Logs every attempt, success or failure, somewhere we can both
+    // see", because "a zero cannot tell 'no fee was owed' from 'we never
+    // tried'" - and section 15 asks for "Service-fee refund failures: Zero",
+    // a number nobody can report honestly against a read that discards its
+    // own error. Section 10 puts emails inside the truthful-claims rule, and
+    // the checkout copy promises the fee "is refunded if your registration is
+    // refunded", so a receipt built on a silently-empty read is a pricing
+    // statement to a family that is not exactly true.
+    const { data: paidRows, error: paidErr } = await admin
       .from('refunds')
       .select('amount_cents')
       .eq('registration_id', reg.id)
@@ -1722,7 +1872,7 @@ async function recordExternalRefund(
     const totalRefunded = ((paidRows ?? []) as Array<{ amount_cents: number }>)
       .reduce((s, r) => s + (r.amount_cents || 0), 0);
 
-    const { data: instPaid } = await admin
+    const { data: instPaid, error: instPaidErr } = await admin
       .from('installments')
       .select('amount_cents, stripe_payment_intent_id, stripe_charge_account_id')
       .eq('registration_id', reg.id)
@@ -1731,9 +1881,29 @@ async function recordExternalRefund(
       amount_cents: number; stripe_payment_intent_id: string | null; stripe_charge_account_id: string | null;
     }>);
     const instTotal = instRowsPaid.reduce((s, r) => s + (r.amount_cents || 0), 0);
-    const { data: regAmt } = await admin
+    const { data: regAmt, error: regAmtErr } = await admin
       .from('registrations').select('amount_cents').eq('id', reg.id).maybeSingle();
     const basePaid = instTotal > 0 ? instTotal : ((regAmt as { amount_cents?: number } | null)?.amount_cents ?? 0);
+
+    // ANY of the three unreadable and we do not know what this family is owed
+    // or has had back. Say so where it can be seen, and then do not write a
+    // status or promise a fee outcome off numbers we could not read.
+    if (paidErr || instPaidErr || regAmtErr) {
+      const why = [
+        paidErr && `prior refunds: ${paidErr.message}`,
+        instPaidErr && `instalments: ${instPaidErr.message}`,
+        regAmtErr && `registration amount: ${regAmtErr.message}`,
+      ].filter(Boolean).join('; ');
+      console.error(
+        `[charge.refunded] SERVICE-FEE REFUND OUTCOME UNVERIFIED for registration ${reg.id} - ${why}. ` +
+        `payment_status left unchanged and no fee claim made to the family.`,
+      );
+      // Leave the label alone rather than write a wrong one. A stale 'partial'
+      // is recoverable and visible; a wrong 'refunded' decrements the
+      // registration counter this doc's section 5 defines and dirties the
+      // history section 9 item 13 says the dark gate needs.
+      throw new Error(`refund totals unreadable: ${why}`);
+    }
 
     // COMPARE LIKE WITH LIKE. refunds.amount_cents is what the card was actually
     // credited — base PLUS any platform fee passed through to the family —

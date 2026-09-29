@@ -125,6 +125,15 @@ const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 // given up, write to them" are different questions and deserve different
 // answers - mailing somebody 30 minutes after they stepped away is nagging.
 const CHECKOUT_WINDOW_MINUTES = 30;
+// How much longer the CREDIT hold lives than the Stripe session it backs. The
+// hold must outlive the session (equal is not good enough - see the hold call),
+// and expiry is the only thing that ever releases it: there is no
+// checkout.session.expired handler, and releaseCreditHold runs only on this
+// function's own failure paths. So this is also how long a family who abandons
+// Stripe genuinely waits, and the refusal below must quote the sum, not the
+// session window.
+const CREDIT_HOLD_SURPLUS_MINUTES = 15;
+const CREDIT_HOLD_MINUTES = CHECKOUT_WINDOW_MINUTES + CREDIT_HOLD_SURPLUS_MINUTES;
 const checkoutExpiresAt = () =>
   Math.floor(Date.now() / 1000) + CHECKOUT_WINDOW_MINUTES * 60;
 
@@ -210,6 +219,12 @@ serve(async (req) => {
       use_installments,
       installment_schedule,
       payment_method,
+      // The account-credit balance the BROWSER priced this cart with. Never
+      // trusted as money - the spendable figure is always re-read from the
+      // database below - it is only used to notice that what the family was
+      // quoted is no longer deliverable, so they get an honest refusal
+      // instead of a silent charge for more than the screen said.
+      quoted_credit_cents,
       // Scholarship fund. `donation_cents` is the gift the family chose; the fee
       // cover and the charged total are computed HERE from the org's own config
       // row, never accepted from the browser. This is the one number in the
@@ -426,7 +441,70 @@ serve(async (req) => {
         //
         // Refusing is the kinder half of the trade: they wait, rather than pay
         // money they did not need to and have to ask for it back.
-        if (available <= 0) {
+        // ZERO WAS THE WRONG TEST. The comment above says this guard exists so
+        // a family is never "quietly charged the full amount and told nothing"
+        // - but `available <= 0` only catches the case where the earlier
+        // attempt held ALL of it. A PARTIAL hold sails straight through and
+        // produces the same silent surprise with a smaller number on it:
+        // balance $240, cart $200, they reach Stripe and back out, click Pay
+        // again without reloading so the page still shows $0.00 owed, and the
+        // server now sees $40 spendable, applies $40, and sends them to Stripe
+        // for $160 after telling them twice they owed nothing.
+        //
+        // So the test is "can we still deliver what we quoted", which needs to
+        // know what was quoted. The browser sends the balance it priced the
+        // cart with; anything it can usefully spend is capped by the cart, so
+        // that is the figure to compare. An older cached client sends nothing
+        // and falls back to the original zero test rather than breaking.
+        const quotedCreditCents = Math.max(0, Math.floor(Number(quoted_credit_cents) || 0));
+        const quotedUsable = Math.min(quotedCreditCents, serverSum);
+        const shortOfQuote = quotedUsable > 0 && available < quotedUsable;
+
+        // A SHORTFALL IS ONLY WORTH REFUSING IF A HOLD CAUSED IT, and proving
+        // that takes a look at the ledger rather than an inference from two
+        // numbers being different.
+        //
+        // The two figures come from DIFFERENT KEYS: the browser's quote is
+        // this SESSION's parent row (my_family_credit_balance_cents resolves
+        // via current_parent_id), while `available` is the parent
+        // create-registration resolved from the TYPED EMAIL. A family with two
+        // parent rows at one org - which has actually happened on staging -
+        // makes those disagree permanently. Refusing on the difference alone
+        // would leave them unable to register at all, ever, which is far worse
+        // than the silent partial charge this guard exists to stop. Before
+        // this guard existed that family simply got whatever their cart row
+        // held, so falling back to that is no worse than the old behaviour.
+        let heldElsewhere = false;
+        if (shortOfQuote && available > 0) {
+          const { data: creditIdRows, error: idsErr } = await guardAdmin
+            .from('family_credits')
+            .select('id')
+            .eq('organization_id', giftOrgId)
+            .eq('parent_id', cartParentId)
+            .eq('status', 'active');
+          const creditIds = ((creditIdRows ?? []) as Array<{ id: string }>).map((r) => r.id);
+          if (idsErr) {
+            // Cannot prove either way. Treat as held: one honest retry beats
+            // charging more than the screen promised.
+            console.error('[create-checkout] credit id lookup failed:', idsErr.message);
+            heldElsewhere = true;
+          } else if (creditIds.length > 0) {
+            const { count: liveHolds, error: holdsErr } = await guardAdmin
+              .from('family_credit_movements')
+              .select('id', { count: 'exact', head: true })
+              .in('credit_id', creditIds)
+              .eq('kind', 'reserved')
+              .gt('expires_at', new Date().toISOString());
+            if (holdsErr) {
+              console.error('[create-checkout] live hold check failed:', holdsErr.message);
+              heldElsewhere = true;
+            } else {
+              heldElsewhere = (liveHolds ?? 0) > 0;
+            }
+          }
+        }
+
+        if (available <= 0 || heldElsewhere) {
           const { count: liveCredits, error: liveErr } = await guardAdmin
             .from('family_credits')
             .select('id', { count: 'exact', head: true })
@@ -451,13 +529,29 @@ serve(async (req) => {
               // retry mints a fresh set of pending registrations and seat holds
               // before it gets here. An honest upper bound sends them away once
               // instead of five times.
-              error: `Your account credit is still tied up in a checkout you started earlier. `
-                + `It frees up within ${CHECKOUT_WINDOW_MINUTES} minutes - please try again then and we will apply it.`,
+              // COVERS BOTH CAUSES NOW. Since this guard also fires when the
+              // balance merely shrank below what the screen quoted, "tied up
+              // in an earlier checkout" would be a confident wrong answer for
+              // a family who simply spent it in another tab. Name both and
+              // tell them what to do either way.
+              // QUOTES THE HOLD WINDOW, NOT THE SESSION WINDOW. It said 30
+              // minutes while the hold now lives 45, so a family who came
+              // back when told to was refused again - and the comment above
+              // explains that each of those retries mints another set of
+              // pending registrations and seat holds. Expiry is the only
+              // thing that releases a hold, so this number has to be the
+              // hold's own.
+              error: `Your account credit has changed since this page loaded - either an earlier checkout `
+                + `is still holding it, or it was used somewhere else. Please reload and try again; if it is `
+                + `held, it frees up within ${CREDIT_HOLD_MINUTES} minutes and we will apply it then.`,
               credit_held_elsewhere: true,
             }, 409);
           }
         }
 
+        // The Stripe-minimum trim lives inside allocateCreditAcrossLines, with
+        // the rest of the split, so the browser's copy of that rule and this
+        // one cannot drift. See STRIPE_MIN_CHARGE_CENTS there.
         if (available > 0) {
           // The lines come from regAmtRows - the SERVER's amounts, carrying real
           // registration ids. line_items is the browser's copy and has no ids at
@@ -1284,7 +1378,19 @@ serve(async (req) => {
           p_amount_needed_cents: entry.creditCents,
           p_application_key: creditPlan.key,
           p_kind: 'reserved',
-          p_hold_minutes: CHECKOUT_WINDOW_MINUTES,
+          // THE HOLD MUST OUTLIVE THE SESSION, the same invariant line 109
+          // states for the seat hold, and for the same reason. This stamp is
+          // taken here; the Stripe session's expires_at is computed further
+          // down, AFTER a coupon round-trip - so an exactly-equal window means
+          // the credit becomes spendable again a few hundred milliseconds
+          // before the page that depends on it dies. A second tab opened in
+          // that gap takes the balance, and completing the first, still-live
+          // page then captures a lapsed hold: v_room resolves to 0, the
+          // reservation is deleted, and the family is charged a price
+          // discounted by credit that was never spent. The surplus costs
+          // nothing - release and capture both handle a hold that outlives
+          // its session.
+          p_hold_minutes: CREDIT_HOLD_MINUTES,
         });
         creditPlan.held = true;
         if (holdErr) {
@@ -1362,9 +1468,15 @@ serve(async (req) => {
       ...(creditCoupon ? { discounts: [{ coupon: creditCoupon.id }] } : {}),
       // Matches the seat hold. See CHECKOUT_WINDOW_MINUTES.
       //
-      // THE CREDIT HOLD USES THIS SAME WINDOW, on purpose: the minute the family
-      // can no longer pay this session is the minute their credit should be
-      // theirs to spend again.
+      // THE CREDIT HOLD DELIBERATELY OUTLIVES THIS by CREDIT_HOLD_SURPLUS_MINUTES.
+      // This comment used to say it used the SAME window, "because the minute
+      // the family can no longer pay this session is the minute their credit
+      // should be theirs to spend again" - which sounds right and is wrong.
+      // Equal is not good enough: this expiry is computed after a Stripe
+      // coupon round-trip, so an equal window frees the credit a moment BEFORE
+      // the page that depends on it dies, and a second tab opened in that gap
+      // can take it while the first session is still payable. See the hold
+      // call for the whole failure.
       //
       // ACH IS NOT SHORTENED BY THIS. expires_at governs how long the family has
       // to SUBMIT the checkout, not how long a submitted bank transfer takes to

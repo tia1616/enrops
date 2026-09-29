@@ -27,9 +27,23 @@ export function spreadCreditAcrossLines(grossLineAmounts, creditCents) {
   const total = gross.reduce((s, a) => s + a, 0);
   // Never more than the cart costs, and never negative - a bad balance quotes
   // full price rather than throwing in the middle of a checkout.
-  const available = Number.isFinite(creditCents) && creditCents > 0
+  let available = Number.isFinite(creditCents) && creditCents > 0
     ? Math.min(Math.floor(creditCents), total)
     : 0;
+
+  // THE SAME 50-CENT RULE THE SERVER APPLIES, mirrored here because the whole
+  // point of this file is that the screen and the charge agree. Stripe refuses
+  // a charge under 50 cents, so credit that would leave 1-49 cents owing is
+  // trimmed until it leaves exactly 50 - the family pays the minimum and keeps
+  // the few cents we did not spend. Without this line the server trims and the
+  // screen does not, so a family is quoted 20 cents and charged 50: a small
+  // number, but charging MORE than the screen promised is the one direction
+  // this flow must never go.
+  const STRIPE_MIN_CHARGE_CENTS = 50;
+  const residual = total - available;
+  if (residual > 0 && residual < STRIPE_MIN_CHARGE_CENTS) {
+    available = Math.max(0, total - STRIPE_MIN_CHARGE_CENTS);
+  }
 
   let left = available;
   const lineAmounts = gross.map((a) => {
