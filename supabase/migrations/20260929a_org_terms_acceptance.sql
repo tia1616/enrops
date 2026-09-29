@@ -142,8 +142,17 @@ alter table public.org_terms_acceptances enable row level security;
 -- UPDATE and DELETE are granted to NOBODY, deliberately: the table is
 -- append-only, the triggers enforce it even for service_role, and withholding
 -- the privilege makes the refusal happen a step earlier still.
-grant insert, select on public.org_terms_acceptances to authenticated;
+-- REVOKE FIRST, THEN GRANT BACK. Never assume what the schema defaults gave
+-- this table, because the two databases do not agree: staging created it with
+-- SELECT only, prod created it with ALL. `grant insert, select` ADDS, so on prod
+-- that left `authenticated` - any signed-in user, including a parent - holding
+-- DELETE, UPDATE and TRUNCATE on the append-only evidence table. Nothing could
+-- actually be destroyed (no UPDATE/DELETE policy, and TRUNCATE hits TR002),
+-- which is the layered guarantee doing its job, but a privilege nobody can
+-- justify is how it goes wrong later. State the end state explicitly.
+revoke all on public.org_terms_acceptances from authenticated;
 revoke all on public.org_terms_acceptances from anon;
+grant insert, select on public.org_terms_acceptances to authenticated;
 
 -- ACCEPTING BINDS THE BUSINESS, so it is the owner's to do, not an admin's.
 -- is_org_owner is the existing spelling of that rule; can_handle_money would be
