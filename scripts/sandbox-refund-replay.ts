@@ -79,6 +79,19 @@
 // attempt that threw before it learned the amount) and goes red on it. The two
 // files are complements, not substitutes: this one proves the numbers Stripe
 // really returns, that one proves the branches Stripe cannot be made to take.
+//
+// THE LIMITATION TO KNOW BEFORE TRUSTING A FUTURE RUN. The three modules below
+// are production's own, imported, not copied - but the GLUE around them (the
+// order of the calls, the try/catch that sets `failed`, the arguments passed)
+// is written out again here, because in refund-registration it is interleaved
+// with Supabase writes and cannot be imported. It matches index.ts as of
+// 2026-09-29: facts, then computeMarginRefund, then refunds.create, then
+// applicationFees.createRefund, then feeReturnOutcome. Nothing enforces that it
+// stays matched. If the refund path's ORDER changes, re-read this against it
+// before believing a green run. Two known and deliberate differences:
+// remainingFraction is pinned to 1 here (it was 1 for all seventeen), and
+// production gates reverse_transfer on the charge really having a transfer,
+// which every destination charge built here does.
 
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { readChargeFeeFacts } from '../supabase/functions/_shared/chargeFeeFacts.ts';
@@ -192,9 +205,12 @@ const TEST_PAYMENT_METHOD = 'pm_card_bypassPending';
  *
  * Every destination round trip costs that account Stripe's own fee, because
  * Stripe keeps its fee on a refund while reverse_transfer pulls the whole
- * transfer back. Ten destination rows drain roughly $55, so the run is topped
- * up first rather than dying two thirds of the way through and leaving half a
- * month replayed.
+ * transfer back. That is $3.19 to $8.57 a row at the September amounts, across
+ * ten destination rows, so the run is topped up first rather than dying two
+ * thirds of the way through and leaving half a month replayed. The floor is set
+ * well above the drain because running out mid-month reads as a refund-path
+ * failure when it is a harness failure - which is how the first attempt at this
+ * script looked, before pm_card_bypassPending.
  */
 const DESTINATION_FLOAT_FLOOR_CENTS = 15_000;
 const DESTINATION_FLOAT_TOPUP_CENTS = 50_000;

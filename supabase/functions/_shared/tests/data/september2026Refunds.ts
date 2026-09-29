@@ -24,12 +24,16 @@
 // which is the number the money layer insists on: "Do not reconcile against the
 // refund amount. Reconcile each return against the original charge object."
 //
-// THE CHARGE IS NOT THE REFUND, and four rows prove it:
-//   - Nehemiah Kalu and Wallace Fritsch were PARTIAL refunds (20500 of 24000,
-//     6468 of 9968), so the margin comes back in proportion.
-//   - Everett Myers was a partial refund of a pay-in-full charge.
-//   - every Ukulele charge is class + pass-through fee (29900 + 299 = 30199),
-//     so one percent of what the family paid is NOT the fee that was taken.
+// THE CHARGE IS NOT THE REFUND. THREE rows are partial refunds, where the
+// margin comes back in proportion to the charge and not to the refund:
+// Wallace Fritsch (6468 of 9968), Nehemiah Kalu (20500 of 24000) and Everett
+// Myers (2500 of 33229).
+//
+// AND THE CHARGE IS NOT THE PRICE EITHER, which catches the other eight. Every
+// Ukulele charge is class + pass-through fee (29900 + 299 = 30199), so the fee
+// that was taken is one percent of the CLASS, not one percent of what the
+// family paid - reading it against 30199 is what made Esme Rosenau's row look
+// wrong in the first place.
 //
 // PROD RECORDED 21 REFUNDS IN SEPTEMBER, NOT 17. Four more landed after the doc
 // was written (23 and 28 September) and all four carry 'returned'. The

@@ -128,6 +128,76 @@ Deno.test('fixtures: the live fee model still produces the September figures', (
   assertEquals(estimateStripeFee(10069, 'card'), DIRECT_10069.operatorStripeFeeCents);
 });
 
+// THE SECOND CANARY, and it exists because of a gap THIS CHANGE OPENED.
+//
+// The table gained the facts the sandbox replay needs - the original charge
+// amount, the application fee taken on it, and the charge model. Nothing in the
+// offline suite read those fields, so an edit to any of them would have gone
+// unnoticed here and then produced a confidently WRONG sandbox run: the replay
+// builds its Stripe charge from those numbers and checks the result against
+// owedCents in the same row, so moving both together is a mutation that reports
+// PASS.
+//
+// This ties them. For every row the sandbox is expected to reproduce exactly,
+// the owed figure has to fall out of the REAL arithmetic - charge, fee, model,
+// refund - rather than being an independent number that happens to sit nearby.
+// The one caveated row is skipped on its amount only, and the skip is asserted
+// to be exactly one row so it cannot quietly grow.
+Deno.test('fixtures: every uncaveated row\'s owed figure is reproduced by the real arithmetic', () => {
+  let skipped = 0;
+  for (const row of SEPTEMBER_2026) {
+    if (row.sandboxCaveat) {
+      skipped += 1;
+      continue;
+    }
+    // Direct: Stripe billed the OPERATOR, so none of the fee is ours to net off.
+    // Destination: the uplift inside the application fee is the estimate, and
+    // the sandbox run of 2026-09-29 confirmed Stripe's real balance-transaction
+    // fee equals it on every September amount (319, 625, 726, 857).
+    const stripeFeeCents = row.model === 'direct'
+      ? 0
+      : estimateStripeFee(row.chargeAmountCents, 'card');
+
+    assertEquals(
+      computeMarginRefund({
+        applicationFeeCents: row.applicationFeeCents,
+        stripeFeeCents,
+        chargeAmountCents: row.chargeAmountCents,
+        refundAmountCents: row.refundedCents,
+      }),
+      row.owedCents,
+      `${row.day} ${row.who}`,
+    );
+  }
+  assertEquals(skipped, 1, 'exactly one row is exempt from the amount check');
+});
+
+// THE SHARED FIXTURES ARE THE SAME FOUR CHARGES AS FOUR OF THE ROWS, so they
+// are pinned to them rather than left as a second spelling. Before the table
+// carried charge amounts there was no overlap to drift; now there is, and a
+// correction applied to one copy and not the other is exactly the divergence
+// gate H exists for.
+Deno.test('fixtures: the four charge fixtures agree with their September rows', () => {
+  const row = (who: string): SeptemberRow => {
+    const found = SEPTEMBER_2026.find((r) => r.who === who);
+    if (!found) throw new Error(`no September row for ${who}`);
+    return found;
+  };
+
+  const pairs: Array<[typeof J2S_240, SeptemberRow]> = [
+    [J2S_240, row('Amit Rasin')],
+    [J2S_285, row('Murphy Yolland')],
+    [DIRECT_11079, row('Heidi Nelson')],
+    [DIRECT_10069, row('Addie Schmitt')],
+  ];
+
+  for (const [fixture, r] of pairs) {
+    assertEquals(fixture.chargeAmountCents, r.chargeAmountCents, `${r.who} charge`);
+    assertEquals(fixture.applicationFeeCents, r.applicationFeeCents, `${r.who} application fee`);
+    assertEquals(fixture.expectedMargin, r.owedCents, `${r.who} margin`);
+  }
+});
+
 // ── 1. The fee return fires on every refund that has margin to return ──────
 
 Deno.test('blocker1/1: a full refund returns the whole margin, destination', () => {
@@ -422,6 +492,11 @@ Deno.test('blocker1/DoD: seventeen September refunds, seventeen correct outcomes
   // table without adding it to prod, or drops one, this fails before any
   // outcome is checked - because "17 correct outcomes" is a claim about
   // seventeen refunds, not about however many happen to be listed here.
+  // Seventeen is written HERE as a literal on purpose. The shape constant lives
+  // in the same file as the table, so `length === SHAPE.rows` is satisfied by
+  // deleting a row and decrementing the constant. This line is the outside
+  // witness the move would otherwise have removed.
+  assertEquals(SEPTEMBER_2026_SHAPE.rows, 17, 'the definition of done names seventeen refunds');
   assertEquals(
     SEPTEMBER_2026.length,
     SEPTEMBER_2026_SHAPE.rows,
