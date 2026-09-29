@@ -82,6 +82,23 @@ Deno.test('mapRow tolerates an apostrophe or a capital appearing in a header', (
   assertEquals(m.grade_notes, '2nd');
 });
 
+Deno.test('a left-hand "Email Opt-In" column is what first-match-wins binds', () => {
+  // This is NOT the behaviour we want, it is the behaviour we have: mapRow takes
+  // the first header containing "email", and a sheet whose columns are iterated
+  // with Opt-In first binds the wrong one. index.ts is what catches it, by
+  // requiring that at least one row's email cell contains an "@" before it will
+  // write or let anything be marked synced. This test pins the shape that guard
+  // is written against - if mapRow ever starts preferring an exact "email"
+  // header, this fails and the guard's rationale needs rereading.
+  const m = mapRow({
+    'Email Opt-In': 'Yes',
+    'Email': 'real@example.com',
+    'Your name parent or guardian': 'A B',
+  });
+  assertEquals(m.email, 'Yes');
+  assertEquals(m.email?.includes('@'), false);
+});
+
 Deno.test('mapRow does not mistake the no-school column for the after-school one', () => {
   // "school" appears in BOTH the place column and the grade column header;
   // the place rule needs "city" too, so neither steals the other.

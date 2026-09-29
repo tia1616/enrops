@@ -2728,12 +2728,24 @@ async function resolveReviewRequestAudience(
   }
 
   // ── Contact anchor: marketing_recipients added N days ago.
+  //
+  // NOT EVERY CONTACT ROW IS A FAMILY WE HAVE SERVED. This anchor asks "how did
+  // it go?", so it may only fire for a contact whose relationship actually
+  // started. A website "Get Notified" lead (source='website_notify', written by
+  // the website-lead-intake function) has by construction started nothing — they
+  // asked to hear from us and have bought no program — so the question is false
+  // for them on the day it is asked. Excluded here rather than in the intake,
+  // because the intake cannot know which automations read the row it writes.
+  //
+  // This is the ONLY source excluded. A contact imported by the operator is
+  // still anchored on, which is what serves contact-only tenants (Kumon).
   const contactEntries: AudienceEntry[] = [];
   {
     const { data, error } = await supabase
       .from("marketing_recipients")
       .select("id, email, parent_name, child_first_name, created_at")
       .eq("organization_id", a.organization_id)
+      .neq("source", "website_notify")
       .gte("created_at", earliest);
     if (error) throw error;
     for (const c of (data ?? []) as any[]) {

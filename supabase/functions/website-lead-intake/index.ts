@@ -18,9 +18,11 @@
 //   one tenant and nothing about any other. Same posture as
 //   apps-script-roster-sync, which uses the same column.
 //
-//   The response never contains anything we LOOKED UP — no addresses, no names,
-//   no counts of other people's rows. It reports, per submitted row, only what
-//   happened to the data the caller already had. A 401 says nothing at all.
+//   The response carries no PERSONAL data we looked up — no addresses, no
+//   names, no counts of other people's rows. It reports, per submitted row, only
+//   what happened to the data the caller already had, plus the org's own slug
+//   and (on a failed write) the database's error text, both of which belong to
+//   the tenant holding the secret. A 401 says nothing at all.
 //
 // WHAT IT WRITES — marketing_recipients only. One row per (organization, email).
 //   * NEW contact  -> insert with source = 'website_notify'.
@@ -101,7 +103,13 @@ Deno.serve(async (req: Request) => {
 
   // ---- Auth ----------------------------------------------------------------
   const secret = (req.headers.get('x-enrops-secret') ?? '').trim();
-  if (!secret) return json({ error: 'unauthorized' }, 401);
+  if (!secret) {
+    // Logged for the same reason the unknown-secret path below is: this endpoint
+    // is reachable without a JWT and has no rate limit, so an attempt to guess
+    // the secret must leave a trace somewhere. The CALLER still learns nothing.
+    console.warn('website-lead-intake: rejected a request with no secret header');
+    return json({ error: 'unauthorized' }, 401);
+  }
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false },
@@ -119,7 +127,10 @@ Deno.serve(async (req: Request) => {
     console.error('website-lead-intake: org lookup failed:', orgErr.message);
     return json({ error: 'lookup_failed' }, 500);
   }
-  if (!org) return json({ error: 'unauthorized' }, 401);
+  if (!org) {
+    console.warn('website-lead-intake: rejected a request whose secret matched no organization');
+    return json({ error: 'unauthorized' }, 401);
+  }
 
   // ---- Payload -------------------------------------------------------------
   let body: { rows?: unknown };
@@ -145,30 +156,60 @@ Deno.serve(async (req: Request) => {
     });
   }
 
-  // A batch in which NO row carries a recognisable email column is a header
-  // change, not an empty mailbag — fail loudly rather than reporting every row
-  // as bad data and letting the script stamp them all as done.
-  const anyEmailColumn = rawRows.some((r) => {
+  // THE COLUMN WE BOUND MUST ACTUALLY HOLD ADDRESSES.
+  //
+  // Checking only that SOME header matched the word "email" is not enough, and
+  // the gap is the dangerous kind: Squarespace adds an "Email Opt-In" column
+  // (Yes/No) to the left of "Email", the first-match-wins rule in mapRow binds
+  // it, every row then reads as a bad address, every row is reported as handled,
+  // and the Apps Script stamps the entire sheet as synced. The leads are gone
+  // and the run logs as clean.
+  //
+  // So the guard is about CONTENT, not headers: at least one submitted row's
+  // mapped email cell must contain an "@". One person mistyping their address
+  // is a row-level skip; a column in which NOTHING looks like an address is a
+  // broken binding, and the whole batch is refused so nothing gets stamped and
+  // the script raises. (It fails loud and retries rather than failing quiet and
+  // discarding, which is the right direction when the alternative is losing
+  // every lead in the sheet.)
+  const anyPlausibleAddress = rawRows.some((r) => {
     const v = r?.values;
-    return !!v && typeof v === 'object' && mapRow(v as Record<string, unknown>).email !== undefined;
+    if (!v || typeof v !== 'object' || Array.isArray(v)) return false;
+    const cell = mapRow(v as Record<string, unknown>).email;
+    return typeof cell === 'string' && cell.includes('@');
   });
-  if (!anyEmailColumn) {
-    return json({ error: 'no_email_column', detail: 'no submitted row had a column matching "email"' }, 400);
+  if (!anyPlausibleAddress) {
+    return json({
+      error: 'no_usable_email_column',
+      detail: 'no submitted row had an email cell containing "@" - the email column is probably bound to the wrong column. Nothing was written and nothing was marked synced.',
+    }, 400);
   }
 
   // ---- Org-scoped reference data ------------------------------------------
   // Both reads FAIL CLOSED. A missing locations list would silently file every
   // lead with no school and no area; a missing suppression list would add
   // someone who unsubscribed. Neither is a state we are willing to write in.
-  const { data: locData, error: locErr } = await supabase
-    .from('program_locations')
-    .select('name, name_aliases, area')
-    .eq('organization_id', org.id);
-  if (locErr) {
-    console.error('website-lead-intake: program_locations read failed:', locErr.message);
-    return json({ error: 'lookup_failed' }, 500);
+  // Paginated for the same reason the suppression read below is: PostgREST caps
+  // an unbounded select at 1000 rows and says nothing about it, so a tenant past
+  // that many sites would silently lose the tail of its own catalog and file
+  // those families with no school and no area.
+  const locations: LocationRow[] = [];
+  {
+    const PAGE = 1000;
+    for (let from = 0; ; from += PAGE) {
+      const { data: locData, error: locErr } = await supabase
+        .from('program_locations')
+        .select('name, name_aliases, area')
+        .eq('organization_id', org.id)
+        .range(from, from + PAGE - 1);
+      if (locErr) {
+        console.error('website-lead-intake: program_locations read failed:', locErr.message);
+        return json({ error: 'lookup_failed' }, 500);
+      }
+      for (const l of (locData ?? []) as LocationRow[]) locations.push(l);
+      if (!locData || locData.length < PAGE) break;
+    }
   }
-  const locations = (locData ?? []) as LocationRow[];
 
   const suppressed = new Set<string>();
   {
@@ -413,9 +454,16 @@ async function writeLead(
   if (!existing.city && lead.city) patch.city = lead.city;
   if (!existing.geo_segment && lead.geo_segment) patch.geo_segment = lead.geo_segment;
 
+  // "Did this add a tag?" is a SET question, and it has to be asked as one.
+  // Comparing the union's length against priorTags.length silently answers "no"
+  // whenever the stored array holds a duplicate — ['registrant','registrant']
+  // plus a new 'website-notify' is 2 either way — and the contact then never
+  // gets the tag a campaign would target them by. Ask whether any incoming tag
+  // is missing instead, which is the actual question.
   const priorTags = (existing.tags ?? []).filter((t) => typeof t === 'string' && t.trim() !== '');
+  const priorSet = new Set(priorTags);
   const unionTags = [...new Set([...priorTags, ...lead.tags])];
-  if (unionTags.length !== priorTags.length) patch.tags = unionTags;
+  if (lead.tags.some((t) => !priorSet.has(t))) patch.tags = unionTags;
 
   if (Object.keys(patch).length === 0) return 'unchanged';
 

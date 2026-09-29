@@ -19,6 +19,12 @@
 // unsubscribed address). Anything else leaves the cell empty and the row is
 // tried again on the next run.
 //
+// ONE THING TO AVOID: do not SORT or DELETE rows in this sheet while a run is
+// in flight. Rows are stamped back by their row NUMBER, so re-ordering the
+// sheet mid-run can put a tick on the wrong row and that lead would never be
+// sent. Squarespace only ever appends, so this can only happen if a person
+// does it by hand. Adding a column is fine; the sync finds its column by name.
+//
 // ---------------------------------------------------------------------------
 // INSTALL (once, ~5 minutes)
 //
@@ -81,9 +87,16 @@ function syncNewLeads() {
   }
 }
 
+// The tab Squarespace writes into. Bound BY NAME, so adding or re-ordering
+// tabs later cannot silently point the sync at the wrong one. Falls back to the
+// first tab when no tab carries this name, which is how a renamed tab still
+// works instead of failing on install.
+var SHEET_NAME = 'Sheet1';
+
 function runSync_() {
   var secret = getSecret_();
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(SHEET_NAME) || ss.getSheets()[0];
 
   var lastRow = sheet.getLastRow();
   if (lastRow < 2) {
