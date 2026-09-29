@@ -37,8 +37,10 @@
 //     unsubscribed does not re-enter the list through a web form.
 //
 // TAGS — every row gets 'website-notify' (the "all website_notify" audience),
-//   plus one slug per interest checked, plus a grade tag when the free-text
-//   grade is readable. Targeting a first-access send at an interest is then the
+//   plus one slug per interest checked, plus one grade tag per grade named in
+//   the free-text grade answer (a family writing "PreK and 3rd" gets both, or
+//   that second child is invisible to a send aimed at their year). Targeting a
+//   first-access send at an interest is then the
 //   campaign builder's existing "A group / tag…" scope, which already filters
 //   marketing_recipients.tags — no new audience machinery.
 //

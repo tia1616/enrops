@@ -95,8 +95,9 @@ Three things about it that are easy to get wrong:
 Every contact it creates carries the tag `website-notify`, plus one tag
 per interest ticked (`after-school`, `winter-break-camps`,
 `no-school-day-camps`, `spring-break-camps`, `summer-camps-2027`,
-`birthday-parties`) and a `grade-K` / `grade-1` / … tag when the grade
-answer is readable. A first-access campaign targets these through the
+`birthday-parties`) and one `grade-K` / `grade-1` / … tag per grade the
+family names, so "PreK and 3rd" tags both children's years. A
+first-access campaign targets these through the
 campaign builder's existing "A group / tag…" audience scope — pick
 `website-notify` for everyone who signed up, or an interest tag for the
 people who asked about that one thing.
