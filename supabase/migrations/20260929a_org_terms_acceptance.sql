@@ -101,6 +101,22 @@ create trigger org_terms_acceptances_no_delete
 -- ── who may read and write it ──────────────────────────────────────────────
 alter table public.org_terms_acceptances enable row level security;
 
+-- GRANTS FIRST, AND THEY ARE NOT OPTIONAL. Policies FILTER a privilege, they do
+-- not confer one. Without the INSERT grant every Accept press failed 42501 -
+-- permission denied for the TABLE - before RLS was ever consulted, and because a
+-- policy existed it looked like an RLS refusal. 42501 means GRANT, an empty
+-- result means RLS; that is the rule, and it is here because I read it the wrong
+-- way round on the first pass and shipped an accept button that could not work.
+--
+-- anon is revoked rather than merely unpolicied. RLS was already blocking it, so
+-- nothing leaked, but a privilege nobody can justify is how 2026-08-20 started.
+--
+-- UPDATE and DELETE are granted to NOBODY, deliberately: the table is
+-- append-only, the triggers enforce it even for service_role, and withholding
+-- the privilege makes the refusal happen a step earlier still.
+grant insert, select on public.org_terms_acceptances to authenticated;
+revoke all on public.org_terms_acceptances from anon;
+
 -- ACCEPTING BINDS THE BUSINESS, so it is the owner's to do, not an admin's.
 -- is_org_owner is the existing spelling of that rule; can_handle_money would be
 -- wrong here because it also admits admins.

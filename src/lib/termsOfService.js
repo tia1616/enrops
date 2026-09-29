@@ -126,9 +126,20 @@ export async function acceptTermsOfService(orgId, version, userId, email) {
   // owner to press the button again forever.
   if (error.code === "23505") return { ok: true, alreadyAccepted: true };
 
-  // 42501 is the policy refusing a non-owner. Named separately because "you are
-  // not the owner" and "something went wrong" need different sentences.
-  if (error.code === "42501") return { ok: false, reason: "not_owner" };
+  // 42501 CANNOT TELL YOU WHY, and an earlier version of this line claimed it
+  // could. It mapped 42501 to "not_owner" and the UI said "Only an owner can
+  // accept the terms for this business" - to an owner, next to the button it was
+  // still offering her, because the real cause was a missing INSERT GRANT on the
+  // table. Grants fail BEFORE RLS, so 42501 means "no privilege OR no policy
+  // match", and this code has no way to separate them.
+  //
+  // So it reports a refusal and does not diagnose one. The console line carries
+  // the detail for whoever looks; the operator gets a sentence that is true in
+  // both cases.
+  if (error.code === "42501") {
+    console.error("[termsOfService] accept refused (grant or policy):", error);
+    return { ok: false, reason: "refused", error };
+  }
 
   console.error("[termsOfService] accepting terms failed:", error);
   return { ok: false, reason: "error", error };

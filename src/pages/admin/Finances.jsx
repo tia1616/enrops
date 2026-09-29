@@ -838,9 +838,14 @@ export default function Finances() {
     );
     setTosAccepting(false);
     if (!res.ok) {
+      // NEVER tell an owner she is not an owner. This panel only offers the
+      // button to owners, so a refusal here is our problem, not a statement
+      // about her access - and saying otherwise sent exactly that contradiction
+      // to the screen: the button and "only an owner can accept" side by side,
+      // when the real cause was a missing table grant.
       setTosError(
-        res.reason === "not_owner"
-          ? "Only an owner can accept the terms for this business."
+        res.reason === "refused"
+          ? "That did not save, and it is not something you did. This one is ours to fix."
           : "That did not save. Try again, and tell us if it keeps happening.",
       );
       return;
