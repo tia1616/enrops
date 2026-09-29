@@ -22,6 +22,7 @@ import { editableToHtml, highlightTokens, htmlToEditable } from "./bodyEditorUti
 import AttachmentPicker from "./AttachmentPicker.jsx";
 import { isOptOutAutomation } from "../../../lib/entitlements.js";
 import { buildRegUrl, PUBLIC_SITE } from "../../../lib/regLinks.js";
+import { buildTestSources } from "../../../lib/automationTestSources.js";
 import { PLATFORM_FOOTER_TEXT, platformFooterUrl, surfaceForAutomation } from "../../../components/PlatformFooterLine.jsx";
 
 // Decode the common HTML entities operators might type or paste into a
@@ -98,15 +99,6 @@ const TEST_SOURCE_BY_TEMPLATE_KEY = {
   mid_recap: "both",
   final_recap: "both",
 };
-
-// Short, friendly date for picker labels (e.g. "Jun 17, 2026"). Falls back to
-// the raw value if it isn't a parseable ISO date.
-function shortDate(iso) {
-  if (!iso) return "";
-  const d = new Date(iso + "T00:00:00");
-  if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-}
 
 // Sample values for the live preview. Tenant-aware — pre-rendered blocks
 // use the org's actual primary_color so what operators see matches what
@@ -418,34 +410,28 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
     let cancelled = false;
     setLoadingSources(true);
     (async () => {
-      const sources = [];
+      let sources = [];
       try {
-        if (sourceType === "camps" || sourceType === "both") {
-          const { data: camps } = await supabase
+        // Legacy camps still live in camp_sessions; only fetch them when the
+        // template can use them.
+        const campsP = (sourceType === "camps" || sourceType === "both")
+          ? supabase
             .from("camp_sessions")
             .select("id, curriculum_name, location_name, starts_on")
             .eq("organization_id", orgId)
-            .order("starts_on", { ascending: false });
-          for (const c of camps ?? []) {
-            sources.push({
-              value: `camp:${c.id}`,
-              label: `Camp · ${c.curriculum_name ?? "Untitled"}${c.location_name ? ` — ${c.location_name}` : ""}${c.starts_on ? ` (${shortDate(c.starts_on)})` : ""}`,
-            });
-          }
-        }
-        if (sourceType === "afterschool" || sourceType === "both") {
-          const { data: progs } = await supabase
-            .from("programs")
-            .select("id, curriculum, first_session_date, program_locations ( name )")
-            .eq("organization_id", orgId)
-            .order("first_session_date", { ascending: false });
-          for (const p of progs ?? []) {
-            sources.push({
-              value: `program:${p.id}`,
-              label: `After-school · ${p.curriculum ?? "Untitled"}${p.program_locations?.name ? ` — ${p.program_locations.name}` : ""}${p.first_session_date ? ` (${shortDate(p.first_session_date)})` : ""}`,
-            });
-          }
-        }
+            .order("starts_on", { ascending: false })
+          : Promise.resolve({ data: [] });
+        // ONE programs query for both kinds. Since 2026-09-25 the programs table
+        // holds classes AND camps (a camp is a program with class_days set), so
+        // this is the same query the after-school picker always used, now also
+        // run for "camps". buildTestSources does the split, by isCampProgram.
+        const progsP = supabase
+          .from("programs")
+          .select("id, curriculum, class_days, first_session_date, program_locations ( name )")
+          .eq("organization_id", orgId)
+          .order("first_session_date", { ascending: false });
+        const [{ data: camps }, { data: progs }] = await Promise.all([campsP, progsP]);
+        sources = buildTestSources(sourceType, camps, progs);
       } catch {
         // Non-fatal — picker just falls back to sample data.
       }

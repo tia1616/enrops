@@ -55,6 +55,7 @@ import {
   type CommsAttachment,
 } from "../_shared/attachments.ts";
 import { cleanNoSchoolDates, toClosurePeriods, termToSchoolYear, nsdWeekdayLower, nsdDate, periodFires, formatDateList, isCampProgram } from "./noSchoolDates.ts";
+import { classProgramsOnly, classRegistrationsOnly, campRegistrationsOnly } from "./campAudience.ts";
 import {
   orgToday,
   orgHour,
@@ -1123,6 +1124,11 @@ async function runPreview(supabase: SupabaseClient, params: PreviewParams): Prom
   return { ok: true, subject: rendered.subject, body_html: rendered.html, used_real_data: rendered.used_real_data };
 }
 
+// The welcome mails, and only these, put the room on the venue line. Named once
+// so the preview and the live resolvers cannot drift apart again by one of them
+// listing a template key the other forgot.
+const WELCOME_TEMPLATE_KEYS = new Set(["welcome_afterschool", "welcome_camp"]);
+
 // Resolve the REAL content fields for a test send from one chosen camp/program.
 // Mirrors the field mappings in resolveWelcomeAudience exactly so the preview
 // matches a live send. Returns only the content fields (family names + resume
@@ -1171,7 +1177,7 @@ async function resolveTestEntryContent(
   if (programId) {
     const { data: p, error } = await supabase
       .from("programs")
-      .select(`id, curriculum, day_of_week, class_days, first_session_date, start_time, end_time, program_location_id, curriculum_id, room,
+      .select(`id, curriculum, day_of_week, class_days, first_session_date, end_date, start_time, end_time, program_location_id, curriculum_id, room,
         program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions, room_number ),
         curricula ( final_showcase, mid_term_skills, final_recap_skills )`)
       .eq("id", programId)
@@ -1187,17 +1193,25 @@ async function resolveTestEntryContent(
     return {
       program_name: prog.curriculum ?? "your program",
       program_start_date: prog.first_session_date ? formatDate(prog.first_session_date) : "",
-      program_end_date: sessions.length > 0 ? formatDate(sessions[sessions.length - 1]) : "",
+      // A camp's real send reads programs.end_date (resolveCampProgramWelcome),
+      // so the preview must too — otherwise a site closure that drops the last
+      // session makes the previewed end date differ from the one that ships.
+      program_end_date: isCampProgram(prog)
+        ? (prog.end_date ? formatDate(prog.end_date) : "")
+        : (sessions.length > 0 ? formatDate(sessions[sessions.length - 1]) : ""),
       program_time: timeClause(prog.start_time, prog.end_time, true),
       // A camp has day_of_week set (it is NOT NULL and holds the FIRST day), so
       // the label has to be suppressed here rather than by recurringDayLabel's
       // empty-in-empty-out guard: a Mon-Fri camp would otherwise read "Mondays".
       program_day: isCampProgram(prog) ? "" : recurringDayLabel(prog.day_of_week),
       is_camp: isCampProgram(prog),
-      // Room only for the welcome mail, matching resolveWelcomeAudience. The
-      // check-in and recap sends do not carry it (Jessica, 2026-09-09), and the
-      // no-school notice cannot: its one vars object feeds the instructor copy.
-      location_name: (templateKey === "welcome_afterschool"
+      // Room only for the WELCOME mails, matching resolveWelcomeAudience — both
+      // of them. welcome_camp was missing here, so a camp previewed as "Capitol
+      // Library" and shipped as "Capitol Library, Room 12": the exact preview/send
+      // drift this resolver exists to prevent. The check-in and recap sends do
+      // not carry the room (Jessica, 2026-09-09), and the no-school notice cannot:
+      // its one vars object feeds the instructor copy.
+      location_name: (WELCOME_TEMPLATE_KEYS.has(templateKey ?? "")
         ? venueLabel(prog.program_locations?.name, prog.room, prog.program_locations?.room_number)
         : prog.program_locations?.name) ?? "",
       final_showcase_raw: prog.curricula?.final_showcase ?? "",
@@ -1262,6 +1276,18 @@ async function resolveWelcomeAudience(
       .eq("organization_id", a.organization_id)
       .eq("status", "confirmed")
       .not("program_id", "is", null);
+    // CLASSES ONLY, enforced in JS by isCampProgram below — NOT by a SQL filter.
+    // Since a camp became a program with class_days set, every camp registration
+    // also satisfies `program_id is not null` and landed here, so a camp family
+    // got welcome_afterschool ("Mia's first CLASS is Monday...") while
+    // welcome_camp, which at the time looked only at camp_sessions, matched
+    // nothing and stayed silent.
+    //
+    // `class_days IS NULL` looks like the obvious SQL test and is NOT equivalent:
+    // programs_class_days_valid does not reject an empty array (array_length of
+    // '{}' is NULL, and a CHECK passes on NULL), so '{}' is storable and means
+    // CLASS to isCampProgram and to the SQL session walk, but would have meant
+    // CAMP to that filter. One rule, one spelling: isCampProgram decides.
 
     let onTimeQ = afterschoolBase()
       .gte("programs.first_session_date", today)
@@ -1296,7 +1322,8 @@ async function resolveWelcomeAudience(
     // derive_program_session_dates call below - same order as the recap
     // resolver. Doing it after would still suppress the email but would keep
     // paying one RPC per excluded program.
-    const mailable = data.filter((r: any) => r.parents?.email && r.students?.id && !isPartnerRun(r.programs));
+    const mailable = classRegistrationsOnly(data)
+      .filter((r: any) => r.parents?.email && r.students?.id && !isPartnerRun(r.programs));
 
     const sessionsByProgram = new Map<string, string[]>();
     const uniqueProgramIds = Array.from(new Set(mailable.map((r: any) => r.programs?.id).filter(Boolean)));
@@ -1361,6 +1388,44 @@ async function resolveWelcomeAudience(
   }
 
   if (a.template.applies_to_program_type === "camps") {
+    // A camp reaches a family in two shapes now, and this ONE template has to
+    // serve both.
+    //   LEGACY  — a camp_sessions row. The 51 SU26 camps and anything historical.
+    //   CURRENT — a PROGRAM with class_days set. It has no camp_sessions row at
+    //             all, and CHECK registrations_one_program_or_camp_session
+    //             (validated on both databases) guarantees its camp_session_id
+    //             is NULL — so the legacy query can NEVER match it.
+    // That last fact is the whole bug: every camp-as-program family fell through
+    // to welcome_afterschool and was told about their first "class", while
+    // welcome_camp — the one carrying her "first day of camp" and what-to-bring
+    // copy — matched nothing and stayed silent.
+    const [sessionEntries, programEntries] = await Promise.all([
+      resolveCampSessionWelcome(supabase, a, win, today, windowEnd, lateFloorIso, eventRegistrationId, nextTermAvailable),
+      resolveCampProgramWelcome(supabase, a, win, today, windowEnd, lateFloorIso, eventRegistrationId, nextTermAvailable),
+    ]);
+    return [...sessionEntries, ...programEntries];
+  }
+
+  // applies_to='both' — currently no template uses this for Welcome, but
+  // handle gracefully by running both queries and concatenating.
+  return [];
+}
+
+// ─── Welcome: the LEGACY camp_sessions shape ────────────────────────────────
+// Body unchanged from when it was inline in resolveWelcomeAudience. The camp-run
+// grouping below (venueKey/runKey/keeper) exists because a multi-week camp is N
+// weekly camp_sessions rows; it is specific to that shape and deliberately has
+// no counterpart in the camp-as-program path, where one camp is one row.
+async function resolveCampSessionWelcome(
+  supabase: SupabaseClient,
+  a: AutomationRow,
+  win: WelcomeWindow,
+  today: string,
+  windowEnd: string,
+  lateFloorIso: string | null,
+  eventRegistrationId: string | null,
+  nextTermAvailable: boolean,
+): Promise<AudienceEntry[]> {
     const campSelect = `
         id, parent_id, registered_at,
         students!inner ( id, first_name ),
@@ -1481,11 +1546,136 @@ async function resolveWelcomeAudience(
         register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
         next_term_available: nextTermAvailable,
       }));
+}
+
+// ─── Welcome: the CURRENT camp-as-program shape ─────────────────────────────
+// Deliberately the afterschool query path with the camp/class test inverted, NOT
+// a port of the legacy camp resolver above. A camp-as-program is ONE row, so the
+// camp-run grouping has nothing to collapse, and standing up a second resolver
+// for it would be the parallel-path mistake the camps build spent days undoing.
+async function resolveCampProgramWelcome(
+  supabase: SupabaseClient,
+  a: AutomationRow,
+  win: WelcomeWindow,
+  today: string,
+  windowEnd: string,
+  lateFloorIso: string | null,
+  eventRegistrationId: string | null,
+  nextTermAvailable: boolean,
+): Promise<AudienceEntry[]> {
+  const campProgramSelect = `
+      id, parent_id, registered_at,
+      students!inner ( id, first_name ),
+      parents!inner ( id, first_name, email ),
+      programs!inner ( id, curriculum, runs_own_registration, day_of_week, class_days, first_session_date, end_date, start_time, end_time, program_location_id, curriculum_id, room, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions, room_number ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
+    `;
+  const base = () => supabase
+    .from("registrations")
+    .select(campProgramSelect)
+    .eq("organization_id", a.organization_id)
+    .eq("status", "confirmed")
+    .not("program_id", "is", null)
+    // A cheap PRE-NARROW to a superset of camps, never the decider: '{}' passes
+    // this filter but is a CLASS, and isCampProgram in the mailable filter below
+    // is what actually decides. Keeping it means the common case does not drag
+    // every class registration in the window across the wire.
+    .not("programs.class_days", "is", null);
+
+  let onTimeQ = base()
+    .gte("programs.first_session_date", today)
+    .lte("programs.first_session_date", windowEnd);
+  // Mid-camp join, matching the afterschool late window: already started, and a
+  // registration newer than the day this automation was switched on.
+  let lateQ = lateFloorIso === null ? null : base()
+    .lt("programs.first_session_date", today)
+    .gte("registered_at", lateFloorIso);
+  if (eventRegistrationId) {
+    onTimeQ = onTimeQ.eq("id", eventRegistrationId);
+    if (lateQ) lateQ = lateQ.eq("id", eventRegistrationId);
+  }
+  const [onTimeRes, lateRes] = await Promise.all([
+    onTimeQ,
+    lateQ ?? Promise.resolve({ data: [], error: null }),
+  ]);
+  if (onTimeRes.error) throw onTimeRes.error;
+  if (lateRes.error) throw lateRes.error;
+  const mergedById = new Map<string, any>();
+  for (const r of [...(onTimeRes.data ?? []), ...(lateRes.data ?? [])]) mergedById.set(r.id, r);
+
+  // Narrowed BEFORE the per-program RPC, same order as the afterschool branch,
+  // so a partner-run camp costs neither an email nor a derive call.
+  const mailable = campRegistrationsOnly(Array.from(mergedById.values()))
+    .filter((r: any) => r.parents?.email && r.students?.id && !isPartnerRun(r.programs));
+  if (mailable.length === 0) return [];
+
+  // derive_program_session_dates is camp-aware: it walks class_days between
+  // first_session_date and end_date, ignores the district calendar (school being
+  // closed is WHY the camp runs) and still honors site closures. So a Mon-Wed
+  // camp resolves to its three real dates, which is what {{session_dates_block}}
+  // renders as "3 sessions: Feb 15, Feb 16, Feb 17".
+  const sessionsByProgram = new Map<string, string[]>();
+  for (const pid of Array.from(new Set(mailable.map((r: any) => r.programs?.id).filter(Boolean)))) {
+    try {
+      const { data: sessions } = await supabase.rpc("derive_program_session_dates", { p_program_id: pid });
+      sessionsByProgram.set(pid as string, (sessions as string[] | null) ?? []);
+    } catch {
+      sessionsByProgram.set(pid as string, []);
+    }
   }
 
-  // applies_to='both' — currently no template uses this for Welcome, but
-  // handle gracefully by running both queries and concatenating.
-  return [];
+  return mailable
+    .map((r: any) => {
+      const sessions = sessionsByProgram.get(r.programs.id) ?? [];
+      return {
+        r,
+        sessions,
+        verdict: welcomeVerdict(
+          {
+            startsOn: r.programs.first_session_date,
+            sessionDates: sessions,
+            // end_date is REQUIRED for a camp (CHECK programs_class_days_need_end_date),
+            // so unlike a class this always has an honest last day even when the
+            // session walk comes back empty.
+            endsOn: r.programs.end_date,
+            registeredAt: r.registered_at,
+          },
+          win,
+        ),
+      };
+    })
+    .filter(({ verdict }) => verdict.eligible)
+    .map(({ r, sessions, verdict }) => ({
+      // Same shape as the afterschool key. No collision: idempotency is UNIQUE
+      // (automation_id, context_key), and this is a different automation.
+      context_key: `program:${r.programs.id}:parent:${r.parents.id}:student:${r.students.id}`,
+      parent_id: r.parents.id,
+      parent_email: r.parents.email,
+      parent_first_name: r.parents.first_name,
+      child_first_name: r.students?.first_name ?? null,
+      program_name: r.programs.curriculum ?? "your camp",
+      program_start_date: formatDate(verdict.firstDay ?? r.programs.first_session_date),
+      // A camp has a real last day and the copy uses it; a class does not.
+      program_end_date: r.programs.end_date ? formatDate(r.programs.end_date) : "",
+      // programs.start_time/end_time are already human text ("9:00 AM").
+      program_time: timeClause(r.programs.start_time, r.programs.end_time, true),
+      // THE TRAP: a camp's day_of_week holds its FIRST day, not a recurring
+      // weekday. Rendering it would tell a Mon-Wed camp family "on Mondays".
+      program_day: "",
+      is_camp: true,
+      location_name: venueLabel(r.programs.program_locations?.name, r.programs.room, r.programs.program_locations?.room_number) ?? "",
+      abandoned_resume_url: "",
+      age_turning: "",
+      final_showcase_raw: r.programs.curricula?.final_showcase ?? "",
+      mid_term_skills_raw: (r.programs.curricula?.mid_term_skills as string[] | null) ?? [],
+      final_recap_skills_raw: (r.programs.curricula?.final_recap_skills as string[] | null) ?? [],
+      arrival_instructions_raw: r.programs.program_locations?.parent_arrival_instructions ?? "",
+      dismissal_instructions_raw: r.programs.program_locations?.parent_dismissal_instructions ?? "",
+      // Only the days this family still gets — a mid-camp joiner is never shown
+      // a date that has passed.
+      session_dates_raw: sessionsOnOrAfter(sessions, today),
+      register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
+      next_term_available: nextTermAvailable,
+    }));
 }
 
 // ─── Check-in (afterschool only, fires N days after first session) ──────────
@@ -1506,7 +1696,7 @@ async function resolveCheckInAudience(
       id, parent_id,
       students!inner ( id, first_name ),
       parents!inner ( id, first_name, email ),
-      programs!inner ( id, curriculum, runs_own_registration, first_session_date, start_time, end_time, program_location_id, curriculum_id, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
+      programs!inner ( id, curriculum, runs_own_registration, class_days, first_session_date, start_time, end_time, program_location_id, curriculum_id, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
     `)
     .eq("organization_id", a.organization_id)
     .eq("status", "confirmed")
@@ -1515,7 +1705,12 @@ async function resolveCheckInAudience(
     .lte("programs.first_session_date", latest);
   if (error) throw error;
 
-  return (data ?? [])
+  // CLASSES ONLY — Jessica's call, 2026-09-29. This fires N days (default 14)
+  // AFTER the first session, which is worth asking a family six weeks into a
+  // term and meaningless to a camp family: a 3-day camp ended 11 days before
+  // this would land. Camps inherited it silently when a camp became a program;
+  // nobody chose it. class_days is selected above so the rule has a value to read.
+  return classRegistrationsOnly(data)
     .filter((r: any) => r.parents?.email && r.students?.id && !isPartnerRun(r.programs))
     .map((r: any) => ({
       context_key: `program:${r.programs.id}:parent:${r.parents.id}:student:${r.students.id}:check_in`,
@@ -1846,19 +2041,19 @@ async function runPartnerRosterAutomation(
   sevenOut.setDate(sevenOut.getDate() + 7);
   const sevenDayStr = sevenOut.toISOString().split("T")[0];
 
-  // Find afterschool programs starting in 7 days OR today, where WE run
-  // registration (not partner-run) and the location has a partner.
-  // NOTE: the `programs` table IS the afterschool table (camps live in
-  // camp_sessions), so there is no program_type='afterschool' filter — that
-  // column is the subject category ('standard'|'coding_robotics') and filtering
-  // on 'afterschool' matched zero rows, silently sending nothing. Every row here
-  // is afterschool; mirror the other program queries (match-afterschool, the
-  // recap resolver) which scope by organization_id only.
+  // Find CLASSES starting in 7 days OR today, where WE run registration (not
+  // partner-run) and the location has a partner.
+  // NOTE: there is no program_type='afterschool' filter — that column is the
+  // subject category ('standard'|'coding_robotics') and filtering on
+  // 'afterschool' matched zero rows, silently sending nothing. The `programs`
+  // table used to BE the afterschool table, with camps in camp_sessions; that
+  // stopped being true on 2026-09-25, when a camp became a program with
+  // class_days set, which is why the camp rows have to be dropped in JS below.
   const { data: programs, error: pErr } = await supabase
     .from("programs")
     .select(`
       id, organization_id, program_location_id, curriculum,
-      first_session_date, runs_own_registration,
+      first_session_date, runs_own_registration, class_days,
       program_locations!inner ( id, partner_id, contact_email )
     `)
     .eq("organization_id", a.organization_id)
@@ -1882,7 +2077,13 @@ async function runPartnerRosterAutomation(
   // re-send, below) would then never run on exactly the days it exists for. The
   // two phases have independent candidate sets, so phase 1 having nothing to do
   // says nothing about phase 2.
-  const dayOnePrograms: any[] = programs ?? [];
+  // CLASSES ONLY — Jessica's call, 2026-09-29. This emails a roster to the
+  // SCHOOL PARTNER, and a camp is not school-bound: it commonly runs at a park
+  // or community centre, and a winter camp runs precisely BECAUSE school is
+  // closed. Camps inherited this silently when a camp became a program.
+  // isCampProgram is the one definition of "is a camp"; a SQL test on class_days
+  // is not the same question, because '{}' passes the CHECK and means class.
+  const dayOnePrograms: any[] = classProgramsOnly(programs);
 
   // Idempotency: check which programs already had a roster sent today
   const programIds = dayOnePrograms.map((p: any) => p.id);
@@ -2040,7 +2241,7 @@ async function runRosterChangeResends(
   // as phase 1 does.
   const { data: programs, error: pErr } = await supabase
     .from("programs")
-    .select(`id, organization_id, first_session_date, program_locations!inner ( id, partner_id, contact_email )`)
+    .select(`id, organization_id, first_session_date, class_days, program_locations!inner ( id, partner_id, contact_email )`)
     .eq("organization_id", a.organization_id)
     .eq("status", "open")
     .eq("runs_own_registration", false)
@@ -2049,7 +2250,13 @@ async function runRosterChangeResends(
   if (pErr) { console.error("[partner-roster] change-resend program query failed:", pErr); return out; }
   if (!programs || programs.length === 0) return out;
 
-  const programIds = programs.map((p: any) => p.id);
+  // CLASSES ONLY — same rule as phase 1. A re-send is still a roster to a school
+  // partner, so excluding camps from phase 1 alone would have let a camp reach
+  // the school by the back door the moment its roster changed.
+  const classPrograms = classProgramsOnly(programs as any[]);
+  if (classPrograms.length === 0) return out;
+
+  const programIds = classPrograms.map((p: any) => p.id);
 
   // What each school was last actually told, and whether anything went today.
   // Ordered newest-first so the first row seen per program is the latest send.
@@ -2124,7 +2331,7 @@ async function runRosterChangeResends(
     if (!regs || regs.length < REG_PAGE) break;
   }
 
-  for (const prog of programs as any[]) {
+  for (const prog of classPrograms) {
     const currentIds = rosterStudentIds(byProgram.get(prog.id) ?? [], isOnRoster);
     const previousIds = lastSend.get(prog.id)?.roster_student_ids ?? null;
 
