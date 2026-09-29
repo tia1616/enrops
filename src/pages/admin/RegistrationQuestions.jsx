@@ -22,6 +22,7 @@ import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
 import { allChoices, offeredChoices, DEFAULT_OFFERED } from "../../lib/dismissal.js";
 import { buildRegUrl } from "../../lib/regLinks.js";
+import { formatDayLabel } from "../../lib/programSchedule.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -161,8 +162,14 @@ const stdFieldKey = (key) => `std_${key}`;
 
 // How a class reads in this page's pickers. ONE place, so the scope picker and
 // the preview's class picker can't start naming the same class differently.
-const programLabel = (p) =>
-  `${p?.curriculum || "Class"}${p?.day_of_week ? ` (${p.day_of_week}s)` : ""}`;
+// The day part comes from formatDayLabel, the one definition shared with the
+// catalog, the roster list, the scheduling board and the instructor portal. It
+// was hand-spelled as `${day_of_week}s` here, which reads a Mon-Thu camp as
+// "(Mondays)" because a camp's day_of_week holds only its FIRST day.
+const programLabel = (p) => {
+  const day = formatDayLabel(p);
+  return `${p?.curriculum || "Class"}${day ? ` (${day})` : ""}`;
+};
 
 // "Only on <class>" — or null when every family is asked. Said in TWO places
 // (the custom-questions list and the preview's ordered list), so it lives here:
@@ -384,7 +391,9 @@ export default function RegistrationQuestions() {
       // picker: the picker deliberately still offers drafts (you configure a
       // question before the class goes live), but the preview can only open a
       // class a family could actually reach.
-      .select("id, curriculum, day_of_week, status, runs_own_registration")
+      // class_days so programLabel can tell a camp from a weekly class; without
+      // it a Mon-Thu camp reads "(Mondays)" in both pickers.
+      .select("id, curriculum, day_of_week, class_days, session_count, status, runs_own_registration")
       .eq("organization_id", org.id)
       .eq("term", org.active_registration_term || "")
       .order("curriculum")

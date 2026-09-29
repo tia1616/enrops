@@ -17,6 +17,7 @@ import PortalSwitcher from "../../components/PortalSwitcher.jsx";
 import { displayFirstName } from "../../lib/instructorName";
 import { roomDisplay } from "../../lib/roomLabel.js";
 import { sortRosterRows, isOnRoster } from "../../lib/rosterOrder.js";
+import { formatDayLabel } from "../../lib/programSchedule.js";
 import { avatarUrl } from "../../lib/avatars";
 import InstructorAvailabilityForm from "./InstructorAvailabilityForm.jsx";
 import AfterschoolAvailabilityForm from "./AfterschoolAvailabilityForm.jsx";
@@ -665,7 +666,7 @@ export default function InstructorPortal() {
   async function loadAfterschoolAssignments(instructorId) {
     const { data, error: aErr } = await supabase
       .from("program_assignments")
-      .select("id, status, role, distance_bonus_cents, flags, change_request_message, instructor_response_at, deadline, published_at, program_id, programs(id, status, curriculum, curriculum_id, day_of_week, start_time, end_time, session_count, term, room, program_location_id, program_locations:program_location_id(id, name, address, contact_phone, room_number, arrival_instructions, dismissal_instructions)), instructor_offer_messages(id, sender_role, sender_instructor_id, message, created_at)")
+      .select("id, status, role, distance_bonus_cents, flags, change_request_message, instructor_response_at, deadline, published_at, program_id, programs(id, status, curriculum, curriculum_id, day_of_week, class_days, start_time, end_time, session_count, term, room, program_location_id, program_locations:program_location_id(id, name, address, contact_phone, room_number, arrival_instructions, dismissal_instructions)), instructor_offer_messages(id, sender_role, sender_instructor_id, message, created_at)")
       .eq("instructor_id", instructorId)
       .not("published_at", "is", null)
       .in("status", ["published", "change_requested", "confirmed"]);
@@ -2744,7 +2745,7 @@ function AfterschoolAssignmentCard({ assignment, coInstructors = [], schedule = 
   const awaitingAdminReply = assignment.status === "change_requested" && latestMsg?.sender_role === "instructor";
   const requestChangeDisabled = busy || awaitingAdminReply;
 
-  const when = [asDayName(p.day_of_week), [p.start_time, p.end_time].filter(Boolean).join("–")].filter(Boolean).join(" · ");
+  const when = [formatDayLabel(p), [p.start_time, p.end_time].filter(Boolean).join("–")].filter(Boolean).join(" · ");
   const loc = p.program_locations;
 
   return (
@@ -2925,7 +2926,7 @@ function AfterschoolAssignmentCard({ assignment, coInstructors = [], schedule = 
 // missing entirely).
 function AfterschoolDetailView({ assignment, instructor, coInstructors = [], schedule = [], onBack }) {
   const p = assignment.programs;
-  const when = p ? [asDayName(p.day_of_week), [p.start_time, p.end_time].filter(Boolean).join("–")].filter(Boolean).join(" · ") : "";
+  const when = p ? [formatDayLabel(p), [p.start_time, p.end_time].filter(Boolean).join("–")].filter(Boolean).join(" · ") : "";
   const loc = p?.program_locations;
   return (
     <div>
@@ -2997,12 +2998,13 @@ function GoogleG() {
   );
 }
 
-function asDayName(dow) {
-  if (dow == null) return "";
-  const k = String(dow).trim().toLowerCase();
-  const map = { monday: "Mondays", tuesday: "Tuesdays", wednesday: "Wednesdays", thursday: "Thursdays", friday: "Fridays" };
-  return map[k] || (k ? k.charAt(0).toUpperCase() + k.slice(1) : "");
-}
+// asDayName() lived here and took a day STRING, so it could only ever answer for
+// a weekly class. A camp's day_of_week holds its FIRST day, so it rendered a
+// Mon-Thu camp as "Mondays" - telling the instructor, in the plural, that they
+// teach it every Monday. It was also the fifth hand-spelling of this label;
+// formatDayLabel in lib/programSchedule.js is the one definition, shared with
+// the catalog, the scheduling board and the family emails, and it takes the
+// PROGRAM so it can see class_days. Retired rather than fixed in place.
 
 function ChangeRequestDialog({ assignment, value, onChange, busy, onSubmit, onClose }) {
   const isProgram = assignment.kind === "program";
@@ -3010,7 +3012,7 @@ function ChangeRequestDialog({ assignment, value, onChange, busy, onSubmit, onCl
   const p = assignment.programs;
   const crTitle = isProgram ? (p?.curriculum ?? "Class") : s?.curriculum_name;
   const crSub = isProgram
-    ? [asDayName(p?.day_of_week), p?.program_locations?.name].filter(Boolean).join(" · ")
+    ? [formatDayLabel(p), p?.program_locations?.name].filter(Boolean).join(" · ")
     : `Week ${s?.week_num} · ${s?.location_name}`;
   return (
     <div
@@ -5084,7 +5086,9 @@ function PayView({ instructorId, onBack, stripePayEnabled }) {
             // cross-tenant public policy to anon, a withdrawn row read from the
             // base table would render with no site name. The view has no such
             // dependency and carries `name`, which is all this read wants.
-            ? supabase.from("programs").select("id, curriculum, day_of_week, start_time, end_time, program_locations:program_locations_public(name)").in("id", programIds)
+            // class_days is what tells formatDayLabel this is a camp; without it
+            // a Mon-Thu camp falls back to day_of_week and reads "Mondays".
+            ? supabase.from("programs").select("id, curriculum, day_of_week, class_days, start_time, end_time, program_locations:program_locations_public(name)").in("id", programIds)
             : NONE,
           programIds.length
             ? supabase.from("program_assignments").select("program_id, role, distance_bonus_cents, distance_bonus_paid_at").eq("instructor_id", instructorId).in("program_id", programIds)
@@ -5123,7 +5127,7 @@ function PayView({ instructorId, onBack, stripePayEnabled }) {
               if (!prog) continue;
               const assn = progAssnByProgram.get(r.program_id);
               const when = [
-                asDayName(prog.day_of_week),
+                formatDayLabel(prog),
                 [prog.start_time, prog.end_time].filter(Boolean).map(formatTimeText).join("–"),
               ].filter(Boolean).join(" · ");
               grouped.set(key, {
