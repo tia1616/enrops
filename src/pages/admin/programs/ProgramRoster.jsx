@@ -18,6 +18,7 @@ import { supabase } from "../../../lib/supabase.js";
 import { dismissalSummary } from "../../../lib/dismissal.js";
 import { roomDisplay } from "../../../lib/roomLabel.js";
 import { sortRosterRows, isOnRoster } from "../../../lib/rosterOrder.js";
+import { formatDayLabel } from "../../../lib/programSchedule.js";
 import { WAITLIST_STATUS } from "../../../lib/waitlistState.js";
 import { usePermissions } from "../../../lib/permissions.js";
 import WaitingList from "../../../components/WaitingList.jsx";
@@ -34,11 +35,6 @@ const PANEL = "#fff";
 const RED = "#b53737";
 const AMBER = "#a16207";
 const OK_GREEN = "#3a7c3a";
-
-const DAY_LABELS = {
-  monday: "Monday", tuesday: "Tuesday", wednesday: "Wednesday",
-  thursday: "Thursday", friday: "Friday", saturday: "Saturday", sunday: "Sunday",
-};
 
 function fmtDate(iso) {
   if (!iso || !/^\d{4}-\d{2}-\d{2}/.test(iso)) return iso ?? "";
@@ -131,7 +127,7 @@ export default function ProgramRoster() {
         const { data: prog, error: pErr } = await supabase
           .from("programs")
           .select(`
-            id, curriculum, term, day_of_week, start_time, end_time, room,
+            id, curriculum, term, day_of_week, class_days, start_time, end_time, room,
             instructor_name, max_capacity, status, program_location_id,
             first_session_date, session_count,
             program_locations ( name, district, room_number )
@@ -365,7 +361,12 @@ export default function ProgramRoster() {
   const loc = program?.program_locations;
   const meta = [
     loc?.name,
-    program?.day_of_week ? `${DAY_LABELS[program.day_of_week.toLowerCase()] ?? program.day_of_week}s` : null,
+    // THROUGH THE SHARED RULE, because a camp's day_of_week holds only its FIRST
+    // day: pluralising it here called a Monday-to-Wednesday camp "Mondays" at the
+    // top of its own roster. formatDayLabel reads class_days when they are set
+    // ("Mon-Wed") and falls back to this pluralised weekday for a class. This was
+    // the fourth place the rule was spelled out by hand.
+    formatDayLabel(program),
     (program?.start_time || program?.end_time)
       ? `${fmtTime(program.start_time)}${program.end_time ? `–${fmtTime(program.end_time)}` : ""}`
       : null,
