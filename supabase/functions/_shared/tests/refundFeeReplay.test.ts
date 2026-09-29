@@ -53,8 +53,16 @@ import { assertEquals } from 'https://deno.land/std@0.208.0/assert/mod.ts';
 import { computeMarginRefund } from '../refundFeeSplit.ts';
 import { readChargeFeeFacts } from '../chargeFeeFacts.ts';
 import { estimateStripeFee } from '../estimateStripeFee.ts';
-import { feeReturnOutcome, type FeeReturnOutcome } from '../feeReturnOutcome.ts';
+import { feeReturnOutcome } from '../feeReturnOutcome.ts';
 import { allocateFeeAcrossInstallments } from '../feeAllocation.ts';
+// The month itself lives in one place, because scripts/sandbox-refund-replay.ts
+// rebuilds these same rows as real Stripe test-mode charges. Two copies of a
+// money fact drift, and the copy you forget is the one that lies.
+import {
+  SEPTEMBER_2026,
+  SEPTEMBER_2026_SHAPE,
+  type SeptemberRow,
+} from './data/september2026Refunds.ts';
 
 // ── fixtures: literal cents, from the two live charge models ───────────────
 //
@@ -374,8 +382,16 @@ Deno.test('blocker1/5: FINDING - zero is ambiguous between nothing-owed and neve
 //   select ... from refunds where created_at >= '2026-09-01'
 //                            and created_at <  '2026-10-01'
 //
-// returns exactly seventeen rows, read off the prod ledger on 18 Sept 2026.
-// Every one of them is below, with the outcome word it should carry.
+// returned exactly seventeen rows when it was read off the prod ledger on
+// 18 Sept 2026. Every one of them is in the table, with the outcome word it
+// should carry.
+//
+// THAT COUNT IS A SNAPSHOT, NOT A STANDING FACT, and it has already moved: the
+// same query on 29 Sept 2026 returns TWENTY-ONE, because four more refunds
+// landed on 23 and 28 September and all four carry 'returned'. The definition
+// of done names the seventeen that existed when it was set, so seventeen is
+// what this table holds. Do not "fix" the count against today's ledger - that
+// would silently change what was proved.
 //
 // WHAT THIS PROVES AND WHAT IT DOES NOT. It proves feeReturnOutcome labels
 // every shape that actually occurred, which is the checkbox: a word per
@@ -395,56 +411,22 @@ Deno.test('blocker1/5: FINDING - zero is ambiguous between nothing-owed and neve
 // September, three rows would have said 'failed' on screen instead of hiding
 // behind a zero and a hand audit.
 
-interface SeptemberRow {
-  who: string;
-  day: string;
-  /** refunds.amount_cents on prod */
-  refundedCents: number;
-  /** what the attempt actually returned, at the time */
-  returnedCents: number;
-  /** what was owed at the time */
-  owedCents: number;
-  applicationFeeId: string | null;
-  failed: boolean;
-  expect: FeeReturnOutcome;
-}
-
-// Read from prod 2026-09-18. Ordered by created_at, Pacific.
-const SEPTEMBER_2026: SeptemberRow[] = [
-  // Twelve that returned the fee.
-  { who: 'Wallace Fritsch', day: '09-01', refundedCents: 6468, returnedCents: 66, owedCents: 66, applicationFeeId: 'fee_1', failed: false, expect: 'returned' },
-  { who: 'Esme Rosenau', day: '09-01', refundedCents: 30199, returnedCents: 299, owedCents: 299, applicationFeeId: 'fee_2', failed: false, expect: 'returned' },
-  { who: 'Nehemiah Kalu', day: '09-03', refundedCents: 20500, returnedCents: 205, owedCents: 205, applicationFeeId: 'fee_3', failed: false, expect: 'returned' },
-  { who: 'Murphy Yolland', day: '09-07', refundedCents: 28500, returnedCents: 285, owedCents: 285, applicationFeeId: 'fee_4', failed: false, expect: 'returned' },
-  { who: 'Amit Rasin', day: '09-08', refundedCents: 24000, returnedCents: 240, owedCents: 240, applicationFeeId: 'fee_5', failed: false, expect: 'returned' },
-  // Leila Banks is the reversal case: Stripe labelled this one Reversed and
-  // the fee still came back. Section 6's "handles the reversal case" tick.
-  { who: 'Leila Banks', day: '09-08', refundedCents: 9968, returnedCents: 101, owedCents: 101, applicationFeeId: 'fee_6', failed: false, expect: 'returned' },
-  { who: 'Mia Simpson', day: '09-10', refundedCents: 28500, returnedCents: 285, owedCents: 285, applicationFeeId: 'fee_12', failed: false, expect: 'returned' },
-  { who: 'Rosie Wittmayer', day: '09-13', refundedCents: 30199, returnedCents: 299, owedCents: 299, applicationFeeId: 'fee_13', failed: false, expect: 'returned' },
-  { who: 'Margot Burke', day: '09-13', refundedCents: 10069, returnedCents: 101, owedCents: 101, applicationFeeId: 'fee_14', failed: false, expect: 'returned' },
-  { who: 'Clara Calcagno', day: '09-13', refundedCents: 30199, returnedCents: 299, owedCents: 299, applicationFeeId: 'fee_15', failed: false, expect: 'returned' },
-  { who: 'Heidi Nelson', day: '09-14', refundedCents: 11079, returnedCents: 111, owedCents: 111, applicationFeeId: 'fee_16', failed: false, expect: 'returned' },
-  { who: 'Everett Myers', day: '09-15', refundedCents: 2500, returnedCents: 25, owedCents: 25, applicationFeeId: 'fee_17', failed: false, expect: 'returned' },
-
-  // Two that correctly returned nothing: registered in June, before the fee
-  // existed, so the charge carries no application fee to give back.
-  { who: 'Lochlan Dillard', day: '09-08', refundedCents: 24000, returnedCents: 0, owedCents: 0, applicationFeeId: null, failed: false, expect: 'nothing_owed' },
-  { who: 'Adalyn Snowley', day: '09-08', refundedCents: 24000, returnedCents: 0, owedCents: 0, applicationFeeId: null, failed: false, expect: 'nothing_owed' },
-
-  // Three that failed on an empty platform balance. 371 + 240 + 101 = 712,
-  // exactly the $7.12 settled by hand on 9 September.
-  { who: 'Laura Lillison', day: '09-08', refundedCents: 28500, returnedCents: 0, owedCents: 371, applicationFeeId: 'fee_9', failed: true, expect: 'failed' },
-  { who: 'Morgan Marlett', day: '09-08', refundedCents: 24000, returnedCents: 0, owedCents: 240, applicationFeeId: 'fee_10', failed: true, expect: 'failed' },
-  { who: 'Addie Schmitt', day: '09-08', refundedCents: 10069, returnedCents: 0, owedCents: 101, applicationFeeId: 'fee_11', failed: true, expect: 'failed' },
-];
+// THE TABLE ITSELF is ./data/september2026Refunds.ts, imported above. It also
+// carries what the SANDBOX replay needs - the original charge amount, the
+// application fee taken on it, the charge model, and the provenance of each
+// number - which this file does not read. Kept there rather than here so the
+// replay and this test can never disagree about what September was.
 
 Deno.test('blocker1/DoD: seventeen September refunds, seventeen correct outcomes', () => {
   // The count is asserted first and on its own. If somebody adds a row to the
   // table without adding it to prod, or drops one, this fails before any
   // outcome is checked - because "17 correct outcomes" is a claim about
   // seventeen refunds, not about however many happen to be listed here.
-  assertEquals(SEPTEMBER_2026.length, 17, 'prod recorded 17 refunds in September 2026');
+  assertEquals(
+    SEPTEMBER_2026.length,
+    SEPTEMBER_2026_SHAPE.rows,
+    'the definition of done names seventeen September 2026 refunds',
+  );
 
   const got: string[] = [];
   for (const row of SEPTEMBER_2026) {
@@ -461,9 +443,9 @@ Deno.test('blocker1/DoD: seventeen September refunds, seventeen correct outcomes
   // The shape of the month, asserted as a whole. Counting the words is what
   // catches a change that flips several rows the same way at once - which a
   // per-row assertion in a loop would report as one failure and hide the rest.
-  assertEquals(got.filter((o) => o === 'returned').length, 12);
-  assertEquals(got.filter((o) => o === 'nothing_owed').length, 2);
-  assertEquals(got.filter((o) => o === 'failed').length, 3);
+  assertEquals(got.filter((o) => o === 'returned').length, SEPTEMBER_2026_SHAPE.returned);
+  assertEquals(got.filter((o) => o === 'nothing_owed').length, SEPTEMBER_2026_SHAPE.nothing_owed);
+  assertEquals(got.filter((o) => o === 'failed').length, SEPTEMBER_2026_SHAPE.failed);
 });
 
 // The $7.12, pinned to the three rows that produced it. This is the number
@@ -472,8 +454,11 @@ Deno.test('blocker1/DoD: seventeen September refunds, seventeen correct outcomes
 // has drifted from what happened.
 Deno.test('blocker1/DoD: the three failures are exactly the $7.12 settled by hand', () => {
   const failures = SEPTEMBER_2026.filter((r) => r.expect === 'failed');
-  assertEquals(failures.length, 3);
-  assertEquals(failures.reduce((sum, r) => sum + r.owedCents, 0), 712);
+  assertEquals(failures.length, SEPTEMBER_2026_SHAPE.failed);
+  assertEquals(
+    failures.reduce((sum, r) => sum + r.owedCents, 0),
+    SEPTEMBER_2026_SHAPE.failedOwedTotalCents,
+  );
   // Every one of them owed money and returned none. A 'failed' row that
   // returned something would mean the classifier, not the balance, was wrong.
   for (const f of failures) {
