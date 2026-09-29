@@ -78,8 +78,9 @@ single-file check could see it.
   footer content, smaller and quieter.
 - **One line only.** No logo lockup, no second sentence, no badge graphic.
 - `enrops` is lowercase everywhere, including at the start of a sentence.
-- Never removable on Free, Pro-Lite or Pro. There is deliberately no prop to
-  hide it.
+- Never removable, **on any plan**. There is deliberately no prop to hide it.
+  This rule names no plan on purpose: it used to name three, two of which never
+  existed in `organizations.platform_plan`, and that is how it went stale.
 - **Not during checkout.** The registration steps are the one flow we need
   finished; an outbound link next to the payment fields is an exit. Use
   `isCheckoutPath`.

@@ -11,7 +11,8 @@
 //     operator's own footer content, smaller and quieter.
 //   - One line only. No logo lockup, no second sentence, no badge graphic.
 //   - "enrops" is lowercase everywhere, including at the start of a sentence.
-//   - Never removable on Free, Pro-Lite, or Pro.
+//   - Never removable, on any plan. Names no plan on purpose - it used to name
+//     three, two of which never existed in the data. See the web twin.
 
 /** The line, exactly as written in the checklist. Do not reword. */
 export const PLATFORM_FOOTER_TEXT =

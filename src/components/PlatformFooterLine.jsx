@@ -15,9 +15,11 @@ import { capture } from '../lib/analytics.js';
 //     with the operator's business name.
 //   - One line only. No logo lockup, no second sentence, no badge graphic.
 //   - "enrops" is lowercase everywhere, including at the start of a sentence.
-//   - Never removable on Free, Pro-Lite, or Pro. There is deliberately NO prop
-//     to hide this - if a future tier is allowed to remove it, that gate goes
-//     in one place, here, and not as a `hidden` prop sprinkled per call site.
+//   - Never removable, on any plan. There is deliberately NO prop to hide this
+//     - if a future plan is allowed to remove it, that gate goes in one place,
+//     here, and not as a `hidden` prop sprinkled per call site. This rule names
+//     no plan on purpose: it used to name three, two of which never existed in
+//     organizations.platform_plan, and that is exactly how it went stale.
 //
 // EDGE-FUNCTION TWIN: supabase/functions/_shared/platformFooter.ts carries the
 // same copy for emails. The Vite app and the Deno edge runtime cannot import
