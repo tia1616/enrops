@@ -35,6 +35,14 @@ import EnnieTip from "../../components/EnnieTip.jsx";
 import { STRIPE_CONNECT_ESTIMATE_SENTENCE } from "../../lib/stripeConnectEstimate.js";
 import { describeOrgSaveFailure } from "../../lib/orgSaveErrors.js";
 import { fetchOrgTerms } from "../../lib/terms.js";
+// NOT the line above. terms.js is SCHOOL terms (Fall/Winter/Spring); this is the
+// legal agreement. Both are imported here, which is exactly why neither is
+// called plain `terms`.
+import {
+  fetchTermsOfServiceStatus,
+  acceptTermsOfService,
+  TOS_STATUS_UNKNOWN,
+} from "../../lib/termsOfService.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -96,6 +104,13 @@ export default function Finances() {
   const [disconnectMsg, setDisconnectMsg] = useState(null);
 
   const canManage = orgMember?.role === "owner" || orgMember?.role === "admin";
+  // Accepting the terms binds the business, so it is the owner's to do and NOT
+  // an admin's. The database is the real gate - the insert policy is
+  // is_org_owner - and this only decides whether to offer the button, so an
+  // admin is told who to ask instead of being handed a control that would be
+  // refused. Declared beside canManage rather than inside the render, because a
+  // const read above its own declaration crashes every render of this page.
+  const canAcceptTerms = orgMember?.role === "owner";
 
   // Finances CSV export range (defaults to the last 90 days).
   const [exportFrom, setExportFrom] = useState(
@@ -114,6 +129,12 @@ export default function Finances() {
   // fast clicks used to put two PATCHes in flight with no ordering guarantee, and
   // the DB could settle opposite to what the UI showed.
   const [feeSaving, setFeeSaving] = useState(false);
+  // Money layer item 7. Inert until a terms version is published, so on every
+  // environment today this loads, reports needsAcceptance false, and changes
+  // nothing on this page.
+  const [tosStatus, setTosStatus] = useState(TOS_STATUS_UNKNOWN);
+  const [tosAccepting, setTosAccepting] = useState(false);
+  const [tosError, setTosError] = useState(null);
   // Families mid-payment-plan, from org_pending_plan_families.
   //
   // THREE states, and the difference matters: a number, 0, or null meaning WE
@@ -417,6 +438,20 @@ export default function Finances() {
 
   useEffect(() => { reload(); /* eslint-disable-next-line */ }, [org?.id]);
 
+  // Terms status, re-read whenever the org changes. Cancelled on unmount so a
+  // slow reply cannot set state on a page the operator has already left, and so
+  // switching orgs quickly cannot let the FIRST org's answer land under the
+  // second one - which would gate the wrong business.
+  useEffect(() => {
+    let live = true;
+    if (!org?.id) {
+      setTosStatus(TOS_STATUS_UNKNOWN);
+      return () => { live = false; };
+    }
+    fetchTermsOfServiceStatus(org.id).then((s) => { if (live) setTosStatus(s); });
+    return () => { live = false; };
+  }, [org?.id]);
+
   // Deliberately one-way: it OPENS the panel and never closes it. Tying
   // setupOpen to the param instead would fight the operator, snapping the panel
   // shut again the moment they collapsed it themselves.
@@ -694,6 +729,11 @@ export default function Finances() {
   async function togglePassThrough(nextValue) {
     if (!canManage || feeSaving) return;
     setFeeError(null);
+    // AFTER the clear, and routed to the fee toggle's OWN error slot. Put
+    // before it, the line above wiped the message; sent to setError, it would
+    // have rendered in the other error area further down the page, which is not
+    // where someone who just clicked this toggle is looking.
+    if (blockedByTerms(setFeeError)) return;
 
     // ── the in-flight-plan consequence ────────────────────────────────────────
     // There no longer is one, and that is a deliberate change rather than an
@@ -760,8 +800,62 @@ export default function Finances() {
     setTimeout(() => setSavedToast(null), 2200);
   }
 
+  // ── the terms gate, in ONE place ─────────────────────────────────────────
+  // Every money setting on this page consults this, rather than each carrying
+  // its own copy of the rule. The recurring review finding here is a fix that
+  // landed in one of the N places that needed it, and this page has three
+  // writers to `organizations`. A source ratchet in
+  // src/lib/financesTermsGate.test.mjs fails the build if a fourth appears
+  // without calling it.
+  //
+  // NOT A VIEW BLOCK. An operator can still read every number on this page. The
+  // exposure is changing what families pay under terms nobody accepted, so that
+  // is what stops; taking away sight of their own payouts over paperwork would
+  // be a punishment, not a control.
+  // `showMessage` is the caller's OWN error setter, because this page has more
+  // than one error slot and a message in the wrong one is a message nobody
+  // sees. The fee toggle renders feeError beside itself; the other two render
+  // error further down.
+  function blockedByTerms(showMessage = setError) {
+    if (!tosStatus.needsAcceptance) return false;
+    showMessage(
+      "Accept the updated enrops terms before changing money settings. " +
+        "Everything else on this page keeps working.",
+    );
+    return true;
+  }
+
+  async function acceptTerms() {
+    if (!tosStatus.currentVersion) return;
+    setTosAccepting(true);
+    setTosError(null);
+    const { data: auth } = await supabase.auth.getUser();
+    const res = await acceptTermsOfService(
+      org.id,
+      tosStatus.currentVersion,
+      auth?.user?.id,
+      auth?.user?.email,
+    );
+    setTosAccepting(false);
+    if (!res.ok) {
+      setTosError(
+        res.reason === "not_owner"
+          ? "Only an owner can accept the terms for this business."
+          : "That did not save. Try again, and tell us if it keeps happening.",
+      );
+      return;
+    }
+    // Re-READ rather than assuming the write means they are current now. The
+    // published version can have moved between the read and the press.
+    setTosStatus(await fetchTermsOfServiceStatus(org.id));
+    setError(null);
+    setSavedToast("Terms accepted");
+    setTimeout(() => setSavedToast(null), 2200);
+  }
+
   async function saveDescriptorSuffix() {
     if (!canManage) return;
+    if (blockedByTerms()) return;
     const trimmed = descriptorSuffix.trim().toUpperCase();
     // Match the CHECK constraint locally so we don't round-trip a bad value.
     if (trimmed !== "" && (trimmed.length < 3 || trimmed.length > 14)) {
@@ -792,6 +886,7 @@ export default function Finances() {
 
   async function saveAdminFee() {
     if (!canManage) return;
+    if (blockedByTerms()) return;
     const numeric = parseFloat(withdrawalAdminFeeDollars);
     if (withdrawalAdminFeeDollars !== "" && (Number.isNaN(numeric) || numeric < 0)) {
       setError("Admin fee must be a positive number, or blank for none.");
@@ -1065,6 +1160,44 @@ export default function Finances() {
                 Two separate fees come out of each parent payment — the enrops service
                 fee and Stripe's processing fee. They're never bundled into one number.
               </p>
+
+              {/* THE TERMS PROMPT LIVES HERE, not in the admin shell. A
+                  disclosure that follows an operator across every page until
+                  they answer it reads as an interruption - Jessica's call on
+                  2026-07-30, for the starter cancellation-policy notice, and the
+                  comment recording it is still at that old mount point in
+                  AdminLayout. So it sits with the settings it actually governs,
+                  where someone is already looking at what families pay.
+                  Renders nothing at all until a terms version is published. */}
+              {tosStatus.needsAcceptance && (
+                <div style={{ background: "#FFF7E0", border: "1px solid #f0e2a8", borderRadius: 8, padding: 14, margin: "4px 0 14px" }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "#8a6d00", marginBottom: 4 }}>
+                    Accept the updated enrops terms to change money settings
+                  </div>
+                  <p style={{ fontSize: 13, color: INK, lineHeight: 1.5, margin: "0 0 10px" }}>
+                    Everything on this page still works, and nothing about your
+                    programs or families changes. The settings below are the ones
+                    that need the current terms.
+                  </p>
+                  {canAcceptTerms ? (
+                    <button
+                      onClick={acceptTerms}
+                      disabled={tosAccepting}
+                      style={{ ...btn(BRIGHT, "#fff"), opacity: tosAccepting ? 0.6 : 1 }}
+                    >
+                      {tosAccepting ? "Saving…" : "Accept the updated terms"}
+                    </button>
+                  ) : (
+                    <div style={{ fontSize: 13, color: MUTED }}>
+                      An owner of this business needs to accept them. Ask whoever
+                      set up your enrops account.
+                    </div>
+                  )}
+                  {tosError && (
+                    <div style={{ fontSize: 13, color: "#9b1c1c", marginTop: 8 }}>{tosError}</div>
+                  )}
+                </div>
+              )}
 
               <div style={{ fontSize: 12, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, margin: "4px 0 8px" }}>
                 enrops service fee
