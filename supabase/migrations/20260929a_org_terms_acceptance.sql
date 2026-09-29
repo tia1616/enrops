@@ -95,10 +95,19 @@ alter table public.org_terms_acceptances enable row level security;
 -- ACCEPTING BINDS THE BUSINESS, so it is the owner's to do, not an admin's.
 -- is_org_owner is the existing spelling of that rule; can_handle_money would be
 -- wrong here because it also admits admins.
+-- AND THE SIGNER MUST BE THE CALLER. An earlier version of this policy checked
+-- only that the caller owns the organisation, so the caller could put ANY user
+-- id in accepted_by_user_id - a co-owner's, or someone who never saw the terms.
+-- In a table whose entire purpose is recording who agreed to what, a forgeable
+-- signer is the one field that must not be. auth.uid() is the server's answer to
+-- "who is asking" and cannot be supplied by the client.
 drop policy if exists owners_accept_terms on public.org_terms_acceptances;
 create policy owners_accept_terms on public.org_terms_acceptances
   for insert to authenticated
-  with check (public.is_org_owner(organization_id));
+  with check (
+    public.is_org_owner(organization_id)
+    and accepted_by_user_id = auth.uid()
+  );
 
 -- Any member may READ, because the banner has to tell the truth to whoever is
 -- looking, not only to the person who can clear it.
@@ -152,11 +161,28 @@ as $$
     where a.organization_id = p_org
     order by a.accepted_at desc
     limit 1
-  ) latest on true;
+  ) latest on true
+  -- THE CALLER CHECK, and it is not belt-and-braces. This is SECURITY DEFINER,
+  -- so without it the GRANT is the only thing between a caller and any
+  -- organisation's row - and a grant is exactly what went wrong on 2026-08-20,
+  -- when `revoke from public` left anon's execute in place and parent emails
+  -- leaked. Definer rights are used to read platform_settings, which is
+  -- admin-only under RLS, and not as a way around membership.
+  --
+  -- Returns NO ROWS rather than a row of nulls: someone who may not ask should
+  -- not learn whether the organisation exists or what it has accepted. The
+  -- frontend reads "no row" as unknown and falls back to inert.
+  where public.is_org_member(p_org) or public.is_platform_admin();
 $$;
 
 comment on function public.org_terms_status(uuid) is
   'The one answer to "is this organisation on the current Terms": the published version, what they last accepted, when, and whether they need to accept. needs_acceptance is false while no version is published, so the machinery is inert until Arielle sets one. Money layer item 7.';
 
+-- BOTH REVOKES ARE LOAD-BEARING. `from public` does NOT remove anon's execute
+-- on Supabase: anon is granted explicitly, not through PUBLIC, so the first line
+-- alone leaves an unauthenticated caller able to run a SECURITY DEFINER
+-- function. That is precisely the 2026-08-20 shape. Read proacl back after
+-- applying this - the grant you did not verify is a claim, not a fix.
 revoke all on function public.org_terms_status(uuid) from public;
+revoke all on function public.org_terms_status(uuid) from anon;
 grant execute on function public.org_terms_status(uuid) to authenticated;
