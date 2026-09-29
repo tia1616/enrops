@@ -74,15 +74,143 @@ export function programScheduleSummary(program, now = new Date()) {
   return parts.length ? parts.join(` ${SEP} `) : null;
 }
 
+// A camp is a program that runs on CONSECUTIVE DAYS: programs.class_days lists
+// the days it meets, and is NULL on a weekly class. Same test as the SQL, where
+// the consecutive branch of derive_program_session_dates needs array_length > 0,
+// so an empty array is a weekly class in both places.
+//
+// ONE definition, because "is this a camp?" now decides school-binding on the
+// public catalog, the day label on its card, and which list it lands in - and
+// three spellings of it would drift the first time one was fixed.
+export function isCampProgram(program) {
+  return Array.isArray(program?.class_days) && program.class_days.length > 0;
+}
+
+// Short labels for a camp's day list, in calendar order. Lowercase keys because
+// that is what programs.class_days stores (there is a CHECK constraint on it).
+const CLASS_DAY_ORDER = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+const CLASS_DAY_SHORT = {
+  monday: 'Mon', tuesday: 'Tue', wednesday: 'Wed', thursday: 'Thu',
+  friday: 'Fri', saturday: 'Sat', sunday: 'Sun',
+};
+
 // The weekday label for a program row OR a pricing line: "Mondays" for a normal
 // recurring class, "Monday" (singular) for a one-off workshop that meets once,
-// and null when the operator never set a day (so the caller renders nothing, not
-// the literal string "nulls"). ONE definition so the day label and the schedule
-// line can never disagree on the same card - the count test here uses the exact
-// same Number() coercion programScheduleSummary uses, so a string "1" is treated
-// as one session by both, never one/plural by one and the other.
+// "Mon-Fri" for a CAMP, and null when the operator never set a day (so the caller
+// renders nothing, not the literal string "nulls"). ONE definition so the day
+// label and the schedule line can never disagree on the same card - the count
+// test here uses the exact same Number() coercion programScheduleSummary uses, so
+// a string "1" is treated as one session by both, never one/plural by one and the
+// other.
+//
+// THE CAMP BRANCH IS NOT COSMETIC. A camp's day_of_week is NOT NULL and holds its
+// FIRST day, so without this a Monday-to-Friday winter break camp advertised
+// itself to families as "Mondays" - on the public catalog card, above a Register
+// button, next to its price. A parent would read a weekly Monday class and buy a
+// week of full-day camp. Caught on staging by selling one.
 export function formatDayLabel(program) {
+  const days = Array.isArray(program?.class_days) ? program.class_days : null;
+  if (days && days.length > 0) {
+    const ordered = CLASS_DAY_ORDER.filter((d) => days.includes(d));
+    // Fall through to the weekday label if class_days held nothing recognisable,
+    // rather than returning an empty string the card would render as a stray dot.
+    if (ordered.length > 0) {
+      const shorts = ordered.map((d) => CLASS_DAY_SHORT[d]);
+      if (shorts.length === 1) return shorts[0];
+      // Contiguous runs read as a range ("Mon-Fri"); a camp that skips a day in
+      // the middle - a holiday week, the case this was built for - has to list
+      // them, because "Mon-Fri" would promise a day it does not meet.
+      const firstIdx = CLASS_DAY_ORDER.indexOf(ordered[0]);
+      const lastIdx = CLASS_DAY_ORDER.indexOf(ordered[ordered.length - 1]);
+      const contiguous = lastIdx - firstIdx === ordered.length - 1;
+      return contiguous ? `${shorts[0]}-${shorts[shorts.length - 1]}` : shorts.join(', ');
+    }
+  }
   const day = program?.day_of_week;
   if (!day) return null;
   return Number(program?.session_count) === 1 ? day : `${day}s`;
+}
+
+// The first day on or after `iso` that the camp actually MEETS.
+//
+// An operator can legitimately type a start that is not a meeting day - "the
+// camp runs the week of the 30th", Tuesday to Friday - and the saved
+// first_session_date is then the Tuesday, not the Monday they typed. Anything
+// deriving from the start date has to walk to that day first, or it is
+// describing a day the camp does not run.
+//
+// Closures are NOT applied here, deliberately. This answers "which day does
+// this camp intend to start", which is what the season and the operator-facing
+// readback are about; the authoritative session list still comes from
+// derive_program_session_dates, which knows the site's closures. Keeping the two
+// separate is why this is safe to use for display: it cannot contradict the
+// saved dates, because it is not claiming to be them.
+//
+// Returns null when there is no date or no days, so a caller renders nothing.
+export function firstMeetingDayOnOrAfter(iso, classDays) {
+  if (typeof iso !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(iso.trim())) return null;
+  const days = Array.isArray(classDays)
+    ? classDays.map((d) => String(d).trim().toLowerCase()).filter(Boolean)
+    : [];
+  if (days.length === 0) return null;
+  const d = new Date(`${iso.trim()}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return null;
+  // Seven steps is the whole week, so a day that is in the list is always found.
+  for (let i = 0; i < 7; i += 1) {
+    if (days.includes(CLASS_DAY_ORDER[(d.getDay() + 6) % 7])) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+    d.setDate(d.getDate() + 1);
+  }
+  return null;
+}
+
+// THE SEASON A CAMP BELONGS TO, FROM ITS OWN FIRST DAY. "2026-12-21" -> "WI27".
+//
+// programs.term is NOT NULL, so every camp needs one - but a camp should never
+// be ASKED for it. Jessica, 2026-09-28: "why does it still ask which term?
+// aren't dates enough? and summer won't have a term." Both true: the dates
+// already say which season it is, and she runs no summer after-school term to
+// pick from.
+//
+// Nothing breaks by deriving a term she has never configured, because the term
+// list is not configuration: org_terms() builds it by grouping the org's own
+// programs, so the first July camp simply makes "Summer 2027" exist.
+//
+// THE SEASONS HERE ARE CAMP SEASONS, NOT TERM SEASONS, and that is deliberate.
+// December sits inside the FALL after-school term (J2S's FA26 runs sessions into
+// January), but a camp on 21 December is a WINTER BREAK camp and belongs on the
+// winter schedule - which is exactly what Jessica asked for: "i want them as
+// part of the winter schedule". The same rule puts a late-March camp in Spring,
+// where spring break actually falls, and June through August in Summer. Mapping
+// by the school term instead would file winter break under Fall and spring break
+// under Winter, which is nobody's idea of either.
+//
+//   Dec, Jan, Feb -> WI    (December takes the FOLLOWING year: Dec 2026 = WI27)
+//   Mar, Apr, May -> SP
+//   Jun, Jul, Aug -> SU
+//   Sep, Oct, Nov -> FA
+//
+// Returns null for anything that is not a YYYY-MM-DD date, so a caller can fall
+// back rather than write a bad term.
+export function campTermForDate(iso) {
+  if (typeof iso !== "string") return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso.trim());
+  if (!m) return null;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  if (month < 1 || month > 12 || Number(m[3]) < 1 || Number(m[3]) > 31) return null;
+
+  let season;
+  let termYear = year;
+  if (month === 12) { season = "WI"; termYear = year + 1; }
+  else if (month <= 2) season = "WI";
+  else if (month <= 5) season = "SP";
+  else if (month <= 8) season = "SU";
+  else season = "FA";
+
+  return `${season}${String(termYear % 100).padStart(2, "0")}`;
 }

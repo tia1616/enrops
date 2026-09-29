@@ -11,6 +11,7 @@
 // DOM. The component decides how to draw the result; this decides what the
 // result IS.
 import { isGroupingDistrict } from './districts.js';
+import { isCampProgram } from './programSchedule.js';
 
 // Catch-all bucket for venues with no public district (private/charter schools,
 // libraries, parks and rec, community sites). Keeps them on the reg page instead
@@ -100,7 +101,25 @@ export function groupByDistrict(locOptions) {
 // `selection` is { district, school } - the district NAME and the location ID
 // the family has picked, both '' when they have picked nothing.
 export function buildCatalogPicker(openPrograms, districtsById, selection = {}) {
-  const all = openPrograms || [];
+  const everything = openPrograms || [];
+
+  // CAMPS ARE NOT SCHOOL-BOUND, so they come out before the gate is built.
+  //
+  // The district -> school gate exists because a family must never be offered an
+  // after-school class at a school their child does not attend. Jessica,
+  // 2026-09-28: "camps should not be associated with any district. they don't
+  // usually run at schools, they run at parks and rec and community centers
+  // mostly." A camp at a community centre is open to any family in the area, so
+  // putting it behind "which school does your child attend?" hides it from
+  // almost everyone who would buy it.
+  //
+  // Splitting here rather than at the gate matters for the PICKER too: a
+  // community centre that only ever hosts camps must not appear in the school
+  // dropdown, where it would read as somewhere a child could be enrolled for
+  // after-school. locOptions is therefore built from classes alone.
+  const all = everything.filter((p) => !isCampProgram(p));
+  const camps = everything.filter(isCampProgram);
+
   const locOptions = buildLocationOptions(all, districtsById);
   const { groups, groupNames, namedCount } = groupByDistrict(locOptions);
 
@@ -152,5 +171,10 @@ export function buildCatalogPicker(openPrograms, districtsById, selection = {}) 
     schoolChoices,
     schoolChosen,
     visiblePrograms,
+    // Always visible, never filtered by the school gate. The caller renders these
+    // in their own section so a family sees camps whether or not they have picked
+    // a school - and so a camp is never mistaken for something happening at their
+    // child's school.
+    camps,
   };
 }

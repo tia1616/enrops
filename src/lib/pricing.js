@@ -232,6 +232,13 @@ export function calculateCart(cart) {
           program_name: prog.curriculum,
           school_name: prog.school_name || prog.program_locations?.name || item.program.school_name || '',
           day_of_week: prog.day_of_week,
+          // A CAMP'S DAYS, so the review line can say "Mon-Fri" instead of
+          // "Mondays". formatDayLabel takes a program row OR one of these lines
+          // and prefers class_days; without it here the line fell back to
+          // day_of_week, which on a camp holds only its FIRST day. The last
+          // screen before payment was describing a Monday-to-Friday camp as a
+          // weekly Monday class.
+          class_days: prog.class_days ?? null,
           start_time: prog.start_time,
           end_time: prog.end_time,
           term: prog.term,

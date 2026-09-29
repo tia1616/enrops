@@ -15,7 +15,7 @@ import {
   standardPriceFor,
 } from '../../lib/pricing.js';
 import { formatTermLabel, termSeasonName, schoolYearTermsForFall } from '../../lib/terms.js';
-import { programScheduleSummary, formatDayLabel } from '../../lib/programSchedule.js';
+import { programScheduleSummary, formatDayLabel, isCampProgram } from '../../lib/programSchedule.js';
 import { audienceLabel } from '../../lib/grades.js';
 import { feeOnCents, totalWithFee } from '../../lib/platformFee.js';
 import { buildCatalogPicker, OTHER_DISTRICT } from '../../lib/regCatalogPicker.js';
@@ -257,6 +257,9 @@ export default function Home() {
   // shown, so a family never lands on a price from someone else's district.
   const [locationDistrict, setLocationDistrict] = useState(''); // lean catalog: which district
   const [locationFilter, setLocationFilter] = useState(''); // lean catalog: which school
+  // 'classes' | 'camps'. Classes first: it is what most providers sell most of,
+  // and a family arriving from a class share link should land where they expect.
+  const [catalogTab, setCatalogTab] = useState('classes');
   // Fee config, so the class card can show what a family will actually pay.
   // The doc's rule is "never a surprise at the end" - until now the service fee
   // first appeared at the Pay step, after they had entered a child's details.
@@ -321,6 +324,11 @@ export default function Home() {
     // this page reads from this same value, so the page can't claim one season
     // while listing another's programs.
     const catalogTerm = org.active_registration_term;
+    // Local date, not toISOString(): a family in Portland at 5pm on the camp's
+    // last day is already "tomorrow" in UTC, and the camp would vanish from the
+    // page while it was still running.
+    const now = new Date();
+    const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 
     // Winter/Spring codes for the VIP bundle lookup, derived from the open term.
     //
@@ -410,7 +418,29 @@ export default function Home() {
         // p.program_locations?.name (the class meta line below) is untouched.
         .select('*, program_locations:program_locations_public(name, district_id)')
         .eq('organization_id', org.id)
-        .eq('term', catalogTerm)
+        // A CLASS BELONGS TO A TERM. A CAMP BELONGS TO ITS DATES.
+        //
+        // Families browse and register one term at a time, which is right for
+        // weekly classes: a Fall class is not on sale during Winter. A camp is a
+        // dated block, and every provider sells those ahead of the season -
+        // summer camp goes on sale in March. Term-gating a camp meant a winter
+        // break camp could only be sold once the WINTER switch was flipped,
+        // which is often weeks before it runs and sometimes after.
+        //
+        // Jessica, 2026-09-28: "yes - don't link camps to terms."
+        //
+        // A camp still CARRIES a term (it is how the schedule board groups it
+        // with that season's after-school), it just no longer decides whether
+        // families can see it. What bounds a camp instead is its own last day:
+        // once it has finished it drops off the page on its own, with no switch
+        // to remember.
+        // BOTH ARMS ARE EXCLUSIVE ON class_days, deliberately. Written first as
+        // `term.eq.X OR (is a camp AND not finished)`, which let a FINISHED camp
+        // back in through the term arm - an August camp was still on sale in
+        // September because it happened to carry the open term. A class is
+        // selected by its term and a camp by its dates, and neither rule may
+        // pick up the other's rows.
+        .or(`and(class_days.is.null,term.eq.${catalogTerm}),and(class_days.not.is.null,end_date.gte.${todayIso})`)
         .eq('status', 'open')
         // Native programs (we run checkout) OR partner-run programs the operator
         // explicitly listed with a registration link (shown as a link-out, no checkout).
@@ -429,6 +459,15 @@ export default function Home() {
           // the same missing filter; both fixed together so one cannot drift
           // back on its own.
           .eq('status', 'open')
+          // A BUNDLE LEG IS A TERM OF WEEKLY CLASSES, NEVER A CAMP. Since
+          // 2026-09-25 a camp is a program too (class_days set) with a real term
+          // and a day_of_week holding its FIRST day, so a winter break camp at
+          // this school starting on a Monday would be advertised as the WINTER
+          // LEG of the year-long bundle for a Monday class. Third instance of
+          // this "which rows may be sold as a leg" filter, and the same pairing
+          // rule as the status one above: Register.jsx's bundle lookup carries
+          // it too, and the two must not drift apart.
+          .is('class_days', null)
           .in('term', [bundleTerms.winter, bundleTerms.spring])
         : Promise.resolve({ data: null }),
       // Recurring weekly classes for outside-registration tenants (no term/checkout).
@@ -497,7 +536,14 @@ export default function Home() {
     const futureTerms = futureRes?.data;
     const bundles = {};
     if (pg && pg.length && bundleTerms) {
-      pg.forEach((fall) => {
+      // A CAMP IS NEVER A BUNDLE LEG - INCLUDING THE FIRST ONE. The winter and
+      // spring lookups already refuse camps; this is the ANCHOR, and it was
+      // missed. Camps entered this list the moment the catalog stopped filtering
+      // them by term, so a two-day Thanksgiving camp at a school whose Thursday
+      // has a WI27 and an SP27 class rendered "Your child's full school year"
+      // with a $727.20 Lock in VIP spot button. The family would be buying a
+      // year-long commitment whose first term is two days of camp.
+      pg.filter((p) => !isCampProgram(p)).forEach((fall) => {
         const winter = futureTerms?.find(
           (f) => f.term === bundleTerms.winter && f.program_location_id === fall.program_location_id && f.day_of_week === fall.day_of_week,
         );
@@ -563,8 +609,19 @@ export default function Home() {
   // Only districts that have at least one school with an open program. Schools
   // with no district collect under a single "Other schools & sites" bucket
   // (sorted last) instead of vanishing or each becoming its own district.
+  // THE BRANDED FINDER BELOW IS A SECOND CATALOG UI, used by legacy tenants
+  // (J2S) while lean tenants get the plain one further down. Both have to learn
+  // the same thing: a camp is not bound to a school, so it must not sit behind
+  // "which school does your child attend?", and a community centre that only
+  // hosts camps must not appear in the school dropdown as somewhere a child
+  // could be enrolled all term. Split once here and every derivation below reads
+  // classes only.
+  const classPrograms = useMemo(() => programs.filter((p) => !isCampProgram(p)), [programs]);
+  const campPrograms = useMemo(() => programs.filter(isCampProgram), [programs]);
+  const finderShowingCamps = catalogTab === 'camps' && campPrograms.length > 0;
+
   const activeDistricts = useMemo(() => {
-    const schoolsWithPrograms = new Set(programs.map((p) => p.program_location_id));
+    const schoolsWithPrograms = new Set(classPrograms.map((p) => p.program_location_id));
     const districts = new Set();
     let hasOther = false;
     schools.forEach((s) => {
@@ -576,25 +633,36 @@ export default function Home() {
     const sorted = [...districts].sort((a, b) => a.localeCompare(b));
     if (hasOther) sorted.push(OTHER_DISTRICT);
     return sorted;
-  }, [schools, programs, districtsById]);
+  }, [schools, classPrograms, districtsById]);
 
   const schoolsInDistrict = useMemo(() => {
     if (!selectedDistrict) return [];
-    const withPrograms = new Set(programs.map((p) => p.program_location_id));
+    const withPrograms = new Set(classPrograms.map((p) => p.program_location_id));
     return schools
       .filter((s) => withPrograms.has(s.id)
         && (selectedDistrict === OTHER_DISTRICT ? !districtOf(s) : districtOf(s) === selectedDistrict))
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [selectedDistrict, schools, programs, districtsById]);
+  }, [selectedDistrict, schools, classPrograms, districtsById]);
 
   const programsAtSchool = useMemo(() => {
     if (!selectedSchool) return [];
-    return programs
+    return classPrograms
       .filter((p) => p.program_location_id === selectedSchool)
       .sort((a, b) =>
         (a.day_of_week || '').localeCompare(b.day_of_week || ''),
       );
-  }, [selectedSchool, programs]);
+  }, [selectedSchool, classPrograms]);
+
+  // What the finder lists: camps ignore the school picker entirely, classes need
+  // one chosen. Sorted by start date because a camp is a block of dates, not a
+  // weekday - sorting those by day_of_week would order them by their first day's
+  // NAME ("Friday" before "Monday"), which is meaningless to a parent.
+  const finderListed = useMemo(() => {
+    if (!finderShowingCamps) return programsAtSchool;
+    return [...campPrograms].sort((a, b) =>
+      String(a.first_session_date || '').localeCompare(String(b.first_session_date || '')),
+    );
+  }, [finderShowingCamps, campPrograms, programsAtSchool]);
 
   // Deep link from a shared per-program link (/<slug>?program=<id>): auto-select
   // the class's district + school so its card renders, then flag it to highlight.
@@ -604,6 +672,19 @@ export default function Home() {
     if (!programId || !programs.length || !schools.length || selectedSchool) return;
     const prog = programs.find((p) => p.id === programId);
     if (!prog) return; // not in the current catalog (e.g. a non-FA26 program) — show normal catalog
+    // A SHARED CAMP LINK OPENS THE CAMPS TAB, not a school.
+    //
+    // Camps were taken out of every school-derived list because they are not
+    // school-bound, so selecting this program's venue here would pick a "school"
+    // that is no longer among the options and then filter the class list to
+    // nothing: the family following the link the operator put on a flyer landed
+    // on "No open programs at this school yet", with the camp one tab away.
+    // Reproduced on staging before this guard existed.
+    if (isCampProgram(prog)) {
+      setCatalogTab('camps');
+      setHighlightProgram(programId);
+      return;
+    }
     const school = schools.find((s) => s.id === prog.program_location_id);
     if (!school) return;
     setSelectedDistrict(districtOf(school) || OTHER_DISTRICT);
@@ -630,7 +711,10 @@ export default function Home() {
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     const t = setTimeout(() => setHighlightProgram(''), 3000);
     return () => clearTimeout(t);
-  }, [highlightProgram, programsAtSchool]);
+    // finderListed, not programsAtSchool: a highlighted CAMP renders from that
+    // list, so keying on the class list alone would run this before the camp
+    // card exists and never again.
+  }, [highlightProgram, finderListed]);
 
   function startRegistration(programId, isVip = false) {
     if (!keepCart) clearCart();
@@ -700,7 +784,14 @@ export default function Home() {
     const {
       groupNames, hasMultiLoc, useGroups, schoolChoices, schoolChosen,
       visiblePrograms: openPrograms,
+      camps: campList,
     } = picker;
+    // Which tab is on screen. Camps are never behind the school gate, so the
+    // camps tab renders its list whatever the picker says. Falls back to classes
+    // the moment an org has no camps, so a stale 'camps' tab can never strand a
+    // family on an empty page.
+    const showingCamps = catalogTab === 'camps' && campList.length > 0;
+    const listedPrograms = showingCamps ? campList : openPrograms;
     // The SANITISED selection, not the raw state. If a value is not among the
     // options the module hands back '' - a select whose value is not in its own
     // option list renders blank and disagrees with the list beneath it.
@@ -815,18 +906,64 @@ export default function Home() {
                     chosen there are no classes on screen, so counting the whole
                     catalog there would be the same "18 open programs, here they
                     all are" first impression the gate exists to remove. */}
+                {/* CAMPS AND CLASSES ARE TWO TABS ON ONE PAGE, which is what the
+                    rest of this market does (Sawyer splits "Semesters" from
+                    "Camps/Events" as tabs on the same booking widget). A second
+                    registration page would split the share link, the SEO and the
+                    sign-up numbers for no gain.
+
+                    The tab strip only appears when there is something to switch
+                    to, so a provider running no camps sees exactly the page they
+                    see today. */}
+                {campList.length > 0 && (
+                  <div style={{ display: 'flex', gap: 8, margin: '0 0 16px' }}>
+                    {[
+                      { key: 'classes', label: 'After-school classes' },
+                      { key: 'camps', label: 'Camps' },
+                    ].map((t) => (
+                      <button
+                        key={t.key}
+                        type="button"
+                        onClick={() => setCatalogTab(t.key)}
+                        style={{
+                          padding: '7px 14px',
+                          borderRadius: 999,
+                          fontSize: 14,
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          border: catalogTab === t.key ? '1px solid #2f1c56' : '1px solid #ddd',
+                          background: catalogTab === t.key ? '#2f1c56' : '#fff',
+                          color: catalogTab === t.key ? '#fff' : '#3d3d3d',
+                        }}
+                      >
+                        {t.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 <h2 style={{ fontSize: 19, fontWeight: 700, margin: '2px 0 4px' }}>
-                  {!schoolChosen
-                    ? 'Find your child’s class'
-                    : (openPrograms.length === 1 ? '1 open program' : `${openPrograms.length} open programs`)}
+                  {showingCamps
+                    ? (campList.length === 1 ? '1 camp' : `${campList.length} camps`)
+                    : !schoolChosen
+                      ? 'Find your child’s class'
+                      : (openPrograms.length === 1 ? '1 open program' : `${openPrograms.length} open programs`)}
                 </h2>
-                {hasMultiLoc && !schoolChosen && (
+                {/* A CAMP IS NOT BOUND TO A SCHOOL. Camps run at parks-and-rec and
+                    community centres, so there is no "which school does your child
+                    attend?" question to ask - and asking it would hide every camp
+                    from every family except the one school it happened to sit at. */}
+                {showingCamps && (
+                  <p style={{ fontSize: 14, color: '#6b6b6b', margin: '0 0 16px' }}>
+                    Open to any family — camps are not tied to a school.
+                  </p>
+                )}
+                {!showingCamps && hasMultiLoc && !schoolChosen && (
                   <p style={{ fontSize: 14, color: '#6b6b6b', margin: '0 0 16px' }}>
                     {useGroups ? 'Pick your district, then your school.' : 'Pick your school to see its classes.'}
                   </p>
                 )}
                 {/* District, then school - see the note where `groups` is built. */}
-                {hasMultiLoc && (
+                {!showingCamps && hasMultiLoc && (
                   <div style={{
                     display: 'grid', gap: 12, margin: '12px 0 16px',
                     gridTemplateColumns: useGroups ? 'repeat(auto-fit, minmax(200px, 1fr))' : '1fr',
@@ -902,13 +1039,13 @@ export default function Home() {
                 {/* A school with nothing in it must say so, or an empty page reads
                     as broken. Only reachable if a school's classes disappear
                     between render and the change event. */}
-                {schoolChosen && openPrograms.length === 0 && (
+                {!showingCamps && schoolChosen && openPrograms.length === 0 && (
                   <div style={{ color: '#6b6b6b', padding: '18px 0', textAlign: 'center', fontSize: 14 }}>
                     No classes at that school right now.
                   </div>
                 )}
                 <div style={{ display: 'grid', gap: 12 }}>
-                  {openPrograms.map((p) => {
+                  {listedPrograms.map((p) => {
                     const timeStr = [p.start_time, p.end_time].filter(Boolean).join(' – ');
                     // "Is my child old enough?" is the first thing a parent asks
                     // and the most common reason they message the provider
@@ -1132,8 +1269,37 @@ export default function Home() {
               Find your child&rsquo;s program
             </h2>
             <p className="mt-2 text-sm text-j2s-ink/70">
-              Pick your district, then your school, then the class.
+              {finderShowingCamps
+                ? 'Camps are open to any family — they are not tied to a school.'
+                : 'Pick your district, then your school, then the class.'}
             </p>
+
+            {/* CAMPS AND CLASSES AS TABS, the same shape the lean catalog uses
+                and the same shape the rest of this market uses (Sawyer splits
+                "Semesters" from "Camps/Events" on one booking widget). Only
+                rendered when there is actually a camp, so a provider running
+                none sees the page exactly as before. */}
+            {campPrograms.length > 0 && (
+              <div className="mt-4 flex gap-2">
+                {[
+                  { key: 'classes', label: 'After-school classes' },
+                  { key: 'camps', label: 'Camps' },
+                ].map((t) => (
+                  <button
+                    key={t.key}
+                    type="button"
+                    onClick={() => setCatalogTab(t.key)}
+                    className={
+                      catalogTab === t.key
+                        ? 'rounded-full bg-j2s-purple px-4 py-2 text-sm font-semibold text-white'
+                        : 'rounded-full border border-j2s-purple/20 bg-white px-4 py-2 text-sm font-semibold text-j2s-ink/70'
+                    }
+                  >
+                    {t.label}
+                  </button>
+                ))}
+              </div>
+            )}
 
             {/* Banner image — pulled from org_branding, templated for all providers */}
             {branding?.banner_image_url && (
@@ -1149,7 +1315,7 @@ export default function Home() {
 
             {loading ? (
               <div className="mt-8 animate-pulse text-j2s-ink/50">Loading schools&hellip;</div>
-            ) : (
+            ) : finderShowingCamps ? null : (
               <div className="mt-6 grid gap-4 sm:grid-cols-2">
                 <div>
                   <label className="label-field">District</label>
@@ -1193,15 +1359,17 @@ export default function Home() {
             )}
 
             {/* Program preview */}
-            {selectedSchool && programsAtSchool.length > 0 && (
+            {(finderShowingCamps || selectedSchool) && finderListed.length > 0 && (
               <div className="mt-8 animate-fade-in space-y-4">
                 <div className="flex items-center justify-between">
                   <h3 className="font-titan text-lg text-j2s-ink">
-                    Open programs ({programsAtSchool.length})
+                    {finderShowingCamps
+                      ? `Camps (${finderListed.length})`
+                      : `Open programs (${finderListed.length})`}
                   </h3>
                 </div>
                 <div className="space-y-4">
-                  {programsAtSchool.map((p) => {
+                  {finderListed.map((p) => {
                     // "When does it start, and how many weeks am I buying?" - the
                     // two questions that previously could only be answered by
                     // starting a registration, which is where families dropped out.
@@ -1414,10 +1582,18 @@ export default function Home() {
                                 column; when it's the only option (no VIP bundle), drop
                                 the "only". Season comes from the open term — when Winter
                                 is open this must read "Winter", not "Fall". */}
+                            {/* seasonName is the ORG's open term, which is the
+                                right label for a class and wrong for a camp: a
+                                winter break camp sold during Fall registration
+                                would be badged "Fall". A camp is sold by its
+                                dates, which the line above already gives, so it
+                                takes no season at all. */}
                             <p className="font-titan text-xs uppercase tracking-widest text-j2s-ink/50">
-                              {seasonName
-                                ? (vipEligible ? `${seasonName} only` : seasonName)
-                                : (vipEligible ? 'This term only' : 'This term')}
+                              {isCampProgram(p)
+                                ? 'Camp'
+                                : seasonName
+                                  ? (vipEligible ? `${seasonName} only` : seasonName)
+                                  : (vipEligible ? 'This term only' : 'This term')}
                             </p>
                             <div className="mt-2">
                               {/* All-in on BOTH numbers, including the struck
@@ -1439,7 +1615,14 @@ export default function Home() {
                                 </p>
                               )}
                             </div>
-                            <p className="mt-1 text-xs text-j2s-ink/60">{termLabel}</p>
+                            {/* The open term under the price tells a family which
+                                term they are buying. A camp is not bought by
+                                term - it is bought by its dates, already on the
+                                line above - so labelling a February camp
+                                "Fall 2026" is just wrong. */}
+                            {!isCampProgram(p) && (
+                              <p className="mt-1 text-xs text-j2s-ink/60">{termLabel}</p>
+                            )}
                             {/* #8: Early-bird on both cards */}
                             {fallShowsEarlyBird && fallEarlyBirdLabel && (
                               <p className="mt-2 text-xs font-semibold text-j2s-orange-dark">
@@ -1461,9 +1644,13 @@ export default function Home() {
                                 onClick={() => startRegistration(p.id, false)}
                                 className="btn-j2s-secondary mt-4 w-full text-sm"
                               >
-                                {seasonName
-                                  ? (vipEligible ? `Register for ${seasonName.toLowerCase()} only` : `Register for ${seasonName.toLowerCase()}`)
-                                  : (vipEligible ? 'Register for this term only' : 'Register')}
+                                {isCampProgram(p)
+                                  // Same reason as the badge above: "Register for
+                                  // fall" on a December camp is simply untrue.
+                                  ? 'Register'
+                                  : seasonName
+                                    ? (vipEligible ? `Register for ${seasonName.toLowerCase()} only` : `Register for ${seasonName.toLowerCase()}`)
+                                    : (vipEligible ? 'Register for this term only' : 'Register')}
                               </button>
                             )}
                           </div>

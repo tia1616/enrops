@@ -54,7 +54,7 @@ import {
   buildResendAttachments,
   type CommsAttachment,
 } from "../_shared/attachments.ts";
-import { cleanNoSchoolDates, toClosurePeriods, termToSchoolYear, nsdWeekdayLower, nsdDate, periodFires, formatDateList } from "./noSchoolDates.ts";
+import { cleanNoSchoolDates, toClosurePeriods, termToSchoolYear, nsdWeekdayLower, nsdDate, periodFires, formatDateList, isCampProgram } from "./noSchoolDates.ts";
 import {
   orgToday,
   orgHour,
@@ -208,6 +208,11 @@ interface AudienceEntry {
   // or "" when it doesn't apply. Afterschool only: a camp runs every weekday, so
   // naming one day would be wrong, and the token isn't offered for welcome_camp.
   program_day?: string;
+  // True when the program runs on consecutive days (programs.class_days set).
+  // Camps now live in `programs`, so "this row is afterschool" is no longer
+  // something a resolver can assume. Drives the Schedule block's wording: a
+  // camp's dates are sessions, not WEEKLY sessions.
+  is_camp?: boolean;
   // ── no_school_day only ──
   // recipient_role distinguishes the two audiences of the SAME automation. When
   // set to "instructor" the resolver also sets subject_template/body_template so
@@ -1166,7 +1171,7 @@ async function resolveTestEntryContent(
   if (programId) {
     const { data: p, error } = await supabase
       .from("programs")
-      .select(`id, curriculum, day_of_week, first_session_date, start_time, end_time, program_location_id, curriculum_id, room,
+      .select(`id, curriculum, day_of_week, class_days, first_session_date, start_time, end_time, program_location_id, curriculum_id, room,
         program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions, room_number ),
         curricula ( final_showcase, mid_term_skills, final_recap_skills )`)
       .eq("id", programId)
@@ -1184,7 +1189,11 @@ async function resolveTestEntryContent(
       program_start_date: prog.first_session_date ? formatDate(prog.first_session_date) : "",
       program_end_date: sessions.length > 0 ? formatDate(sessions[sessions.length - 1]) : "",
       program_time: timeClause(prog.start_time, prog.end_time, true),
-      program_day: recurringDayLabel(prog.day_of_week),
+      // A camp has day_of_week set (it is NOT NULL and holds the FIRST day), so
+      // the label has to be suppressed here rather than by recurringDayLabel's
+      // empty-in-empty-out guard: a Mon-Fri camp would otherwise read "Mondays".
+      program_day: isCampProgram(prog) ? "" : recurringDayLabel(prog.day_of_week),
+      is_camp: isCampProgram(prog),
       // Room only for the welcome mail, matching resolveWelcomeAudience. The
       // check-in and recap sends do not carry it (Jessica, 2026-09-09), and the
       // no-school notice cannot: its one vars object feeds the instructor copy.
@@ -1245,7 +1254,7 @@ async function resolveWelcomeAudience(
         id, parent_id, registered_at,
         students!inner ( id, first_name ),
         parents!inner ( id, first_name, email ),
-        programs!inner ( id, curriculum, runs_own_registration, day_of_week, first_session_date, start_time, end_time, program_location_id, curriculum_id, room, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions, room_number ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
+        programs!inner ( id, curriculum, runs_own_registration, day_of_week, class_days, first_session_date, start_time, end_time, program_location_id, curriculum_id, room, program_locations ( name, parent_arrival_instructions, parent_dismissal_instructions, room_number ), curricula ( final_showcase, mid_term_skills, final_recap_skills ) )
       `;
     const afterschoolBase = () => supabase
       .from("registrations")
@@ -1328,7 +1337,10 @@ async function resolveWelcomeAudience(
         program_end_date: "",
         // programs.start_time/end_time are already human text ("3:25 PM"); use as-is.
         program_time: timeClause(r.programs.start_time, r.programs.end_time, true),
-        program_day: recurringDayLabel(r.programs.day_of_week),
+        // See the welcome resolver: a camp's day_of_week holds its FIRST day, so
+        // the suppression has to happen here, not inside recurringDayLabel.
+        program_day: isCampProgram(r.programs) ? "" : recurringDayLabel(r.programs.day_of_week),
+        is_camp: isCampProgram(r.programs),
         location_name: venueLabel(r.programs.program_locations?.name, r.programs.room, r.programs.program_locations?.room_number) ?? "",
         abandoned_resume_url: "",
         age_turning: "",
@@ -2769,16 +2781,24 @@ async function resolveNoSchoolDayAudience(
   const enabledDay = a.enabled_at ? a.enabled_at.slice(0, 10) : null;
   if (!enabledDay) return [];
 
-  // All AFTERSCHOOL programs for the org (the programs table is afterschool; camps
-  // live in camp_sessions and never follow the school calendar).
+  // All AFTERSCHOOL programs for the org. This used to be every row in the table,
+  // on the reasoning that camps lived in camp_sessions - no longer true since
+  // 2026-09-25, when a camp became a program with class_days set. A camp must be
+  // excluded here: it IGNORES the district calendar by design (school being out
+  // is the reason a winter camp runs), so its days are real sessions. Without
+  // this filter a WI27 camp is in scope - termToSchoolYear("WI27") is non-null -
+  // and the break dates landing on its day_of_week would tell confirmed families
+  // "your class will not meet then" on days camp is running, and tell the
+  // assigned instructor "You are off that day" for a day they are being paid for.
   const { data: progs, error: progErr } = await supabase
     .from("programs")
-    .select("id, curriculum, term, day_of_week, first_session_date, program_location_id, status, runs_own_registration, program_locations!inner ( name )")
+    .select("id, curriculum, term, day_of_week, class_days, first_session_date, program_location_id, status, runs_own_registration, program_locations!inner ( name )")
     .eq("organization_id", a.organization_id);
   if (progErr) throw progErr;
 
   const DEAD_STATUSES = new Set(["draft", "cancelled", "canceled", "archived", "deleted"]);
   const relevantProgs = (progs ?? []).filter((p: any) =>
+    !isCampProgram(p) &&
     termToSchoolYear(p.term) !== null &&
     !DEAD_STATUSES.has((p.status ?? "").toLowerCase()) &&
     p.first_session_date &&
@@ -3005,7 +3025,7 @@ function buildTokens(entry: AudienceEntry, brand: OrgBrand): Record<string, stri
     mid_term_skills_block: buildSkillsBlock(entry.mid_term_skills_raw, brand, "What they have been working on"),
     final_recap_skills_block: buildSkillsBlock(entry.final_recap_skills_raw, brand, "What they covered"),
     arrival_dismissal_block: buildArrivalDismissalBlock(entry.arrival_instructions_raw, entry.dismissal_instructions_raw, brand),
-    session_dates_block: buildSessionDatesBlock(entry.session_dates_raw, brand, entry.program_day ?? ""),
+    session_dates_block: buildSessionDatesBlock(entry.session_dates_raw, brand, entry.program_day ?? "", !entry.is_camp),
     register_url: entry.register_url,
     next_term_link_block: buildNextTermLinkBlock(entry.next_term_available, entry.register_url, brand),
     // no_school_day tokens — "" for every other template (they never set these),
@@ -3053,7 +3073,7 @@ const PRE_RENDERED_HTML_TOKENS = new Set(["final_showcase_block", "mid_term_skil
 // output. Renders the program's session count + first/last dates as a tight
 // summary parents can scan. Empty when there are no dates (camps, or
 // afterschool programs whose session list hasn't been derived yet).
-function buildSessionDatesBlock(sessions: string[] | null | undefined, brand: OrgBrand, dayLabel = ""): string {
+function buildSessionDatesBlock(sessions: string[] | null | undefined, brand: OrgBrand, dayLabel = "", weekly = true): string {
   if (!sessions || sessions.length === 0) return "";
   const valid = sessions.filter((s) => typeof s === "string" && s.trim().length > 0);
   if (valid.length === 0) return "";
@@ -3072,7 +3092,10 @@ function buildSessionDatesBlock(sessions: string[] | null | undefined, brand: Or
   // It is the one thing a parent joining mid-term can't infer from a date list,
   // and the block already handles being empty, so an unknown day degrades to the
   // original wording instead of leaving a dangling word in the sentence.
-  const header = escapeHtml(dayLabel ? `${count} weekly sessions, on ${dayLabel}:` : `${count} weekly sessions:`);
+  // "weekly" is a claim about cadence, and a camp's ten days are not weekly. A
+  // camp also has no single recurring day to name, so it takes the bare count.
+  const cadence = weekly ? "weekly sessions" : "sessions";
+  const header = escapeHtml(dayLabel ? `${count} ${cadence}, on ${dayLabel}:` : `${count} ${cadence}:`);
   const dates = escapeHtml(valid.map(formatDateShort).join(", "));
   return `<div style="background:#f5f4ee;padding:14px 18px;margin:16px 0;border-radius:6px;border-left:3px solid ${brand.primary_color};"><p style="${labelStyle}">Schedule</p><p style="${textStyle}margin-bottom:4px;font-weight:700;">${header}</p><p style="${textStyle}">${dates}</p></div>`;
 }

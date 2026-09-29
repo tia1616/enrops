@@ -10,6 +10,7 @@
 //     given us a link, there's nothing to share yet.
 
 import ShareLink from "./ShareLink.jsx";
+import { isCampProgram } from "../lib/programSchedule.js";
 import { buildProgramShareUrl } from "../lib/regLinks.js";
 
 const INK = "#1a1a1a";
@@ -54,7 +55,11 @@ export default function ShareProgram({ slug, program, activeTerm, align = "right
   // for any other term would dead-end on a catalog that can't show that class —
   // so gate it and explain, never hand out a broken link.
   const isPublished = program?.status === "open";
-  const inCatalogTerm = !!activeTerm && program?.term === activeTerm;
+  // A CAMP IS NOT SERVED BY TERM, so the term gate does not apply to one. The
+  // catalog shows an open camp until its last day whatever term is on sale
+  // (2026-09-28), so its link works the moment it is published - which is the
+  // point, since camps are advertised weeks before the season they sit in.
+  const inCatalogTerm = isCampProgram(program) || (!!activeTerm && program?.term === activeTerm);
   const shareable = isPublished && inCatalogTerm;
   const url = slug && shareable ? buildProgramShareUrl(slug, program?.id) : "";
 
