@@ -138,25 +138,39 @@ Deno.test('fixtures: the live fee model still produces the September figures', (
 // owedCents in the same row, so moving both together is a mutation that reports
 // PASS.
 //
-// This ties them. For every row the sandbox is expected to reproduce exactly,
-// the owed figure has to fall out of the REAL arithmetic - charge, fee, model,
-// refund - rather than being an independent number that happens to sit nearby.
-// The one caveated row is skipped on its amount only, and the skip is asserted
-// to be exactly one row so it cannot quietly grow.
-Deno.test('fixtures: every uncaveated row\'s owed figure is reproduced by the real arithmetic', () => {
-  let skipped = 0;
+// This ties them. EVERY row's owed figure has to fall out of the REAL
+// arithmetic - charge, fee, model, refund - rather than being an independent
+// number that happens to sit nearby.
+//
+// NO ROW IS SKIPPED. An earlier version exempted the one row the sandbox cannot
+// reproduce; a divergence we can predict to the cent gets asserted to the cent,
+// through `sandboxOwedCents`, and the number of rows allowed to carry one is
+// itself pinned below.
+//
+// WHAT THIS TEST DOES NOT DO, said plainly because an earlier version of this
+// comment claimed otherwise. The hole the exemption opened was in
+// scripts/sandbox-refund-replay.ts, and it is closed there, not here: this loop
+// calls computeMarginRefund with estimateStripeFee and never touches
+// readChargeFeeFacts, so the mutation that drops the balance_transaction
+// expansion cannot move a single figure in it. Verified by running that
+// mutation against this file: green throughout, while the script's run goes
+// red. What this test DOES add is the tie between `sandboxOwedCents: 285` and
+// the arithmetic 1142 - 857 - a number that would otherwise be asserted
+// nowhere.
+Deno.test('fixtures: every row\'s owed figure is reproduced by the real arithmetic', () => {
   for (const row of SEPTEMBER_2026) {
-    if (row.sandboxCaveat) {
-      skipped += 1;
-      continue;
-    }
     // Direct: Stripe billed the OPERATOR, so none of the fee is ours to net off.
     // Destination: the uplift inside the application fee is the estimate, and
     // the sandbox run of 2026-09-29 confirmed Stripe's real balance-transaction
-    // fee equals it on every September amount (319, 625, 726, 857).
+    // fee equals it on all three September destination amounts - 319 on 9968,
+    // 726 on 24000, 857 on 28500.
     const stripeFeeCents = row.model === 'direct'
       ? 0
       : estimateStripeFee(row.chargeAmountCents, 'card');
+
+    // Production's figure, except where Stripe's real pricing differed from the
+    // estimate on the day (Link) and the sandbox therefore cannot reproduce it.
+    const expected = row.sandboxOwedCents ?? row.owedCents;
 
     assertEquals(
       computeMarginRefund({
@@ -165,11 +179,33 @@ Deno.test('fixtures: every uncaveated row\'s owed figure is reproduced by the re
         chargeAmountCents: row.chargeAmountCents,
         refundAmountCents: row.refundedCents,
       }),
-      row.owedCents,
+      expected,
       `${row.day} ${row.who}`,
     );
   }
-  assertEquals(skipped, 1, 'exactly one row is exempt from the amount check');
+});
+
+// The exemption is bounded on BOTH fields. A second row quietly acquiring its
+// own sandbox figure is how "one known divergence" becomes "the amounts are
+// advisory"; a sandbox figure with no caveat is a number with no reason
+// attached; and a caveat with no figure is a row a reader will treat as not
+// fully proved. The caveat count is asserted too because the previous version
+// of this test bounded only the figure - the caveat bound existed before the
+// fix round and was dropped by it, which is the subtraction nobody notices.
+Deno.test('fixtures: exactly one row diverges in the sandbox, and it says why', () => {
+  const diverging = SEPTEMBER_2026.filter((r) => r.sandboxOwedCents !== undefined);
+  const caveated = SEPTEMBER_2026.filter((r) => r.sandboxCaveat !== undefined);
+  assertEquals(diverging.length, 1, 'exactly one row may diverge from production');
+  assertEquals(caveated.length, 1, 'exactly one row may carry a sandbox caveat');
+  assertEquals(diverging[0].who, caveated[0].who, 'the divergence and the caveat are one row');
+  assertEquals(diverging[0].who, 'Laura Lillison');
+  // Link, 2.6% + 30c: 1142 - 771 = 371 on the day, 1142 - 857 = 285 in a
+  // sandbox that can only bill a plain card.
+  assertEquals(diverging[0].owedCents, 371);
+  assertEquals(diverging[0].sandboxOwedCents, 285);
+  for (const r of diverging) {
+    assertEquals(typeof r.sandboxCaveat, 'string', `${r.who} must explain its divergence`);
+  }
 });
 
 // THE SHARED FIXTURES ARE THE SAME FOUR CHARGES AS FOUR OF THE ROWS, so they
@@ -492,11 +528,17 @@ Deno.test('blocker1/DoD: seventeen September refunds, seventeen correct outcomes
   // table without adding it to prod, or drops one, this fails before any
   // outcome is checked - because "17 correct outcomes" is a claim about
   // seventeen refunds, not about however many happen to be listed here.
-  // Seventeen is written HERE as a literal on purpose. The shape constant lives
-  // in the same file as the table, so `length === SHAPE.rows` is satisfied by
-  // deleting a row and decrementing the constant. This line is the outside
-  // witness the move would otherwise have removed.
+  // THE SHAPE IS WRITTEN HERE AS LITERALS, all of it. The shape constant lives
+  // in the same file as the table it describes, so any assertion made only
+  // against it is satisfied by editing a row and its constant together. These
+  // five lines are the outside witness the move would otherwise have removed,
+  // and they must stay literal - replacing any of them with SEPTEMBER_2026_SHAPE
+  // deletes the check while leaving it looking like a check.
   assertEquals(SEPTEMBER_2026_SHAPE.rows, 17, 'the definition of done names seventeen refunds');
+  assertEquals(SEPTEMBER_2026_SHAPE.returned, 12, 'twelve returned the fee');
+  assertEquals(SEPTEMBER_2026_SHAPE.nothing_owed, 2, 'two correctly returned nothing');
+  assertEquals(SEPTEMBER_2026_SHAPE.failed, 3, 'three failed, not the two the doc first said');
+  assertEquals(SEPTEMBER_2026_SHAPE.failedOwedTotalCents, 712, 'the $7.12 settled by hand');
   assertEquals(
     SEPTEMBER_2026.length,
     SEPTEMBER_2026_SHAPE.rows,

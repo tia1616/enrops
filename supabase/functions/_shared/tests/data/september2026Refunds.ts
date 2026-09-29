@@ -93,6 +93,21 @@ export interface SeptemberRow {
    * more than it did.
    */
   sandboxCaveat?: string;
+  /**
+   * The owed figure the SANDBOX is expected to produce, when that differs from
+   * what production owed. Only set alongside a `sandboxCaveat` that explains
+   * why, and both are asserted to appear on exactly one row.
+   *
+   * WHY THIS IS A NUMBER AND NOT A SKIP. It used to be a skip: a row with a
+   * caveat was exempt from the amount check entirely. That made it blind to the
+   * whole over-refund class - under the mutation that drops the
+   * balance_transaction expansion, Laura Lillison's row computed 1142 instead
+   * of 285, an $11.42 over-refund, and still reported PASS while six other rows
+   * caught the same bug. A divergence we can predict to the cent should be
+   * asserted to the cent; "we know this one is different" is not a reason to
+   * stop checking it.
+   */
+  sandboxOwedCents?: number;
 }
 
 export const SEPTEMBER_2026: SeptemberRow[] = [
@@ -165,7 +180,10 @@ export const SEPTEMBER_2026: SeptemberRow[] = [
       'owed 371 because this charge was funded by Link, which Stripe bills at ' +
       '2.6% + 30c (real fee 771, not the 857 the uplift assumed). Test mode ' +
       'cannot produce a Link-funded card, so the sandbox charge is billed at ' +
-      '2.9% + 30c and the owed figure reads 285. The outcome word is unaffected.',
+      '2.9% + 30c and owes 285 instead. The outcome word is unaffected, and 285 ' +
+      'is asserted exactly - see sandboxOwedCents.',
+    // 1142 application fee less 857 (2.9% + 30c on 28500) = 285.
+    sandboxOwedCents: 285,
   },
   {
     who: 'Morgan Marlett', day: '09-08', model: 'destination',

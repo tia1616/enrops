@@ -17,10 +17,25 @@
 // own objects, issues the family's refund and attempts the fee return for real,
 // and checks the word that comes out.
 //
-// So the numbers under test stop being mine. application_fee_amount is read back
-// off the charge Stripe created; the Stripe fee is read off the real balance
-// transaction; the fee return is a real applicationFees.createRefund; and the
-// three failures throw a real Stripe error.
+// HOW MUCH OF THIS STOPS BEING MINE, honestly, because it is not uniform and an
+// earlier draft of this header claimed it was.
+//
+// On the TEN destination rows the Stripe fee comes off the real balance
+// transaction, so the margin is genuinely discovered: change the arithmetic and
+// the numbers move. That is where the falsification power is.
+//
+// On the SEVEN direct rows readChargeFeeFacts nets off nothing by design
+// (Stripe billed the operator), so the margin reduces to the application fee -
+// and that fee is a number this script SET on the charge from the table. Those
+// rows prove the code reads Stripe correctly and the direct path takes no fee
+// off; they cannot tell you the table's fee matches what production charged.
+// Four of them (Rosenau, Wittmayer, Calcagno, Burke) rest on a fee marked
+// `appFeeSource: 'derived'`, which is printed beside every row for exactly this
+// reason. Nelson and Schmitt are pinned independently by the offline fixtures.
+//
+// Everywhere: the fee return is a real applicationFees.createRefund, the three
+// failures throw a real Stripe error, and the charge Stripe built is asserted
+// to be the charge the row asked for before anything is computed from it.
 //
 // TEST MODE ONLY, AND THE GUARD IS THE FIRST THING THAT RUNS. The key must begin
 // sk_test_ or this refuses to start, and the first object it creates is checked
@@ -37,7 +52,9 @@
 // worktree passes the variable instead. Add --dry-run to print the plan without
 // touching Stripe (no key needed), --json=<path> to write the result, and
 // --destination-account / --direct-account to pin the connected accounts
-// instead of discovering them.
+// instead of discovering them. Pin BOTH or neither: one pin plus discovery can
+// resolve the two roles to the same account, so it is refused. Every flag needs
+// its value with an equals sign; a bare flag is refused rather than ignored.
 //
 // --allow-write is only needed for --json, and the permission is checked BEFORE
 // the first charge: a missing flag must not surface after seventeen charges
@@ -55,20 +72,27 @@
 //  2. Laura Lillison's charge was funded by Link, which Stripe bills at
 //     2.6% + 30c rather than 2.9% + 30c. Test mode has no Link-funded card, so
 //     her sandbox charge is billed at the card rate and the margin reads 285
-//     where production owed 371. Her row carries that caveat in the table and
-//     the runner honours it. Her outcome word is unaffected.
+//     where production owed 371. Her outcome word is unaffected.
 //
-// Every other row is expected to match production to the cent, and a cents
-// mismatch on a row with no caveat FAILS the run. "Seventeen correct outcomes"
-// is the bar, but a right word over a wrong amount is not a result worth having.
+// THAT ROW IS STILL CHECKED TO THE CENT. It says what the sandbox SHOULD owe
+// (285, in `sandboxOwedCents`) and is held to it. An earlier version let a
+// caveat suspend the amount check altogether, and that was blind to the whole
+// over-refund class below: her figure moved to 1142 under mutation and the row
+// still said PASS. A divergence we can predict exactly gets asserted exactly.
+//
+// So every row is expected to match to the cent, and ANY cents mismatch FAILS
+// the run. "Seventeen correct outcomes" is the bar, but a right word over a
+// wrong amount is not a result worth having.
 //
 // AND THAT IS NOT A PEDANTIC ADDITION - the doc's bar, taken literally, is not
 // enough. Proved by mutation on 2026-09-29: dropping the balance_transaction
 // expansion from chargeFeeFacts (the silent over-refund the offline test
 // documents as a FINDING) still produces SEVENTEEN CORRECT OUTCOMES. It flags
-// seven rows on cents, six of which really moved the money: 207 + 620 + 857 +
+// EIGHT rows on cents, six of which really moved the money: 207 + 620 + 857 +
 // 726 + 319 + 857 = $35.86 handed back over and above the margin, out of
-// enrops's own pocket. Only the cents check catches it.
+// enrops's own pocket. (Seven, in an earlier version of this paragraph, was
+// measured before the caveated row stopped being exempt; that row is the
+// eighth.) Only the cents check catches any of it.
 // Dropping the direct-charge asymmetry instead fails both ways: 10 of 17 words
 // and every Ukulele row silently returning nothing.
 //
@@ -88,10 +112,29 @@
 // 2026-09-29: facts, then computeMarginRefund, then refunds.create, then
 // applicationFees.createRefund, then feeReturnOutcome. Nothing enforces that it
 // stays matched. If the refund path's ORDER changes, re-read this against it
-// before believing a green run. Two known and deliberate differences:
-// remainingFraction is pinned to 1 here (it was 1 for all seventeen), and
-// production gates reverse_transfer on the charge really having a transfer,
-// which every destination charge built here does.
+// before believing a green run.
+//
+// THE KNOWN DIFFERENCES ARE FIVE, NOT TWO. This list is the map of what a green
+// run means, so it is worth more than it costs to keep complete:
+//  1. `remainingFraction` is pinned to 1 (it was 1 for all seventeen), so the
+//     COMPOSITION of proration with the margin split is never exercised here.
+//     refundFeeProration.test.ts covers the proration itself.
+//  2. Production gates reverse_transfer on the charge really having a transfer;
+//     every destination charge built here does.
+//  3. Production gates the whole fee path on `feeRefundApplies`
+//     (refund-registration/index.ts:1862). This script has no equivalent, so a
+//     regression in that gate is invisible to the replay. Every live org is
+//     'tenant' today, which is why it is inert rather than wrong.
+//  4. Production refunds PER PAYMENT INTENT across an instalment plan; every row
+//     here is one standalone charge, so `alreadyRefundedFeeCents` is always 0
+//     and the double-refund ceiling in refundFeeSplit.ts is never reached -
+//     even though Leila Banks really was instalment 1 of 3.
+//  5. This script sets `on_behalf_of` on every destination charge. Production
+//     sets it only when `instructor_pay_model === 'enrops_platform'`
+//     (connectChargeParams.ts:120), and J2S - which is all ten destination rows
+//     - is deliberately NOT that, so the real charges did not carry it. It does
+//     not move the money (Stripe debits the platform on a destination charge
+//     either way, recorded in stripe-webhook), but the shape differs.
 
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { readChargeFeeFacts } from '../supabase/functions/_shared/chargeFeeFacts.ts';
@@ -116,6 +159,26 @@ const DRY_RUN = flag('dry-run') !== null;
 const JSON_OUT = flag('json');
 const PINNED_DESTINATION = flag('destination-account');
 const PINNED_DIRECT = flag('direct-account');
+
+// A FLAG GIVEN WITHOUT ITS VALUE IS A TYPO, NOT A DEFAULT, and it is checked
+// here for every value-taking flag rather than separately per flag.
+//
+// `--json` with a space instead of an equals sign used to parse as the empty
+// string, which is falsy, so both the write-permission pre-check and the write
+// itself were skipped in silence: seventeen real charges, "REPLAY PASSED", and
+// no artifact, with nothing said. The account flags had the same shape and were
+// fixed in their own function, which is how this one survived - so the rule now
+// lives in ONE place for all three.
+for (const [name, value] of [
+  ['json', JSON_OUT],
+  ['destination-account', PINNED_DESTINATION],
+  ['direct-account', PINNED_DIRECT],
+] as const) {
+  if (value === '') {
+    console.error(`--${name} needs a value, e.g. --${name}=<value>. Refusing rather than ignoring it.`);
+    Deno.exit(2);
+  }
+}
 
 // ── the plan, printable without a key ──────────────────────────────────────
 // Above the key resolution on purpose: --dry-run must work on a machine that
@@ -225,7 +288,32 @@ interface Accounts {
 }
 
 async function resolveAccounts(): Promise<Accounts> {
+  // BOTH PINS OR NEITHER. Honouring one pin and discovering the other used to
+  // be allowed, and it could resolve both roles to the SAME account: pin only
+  // the destination, and if that id happens to sort into the slot discovery
+  // would pick for direct, every direct row is created on the destination
+  // account and the run still reports PASS.
+  //
+  // What that costs is realism rather than coverage, and the distinction is
+  // worth keeping straight: the asymmetry the seven direct rows test turns on
+  // `onAccount` being non-null (which decides whether readChargeFeeFacts nets
+  // off Stripe's fee), not on WHICH account it is. One account for both roles
+  // would still exercise both code paths - it just would not be two businesses.
+  // Refuse anyway; a replay that quietly stops being what it says it is has
+  // already lost its value as evidence.
+  //
+  // The empty-value case is caught centrally at the top of the file.
+  if ((PINNED_DESTINATION === null) !== (PINNED_DIRECT === null)) {
+    throw new Error(
+      'pin BOTH accounts or neither. One pin plus discovery can resolve the ' +
+        'destination and direct roles to the same account, which silently stops ' +
+        'the two charge models being two accounts.',
+    );
+  }
   if (PINNED_DESTINATION && PINNED_DIRECT) {
+    if (PINNED_DESTINATION === PINNED_DIRECT) {
+      throw new Error('the destination and direct accounts must be different');
+    }
     return { destination: PINNED_DESTINATION, direct: PINNED_DIRECT };
   }
   const list = await stripe.accounts.list({ limit: 100 });
@@ -240,10 +328,13 @@ async function resolveAccounts(): Promise<Accounts> {
   // Sorted so two runs on the same test account pick the same pair, which makes
   // a rerun comparable to the run before it.
   const ids = usable.map((a: { id: string }) => a.id).sort();
-  return {
-    destination: PINNED_DESTINATION || ids[0],
-    direct: PINNED_DIRECT || ids[1],
-  };
+  // Both come from discovery here - the pinned paths all returned above - so the
+  // two are different by construction, and asserted rather than assumed.
+  const resolved = { destination: ids[0], direct: ids[1] };
+  if (resolved.destination === resolved.direct) {
+    throw new Error('discovery resolved both roles to the same account');
+  }
+  return resolved;
 }
 
 async function availableCents(account: string): Promise<number> {
@@ -273,7 +364,26 @@ async function ensureDestinationFloat(account: string): Promise<number> {
     transfer_data: { destination: account },
     metadata: { enrops_sandbox_replay: RUN_ID, enrops_replay_role: 'float_topup' },
   });
-  return await availableCents(account);
+
+  // CHECK THE TOP-UP ACTUALLY CLEARED THE FLOOR. One top-up is not enough if
+  // the account starts deeply negative from an aborted earlier run, and
+  // proceeding anyway means dying around row six with "the recipient of this
+  // transfer does not have sufficient funds" - the very error the comment above
+  // warns reads like a refund-path defect and is not one - after ten real
+  // charges have been created. Refuse here instead, while none of the seventeen
+  // has been replayed. (The float top-up charge above HAS been created by this
+  // point, and carries no idempotency key, so each retry of a run that trips
+  // this guard leaves another one behind. Test mode, tagged as float in its
+  // metadata, and never refunded - but "nothing has moved" would be false.)
+  const after = await availableCents(account);
+  if (after < DESTINATION_FLOAT_FLOOR_CENTS) {
+    throw new Error(
+      `destination account ${account} is at ${after}c after a ${DESTINATION_FLOAT_TOPUP_CENTS}c ` +
+        `top-up, still below the ${DESTINATION_FLOAT_FLOOR_CENTS}c floor. Top it up by hand ` +
+        'before replaying, rather than failing part way through the month.',
+    );
+  }
+  return after;
 }
 
 // ── one row ────────────────────────────────────────────────────────────────
@@ -286,11 +396,21 @@ interface RowResult {
   chargeAmountCents: number;
   /** application_fee_amount Stripe reports on the charge it created. */
   applicationFeeCentsOnCharge: number;
+  /**
+   * Where that fee figure came from. Carried into the result on purpose: on a
+   * direct row the margin reduces to the application fee, so a row whose fee is
+   * 'derived' is proving the code path, not the number. Printed beside the row
+   * rather than left to the header.
+   */
+  appFeeSource: SeptemberRow['appFeeSource'];
   /** Stripe's real processing fee from the balance transaction, as our code reads it. */
   stripeFeeCents: number;
   refundAmountCents: number;
   owedCents: number;
+  /** What the SANDBOX should owe: production's figure unless the row diverges. */
   owedExpectedCents: number;
+  /** What production owed on the day. Differs from the above on the Link row. */
+  productionOwedCents: number;
   returnedCents: number;
   returnedExpectedCents: number;
   outcome: FeeReturnOutcome;
@@ -343,6 +463,26 @@ async function replayRow(row: SeptemberRow, accounts: Accounts): Promise<RowResu
   // ── 2. read the REAL numbers back, through production's own reader ───────
   const facts = await readChargeFeeFacts(stripe, pi.id, onAccount);
 
+  // THE CHARGE STRIPE BUILT MUST BE THE CHARGE THE ROW ASKED FOR. These two
+  // numbers were read back off Stripe's object and then used as inputs to the
+  // arithmetic without ever being compared to what was requested, so a
+  // parameter Stripe clamped, adjusted or ignored would have been absorbed
+  // silently and the row's verdict computed against a charge nobody asked for.
+  // Every printed figure downstream describes a charge; assert it is the right
+  // one before describing it.
+  if (facts.chargeAmountCents !== row.chargeAmountCents) {
+    throw new Error(
+      `${row.who}: asked Stripe for a ${row.chargeAmountCents}c charge and got ` +
+        `${facts.chargeAmountCents}c. The row cannot be replayed against a different charge.`,
+    );
+  }
+  if (facts.applicationFeeCents !== row.applicationFeeCents) {
+    throw new Error(
+      `${row.who}: asked for a ${row.applicationFeeCents}c application fee and Stripe ` +
+        `recorded ${facts.applicationFeeCents}c.`,
+    );
+  }
+
   // ── 3. decide the margin, through production's own arithmetic ────────────
   // remainingFraction is 1 for all seventeen: every one of these refunds
   // returned the full amount-prorated margin, which is what production's
@@ -357,7 +497,7 @@ async function replayRow(row: SeptemberRow, accounts: Accounts): Promise<RowResu
   });
 
   // ── 4. the family's refund, in the shape refund-registration issues it ───
-  await stripe.refunds.create({
+  const stripeRefund = await stripe.refunds.create({
     payment_intent: pi.id,
     amount: row.refundedCents,
     refund_application_fee: false,
@@ -365,6 +505,21 @@ async function replayRow(row: SeptemberRow, accounts: Accounts): Promise<RowResu
     reason: 'requested_by_customer',
     metadata: { enrops_sandbox_replay: RUN_ID, enrops_replay_row: row.who },
   }, { idempotencyKey: `${RUN_ID}_refund_${row.day}_${row.who}`, ...(scope ?? {}) });
+
+  // THE REFUND'S STATUS IS READ, NOT ASSUMED. refunds.create resolves rather
+  // than throwing on a refund that is pending or failed, and every word this
+  // script prints is a claim about what happened AFTER the family's money moved.
+  // Scoring a fee return as 'returned' on a refund that never completed would
+  // make the artifact say the opposite of the truth. Production does not check
+  // this either, but production is backstopped by stripe-webhook, which reads
+  // refund.status; nothing backstops a script.
+  if (stripeRefund.status !== 'succeeded') {
+    throw new Error(
+      `${row.who}: Stripe returned refund ${stripeRefund.id} with status ` +
+        `"${stripeRefund.status}", so the family's money did not move and the ` +
+        'fee return below would be scored against a refund that did not happen.',
+    );
+  }
 
   // ── 5. make the three failures fail, for real ────────────────────────────
   // Production's failures were an empty platform balance, which test mode
@@ -392,8 +547,40 @@ async function replayRow(row: SeptemberRow, accounts: Accounts): Promise<RowResu
         { amount: owedCents },
         { idempotencyKey: `${RUN_ID}_appfee_${row.day}_${row.who}` },
       );
-      returnedCents = feeRefund.amount ?? owedCents;
+      // OBSERVED, NOT ASSUMED. This used to fall back to `owedCents` - the
+      // number we ASKED for - so a response without an amount would have been
+      // reported as money returned and then compared against the table, which
+      // is the request checked against itself. The whole point of a sandbox
+      // replay is that the figures come back from Stripe.
+      if (typeof feeRefund.amount !== 'number') {
+        throw new Error(
+          `${row.who}: Stripe returned a fee refund with no amount, so there is no ` +
+            'observed figure to report.',
+        );
+      }
+      returnedCents = feeRefund.amount;
     } catch (err) {
+      // A STRIPE REJECTION AND A BROKEN HARNESS ARE NOT THE SAME EVENT, and
+      // this catch used to treat them as one. On the three rows that expect
+      // 'failed', every field already matches by construction - owed is right,
+      // returned is 0, the word is 'failed' - so a rate limit, a dropped
+      // connection or an idempotency conflict at this exact call scored as
+      // "failed as expected" and the entire failure-path evidence, three of the
+      // seventeen rows, passed on a harness fault.
+      //
+      // The deliberate failure above is Stripe REJECTING a correctly sized call
+      // (invalid_request_error: the fee is already fully refunded). Anything
+      // else is the harness breaking and must stop the run rather than be
+      // scored.
+      const type = (err as { raw?: { type?: string }; type?: string });
+      const errType = type.raw?.type ?? type.type ?? '';
+      if (row.failed && errType !== 'invalid_request_error') {
+        throw new Error(
+          `${row.who}: the fee return failed with "${errType || 'unknown'}" - ` +
+            `${stripeMessage(err)}. That is the harness breaking, not Stripe rejecting ` +
+            'the call, and it must not be scored as the expected failure.',
+        );
+      }
       returnedCents = 0;
       feeAttemptFailed = true;
       feeErrorMessage = stripeMessage(err);
@@ -409,12 +596,17 @@ async function replayRow(row: SeptemberRow, accounts: Accounts): Promise<RowResu
   });
 
   const wordOk = outcome === row.expect;
-  // A caveated row is exempt from the cents check and ONLY from the cents
-  // check. Its word still has to be right, and the caveat is printed beside it
-  // so the exemption is visible rather than assumed.
-  const centsOk = row.sandboxCaveat
-    ? true
-    : owedCents === row.owedCents && returnedCents === row.returnedCents;
+  // NO ROW IS EXEMPT FROM THE AMOUNT CHECK. A caveated row used to be, and that
+  // exemption was blind to exactly the class this replay exists to catch: under
+  // the mutation that drops the balance_transaction expansion, Laura Lillison's
+  // row computed 1142 instead of 285 - an $11.42 over-refund - and still printed
+  // PASS while six other rows caught the same bug.
+  //
+  // So a row that cannot reproduce production says what it CAN reproduce, to the
+  // cent, in `sandboxOwedCents`, and is held to that. The caveat now explains a
+  // number rather than suspending one.
+  const owedExpectedCents = row.sandboxOwedCents ?? row.owedCents;
+  const centsOk = owedCents === owedExpectedCents && returnedCents === row.returnedCents;
 
   return {
     who: row.who,
@@ -423,10 +615,13 @@ async function replayRow(row: SeptemberRow, accounts: Accounts): Promise<RowResu
     paymentIntentId: pi.id,
     chargeAmountCents: facts.chargeAmountCents,
     applicationFeeCentsOnCharge: facts.applicationFeeCents,
+    appFeeSource: row.appFeeSource,
     stripeFeeCents: facts.stripeFeeCents,
     refundAmountCents: row.refundedCents,
     owedCents,
-    owedExpectedCents: row.owedCents,
+    owedExpectedCents,
+    /** Production's own figure, kept beside the sandbox's when they differ. */
+    productionOwedCents: row.owedCents,
     returnedCents,
     returnedExpectedCents: row.returnedCents,
     outcome,
@@ -475,6 +670,7 @@ for (const row of SEPTEMBER_2026) {
     `${mark}  ${result.day}  ${pad(result.who, 17)} ${pad(result.model, 12)}` +
       ` charge ${padStart(String(result.chargeAmountCents), 6)}` +
       ` fee ${padStart(String(result.applicationFeeCentsOnCharge), 5)}` +
+      `(${result.appFeeSource.slice(0, 4)})` +
       ` stripe ${padStart(String(result.stripeFeeCents), 4)}` +
       ` refund ${padStart(String(result.refundAmountCents), 6)}` +
       ` | owed ${padStart(String(result.owedCents), 4)}/${result.owedExpectedCents}` +
@@ -491,15 +687,59 @@ const correctOutcomes = results.filter((r) => r.wordOk).length;
 const centsMismatches = results.filter((r) => !r.centsOk);
 const counted = (word: FeeReturnOutcome) => results.filter((r) => r.outcome === word).length;
 
+// SEVENTEEN IS WRITTEN HERE AS A LITERAL, in the script, because the script is
+// what produces the artifact anyone quotes.
+//
+// The gate sentence is "17 correct outcomes". Everything else the verdict reads
+// - the table and the shape constant - lives in one imported file, so deleting
+// an awkward row and decrementing the matching constant used to print
+// "16 of 16 correct outcomes / REPLAY PASSED" and write `"passed": true`. The
+// outside witness added in the last round went into the TEST file, which is a
+// different command nobody is required to run alongside this one. That was the
+// same finding, half fixed.
+const EXPECTED_ROWS = 17;
+const rowCountOk = results.length === EXPECTED_ROWS &&
+  SEPTEMBER_2026_SHAPE.rows === EXPECTED_ROWS;
+
+const shapeOk = counted('returned') === SEPTEMBER_2026_SHAPE.returned &&
+  counted('nothing_owed') === SEPTEMBER_2026_SHAPE.nothing_owed &&
+  counted('failed') === SEPTEMBER_2026_SHAPE.failed;
+
+const allPassed = rowCountOk &&
+  correctOutcomes === results.length &&
+  centsMismatches.length === 0 &&
+  shapeOk;
+
+// THE HEADLINE IS THE SENTENCE THAT GETS QUOTED, so it must not read as the
+// money layer's sign-off unless the run actually earned it. "N of N correct
+// outcomes" is word-for-word the doc's definition of done, and it used to print
+// on a FAILING run: the mutation run showed "17 of 17 correct outcomes"
+// directly above "REPLAY FAILED", with $35.86 over-returned on six charges.
+// Anyone pasting that line into a status update would sign blocker 1 off on a
+// failure. On a failed run the count is still shown, because it is useful, but
+// it is not allowed to stand as the claim.
 console.log('');
-console.log(`${correctOutcomes} of ${results.length} correct outcomes`);
+if (allPassed) {
+  console.log(`${correctOutcomes} of ${results.length} correct outcomes`);
+} else {
+  console.log(
+    `NOT A PASS. ${correctOutcomes} of ${results.length} outcome WORDS are correct, ` +
+      'which is not the same as correct outcomes - see the failures below.',
+  );
+  if (!rowCountOk) {
+    console.log(
+      `  and this is not the month: ${results.length} rows replayed against a table ` +
+        `declaring ${SEPTEMBER_2026_SHAPE.rows}, where the definition of done names ${EXPECTED_ROWS}.`,
+    );
+  }
+}
 console.log(
   `words: returned ${counted('returned')}/${SEPTEMBER_2026_SHAPE.returned}, ` +
     `nothing_owed ${counted('nothing_owed')}/${SEPTEMBER_2026_SHAPE.nothing_owed}, ` +
     `failed ${counted('failed')}/${SEPTEMBER_2026_SHAPE.failed}`,
 );
 if (centsMismatches.length) {
-  console.log(`cents mismatches on ${centsMismatches.length} uncaveated row(s):`);
+  console.log(`cents mismatches on ${centsMismatches.length} row(s):`);
   for (const m of centsMismatches) {
     console.log(
       `  ${m.day} ${m.who}: owed ${m.owedCents} expected ${m.owedExpectedCents}, ` +
@@ -507,12 +747,6 @@ if (centsMismatches.length) {
     );
   }
 }
-
-const shapeOk = counted('returned') === SEPTEMBER_2026_SHAPE.returned &&
-  counted('nothing_owed') === SEPTEMBER_2026_SHAPE.nothing_owed &&
-  counted('failed') === SEPTEMBER_2026_SHAPE.failed;
-
-const allPassed = correctOutcomes === results.length && centsMismatches.length === 0 && shapeOk;
 
 if (JSON_OUT) {
   await Deno.writeTextFile(
@@ -522,7 +756,14 @@ if (JSON_OUT) {
       ranAt: new Date().toISOString(),
       accounts,
       rows: results.length,
-      correctOutcomes,
+      expectedRows: EXPECTED_ROWS,
+      rowCountOk,
+      // DELIBERATELY NOT CALLED `correctOutcomes`. The console was taught not
+      // to print "N of N correct outcomes" on a failing run, and the artifact
+      // - which is the machine-readable half, and the easier one to quote -
+      // went on emitting exactly that field beside `passed: false`. A field
+      // name is a claim too. This one says only what it counts.
+      outcomeWordsCorrect: correctOutcomes,
       centsMismatches: centsMismatches.length,
       shapeOk,
       passed: allPassed,
