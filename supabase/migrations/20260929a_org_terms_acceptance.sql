@@ -23,8 +23,17 @@
 -- acceptance - there is no "I agree" anywhere in it - so on 2026-09-29 the
 -- acceptance count for all eleven live organisations is zero, J2S included. The
 -- day a version is recorded, every one of them is on older Terms
--- simultaneously. That is the evidence behind warning everywhere and hard
--- blocking only the money surfaces, rather than locking anyone out.
+-- simultaneously. That is the evidence behind gating narrowly rather than
+-- locking anyone out.
+--
+-- WHAT THE UI ACTUALLY DOES, since an earlier version of this comment said
+-- "warning everywhere" and that is NOT what was built. There is no warning
+-- anywhere except the money page itself: no admin-shell banner, because a
+-- disclosure that follows an operator across every screen until they answer it
+-- was ruled out on 2026-07-30. Three writes are refused until the terms are
+-- accepted - who pays the enrops service fee, the statement descriptor, and the
+-- withdrawal admin fee - and the prompt to accept sits at the top of that same
+-- page. Every number on it stays readable; nothing else in the product changes.
 
 -- ── where the current version lives ────────────────────────────────────────
 -- NOT a new table and NOT a constant in code. platform_settings is already the

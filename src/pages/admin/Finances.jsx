@@ -1052,6 +1052,51 @@ export default function Finances() {
         <Banner tone="ok">{savedToast}</Banner>
       )}
 
+      {/* THE TERMS PROMPT: on the money page, and at PAGE level.
+          On the money page and not in the admin shell, because a disclosure that
+          follows an operator across every screen until they answer it reads as
+          an interruption - Jessica's call on 2026-07-30 about the starter
+          cancellation-policy notice, and the comment recording it is still at
+          that old mount point in AdminLayout.
+          At page level and not inside "Manage setup", which is where I first put
+          it and which was a dead end: that section renders only when Stripe is
+          active AND the operator has expanded it, while FeePayerRow is
+          deliberately hoisted OUT of it and shown always for registration
+          operators. So a lean operator clicked the visible toggle, got "accept
+          the terms first" beside it, and had no accept button anywhere on
+          screen - blocked with no way to unblock, which is the whole failure
+          this panel exists to prevent.
+          Renders nothing at all until a terms version is published. */}
+      {tosStatus.needsAcceptance && (
+        <div style={{ background: "#FFF7E0", border: "1px solid #f0e2a8", borderRadius: 8, padding: 14, margin: "0 0 16px" }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: "#8a6d00", marginBottom: 4 }}>
+            Accept the updated enrops terms to change money settings
+          </div>
+          <p style={{ fontSize: 13, color: INK, lineHeight: 1.5, margin: "0 0 10px" }}>
+            Everything else on this page still works, and nothing about your
+            programs or families changes. This applies to who pays the enrops
+            service fee, your statement descriptor and your withdrawal admin fee.
+          </p>
+          {canAcceptTerms ? (
+            <button
+              onClick={acceptTerms}
+              disabled={tosAccepting}
+              style={{ ...btn(BRIGHT, "#fff"), opacity: tosAccepting ? 0.6 : 1 }}
+            >
+              {tosAccepting ? "Saving…" : "Accept the updated terms"}
+            </button>
+          ) : (
+            <div style={{ fontSize: 13, color: MUTED }}>
+              An owner of this business needs to accept them. Ask whoever set up
+              your enrops account.
+            </div>
+          )}
+          {tosError && (
+            <div style={{ fontSize: 13, color: "#9b1c1c", marginTop: 8 }}>{tosError}</div>
+          )}
+        </div>
+      )}
+
       {/* When ACTIVE: slim collapsible setup banner + tabs.
           When NOT active: big setup card (operator has to finish setup before
           tabs/activity make sense). */}
@@ -1160,44 +1205,6 @@ export default function Finances() {
                 Two separate fees come out of each parent payment — the enrops service
                 fee and Stripe's processing fee. They're never bundled into one number.
               </p>
-
-              {/* THE TERMS PROMPT LIVES HERE, not in the admin shell. A
-                  disclosure that follows an operator across every page until
-                  they answer it reads as an interruption - Jessica's call on
-                  2026-07-30, for the starter cancellation-policy notice, and the
-                  comment recording it is still at that old mount point in
-                  AdminLayout. So it sits with the settings it actually governs,
-                  where someone is already looking at what families pay.
-                  Renders nothing at all until a terms version is published. */}
-              {tosStatus.needsAcceptance && (
-                <div style={{ background: "#FFF7E0", border: "1px solid #f0e2a8", borderRadius: 8, padding: 14, margin: "4px 0 14px" }}>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: "#8a6d00", marginBottom: 4 }}>
-                    Accept the updated enrops terms to change money settings
-                  </div>
-                  <p style={{ fontSize: 13, color: INK, lineHeight: 1.5, margin: "0 0 10px" }}>
-                    Everything on this page still works, and nothing about your
-                    programs or families changes. The settings below are the ones
-                    that need the current terms.
-                  </p>
-                  {canAcceptTerms ? (
-                    <button
-                      onClick={acceptTerms}
-                      disabled={tosAccepting}
-                      style={{ ...btn(BRIGHT, "#fff"), opacity: tosAccepting ? 0.6 : 1 }}
-                    >
-                      {tosAccepting ? "Saving…" : "Accept the updated terms"}
-                    </button>
-                  ) : (
-                    <div style={{ fontSize: 13, color: MUTED }}>
-                      An owner of this business needs to accept them. Ask whoever
-                      set up your enrops account.
-                    </div>
-                  )}
-                  {tosError && (
-                    <div style={{ fontSize: 13, color: "#9b1c1c", marginTop: 8 }}>{tosError}</div>
-                  )}
-                </div>
-              )}
 
               <div style={{ fontSize: 12, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, margin: "4px 0 8px" }}>
                 enrops service fee

@@ -25,7 +25,15 @@
 //
 // So this gates the three writes that actually need the terms - the ones on the
 // money page that change what families pay and what the business is called on a
-// statement - and says so where the operator is already looking at them.
+// statement - and the prompt sits at the top of that same page.
+//
+// PAGE LEVEL, not beside the settings, and that is a correction. The prompt was
+// first put inside the "Manage setup" section next to the fee toggle, which
+// renders only when Stripe is active AND the operator has expanded it - while
+// FeePayerRow is deliberately hoisted OUT of that section and shown always for
+// registration operators. The result was an operator clicking the visible toggle,
+// being told to accept the terms, and having no accept button on screen.
+//
 // Nothing else changes, and nothing is hidden: an operator can still SEE every
 // number on that page. Blocking the view would punish someone for paperwork by
 // taking away sight of their own payouts, which is not what the exposure is.
