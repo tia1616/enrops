@@ -20,21 +20,32 @@
 // sent and awaiting a reply, are states to watch, not things to do. Only the
 // caller decides which steps carry hasWork; this file just honours it.
 //
-// ORDER IS STILL THE BOARD'S ORDER when more than one step has work: Draft comes
-// before Offers on purpose. Sending an offer for one class while thirty are
-// unstaffed books that instructor and then makes every later addition a
-// patch-send - the board carries a whole safety net for that mess. Lock the
-// draft in, then send.
+// ORDER IS THE BOARD'S ORDER, except that a higher workRank jumps the queue.
+// The one thing that uses it today is offers READY TO SEND, and that is
+// Jessica's call, 2026-09-30. I argued the other way first - sending an offer
+// for one class while thirty are unstaffed books that instructor and makes
+// every later addition a patch-send - and she overruled it by pointing at the
+// term where she has actually done this work: "just do what we did for fall -
+// it worked." A send that is ready to go is a finished decision waiting on one
+// click; an unstaffed class is work that has not been done yet. Her board.
+//
+// Ties keep board order, so Draft still comes before Offers whenever Offers has
+// work but nothing actually queued to send.
 
 /**
- * @param {Array<{key: string, state?: string, hasWork?: boolean}>} steps
+ * @param {Array<{key: string, state?: string, hasWork?: boolean, workRank?: number}>} steps
  * @returns {string|undefined} the key of the step to focus
  */
 export function pickFocusedStep(steps) {
   const list = Array.isArray(steps) ? steps : [];
-  return (
-    list.find((s) => s?.state === "active" && s?.hasWork)?.key
-    ?? list.find((s) => s?.state === "active")?.key
-    ?? list[0]?.key
-  );
+  const working = list.filter((s) => s?.state === "active" && s?.hasWork);
+  if (working.length > 0) {
+    // Strictly greater, so a tie keeps the FIRST one in board order.
+    let best = working[0];
+    for (const s of working) {
+      if ((s.workRank ?? 0) > (best.workRank ?? 0)) best = s;
+    }
+    return best.key;
+  }
+  return list.find((s) => s?.state === "active")?.key ?? list[0]?.key;
 }

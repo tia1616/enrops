@@ -2418,8 +2418,13 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     // step that has not finished. It is what lets the cockpit open on Offers for
     // a camp term that will never have an availability survey. Waiting on other
     // people (responses out, offers awaiting a reply) is NOT work waiting.
-    { key: "draft", name: "Draft", meta: counts.needsHire > 0 ? `${counts.needsHire} need an instructor` : counts.proposed > 0 ? (offersOut ? `${counts.proposed} to send` : `${counts.proposed} to lock in`) : hasDraft ? "Drafted" : "Not started", state: (!hasDraft && counts.needsHire === 0) ? "todo" : (counts.needsHire > 0 || counts.proposed > 0) ? "active" : "done", hasWork: counts.needsHire > 0 || counts.proposed > 0 },
-    { key: "offers", name: "Offers", meta: counts.sendable > 0 ? `${counts.sendable} ready to send` : offersOut ? (awaitingReply > 0 ? `${awaitingReply} awaiting reply` : "all responded") : "Not sent", state: (!offersOut && counts.sendable === 0) ? "todo" : (counts.sendable > 0 || awaitingReply > 0 || counts.changeRequested > 0) ? "active" : "done", hasWork: counts.sendable > 0 || counts.changeRequested > 0 },
+    { key: "draft", name: "Draft", meta: counts.needsHire > 0 ? `${counts.needsHire} need an instructor` : counts.proposed > 0 ? (offersOut ? `${counts.proposed} to send` : `${counts.proposed} to lock in`) : hasDraft ? "Drafted" : "Not started", state: (!hasDraft && counts.needsHire === 0) ? "todo" : (counts.needsHire > 0 || counts.proposed > 0) ? "active" : "done", hasWork: counts.needsHire > 0 || counts.proposed > 0, workRank: 1 },
+    // workRank 2 = OFFERS READY TO SEND OUTRANKS EVERYTHING. Jessica's call,
+    // 2026-09-30: "just do what we did for fall - it worked." Fall is the term
+    // she has actually sent offers on, and a term with something queued should
+    // put her in front of the button rather than behind a staffing list. A
+    // change request alone stays rank 1, so it does not jump the draft.
+    { key: "offers", name: "Offers", meta: counts.sendable > 0 ? `${counts.sendable} ready to send` : offersOut ? (awaitingReply > 0 ? `${awaitingReply} awaiting reply` : "all responded") : "Not sent", state: (!offersOut && counts.sendable === 0) ? "todo" : (counts.sendable > 0 || awaitingReply > 0 || counts.changeRequested > 0) ? "active" : "done", hasWork: counts.sendable > 0 || counts.changeRequested > 0, workRank: counts.sendable > 0 ? 2 : 1 },
     { key: "confirmed", name: "Confirmed", meta: counts.accepted > 0 ? `${counts.accepted} accepted` : "—", state: (offersOut && awaitingReply === 0 && counts.sendable === 0 && counts.proposed === 0 && counts.needsHire === 0 && counts.accepted > 0) ? "done" : offersOut ? "active" : "todo" },
   ];
   return (
@@ -2963,14 +2968,12 @@ function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCa
   // on and opened on "send an availability survey" instead - so the Send offers
   // button was not merely hard to find, it was never rendered.
   //
-  // Only steps that flag hasWork can jump the queue, and Draft still comes
-  // before Offers when both do: lock the draft in, then send. THAT ORDER IS THE
-  // OPEN QUESTION, not a settled one: a term holding both unstaffed classes and
-  // a camp ready to offer still opens on Draft, which is not the panel Jessica
-  // was looking for when she reported this. It is here as a deliberate call
-  // (sending one offer while thirty classes are unstaffed turns every later
-  // addition into a patch-send), and it is one line to flip if she'd rather the
-  // board open on a send that is ready to go.
+  // Only steps that flag hasWork can jump the queue. Among those, OFFERS READY
+  // TO SEND wins (workRank 2) - settled by Jessica on 2026-09-30 after I built
+  // it the other way round and a term with 31 unstaffed classes and one camp
+  // offer queued still hid the Send offers button from her. Everything else
+  // ties at rank 1 and keeps board order, so Draft still comes first when
+  // nothing is actually queued to send.
   //
   // The staleness guard on the next line is dead and has always been: the five
   // step keys are identical on every term, so `steps.some` always matches. It is
