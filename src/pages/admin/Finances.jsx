@@ -1003,10 +1003,16 @@ export default function Finances() {
           old account while the new one stayed unverified and the move stalled
           silently. Only Enrops can issue a move link, so these say so rather
           than offering an action that would do the wrong thing. */}
+      {/* Deliberately does NOT say "you're set up". Stripe sends the operator
+          here whether they FINISHED the form or closed it halfway - return_url
+          does not distinguish - and unlike the ordinary return above, nothing
+          else on this page reflects the new account's real state, so this
+          sentence would be their only signal and it would sometimes be false.
+          Telling them we will check is true either way. */}
       {stripeParam === "move-return" && (
         <Banner tone="ok">
-          Thanks — that's your new Stripe account set up. Nothing about your payments has changed
-          yet, and we'll be in touch before anything does.
+          Thanks — we've got that. Nothing about your payments has changed, and they're still going
+          where they always have. We'll check everything over and be in touch before anything moves.
         </Banner>
       )}
       {stripeParam === "move-refresh" && (

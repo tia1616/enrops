@@ -39,6 +39,21 @@ const AMBER = "#8a6100";
 const FN_BASE = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
 
 /**
+ * Sentences for the refusals that carry no message of their own - the failures
+ * rather than the decisions. Module scope, not inside the component: a const
+ * read during render before its own declaration crashes every render, and a map
+ * that never changes has no business being rebuilt on each one.
+ */
+const CODE_SENTENCES = {
+  forbidden: "You don't have platform-admin access, so nothing was changed.",
+  lookup_failed: "We couldn't read the current state, so nothing was changed. Try again.",
+  promote_failed: "The switch was refused by the database, so nothing was changed.",
+  internal_error: "Something went wrong at our end, so nothing was changed.",
+  org_not_found: "We couldn't find that business.",
+  stripe_account_unreadable: "We couldn't reach Stripe, so nothing was changed.",
+};
+
+/**
  * What state is this business's move in? Derived from the row, never from a
  * status column somebody has to remember to set - the same rule the operator
  * overview states for its own stages.
@@ -116,10 +131,20 @@ export default function StripeMoves() {
   }
 
   // `message` FIRST on every path. Both functions write a sentence a person can
-  // act on for every refusal they expect; falling straight to `error` would put
+  // act on for every refusal they EXPECT; falling straight to `error` would put
   // a bare code like "instalments_would_be_stranded" on a money screen.
+  //
+  // But several reachable refusals carry no message at all - forbidden,
+  // lookup_failed, promote_failed, internal_error, org_not_found - because they
+  // are failures rather than decisions. Those got the raw code until this
+  // review. Each now gets a sentence, and the code is kept alongside it so it
+  // is still greppable in a bug report; what is never shown is a bare code on
+  // its own.
   function say(json, fallback) {
-    return json?.message || json?.error || fallback;
+    if (json?.message) return json.message;
+    const code = json?.error;
+    if (!code) return fallback;
+    return CODE_SENTENCES[code] ? `${CODE_SENTENCES[code]} (${code})` : `${fallback} (${code})`;
   }
 
   async function startOrRefresh(org) {
