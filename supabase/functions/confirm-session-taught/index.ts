@@ -13,9 +13,12 @@
 //              session_type = camp_sessions.session_type (full_day/morning/afternoon).
 //              valid dates = camp_sessions.starts_on..ends_on.
 //   - program: body { program_assignment_id } -> program_assignments -> programs.
-//              session_type = 'after_school' (programs carry no session_type, same as
-//              confirm-sub-delivery). valid dates = the program's derived session
-//              schedule (derive_program_session_schedule), closures excluded.
+//              session_type = programSessionType(program): 'after_school' for a
+//              weekly class, programs.session_type for a CAMP (a camp is a
+//              program row with class_days set since 2026-09-25, and its days do
+//              NOT pay the after-school rate). valid dates = the program's
+//              derived session schedule (derive_program_session_schedule),
+//              closures excluded.
 //
 // The daily cron (session-confirmation-cron) pre-seeds a placeholder row
 // (confirmed_by='pending') for each CAMP day so unconfirmed days surface on the
@@ -50,6 +53,7 @@ import {
 } from '../_shared/instructor.ts';
 import { resolvePayAmount } from '../_shared/payRates.ts';
 import { fetchProgramRunState, mayBecomePay } from '../_shared/programRunning.ts';
+import { programSessionType } from '../_shared/programPay.ts';
 
 interface RequestBody {
   camp_assignment_id?: string;
@@ -198,9 +202,36 @@ serve(async (req: Request) => {
       role = assignment.role;
       refCol = 'program_id';
       refVal = assignment.program_id;
-      // Programs don't carry a session_type; after-school is always after_school
-      // (mirrors confirm-sub-delivery). resolvePayAmount + the CHECK both accept it.
-      sessionType = 'after_school';
+
+      // WHICH KIND OF DAY IS THIS, AND THEREFORE WHAT DOES IT PAY.
+      //
+      // This used to be the literal 'after_school', with the comment "programs
+      // carry no session_type". True until 2026-09-25, when a camp became a
+      // program row with class_days set. A four-day full-day camp then paid a
+      // J2S lead $240 instead of $640, silently. programSessionType() is the one
+      // rule, shared with confirm-sub-delivery and session-confirmation-cron.
+      //
+      // Its own query rather than a widened select inside programRunning.ts:
+      // that module's select is read by four money-writing functions at once, and
+      // a widened .select() is a deploy-order contract PostgREST fails whole.
+      const { data: program, error: progErr } = await supabase
+        .from('programs')
+        .select('class_days, session_type')
+        .eq('id', assignment.program_id)
+        .maybeSingle();
+      if (progErr) {
+        console.error('program session_type lookup failed:', progErr);
+        return json({ error: 'lookup_failed' }, 500);
+      }
+      const programType = programSessionType(program);
+      if (!programType) {
+        // Only reachable for a CAMP with no session_type. Refusing is the
+        // fail-safe direction: session_delivery_confirmations.session_type is
+        // NOT NULL, so the alternative is typing 'after_school' onto the row -
+        // a wrong number that pays, and one every later reader inherits.
+        return json({ error: 'camp_missing_session_type' }, 409);
+      }
+      sessionType = programType;
     }
 
     // session_date must be today or earlier (no marking future sessions taught).
@@ -288,6 +319,12 @@ serve(async (req: Request) => {
           confirmed_at: nowIso,
           pay_status: 'approved',
           pay_amount_cents: payAmountCents,
+          // Restamped, not inherited. pay_amount_cents above is resolved from
+          // THIS request's sessionType, so leaving the placeholder's own value
+          // in place would let the row say "after_school" while carrying a
+          // full-day camp's money - and that column is what every later reader
+          // and the Payroll screen believe. They must agree.
+          session_type: sessionType,
           updated_at: nowIso,
         })
         .eq('id', rowId)

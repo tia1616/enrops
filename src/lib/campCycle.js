@@ -30,6 +30,29 @@ export const CAMP_WEEKDAYS = [
 ];
 
 /**
+ * WHAT KIND OF DAY a camp runs - and therefore which tenant_pay_rates cell each
+ * of its days pays at.
+ *
+ * Shared by BOTH camp builders for the same reason CAMP_WEEKDAYS is: the SU26
+ * board's editor writes camp_sessions.session_type and the program builder
+ * writes programs.session_type, the two columns are CHECKed against the same
+ * words, and resolvePayAmount() looks up the rate with whichever one it is
+ * handed. A second spelling of this list is a future divergence in money.
+ *
+ * Listing the values rather than deriving them is deliberate: the CHECK
+ * constraint is the contract, and a value a form can produce that the
+ * constraint rejects is a save that fails at the database with a wall of SQL.
+ *
+ * 'after_school' is the fourth cell on the rate card and is deliberately NOT
+ * here: it is what a weekly class pays, and a camp is never offered it.
+ */
+export const CAMP_SESSION_TYPES = [
+  { value: "morning", label: "Morning" },
+  { value: "afternoon", label: "Afternoon" },
+  { value: "full_day", label: "Full day" },
+];
+
+/**
  * Turn a day on or off, keeping the canonical Mon-Fri order.
  *
  * Written out separately in two forms before this, and the two copies had already

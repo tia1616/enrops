@@ -4000,6 +4000,11 @@ function humanizeConfirmError(code) {
   // through to "Try again" — the only way to reach it is a tab that was open
   // before the class was cancelled, and that instructor would retry forever.
   if (code === "program_not_running") return "This class has been cancelled, so there's no check-in for it. Nothing more for you to do here.";
+  // Same reason as the line above: retrying cannot work. The camp has not been
+  // set up as a morning, an afternoon or a full day, which is what its days pay
+  // at, and only an admin can answer that. "Try again" would have this
+  // instructor tapping a button that will refuse forever.
+  if (code === "camp_missing_session_type") return "This camp hasn't been set up as a morning, afternoon or full day yet, so we can't record the day. Ask your admin to set that.";
   return "Couldn't save your check-in. Try again.";
 }
 

@@ -19,7 +19,7 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../../lib/supabase.js";
 import { isUnset, GRADE_OPTIONS, rangeBackwards, rangeBackwardsMessage } from "../../../lib/grades.js";
 import ModalShell from "../../../components/ModalShell.jsx";
-import { CAMP_WEEKDAYS, toggleCampDay } from "../../../lib/campCycle.js";
+import { CAMP_SESSION_TYPES, CAMP_WEEKDAYS, toggleCampDay } from "../../../lib/campCycle.js";
 import AddSchoolModal from "../schools/AddSchoolModal.jsx";
 import FamiliesPayNote, { useOrgFeeConfig } from "../../../components/FamiliesPayNote.jsx";
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
@@ -36,15 +36,11 @@ const DANGER = "#B3261E";
 // the program wizard uses, so "not stated" means one thing across both builders.
 const intOrNull = (v) => (isUnset(v) ? null : Number(v));
 
-// The three session types camp_sessions_session_type_check allows. Listing them
-// here rather than deriving them is deliberate: the CHECK constraint is the
-// contract, and a value this form can produce that the constraint rejects is a
-// save that fails at the database with a wall of SQL.
-const SESSION_TYPES = [
-  { value: "morning", label: "Morning" },
-  { value: "afternoon", label: "Afternoon" },
-  { value: "full_day", label: "Full day" },
-];
+// The three session types camp_sessions_session_type_check allows. Now shared
+// with the program builder's camp mode (which writes the same words to
+// programs.session_type) via lib/campCycle.js, so the two camp forms cannot
+// drift on the vocabulary the pay card is keyed on.
+const SESSION_TYPES = CAMP_SESSION_TYPES;
 
 // camp_sessions.class_days stores lowercase day names, matching all 51 existing
 // rows. Checked every reader before picking the spelling: the pay cron, the

@@ -45,7 +45,7 @@ import { GRADE_OPTIONS, audiencePatch, rangeBackwards, rangeBackwardsMessage } f
 // Only the weekday list and its toggle are still shared. ensureCampCycle and
 // deriveSessionType went with the camp_sessions write: a camp is a program now,
 // so it has a term instead of a cycle and needs no week number or session type.
-import { CAMP_WEEKDAYS, toggleCampDay } from "../../../lib/campCycle.js";
+import { CAMP_SESSION_TYPES, CAMP_WEEKDAYS, toggleCampDay } from "../../../lib/campCycle.js";
 import {
   publishBlockedByStripe,
   PUBLISH_GATE_CTA_SAVE,
@@ -247,6 +247,12 @@ export default function QuickProgramBuilder() {
   // a holiday week is the operator turning one off.
   const [campDays, setCampDays] = useState(() => CAMP_WEEKDAYS.map((d) => d.value));
   const [campEndDate, setCampEndDate] = useState("");
+  // Which kind of day the camp runs, and therefore which tenant_pay_rates cell
+  // each of its days pays at. NO DEFAULT on purpose: pre-selecting "Full day"
+  // would let an operator save a morning camp at the full-day rate without ever
+  // seeing the question. The same three words the camp availability survey and
+  // the SU26 camp editor already use (CAMP_SESSION_TYPES).
+  const [campSessionType, setCampSessionType] = useState("");
   // A CAMP'S SEASON COMES FROM ITS DATES. Nothing to ask.
   //
   // This was a dropdown for about an hour. Jessica: "why does it still ask which
@@ -649,7 +655,12 @@ export default function QuickProgramBuilder() {
     // kept now that a camp writes to programs: a weekly class at a school has an
     // implied window (right after the bell), while a camp is a whole day a family
     // arranges childcare around. "9-3 or 9-12?" is the first thing they ask.
-    (isCamp ? (!!startDate && campDays.length > 0 && !!startTime && !!endTime)
+    // campSessionType is required for the same reason the times are, and it is
+    // the one field here that is MONEY: it is the tenant_pay_rates cell every
+    // day of this camp pays at. Deriving it from start/end times was considered
+    // and rejected - a guess that is wrong is worse than a question, because it
+    // is wrong silently and on a payroll line that looks plausible.
+    (isCamp ? (!!startDate && campDays.length > 0 && !!startTime && !!endTime && !!campSessionType)
       : isOneOff ? !!startDate : !!day) && !!locationId;
 
   // Create PUBLISHES, so it carries the Stripe gate; Save as draft does not and
@@ -976,6 +987,13 @@ export default function QuickProgramBuilder() {
       if (isCamp) {
         if (!startDate) throw new Error("A camp needs a first day.");
         if (!campDays.length) throw new Error("Pick at least one day the camp runs.");
+        // Checked HERE as well as in `valid` above because this is the only
+        // money field on the form. Without it every day of the camp would be
+        // priced as after-school - a J2S lead paid $60 for a $160 full day,
+        // with nothing to see on the Payroll screen.
+        if (!CAMP_SESSION_TYPES.some((t) => t.value === campSessionType)) {
+          throw new Error("Say whether this camp is a morning, an afternoon or a full day.");
+        }
         const campEnd = campEndDate || startDate;
         if (campEnd < startDate) throw new Error("The last day has to be on or after the first day.");
 
@@ -1026,6 +1044,11 @@ export default function QuickProgramBuilder() {
         // matches it with `=`). A camp's is its FIRST day, the way a one-off
         // workshop derives its day from its date.
         payload.day_of_week = WEEKDAY_NAMES[new Date(`${campFirst}T00:00:00`).getDay()];
+        // WHAT EACH DAY OF THIS CAMP PAYS. Written only on the camp arm, so a
+        // weekly class keeps session_type NULL and keeps paying after_school
+        // exactly as it did - the confirmation writers answer 'after_school'
+        // for a non-camp without reading this column at all.
+        payload.session_type = campSessionType;
       }
 
       const { data, error } = await supabase
@@ -2315,6 +2338,34 @@ export default function QuickProgramBuilder() {
               })}
             </div>
             <div style={helpStyle}>Turn off any day it does not run, like a holiday in the middle of the week.</div>
+          </div>
+        )}
+
+        {/* NOT ASKED FOR A WEEKLY CLASS, which always pays the after-school rate.
+            A camp does not, and until this question existed every camp day was
+            recorded as after-school: a four-day full-day camp paid a lead $240
+            where the rate card says $640. Deliberately a question and not a
+            guess from the start and end times - a wrong guess is silent, and it
+            is silent in money. Same three words as the camp availability survey
+            and the summer camp editor. */}
+        {isCamp && (
+          <div>
+            <label style={labelStyle} htmlFor="qpb-camp-session-type">Is it a morning, an afternoon or a full day?</label>
+            <select
+              id="qpb-camp-session-type"
+              style={inputStyle}
+              value={campSessionType}
+              onChange={(e) => setCampSessionType(e.target.value)}
+            >
+              <option value="">Choose one…</option>
+              {CAMP_SESSION_TYPES.map((t) => (
+                <option key={t.value} value={t.value}>{t.label}</option>
+              ))}
+            </select>
+            <div style={helpStyle}>
+              This is what each day of the camp pays your instructors, from your
+              pay rates. A full day and a morning are different rates.
+            </div>
           </div>
         )}
 
