@@ -121,6 +121,17 @@ verify_jwt = true
 # fails visibly, the job just 401s forever. Documenting a risk is not closing it.
 verify_jwt = false
 
+[functions.stripe-complete-move]
+# MUST stay true. This promotes an org's parked Stripe account to the one its
+# money goes to, and it decides WHO may do that by reading platform_admins for
+# the caller's auth id - which only exists if a JWT was verified. With
+# verify_jwt = false the anon key alone would satisfy the edge gateway, there
+# would be no caller to look up, and the platform-admin check would be deciding
+# on nothing. Pinned explicitly rather than left to the default, because the CLI
+# omits the field for an unlisted function and the API then keeps whatever the
+# last deploy happened to set.
+verify_jwt = true
+
 [functions.stripe-webhook]
 verify_jwt = false
 

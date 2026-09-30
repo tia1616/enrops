@@ -67,6 +67,13 @@ export const ACTION = {
   // triggers below, connected -> stripe_charges_enabled, paid -> enrollment_events.)
   SIGNUP_STARTED: 'signup_started',
   STRIPE_CONNECT_STARTED: 'stripe_connect_started',
+  // A platform admin moved an org onto a DIFFERENT Stripe account
+  // (stripe-complete-move). Its own action rather than a flavour of
+  // stripe_connect_started, because that one measures how many COLD operators
+  // reach Stripe and how many finish - and a platform-run account move is
+  // neither. Logging completions under 'started' would inflate the numerator of
+  // a funnel it does not belong to.
+  STRIPE_MOVE_COMPLETED: 'stripe_move_completed',
   // NOTE: programs (program_created/published) + payroll_approved are captured by
   // DB triggers, not here — they are pure client-side table writes.
 } as const;
