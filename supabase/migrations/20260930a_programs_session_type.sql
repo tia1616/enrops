@@ -56,4 +56,4 @@ begin
 end $$;
 
 comment on column public.programs.session_type is
-  'Which kind of day a CAMP runs (morning | afternoon | full_day), and therefore which tenant_pay_rates cell its days pay at. NULL on a weekly class, which always pays at after_school. Never defaulted: a camp with no session_type is refused a pay amount rather than priced as after-school.';
+  'How long a CAMP day is, and therefore which tenant_pay_rates cell its days pay at. The builder offers HALF DAY (stored as morning) or FULL DAY: Pay rates has one Half day box per role that writes the morning and afternoon cells together, so which half of the day it is changes no amount and is not asked. A morning here is therefore not a claim about the time of day - do not "correct" it to afternoon from a start time. NULL on a weekly class, which always pays at after_school. Never defaulted: a camp with no session_type is refused a pay amount rather than priced as after-school.';

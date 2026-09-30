@@ -21,6 +21,7 @@ import TabStrip from "../../components/TabStrip.jsx";
 import { useAdminNarrow, cardRow, cardCell } from "../../lib/adminViewport.js";
 import { resolveBoardSendIntro } from "../../lib/boardSendCopy.js";
 import { classifyOther } from "../../lib/scheduleConflicts.js";
+import { pickFocusedStep } from "../../lib/scheduleSteps.js";
 import { programScheduleSummary, formatDayLabel, isCampProgram, programWeekdays } from "../../lib/programSchedule.js";
 import { parseBonusDollars } from "../../lib/bonusAmount.js";
 import { aggregateSubOffers, subSlotLabel, slotNeedsCover, subDisplayName, SUB_ACTIVE_STATUSES } from "../../lib/subCoverage.js";
@@ -2413,8 +2414,12 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   const cockpitSteps = [
     { key: "survey", name: "Availability", meta: survey?.opened_at ? "Survey sent" : "Not sent yet", state: survey?.opened_at ? "done" : "active" },
     { key: "responses", name: "Responses", meta: survey?.opened_at ? `${submittedCount} of ${counts.instructors} in` : "waiting on the survey", state: !survey?.opened_at ? "todo" : (counts.instructors > 0 && submittedCount >= counts.instructors ? "done" : "active") },
-    { key: "draft", name: "Draft", meta: counts.needsHire > 0 ? `${counts.needsHire} need an instructor` : counts.proposed > 0 ? (offersOut ? `${counts.proposed} to send` : `${counts.proposed} to lock in`) : hasDraft ? "Drafted" : "Not started", state: (!hasDraft && counts.needsHire === 0) ? "todo" : (counts.needsHire > 0 || counts.proposed > 0) ? "active" : "done" },
-    { key: "offers", name: "Offers", meta: counts.sendable > 0 ? `${counts.sendable} ready to send` : offersOut ? (awaitingReply > 0 ? `${awaitingReply} awaiting reply` : "all responded") : "Not sent", state: (!offersOut && counts.sendable === 0) ? "todo" : (counts.sendable > 0 || awaitingReply > 0 || counts.changeRequested > 0) ? "active" : "done" },
+    // hasWork = there is something for the operator to DO here, not merely a
+    // step that has not finished. It is what lets the cockpit open on Offers for
+    // a camp term that will never have an availability survey. Waiting on other
+    // people (responses out, offers awaiting a reply) is NOT work waiting.
+    { key: "draft", name: "Draft", meta: counts.needsHire > 0 ? `${counts.needsHire} need an instructor` : counts.proposed > 0 ? (offersOut ? `${counts.proposed} to send` : `${counts.proposed} to lock in`) : hasDraft ? "Drafted" : "Not started", state: (!hasDraft && counts.needsHire === 0) ? "todo" : (counts.needsHire > 0 || counts.proposed > 0) ? "active" : "done", hasWork: counts.needsHire > 0 || counts.proposed > 0 },
+    { key: "offers", name: "Offers", meta: counts.sendable > 0 ? `${counts.sendable} ready to send` : offersOut ? (awaitingReply > 0 ? `${awaitingReply} awaiting reply` : "all responded") : "Not sent", state: (!offersOut && counts.sendable === 0) ? "todo" : (counts.sendable > 0 || awaitingReply > 0 || counts.changeRequested > 0) ? "active" : "done", hasWork: counts.sendable > 0 || counts.changeRequested > 0 },
     { key: "confirmed", name: "Confirmed", meta: counts.accepted > 0 ? `${counts.accepted} accepted` : "—", state: (offersOut && awaitingReply === 0 && counts.sendable === 0 && counts.proposed === 0 && counts.needsHire === 0 && counts.accepted > 0) ? "done" : offersOut ? "active" : "todo" },
   ];
   return (
@@ -2458,6 +2463,14 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       )}
 
       <Header
+        // THE TERM IS THE IDENTITY OF THIS HEADER. Without it the cockpit keeps
+        // the step it focused on the term it first loaded - Fall - and shows
+        // that same panel for every term after it, with the new term's numbers
+        // in it. Jessica, 2026-09-30: "the offers are stuck to fall and i don't
+        // see that pop up in winter". Remounting is the whole fix: the only
+        // state in Header is which step is selected, and that answer is per
+        // term by definition.
+        key={term}
         term={term}
         campCycles={campCycles}
         afterschoolTerms={afterschoolTerms}
@@ -2935,10 +2948,25 @@ function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCa
     else onSwitchToCamp && onSwitchToCamp(v);
   }
 
-  // Focus the current step by default; clicks let the operator revisit any step
-  // (re-enterable). Fall back to the current step if the selection went stale
-  // (e.g. after a term switch).
-  const firstActive = steps.find((s) => s.state === "active")?.key ?? steps[0]?.key;
+  // Focus the step with work waiting; clicks let the operator revisit any step
+  // (re-enterable).
+  //
+  // WORK WAITING BEATS SEQUENCE, and that is the whole point. The first ACTIVE
+  // step is not always the one to do: Availability is active whenever no survey
+  // has been opened, and a CAMP TERM may legitimately never have one, because
+  // camps are staffed by hand. Winter 2027 had one class ready to send offers
+  // on and opened on "send an availability survey" instead - so the Send offers
+  // button was not merely hard to find, it was never rendered.
+  //
+  // Only steps that flag hasWork can jump the queue, and Draft still comes
+  // before Offers when both do: lock the draft in, then send.
+  //
+  // The other half of "the offers are stuck to fall" (Jessica, 2026-09-30) is
+  // the `key={term}` where this component is rendered. Nothing here remounts on
+  // a term switch, so this useState held the FALL answer for every term after
+  // it, and the old staleness guard could not catch it - the five step keys are
+  // identical on every term, so it always matched.
+  const firstActive = pickFocusedStep(steps);
   const [selected, setSelected] = useState(firstActive);
   const selKey = steps.some((s) => s.key === selected) ? selected : firstActive;
 

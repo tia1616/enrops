@@ -45,7 +45,7 @@ import { GRADE_OPTIONS, audiencePatch, rangeBackwards, rangeBackwardsMessage } f
 // Only the weekday list and its toggle are still shared. ensureCampCycle and
 // deriveSessionType went with the camp_sessions write: a camp is a program now,
 // so it has a term instead of a cycle and needs no week number or session type.
-import { CAMP_SESSION_TYPES, CAMP_WEEKDAYS, toggleCampDay } from "../../../lib/campCycle.js";
+import { CAMP_DAY_LENGTHS, CAMP_WEEKDAYS, toggleCampDay } from "../../../lib/campCycle.js";
 import {
   publishBlockedByStripe,
   PUBLISH_GATE_CTA_SAVE,
@@ -247,12 +247,12 @@ export default function QuickProgramBuilder() {
   // a holiday week is the operator turning one off.
   const [campDays, setCampDays] = useState(() => CAMP_WEEKDAYS.map((d) => d.value));
   const [campEndDate, setCampEndDate] = useState("");
-  // Which kind of day the camp runs, and therefore which tenant_pay_rates cell
-  // each of its days pays at. NO DEFAULT on purpose: pre-selecting "Full day"
-  // would let an operator save a morning camp at the full-day rate without ever
-  // seeing the question. The same three words the camp availability survey and
-  // the SU26 camp editor already use (CAMP_SESSION_TYPES).
-  const [campSessionType, setCampSessionType] = useState("");
+  // How long the camp day is, and therefore which tenant_pay_rates cell each of
+  // its days pays at. NO DEFAULT on purpose: pre-selecting "Full day" would let
+  // an operator save a half-day camp at the full-day rate without ever seeing
+  // the question. Half day stores 'morning' - see CAMP_DAY_LENGTHS for why that
+  // is the cell and not a claim about the time of day.
+  const [campDayLength, setCampDayLength] = useState("");
   // A CAMP'S SEASON COMES FROM ITS DATES. Nothing to ask.
   //
   // This was a dropdown for about an hour. Jessica: "why does it still ask which
@@ -655,12 +655,12 @@ export default function QuickProgramBuilder() {
     // kept now that a camp writes to programs: a weekly class at a school has an
     // implied window (right after the bell), while a camp is a whole day a family
     // arranges childcare around. "9-3 or 9-12?" is the first thing they ask.
-    // campSessionType is required for the same reason the times are, and it is
+    // campDayLength is required for the same reason the times are, and it is
     // the one field here that is MONEY: it is the tenant_pay_rates cell every
     // day of this camp pays at. Deriving it from start/end times was considered
     // and rejected - a guess that is wrong is worse than a question, because it
     // is wrong silently and on a payroll line that looks plausible.
-    (isCamp ? (!!startDate && campDays.length > 0 && !!startTime && !!endTime && !!campSessionType)
+    (isCamp ? (!!startDate && campDays.length > 0 && !!startTime && !!endTime && !!campDayLength)
       : isOneOff ? !!startDate : !!day) && !!locationId;
 
   // Create PUBLISHES, so it carries the Stripe gate; Save as draft does not and
@@ -991,8 +991,8 @@ export default function QuickProgramBuilder() {
         // money field on the form. Without it every day of the camp would be
         // priced as after-school - a J2S lead paid $60 for a $160 full day,
         // with nothing to see on the Payroll screen.
-        if (!CAMP_SESSION_TYPES.some((t) => t.value === campSessionType)) {
-          throw new Error("Say whether this camp is a morning, an afternoon or a full day.");
+        if (!CAMP_DAY_LENGTHS.some((t) => t.value === campDayLength)) {
+          throw new Error("Say whether this camp is a half day or a full day.");
         }
         const campEnd = campEndDate || startDate;
         if (campEnd < startDate) throw new Error("The last day has to be on or after the first day.");
@@ -1048,7 +1048,7 @@ export default function QuickProgramBuilder() {
         // weekly class keeps session_type NULL and keeps paying after_school
         // exactly as it did - the confirmation writers answer 'after_school'
         // for a non-camp without reading this column at all.
-        payload.session_type = campSessionType;
+        payload.session_type = campDayLength;
       }
 
       const { data, error } = await supabase
@@ -2346,25 +2346,29 @@ export default function QuickProgramBuilder() {
             recorded as after-school: a four-day full-day camp paid a lead $240
             where the rate card says $640. Deliberately a question and not a
             guess from the start and end times - a wrong guess is silent, and it
-            is silent in money. Same three words as the camp availability survey
-            and the summer camp editor. */}
+            is silent in money.
+
+            HALF DAY OR FULL DAY, not morning/afternoon/full day: Pay rates has
+            one "Half day" box per role and writes it to both the morning and
+            afternoon cells, so which half of the day it is changes nothing and
+            asking would be a question with no consequence. */}
         {isCamp && (
           <div>
-            <label style={labelStyle} htmlFor="qpb-camp-session-type">Is it a morning, an afternoon or a full day?</label>
+            <label style={labelStyle} htmlFor="qpb-camp-day-length">Half day or full day?</label>
             <select
-              id="qpb-camp-session-type"
+              id="qpb-camp-day-length"
               style={inputStyle}
-              value={campSessionType}
-              onChange={(e) => setCampSessionType(e.target.value)}
+              value={campDayLength}
+              onChange={(e) => setCampDayLength(e.target.value)}
             >
               <option value="">Choose one…</option>
-              {CAMP_SESSION_TYPES.map((t) => (
+              {CAMP_DAY_LENGTHS.map((t) => (
                 <option key={t.value} value={t.value}>{t.label}</option>
               ))}
             </select>
             <div style={helpStyle}>
               This is what each day of the camp pays your instructors, from your
-              pay rates. A full day and a morning are different rates.
+              pay rates. A half day and a full day are different rates.
             </div>
           </div>
         )}

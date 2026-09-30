@@ -30,25 +30,38 @@ export const CAMP_WEEKDAYS = [
 ];
 
 /**
- * WHAT KIND OF DAY a camp runs - and therefore which tenant_pay_rates cell each
- * of its days pays at.
+ * HOW LONG A CAMP DAY IS - and therefore which tenant_pay_rates cell each of
+ * its days pays at.
  *
- * Shared by BOTH camp builders for the same reason CAMP_WEEKDAYS is: the SU26
- * board's editor writes camp_sessions.session_type and the program builder
- * writes programs.session_type, the two columns are CHECKed against the same
- * words, and resolvePayAmount() looks up the rate with whichever one it is
- * handed. A second spelling of this list is a future divergence in money.
+ * TWO CHOICES, NOT THREE. Jessica, 2026-09-30: "should just be half day or full
+ * day - doesn't matter if it's morning or afternoon." She is describing what
+ * the product already does: Pay rates (PayRatesSettings.jsx) has ONE "Half day"
+ * box per role and writes the same amount to the morning AND afternoon cells,
+ * and every org that has camp rates configured has them equal. Asking which
+ * half of the day it is buys nothing and costs an answer.
  *
- * Listing the values rather than deriving them is deliberate: the CHECK
- * constraint is the contract, and a value a form can produce that the
- * constraint rejects is a save that fails at the database with a wall of SQL.
+ * SO "HALF DAY" IS STORED AS 'morning'. That is not a claim the camp runs in
+ * the morning - it is the cell the Half day box drives, and the rates screen
+ * keeps morning and afternoon in lockstep (it upserts and deletes them
+ * together), so the rate resolves the same either way. Nothing may "tidy" an
+ * afternoon camp into 'afternoon' on the strength of its start time: that is a
+ * second spelling of one rule, and the next person to read the column would
+ * have to know which forms mean it literally.
  *
- * 'after_school' is the fourth cell on the rate card and is deliberately NOT
+ * Anything that SHOWS a session_type to an operator labels morning and
+ * afternoon as "Half day" for the same reason - Payroll does, and so does the
+ * rates screen.
+ *
+ * The SU26 camp editor (CampSessionForm) deliberately does NOT use this list.
+ * It edits historical camp_sessions rows where morning and afternoon are real,
+ * recorded data about camps that actually ran, and rewriting that history to
+ * fit a simpler question would be a lie about 51 rows.
+ *
+ * 'after_school' is the fourth cell on the rate card and is deliberately not
  * here: it is what a weekly class pays, and a camp is never offered it.
  */
-export const CAMP_SESSION_TYPES = [
-  { value: "morning", label: "Morning" },
-  { value: "afternoon", label: "Afternoon" },
+export const CAMP_DAY_LENGTHS = [
+  { value: "morning", label: "Half day" },
   { value: "full_day", label: "Full day" },
 ];
 
