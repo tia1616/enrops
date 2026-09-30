@@ -2463,13 +2463,18 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       )}
 
       <Header
-        // THE TERM IS THE IDENTITY OF THIS HEADER. Without it the cockpit keeps
-        // the step it focused on the term it first loaded - Fall - and shows
-        // that same panel for every term after it, with the new term's numbers
-        // in it. Jessica, 2026-09-30: "the offers are stuck to fall and i don't
-        // see that pop up in winter". Remounting is the whole fix: the only
-        // state in Header is which step is selected, and that answer is per
-        // term by definition.
+        // The term is the identity of this header: the only state it holds is
+        // which step is focused, and that answer is per term by definition.
+        //
+        // REDUNDANT TODAY, AND DELIBERATELY KEPT. A term switch already remounts
+        // this: loadAll runs on [org?.id, term] and sets status 'loading' before
+        // it fetches, and the "Loading schedule..." early return above unmounts
+        // the whole subtree until the new term's data lands. So the focused step
+        // was NEVER carried across a term switch - an earlier version of this
+        // comment claimed it was, which was wrong and is corrected here rather
+        // than deleted, because the wrong story is the kind a reader inherits.
+        // The key states the intent locally instead of resting on a loading
+        // branch three thousand lines away that a refactor could remove.
         key={term}
         term={term}
         campCycles={campCycles}
@@ -2959,13 +2964,18 @@ function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCa
   // button was not merely hard to find, it was never rendered.
   //
   // Only steps that flag hasWork can jump the queue, and Draft still comes
-  // before Offers when both do: lock the draft in, then send.
+  // before Offers when both do: lock the draft in, then send. THAT ORDER IS THE
+  // OPEN QUESTION, not a settled one: a term holding both unstaffed classes and
+  // a camp ready to offer still opens on Draft, which is not the panel Jessica
+  // was looking for when she reported this. It is here as a deliberate call
+  // (sending one offer while thirty classes are unstaffed turns every later
+  // addition into a patch-send), and it is one line to flip if she'd rather the
+  // board open on a send that is ready to go.
   //
-  // The other half of "the offers are stuck to fall" (Jessica, 2026-09-30) is
-  // the `key={term}` where this component is rendered. Nothing here remounts on
-  // a term switch, so this useState held the FALL answer for every term after
-  // it, and the old staleness guard could not catch it - the five step keys are
-  // identical on every term, so it always matched.
+  // The staleness guard on the next line is dead and has always been: the five
+  // step keys are identical on every term, so `steps.some` always matches. It is
+  // left because it costs nothing and would start earning its keep the moment
+  // the step list becomes conditional.
   const firstActive = pickFocusedStep(steps);
   const [selected, setSelected] = useState(firstActive);
   const selKey = steps.some((s) => s.key === selected) ? selected : firstActive;
