@@ -529,8 +529,25 @@ serve(async (req: Request) => {
     // (Account Links have short TTLs); the page calls this fn again to mint
     // a new link.
     const slug = org.slug || '';
-    const returnUrl = `${origin}/admin/finances?stripe=return`;
-    const refreshUrl = `${origin}/admin/finances?stripe=refresh`;
+    // A MOVE gets its own two params, and this is a correctness fix, not
+    // cosmetics. Account Links expire fast; when one does, Stripe sends the
+    // operator to refresh_url, and the ONLY "mint a new link" action on
+    // /admin/finances is startOnboarding(), which sends no start_move and so
+    // takes the ordinary path - handing back a link for the account they ALREADY
+    // have. The operator would then walk through onboarding for their live
+    // account while the parked one sat unverified, and the move would stall with
+    // nothing anywhere reporting a problem. They cannot rescue it themselves
+    // either: start_move is refused for anyone who is not a platform admin.
+    //
+    // So a move's links land on params that tell them what happened and point
+    // them at us, instead of offering a button that quietly does the wrong
+    // thing. A fresh link comes from /admin/platform/stripe-moves.
+    const returnUrl = isMove
+      ? `${origin}/admin/finances?stripe=move-return`
+      : `${origin}/admin/finances?stripe=return`;
+    const refreshUrl = isMove
+      ? `${origin}/admin/finances?stripe=move-refresh`
+      : `${origin}/admin/finances?stripe=refresh`;
     void slug; // reserved for future per-tenant routes if we adopt them
 
     // What did Stripe ACTUALLY assign? controller.fees.payer / losses.payments /

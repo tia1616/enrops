@@ -996,6 +996,25 @@ export default function Finances() {
           Stripe's setup link expired. Click "Continue setup" below for a fresh one.
         </Banner>
       )}
+      {/* A MOVE, not ordinary onboarding. These two params exist because
+          "Continue setup" below is the wrong button here: it mints a link for
+          the account this business is ALREADY using, not the new one being set
+          up, so an expired move link would walk them through re-onboarding the
+          old account while the new one stayed unverified and the move stalled
+          silently. Only Enrops can issue a move link, so these say so rather
+          than offering an action that would do the wrong thing. */}
+      {stripeParam === "move-return" && (
+        <Banner tone="ok">
+          Thanks — that's your new Stripe account set up. Nothing about your payments has changed
+          yet, and we'll be in touch before anything does.
+        </Banner>
+      )}
+      {stripeParam === "move-refresh" && (
+        <Banner tone="info">
+          That setup link has expired. Your payments are unaffected and are still going where they
+          always have. Contact enrops and we'll send you a fresh link.
+        </Banner>
+      )}
       {/* CONNECTED is not the same as CAN TAKE MONEY, and this banner must not
           conflate them. buildChargeRouting FAILS CLOSED when an org is
           stripe_charge_model='direct' with stripe_charges_enabled=false

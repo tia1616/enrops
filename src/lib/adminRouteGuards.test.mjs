@@ -88,6 +88,12 @@ const BARE_ROUTES = new Set([
   // Dev + platform consoles. No nav entry by design; gated by platform_admins in
   // the UI and again in the database.
   'dev/extraction-test', 'dev/refund-watch', 'platform/operators',
+  // platform/stripe-moves writes - it is the only one of these that does - and
+  // it is bare for the same reason as its neighbours: AdminLayout's guards are
+  // org-scoped and this screen is cross-tenant. Its gate is platform_admins,
+  // checked in the component, again by RLS on organizations, again by both edge
+  // functions, and again by guard_organizations_locked_columns on the write.
+  'platform/stripe-moves',
 ]);
 
 // ---------------------------------------------------------------------------

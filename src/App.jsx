@@ -55,6 +55,7 @@ const ClassSchedule = lazy(() => import('./pages/admin/ClassSchedule.jsx'));
 const ExtractionTest = lazy(() => import('./pages/admin/dev/ExtractionTest.jsx'));
 const RefundWatch = lazy(() => import('./pages/admin/dev/RefundWatch.jsx'));
 const OperatorOverview = lazy(() => import('./pages/admin/platform/OperatorOverview.jsx'));
+const StripeMoves = lazy(() => import('./pages/admin/platform/StripeMoves.jsx'));
 const CurriculaList = lazy(() => import('./pages/admin/curricula/CurriculaList.jsx'));
 const CurriculumNew = lazy(() => import('./pages/admin/curricula/CurriculumNew.jsx'));
 const CurriculumExtracting = lazy(() => import('./pages/admin/curricula/CurriculumExtracting.jsx'));
@@ -419,6 +420,7 @@ export default function App() {
             Reached by URL, gated by platform_admins in the UI and again in the
             database. */}
         <Route path="platform/operators" element={<OperatorOverview />} />
+        <Route path="platform/stripe-moves" element={<StripeMoves />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
