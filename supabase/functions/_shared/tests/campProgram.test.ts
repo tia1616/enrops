@@ -17,6 +17,7 @@ import {
   campRunLabel,
   isCampProgram,
   programRunLabel,
+  programScheduleLabel,
 } from "../campProgram.ts";
 import { isCampProgram as isCampProgramCron } from "../../lifecycle-automations-cron/noSchoolDates.ts";
 
@@ -166,4 +167,57 @@ Deno.test("anyCampProgram: only flips the intro sentence when a camp is present"
   assertEquals(anyCampProgram([]), false);
   assertEquals(anyCampProgram(null), false);
   assertEquals(anyCampProgram([{ class_days: [] }, CAMP_MON_THU]), true);
+});
+
+// programScheduleLabel is what a FAMILY reads on the Stripe checkout page and on
+// the receipt they keep. create-checkout built that line as `${day_of_week}s`
+// from the posted cart, so a Mon-Thu winter camp was charged for "Mondays".
+
+Deno.test("programScheduleLabel: THE BUG - a camp names its days and its dates", () => {
+  assertEquals(programScheduleLabel(CAMP_MON_THU), "Mon-Thu, December 21-24");
+  // The specific wrong answer this replaces.
+  assertEquals(programScheduleLabel(CAMP_MON_THU) === "Mondays", false);
+});
+
+Deno.test("programScheduleLabel: a weekly class is unchanged, byte for byte", () => {
+  assertEquals(programScheduleLabel({ day_of_week: "Monday" }), "Mondays");
+  assertEquals(programScheduleLabel({ day_of_week: "Wednesday", class_days: null }), "Wednesdays");
+  // An EMPTY class_days is a CLASS - the CHECK permits '{}' and reading "not
+  // null therefore camp" is the bug isCampProgram exists to stop.
+  assertEquals(programScheduleLabel({ day_of_week: "Friday", class_days: [] }), "Fridays");
+});
+
+Deno.test("programScheduleLabel: a camp with no dates still says its days", () => {
+  // campRunLabel returns '' when the dates are not both known; the days alone
+  // are still true, so the empty half is dropped rather than leaving ", ".
+  assertEquals(
+    programScheduleLabel({ class_days: ["monday", "tuesday"], day_of_week: "Monday" }),
+    "Mon-Tue",
+  );
+  assertEquals(
+    programScheduleLabel({ class_days: ["monday"], first_session_date: "2026-12-21" }),
+    "Mon, December 21",
+  );
+});
+
+Deno.test("programScheduleLabel: a camp that skips a day lists them", () => {
+  // "Mon-Fri" would promise a day it does not meet.
+  assertEquals(
+    programScheduleLabel({
+      class_days: ["monday", "wednesday", "friday"],
+      first_session_date: "2027-02-15",
+      end_date: "2027-02-19",
+    }),
+    "Mon, Wed, Fri, February 15-19",
+  );
+});
+
+Deno.test("programScheduleLabel: nothing true to say returns '', never 'undefineds'", () => {
+  // The caller drops the segment; it must never print an empty or broken one.
+  assertEquals(programScheduleLabel(null), "");
+  assertEquals(programScheduleLabel(undefined), "");
+  assertEquals(programScheduleLabel({}), "");
+  assertEquals(programScheduleLabel({ day_of_week: "" }), "");
+  assertEquals(programScheduleLabel({ day_of_week: "   " }), "");
+  assertEquals(programScheduleLabel({ day_of_week: 3 }), "");
 });

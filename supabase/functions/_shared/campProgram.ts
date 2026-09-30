@@ -143,6 +143,42 @@ export function campRunLabel(
 }
 
 /**
+ * WHEN THIS RUNS, for a FAMILY: "Mondays" for a weekly class, "Mon-Thu,
+ * December 21-24" for a camp.
+ *
+ * This is the line on the Stripe checkout page and on the receipt the family
+ * keeps, so it answers a different question from programRunLabel below, which
+ * tells an INSTRUCTOR how long an engagement lasts. A family is not committing
+ * to a term, they are buying specific days.
+ *
+ * It exists because create-checkout built that line as `${day_of_week}s` from
+ * the posted cart, and a camp's day_of_week holds only its FIRST day - so a
+ * Mon-Thu winter camp was charged for "Mondays". Composed HERE rather than
+ * inline in the function so the composition has a test and there is one Deno
+ * spelling of it.
+ *
+ * A camp carries its dates as well as its days: the dates are what a family
+ * arranges childcare around, and what makes a break camp legible on a receipt
+ * read months later. When the dates are not both known campRunLabel returns '',
+ * and the days alone are still true, so the empty half is dropped.
+ *
+ * Returns '' when there is nothing true to say - the caller drops the segment
+ * rather than printing an empty one.
+ */
+export function programScheduleLabel(
+  program:
+    | { day_of_week?: unknown; class_days?: unknown; first_session_date?: unknown; end_date?: unknown }
+    | null
+    | undefined,
+): string {
+  if (isCampProgram(program)) {
+    return [campDayLabel(program), campRunLabel(program)].filter(Boolean).join(", ");
+  }
+  const day = program?.day_of_week;
+  return typeof day === "string" && day.trim() ? `${day.trim()}s` : "";
+}
+
+/**
  * The phrase that says how long an engagement lasts, for one program row:
  * "all term" for a weekly class, the camp's dates for a camp.
  *
