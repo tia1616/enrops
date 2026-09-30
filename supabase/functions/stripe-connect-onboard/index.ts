@@ -17,6 +17,35 @@
 // just returns a new Account Link against the existing account. This is
 // how the UI handles "tab closed, restart onboarding."
 //
+// MOVE MODE ({ start_move: true }, PLATFORM ADMINS ONLY). Mints a SECOND
+// account for an org that already has a working one and parks it in
+// organizations.stripe_pending_account_id. Live routing is untouched: the
+// org keeps charging to stripe_account_id, on the same stripe_charge_model,
+// with the same stripe_account_status, until the switch promotes the new
+// account - which is a separate, deliberate step that first asks Stripe
+// whether the new account can actually take a charge.
+//
+// It exists because the normal path above never mints for an org that
+// already has an account, so the only way to move one was to disconnect it
+// first - which sets stripe_charge_model='direct' against an unverified
+// account, and buildChargeRouting fails closed on that, blacking out
+// checkout for as long as Stripe takes to verify. Fine for an org with
+// nothing on sale; not fine for J2S, which is the org that has to move
+// (its fee-payer is application_express and Stripe will not change that on
+// an existing account).
+//
+// Move mode is idempotent the same way: called again while an account is
+// already parked, it returns a fresh Account Link for that one rather than
+// minting a third.
+//
+// EXPECT WEBHOOK NOISE while a parked account verifies. stripe-webhook finds
+// an org by stripe_account_id, which a pending account is not, so its
+// account.updated events fall through to the instructor path and are logged as
+// "account.updated for unknown account <id> - ignoring". That is harmless and
+// deliberate: it writes nothing and alerts nobody. The switch does not learn
+// readiness from a webhook - it asks Stripe directly at the moment it is asked
+// to promote, because that is the only answer that is true right then.
+//
 // Env: STRIPE_SECRET_KEY (operator-Connect platform key — the ORIGINAL
 // Enrops Stripe account, not the instructor one).
 // Does NOT use STRIPE_CONNECT_CLIENT_ID (that was for the v1 OAuth design,
@@ -35,6 +64,19 @@ const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
 interface RequestBody {
   org_id?: string;
   origin?: string;
+  /**
+   * PLATFORM-ADMIN ONLY. Start a MOVE: mint a second Stripe account for an org
+   * that already has a working one, and park it in
+   * organizations.stripe_pending_account_id while it verifies. Live routing is
+   * NOT touched - stripe_account_id and stripe_charge_model are left exactly as
+   * they are, so every charge keeps going where it went yesterday.
+   *
+   * This is the only way to get a second account onto an org. Without it the
+   * normal path below never mints for an org that already has one, so item 12
+   * (J2S off application_express, which cannot be changed on an existing
+   * account) had no route that did not black out checkout while Stripe verified.
+   */
+  start_move?: boolean;
 }
 
 interface OrgRow {
@@ -44,6 +86,7 @@ interface OrgRow {
   website: string | null;
   email: string | null;
   stripe_account_id: string | null;
+  stripe_pending_account_id: string | null;
   stripe_account_status: string | null;
   stripe_business_type: string | null;
   stripe_country: string | null;
@@ -103,6 +146,35 @@ serve(async (req: Request) => {
     }
     let callerRole: string | null = null;
 
+    // ── is this a MOVE, and is the caller allowed to run one? ─────────────
+    //
+    // Resolved BEFORE the membership check below, because a move is a platform
+    // operation on someone else's business. Enrops platform admins are not
+    // members of their tenants' orgs - Jessica is an owner of J2S by accident
+    // of history, not by rule - so requiring org membership here would make
+    // move mode unreachable for every tenant except that one. The bypass is
+    // deliberately narrow: it applies ONLY when start_move is set, and ONLY to
+    // a platform admin. Ordinary onboarding still demands org owner/admin.
+    const wantsMove = body.start_move === true;
+    let isPlatformAdmin = false;
+    if (wantsMove) {
+      const { data: pa, error: paErr } = await supabase
+        .from('platform_admins')
+        .select('auth_user_id')
+        .eq('auth_user_id', callerAuthId)
+        .limit(1)
+        .maybeSingle();
+      if (paErr) {
+        // Fail CLOSED, and say which check failed. A discarded error here would
+        // make a database blip look like a permission denial - the same bug the
+        // membership check below carries a comment about.
+        console.error('[connect-onboard] platform_admins check failed for', callerAuthId, paErr);
+        return json({ error: 'lookup_failed' }, 500);
+      }
+      isPlatformAdmin = !!pa;
+      if (!isPlatformAdmin) return FORBIDDEN;
+    }
+
     // A bare .maybeSingle() RESOLVES WITH AN ERROR when more than one row
     // matches, and the error was being discarded - so a transient database
     // failure was indistinguishable from a real permission denial. Scoping to
@@ -122,13 +194,19 @@ serve(async (req: Request) => {
       console.error('[connect-onboard] membership check failed for org', targetOrgId, cmErr);
       return json({ error: 'lookup_failed' }, 500);
     }
-    if (!cm) return FORBIDDEN;
-    callerRole = (cm as { role: string }).role;
+    // A platform admin running a move needs no org membership (above). Everyone
+    // else does, including a platform admin doing ordinary onboarding.
+    if (!cm && !(wantsMove && isPlatformAdmin)) return FORBIDDEN;
+    callerRole = cm ? (cm as { role: string }).role : 'platform_admin';
 
     // ── load org ──────────────────────────────────────────────────────────
     const { data: orgData, error: orgErr } = await supabase
       .from('organizations')
-      .select('id, name, slug, website, email, stripe_account_id, stripe_account_status, stripe_business_type, stripe_country')
+      // stripe_pending_account_id is a DEPLOY-ORDER CONTRACT: 20260930b must be
+      // applied to a database BEFORE this function is deployed against it, or
+      // every call here fails on a column PostgREST cannot find - including the
+      // ordinary org-admin onboarding that has nothing to do with moves.
+      .select('id, name, slug, website, email, stripe_account_id, stripe_pending_account_id, stripe_account_status, stripe_business_type, stripe_country')
       .eq('id', targetOrgId)
       .maybeSingle();
     if (orgErr) {
@@ -143,8 +221,41 @@ serve(async (req: Request) => {
     // won't let us mint Account Links against. Treat as a fresh onboard:
     // clear the dead ID and create a new Express account below. Audit trail
     // for the old account stays in Stripe's dashboard.
-    let accountId =
-      org.stripe_account_status === 'disconnected' ? null : org.stripe_account_id;
+    // ── MOVE MODE: mint a SECOND account without disturbing the live one ──
+    //
+    // Deliberately not a separate function. Everything below - orphan recovery,
+    // account creation, the Account Link, the failure handling - is identical
+    // for a move; the ONLY difference is which column the account id lands in
+    // and that stripe_charge_model is left alone. A parallel implementation
+    // would be a second spelling of the same rules, and they would drift.
+    //
+    // PLATFORM ADMIN ONLY - already settled above, where the caller was either
+    // confirmed as one or refused. An org admin must never be able to point
+    // their own org at a second Stripe account: stripe_pending_account_id is
+    // one switch away from being the payout destination, which is why 20260930b
+    // locks it to platform admins in the database too. That check is the front
+    // door; the trigger is the lock.
+    let isMove = false;
+    if (wantsMove) {
+      // A move needs something to move AWAY from. Without a live account this
+      // is just ordinary onboarding, and doing it in move mode would park the
+      // org's FIRST account in the pending column where nothing charges to it.
+      if (!org.stripe_account_id || org.stripe_account_status === 'disconnected') {
+        return json({
+          error: 'nothing_to_move_from',
+          message: 'This business has no connected Stripe account to move away from. Set it up the normal way instead.',
+        }, 409);
+      }
+      isMove = true;
+    }
+
+    // In move mode the account under construction is the PENDING one, so the
+    // recovery and creation below operate on that column's value. Live routing
+    // is read-only from here on: stripe_account_id, stripe_charge_model and
+    // stripe_account_status are never written on this path.
+    let accountId = isMove
+      ? org.stripe_pending_account_id
+      : (org.stripe_account_status === 'disconnected' ? null : org.stripe_account_id);
     let justCreated = false;
 
     // ── recover orphan if no account_id but Stripe already has one ────────
@@ -159,9 +270,29 @@ serve(async (req: Request) => {
         // Filter out rejected/closed accounts so a stale one from a reset
         // doesn't get auto-recovered. Stripe sets disabled_reason to
         // 'rejected.*' on platform-rejected accounts; we skip those.
+        //
+        // AND the two accounts a move creates, because this search keys on
+        // enrops_org_id and BOTH of an org's accounts carry it:
+        //
+        //   - in move mode, the org's LIVE account matches this query. Without
+        //     excluding it, the very first start_move would "recover" the live
+        //     account as the pending one, and the move would quietly become a
+        //     no-op that looks like it worked.
+        //   - in normal mode, an account parked for a move matches too. An org
+        //     with a move in flight that then disconnects would see two
+        //     candidates and get the 409 below - a dead end on the Payments
+        //     screen caused by a move nobody on that screen knows about.
+        //
+        // enrops_account_role is stamped at creation (below) for exactly this.
+        // Accounts minted before it existed have no role and read as live,
+        // which is what they are.
         const candidates = search.data.filter((a: Stripe.Account) => {
           const dr = a.requirements?.disabled_reason || '';
-          return !dr.startsWith('rejected.');
+          if (dr.startsWith('rejected.')) return false;
+          const role = (a.metadata as Record<string, string> | null)?.enrops_account_role ?? 'live';
+          return isMove
+            ? a.id !== org.stripe_account_id && role === 'pending'
+            : role !== 'pending';
         });
         if (candidates.length === 1) {
           accountId = candidates[0].id;
@@ -255,6 +386,10 @@ serve(async (req: Request) => {
           metadata: {
             enrops_org_id: org.id,
             enrops_org_slug: org.slug || '',
+            // Which of the org's accounts this is. Read back by the orphan
+            // search above, and cleared to 'live' when the switch promotes it.
+            // Stamped on BOTH paths so the value is never absent-means-guess.
+            enrops_account_role: isMove ? 'pending' : 'live',
           },
         };
         if (org.email || callerEmail) {
@@ -297,20 +432,31 @@ serve(async (req: Request) => {
     // ── persist accountId on the org row ──────────────────────────────────
     // Trigger guard_organizations_locked_columns blocks org admins from
     // changing stripe_account_id; service_role (this fn) bypasses.
-    if (justCreated || org.stripe_account_id !== accountId) {
+    const previouslyStored = isMove ? org.stripe_pending_account_id : org.stripe_account_id;
+    if (justCreated || previouslyStored !== accountId) {
+      // A MOVE writes ONE column. Not stripe_account_id, not
+      // stripe_charge_model, and NOT stripe_account_status: that column
+      // describes the account currently taking the money, and setting it to
+      // 'onboarding' would tell the operator's own Payments screen that their
+      // WORKING account is mid-setup - while it carries on charging perfectly
+      // well. The new account's readiness is read from Stripe by the switch,
+      // which is the only thing that needs to know it.
+      const moveUpdate = { stripe_pending_account_id: accountId };
+      const normalUpdate = {
+        stripe_account_id: accountId,
+        stripe_account_status: 'onboarding',
+        // Only an account WE just minted is known to be controller-based.
+        // The orphan-recovery branch above adopts a pre-existing Stripe
+        // account, which may well be a legacy Express one — marking that
+        // 'direct' would route its charges the wrong way and make the
+        // operator pay a Stripe fee we are also still recovering via the
+        // uplift. Leave those on the 'destination' default.
+        ...(justCreated ? { stripe_charge_model: 'direct' } : {}),
+      };
+
       const { error: updErr } = await supabase
         .from('organizations')
-        .update({
-          stripe_account_id: accountId,
-          stripe_account_status: 'onboarding',
-          // Only an account WE just minted is known to be controller-based.
-          // The orphan-recovery branch above adopts a pre-existing Stripe
-          // account, which may well be a legacy Express one — marking that
-          // 'direct' would route its charges the wrong way and make the
-          // operator pay a Stripe fee we are also still recovering via the
-          // uplift. Leave those on the 'destination' default.
-          ...(justCreated ? { stripe_charge_model: 'direct' } : {}),
-        })
+        .update(isMove ? moveUpdate : normalUpdate)
         .eq('id', org.id);
       if (updErr) {
         // If we just minted a Stripe account and can't persist it, delete it
@@ -383,7 +529,15 @@ serve(async (req: Request) => {
       outcome: 'success',
       organizationId: org.id,
       actorUserId: callerAuthId,
-      metadata: { reconnect: org.stripe_account_status === 'disconnected', caller_role: callerRole },
+      // `move` keeps the funnel honest. Without it a platform admin starting a
+      // move would count as an operator starting onboarding, and the
+      // started-vs-finished number Arielle reads would drift by exactly the
+      // moves we run - which are the ones that never "finish" that way.
+      metadata: {
+        reconnect: org.stripe_account_status === 'disconnected',
+        caller_role: callerRole,
+        move: isMove,
+      },
     });
 
     return json({
@@ -391,6 +545,12 @@ serve(async (req: Request) => {
       account_id: accountId,
       account_controller: assignedController,
       caller_role: callerRole,
+      // Named differently on purpose: on a move, account_id above is the NEW
+      // account, which is not yet taking anything. Saying which account is
+      // still live stops a caller reading account_id as "where the money goes".
+      ...(isMove
+        ? { move: true, pending_account_id: accountId, still_charging_to: org.stripe_account_id }
+        : {}),
     });
   } catch (err) {
     console.error('[connect-onboard] fatal:', err);
