@@ -2465,9 +2465,17 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
 
           NOT A SECOND VOICE SAYING THE SAME THING. Suppressed while the patch
           tip is up (Fall keeps exactly the prompt that works today) and while
-          the just-approved banner below is still on screen, which already says
-          "ready to send - click Send offers". */}
-      {pendingPatchAssignments.length === 0 && !approveResult && counts.sendable > 0 && (
+          the just-approved banner below is saying "ready to send - click Send
+          offers" itself.
+
+          `approveResult?.count > 0`, NOT `approveResult`. That banner has two
+          branches and only one of them mentions sending: an approve that locked
+          nothing in sets {count: 0} and renders "No draft matches to lock in.",
+          which says nothing about the offers still waiting. Suppressing on the
+          bare object meant clicking Approve on a camp term already locked in
+          hid this prompt and replaced it with a sentence about drafts - the
+          dead end the tip exists to close, reintroduced by its own guard. */}
+      {pendingPatchAssignments.length === 0 && !(approveResult?.count > 0) && counts.sendable > 0 && (
         <HatGuide
           character="ennie"
           tip={{
