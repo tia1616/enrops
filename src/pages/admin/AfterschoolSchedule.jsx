@@ -21,7 +21,7 @@ import TabStrip from "../../components/TabStrip.jsx";
 import { useAdminNarrow, cardRow, cardCell } from "../../lib/adminViewport.js";
 import { resolveBoardSendIntro } from "../../lib/boardSendCopy.js";
 import { classifyOther } from "../../lib/scheduleConflicts.js";
-import { programScheduleSummary } from "../../lib/programSchedule.js";
+import { programScheduleSummary, formatDayLabel, isCampProgram, programWeekdays } from "../../lib/programSchedule.js";
 import { parseBonusDollars } from "../../lib/bonusAmount.js";
 import { aggregateSubOffers, subSlotLabel, slotNeedsCover, subDisplayName, SUB_ACTIVE_STATUSES } from "../../lib/subCoverage.js";
 // Replaces a local gradeLabel() that has been deleted with its last caller. It
@@ -437,7 +437,11 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           // age_min/age_max added with audienceLabel: the helper answers "grades OR
           // ages", so selecting only the grade pair would have made it silently
           // render nothing for an age-based class rather than "Ages 6-12".
-          .select("id, curriculum, day_of_week, start_time, end_time, program_location_id, status, max_capacity, grade_min, grade_max, age_min, age_max, age_format, first_session_date, session_count")
+          // class_days + end_date identify a CAMP. Without them this board cannot
+          // tell one from a weekly class, and a camp's day_of_week holds its FIRST
+          // day - so a Mon-Fri camp was filed in the Monday column and read as a
+          // weekly Monday class. Both columns feed isCampProgram and formatDayLabel.
+          .select("id, curriculum, day_of_week, class_days, start_time, end_time, program_location_id, status, max_capacity, grade_min, grade_max, age_min, age_max, age_format, first_session_date, end_date, session_count")
           .eq("organization_id", org.id)
           .eq("term", term)
           // DRAFT JOINS cancelled and archived. Jessica, 2026-08-31: "take out
@@ -952,12 +956,18 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     for (const a of state.assignments) {
       if (a.status === "withdrawn" || a.status === "declined" || !a.instructor_id) continue;
       const p = progById.get(a.program_id);
-      const code = p ? DAY_TO_CODE[dayKey(p.day_of_week)] : null;
-      if (!code) continue;
-      if (!m.has(a.instructor_id)) m.set(a.instructor_id, new Map());
-      const byDay = m.get(a.instructor_id);
-      if (!byDay.has(code)) byDay.set(code, []);
-      byDay.get(code).push({ program_id: a.program_id, status: a.status });
+      if (!p) continue;
+      // EVERY day this program occupies, not just day_of_week. A Mon-Thu camp
+      // used to register as Monday only, so the board told you its instructor
+      // was free Tue, Wed and Thu - and would happily put them somewhere else.
+      for (const day of programWeekdays(p)) {
+        const code = DAY_TO_CODE[day];
+        if (!code) continue;
+        if (!m.has(a.instructor_id)) m.set(a.instructor_id, new Map());
+        const byDay = m.get(a.instructor_id);
+        if (!byDay.has(code)) byDay.set(code, []);
+        byDay.get(code).push({ program_id: a.program_id, status: a.status });
+      }
     }
     return m;
   }, [state]);
@@ -984,10 +994,22 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     for (const a of state.assignments) {
       if (a.status === "withdrawn" || a.status === "declined" || !a.instructor_id) continue;
       const p = progById.get(a.program_id);
-      const code = p ? DAY_TO_CODE[dayKey(p.day_of_week)] : null;
-      if (!code) continue;
-      if (!m.has(a.instructor_id)) m.set(a.instructor_id, new Set());
-      m.get(a.instructor_id).add(code);
+      if (!p) continue;
+      // A four-day camp costs FOUR of an instructor's days, not one. Counting it
+      // as a single Monday let someone blow through their stated max_days while
+      // the board reported them well inside it.
+      //
+      // Each day is kept WITH the program it came from, because max_days is a
+      // per-week cap and a camp occupies one week. Summing a December camp into
+      // the same total as a February class would refuse an assignment on the
+      // strength of days the instructor is not working that week; evaluate()
+      // narrows to the weeks that actually overlap the target.
+      for (const day of programWeekdays(p)) {
+        const code = DAY_TO_CODE[day];
+        if (!code) continue;
+        if (!m.has(a.instructor_id)) m.set(a.instructor_id, []);
+        m.get(a.instructor_id).push({ code, program_id: a.program_id });
+      }
     }
     return m;
   }, [state]);
@@ -1062,6 +1084,63 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     return state.instructors.filter((i) => ids.has(i.id));
   }, [state]);
 
+  // WHEN two programs actually coincide, which a shared weekday does not answer.
+  //
+  // For two term-long weekly classes a shared weekday WAS a safe proxy: both run
+  // the whole term, so the same weekday means the same afternoon every week. A
+  // CAMP breaks that - it runs for one week - so "both on Thursday" can mean a
+  // December camp and a March class, which do not collide at all.
+  //
+  // Dates come from derive_program_session_dates via state.programDates, the same
+  // source the week rail uses, so closures are already applied.
+  //
+  // When the dates are unknown the answer is "unknown", which WARNS rather than
+  // blocks - see the note on coincidence() below for why that is the right
+  // direction here. Do not read this as fail-closed: the guard that keeps the
+  // old weekday-only behaviour is the two-weekly-classes short-circuit, not the
+  // unknown case.
+  const datesOf = (id) => state.programDates?.[id] ?? null;
+  const progByIdAll = useMemo(
+    () => new Map((state.status === "ready" ? state.programs : []).map((p) => [p.id, p])),
+    [state],
+  );
+
+  // "yes" they provably coincide, "no" they provably do not, "unknown" we cannot tell.
+  //
+  // TWO WEEKLY CLASSES ARE ALWAYS "yes", whatever the dates say. Both run the
+  // whole term on the same weekday, so they collide every week - and crucially
+  // 27 of the 29 WI27 classes on staging have no dates yet, because staffing
+  // happens BEFORE dates are set. Demanding proof there would have quietly
+  // dropped the double-booking guard this board has always had.
+  //
+  // Once a CAMP is involved the weekday proxy breaks, so proof is required: a
+  // Dec 21-25 camp and a Thursday class running Jan to March share a Thursday
+  // and never meet. Unknown stays unknown rather than becoming a block, because
+  // a one-week camp against an undated class is far more likely not to clash -
+  // and the operator gets told, instead of being refused with no override.
+  function coincidence(program, otherId, granularity) {
+    const other = progByIdAll.get(otherId);
+    if (!isCampProgram(program) && !(other && isCampProgram(other))) return "yes";
+    // THE DATABASE IS STILL DAY_OF_WEEK ONLY. check_program_assignment_conflict()
+    // compares lower(btrim(day_of_week)) and never reads class_days or dates, so
+    // when the two rows carry the SAME day_of_week string and their times overlap
+    // the insert is refused whatever this board thinks. Treat that as a clash, or
+    // the board offers an assignment the save then rejects with a raw error -
+    // exactly what the note above the double-booking block warns against.
+    // The camp's OTHER days are invisible to the trigger, so for those this board
+    // is the only guard and the date test below is what decides.
+    const sameDowString = other
+      && String(other.day_of_week ?? "").trim().toLowerCase()
+        === String(program.day_of_week ?? "").trim().toLowerCase()
+      && String(program.day_of_week ?? "").trim() !== "";
+    if (sameDowString) return "yes";
+    const a = datesOf(program.id), b = datesOf(otherId);
+    if (!a?.length || !b?.length) return "unknown";
+    const key = granularity === "week" ? weekStartOf : (d) => d;
+    const set = new Set(a.map(key));
+    return b.some((d) => set.has(key(d))) ? "yes" : "no";
+  }
+
   // Eligibility for a target program: returns { ok, reason, pref, warnings }.
   function evaluate(instructorId, program) {
     const av = availByInstr.get(instructorId);
@@ -1069,8 +1148,14 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     const first = inst?.preferred_name || inst?.first_name || "This instructor";
     const warnings = [];
     const wd = av?.weekday_availability || {};
-    const code = DAY_TO_CODE[dayKey(program.day_of_week)];
-    const dayLabel = DAYS.find((d) => d.code === code)?.label ?? "that day";
+    // EVERY weekday this program occupies. A weekly class yields exactly one, so
+    // every check below behaves precisely as it always has - that is the safety
+    // property of this change. A camp yields all of its days, which is the
+    // difference between "is she free Monday" and "is she free Monday to
+    // Thursday". Weekend days are dropped: this board has only Mon-Fri columns,
+    // so it cannot reason about them either way.
+    const dayCodes = programWeekdays(program).map((d) => DAY_TO_CODE[d]).filter(Boolean);
+    const labelFor = (c) => DAYS.find((d) => d.code === c)?.label ?? "that day";
     // AREA AND DATE CONFLICTS ARE COMPUTED FIRST — DO NOT MOVE THEM BACK DOWN.
     //
     // Below the five early returns (no_survey, day_off, no_time, double_booked,
@@ -1110,18 +1195,44 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     if (!av || !Object.values(wd).some((w) => w && w.from)) {
       return { ok: false, overridable: true, blockKind: "no_survey", reason: `${first} hasn't submitted availability for this term.`, warnings };
     }
-    const avail = wd[code];
-    if (!avail || !avail.from) {
-      return { ok: false, overridable: true, blockKind: "day_off", reason: `${first} isn't available on ${dayLabel}.`, warnings };
+    // FAIL CLOSED when this board cannot place the program on any of its five
+    // columns - a weekday it does not recognise, or a camp whose days are all at
+    // the weekend. Every check below is keyed on dayCodes, so an empty list would
+    // skip ALL of them, including the double-booking block that is deliberately
+    // not overridable, and report the instructor as eligible. The old single-day
+    // code failed closed here by accident (wd[undefined] is undefined, so it hit
+    // day_off); this makes that deliberate and says why.
+    if (dayCodes.length === 0) {
+      return {
+        ok: false,
+        overridable: true,
+        blockKind: "day_off",
+        reason: `This board only schedules Monday to Friday, so it can't check ${first}'s availability for this one.`,
+        warnings,
+      };
+    }
+    // A camp needs them free on EVERY day it runs, so the first day they cannot
+    // do blocks it and is the day named. One unavailable day in the middle of a
+    // run is still a camp they cannot take.
+    const offCode = dayCodes.find((c) => !wd[c] || !wd[c].from);
+    if (offCode) {
+      return { ok: false, overridable: true, blockKind: "day_off", reason: `${first} isn't available on ${labelFor(offCode)}.`, warnings };
     }
     const start = parse12h(program.start_time), end = parse12h(program.end_time);
     if (start == null || end == null) {
       // Data integrity, not preference — there is nothing to override TO.
       return { ok: false, overridable: false, blockKind: "no_time", reason: `This class is missing a start/end time.`, warnings };
     }
-    const from = parseHHMM(avail.from), until = avail.until ? parseHHMM(avail.until) : null;
-    if (from == null || start - ARRIVAL_BUFFER_MIN < from || (until != null && end > until)) {
-      return { ok: false, overridable: true, blockKind: "hours", reason: `${first}'s ${dayLabel} hours don't cover this class time (needs to arrive ${ARRIVAL_BUFFER_MIN} min early).`, warnings };
+    // Same shape for hours: a camp runs the same clock time every day, so each of
+    // its days has to be covered. A camp is usually 9-3, which is exactly the kind
+    // of span an after-school instructor's stated hours will not cover on some days.
+    const badHoursCode = dayCodes.find((c) => {
+      const a = wd[c];
+      const f = parseHHMM(a.from), u = a.until ? parseHHMM(a.until) : null;
+      return f == null || start - ARRIVAL_BUFFER_MIN < f || (u != null && end > u);
+    });
+    if (badHoursCode) {
+      return { ok: false, overridable: true, blockKind: "hours", reason: `${first}'s ${labelFor(badHoursCode)} hours don't cover this class time (needs to arrive ${ARRIVAL_BUFFER_MIN} min early).`, warnings };
     }
     // Double-booking: already holds a (different) program that same weekday. HARD BLOCK
     // (Jessica, 2026-07-16 — reverses the 07-14 warning-only call; camp and after-school
@@ -1142,7 +1253,21 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     // matcher draft blocks here too — but the copy stays honest about it being a
     // draft rather than claiming they "already teach" it.
     const committed = committedDays.get(instructorId);
-    const sameDayOthers = (committed?.get(code) ?? []).filter((c) => c.program_id !== program.id);
+    // Checked on EVERY day the program occupies, not just its first. A Mon-Thu
+    // camp against a Wednesday class is a real clash that reading day_of_week
+    // alone could never see. Each entry keeps the day it clashes on so the
+    // message names the right one; the same other class can appear on more than
+    // one day, which is correct - it clashes on each.
+    const sameDayOthers = dayCodes.flatMap((c) =>
+      (committed?.get(c) ?? [])
+        .filter((o) => o.program_id !== program.id)
+        // ...AND the two are not provably in different weeks. Without this a
+        // one-week camp hard-blocks every class sharing its weekdays for the
+        // rest of the term - a Dec 21-25 camp refusing a Thursday class that
+        // runs Jan to March, with no override, because both touch a Thursday.
+        .map((o) => ({ ...o, dayCode: c, when: coincidence(program, o.program_id, "date") }))
+        .filter((o) => o.when !== "no"),
+    );
     if (sameDayOthers.length) {
       const describe = (c) => {
         const op = state.programs.find((p) => p.id === c.program_id);
@@ -1150,6 +1275,24 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         const where = op?.program_location_id ? locName.get(op.program_location_id) : null;
         return where ? `${nm} at ${where}` : nm;
       };
+      // One entry per clashing PROGRAM, however many of its days clash. A Mon-Thu
+      // camp against a Mon-Fri camp clashes four times and would otherwise be
+      // listed four times in one sentence.
+      //
+      // Keyed on program_id, not on the rendered name: two different classes can
+      // share a curriculum AND a site (two sections at one school), and deduping
+      // the string would collapse them into one, telling the operator about a
+      // single clash when there are two. The counts below come from the same
+      // deduped rows so the wording cannot disagree with the list.
+      const uniqueByProgram = (rows) => {
+        const seen = new Set();
+        return rows.filter((o) => {
+          if (seen.has(o.c.program_id)) return false;
+          seen.add(o.c.program_id);
+          return true;
+        });
+      };
+      const nameList = (rows) => uniqueByProgram(rows).map((o) => describe(o.c)).join(", ");
       // Resolve each same-day class ONCE — its program row, its parsed times, and
       // whether it's the same school — then derive the three outcomes below from
       // that. Doing the lookup/parse three times risked the passes drifting. The
@@ -1176,48 +1319,84 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       // 2026-08-18, J2S runs exactly that Wednesday pair). This MUST agree with
       // check_program_assignment_conflict(), or the board offers an assignment the
       // insert then rejects.
-      const conflicts = others.filter((o) => o.conflict);
+      // A time overlap only BLOCKS when the two provably meet on the same date.
+      // Where a camp is involved and the other side has no dates yet, we cannot
+      // prove it either way - so say so and let the operator decide, rather than
+      // refusing with a block that carries no override.
+      const unprovable = others.filter((o) => o.conflict && o.c.when === "unknown");
+      if (unprovable.length) {
+        // Count the deduped PROGRAMS, not the day-entries: a four-day camp
+        // produced four rows and made this read "they have" about one class.
+        const n = uniqueByProgram(unprovable).length;
+        warnings.push(
+          `${first} has ${nameList(unprovable)} at an overlapping time, but ${n === 1 ? "it has" : "they have"} no dates set yet — check the two do not fall in the same week.`,
+        );
+      }
+      const conflicts = others.filter((o) => o.conflict && o.c.when === "yes");
       if (conflicts.length) {
-        const list = conflicts.map((o) => describe(o.c)).join(", ");
+        const list = nameList(conflicts);
         const allDraft = conflicts.every((o) => o.c.status === "proposed");
+        // Name the day that actually clashes. For a multi-day camp this is not
+        // necessarily its first day, and saying "Monday" about a Wednesday clash
+        // sends the operator looking at the wrong class.
+        const clashDays = [...new Set(conflicts.map((o) => labelFor(o.c.dayCode)))].join(" and ");
         return {
           ok: false,
           overridable: false, // physics: one person, two places at once. Never override.
           blockKind: "double_booked",
           reason: allDraft
-            ? `${first} is already pencilled in for ${list} on ${dayLabel} — a draft, but they can't be in two places. Free that class first.`
-            : `${first} would be double-booked: already has ${list} on ${dayLabel}.`,
+            ? `${first} is already pencilled in for ${list} on ${clashDays} — a draft, but they can't be in two places. Free that class first.`
+            : `${first} would be double-booked: already has ${list} on ${clashDays}.`,
           warnings,
         };
       }
       // No overlap. Say what the pairing is, but don't stand in the way.
       // Same school: note it. "back-to-back" only when the gap is genuinely tight —
       // two same-school classes hours apart are not back-to-back.
-      const sameSchool = others.filter((o) => o.sameSchool);
+      // Only assert a same-day pairing we can PROVE. An "unknown" entry is a camp
+      // against a class with no dates yet: saying "also has X on Wednesday, back
+      // to back" states as fact a pairing that may never happen, and contradicts
+      // the "no dates set yet" warning pushed just above it.
+      const sameSchool = others.filter((o) => o.sameSchool && o.c.when === "yes");
       if (sameSchool.length) {
-        const list = sameSchool.map((o) => describe(o.c)).join(", ");
+        const list = nameList(sameSchool);
         const adjacent = sameSchool.every((o) => o.tight);
+        const days = [...new Set(sameSchool.map((o) => labelFor(o.c.dayCode)))].join(" and ");
         warnings.push(
           adjacent
-            ? `${first} also has ${list} on ${dayLabel}, back-to-back at the same school.`
-            : `${first} also has ${list} on ${dayLabel} at the same school.`
+            ? `${first} also has ${list} on ${days}, back-to-back at the same school.`
+            : `${first} also has ${list} on ${days} at the same school.`
         );
       }
       // Another school with a tight turnaround: allowed, but flag the drive. Jessica's
       // number — "might not be possible unless they're close together". She knows the
       // drive; the software doesn't, so this warns and never blocks.
-      const tight = others.filter((o) => !o.sameSchool && o.tight);
+      // Same rule as the same-school warning above: a drive between two schools
+      // is only worth flagging once we know the two actually fall on one day.
+      const tight = others.filter((o) => !o.sameSchool && o.tight && o.c.when === "yes");
       if (tight.length) {
-        const list = tight.map((o) => describe(o.c)).join(", ");
-        warnings.push(`${first} also has ${list} on ${dayLabel} — under ${TRAVEL_GAP_WARN_MIN} min to get between the two schools.`);
+        const list = nameList(tight);
+        const days = [...new Set(tight.map((o) => labelFor(o.c.dayCode)))].join(" and ");
+        warnings.push(`${first} also has ${list} on ${days} — under ${TRAVEL_GAP_WARN_MIN} min to get between the two schools.`);
       }
     }
     // Max-days cap. Counts DISTINCT WEEKDAYS including the day this class would add —
     // not assignments. A second class on a day they already work costs no extra day,
     // which is the whole point of allowing back-to-back at one school.
     if (av.max_days != null) {
-      const days = new Set(daysUsed.get(instructorId) ?? []);
-      days.add(code);
+      // max_days is a per-WEEK cap, so only days the instructor works in a week
+      // this program actually runs count towards it. A camp week and a term week
+      // are different weeks; summing them would refuse an assignment on days they
+      // are not working alongside it.
+      const days = new Set(
+        (daysUsed.get(instructorId) ?? [])
+          .filter((u) => u.program_id === program.id || coincidence(program, u.program_id, "week") !== "no")
+          .map((u) => u.code),
+      );
+      // Every day the program would add. A Mon-Thu camp costs four days against
+      // the cap; counting it as one let an instructor be booked past a limit they
+      // set themselves while the board said they were inside it.
+      for (const c of dayCodes) days.add(c);
       if (days.size > av.max_days) {
         // A workload cap the instructor set — asking them to work more days than they
         // agreed is a different conversation from "your hours are conservative".
@@ -1276,6 +1455,12 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       return (a.start_time ?? "").localeCompare(b.start_time ?? "");
     });
     for (const p of filtered) {
+      // A CAMP never belongs in a weekday column. Its day_of_week holds the FIRST
+      // day it meets, not a weekday it repeats on, so a Mon-Thu camp landed under
+      // Monday and read as a weekly Monday class - the board had no way to show
+      // that it also occupies Tue, Wed and Thu. Camps render in their own band
+      // above the grid instead; see campRows.
+      if (isCampProgram(p)) continue;
       const code = DAY_TO_CODE[dayKey(p.day_of_week)];
       if (!byDay.has(code)) continue;
       if (effectiveWeek) {
@@ -1290,6 +1475,25 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     return byDay;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state, enriched, searchText, selectedLocations, selectedStatuses, selectedInstructors, locName, effectiveWeek]);
+
+  // Camps for this term, in date order. They are already in state.programs, so
+  // matching, offers, assignment and the counts have always worked for them -
+  // only the LAYOUT was wrong. This memo exists to place them, not to re-do any
+  // of that. Same filters as the grid, so a search or a location filter hides a
+  // camp exactly as it hides a class.
+  const campRows = useMemo(() => {
+    if (state.status !== "ready") return [];
+    const camps = state.programs.filter((p) => isCampProgram(p) && matchesFilters(p));
+    // Week mode: a camp shows only if it actually meets during the focused week,
+    // which is the same test the grid applies to a class. Its dates come from
+    // derive_program_session_dates (camp-aware) via state.programDates, so a site
+    // closure inside the run is already accounted for.
+    const inWeek = effectiveWeek
+      ? camps.filter((p) => (state.programDates?.[p.id] ?? []).some((dt) => weekStartOf(dt) === effectiveWeek))
+      : camps;
+    return [...inWeek].sort((a, b) => (a.first_session_date ?? "").localeCompare(b.first_session_date ?? ""));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state, enriched, searchText, selectedLocations, selectedStatuses, selectedInstructors, effectiveWeek]);
 
   const locationOptions = useMemo(() => {
     if (state.status !== "ready") return [];
@@ -2383,6 +2587,55 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
               Off this week (break/closure): <strong style={{ color: INK }}>{weekSignals.get(effectiveWeek).closures.join(", ")}</strong>
             </div>
           )}
+          {/* CAMPS BAND — above the weekday grid, because a camp does not belong to
+              one weekday. Jessica, three times: "i want them as part of the winter
+              schedule - afterschool and programs together", so this is a band on
+              THIS board rather than a second camp board. The cards are the same
+              ProgramCard the grid uses, wired identically, so assigning, offering
+              and sub-cover behave exactly as they do for a class - camps were
+              already in state.programs and already counted; only their placement
+              was wrong. The day range comes from formatDayLabel and the dates from
+              programScheduleSummary, the definitions the catalog and the emails
+              already use, so there is no fifth spelling of "Mon-Thu". */}
+          {campRows.length > 0 && (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "6px 0", borderBottom: `2px solid ${RULE}`, marginBottom: 10 }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: PURPLE }}>Camps</span>
+                <span style={{ fontSize: 11, color: MUTED }}>
+                  {campRows.length} {campRows.length === 1 ? "camp" : "camps"} · runs across days, not on a weekday
+                </span>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: narrow ? "1fr" : "repeat(auto-fill, minmax(240px, 1fr))", gap: 10 }}>
+                {campRows.map((p) => {
+                  const e = enriched.get(p.id);
+                  const loc = locName.get(p.program_location_id) ?? "—";
+                  return (
+                    <div key={p.id} style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                      <div style={{ fontSize: 11, fontWeight: 700, color: BRIGHT, textTransform: "uppercase", letterSpacing: 0.4 }}>
+                        {formatDayLabel(p)}
+                      </div>
+                      <ProgramCard
+                        program={p}
+                        loc={loc}
+                        tint={colorMap.get(loc)}
+                        status={e?.status}
+                        flags={e?.flags}
+                        lead={e?.lead}
+                        subNeeded={e?.subNeeded}
+                        sub={subInfoByProgram.get(p.id)}
+                        weekDate={null}
+                        weekSub={null}
+                        onClick={() => openRow(p)}
+                        onSubClick={(dd) => openAssignSub(p, dd)}
+                      />
+                      <div style={{ fontSize: 11, color: MUTED }}>{programScheduleSummary(p) || "dates not set"}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* THE DAY PICKER, phone only.
               Five day columns do not fit a phone and nothing serious pretends
               otherwise: Deputy's mobile app moves a day at a time, Google
@@ -3032,12 +3285,26 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
   // the desktop table about what it is showing.
   const narrow = useAdminNarrow();
   const byDay = new Map(DAYS.map((d) => [d.code, []]));
+  // Camps are grouped on their own, exactly as they are in the grid view. A camp
+  // has no single weekday to file under - day_of_week is its FIRST day - so
+  // putting it in the Monday group would make this view disagree with the grid
+  // about what a Mon-Thu camp is.
+  const campItems = programs.filter(isCampProgram)
+    .slice()
+    .sort((a, b) => (a.first_session_date ?? "").localeCompare(b.first_session_date ?? ""));
   for (const p of programs) {
+    if (isCampProgram(p)) continue;
     const code = DAY_TO_CODE[dayKey(p.day_of_week)];
     if (byDay.has(code)) byDay.get(code).push(p);
   }
   for (const arr of byDay.values()) arr.sort((a, b) => (parse12h(a.start_time) ?? 0) - (parse12h(b.start_time) ?? 0));
-  const anyRows = DAYS.some((d) => (byDay.get(d.code) ?? []).length > 0);
+  // Camps first, then the weekdays. One list so the group rendering below has a
+  // single shape rather than a special case bolted beside it.
+  const groups = [
+    ...(campItems.length ? [{ key: "camps", label: "Camps", items: campItems, noun: "camp" }] : []),
+    ...DAYS.map((d) => ({ key: d.code, label: d.label, items: byDay.get(d.code) ?? [], noun: "class" })),
+  ];
+  const anyRows = groups.some((g) => g.items.length > 0);
   if (!anyRows) {
     return <div style={{ background: "#fff", border: `1px dashed ${RULE}`, borderRadius: 12, padding: 24, textAlign: "center", color: MUTED }}>No classes match your filters.</div>;
   }
@@ -3070,14 +3337,17 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
           </thead>
         )}
         <tbody style={narrow ? { display: "block" } : undefined}>
-          {DAYS.map((d) => {
-            const items = byDay.get(d.code) ?? [];
+          {groups.map((g) => {
+            const items = g.items;
             if (items.length === 0) return null;
+            const noun = g.noun === "camp"
+              ? `${items.length} camp${items.length === 1 ? "" : "s"}`
+              : `${items.length} class${items.length === 1 ? "" : "es"}`;
             return (
-              <React.Fragment key={d.code}>
+              <React.Fragment key={g.key}>
                 <tr style={narrow ? { display: "block" } : undefined}>
                   <td colSpan={6} style={{ background: CREAM, padding: "7px 14px", fontSize: 12, fontWeight: 700, color: PURPLE, borderTop: `1px solid ${RULE}`, ...(narrow ? { display: "block" } : null) }}>
-                    {d.label} <span style={{ color: MUTED, fontWeight: 500 }}>· {items.length} class{items.length === 1 ? "" : "es"}</span>
+                    {g.label} <span style={{ color: MUTED, fontWeight: 500 }}>· {noun}</span>
                   </td>
                 </tr>
                 {items.map((p) => {
@@ -3387,7 +3657,12 @@ function PickerModal({ program, loc, current, instructors, evaluate, onAssign, o
     <Overlay onClose={onClose}>
       <div style={{ padding: "20px 22px", borderBottom: `1px solid ${RULE}` }}>
         <div style={{ fontSize: 16, fontWeight: 700, color: INK }}>{program.curriculum || "Class"}</div>
-        <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>{loc} · {program.day_of_week}{program.start_time ? ` · ${fmtTimeRange(program.start_time, program.end_time)}` : ""}</div>
+        {/* A camp's day_of_week is its FIRST day, so printing it here said
+            "Monday" about a Mon-Thu camp in the very dialog you assign from.
+            Camps get the run ("Mon-Thu"); a class keeps the exact wording it
+            already had, because formatDayLabel pluralises ("Wednesdays") and
+            that is a copy change nobody asked for. */}
+        <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>{loc} · {isCampProgram(program) ? formatDayLabel(program) : program.day_of_week}{program.start_time ? ` · ${fmtTimeRange(program.start_time, program.end_time)}` : ""}</div>
         {current && !confirming && (
           <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10 }}>
             <span style={{ fontSize: 13, color: INK }}>Currently: <strong>{(current.instructor_preferred || current.instructor_first) ?? "—"} {current.instructor_last ?? ""}</strong></span>
@@ -4033,7 +4308,12 @@ function OfferReviewModal({ program, assignment, loc, subNeeded, onReply, onReas
     <Overlay onClose={onClose}>
       <div style={{ padding: "20px 22px", borderBottom: `1px solid ${RULE}` }}>
         <div style={{ fontSize: 16, fontWeight: 700, color: INK }}>{program.curriculum || "Class"}</div>
-        <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>{loc} · {program.day_of_week}{program.start_time ? ` · ${fmtTimeRange(program.start_time, program.end_time)}` : ""}</div>
+        {/* A camp's day_of_week is its FIRST day, so printing it here said
+            "Monday" about a Mon-Thu camp in the very dialog you assign from.
+            Camps get the run ("Mon-Thu"); a class keeps the exact wording it
+            already had, because formatDayLabel pluralises ("Wednesdays") and
+            that is a copy change nobody asked for. */}
+        <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>{loc} · {isCampProgram(program) ? formatDayLabel(program) : program.day_of_week}{program.start_time ? ` · ${fmtTimeRange(program.start_time, program.end_time)}` : ""}</div>
         <div style={{ fontSize: 13, color: INK, marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}><span style={{ fontWeight: 600 }}>{who}</span> <Pill status={pillStatus} flags={assignment?.flags} /></div>
         {assignment.deadline && <div style={{ fontSize: 12, color: MUTED, marginTop: 4 }}>Response due {fmtDeadline(assignment.deadline)}</div>}
         {subNeeded?.length > 0 && (

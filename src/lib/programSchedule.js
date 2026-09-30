@@ -131,6 +131,30 @@ export function formatDayLabel(program) {
   return Number(program?.session_count) === 1 ? day : `${day}s`;
 }
 
+// Which weekdays a program OCCUPIES, lowercase, in calendar order.
+//
+// For a weekly class that is the single day it repeats on. For a CAMP it is
+// every day of its run - and that difference is the whole point. A camp's
+// day_of_week holds only its FIRST day, so anything that asks "which day is
+// this on" and reads day_of_week gets Monday for a Mon-Thu camp, and then
+// believes the instructor is free Tue, Wed and Thu.
+//
+// That is not cosmetic: the scheduling board uses the answer for "already
+// teaches that day", for counting days against an instructor's max, and for
+// checking their stated weekday availability. Under-reporting a camp by three
+// days silently double-books an instructor and under-counts their workload.
+//
+// Returns [] when neither is known, so a caller can skip rather than guess.
+export function programWeekdays(program) {
+  const days = Array.isArray(program?.class_days) ? program.class_days : null;
+  if (days && days.length > 0) {
+    const lower = days.map((d) => String(d).toLowerCase());
+    return CLASS_DAY_ORDER.filter((d) => lower.includes(d));
+  }
+  const single = String(program?.day_of_week ?? '').trim().toLowerCase();
+  return CLASS_DAY_ORDER.includes(single) ? [single] : [];
+}
+
 // The first day on or after `iso` that the camp actually MEETS.
 //
 // An operator can legitimately type a start that is not a meeting day - "the

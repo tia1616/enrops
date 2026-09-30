@@ -47,6 +47,7 @@ import InviteFamiliesModal from "./InviteFamiliesModal";
 import MessageFamiliesModal from "./programs/MessageFamiliesModal.jsx";
 import RefundDrawer from "../../components/RefundDrawer";
 import Chevron from "../../components/Chevron.jsx";
+import { formatDayLabel } from "../../lib/programSchedule.js";
 import {
   FIELD_DEFS,
   autoMap,
@@ -2479,7 +2480,10 @@ function AfterschoolRostersSection({ org, canEdit }) {
       try {
         const { data: progRows, error: pErr } = await supabase
           .from("programs")
-          .select("id, curriculum, status, day_of_week, start_time, end_time, max_capacity, program_location_id, first_session_date, session_count, program_locations ( name, district )")
+          // class_days is what makes a camp a camp. Without it the label below
+          // falls back to day_of_week - a camp's FIRST day - and a Mon-Thu camp
+          // reads "Mondays" on the roster list.
+          .select("id, curriculum, status, day_of_week, class_days, start_time, end_time, max_capacity, program_location_id, first_session_date, session_count, program_locations ( name, district )")
           .eq("organization_id", org.id)
           // A DRAFT cannot have registrations, so it would list at "0 enrolled"
           // next to a roster-email control that would send a school an empty
@@ -2640,10 +2644,13 @@ function AfterschoolRostersSection({ org, canEdit }) {
       // 2026-08-31, reading her own roster list: "fix both thus and afterschool."
       //
       // "Fridays" is what the parent dashboard and RegistrationQuestions'
-      // programLabel already render, so this is matching the two siblings rather
-      // than inventing a fourth spelling of a weekday. Search still matches "fri"
-      // - the haystack carries both forms deliberately.
-      p.day_of_week ? `${p.day_of_week}s` : null,
+      // programLabel already render. That agreement now lives in ONE place:
+      // formatDayLabel, shared with the catalog, the scheduling board, the
+      // instructor portal and the class roster. It returns the same "Fridays"
+      // for a weekly class and "Mon-Thu" for a camp, whose day_of_week holds
+      // only its first day. Search still matches "fri" - the haystack carries
+      // both forms deliberately.
+      formatDayLabel(p),
       p.start_time || null,
     ].filter(Boolean).join(" · ");
   }

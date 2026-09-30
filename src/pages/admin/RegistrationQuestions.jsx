@@ -22,6 +22,7 @@ import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
 import { allChoices, offeredChoices, DEFAULT_OFFERED } from "../../lib/dismissal.js";
 import { buildRegUrl } from "../../lib/regLinks.js";
+import { formatDayLabel, isCampProgram } from "../../lib/programSchedule.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -161,8 +162,14 @@ const stdFieldKey = (key) => `std_${key}`;
 
 // How a class reads in this page's pickers. ONE place, so the scope picker and
 // the preview's class picker can't start naming the same class differently.
-const programLabel = (p) =>
-  `${p?.curriculum || "Class"}${p?.day_of_week ? ` (${p.day_of_week}s)` : ""}`;
+// The day part comes from formatDayLabel, the one definition shared with the
+// catalog, the roster list, the scheduling board and the instructor portal. It
+// was hand-spelled as `${day_of_week}s` here, which reads a Mon-Thu camp as
+// "(Mondays)" because a camp's day_of_week holds only its FIRST day.
+const programLabel = (p) => {
+  const day = formatDayLabel(p);
+  return `${p?.curriculum || "Class"}${day ? ` (${day})` : ""}`;
+};
 
 // "Only on <class>" — or null when every family is asked. Said in TWO places
 // (the custom-questions list and the preview's ordered list), so it lives here:
@@ -384,7 +391,9 @@ export default function RegistrationQuestions() {
       // picker: the picker deliberately still offers drafts (you configure a
       // question before the class goes live), but the preview can only open a
       // class a family could actually reach.
-      .select("id, curriculum, day_of_week, status, runs_own_registration")
+      // class_days so programLabel can tell a camp from a weekly class; without
+      // it a Mon-Thu camp reads "(Mondays)" in both pickers.
+      .select("id, curriculum, day_of_week, class_days, session_count, status, runs_own_registration")
       .eq("organization_id", org.id)
       .eq("term", org.active_registration_term || "")
       .order("curriculum")
@@ -1118,8 +1127,20 @@ function FormPreview({ std, customRows, programs, orgSlug, stdDirty, stdEdited, 
 
   // The questions in the order families meet them: enabled standard, then active
   // custom. Labels only - what an input LOOKS like is the real form's job now.
+  // THE CAMP RULE, MIRRORED FROM THE FORM. Register.jsx drops homeroom teacher
+  // when every item in the cart is a camp (Jessica, 2026-09-28: "drop homeroom
+  // for camps") - a camp runs at a park or community centre where there is no
+  // classroom to collect from, and the question is required, so leaving it in
+  // stopped the registration dead.
+  //
+  // This list did not know that, so picking a camp above still showed "Homeroom
+  // teacher *" and told the operator their form asks a question it does not. A
+  // preview that disagrees with the real form is worse than no preview. The
+  // picker chooses ONE class, so "every item is a camp" is just "this one is".
+  const previewIsCamp = isCampProgram(picked);
   const items = [];
   for (const f of STANDARD_FIELDS) {
+    if (previewIsCamp && f.key === "homeroom_teacher") continue;
     const s = std[f.key];
     if (s?.enabled) items.push({ key: f.key, label: (s.label || "").trim() || f.label, required: f.alwaysRequired || !!s.required });
   }
@@ -1304,6 +1325,15 @@ function FormPreview({ std, customRows, programs, orgSlug, stdDirty, stdEdited, 
               </li>
             ))}
           </ol>
+        )}
+        {/* Say WHY it is missing. Without this the question just disappears when
+            a camp is picked, which reads as "did I switch that off?" - and the
+            answer matters, because it is still asked for every class. */}
+        {previewIsCamp && std?.homeroom_teacher?.enabled && (
+          <div style={{ fontSize: 11, color: MUTED, marginTop: 8, lineHeight: 1.5 }}>
+            Homeroom teacher isn't asked for a camp — there's no classroom to collect from.
+            It's still asked for your after-school classes.
+          </div>
         )}
         <div style={{ fontSize: 11, color: MUTED, marginTop: 8, lineHeight: 1.5 }}>
           Your form also asks everything under "Always on your form" above.
