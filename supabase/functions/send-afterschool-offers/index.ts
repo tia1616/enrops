@@ -1,7 +1,9 @@
 // send-afterschool-offers: emails offer letters to instructors for an after-school
 // TERM and flips their confirmed program_assignments to published. Sibling of the
-// camp send-offers, but term/program-shaped (no weeks/session_types — each class
-// recurs the same weekday all term).
+// camp send-offers, but term/program-shaped (no weeks/session_types). A weekly
+// class recurs the same weekday all term; a CAMP is a program too since
+// 2026-09-25 and runs consecutive days on its own dates, so the schedule line
+// asks _shared/campProgram.ts which of the two it is holding.
 //
 // Input: { organization_id, term, instructor_ids?: string[]|null, mode: 'preview'|'test'|'send', deadline?: 'YYYY-MM-DD' }
 //   preview: render HTML/text for everyone in scope, no writes/sends
@@ -16,6 +18,11 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
 import { AVAILABILITY_OVERRIDE_NOTE_HTML, AVAILABILITY_OVERRIDE_NOTE_TEXT, hasAvailabilityOverride, distanceBonusNote } from '../_shared/offerCopy.ts';
+// A camp is a program too (class_days set), and its day_of_week holds only its
+// FIRST day - so dayLabel() below, which reads day_of_week and stops, offered a
+// Mon-Thu winter break camp as "Mondays ... all term". Both halves false, in the
+// email that asks an instructor to commit. See _shared/campProgram.ts.
+import { campDayLabel, programRunLabel, programsUnitLabel, runsClause } from '../_shared/campProgram.ts';
 import { loadOrgBrand, renderSignatureBlock, formatFromAddress, resolveTestRecipient, NO_TENANT_INBOX_MESSAGE } from '../_shared/orgBrand.ts';
 import { roomDisplay } from '../_shared/roomLabel.ts';
 
@@ -76,6 +83,21 @@ function dayLabel(dow: string | null): string {
   if (!dow) return '';
   const d = dow.trim().toLowerCase();
   return d.charAt(0).toUpperCase() + d.slice(1) + 's'; // "Mondays"
+}
+// The day label for ANY row on this email. A weekly class goes through
+// dayLabel() exactly as it always has, so its line comes out byte-for-byte
+// unchanged; only a camp reads differently.
+function whenLabel(p: any): string {
+  const camp = campDayLabel(p);
+  return camp || dayLabel(p?.day_of_week ?? null);
+}
+// " · all term" for a class, " · December 21-24" for a camp - and NOTHING when a
+// camp's dates are missing. Printing "all term" there would be a false claim
+// about a four-day commitment; printing nothing is a question the instructor
+// asks.
+function runsSuffix(p: any): string {
+  const label = programRunLabel(p);
+  return label ? ` · ${label}` : '';
 }
 function dollars(cents: number | null | undefined) {
   if (!cents) return '';
@@ -146,7 +168,10 @@ serve(async (req: Request) => {
       // `room` added 2026-08-25: the offer email showed only the SITE room, so an
       // instructor accepting a class at Happy Valley Library was told the summer
       // camp room. The class's own room now wins, via the shared rule.
-      .select('id, curriculum, day_of_week, start_time, end_time, program_location_id, room')
+      // class_days is what makes a camp a camp; first_session_date/end_date are
+      // what it runs on instead of "all term". Without these three the email
+      // CANNOT tell a camp from a Monday class - the row looks identical.
+      .select('id, curriculum, day_of_week, class_days, first_session_date, end_date, start_time, end_time, program_location_id, room')
       .eq('organization_id', organizationId).eq('term', term).eq('status', 'open');
     const programIds = (progs ?? []).map((p: any) => p.id);
     if (programIds.length === 0) return json({ sent: 0, failed: [], preview: [], note: 'No open classes for this term.' });
@@ -308,7 +333,7 @@ function renderHtml({ org, primary, firstName, termDisplay, classes, portalUrl, 
     return `<tr><td style="padding:14px 0;border-bottom:1px solid ${BORDER};">
       <div style="font-size:15px;font-weight:700;color:${TEXT};line-height:1.3;">${escape(p.curriculum ?? 'Class')}</div>
       <div style="font-size:13px;color:${MUTED};margin-top:4px;line-height:1.4;">
-        ${escape(dayLabel(p.day_of_week))} ${escape(p.start_time ?? '')}–${escape(p.end_time ?? '')} · <strong>all term</strong><br/>
+        ${escape(whenLabel(p))} ${escape(p.start_time ?? '')}–${escape(p.end_time ?? '')}${runsSuffix(p) ? ` · <strong>${escape(programRunLabel(p))}</strong>` : ''}<br/>
         ${escape(loc?.name ?? '')}${area}${ab ? ` · please arrive by ${ab}` : ''}
       </div>
       ${venueHtml(loc, p.room)}
@@ -317,7 +342,12 @@ function renderHtml({ org, primary, firstName, termDisplay, classes, portalUrl, 
     </td></tr>`;
   }).join('');
   const n = classes.length;
-  const cls = n === 1 ? 'class' : 'classes';
+  // The noun and the shape-clause both come from WHAT IS IN THE LIST. With no
+  // camp in it both resolve to the words that were hard-coded here before, so an
+  // all-classes offer email is untouched.
+  const progs = classes.map((c: any) => c.p);
+  const cls = programsUnitLabel(progs);
+  const shape = runsClause(progs);
   return `<!doctype html><html lang="en"><body style="margin:0;padding:0;background:${PAGE_BG};font-family:-apple-system,'Helvetica Neue',Helvetica,Arial,sans-serif;color:${TEXT};">
   <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:${PAGE_BG};padding:32px 16px;"><tr><td align="center">
     <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" style="max-width:600px;width:100%;background:#fff;border:1px solid ${BORDER};border-radius:10px;">
@@ -327,27 +357,30 @@ function renderHtml({ org, primary, firstName, termDisplay, classes, portalUrl, 
       </td></tr>
       <tr><td style="padding:14px 32px 6px;font-size:15px;color:${TEXT};line-height:1.55;">
         Hi ${escape(firstName)},<br/><br/>
-        ${introMessage ? escape(introMessage).replace(/\n/g, '<br />') : `Your proposed after-school schedule for ${escape(termDisplay)} is below. <strong>Please tap Accept or Request change on each of the ${n} ${cls}</strong> — each one runs weekly all term, and your schedule isn't confirmed until we hear back on every one.`}${deadline ? `<br/><br/><strong>Please respond by ${escape(deadline)}.</strong>` : ''}
+        ${introMessage ? escape(introMessage).replace(/\n/g, '<br />') : `Your proposed after-school schedule for ${escape(termDisplay)} is below. <strong>Please tap Accept or Request change on each of the ${n} ${cls}</strong> — ${shape}, and your schedule isn't confirmed until we hear back on every one.`}${deadline ? `<br/><br/><strong>Please respond by ${escape(deadline)}.</strong>` : ''}
       </td></tr>
       <tr><td style="padding:8px 32px 0;"><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">${rows}</table></td></tr>
       <tr><td style="padding:24px 32px 6px;" align="left">
         <a href="${portalUrl}" style="display:inline-block;background:${primary};color:#fff;text-decoration:none;padding:14px 28px;border-radius:6px;font-size:16px;font-weight:700;">Review and respond →</a>
       </td></tr>
-      <tr><td style="padding:14px 32px 24px;font-size:13px;color:${MUTED};line-height:1.55;">Once you've responded to every class, you're set. Questions? Just reply to this email.${signatureHtml || `<br/><br/>— ${escape(org.name)}`}</td></tr>
+      <tr><td style="padding:14px 32px 24px;font-size:13px;color:${MUTED};line-height:1.55;">Once you've responded to every one, you're set. Questions? Just reply to this email.${signatureHtml || `<br/><br/>— ${escape(org.name)}`}</td></tr>
     </table>
   </td></tr></table></body></html>`;
 }
 
 function renderText({ org, firstName, termDisplay, classes, portalUrl, deadline, locById, introMessage }: any) {
   const lines: string[] = [`Hi ${firstName},`, ''];
-  lines.push(introMessage || `Your proposed after-school schedule for ${termDisplay} is below. Please tap Accept or Request change on each class — each runs weekly all term, and nothing's confirmed until we hear back on every one.`);
+  // Same two derived words as the HTML half, from the same list, so the halves
+  // cannot say different things about the same email.
+  const progs = classes.map((c: any) => c.p);
+  lines.push(introMessage || `Your proposed after-school schedule for ${termDisplay} is below. Please tap Accept or Request change on each one — ${runsClause(progs)}, and nothing's confirmed until we hear back on every one.`);
   if (deadline) { lines.push(''); lines.push(`Please respond by ${deadline}.`); }
   lines.push('');
   for (const { a, p } of classes) {
     const loc = p.program_location_id ? locById.get(p.program_location_id) : undefined;
     const ab = arriveBy(p.start_time);
     lines.push(`• ${p.curriculum ?? 'Class'}`);
-    lines.push(`  ${dayLabel(p.day_of_week)} ${p.start_time ?? ''}–${p.end_time ?? ''} · all term`);
+    lines.push(`  ${whenLabel(p)} ${p.start_time ?? ''}–${p.end_time ?? ''}${runsSuffix(p)}`);
     // The HTML half has carried the room in its venue block all along and this
     // half never mentioned it, so a plain-text reader was told the school and not
     // the room. Same shared label, so the two halves cannot disagree.

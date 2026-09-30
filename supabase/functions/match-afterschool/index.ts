@@ -42,6 +42,9 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
 import { getUntrainedInstructorIds } from '../_shared/trainingGate.ts';
+// The one Deno definition of "is this program a camp". Used here to EXCLUDE
+// camps from auto-matching - see the long note at the programs query.
+import { isCampProgram } from '../_shared/campProgram.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -147,12 +150,45 @@ serve(async (req) => {
     // ----- Programs (open only — drafts are excluded from auto-match) -----
     const { data: progRaw, error: progErr } = await admin
       .from('programs')
-      .select('id, day_of_week, start_time, end_time, program_location_id, status, curriculum_id, curriculum')
+      // class_days is selected ONLY to exclude camps - see below. Without it in
+      // the select, isCampProgram() reads undefined on every row and silently
+      // decides nothing is a camp, which is the bug this is preventing.
+      .select('id, day_of_week, class_days, start_time, end_time, program_location_id, status, curriculum_id, curriculum')
       .eq('organization_id', organizationId)
       .eq('term', term)
       .eq('status', 'open');
     if (progErr) return json({ error: `Load programs: ${progErr.message}` }, 500);
-    const programs = (progRaw ?? []).filter((p: any) => dayCode(p.day_of_week) !== null);
+
+    // CAMPS ARE NOT AUTO-MATCHED, AND THAT IS A DELIBERATE REFUSAL.
+    //
+    // Every schedule rule in this file is written against ONE weekday:
+    // dayCode(prog.day_of_week) gates availability, the time-overlap check
+    // compares two programs only when their day_of_week matches, and the
+    // max_days cap counts one day per program. A camp is a program too since
+    // 2026-09-25, carries a real term, and its day_of_week holds only its FIRST
+    // day - so a Monday-to-Thursday winter break camp would be matched as a
+    // Monday class. Concretely, that would: assign someone who never said they
+    // were free Tue-Thu; let the SAME instructor take the camp and a Tuesday
+    // class that runs inside the camp's hours, because the overlap test never
+    // compares a Tuesday to a Monday; and charge one day against a cap that
+    // four days should have filled.
+    //
+    // The board's own assign path already reasons over every day a camp
+    // occupies (programWeekdays + coincidence in AfterschoolSchedule.jsx). This
+    // agent does not, and making it do so is a real piece of work, not a filter.
+    // Until it exists, the honest behaviour is to leave camps alone rather than
+    // to propose assignments built on a rule that does not hold for them - a
+    // proposal the operator would reasonably trust.
+    //
+    // Reported in the summary as camps_skipped so the board can SAY this, rather
+    // than leaving the operator to notice their camps were quietly passed over.
+    // NOT named openPrograms: that name is already taken further down for
+    // "programs nobody has confirmed yet", which is a different set.
+    const termPrograms = progRaw ?? [];
+    const campsSkipped = termPrograms.filter((p: any) => isCampProgram(p)).length;
+    const programs = termPrograms
+      .filter((p: any) => !isCampProgram(p))
+      .filter((p: any) => dayCode(p.day_of_week) !== null);
 
     // ----- Locations: name + area (the unit preferences are ranked by) -----
     const { data: locRaw } = await admin
@@ -666,6 +702,10 @@ serve(async (req) => {
       term,
       summary: {
         programs_total: programs.length,
+        // Camps this term that the agent deliberately did not touch. The board
+        // says so out loud; without it the operator sees "matched 8 of 8" and
+        // has no way to know two camps were never in the 8.
+        camps_skipped: campsSkipped,
         locked_confirmed: lockedProgram.size,
         assigned: assignedDecisions.length,
         needs_hire: decisions.filter((d) => d.status === 'needs_hire').length,

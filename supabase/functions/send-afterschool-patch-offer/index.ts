@@ -17,6 +17,9 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, renderSignatureBlock, formatFromAddress } from '../_shared/orgBrand.ts';
 import { AVAILABILITY_OVERRIDE_NOTE_HTML, AVAILABILITY_OVERRIDE_NOTE_TEXT, hasAvailabilityOverride, distanceBonusNote } from '../_shared/offerCopy.ts';
+// Same fix as send-afterschool-offers: dayName() reads day_of_week, which on a
+// camp holds only its FIRST day, so a Mon-Thu camp read "Mondays ... all term".
+import { anyCampProgram, campDayLabel, programRunLabel, programsUnitLabel } from '../_shared/campProgram.ts';
 import { roomDisplay } from '../_shared/roomLabel.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
@@ -78,6 +81,27 @@ function dayName(dow: string | number | null): string {
   const n = Number(dow);
   const key = !Number.isNaN(n) ? DAY_NAMES[n] : String(dow).trim().toLowerCase();
   return key ? key.charAt(0).toUpperCase() + key.slice(1) : '';
+}
+
+// The schedule line for one row: a camp's real days, else the weekly label. A
+// class goes through dayName() exactly as before, so its line is unchanged.
+function whenLabel(p: any): string {
+  const camp = campDayLabel(p);
+  const day = camp || (dayName(p?.day_of_week) ? `${dayName(p?.day_of_week)}s` : '');
+  const time = [fmtTime(p?.start_time), fmtTime(p?.end_time)].filter(Boolean).join('–');
+  return [day, time].filter(Boolean).join(' · ');
+}
+// " · all term" for a class, " · December 21-24" for a camp, nothing when a
+// camp's dates are missing - never a false "all term" on a four-day commitment.
+function runsSuffix(p: any): string {
+  const label = programRunLabel(p);
+  return label ? ` · ${label}` : '';
+}
+// What the intro calls the things that were added. "after-school" is dropped
+// once a camp is in the list, because a camp is not after-school.
+function addedNoun(progs: any[]): string {
+  const noun = programsUnitLabel(progs);
+  return anyCampProgram(progs) ? noun : `after-school ${noun}`;
 }
 
 function unitLabel(count: number) {
@@ -171,7 +195,9 @@ serve(async (req: Request) => {
       .from('programs')
       // `room` added 2026-08-25: this email showed only the SITE room, so the
       // class's own room never reached the instructor being patched in.
-      .select('id, curriculum, day_of_week, start_time, end_time, term, program_location_id, room')
+      // class_days / first_session_date / end_date: without them this email
+      // cannot tell a camp from a Monday class. See _shared/campProgram.ts.
+      .select('id, curriculum, day_of_week, class_days, first_session_date, end_date, start_time, end_time, term, program_location_id, room')
       .in('id', programIds);
     if (progErr) return json({ error: `programs query: ${progErr.message}` }, 500);
     const programById = new Map((programs ?? []).map((p) => [p.id, p]));
@@ -370,11 +396,11 @@ function renderPatchHtml({ termDisplay, org, primary, instructor, classes, porta
       ? `<div style="margin-top:6px;font-size:12px;color:${MUTED};line-height:1.5;">${AVAILABILITY_OVERRIDE_NOTE_HTML}</div>`
       : '';
     const role = a.role === 'developing' ? `<span style="font-size:11px;color:${MUTED};text-transform:uppercase;letter-spacing:0.5px;font-weight:600;margin-left:6px;">Developing</span>` : '';
-    const when = [dayName(p.day_of_week as string) ? `${dayName(p.day_of_week as string)}s` : '', [fmtTime(p.start_time as string), fmtTime(p.end_time as string)].filter(Boolean).join('–')].filter(Boolean).join(' · ');
+    const when = whenLabel(p);
     return `
       <tr><td style="padding:14px 0;border-bottom:1px solid ${BORDER};">
         <div style="font-size:15px;font-weight:700;color:${TEXT};line-height:1.3;">${escape(p.curriculum as string) || 'Class'}${role}</div>
-        <div style="font-size:13px;color:${MUTED};margin-top:4px;line-height:1.4;">${escape(when)} · all term${(loc && loc.name) ? `<br />${escape(loc.name as string)}` : ''}</div>
+        <div style="font-size:13px;color:${MUTED};margin-top:4px;line-height:1.4;">${escape(when)}${escape(runsSuffix(p))}${(loc && loc.name) ? `<br />${escape(loc.name as string)}` : ''}</div>
         ${venue}
         ${bonus}
         ${availNote}
@@ -395,8 +421,8 @@ function renderPatchHtml({ termDisplay, org, primary, instructor, classes, porta
         ${introMessage
           ? escape(introMessage).replace(/\n/g, '<br />')
           : isOne
-            ? `Good news — another after-school class just got added to your ${escape(termDisplay)} schedule. <strong>Please tap Accept or Request change</strong> when you get a moment.`
-            : `${classes.length} more after-school classes just got added to your ${escape(termDisplay)} schedule. <strong>Please tap Accept or Request change on each one</strong> when you get a moment.`}
+            ? `Good news — another ${addedNoun(classes.map((c: any) => c.p))} just got added to your ${escape(termDisplay)} schedule. <strong>Please tap Accept or Request change</strong> when you get a moment.`
+            : `${classes.length} more ${addedNoun(classes.map((c: any) => c.p))} just got added to your ${escape(termDisplay)} schedule. <strong>Please tap Accept or Request change on each one</strong> when you get a moment.`}
         ${deadline ? `<br /><br /><strong>Please respond by ${fmt(deadline)}.</strong>` : ''}
       </td></tr>
       <tr><td style="padding:8px 32px 0;"><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">${rows}</table></td></tr>
@@ -421,17 +447,17 @@ function renderPatchText({ termDisplay, org, instructor, classes, portalUrl, dea
   lines.push(introMessage
     ? introMessage
     : isOne
-      ? `Good news — another after-school class just got added to your ${termDisplay} schedule. Please tap Accept or Request change when you get a moment.`
-      : `${classes.length} more after-school classes just got added to your ${termDisplay} schedule. Please tap Accept or Request change on each one when you get a moment.`);
+      ? `Good news — another ${addedNoun(classes.map((c: any) => c.p))} just got added to your ${termDisplay} schedule. Please tap Accept or Request change when you get a moment.`
+      : `${classes.length} more ${addedNoun(classes.map((c: any) => c.p))} just got added to your ${termDisplay} schedule. Please tap Accept or Request change on each one when you get a moment.`);
   if (deadline) { lines.push(''); lines.push(`Please respond by ${fmt(deadline)}.`); }
   lines.push('');
   for (const { a, p } of classes) {
     if (!p) continue;
     const loc = p.program_location_id ? locationById.get(p.program_location_id as string) : undefined;
     const role = a.role === 'developing' ? ' (Developing)' : '';
-    const when = [dayName(p.day_of_week as string) ? `${dayName(p.day_of_week as string)}s` : '', [fmtTime(p.start_time as string), fmtTime(p.end_time as string)].filter(Boolean).join('–')].filter(Boolean).join(' · ');
+    const when = whenLabel(p);
     lines.push(`• ${(p.curriculum as string) || 'Class'}${role}`);
-    lines.push(`  ${when} · all term`);
+    lines.push(`  ${when}${runsSuffix(p)}`);
     if (loc && loc.name) lines.push(`  ${loc.name as string}`);
     for (const v of renderVenueDetailsText(loc, p.room as string | null)) lines.push(v);
     if (a.distance_bonus_cents) lines.push(`  ${distanceBonusNote(dollars(a.distance_bonus_cents as number))}`);

@@ -1716,7 +1716,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
 
   async function handleMatch() {
     const ok = window.confirm(
-      "Match instructors for this term? This fills empty classes from instructor availability, and re-does its own earlier suggestions. It never touches a class you picked yourself, approved, or already emailed."
+      "Match instructors for this term? This fills empty classes from instructor availability, and re-does its own earlier suggestions. It never touches a class you picked yourself, approved, or already emailed, and it does not fill camps — assign those yourself."
     );
     if (!ok) return;
     setBusy("matching");
@@ -2491,6 +2491,17 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         <div style={{ background: `${VIOLET}14`, border: `1px solid ${VIOLET}55`, borderRadius: 8, padding: "12px 16px", fontSize: 14, color: INK }}>
           Matched <strong>{matchResult.assigned}</strong> of {matchResult.programs_total} classes.{" "}
           {matchResult.needs_hire > 0 && <span>{matchResult.needs_hire} still need an instructor. </span>}
+          {/* SAY WHAT IT DID NOT DO. Auto-matching reasons about one weekday per
+              program, and a camp runs several - so camps are deliberately left
+              alone (see the note in match-afterschool). Without this line the
+              operator reads "matched 8 of 8" and has no way to learn that their
+              camps were never among the 8. */}
+          {Number(matchResult.camps_skipped) > 0 && (
+            <span>
+              {matchResult.camps_skipped} camp{matchResult.camps_skipped === 1 ? " was" : "s were"} left for you
+              — matching works a weekday at a time, so assign camps yourself in the Camps row.{" "}
+            </span>
+          )}
           {Array.isArray(matchResult.missing_surveys) && matchResult.missing_surveys.length > 0 && (
             <span style={{ color: MUTED }}>Waiting on availability from {matchResult.missing_surveys.length} instructor{matchResult.missing_surveys.length === 1 ? "" : "s"}.</span>
           )}

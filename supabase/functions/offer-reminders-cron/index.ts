@@ -34,6 +34,9 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 import { AVAILABILITY_OVERRIDE_NOTE_HTML, AVAILABILITY_OVERRIDE_NOTE_TEXT, hasAvailabilityOverride, distanceBonusNote } from '../_shared/offerCopy.ts';
+// Same fix as the two send-offer functions: dayLabel() reads day_of_week, which
+// on a camp holds only its FIRST day. See _shared/campProgram.ts.
+import { anyCampProgram, campDayLabel, programRunLabel, runsClause } from '../_shared/campProgram.ts';
 import { roomDisplay } from '../_shared/roomLabel.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
@@ -52,8 +55,10 @@ const BORDER = '#e2dfd5';
 const REMINDER_WINDOW_DAYS_MIN = 2;
 const REMINDER_WINDOW_DAYS_MAX = 3;
 
-// After-school classes recur the same weekday all term, so the program email
-// frames each class by day/time (not "Week N · dates"). Mirror the buffer that
+// A weekly after-school class recurs the same weekday all term, so the program
+// email frames it by day/time rather than "Week N · dates" - but a CAMP is a
+// program too and carries its own dates, which is why the schedule line goes
+// through _shared/campProgram.ts. Mirror the buffer that
 // send-afterschool-offers uses for "please arrive by ...".
 const ARRIVAL_BUFFER_MIN = 15;
 
@@ -131,6 +136,18 @@ function arriveBy(start: string | null): string {
   const s = parse12h(start);
   if (s == null) return '';
   return minutesToLabel(s - ARRIVAL_BUFFER_MIN);
+}
+// The day label for ANY program row: a camp's real days, else the weekly label.
+// A class still goes through dayLabel(), so its line is unchanged.
+function whenLabel(p: any): string {
+  const camp = campDayLabel(p);
+  return camp || dayLabel(p?.day_of_week ?? null);
+}
+// " · all term" for a class, " · December 21-24" for a camp, nothing when a
+// camp's dates are missing.
+function runsSuffix(p: any): string {
+  const label = programRunLabel(p);
+  return label ? ` · ${label}` : '';
 }
 function dayLabel(dow: string | null): string {
   if (!dow) return '';
@@ -446,7 +463,9 @@ serve(async (req: Request) => {
         .from('programs')
         // `room` added 2026-08-25 so the after-school reminder shows the class's
         // own room. The camp half of this function is deliberately untouched.
-        .select('id, curriculum, day_of_week, start_time, end_time, program_location_id, term, room')
+        // class_days / first_session_date / end_date: without them this reminder
+        // cannot tell a camp from a Monday class. See _shared/campProgram.ts.
+        .select('id, curriculum, day_of_week, class_days, first_session_date, end_date, start_time, end_time, program_location_id, term, room')
         .in('id', programIds);
       const programById = new Map((programs ?? []).map((p: any) => [p.id, p]));
 
@@ -735,12 +754,21 @@ function buildReminderText({ instructor, camps, cycle, portalUrl, deadline, orgN
 }
 
 // ---- After-school (program) reminder renderers ----
-// Weekly framing: curriculum · day/time · all term · school · area. No week
-// numbers or date ranges — each class recurs the same weekday all term.
+// Framing: curriculum · day/time · when it runs · school · area. A weekly class
+// recurs the same weekday all term and says so; a CAMP is a program too, and
+// says its own days and dates instead. Same rule, and the same module, as the
+// two send-offer functions.
 function buildProgramReminderHtml({ branding, firstName, classes, termDisplay, portalUrl, deadline, orgName, locationById }: any) {
   const primary = branding.primary_color ?? DEFAULT_PRIMARY;
   const n = classes.length;
-  const unit = n === 1 ? 'class' : 'classes';
+  // Noun and shape-clause derived from the list. With no camp in it BOTH come
+  // out as the exact strings that were hard-coded here before, so an
+  // all-classes reminder is byte-for-byte what it was. "each one" rather than a
+  // derived noun once a camp is present: this sentence wants a singular, and
+  // "on each classes and camps" is not one.
+  const progs = classes.map((c: any) => c.p);
+  const unit = anyCampProgram(progs) ? 'one' : (n === 1 ? 'class' : 'classes');
+  const shape = titleCase(runsClause(progs));
 
   const rows = classes.map(({ a, p }: any) => {
     const loc = p.program_location_id ? locationById?.get(p.program_location_id) : undefined;
@@ -758,29 +786,33 @@ function buildProgramReminderHtml({ branding, firstName, classes, termDisplay, p
       : '';
     return `<tr><td style="padding:12px 0;border-bottom:1px solid ${BORDER};">
       <div style="font-size:14px;font-weight:600;color:${TEXT};line-height:1.3;">${escape(p.curriculum ?? 'Class')}</div>
-      <div style="font-size:12px;color:${MUTED};margin-top:2px;line-height:1.4;">${escape(dayLabel(p.day_of_week))} ${escape(p.start_time ?? '')}–${escape(p.end_time ?? '')} · <strong>all term</strong><br/>${escape(loc?.name ?? '')}${area}${ab ? ` · please arrive by ${ab}` : ''}</div>
+      <div style="font-size:12px;color:${MUTED};margin-top:2px;line-height:1.4;">${escape(whenLabel(p))} ${escape(p.start_time ?? '')}–${escape(p.end_time ?? '')}${programRunLabel(p) ? ` · <strong>${escape(programRunLabel(p))}</strong>` : ''}<br/>${escape(loc?.name ?? '')}${area}${ab ? ` · please arrive by ${ab}` : ''}</div>
       ${venue}
       ${bonus}
       ${availNote}
     </td></tr>`;
   }).join('');
 
-  return `<!doctype html><html lang="en"><body style="margin:0;padding:0;background:${DEFAULT_PAGE_BG};font-family:-apple-system,'Helvetica Neue',Helvetica,Arial,sans-serif;color:${TEXT};"><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:${DEFAULT_PAGE_BG};padding:32px 16px;"><tr><td align="center"><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" style="max-width:600px;width:100%;background:#fff;border:1px solid ${BORDER};border-radius:10px;"><tr><td style="padding:28px 32px 8px;"><div style="font-size:13px;color:${MUTED};text-transform:uppercase;letter-spacing:0.6px;font-weight:600;">${escape(orgName)}</div><h1 style="margin:6px 0 0;font-size:22px;color:${TEXT};font-weight:700;">Quick reminder — please respond</h1></td></tr><tr><td style="padding:14px 32px 6px;font-size:15px;color:${TEXT};line-height:1.55;">Hi ${escape(firstName)},<br /><br />Just a nudge — your ${escape(termDisplay)} after-school schedule is still waiting for your response. <strong>Please tap Accept or Request change on each ${unit}</strong> by <strong>${fmt(deadline)}</strong>. Each one runs weekly all term, and your schedule isn't confirmed until we hear back on every one.</td></tr><tr><td style="padding:8px 32px 0;"><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">${rows}</table></td></tr><tr><td style="padding:20px 32px 6px;"><a href="${portalUrl}" style="display:inline-block;background:${primary};color:#fff;text-decoration:none;padding:13px 26px;border-radius:6px;font-size:15px;font-weight:700;">Review and respond →</a></td></tr><tr><td style="padding:14px 32px 24px;font-size:13px;color:${MUTED};line-height:1.55;">Already responded? You can ignore this email — sometimes the timing crosses. Questions? Just reply.<br /><br />— The ${escape(orgName)} team</td></tr></table></td></tr></table></body></html>`;
+  return `<!doctype html><html lang="en"><body style="margin:0;padding:0;background:${DEFAULT_PAGE_BG};font-family:-apple-system,'Helvetica Neue',Helvetica,Arial,sans-serif;color:${TEXT};"><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:${DEFAULT_PAGE_BG};padding:32px 16px;"><tr><td align="center"><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" style="max-width:600px;width:100%;background:#fff;border:1px solid ${BORDER};border-radius:10px;"><tr><td style="padding:28px 32px 8px;"><div style="font-size:13px;color:${MUTED};text-transform:uppercase;letter-spacing:0.6px;font-weight:600;">${escape(orgName)}</div><h1 style="margin:6px 0 0;font-size:22px;color:${TEXT};font-weight:700;">Quick reminder — please respond</h1></td></tr><tr><td style="padding:14px 32px 6px;font-size:15px;color:${TEXT};line-height:1.55;">Hi ${escape(firstName)},<br /><br />Just a nudge — your ${escape(termDisplay)} after-school schedule is still waiting for your response. <strong>Please tap Accept or Request change on each ${unit}</strong> by <strong>${fmt(deadline)}</strong>. ${shape}, and your schedule isn't confirmed until we hear back on every one.</td></tr><tr><td style="padding:8px 32px 0;"><table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">${rows}</table></td></tr><tr><td style="padding:20px 32px 6px;"><a href="${portalUrl}" style="display:inline-block;background:${primary};color:#fff;text-decoration:none;padding:13px 26px;border-radius:6px;font-size:15px;font-weight:700;">Review and respond →</a></td></tr><tr><td style="padding:14px 32px 24px;font-size:13px;color:${MUTED};line-height:1.55;">Already responded? You can ignore this email — sometimes the timing crosses. Questions? Just reply.<br /><br />— The ${escape(orgName)} team</td></tr></table></td></tr></table></body></html>`;
 }
 
 function buildProgramReminderText({ firstName, classes, termDisplay, portalUrl, deadline, orgName, locationById }: any) {
   const n = classes.length;
-  const unit = n === 1 ? 'class' : 'classes';
+  // Same two derived words as the HTML half, from the same list, so the halves
+  // cannot describe the same reminder differently.
+  const progs = classes.map((c: any) => c.p);
+  const unit = anyCampProgram(progs) ? 'one' : (n === 1 ? 'class' : 'classes');
+  const shape = titleCase(runsClause(progs));
   const lines: string[] = [];
   lines.push(`Hi ${firstName},`);
   lines.push('');
-  lines.push(`Just a nudge — your ${termDisplay} after-school schedule is still waiting for your response. Please tap Accept or Request change on each ${unit} by ${fmt(deadline)}. Each one runs weekly all term, and nothing's confirmed until we hear back on every one.`);
+  lines.push(`Just a nudge — your ${termDisplay} after-school schedule is still waiting for your response. Please tap Accept or Request change on each ${unit} by ${fmt(deadline)}. ${shape}, and nothing's confirmed until we hear back on every one.`);
   lines.push('');
   for (const { a, p } of classes) {
     const loc = p.program_location_id ? locationById?.get(p.program_location_id) : undefined;
     const ab = arriveBy(p.start_time);
     lines.push(`• ${p.curriculum ?? 'Class'}`);
-    lines.push(`  ${dayLabel(p.day_of_week)} ${p.start_time ?? ''}–${p.end_time ?? ''} · all term`);
+    lines.push(`  ${whenLabel(p)} ${p.start_time ?? ''}–${p.end_time ?? ''}${runsSuffix(p)}`);
     lines.push(`  ${loc?.name ?? ''}${loc?.area ? ` · ${loc.area}` : ''}${ab ? ` · arrive by ${ab}` : ''}`);
     for (const v of renderVenueDetailsText(loc, p.room)) lines.push(v);
     if (a.distance_bonus_cents) lines.push(`  ${distanceBonusNote(dollars(a.distance_bonus_cents))}`);
