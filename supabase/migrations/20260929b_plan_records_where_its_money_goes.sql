@@ -48,6 +48,20 @@
 --
 -- So the order is not free: THIS MIGRATION MUST BE APPLIED TO BOTH
 -- ENVIRONMENTS BEFORE EITHER WRITER IS DEPLOYED.
+--
+-- AND A ROLLBACK RUNS THE SAME CONTRACT BACKWARDS. Dropping these columns while
+-- create-checkout or stripe-webhook are still deployed reproduces the failure
+-- exactly: PostgREST rejects the write as an unknown column, checkouts 500, and
+-- the webhook fails AFTER charge 1 is taken. The columns must OUTLIVE the
+-- functions in any revert. process-installments is safe in either direction -
+-- it selects '*', so a missing column reads as undefined, which resolvePlanRouting
+-- treats identically to the old unrecorded case.
+--
+-- RUN THE BACKFILL AGAIN AFTER THE WRITERS ARE DEPLOYED. Any plan whose charge 1
+-- completes between this migration and the stripe-webhook deploy gets NULL on
+-- every row, and the one-shot backfill below has already been and gone. Re-running
+-- the same statement afterwards is idempotent (the `is null` guard means a row
+-- already stamped is never touched) and closes that window.
 
 alter table public.checkout_schedules
   add column if not exists stripe_transfer_destination_id text;
@@ -67,11 +81,25 @@ comment on column public.installments.stripe_transfer_destination_id is
 -- anyway, so the money moves to exactly the same place either way. All it does
 -- is stop a LATER change of the org's account or charge model from moving it.
 --
--- Only rows that can still be charged. A paid row is history and is never
--- re-charged, so writing a snapshot onto it would invent a record of a routing
--- decision we did not actually observe; NULL there stays honest. Rows paused
--- because the PROGRAM was cancelled are not chargeable either and are left
--- alone for the same reason.
+-- Only rows that can still be charged, expressed as a DENY-list of the two
+-- provably terminal states. 20260810f got this wrong with an allow-list of
+-- ('pending','paused_card_failed') and 20260810g had to correct it: the CHECK
+-- permits six statuses, and 'failed' and 'paused_program_cancelled' are NOT
+-- terminal - process-installments' own alert tells operators to "flip the rows
+-- back to status=pending to retry". A row resurrected that way would carry no
+-- routing and strand the family on the next switch, which is the whole thing
+-- this migration exists to prevent. On prod today that is 16 real rows worth
+-- $2,681.36 sitting in paused_program_cancelled.
+--
+-- A paid row is history and is never re-charged, so writing a snapshot onto it
+-- would invent a record of a routing decision we did not observe; NULL there
+-- stays honest. A refunded row is closed.
+--
+-- stripe_charges_enabled is required because the claim has to be TRUE. With the
+-- account disabled, buildConnectChargeParams returns no transfer_data at all,
+-- so the charge would not go to this account and stamping it would record a
+-- destination the money never took. Those rows stay NULL and keep asking a
+-- human, which is the honest answer.
 --
 -- Deliberately NOT backfilled, because we would be guessing rather than
 -- recording: a platform row whose org is ALREADY on direct charges. That is
@@ -93,5 +121,6 @@ update public.installments i
    and i.stripe_transfer_destination_id is null
    and i.stripe_charge_account_id is null
    and o.stripe_account_id is not null
+   and o.stripe_charges_enabled
    and o.stripe_charge_model is distinct from 'direct'
-   and i.status in ('pending', 'paused_card_failed');
+   and coalesce(i.status, 'pending') not in ('paid', 'refunded');

@@ -434,3 +434,35 @@ Deno.test('THE ITEM 12 CASE: a recorded destination survives its org moving to d
   assertEquals(routing.params.transfer_data, { destination: 'acct_old_destination' });
   assertEquals(routing.blocked, null);
 });
+
+Deno.test('THE TRAP THE GUARD EXISTS FOR: a disabled account silently drops transfer_data', () => {
+  // This pins a DANGEROUS existing behaviour, not new code. When the org's
+  // stripe_charges_enabled is false, buildConnectChargeParams returns {} - no
+  // transfer_data and no application_fee_amount - and buildChargeRouting hands
+  // that back with blocked:null. The resulting charge is a plain PLATFORM
+  // charge: the family is debited in full and every cent stays in the Enrops
+  // balance.
+  //
+  // stripe_charges_enabled is read off the ORG row, never off the plan, so a
+  // plan that recorded its own destination cannot protect itself here. That is
+  // why process-installments compares the destination it BUILT against the one
+  // the plan RECORDED and fails closed when they differ, rather than trusting
+  // that a known destination means a safe charge.
+  //
+  // If this test ever fails because {} gained a transfer_data, revisit that
+  // comparison - it would mean the hazard moved.
+  const planDestination = 'acct_recorded_on_the_plan';
+  const orgWithDisabledAccount: ConnectOrgConfig = {
+    ...HAPPY_ORG,
+    stripe_account_id: planDestination,
+    stripe_charges_enabled: false,
+  };
+  const routing = buildChargeRouting(20000, 'card', orgWithDisabledAccount, 'org-id');
+
+  assertEquals(routing.params.transfer_data, undefined);
+  assertEquals(routing.params.application_fee_amount, undefined);
+  assertEquals(routing.blocked, null);
+  // The comparison process-installments makes, spelled out:
+  const builtDestination = routing.params.transfer_data?.destination ?? null;
+  assertEquals(builtDestination === planDestination, false);
+});

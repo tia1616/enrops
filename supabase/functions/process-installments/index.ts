@@ -212,8 +212,28 @@ serve(async (req) => {
     // Consequence, and it is the correct one: a parent enrolled with two
     // operators now sees one charge per operator per installment. They are two
     // different merchants; a single combined charge was never right.
-    const installmentGroupKey = (r: InstallmentRow) =>
-      `${r.organization_id}__${r.stripe_customer_id}__${r.installment_number}`;
+    // ROUTING IS PART OF THE KEY FOR THE SAME REASON THE ORG IS. A group is
+    // charged as ONE PaymentIntent, and a PaymentIntent has exactly one
+    // transfer destination - so two plans that recorded DIFFERENT accounts can
+    // no more share a charge than two operators can. A returning parent whose
+    // operator changed connected accounts between their two registrations has
+    // exactly that: plan 1 recorded the old account, plan 2 the new one, and
+    // both are individually perfectly chargeable.
+    //
+    // Splitting them is the fix; demanding they agree is not. This file already
+    // learned that once - see the fee-snapshot comment in processGroup, where
+    // an earlier group-wide agreement check "deadlocked on exactly the action
+    // this feature exists to make safe" and paused rows that were not even due.
+    // Keying on the routing charges each plan correctly instead of charging
+    // neither.
+    //
+    // Consequence, and it is the correct one: such a parent sees one charge per
+    // destination per installment. The money is going to two different places.
+    const installmentGroupKey = (r: InstallmentRow) => {
+      const route = resolvePlanRouting(r.stripe_charge_account_id, r.stripe_transfer_destination_id);
+      return `${r.organization_id}__${r.stripe_customer_id}__${r.installment_number}`
+        + `__${route.model ?? 'unrecorded'}:${route.accountId ?? 'none'}`;
+    };
 
     const triggerKeys = new Set<string>();
     for (const row of triggerSet as InstallmentRow[]) {
@@ -754,6 +774,28 @@ async function processGroup(
       // always been treated as - the direct case above already returned.
       stripe_charge_model: planRouting.model ?? 'destination',
       ...(planRouting.accountId ? { stripe_account_id: planRouting.accountId } : {}),
+      // stripe_charges_enabled describes the org's CURRENT account. Once a plan
+      // names its own destination, that flag is about a DIFFERENT account and
+      // must not decide this charge.
+      //
+      // Leaving it alone looks conservative and is the opposite. When an org
+      // moves to direct it mints a new account and the account.updated webhook
+      // writes stripe_charges_enabled=false on the org row while that new
+      // account onboards - even though the plan's OLD account is connected and
+      // perfectly able to receive a transfer. buildConnectChargeParams would
+      // then return {} for every one of those plans, which is how the first
+      // version of this fix managed to strand the exact 163 rows the work
+      // exists to save.
+      //
+      // So: trust the plan's account, and let Stripe be the authority on
+      // whether it can still receive money. If it cannot, the transfer is
+      // rejected and the charge fails loudly into the existing failure path -
+      // which is strictly better than the alternative it replaces, where an
+      // empty params object silently became a plain platform charge that took
+      // the family's money into the Enrops balance and marked it paid.
+      ...(planRouting.model === 'destination' && planRouting.accountId
+        ? { stripe_charges_enabled: true }
+        : {}),
     }
     : null;
 
@@ -765,26 +807,63 @@ async function processGroup(
     groupMargin,
   );
 
+  // A plan that recorded where its money goes must actually send it there.
+  //
+  // buildConnectChargeParams returns {} - no transfer_data, no application fee -
+  // whenever stripe_charges_enabled is false, and that flag is read from the
+  // ORG row, never from the plan. Before a plan recorded its own destination,
+  // such a row was caught by the pre-switch guard above and paused. Now that the
+  // guard only fires for a plan with NO recorded routing, the same row would
+  // sail through and create a PLAIN PLATFORM CHARGE: the family's card is
+  // debited in full, every cent lands in the Enrops balance, the rows are marked
+  // paid, and the only trace is a console.warn nobody reads.
+  //
+  // It is reachable on exactly the path this work exists to enable. Moving an
+  // org to direct charges mints a new account and writes charge_model='direct'
+  // BEFORE onboarding finishes, and the account.updated webhook then sets
+  // stripe_charges_enabled=false on the org row - so the flip itself opens the
+  // window. A verification hold or a dashboard deauthorisation does the same to
+  // an org that never flipped.
+  //
+  // With stripe_charges_enabled forced true above for a plan that names its own
+  // destination, this should now be unreachable - it is kept as a last assertion
+  // that we never send a charge somewhere other than where the plan says, no
+  // matter what a future edit to buildConnectChargeParams does. Compare what was
+  // BUILT against what the plan RECORDED rather than re-deriving the condition,
+  // so it keeps working without this file knowing why params came back empty.
+  const plannedDest = planRouting.model === 'destination' ? planRouting.accountId : null;
+  const builtDest = routing.params.transfer_data?.destination ?? null;
+  const destinationUnmet = plannedDest && builtDest !== plannedDest
+    ? `installment plan is recorded against ${plannedDest} but this charge would not transfer there `
+      + `(org ${activeRows[0].organization_id} stripe_charges_enabled=${orgConfig?.stripe_charges_enabled ?? 'null'}); `
+      + `charging anyway would put the family's money in the platform balance`
+    : null;
+
+  // Reading routing from activeRows[0] is safe BECAUSE routing is part of
+  // installmentGroupKey: every row in this group resolved to the same account,
+  // or they would not be in the same group. Do not add a group-wide agreement
+  // check here - that shape is what deadlocked the fee snapshot.
+
   // Fail closed for direct orgs with no usable account. Charging anyway would
   // create a plain platform PaymentIntent against a customer id that doesn't
   // exist on the platform — it would fail confusingly, or worse, succeed and
   // put the operator's money in the Enrops balance. Pause and alert instead.
-  // (Never set for destination orgs, so J2S can't reach this branch.)
-  if (routing.blocked) {
-    console.error(`[process-installments] BLOCKED: ${routing.blocked}`);
+  const blocked = routing.blocked ?? destinationUnmet;
+  if (blocked) {
+    console.error(`[process-installments] BLOCKED: ${blocked}`);
     await admin.from('installments').update({
       status: 'paused_card_failed',
-      failure_reason: `charge blocked: ${routing.blocked}`,
+      failure_reason: `charge blocked: ${blocked}`,
       last_attempt_at: new Date().toISOString(),
     }).in('id', activeRows.map((r) => r.id).sort());
     summary.paused_card_failed_groups++;
     summary.paused_card_failed_rows += activeRows.length;
-    summary.details.push(`BLOCKED group: ${routing.blocked}`);
+    summary.details.push(`BLOCKED group: ${blocked}`);
     await sendOperatorAlert({
       brand,
       to: alertEmail,
       subject: `Installment charge blocked — Stripe account not ready`,
-      body: `${routing.blocked}\n\n${activeRows.length} installment row(s) were NOT charged and are now paused. Finish Stripe onboarding, then flip the rows back to status=pending to retry.\n\nRow IDs: ${activeRows.map((r) => r.id).join(', ')}`,
+      body: `${blocked}\n\n${activeRows.length} installment row(s) were NOT charged and are now paused. Finish Stripe onboarding, then flip the rows back to status=pending to retry.\n\nRow IDs: ${activeRows.map((r) => r.id).join(', ')}`,
     });
     return;
   }
@@ -908,6 +987,15 @@ async function processGroup(
       // Re-stamp where this PI actually landed, so a refund of installment 2 or
       // 3 scopes itself correctly without consulting the org's current model.
       stripe_charge_account_id: recordedAcct,
+      // Record the transfer destination this charge ACTUALLY used, which closes
+      // the gap for a plan that never recorded one. Without this an unrecorded
+      // plan stays unrecorded for its whole life: charge 2 transfers to
+      // whichever account the org points at today, that fact is thrown away,
+      // and if the org reconnects a different account before charge 3 the two
+      // halves of one plan pay two different operators with nothing recording
+      // either. Writing it here also upgrades the migration's forward-looking
+      // backfill into an observed fact the first time each plan charges.
+      stripe_transfer_destination_id: builtDest,
     }).in('id', sortedRowIds);
 
     summary.charged_groups++;
