@@ -3808,7 +3808,17 @@ function DailyCheckInSection({ assignmentId, instructorId, campSessionId, starts
             : { program_assignment_id: assignmentId, session_date: dateStr } },
       );
       if (fnErr || data?.error) {
-        setErr(humanizeConfirmError(data?.error || fnErr?.message));
+        // READ THE BODY, not fnErr.message. Every refusal from this function is
+        // a non-2xx with a code in the body, and supabase-js turns that into a
+        // FunctionsHttpError whose message is the fixed string "Edge Function
+        // returned a non-2xx status code" - so passing fnErr.message here meant
+        // humanizeConfirmError matched nothing and EVERY refusal came out as
+        // "Couldn't save your check-in. Try again.", including the two that can
+        // never succeed on a retry (a cancelled class, and a camp with no
+        // session type). fnErrorBody is the pattern the sub-delivery handler in
+        // this same file already uses.
+        const body = fnErr ? await fnErrorBody(fnErr) : null;
+        setErr(humanizeConfirmError(body?.error || data?.error || fnErr?.message));
         return;
       }
       // Update local state with the returned confirmation.
