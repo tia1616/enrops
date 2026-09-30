@@ -292,7 +292,14 @@ serve(async (req: Request) => {
           const role = (a.metadata as Record<string, string> | null)?.enrops_account_role ?? 'live';
           return isMove
             ? a.id !== org.stripe_account_id && role === 'pending'
-            : role !== 'pending';
+            // 'live' ONLY - not merely "not pending". stripe-complete-move
+            // stamps a promoted org's OLD account 'retired', and an org that
+            // has moved once would otherwise offer BOTH its retired and its
+            // current account as candidates, giving its operator the
+            // multiple_stripe_accounts 409 on their own Payments screen. An
+            // account minted before roles existed has none and reads 'live',
+            // which is what it is.
+            : role === 'live';
         });
         if (candidates.length === 1) {
           accountId = candidates[0].id;

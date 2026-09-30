@@ -180,6 +180,51 @@ serve(async (req: Request) => {
     // is not on the new model would complete a move that achieved nothing, and
     // would mark it stripe_charge_model='direct' while Stripe still bills the
     // platform - so the uplift and the routing would disagree about who pays.
+    // ── does this account actually BELONG to this org? ────────────────────
+    // Promised in 20260930b's comment and, until this review, not written.
+    //
+    // The partial unique index stops two orgs PARKING the same account. It
+    // cannot stop a parked value that equals another org's LIVE
+    // stripe_account_id, because those are different columns - and an account
+    // belonging to someone else is perfectly healthy, so every other check here
+    // passes it. Promoting it would point this org's charges at another
+    // business's Stripe balance, and nothing downstream re-checks: buildChargeRouting
+    // simply reads the column.
+    //
+    // Two independent checks, because they fail in different directions. The
+    // metadata is what Stripe itself says the account is for; the query catches
+    // an account whose metadata is missing or stale but which some other org is
+    // demonstrably charging to right now.
+    const acctOrgId = (acct.metadata as Record<string, string> | null)?.enrops_org_id ?? null;
+    if (acctOrgId !== org.id) {
+      console.error('[complete-move] REFUSED: parked account', pendingId, 'is tagged for org', acctOrgId, 'not', org.id);
+      return json({
+        error: 'account_belongs_elsewhere',
+        message: 'The account waiting to take over is not registered to this business, so nothing was changed. Check which account was set up for them.',
+      }, 409);
+    }
+
+    const { data: otherOwner, error: otherErr } = await supabase
+      .from('organizations')
+      .select('id')
+      .eq('stripe_account_id', pendingId)
+      .neq('id', org.id)
+      .limit(1)
+      .maybeSingle();
+    if (otherErr) {
+      // Fail CLOSED: not knowing whether another business is charging to this
+      // account is not permission to point a second one at it.
+      console.error('[complete-move] other-owner check failed:', otherErr);
+      return json({ error: 'lookup_failed' }, 500);
+    }
+    if (otherOwner) {
+      console.error('[complete-move] REFUSED: account', pendingId, 'is already live for org', (otherOwner as { id: string }).id);
+      return json({
+        error: 'account_in_use',
+        message: 'Another business is already taking payments through that account, so nothing was changed.',
+      }, 409);
+    }
+
     const feesPayer = acct.controller?.fees?.payer ?? null;
     if (feesPayer !== 'account') {
       return json({
