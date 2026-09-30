@@ -2451,6 +2451,40 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         />
       )}
 
+      {/* ENNIE ON A TERM THAT HAS NEVER SENT ANYTHING.
+          The tip above is a MID-FLIGHT safety net: it is gated on offersOut, so
+          Ennie only appears once a batch has already gone out, to catch someone
+          added afterwards. That is why Fall prompts her and Winter never did -
+          Winter has sent nothing, so the gate is false and the list is empty
+          before it looks at anything else. A CAMP TERM never gets past that
+          gate, because a camp is staffed by hand and there is no batch.
+
+          Jessica hit this twice and named it plainly the second time: "it's not
+          the same as the fall one. the fall one has ennie." She is right, and it
+          was never the Offers panel she was missing.
+
+          NOT A SECOND VOICE SAYING THE SAME THING. Suppressed while the patch
+          tip is up (Fall keeps exactly the prompt that works today) and while
+          the just-approved banner below is still on screen, which already says
+          "ready to send - click Send offers". */}
+      {pendingPatchAssignments.length === 0 && !approveResult && counts.sendable > 0 && (
+        <HatGuide
+          character="ennie"
+          tip={{
+            key: `as-${term}-readytosend-${counts.sendable}`,
+            message: counts.sendable === 1
+              ? "One offer is approved and ready to send. It won't go out until you send it."
+              : `${counts.sendable} offers are approved and ready to send. They won't go out until you send them.`,
+            primary: {
+              // Same words as the button in the Offers panel on purpose: one
+              // action, one name, wherever she meets it.
+              label: `Send offers (${counts.sendable})`,
+              onClick: openSendOffers,
+            },
+          }}
+        />
+      )}
+
       {counts.changeRequested > 0 && changeReqLead && (
         <HatGuide
           character="ennie"
