@@ -6,7 +6,7 @@
 // Run: deno test supabase/functions/_shared/tests/connectChargeParams.test.ts
 
 import { assertEquals } from 'https://deno.land/std@0.177.0/testing/asserts.ts';
-import { buildChargeRouting, buildConnectChargeParams, ConnectOrgConfig } from '../connectChargeParams.ts';
+import { buildChargeRouting, buildConnectChargeParams, ConnectOrgConfig, resolvePlanRouting } from '../connectChargeParams.ts';
 
 // J2S-style free-tier config, fully connected and enabled.
 const HAPPY_ORG: ConnectOrgConfig = {
@@ -356,5 +356,81 @@ Deno.test('null org → destination fall-through, not blocked', () => {
   const routing = buildChargeRouting(20000, 'card', null, 'org-id');
   assertEquals(routing.direct, false);
   assertEquals(routing.params, {});
+  assertEquals(routing.blocked, null);
+});
+
+// --- resolvePlanRouting: what an in-flight plan recorded about itself --------
+//
+// These pin the fact that a plan's routing comes from the PLAN, not from the
+// org's current configuration. The bug they exist to prevent is silent: an org
+// that changes its connected account, or moves to direct charges, would
+// otherwise have its in-flight plans either redirected to an account they never
+// settled against, or paused wholesale.
+
+Deno.test('plan routing: a direct plan routes to the account it was charged on', () => {
+  assertEquals(
+    resolvePlanRouting('acct_direct', null),
+    { model: 'direct', accountId: 'acct_direct' },
+  );
+});
+
+Deno.test('plan routing: a destination plan routes to the account it transferred to', () => {
+  assertEquals(
+    resolvePlanRouting(null, 'acct_destination'),
+    { model: 'destination', accountId: 'acct_destination' },
+  );
+});
+
+Deno.test('plan routing: a plan that recorded neither is unknown, not "platform"', () => {
+  // The whole point. Before this existed, null meant both "on the platform" and
+  // "we have no idea", and the caller could not tell them apart.
+  assertEquals(
+    resolvePlanRouting(null, null),
+    { model: null, accountId: null },
+  );
+});
+
+Deno.test('plan routing: the charge account wins over a destination, because that is where the card is', () => {
+  assertEquals(
+    resolvePlanRouting('acct_direct', 'acct_destination'),
+    { model: 'direct', accountId: 'acct_direct' },
+  );
+});
+
+Deno.test('plan routing: empty strings are treated as unrecorded, not as an account id', () => {
+  assertEquals(resolvePlanRouting('', ''), { model: null, accountId: null });
+  assertEquals(resolvePlanRouting('', 'acct_destination'), {
+    model: 'destination', accountId: 'acct_destination',
+  });
+});
+
+Deno.test('plan routing: undefined is tolerated the same as null', () => {
+  assertEquals(resolvePlanRouting(undefined, undefined), { model: null, accountId: null });
+});
+
+Deno.test('THE ITEM 12 CASE: a recorded destination survives its org moving to direct', () => {
+  // The org has moved on: new account, direct charges. The plan has not - its
+  // card is still on the platform and its money still belongs to the account it
+  // has always transferred to. Routing must follow the PLAN.
+  const plan = resolvePlanRouting(null, 'acct_old_destination');
+  assertEquals(plan.model, 'destination');
+
+  // This is what process-installments hands buildChargeRouting: the org's fee
+  // config, overridden by the plan's own routing.
+  const orgNowDirect: ConnectOrgConfig = {
+    ...HAPPY_ORG,
+    stripe_account_id: 'acct_brand_new_direct',
+    stripe_charge_model: 'direct',
+  };
+  const routing = buildChargeRouting(20000, 'card', {
+    ...orgNowDirect,
+    stripe_charge_model: plan.model ?? 'destination',
+    ...(plan.accountId ? { stripe_account_id: plan.accountId } : {}),
+  }, 'org-id');
+
+  // Still a platform charge, still transferring to the ORIGINAL account.
+  assertEquals(routing.direct, false);
+  assertEquals(routing.requestOptions, undefined);
+  assertEquals(routing.params.transfer_data, { destination: 'acct_old_destination' });
   assertEquals(routing.blocked, null);
 });

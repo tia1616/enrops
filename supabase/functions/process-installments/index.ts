@@ -75,7 +75,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
-import { buildChargeRouting, ConnectOrgConfig } from '../_shared/connectChargeParams.ts';
+import { buildChargeRouting, ConnectOrgConfig, resolvePlanRouting } from '../_shared/connectChargeParams.ts';
 import { runUpliftTrueUp } from '../_shared/upliftTrueUp.ts';
 import { UPLIFT_METADATA_KEY } from '../_shared/chargeFeeFacts.ts';
 import { allocateCartFeeByLine } from '../_shared/cartFee.ts';
@@ -116,6 +116,15 @@ interface InstallmentRow {
   parent_notified_failed_at: string | null;
   /** Stripe account this plan's charges live on. null = the platform. */
   stripe_charge_account_id: string | null;
+  /**
+   * For a plan on the platform, the connected account its charges transfer TO,
+   * frozen at checkout. Routing reads this instead of the org's current account,
+   * so changing how an org takes payments cannot redirect or strand a plan a
+   * family already authorised.
+   * null = not recorded (a row from before this shipped); falls back to the
+   * org's current account, which is the behaviour those rows already had.
+   */
+  stripe_transfer_destination_id: string | null;
   /**
    * What the FAMILY agreed to at checkout, not the org's setting today. Honoured
    * over live config so a later toggle cannot reprice a plan in flight.
@@ -677,23 +686,39 @@ async function processGroup(
       : 0;
 
   // The PLAN's own history wins over the org's CURRENT stripe_charge_model.
-  // stripe_charge_account_id was stamped on every row when charge 1 completed:
-  // null = the plan lives on the platform (destination), non-null = it lives on
-  // that connected account. This matters because the saved Customer and card
-  // are on whichever account charge 1 used, and an operator who moves to direct
-  // charges gets a BRAND NEW connected account (controller.fees.payer can never
-  // be changed on an existing one). Routing charges 2 and 3 by the org's current
-  // model would aim them at an account that has never seen this card.
-  const recordedAcct = activeRows[0].stripe_charge_account_id ?? null;
+  // This matters because the saved Customer and card are on whichever account
+  // charge 1 used, and an operator who moves to direct charges gets a BRAND NEW
+  // connected account (controller.fees.payer can never be changed on an
+  // existing one). Routing charges 2 and 3 by the org's current model would aim
+  // them at an account that has never seen this card.
+  //
+  // TWO facts are stamped at checkout, and they are not interchangeable:
+  //   stripe_charge_account_id        the account a DIRECT charge was created
+  //                                   ON. The saved card lives there.
+  //   stripe_transfer_destination_id  the account a PLATFORM charge transferred
+  //                                   TO. The card is on the platform; only the
+  //                                   money moves.
+  // A row carrying neither predates both columns, and only then is the plan's
+  // routing genuinely unknown. resolvePlanRouting owns that meaning so this
+  // file and any future caller cannot spell it differently; it is unit-tested
+  // in connectChargeParams.test.ts.
+  const planRouting = resolvePlanRouting(
+    activeRows[0].stripe_charge_account_id,
+    activeRows[0].stripe_transfer_destination_id,
+  );
+  const recordedAcct = planRouting.model === 'direct' ? planRouting.accountId : null;
   const orgIsDirect = orgConfig?.stripe_charge_model === 'direct';
 
-  if (orgIsDirect && !recordedAcct) {
-    // The org is on direct charges but this plan was started on the platform,
-    // i.e. it predates the switch. We cannot safely guess: charging it as
+  if (orgIsDirect && planRouting.model === null) {
+    // The org is on direct charges and this plan recorded NEITHER routing fact,
+    // so it predates both columns and we cannot safely guess: charging it as
     // 'direct' would use the new account (no card there), and charging it as
     // 'destination' would transfer to the new account rather than wherever the
     // original charge settled. A human has to decide. Fail closed.
-    const why = `org ${activeRows[0].organization_id} is now stripe_charge_model=direct but this installment plan was started on the platform (no stripe_charge_account_id) - it predates the switch`;
+    //
+    // A plan that recorded a transfer destination does NOT land here - it knows
+    // exactly where its money goes and finishes as the family authorised.
+    const why = `org ${activeRows[0].organization_id} is now stripe_charge_model=direct but this installment plan recorded no routing (neither stripe_charge_account_id nor stripe_transfer_destination_id) - it predates the switch`;
     console.error(`[process-installments] BLOCKED: ${why}`);
     await admin.from('installments').update({
       status: 'paused_card_failed',
@@ -717,11 +742,18 @@ async function processGroup(
   // orgFeeConfig, not orgConfig: buildChargeRouting computes the Stripe-fee
   // uplift from these same numbers, so routing and the margin above must be
   // built from ONE config or the application fee and the shares disagree.
+  //
+  // The account is taken from the plan whenever the plan recorded one, and only
+  // falls through to orgFeeConfig's own stripe_account_id for rows written
+  // before this column existed - which is the old behaviour, unchanged, for
+  // exactly the rows that used to get it.
   const routingOrg: ConnectOrgConfig | null = orgFeeConfig
     ? {
       ...orgFeeConfig,
-      stripe_charge_model: recordedAcct ? 'direct' : 'destination',
-      ...(recordedAcct ? { stripe_account_id: recordedAcct } : {}),
+      // An unrecorded plan falls back to 'destination', which is what it has
+      // always been treated as - the direct case above already returned.
+      stripe_charge_model: planRouting.model ?? 'destination',
+      ...(planRouting.accountId ? { stripe_account_id: planRouting.accountId } : {}),
     }
     : null;
 

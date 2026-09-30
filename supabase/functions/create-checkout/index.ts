@@ -1073,6 +1073,19 @@ serve(async (req) => {
         // live config, which is what stops a later toggle from repricing
         // charges 2 and 3 on a card they have already saved.
         fee_pass_through: !!orgConfig?.fee_pass_through,
+        // Freeze WHERE this plan's money goes, for the same reason and in the
+        // same breath. Read off the params we are actually sending to Stripe
+        // rather than re-derived from org config: re-deriving is how a figure
+        // that appears in two places ends up computed two ways, and here the
+        // two answers would be "the account this charge transferred to" and
+        // "the account this org points at today" — which is exactly the
+        // difference this column exists to record.
+        //
+        // undefined on a DIRECT charge (buildChargeRouting omits transfer_data
+        // entirely; that account is recorded as stripe_charge_account_id off
+        // the webhook event instead) and on an org with no connected account.
+        // `?? null` so the column reads "not recorded" rather than being absent.
+        stripe_transfer_destination_id: routing.params.transfer_data?.destination ?? null,
       });
 
       if (scheduleErr) {

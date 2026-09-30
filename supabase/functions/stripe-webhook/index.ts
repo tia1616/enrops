@@ -717,6 +717,19 @@ serve(async (req) => {
                     // to live config downstream, i.e. the behaviour those rows would
                     // have had anyway. The window is minutes wide and closes itself.
                     fee_pass_through: scheduleRow.fee_pass_through ?? null,
+                    // Where this plan's money goes, carried from the same
+                    // checkout row and for the same reason. Stamped on the PAID
+                    // charge-1 rows as well as the pending ones: it is a record
+                    // of where that charge actually settled, which is what makes
+                    // it evidence rather than a guess, and refunds of charge 1
+                    // read the same history.
+                    //
+                    // `?? null` covers the same minutes-wide window as the line
+                    // above — a session created by the previous deploy and paid
+                    // after this one. NULL means "not recorded" and falls back to
+                    // the org's current account downstream, i.e. the behaviour
+                    // those rows would have had anyway.
+                    stripe_transfer_destination_id: scheduleRow.stripe_transfer_destination_id ?? null,
                   };
                 });
 

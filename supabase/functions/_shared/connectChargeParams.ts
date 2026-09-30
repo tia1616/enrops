@@ -196,6 +196,49 @@ export interface ChargeRouting {
   blocked: string | null;
 }
 
+// --- Phase 3: what a plan ALREADY IN FLIGHT recorded about itself ------------
+
+/** Where an in-flight payment plan's money goes, as the plan itself recorded it. */
+export interface PlanRouting {
+  /**
+   * How this plan's charges were made. null means the plan recorded neither
+   * fact - a row written before either column existed - and the caller has to
+   * decide what to do about that, because only the caller knows whether the
+   * org has since moved and made guessing unsafe.
+   */
+  model: 'direct' | 'destination' | null;
+  /** The connected account this plan's money goes to. null when unrecorded. */
+  accountId: string | null;
+}
+
+/**
+ * Decide an in-flight plan's routing from what the PLAN recorded, never from
+ * the org's current configuration.
+ *
+ * The two inputs are different facts and are deliberately separate columns:
+ *   - chargeAccountId (installments.stripe_charge_account_id) is the account a
+ *     DIRECT charge was created ON. The saved card lives there.
+ *   - transferDestinationId (installments.stripe_transfer_destination_id) is
+ *     the account a platform charge transferred TO. The saved card lives on the
+ *     PLATFORM, and only the money moves.
+ *
+ * Collapsing them is what made a null mean two things - "on the platform" and
+ * "we have no idea" - which is the ambiguity that forced process-installments
+ * to pause an entire plan whenever its org changed how it takes payments.
+ *
+ * A direct record wins when somehow both are present: the account a charge was
+ * created on is where the card is, and without the card there is nothing to
+ * charge at all.
+ */
+export function resolvePlanRouting(
+  chargeAccountId: string | null | undefined,
+  transferDestinationId: string | null | undefined,
+): PlanRouting {
+  if (chargeAccountId) return { model: 'direct', accountId: chargeAccountId };
+  if (transferDestinationId) return { model: 'destination', accountId: transferDestinationId };
+  return { model: null, accountId: null };
+}
+
 export function buildChargeRouting(
   amountCents: number,
   paymentMethod: PaymentMethodType,
