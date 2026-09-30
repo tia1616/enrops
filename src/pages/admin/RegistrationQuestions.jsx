@@ -23,6 +23,7 @@ import { supabase } from "../../lib/supabase.js";
 import { allChoices, offeredChoices, DEFAULT_OFFERED } from "../../lib/dismissal.js";
 import { buildRegUrl } from "../../lib/regLinks.js";
 import { formatDayLabel, isCampProgram } from "../../lib/programSchedule.js";
+import { questionAppliesToCart, ENROLLMENT_SCOPES } from "../../lib/registrationFields.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -217,6 +218,14 @@ function seedStdFromRows(rows) {
       offered: f.answerChoices
         ? offeredChoices(row?.options).map((c) => c.value)
         : null,
+      // WHO this question is for. Seeded from the saved row so the section can
+      // SHOW it and, more importantly, SAVE it back: the standard save used to
+      // write applies_to:'all' unconditionally, so a question scoped to
+      // after-school families would be silently widened to everyone the next
+      // time anything else in this section was saved. That is the whole-row
+      // write that keeps costing this product data nobody touched.
+      // "" means everyone; otherwise 'afterschool' or 'camp'.
+      enrollmentScope: row?.applies_to === "enrollment_type" ? (row.applies_to_value || "") : "",
     };
   }
   return seeded;
@@ -284,6 +293,11 @@ function stdDiffersFrom(std, baseline) {
     if (!a.enabled && !b.enabled) return false;
     if (!!a.required !== !!b.required) return true;
     if ((a.label ?? "") !== (b.label ?? "")) return true;
+    // Who it is asked of is a real change to the form, so it has to count here.
+    // This list is enumerated field by field, so a new one that is not added is
+    // silently exempt: the operator narrows a question to camps, gets no
+    // unsaved-changes warning, navigates away and loses it with nothing said.
+    if ((a.enrollmentScope ?? "") !== (b.enrollmentScope ?? "")) return true;
     const setA = [...new Set(a.offered ?? [])].sort().join("|");
     const setB = [...new Set(b.offered ?? [])].sort().join("|");
     return setA !== setB;
@@ -453,7 +467,22 @@ export default function RegistrationQuestions() {
             field_type: "standard",
             is_required: required,
             is_active: true,
-            applies_to: "all",
+            // CARRY the scope, never flatten it. This wrote applies_to:'all'
+            // unconditionally, so a question aimed at after-school families was
+            // silently widened to everyone the next time anything in this
+            // section was saved - a whole-row write reverting data nobody had
+            // touched on screen.
+            //
+            // AN alwaysRequired QUESTION IS ASKED OF EVERYONE, and that is
+            // enforced on the WRITE as well as in the UI - the same belt and
+            // braces as neverRequired above, for the same reason: the UI protects
+            // what this screen shows, this protects what it stores. Dismissal is
+            // the safety question; the code already refuses to let it be made
+            // optional, and narrowing it to one enrolment type would remove it
+            // from the other entirely, which is strictly worse.
+            ...(s.enrollmentScope && !f.alwaysRequired
+              ? { applies_to: "enrollment_type", applies_to_value: s.enrollmentScope }
+              : { applies_to: "all", applies_to_value: null }),
             sort_order: i,
             // Only for questions that HAVE answer choices. Sending options:null
             // for the others would overwrite anything a future feature stores
@@ -797,6 +826,33 @@ function StandardRow({ field, state, canEdit, first, hasInstructorPortal = true,
               style={{ flex: 1, minWidth: 0, fontFamily: "inherit", fontSize: 13, color: INK, border: `1px solid ${RULE}`, borderRadius: 6, padding: "6px 9px", background: canEdit ? "#fff" : CREAM }}
             />
           </span>
+          {/* WHO gets asked. A camp has no classroom to collect a child from, so
+              a required "Homeroom teacher" had no answer and stopped a camp
+              registration dead. That used to be a rule written into the form for
+              one named question; it is a setting now, so the next question with
+              the same shape needs nobody to change code. A mixed cart still asks
+              an after-school question, because the class still needs it. */}
+          {/* NOT OFFERED for an alwaysRequired question. Dismissal is the safety
+              question - this screen already refuses to let it be made optional,
+              and narrowing it to one enrolment type would remove it from the
+              other outright, which is worse than optional. Enforced on the write
+              too, so a stale draft cannot store one either. */}
+          {!field.alwaysRequired && (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+              <span style={{ fontSize: 12, color: MUTED, whiteSpace: "nowrap" }}>Ask this of:</span>
+              <select
+                value={state.enrollmentScope || ""}
+                disabled={!canEdit}
+                onChange={(e) => onChange({ enrollmentScope: e.target.value })}
+                style={{ fontFamily: "inherit", fontSize: 13, color: INK, border: `1px solid ${RULE}`, borderRadius: 6, padding: "6px 9px", background: canEdit ? "#fff" : CREAM }}
+              >
+                <option value="">Everyone</option>
+                {ENROLLMENT_SCOPES.map((s) => (
+                  <option key={s.value} value={s.value}>{s.label}</option>
+                ))}
+              </select>
+            </span>
+          )}
         </div>
         {/* WHICH ANSWERS FAMILIES CAN PICK. Only the dismissal question has these
             today. Rendered from the shared list, so Settings cannot offer an answer
@@ -1137,12 +1193,20 @@ function FormPreview({ std, customRows, programs, orgSlug, stdDirty, stdEdited, 
   // teacher *" and told the operator their form asks a question it does not. A
   // preview that disagrees with the real form is worse than no preview. The
   // picker chooses ONE class, so "every item is a camp" is just "this one is".
+  // The preview picks ONE class, so its "cart" is that one item - which is all
+  // questionAppliesToCart needs. Same rule the form runs, so this panel cannot
+  // drift from what a family is actually asked; it listed every enabled question
+  // regardless of the class picked above it, and told the operator their form
+  // asks things it does not.
   const previewIsCamp = isCampProgram(picked);
+  const previewCart = picked ? [picked] : [];
+  const askedInPreview = (scope) => questionAppliesToCart(scope, previewCart, (p) => isCampProgram(p));
   const items = [];
   for (const f of STANDARD_FIELDS) {
-    if (previewIsCamp && f.key === "homeroom_teacher") continue;
     const s = std[f.key];
-    if (s?.enabled) items.push({ key: f.key, label: (s.label || "").trim() || f.label, required: f.alwaysRequired || !!s.required });
+    if (!s?.enabled) continue;
+    if (!askedInPreview({ appliesTo: s.enrollmentScope ? "enrollment_type" : "all", appliesToValue: s.enrollmentScope || null })) continue;
+    items.push({ key: f.key, label: (s.label || "").trim() || f.label, required: f.alwaysRequired || !!s.required });
   }
   for (const r of customRows) {
     if (r.is_active === false) continue;
@@ -1329,12 +1393,23 @@ function FormPreview({ std, customRows, programs, orgSlug, stdDirty, stdEdited, 
         {/* Say WHY it is missing. Without this the question just disappears when
             a camp is picked, which reads as "did I switch that off?" - and the
             answer matters, because it is still asked for every class. */}
-        {previewIsCamp && std?.homeroom_teacher?.enabled && (
-          <div style={{ fontSize: 11, color: MUTED, marginTop: 8, lineHeight: 1.5 }}>
-            Homeroom teacher isn't asked for a camp — there's no classroom to collect from.
-            It's still asked for your after-school classes.
-          </div>
-        )}
+        {(() => {
+          // Name what this class is NOT asked, so a question disappearing reads
+          // as a setting rather than "did I switch that off?".
+          const hidden = STANDARD_FIELDS.filter((f) => {
+            const s = std[f.key];
+            if (!s?.enabled || !s.enrollmentScope) return false;
+            return !askedInPreview({ appliesTo: "enrollment_type", appliesToValue: s.enrollmentScope });
+          });
+          if (hidden.length === 0) return null;
+          const names = hidden.map((f) => (std[f.key].label || "").trim() || f.label).join(", ");
+          return (
+            <div style={{ fontSize: 11, color: MUTED, marginTop: 8, lineHeight: 1.5 }}>
+              Not asked on {previewIsCamp ? "a camp" : "this class"}: <strong style={{ color: INK }}>{names}</strong>.
+              Still asked wherever it applies — change that with "Ask this of" above.
+            </div>
+          );
+        })()}
         <div style={{ fontSize: 11, color: MUTED, marginTop: 8, lineHeight: 1.5 }}>
           Your form also asks everything under "Always on your form" above.
         </div>

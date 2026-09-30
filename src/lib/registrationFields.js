@@ -69,6 +69,13 @@ export function parseRegFields(rows) {
         enabled: true,
         required: standardQuestionRequired(r.standard_key, r.is_required),
         label: r.label,
+        // WHO this question is for, carried through for the same reason `options`
+        // is below: the row already knows, and dropping it here is what forces
+        // the rule to be re-invented in code. 'all' asks everyone; the
+        // 'enrollment_type' pair says after-school families or camp families,
+        // and only the form knows a child's cart, so the form resolves it.
+        appliesTo: r.applies_to ?? 'all',
+        appliesToValue: r.applies_to_value ?? null,
         // `options` carried through, not dropped. It is a real column on
         // custom_reg_fields and get_active_registration_fields returns the whole
         // row, so the provider's per-question configuration was already arriving
@@ -81,4 +88,50 @@ export function parseRegFields(rows) {
     }
   }
   return { std, custom };
+}
+
+// ── Who a question is for ────────────────────────────────────────────────────
+
+/**
+ * The enrolment kinds a question can be aimed at, with the words the operator
+ * reads. ONE list: the picker renders from it and questionAppliesToCart below
+ * answers for the same values, so the control cannot offer a scope the rule does
+ * not understand — which would silently fall through to "ask everyone".
+ */
+export const ENROLLMENT_SCOPES = [
+  { value: 'afterschool', label: 'After-school only' },
+  { value: 'camp', label: 'Camps only' },
+];
+
+/**
+ * Does a question scoped by enrolment type apply to THIS child's cart?
+ *
+ * `scope` is the pair carried on the row: applies_to and applies_to_value.
+ * Anything not scoped by enrolment type is left alone and returns true — 'all'
+ * asks everyone, and a 'program'-scoped row was already resolved by the database
+ * against the program the family arrived on.
+ *
+ * THE CART IS THE SUBJECT, NOT A PROGRAM. A child can hold a camp and a weekly
+ * class at once, and the answer differs:
+ *   afterschool  asked unless EVERY item is a camp. A mixed cart still asks,
+ *                because the class still needs it — under-collecting there puts
+ *                the instructor back where the question was added to rescue them.
+ *   camp         asked as soon as ANY item is a camp, for the mirror reason: a
+ *                question a camp needs must not vanish because a class is beside
+ *                it in the cart.
+ * An EMPTY cart asks everything: nothing has been chosen to rule a question out,
+ * and silently dropping a required question there would block a family with no
+ * way to see why.
+ */
+export function questionAppliesToCart(scope, items, isCamp) {
+  if (scope?.appliesTo !== 'enrollment_type') return true;
+  const list = Array.isArray(items) ? items.filter(Boolean) : [];
+  if (list.length === 0) return true;
+  const anyCamp = list.some((it) => isCamp(it));
+  const everyCamp = list.every((it) => isCamp(it));
+  if (scope.appliesToValue === 'camp') return anyCamp;
+  if (scope.appliesToValue === 'afterschool') return !everyCamp;
+  // An enrolment type nobody recognises must not silently hide a question the
+  // operator believes is on. Fail towards asking.
+  return true;
 }

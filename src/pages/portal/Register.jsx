@@ -6,6 +6,7 @@ import { VIP_PRICE_PER_TERM_CENTS, INSTALLMENT_MIN_CENTS } from '../../lib/prici
 import { schoolYearTermsForFall } from '../../lib/terms.js';
 import { spreadCreditAcrossLines } from '../../lib/creditSpread.js';
 import { isCampProgram } from '../../lib/programSchedule.js';
+import { questionAppliesToCart } from '../../lib/registrationFields.js';
 import { useCart } from '../../context/CartContext.jsx';
 import StepIndicator from '../../components/StepIndicator.jsx';
 import StepStudent from './register-steps/StepStudent.jsx';
@@ -531,14 +532,33 @@ export default function Register() {
   // Derived ONCE and handed to both readers - the form renders from it and
   // registerAdvance blocks on it - so the asterisk and the gate cannot disagree
   // about whether the question exists. That pairing is called out in both files.
-  const activeChildIsCampOnly =
-    (activeChild?.items?.length ?? 0) > 0
-    && activeChild.items.every((it) => isCampProgram(it?.program));
+  // WAS a hardcoded rule that dropped ONE named question (homeroom teacher) for
+  // a camp-only cart. That rule was right and is kept exactly - it is now just
+  // expressed as configuration instead: the homeroom row carries
+  // applies_to = 'enrollment_type', applies_to_value = 'afterschool', and this
+  // resolves it. The next question with the same shape needs no code.
+  //
+  // Resolved HERE, not in the database, because the subject is the child's CART
+  // and only this screen knows it: get_active_registration_fields is called once
+  // with whatever ?program= carried, which is null for a family browsing the
+  // catalogue, and a child can hold a camp and a class at the same time.
+  //
+  // Still derived ONCE and handed to both readers - the form renders from it and
+  // the Continue gate blocks on it - so the asterisk and the gate cannot disagree
+  // about whether a question exists.
   const regFieldsForChild = useMemo(() => {
-    if (!activeChildIsCampOnly || !regFields?.std?.homeroom_teacher) return regFields;
-    const { homeroom_teacher: _dropped, ...std } = regFields.std;
-    return { ...regFields, std };
-  }, [regFields, activeChildIsCampOnly]);
+    if (!regFields) return regFields;
+    const items = activeChild?.items ?? [];
+    const itemIsCamp = (it) => isCampProgram(it?.program);
+    const std = {};
+    for (const [key, cfg] of Object.entries(regFields.std ?? {})) {
+      if (questionAppliesToCart(cfg, items, itemIsCamp)) std[key] = cfg;
+    }
+    const custom = (regFields.custom ?? []).filter((r) => questionAppliesToCart(
+      { appliesTo: r?.applies_to, appliesToValue: r?.applies_to_value }, items, itemIsCamp,
+    ));
+    return { ...regFields, std, custom };
+  }, [regFields, activeChild]);
 
   const advanceBlocker = advanceProblem({
     step,
