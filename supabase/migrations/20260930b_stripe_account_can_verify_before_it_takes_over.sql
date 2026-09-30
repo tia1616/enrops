@@ -36,6 +36,25 @@
 ALTER TABLE public.organizations
   ADD COLUMN IF NOT EXISTS stripe_pending_account_id text;
 
+-- UNIQUE, in exactly the shape stripe_account_id already has
+-- (organizations_stripe_account_id_unique: partial, WHERE NOT NULL, so any
+-- number of orgs may have none staged). This column exists to BECOME
+-- stripe_account_id, so it has to be at least as strict as what it turns into.
+--
+-- Without it, two orgs can stage the same acct_ID with nothing complaining, and
+-- the collision only surfaces when the SECOND one is promoted - as a raw 23505
+-- from the unique index on stripe_account_id, on the money screen, at the moment
+-- of the switch-over. Refusing it when the account is staged costs one index and
+-- moves the failure to the harmless end of the process.
+--
+-- It does NOT stop an org staging an account that is another org's LIVE
+-- stripe_account_id: that is a cross-column rule a unique index cannot express.
+-- The switch in chunk 3 checks for it, where the account is being read back from
+-- Stripe anyway.
+CREATE UNIQUE INDEX IF NOT EXISTS organizations_stripe_pending_account_id_unique
+  ON public.organizations (stripe_pending_account_id)
+  WHERE stripe_pending_account_id IS NOT NULL;
+
 COMMENT ON COLUMN public.organizations.stripe_pending_account_id IS
   'A Stripe connected account that exists and is being verified, but is NOT yet taking this org''s money. Charges keep routing to stripe_account_id until a platform admin promotes this one. NULL = no move in progress. Platform-admin only, audited.';
 
