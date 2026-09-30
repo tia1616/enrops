@@ -108,8 +108,11 @@ comment on column public.installments.stripe_transfer_destination_id is
 -- so stamping it would send a family's money somewhere it has never been. Those
 -- rows keep hitting the guard and keep asking a human, which is correct.
 --
--- Live at the time of writing (2026-09-29). PROD: j2s is the only org in scope,
--- 163 pending rows, and there are ZERO rows in the guess-required state above.
+-- Live at the time of writing (2026-09-30), counted by running this exact
+-- predicate. PROD: j2s is the only org in scope, 179 rows - 163 pending plus the
+-- 16 paused_program_cancelled the deny-list above deliberately includes - and
+-- ZERO rows in the guess-required state. (An earlier draft of this note said
+-- 163: that was the count under the allow-list this file no longer uses.)
 -- STAGING: j2s, 4 pending rows, likewise none ambiguous. The other orgs holding
 -- pending rows (the-ukulele-project 102, branching-minds 10, staging's
 -- onboard-test 3) are all on direct charges and already carry their account, so

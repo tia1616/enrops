@@ -834,8 +834,8 @@ async function processGroup(
   const plannedDest = planRouting.model === 'destination' ? planRouting.accountId : null;
   const builtDest = routing.params.transfer_data?.destination ?? null;
   const destinationUnmet = plannedDest && builtDest !== plannedDest
-    ? `installment plan is recorded against ${plannedDest} but this charge would not transfer there `
-      + `(org ${activeRows[0].organization_id} stripe_charges_enabled=${orgConfig?.stripe_charges_enabled ?? 'null'}); `
+    ? `installment plan is recorded against ${plannedDest} but this charge was built to transfer to `
+      + `${builtDest ?? 'nowhere (no transfer_data)'} (org ${activeRows[0].organization_id}); `
       + `charging anyway would put the family's money in the platform balance`
     : null;
 
@@ -987,16 +987,52 @@ async function processGroup(
       // Re-stamp where this PI actually landed, so a refund of installment 2 or
       // 3 scopes itself correctly without consulting the org's current model.
       stripe_charge_account_id: recordedAcct,
-      // Record the transfer destination this charge ACTUALLY used, which closes
-      // the gap for a plan that never recorded one. Without this an unrecorded
-      // plan stays unrecorded for its whole life: charge 2 transfers to
-      // whichever account the org points at today, that fact is thrown away,
-      // and if the org reconnects a different account before charge 3 the two
-      // halves of one plan pay two different operators with nothing recording
-      // either. Writing it here also upgrades the migration's forward-looking
-      // backfill into an observed fact the first time each plan charges.
+      // Record the transfer destination this charge ACTUALLY used. See the
+      // sibling stamp below for why this alone is not enough.
       stripe_transfer_destination_id: builtDest,
     }).in('id', sortedRowIds);
+
+    // ...and on the REST of each plan, not only the rows we just charged.
+    //
+    // sortedRowIds is THIS instalment number only. Stamping there alone leaves
+    // instalment 3 unrecorded and free to follow the org's account wherever it
+    // moves next - so a plan that recorded nothing would still pay acct_A for
+    // charge 2 and acct_B for charge 3, which is the exact split this column
+    // exists to stop. The fact we just observed is true of the whole plan: same
+    // registration, same saved card, same destination.
+    //
+    // Deliberately narrow. It fills BLANKS only (`is null`), so it can never
+    // overwrite a destination somebody else observed, and it skips the two
+    // terminal states, so it cannot rewrite history onto a paid or refunded row
+    // whose routing we never saw. Terminal is spelled as a DENY-list for the
+    // reason 20260810g gives: 'failed' and 'paused_program_cancelled' are
+    // resurrectable, and an allow-list forgets them.
+    //
+    // Best-effort by design. A failure here leaves the siblings exactly as they
+    // are today and the next instalment stamps them again, so it must never
+    // fail a charge that already succeeded - but it is logged, because silence
+    // is how this class of gap survives.
+    if (builtDest) {
+      const planRegIds = [...new Set(activeRows.map((r) => r.registration_id))].sort();
+      const { error: siblingStampErr } = await admin
+        .from('installments')
+        .update({ stripe_transfer_destination_id: builtDest })
+        .in('registration_id', planRegIds)
+        .is('stripe_transfer_destination_id', null)
+        // Two neq filters rather than a hand-built `not(... in ...)` tuple: the
+        // tuple is a filter STRING, and a mis-quoted one does not error, it
+        // just matches the wrong set - silently stamping paid history, or
+        // silently nothing. These AND together and cannot be mis-parsed.
+        .neq('status', 'paid')
+        .neq('status', 'refunded');
+      if (siblingStampErr) {
+        console.error(
+          `[process-installments] could not record the destination on the rest of `
+          + `${planRegIds.length} plan(s) (charge ${paymentIntent.id} already succeeded): `
+          + siblingStampErr.message,
+        );
+      }
+    }
 
     summary.charged_groups++;
     summary.charged_rows += activeRows.length;
