@@ -311,7 +311,12 @@ serve(async (req: Request) => {
           return json({
             error: 'multiple_stripe_accounts',
             account_ids: ids,
-            message: 'There\'s more than one Stripe account set up for this business, so we\'ve stopped rather than guess which one to use. Contact us and we\'ll sort it out with you.',
+            // Move mode is only ever reached by an Enrops platform admin, so
+            // "contact us and we'll sort it out" would be telling Enrops to
+            // contact Enrops. Same refusal, addressed to whoever is reading it.
+            message: isMove
+              ? 'This business has more than one parked Stripe account, so we stopped rather than guess which one the move should use. Delete the unwanted one in Stripe, then start the move again.'
+              : 'There\'s more than one Stripe account set up for this business, so we\'ve stopped rather than guess which one to use. Contact us and we\'ll sort it out with you.',
           }, 409);
         }
       } catch (err) {
@@ -454,11 +459,38 @@ serve(async (req: Request) => {
         ...(justCreated ? { stripe_charge_model: 'direct' } : {}),
       };
 
-      const { error: updErr } = await supabase
+      // CONDITION THE MOVE'S FIRST WRITE on the column still being empty, the
+      // same way stripe-oauth-callback conditions its own write rather than
+      // trusting a check made earlier in the request.
+      //
+      // Two platform admins starting a move on one org - or one impatient
+      // double-click, since minting takes a beat - both read NULL, both mint,
+      // and both write. The unique index is on the VALUE, so both succeed and
+      // the later one wins, leaving the earlier account orphaned at Stripe
+      // carrying role 'pending'. The next start_move then finds two pending
+      // candidates and dies on multiple_stripe_accounts, so the move cannot be
+      // restarted without deleting an account by hand.
+      //
+      // Only the FIRST write needs it: a re-link of an already-parked account
+      // does not reach here at all, because previouslyStored === accountId.
+      let write = supabase
         .from('organizations')
         .update(isMove ? moveUpdate : normalUpdate)
         .eq('id', org.id);
-      if (updErr) {
+      if (isMove && justCreated) {
+        write = write.is('stripe_pending_account_id', null);
+      }
+      const { data: written, error: updErr } = await write.select('id').maybeSingle();
+
+      // No row matched and no error = someone else parked an account between
+      // our read and this write. Treated exactly like a failed write below:
+      // the account WE minted is deleted, so the winner's account is the only
+      // one left and the next call recovers it cleanly.
+      const lostTheRace = !updErr && isMove && justCreated && !written;
+      if (lostTheRace) {
+        console.warn('[connect-onboard] lost a concurrent start_move for org', org.id, '- discarding', accountId);
+      }
+      if (updErr || lostTheRace) {
         // If we just minted a Stripe account and can't persist it, delete it
         // so the next retry's search doesn't find an orphan to "recover".
         if (justCreated && accountId) {
@@ -468,6 +500,15 @@ serve(async (req: Request) => {
           } catch (delErr) {
             console.error('[connect-onboard] orphan delete failed', accountId, delErr);
           }
+        }
+        if (lostTheRace) {
+          // Not a failure, and not a 500: the org HAS a parked account now, just
+          // not the one this call minted. Saying so lets the caller simply try
+          // again, which returns a link for the winner.
+          return json({
+            error: 'move_already_started',
+            message: 'Someone else started this move a moment ago. Try again and you will pick up the account they created.',
+          }, 409);
         }
         console.error('[connect-onboard] org update failed:', updErr);
         return json({ error: 'persist_failed' }, 500);
