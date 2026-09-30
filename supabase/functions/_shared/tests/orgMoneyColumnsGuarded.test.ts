@@ -57,6 +57,7 @@ const audited = new Set(SNAP.audited);
 /** Platform-admin-only. An operator changing any of these moves real money. */
 const MUST_BE_LOCKED = [
   'stripe_account_id', // the payout destination - "payout-theft prevention", 20260527
+  'stripe_pending_account_id', // one switch away from BEING the payout destination, 20260930b
   'platform_fee_card_pct',
   'platform_fee_ach_pct',
   'platform_fee_cap_cents',
@@ -86,6 +87,7 @@ const MUST_BE_AUDITED = [
   'platform_monthly_cents',
   'stripe_fee_payer',
   'stripe_charge_model',
+  'stripe_pending_account_id',
   'withdrawal_admin_fee_cents',
 ];
 
