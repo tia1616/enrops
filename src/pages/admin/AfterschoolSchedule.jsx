@@ -21,6 +21,7 @@ import TabStrip from "../../components/TabStrip.jsx";
 import { useAdminNarrow, cardRow, cardCell } from "../../lib/adminViewport.js";
 import { resolveBoardSendIntro } from "../../lib/boardSendCopy.js";
 import { classifyOther } from "../../lib/scheduleConflicts.js";
+import { pickFocusedStep } from "../../lib/scheduleSteps.js";
 import { programScheduleSummary, formatDayLabel, isCampProgram, programWeekdays } from "../../lib/programSchedule.js";
 import { parseBonusDollars } from "../../lib/bonusAmount.js";
 import { aggregateSubOffers, subSlotLabel, slotNeedsCover, subDisplayName, SUB_ACTIVE_STATUSES } from "../../lib/subCoverage.js";
@@ -1716,7 +1717,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
 
   async function handleMatch() {
     const ok = window.confirm(
-      "Match instructors for this term? This fills empty classes from instructor availability, and re-does its own earlier suggestions. It never touches a class you picked yourself, approved, or already emailed."
+      "Match instructors for this term? This fills empty classes from instructor availability, and re-does its own earlier suggestions. It never touches a class you picked yourself, approved, or already emailed, and it does not fill camps — assign those yourself."
     );
     if (!ok) return;
     setBusy("matching");
@@ -2413,8 +2414,17 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   const cockpitSteps = [
     { key: "survey", name: "Availability", meta: survey?.opened_at ? "Survey sent" : "Not sent yet", state: survey?.opened_at ? "done" : "active" },
     { key: "responses", name: "Responses", meta: survey?.opened_at ? `${submittedCount} of ${counts.instructors} in` : "waiting on the survey", state: !survey?.opened_at ? "todo" : (counts.instructors > 0 && submittedCount >= counts.instructors ? "done" : "active") },
-    { key: "draft", name: "Draft", meta: counts.needsHire > 0 ? `${counts.needsHire} need an instructor` : counts.proposed > 0 ? (offersOut ? `${counts.proposed} to send` : `${counts.proposed} to lock in`) : hasDraft ? "Drafted" : "Not started", state: (!hasDraft && counts.needsHire === 0) ? "todo" : (counts.needsHire > 0 || counts.proposed > 0) ? "active" : "done" },
-    { key: "offers", name: "Offers", meta: counts.sendable > 0 ? `${counts.sendable} ready to send` : offersOut ? (awaitingReply > 0 ? `${awaitingReply} awaiting reply` : "all responded") : "Not sent", state: (!offersOut && counts.sendable === 0) ? "todo" : (counts.sendable > 0 || awaitingReply > 0 || counts.changeRequested > 0) ? "active" : "done" },
+    // hasWork = there is something for the operator to DO here, not merely a
+    // step that has not finished. It is what lets the cockpit open on Offers for
+    // a camp term that will never have an availability survey. Waiting on other
+    // people (responses out, offers awaiting a reply) is NOT work waiting.
+    { key: "draft", name: "Draft", meta: counts.needsHire > 0 ? `${counts.needsHire} need an instructor` : counts.proposed > 0 ? (offersOut ? `${counts.proposed} to send` : `${counts.proposed} to lock in`) : hasDraft ? "Drafted" : "Not started", state: (!hasDraft && counts.needsHire === 0) ? "todo" : (counts.needsHire > 0 || counts.proposed > 0) ? "active" : "done", hasWork: counts.needsHire > 0 || counts.proposed > 0, workRank: 1 },
+    // workRank 2 = OFFERS READY TO SEND OUTRANKS EVERYTHING. Jessica's call,
+    // 2026-09-30: "just do what we did for fall - it worked." Fall is the term
+    // she has actually sent offers on, and a term with something queued should
+    // put her in front of the button rather than behind a staffing list. A
+    // change request alone stays rank 1, so it does not jump the draft.
+    { key: "offers", name: "Offers", meta: counts.sendable > 0 ? `${counts.sendable} ready to send` : offersOut ? (awaitingReply > 0 ? `${awaitingReply} awaiting reply` : "all responded") : "Not sent", state: (!offersOut && counts.sendable === 0) ? "todo" : (counts.sendable > 0 || awaitingReply > 0 || counts.changeRequested > 0) ? "active" : "done", hasWork: counts.sendable > 0 || counts.changeRequested > 0, workRank: counts.sendable > 0 ? 2 : 1 },
     { key: "confirmed", name: "Confirmed", meta: counts.accepted > 0 ? `${counts.accepted} accepted` : "—", state: (offersOut && awaitingReply === 0 && counts.sendable === 0 && counts.proposed === 0 && counts.needsHire === 0 && counts.accepted > 0) ? "done" : offersOut ? "active" : "todo" },
   ];
   return (
@@ -2441,6 +2451,48 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         />
       )}
 
+      {/* ENNIE ON A TERM THAT HAS NEVER SENT ANYTHING.
+          The tip above is a MID-FLIGHT safety net: it is gated on offersOut, so
+          Ennie only appears once a batch has already gone out, to catch someone
+          added afterwards. That is why Fall prompts her and Winter never did -
+          Winter has sent nothing, so the gate is false and the list is empty
+          before it looks at anything else. A CAMP TERM never gets past that
+          gate, because a camp is staffed by hand and there is no batch.
+
+          Jessica hit this twice and named it plainly the second time: "it's not
+          the same as the fall one. the fall one has ennie." She is right, and it
+          was never the Offers panel she was missing.
+
+          NOT A SECOND VOICE SAYING THE SAME THING. Suppressed while the patch
+          tip is up (Fall keeps exactly the prompt that works today) and while
+          the just-approved banner below is saying "ready to send - click Send
+          offers" itself.
+
+          `approveResult?.count > 0`, NOT `approveResult`. That banner has two
+          branches and only one of them mentions sending: an approve that locked
+          nothing in sets {count: 0} and renders "No draft matches to lock in.",
+          which says nothing about the offers still waiting. Suppressing on the
+          bare object meant clicking Approve on a camp term already locked in
+          hid this prompt and replaced it with a sentence about drafts - the
+          dead end the tip exists to close, reintroduced by its own guard. */}
+      {pendingPatchAssignments.length === 0 && !(approveResult?.count > 0) && counts.sendable > 0 && (
+        <HatGuide
+          character="ennie"
+          tip={{
+            key: `as-${term}-readytosend-${counts.sendable}`,
+            message: counts.sendable === 1
+              ? "One offer is approved and ready to send. It won't go out until you send it."
+              : `${counts.sendable} offers are approved and ready to send. They won't go out until you send them.`,
+            primary: {
+              // Same words as the button in the Offers panel on purpose: one
+              // action, one name, wherever she meets it.
+              label: `Send offers (${counts.sendable})`,
+              onClick: openSendOffers,
+            },
+          }}
+        />
+      )}
+
       {counts.changeRequested > 0 && changeReqLead && (
         <HatGuide
           character="ennie"
@@ -2458,6 +2510,19 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       )}
 
       <Header
+        // The term is the identity of this header: the only state it holds is
+        // which step is focused, and that answer is per term by definition.
+        //
+        // REDUNDANT TODAY, AND DELIBERATELY KEPT. A term switch already remounts
+        // this: loadAll runs on [org?.id, term] and sets status 'loading' before
+        // it fetches, and the "Loading schedule..." early return above unmounts
+        // the whole subtree until the new term's data lands. So the focused step
+        // was NEVER carried across a term switch - an earlier version of this
+        // comment claimed it was, which was wrong and is corrected here rather
+        // than deleted, because the wrong story is the kind a reader inherits.
+        // The key states the intent locally instead of resting on a loading
+        // branch three thousand lines away that a refactor could remove.
+        key={term}
         term={term}
         campCycles={campCycles}
         afterschoolTerms={afterschoolTerms}
@@ -2491,6 +2556,17 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         <div style={{ background: `${VIOLET}14`, border: `1px solid ${VIOLET}55`, borderRadius: 8, padding: "12px 16px", fontSize: 14, color: INK }}>
           Matched <strong>{matchResult.assigned}</strong> of {matchResult.programs_total} classes.{" "}
           {matchResult.needs_hire > 0 && <span>{matchResult.needs_hire} still need an instructor. </span>}
+          {/* SAY WHAT IT DID NOT DO. Auto-matching reasons about one weekday per
+              program, and a camp runs several - so camps are deliberately left
+              alone (see the note in match-afterschool). Without this line the
+              operator reads "matched 8 of 8" and has no way to learn that their
+              camps were never among the 8. */}
+          {Number(matchResult.camps_skipped) > 0 && (
+            <span>
+              {matchResult.camps_skipped} camp{matchResult.camps_skipped === 1 ? " was" : "s were"} left for you
+              — matching works a weekday at a time, so assign camps yourself in the Camps row.{" "}
+            </span>
+          )}
           {Array.isArray(matchResult.missing_surveys) && matchResult.missing_surveys.length > 0 && (
             <span style={{ color: MUTED }}>Waiting on availability from {matchResult.missing_surveys.length} instructor{matchResult.missing_surveys.length === 1 ? "" : "s"}.</span>
           )}
@@ -2924,10 +3000,28 @@ function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCa
     else onSwitchToCamp && onSwitchToCamp(v);
   }
 
-  // Focus the current step by default; clicks let the operator revisit any step
-  // (re-enterable). Fall back to the current step if the selection went stale
-  // (e.g. after a term switch).
-  const firstActive = steps.find((s) => s.state === "active")?.key ?? steps[0]?.key;
+  // Focus the step with work waiting; clicks let the operator revisit any step
+  // (re-enterable).
+  //
+  // WORK WAITING BEATS SEQUENCE, and that is the whole point. The first ACTIVE
+  // step is not always the one to do: Availability is active whenever no survey
+  // has been opened, and a CAMP TERM may legitimately never have one, because
+  // camps are staffed by hand. Winter 2027 had one class ready to send offers
+  // on and opened on "send an availability survey" instead - so the Send offers
+  // button was not merely hard to find, it was never rendered.
+  //
+  // Only steps that flag hasWork can jump the queue. Among those, OFFERS READY
+  // TO SEND wins (workRank 2) - settled by Jessica on 2026-09-30 after I built
+  // it the other way round and a term with 31 unstaffed classes and one camp
+  // offer queued still hid the Send offers button from her. Everything else
+  // ties at rank 1 and keeps board order, so Draft still comes first when
+  // nothing is actually queued to send.
+  //
+  // The staleness guard on the next line is dead and has always been: the five
+  // step keys are identical on every term, so `steps.some` always matches. It is
+  // left because it costs nothing and would start earning its keep the moment
+  // the step list becomes conditional.
+  const firstActive = pickFocusedStep(steps);
   const [selected, setSelected] = useState(firstActive);
   const selKey = steps.some((s) => s.key === selected) ? selected : firstActive;
 

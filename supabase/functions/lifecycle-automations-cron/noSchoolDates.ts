@@ -47,10 +47,13 @@ export function nsdWeekdaysStrictlyBetween(aIso: string, bIso: string): number {
 // running, and two welcome/check-in resolvers would have called a Mon-Fri camp
 // "Mondays" and its dates "weekly sessions". One predicate so those three
 // cannot drift apart.
-export function isCampProgram(program: { class_days?: unknown } | null | undefined): boolean {
-  const days = program?.class_days;
-  return Array.isArray(days) && days.length > 0;
-}
+// MOVED to _shared/campProgram.ts and re-exported here, so every caller in this
+// function is untouched. It moved because the three instructor-offer emails
+// needed the same predicate and would otherwise have hand-written a fourth
+// spelling of it - which is the exact mechanism that produced the bug this
+// comment describes. Re-exported rather than replaced at each call site to keep
+// that a one-line change to a send path.
+export { isCampProgram } from "../_shared/campProgram.ts";
 
 // Mirror of the SQL term_to_school_year(): FA26 → "2026-2027", WI27/SP27 →
 // "2026-2027", SU/unknown → null. Kept in TS so the resolver can match a

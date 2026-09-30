@@ -10,6 +10,9 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
+// The fourth function in the offer loop, and it had the same bug as the other
+// three: dayLabel() reads day_of_week, which on a camp holds only its FIRST day.
+import { campDayLabel } from '../_shared/campProgram.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -103,7 +106,9 @@ serve(async (req: Request) => {
     if (isProgram) {
       const { data: prog } = await supabase
         .from('programs')
-        .select('curriculum, day_of_week, program_location_id')
+        // class_days: without it this line cannot tell a camp from a Monday
+        // class, and the message thread names the camp "Mondays".
+        .select('curriculum, day_of_week, class_days, program_location_id')
         .eq('id', (assignment as any).program_id)
         .maybeSingle();
       if (prog) {
@@ -114,7 +119,8 @@ serve(async (req: Request) => {
             .from('program_locations').select('name').eq('id', prog.program_location_id).maybeSingle();
           locName = loc?.name ?? '';
         }
-        subLine = [dayLabel(prog.day_of_week), locName].filter(Boolean).join(' · ');
+        // A camp's own days ("Mon-Thu"), else the weekly label exactly as before.
+        subLine = [campDayLabel(prog) || dayLabel(prog.day_of_week), locName].filter(Boolean).join(' · ');
       }
     } else {
       const { data: session } = await supabase

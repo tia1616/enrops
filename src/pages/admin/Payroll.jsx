@@ -69,6 +69,24 @@ function fmtDate(d) {
   });
 }
 
+// What a day's session_type is CALLED on screen, in the same words the Pay
+// rates screen uses to ask for the amount. It was the raw column through a CSS
+// capitalize, which reads "After_school" / "Full_day" - an underscore in front
+// of the operator, and worse, a half-day camp reading "Morning". Pay rates has
+// one "Half day" box per role that writes both the morning and afternoon cells,
+// so those two are one thing here too. Unknown values fall through unchanged
+// rather than being hidden: a session type nobody has named yet should be
+// visible, not blank.
+const SESSION_TYPE_LABEL = {
+  after_school: 'Per session',
+  morning: 'Half day',
+  afternoon: 'Half day',
+  full_day: 'Full day',
+};
+function sessionTypeLabel(t) {
+  return SESSION_TYPE_LABEL[t] ?? (t || '');
+}
+
 function shortName(i) {
   if (!i) return '—';
   return i.preferred_name || `${i.first_name ?? ''} ${i.last_name ?? ''}`.trim() || 'Unknown';
@@ -1262,7 +1280,7 @@ function DayBreakdown({ rows, onApproveRow, onConfirmRow, onWithholdRow, onReapp
             borderBottom: `1px dashed ${RULE}`, fontSize: 13,
           }}>
             <div style={{ flex: '0 0 110px', color: INK }}>{fmtDate(r.session_date)}</div>
-            <div style={{ flex: '0 0 90px', color: MUTED, textTransform: 'capitalize' }}>{r.session_type}</div>
+            <div style={{ flex: '0 0 90px', color: MUTED }}>{sessionTypeLabel(r.session_type)}</div>
             <div style={{ flex: '1 1 auto', color: unconfirmed ? MUTED : INK, fontStyle: unconfirmed ? 'italic' : 'normal' }}>
               {unconfirmed
                 ? 'Not yet confirmed by instructor'

@@ -24,6 +24,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
 import { fetchProgramRunStates } from '../_shared/programRunning.ts';
+import { programSessionType } from '../_shared/programPay.ts';
 
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
@@ -161,13 +162,19 @@ serve(async (req: Request) => {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // Job C: create today's AFTER-SCHOOL program confirmation rows.
+    // Job C: create today's PROGRAM confirmation rows.
     // Mirrors Job A for programs. A program "meets today" when its derived
     // session schedule (weekly cadence minus location/district closures) has a
     // 'session' entry for today. Seed ONLY accepted (confirmed) program
     // assignments — same committed-status rule as camps + admin-confirm-session.
-    // session_type is always 'after_school' (programs carry none; matches
-    // confirm-session-taught + confirm-sub-delivery).
+    //
+    // session_type comes from programSessionType(): 'after_school' for a weekly
+    // class (unchanged), programs.session_type for a CAMP. This was the literal
+    // 'after_school' with the comment "programs carry none" - true until
+    // 2026-09-25, when a camp became a program row with class_days set, and a
+    // camp day stopped paying the after-school rate. The value seeded here is
+    // the one admin-confirm-session re-prices from later, so getting it wrong
+    // here is wrong all the way to the payout.
     // ─────────────────────────────────────────────────────────────────────
     // NOTE (optimization, safe to defer): this pulls every accepted assignment
     // and asks the schedule RPC per unique program, so the RPC fan-out grows with
@@ -247,6 +254,32 @@ serve(async (req: Request) => {
         }
       }
 
+      // What each program's day PAYS AT. Its own query rather than widening the
+      // select inside programRunning.ts, which four money-writing functions
+      // share: a widened .select() is a deploy-order contract and PostgREST
+      // fails the whole statement on an unknown column.
+      //
+      // A lookup failure seeds nothing rather than seeding blind, for the same
+      // reason the status lookup above does: a missing placeholder is
+      // recoverable (the instructor's own "Mark taught" inserts the row), a
+      // wrong pay line is not.
+      const payTypes = new Map<string, string | null>();
+      if (!progStateErr && uniqueProgramIds.length > 0) {
+        const { data: payRows, error: payErr } = await supabase
+          .from('programs')
+          .select('id, class_days, session_type')
+          .in('id', uniqueProgramIds);
+        if (payErr) {
+          console.error('Job C session_type lookup failed; seeded no program rows:', payErr);
+          summary.errors.push(`job_c_session_type: ${payErr.message}`);
+          runnableProgramIds.clear();
+        } else {
+          for (const row of (payRows ?? []) as Array<{ id: string; class_days: unknown; session_type: unknown }>) {
+            payTypes.set(row.id, programSessionType(row));
+          }
+        }
+      }
+
       const meetsToday = new Set<string>();
       for (const pid of uniqueProgramIds) {
         if (!runnableProgramIds.has(pid)) continue;
@@ -272,12 +305,26 @@ serve(async (req: Request) => {
         program_id: string | null;
       }>)
         .filter((r) => r.program_id && meetsToday.has(r.program_id))
+        // A CAMP THAT NEVER SAID WHAT KIND OF DAY IT RUNS is skipped, not
+        // seeded. session_delivery_confirmations.session_type is NOT NULL, so
+        // there is no "seed it blank and let the admin price it" here - the
+        // only alternative to skipping is typing 'after_school' onto a full-day
+        // camp, which pays a J2S lead $60 for a $160 day and looks plausible on
+        // Payroll. The day is not lost: the instructor's own "Mark taught"
+        // inserts the row, and that path refuses with a nameable error instead
+        // of a wrong number. Recorded so it is visible rather than guessed at.
+        .filter((r) => {
+          const st = payTypes.get(r.program_id as string) ?? null;
+          if (st) return true;
+          summary.errors.push(`job_c_camp_missing_session_type:${r.program_id}`);
+          return false;
+        })
         .map((r) => ({
           instructor_id: r.instructor_id,
           organization_id: r.organization_id,
           program_id: r.program_id as string,
           session_date: today,
-          session_type: 'after_school',
+          session_type: payTypes.get(r.program_id as string) as string,
         }));
 
       if (progRows.length > 0) {

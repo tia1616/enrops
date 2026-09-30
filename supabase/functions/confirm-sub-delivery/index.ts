@@ -15,8 +15,11 @@
 //   3. Verify substitution.date <= today.
 //   4. Look up parent assignment to get (camp_session_id | program_id),
 //      regular_instructor_id, organization_id.
-//   5. Look up session_type from camp_sessions or programs (program.session_type
-//      defaults to 'after_school').
+//   5. Look up session_type from camp_sessions, or from the program via
+//      programSessionType(): 'after_school' for a weekly class, and for a CAMP
+//      (a program row with class_days set) its own programs.session_type. There
+//      is no default - a camp that declares none is refused, not priced as
+//      after-school.
 //   6. UPSERT session_delivery_confirmations for
 //      (regular_instructor_id, target_id, date):
 //        - confirmed_by = 'sub'
@@ -27,6 +30,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, resolveInstructor, adminClient } from '../_shared/instructor.ts';
 import { resolvePayAmount } from '../_shared/payRates.ts';
+import { programSessionType } from '../_shared/programPay.ts';
 
 type Tier = 'lead' | 'developing';
 type SessionType = 'morning' | 'afternoon' | 'full_day' | 'after_school';
@@ -105,8 +109,25 @@ serve(async (req: Request) => {
       if (!parent) return json({ error: 'parent_not_found' }, 404);
       regularInstructorId = parent.instructor_id;
       programId = parent.program_id;
-      // Programs don't carry session_type — afterschool is always after_school.
-      sessionType = 'after_school';
+      // WHICH KIND OF DAY DID THE SUB COVER. This was the literal
+      // 'after_school', with the comment "programs don't carry session_type".
+      // True until 2026-09-25, when a camp became a program row with class_days
+      // set - and a camp day does not pay the after-school rate. Same rule as
+      // confirm-session-taught and session-confirmation-cron, one place.
+      //
+      // A camp with no declared session_type yields null and falls into the
+      // no_pay_rate_for_session refusal below, which already exists for exactly
+      // this shape of answer.
+      const { data: prog, error: progErr } = await supabase
+        .from('programs')
+        .select('class_days, session_type')
+        .eq('id', parent.program_id)
+        .maybeSingle();
+      if (progErr) {
+        console.error('[confirm-sub-delivery] program lookup failed:', progErr);
+        return json({ error: 'lookup_failed' }, 500);
+      }
+      sessionType = programSessionType(prog) as SessionType | null;
     } else {
       return json({ error: 'invalid_parent_assignment_type' }, 400);
     }
@@ -152,6 +173,11 @@ serve(async (req: Request) => {
             confirmed_at: nowIso,
             pay_status: 'approved',
             pay_amount_cents: payCents,
+            // Restamped for the same reason the self-confirm path restamps it:
+            // payCents came from THIS request's sessionType, and a row whose
+            // session_type disagrees with the money on it misleads every later
+            // reader, the Payroll screen included.
+            session_type: sessionType,
             updated_at: nowIso,
           })
           .eq('id', existing.id);

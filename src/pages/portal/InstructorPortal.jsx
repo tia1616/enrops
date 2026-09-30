@@ -3808,7 +3808,17 @@ function DailyCheckInSection({ assignmentId, instructorId, campSessionId, starts
             : { program_assignment_id: assignmentId, session_date: dateStr } },
       );
       if (fnErr || data?.error) {
-        setErr(humanizeConfirmError(data?.error || fnErr?.message));
+        // READ THE BODY, not fnErr.message. Every refusal from this function is
+        // a non-2xx with a code in the body, and supabase-js turns that into a
+        // FunctionsHttpError whose message is the fixed string "Edge Function
+        // returned a non-2xx status code" - so passing fnErr.message here meant
+        // humanizeConfirmError matched nothing and EVERY refusal came out as
+        // "Couldn't save your check-in. Try again.", including the two that can
+        // never succeed on a retry (a cancelled class, and a camp with no
+        // session type). fnErrorBody is the pattern the sub-delivery handler in
+        // this same file already uses.
+        const body = fnErr ? await fnErrorBody(fnErr) : null;
+        setErr(humanizeConfirmError(body?.error || data?.error || fnErr?.message));
         return;
       }
       // Update local state with the returned confirmation.
@@ -4000,6 +4010,11 @@ function humanizeConfirmError(code) {
   // through to "Try again" — the only way to reach it is a tab that was open
   // before the class was cancelled, and that instructor would retry forever.
   if (code === "program_not_running") return "This class has been cancelled, so there's no check-in for it. Nothing more for you to do here.";
+  // Same reason as the line above: retrying cannot work. The camp has not been
+  // set up as a half day or a full day, which is what its days pay at, and only
+  // an admin can answer that. "Try again" would have this instructor tapping a
+  // button that will refuse forever.
+  if (code === "camp_missing_session_type") return "This camp hasn't been set up as a half day or a full day yet, so we can't record the day. Ask your admin to set that.";
   return "Couldn't save your check-in. Try again.";
 }
 
