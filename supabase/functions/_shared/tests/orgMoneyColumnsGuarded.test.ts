@@ -76,6 +76,11 @@ const MUST_BE_LOCKED = [
 
 /** A change to these must leave a record of who made it. */
 const MUST_BE_AUDITED = [
+  // Where the money GOES. Locked since 20260527, audited only from 20260930c -
+  // found by running stripe-complete-move's promote payload and reading the
+  // trail back: it recorded the model change and the parked column clearing,
+  // and never which account the business moved from and to.
+  'stripe_account_id',
   'fee_pass_through',
   'platform_fee_card_pct',
   'platform_fee_ach_pct',
