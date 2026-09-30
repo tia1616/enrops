@@ -1023,6 +1023,17 @@ async function processGroup(
         // tuple is a filter STRING, and a mis-quoted one does not error, it
         // just matches the wrong set - silently stamping paid history, or
         // silently nothing. These AND together and cannot be mis-parsed.
+        //
+        // KNOWN DIVERGENCE from the migration's predicate, which wraps the same
+        // test in coalesce(status,'pending'). status is nullable, and `status <>
+        // 'paid'` is NULL - not true - for a NULL status, so a null-status row
+        // is skipped here and stamped there. Accepted deliberately: the miss
+        // direction is safe (that row keeps today's behaviour and the next
+        // instalment tries again), both databases hold zero null-status rows,
+        // and the alternative is an .or() filter STRING - reintroducing exactly
+        // the mis-quote hazard the two neqs exist to avoid, to cover a row that
+        // does not exist. If null statuses ever become real, fix it by making
+        // the column NOT NULL rather than by growing this filter.
         .neq('status', 'paid')
         .neq('status', 'refunded');
       if (siblingStampErr) {

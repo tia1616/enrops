@@ -108,15 +108,35 @@ comment on column public.installments.stripe_transfer_destination_id is
 -- so stamping it would send a family's money somewhere it has never been. Those
 -- rows keep hitting the guard and keep asking a human, which is correct.
 --
--- Live at the time of writing (2026-09-30), counted by running this exact
--- predicate. PROD: j2s is the only org in scope, 179 rows - 163 pending plus the
--- 16 paused_program_cancelled the deny-list above deliberately includes - and
--- ZERO rows in the guess-required state. (An earlier draft of this note said
--- 163: that was the count under the allow-list this file no longer uses.)
--- STAGING: j2s, 4 pending rows, likewise none ambiguous. The other orgs holding
--- pending rows (the-ukulele-project 102, branching-minds 10, staging's
--- onboard-test 3) are all on direct charges and already carry their account, so
--- this touches none of them.
+-- BLAST RADIUS, MEASURED 2026-09-30. Read the caveat before trusting the number.
+--
+-- PROD: j2s is the only org in scope, 178 rows -
+--     161 pending
+--    + 16 paused_program_cancelled  (admitted by the deny-list above)
+--    +  1 paused_card_failed        (ditto - a card declined on 30 Sept)
+-- and ZERO rows in the guess-required state, i.e. no platform-charge row on an
+-- org already moved to direct.
+--
+-- STAGING: j2s, 4 rows. The orgs holding other non-terminal rows
+-- (the-ukulele-project 110, branching-minds 10, staging's onboard-test 3) are
+-- all on direct charges and already carry their account, so this touches none
+-- of them.
+--
+-- HOW IT WAS COUNTED, because the obvious reading is wrong. This file's
+-- predicate cannot be run against prod as written: prod has no
+-- stripe_transfer_destination_id column until this migration creates it, so
+-- `i.stripe_transfer_destination_id is null` has nothing to evaluate. The count
+-- above was taken with that one clause omitted, which is equivalent on a
+-- database that has never had the column - nothing can be recorded there - but
+-- it is a reconstruction, not a run of this statement. Do not describe it as
+-- one.
+--
+-- AND IT MOVES. This is a snapshot of live money, not an invariant. An earlier
+-- draft of this note said 179, which was true on 29 Sept; overnight one row
+-- charged and one declined, so pending fell to 161 and paused_card_failed rose
+-- to 1. Re-count before applying rather than trusting any number written here -
+-- what should stay constant is the SHAPE: one org in scope, and zero rows in
+-- the guess-required state.
 update public.installments i
    set stripe_transfer_destination_id = o.stripe_account_id
   from public.organizations o
