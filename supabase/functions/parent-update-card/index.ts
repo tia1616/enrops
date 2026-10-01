@@ -24,10 +24,15 @@
 //
 // It is called with amount 0 on purpose: this is not a charge, so there is no
 // amount, and the only two things read off the result are `requestOptions` (which
-// account to talk to) and `blocked` (whether this operator can take money at
-// all). The fee it computes for a zero amount is never used. Asking a family to
-// save a card to an account that cannot charge would be collecting a card for a
-// payment that can never happen.
+// account to talk to) and `blocked`. The fee it computes for a zero amount is
+// never used.
+//
+// `blocked` IS NOT THE WHOLE PAYMENT GATE, and reading it as one was a review
+// finding here. buildChargeRouting only sets it on the DIRECT path; for a
+// destination org it is null even when that operator's Stripe account is
+// switched off. So stripe_charges_enabled is checked explicitly first, the same
+// way create-checkout checks it, and `blocked` is the direct-path half of the
+// same question rather than the answer to it.
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import Stripe from 'https://esm.sh/stripe@14.14.0?target=deno';
@@ -54,19 +59,40 @@ interface RequestBody {
  */
 const RESCUABLE = ['pending', 'failed', 'paused_card_failed'];
 
+/**
+ * What a FAMILY reads when something breaks that is not their fault.
+ *
+ * Every refusal on this path carries a sentence, not just a code. The reader
+ * here is a parent trying to pay a business they trust, on a page they reached
+ * because their card was declined - the worst possible audience for the string
+ * "lookup_failed". It also says their card was not charged, because that is the
+ * question they actually have, and leaves them with one action rather than
+ * guessing.
+ */
+const SORRY = 'Something went wrong at our end and nothing was charged. Please try again in a moment, or contact the provider if it keeps happening.';
+
+/**
+ * Shown for a registration that does not exist AND for one that is not the
+ * caller's, which are deliberately the same answer: confirming that somebody
+ * else's registration exists is a fact a signed-in stranger has no business
+ * learning. Worded so it reads as "wrong link" rather than "access denied",
+ * because for the family who actually hits this, that is what happened.
+ */
+const NOT_YOURS = 'We could not find that payment plan on your account. Check the link in your email, or contact the provider.';
+
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
   if (req.method !== 'POST') return json({ error: 'method_not_allowed' }, 405);
 
   try {
     const authHeader = req.headers.get('Authorization');
-    if (!authHeader) return json({ error: 'auth_required' }, 401);
+    if (!authHeader) return json({ error: 'auth_required', message: 'Please sign in to update your card.' }, 401);
     const token = authHeader.replace(/^Bearer\s+/i, '').trim();
-    if (!token) return json({ error: 'auth_required' }, 401);
+    if (!token) return json({ error: 'auth_required', message: 'Please sign in to update your card.' }, 401);
 
     const supabase = adminClient();
     const { data: userData, error: userErr } = await supabase.auth.getUser(token);
-    if (userErr || !userData?.user) return json({ error: 'invalid_auth' }, 401);
+    if (userErr || !userData?.user) return json({ error: 'invalid_auth', message: 'Your session has expired. Please sign in again.' }, 401);
     const callerAuthId = userData.user.id;
 
     let body: RequestBody = {};
@@ -109,16 +135,16 @@ serve(async (req: Request) => {
       .maybeSingle();
     if (regErr) {
       console.error('[parent-update-card] registration lookup failed:', regErr);
-      return json({ error: 'lookup_failed' }, 500);
+      return json({ error: 'lookup_failed', message: SORRY }, 500);
     }
-    if (!reg) return json({ error: 'not_found' }, 404);
+    if (!reg) return json({ error: 'not_found', message: NOT_YOURS }, 404);
 
     const parentAuthId = (reg.parents as { auth_id?: string | null } | null)?.auth_id ?? null;
     if (!parentAuthId || parentAuthId !== callerAuthId) {
       // Same answer whether the registration is missing or simply not theirs.
       // Telling a signed-in stranger that a registration EXISTS is a fact they
       // have no business learning.
-      return json({ error: 'not_found' }, 404);
+      return json({ error: 'not_found', message: NOT_YOURS }, 404);
     }
 
     // ── which rows would a new card rescue, and whose customer is it? ─────
@@ -130,7 +156,7 @@ serve(async (req: Request) => {
       .order('installment_number');
     if (rowsErr) {
       console.error('[parent-update-card] installment lookup failed:', rowsErr);
-      return json({ error: 'lookup_failed' }, 500);
+      return json({ error: 'lookup_failed', message: SORRY }, 500);
     }
 
     const stalled = (rows ?? []).filter((r) => r.status === 'paused_card_failed' || r.status === 'failed');
@@ -148,15 +174,50 @@ serve(async (req: Request) => {
     // assuming, and refuse if they disagree - a plan whose rows point at two
     // customers is a data problem, not something to guess our way through.
     const customerIds = [...new Set(stalled.map((r) => r.stripe_customer_id).filter(Boolean))];
-    if (customerIds.length !== 1) {
-      console.error('[parent-update-card] expected exactly one customer for registration', registrationId, customerIds);
-      return json({ error: 'ambiguous_customer' }, 409);
+    if (customerIds.length === 0) {
+      // NOT the same thing as "two customers", and it was reported as such until
+      // this review: .filter(Boolean) drops NULLs, so a plan with no recorded
+      // customer fell into the ambiguity branch and sent whoever investigated
+      // looking for a second customer that does not exist.
+      console.error('[parent-update-card] no stripe customer recorded on the stalled rows of', registrationId);
+      return json({
+        error: 'no_customer_on_plan',
+        message: 'We could not find the payment details saved for this plan. Please contact the provider and they will sort it out.',
+      }, 409);
+    }
+    if (customerIds.length > 1) {
+      console.error('[parent-update-card] more than one customer on registration', registrationId, customerIds);
+      return json({
+        error: 'ambiguous_customer',
+        message: 'This payment plan has more than one set of payment details on it, so we have stopped rather than guess. Please contact the provider.',
+      }, 409);
     }
     const customerId = customerIds[0] as string;
 
     // ── which Stripe account owns that customer? ──────────────────────────
     const orgConfig = (reg.organizations ?? null) as ConnectOrgConfig | null;
     const orgId = reg.organization_id as string | null;
+    // CAN THIS OPERATOR TAKE MONEY AT ALL? Checked explicitly, because
+    // routing.blocked below does NOT answer it for every org: buildChargeRouting
+    // only sets blocked on the DIRECT path, and returns null unconditionally for
+    // a destination org even when its Stripe account is switched off. A
+    // destination operator whose account gets restricted would therefore have
+    // been handed a card form, and the charge that followed would have fallen
+    // through buildConnectChargeParams to a plain platform charge - putting that
+    // family's money in the enrops balance instead of the operator's, after we
+    // specifically asked them to re-enter their card.
+    //
+    // create-checkout carries this same gate for the same reason. Copying it
+    // rather than relying on blocked is the difference between the two paths
+    // agreeing and only looking like they agree.
+    if (!orgConfig?.stripe_charges_enabled) {
+      console.warn('[parent-update-card] refusing: org cannot take payments', orgId);
+      return json({
+        error: 'operator_cannot_charge',
+        message: 'This provider is not set up to take payments right now, so there is nothing to save a card against. Please contact them directly.',
+      }, 409);
+    }
+
     const routing = buildChargeRouting(0, 'card', orgConfig, orgId);
     if (routing.blocked) {
       console.warn(`[parent-update-card] BLOCKED: ${routing.blocked}`);
@@ -182,7 +243,7 @@ serve(async (req: Request) => {
     const slug = (reg.organizations as { slug?: string | null } | null)?.slug ?? '';
     if (!slug) {
       console.error('[parent-update-card] org has no slug, cannot build a return URL:', orgId);
-      return json({ error: 'org_not_reachable' }, 409);
+      return json({ error: 'org_not_reachable', message: SORRY }, 409);
     }
     const backTo = `${origin}/${slug}/dashboard`;
 
@@ -233,7 +294,7 @@ serve(async (req: Request) => {
     });
   } catch (err) {
     console.error('[parent-update-card] fatal:', err);
-    return json({ error: 'internal_error' }, 500);
+    return json({ error: 'internal_error', message: SORRY }, 500);
   }
 });
 
