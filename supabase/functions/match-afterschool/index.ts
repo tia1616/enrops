@@ -44,7 +44,7 @@ import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatfo
 import { getUntrainedInstructorIds } from '../_shared/trainingGate.ts';
 // The one Deno definition of "is this program a camp". Used here to EXCLUDE
 // camps from auto-matching - see the long note at the programs query.
-import { isCampProgram } from '../_shared/campProgram.ts';
+import { isCampProgram, programWeekdays } from '../_shared/campProgram.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -153,42 +153,80 @@ serve(async (req) => {
       // class_days is selected ONLY to exclude camps - see below. Without it in
       // the select, isCampProgram() reads undefined on every row and silently
       // decides nothing is a camp, which is the bug this is preventing.
-      .select('id, day_of_week, class_days, start_time, end_time, program_location_id, status, curriculum_id, curriculum')
+      // first_session_date + end_date are a camp's RUN, and the conflict test
+      // needs them: without the dates, two camps months apart look like a clash
+      // because they share a weekday and a start time.
+      .select('id, day_of_week, class_days, first_session_date, end_date, start_time, end_time, program_location_id, status, curriculum_id, curriculum')
       .eq('organization_id', organizationId)
       .eq('term', term)
       .eq('status', 'open');
     if (progErr) return json({ error: `Load programs: ${progErr.message}` }, 500);
 
-    // CAMPS ARE NOT AUTO-MATCHED, AND THAT IS A DELIBERATE REFUSAL.
+    // CAMPS ARE NOW MATCHED, ON THEIR OWN RULES. The refusal that used to live
+    // here said every schedule rule was written against one weekday and that
+    // teaching them a set was "a real piece of work". Having done it: the work
+    // was smaller than that, because the weekday rules are the WRONG INSTRUMENT
+    // for a camp rather than a harder version of the right one.
     //
-    // Every schedule rule in this file is written against ONE weekday:
-    // dayCode(prog.day_of_week) gates availability, the time-overlap check
-    // compares two programs only when their day_of_week matches, and the
-    // max_days cap counts one day per program. A camp is a program too since
-    // 2026-09-25, carries a real term, and its day_of_week holds only its FIRST
-    // day - so a Monday-to-Thursday winter break camp would be matched as a
-    // Monday class. Concretely, that would: assign someone who never said they
-    // were free Tue-Thu; let the SAME instructor take the camp and a Tuesday
-    // class that runs inside the camp's hours, because the overlap test never
-    // compares a Tuesday to a Monday; and charge one day against a cap that
-    // four days should have filled.
+    //   AVAILABILITY. Not the weekday answer. "Mondays, from 1:00" means after
+    //   dismissal, and says nothing about a 9-3 camp day. The availability
+    //   survey now asks directly which camps someone can work
+    //   (instructor_term_availability.camp_availability, 2026-10-01), and only
+    //   an explicit yes makes them eligible. Absent is NOT a yes: a camp created
+    //   after they answered was never put to them.
     //
-    // The board's own assign path already reasons over every day a camp
-    // occupies (programWeekdays + coincidence in AfterschoolSchedule.jsx). This
-    // agent does not, and making it do so is a real piece of work, not a filter.
-    // Until it exists, the honest behaviour is to leave camps alone rather than
-    // to propose assignments built on a rule that does not hold for them - a
-    // proposal the operator would reasonably trust.
+    //   CONFLICTS. A camp occupies EVERY weekday it runs, via programWeekdays -
+    //   the same answer the board's own assign path uses. Reading day_of_week
+    //   would have said Monday for a Mon-Thu camp and left the instructor
+    //   "free" for three days they are teaching.
     //
-    // Reported in the summary as camps_skipped so the board can SAY this, rather
-    // than leaving the operator to notice their camps were quietly passed over.
+    //   THE DAYS CAP. A camp does not spend it. max_days is a weekly cap on
+    //   term-time load ("I want at most 3 days a week"); a break camp is not
+    //   part of that week, and charging four days against it would exclude
+    //   nearly everyone from the camp they just said yes to. Jessica's call,
+    //   2026-10-01.
+    //
+    // WHAT IS DELIBERATELY CONSERVATIVE: a camp is treated as occupying all its
+    // weekdays for overlap, without checking whether a weekly class actually
+    // MEETS inside the camp's dates. During a school break it does not, so some
+    // refusals here are stricter than reality. That direction is chosen: a
+    // refusal costs the operator one manual assignment, and the other direction
+    // double-books a real instructor on a real day.
+    //
+    // WHAT THE REFUSAL USED TO SAY, kept because it names every trap this had to
+    // clear rather than being deleted as though they were never real: every rule
+    // was written against ONE weekday, so a Mon-Thu camp would be matched as a
+    // Monday class - assigning someone who never said they were free Tue-Thu,
+    // letting that same instructor also take a Tuesday class inside the camp's
+    // hours because the overlap test never compared a Tuesday to a Monday, and
+    // charging one day against a cap four days should have filled. All three are
+    // closed above: availability comes from the camp question, occupancy and
+    // overlap run over programWeekdays, and the cap is not spent by a camp at
+    // all (daysUsed ignores camp slots - which it had to be taught, because
+    // addSlot filling four days silently spent the cap the camp path skips).
+    //
     // NOT named openPrograms: that name is already taken further down for
     // "programs nobody has confirmed yet", which is a different set.
     const termPrograms = progRaw ?? [];
-    const campsSkipped = termPrograms.filter((p: any) => isCampProgram(p)).length;
-    const programs = termPrograms
-      .filter((p: any) => !isCampProgram(p))
-      .filter((p: any) => dayCode(p.day_of_week) !== null);
+    // A program is schedulable when we can name at least one weekday it occupies
+    // AND that weekday is one this agent can reason about. programWeekdays
+    // answers the first for both shapes: every day for a camp, the one repeating
+    // day for a class.
+    //
+    // THE SECOND HALF IS NOT TIDINESS. The old filter was dayCode() != null, and
+    // DAY_MAP holds monday-friday only, so weekend programs were never in the
+    // run. programWeekdays knows all seven, so swapping to it alone quietly
+    // pulled Saturday CLASSES in - where the class path then fails on `!dc` and
+    // reports them as needs_hire with a reason about weekday availability, which
+    // is not why. Prod has three. A camp is different: its path never touches
+    // dayCode, so a weekend CAMP genuinely can be matched and is kept.
+    const programs = termPrograms.filter((p: any) => {
+      const days = programWeekdays(p);
+      if (days.length === 0) return false;
+      if (isCampProgram(p)) return true;
+      return dayCode(p.day_of_week) !== null;
+    });
+    const campsInTerm = programs.filter((p: any) => isCampProgram(p)).length;
 
     // ----- Locations: name + area (the unit preferences are ranked by) -----
     const { data: locRaw } = await admin
@@ -211,7 +249,7 @@ serve(async (req) => {
     // ----- Availability (term-scoped) -----
     const { data: availRaw, error: availErr } = await admin
       .from('instructor_term_availability')
-      .select('instructor_id, weekday_availability, max_days, needs_confirmation, preferred_categories')
+      .select('instructor_id, weekday_availability, max_days, needs_confirmation, preferred_categories, camp_availability')
       .eq('organization_id', organizationId)
       .eq('term', term);
     if (availErr) return json({ error: `Load availability: ${availErr.message}` }, 500);
@@ -280,6 +318,7 @@ serve(async (req) => {
       needsConfirmation: boolean;
       areaPrefs: Record<string, string>;
       preferredCategories: Set<string>;  // LEGO / coding / robotics families they enjoy
+      campYes: Set<string>;              // programs.id of every camp they said YES to
     }
     // Training gate: instructors who haven't finished required training can't be
     // assigned. Computed once for the whole pool (empty set when training is off
@@ -296,9 +335,20 @@ serve(async (req) => {
       if (!hasAny) { missingSurveys.push(name); continue; }
       if (blockedTraining.has(inst.id)) { missingTraining.push(name); continue; }
       const cats = Array.isArray(av.preferred_categories) ? av.preferred_categories : [];
+      // Which camps they said yes to. Only an explicit true counts: absent means
+      // they were never asked (the camp postdates their answer), and false means
+      // they said no. Both are "do not assign", but only the first is worth the
+      // operator chasing - the board reports them apart.
+      const ca = av.camp_availability;
+      const campYes = new Set<string>(
+        ca && typeof ca === 'object' && !Array.isArray(ca)
+          ? Object.entries(ca as Record<string, unknown>).filter(([, v]) => v === true).map(([k]) => k)
+          : [],
+      );
       pool.push({
         id: inst.id, name,
         days: wd,
+        campYes,
         maxDays: av.max_days ?? null,
         needsConfirmation: !!av.needs_confirmation,
         areaPrefs: areaPrefByInstr.get(inst.id) ?? {},
@@ -310,7 +360,15 @@ serve(async (req) => {
     // assignedCurricula tracks which curricula each instructor already holds (incl.
     // confirmed ones) so continuity carries across re-runs.
     //
-    // committedSlots holds every class an instructor already has on a weekday — not
+    // committedSlots holds every WEEKDAY an instructor is already committed to -
+    // one entry per weekday, so a camp contributes one per day it runs. Each
+    // reader has to say whether it means camps too: wouldConflict does (a day
+    // taught is a day taught), daysUsed and alreadyAtSchoolToday do not (one is
+    // a term-time weekly cap, the other is about a single trip). The isCamp flag
+    // on the slot is what lets them differ out loud instead of by accident - not
+    // saying so is how the days cap broke.
+    //
+    // It is not just the fact that they have a class that day — not
     // just the fact that they have one. It used to be Set<dayCode>, i.e. "one class per
     // instructor per weekday, full stop", which is STRICTER than both the picker and the
     // DB trigger and quietly wrong: OES runs LEGO Game Makers 2:00-3:25 and LEGO
@@ -319,19 +377,26 @@ serve(async (req) => {
     // Same rule as evaluate() and check_program_assignment_conflict now: a conflict is
     // genuinely overlapping times (20260818a); a different school later the same day
     // is fine.
-    type Slot = { dc: string; start: number | null; end: number | null; locationId: string | null };
+    // from/to are the program's DATE RANGE, and only a camp has one. A weekly
+    // class runs the whole term, so it has no range to compare and keeps the
+    // original weekday+time rule.
+    type Slot = { dc: string; start: number | null; end: number | null; locationId: string | null; from: string | null; to: string | null; isCamp: boolean };
     const committedSlots = new Map<string, Slot[]>();
 
+    // ONE SLOT PER WEEKDAY THE PROGRAM OCCUPIES. A weekly class contributes one;
+    // a Mon-Thu camp contributes four. Reading day_of_week here - which is what
+    // this did - books a camp as a Monday and leaves the instructor looking free
+    // on the Tuesday, Wednesday and Thursday they are actually teaching.
     function addSlot(instructorId: string, prog: any) {
-      const dc = dayCode(prog.day_of_week);
-      if (!dc) return;
-      if (!committedSlots.has(instructorId)) committedSlots.set(instructorId, []);
-      committedSlots.get(instructorId)!.push({
-        dc,
-        start: parse12h(prog.start_time),
-        end: parse12h(prog.end_time),
-        locationId: prog.program_location_id ?? null,
-      });
+      const start = parse12h(prog.start_time);
+      const end = parse12h(prog.end_time);
+      const locationId = prog.program_location_id ?? null;
+      const { from, to } = runRange(prog);
+      const isCamp = isCampProgram(prog);
+      for (const dc of programWeekdays(prog)) {
+        if (!committedSlots.has(instructorId)) committedSlots.set(instructorId, []);
+        committedSlots.get(instructorId)!.push({ dc, start, end, locationId, from, to, isCamp });
+      }
     }
 
     // How many distinct WEEKDAYS this instructor is already committed to. max_days is a
@@ -339,8 +404,17 @@ serve(async (req) => {
     // only while one-class-per-weekday was enforced. Now that back-to-back at one school
     // is legal, Zeke's two Wednesday classes are ONE day of work, not two, and must not
     // burn two days of his cap.
+    // CAMP DAYS DO NOT COUNT. max_days is a cap on a normal TEACHING WEEK, and
+    // a break camp is not part of one - it runs when the classes do not. Letting
+    // it count was a sibling break, not a decision: the camp path deliberately
+    // skips the cap, but addSlot now contributes one slot per day a camp runs,
+    // so a confirmed Mon-Thu camp quietly filled four days of the counter the
+    // CLASS path reads. Someone with "max 2 days" and one winter camp was then
+    // ineligible for every after-school class in the term.
     function daysUsed(instructorId: string, extraDay?: string | null): number {
-      const days = new Set((committedSlots.get(instructorId) ?? []).map((s) => s.dc));
+      const days = new Set(
+        (committedSlots.get(instructorId) ?? []).filter((s) => !s.isCamp).map((s) => s.dc),
+      );
       if (extraDay) days.add(extraDay);
       return days.size;
     }
@@ -359,15 +433,41 @@ serve(async (req) => {
     // trigger's small-hours guard catches it in SQL -- the two stay in agreement,
     // and the matcher is never LOOSER than the trigger (which would 500 the run when
     // the insert is rejected).
+    // A camp runs between two dates; a weekly class runs the whole term and has
+    // no range to compare.
+    function runRange(prog: any): { from: string | null; to: string | null } {
+      if (!isCampProgram(prog)) return { from: null, to: null };
+      const f = typeof prog.first_session_date === 'string' ? prog.first_session_date.slice(0, 10) : null;
+      const t = typeof prog.end_date === 'string' ? prog.end_date.slice(0, 10) : null;
+      return { from: f, to: t ?? f };
+    }
+
+    // Asks about EVERY weekday the program occupies, so a camp is tested against
+    // all four of its days rather than only the first one its column names.
+    //
+    // AND ABOUT DATES, when both sides have them. Weekday-and-time alone said a
+    // February camp clashed with a December one - they share a Monday at 9:00 -
+    // so an instructor could never be matched to more than one camp in a term.
+    // That is precisely the summer shape, where someone works week after week.
+    // Caught by dry-running Winter 2027 on staging, not by reading the code.
+    //
+    // When only ONE side is a camp the ranges cannot be compared (a weekly class
+    // has none), and it stays conservative: a shared weekday at a clashing time
+    // is a conflict even though a break camp usually runs when classes do not.
+    // A refusal costs one manual assignment; the other way double-books someone.
     function wouldConflict(instructorId: string, prog: any): boolean {
-      const dc = dayCode(prog.day_of_week);
-      if (!dc) return false;
+      const days = programWeekdays(prog);
+      if (days.length === 0) return false;
       const slots = committedSlots.get(instructorId);
       if (!slots?.length) return false;
       const start = parse12h(prog.start_time);
       const end = parse12h(prog.end_time);
+      const { from, to } = runRange(prog);
+      const dayset = new Set(days);
       return slots.some((s) => {
-        if (s.dc !== dc) return false;
+        if (!dayset.has(s.dc)) return false;
+        // Two dated runs that do not overlap cannot clash, whatever the clock says.
+        if (from && to && s.from && s.to && (to < s.from || s.to < from)) return false;
         // Unreadable time on either side: can't prove no overlap -> fail safe.
         if (s.start == null || s.end == null || start == null || end == null) return true;
         return start < s.end && s.start < end;
@@ -417,6 +517,20 @@ serve(async (req) => {
 
     // Everything except the area check: time/day fit, not double-booked, under cap.
     function eligibleCore(inst: PoolInstr, prog: any): boolean {
+      // A CAMP ASKS A DIFFERENT QUESTION, and answers it from a different place.
+      // The weekday window below is an after-school answer ("I can start at
+      // 1:00, after my other job"); a camp runs 9-3 on named dates and the
+      // instructor was asked about it by name. Only an explicit yes counts, so
+      // a camp they were never shown can never be auto-assigned to them.
+      //
+      // The days cap is skipped on purpose: it is a term-time weekly cap, and a
+      // four-day break camp would swallow it whole.
+      if (isCampProgram(prog)) {
+        if (declinedByProgram.get(prog.id)?.has(inst.id)) return false;
+        if (!inst.campYes.has(prog.id)) return false;
+        if (!hasUsableTime(prog)) return false;
+        return !wouldConflict(inst.id, prog);
+      }
       const dc = dayCode(prog.day_of_week);
       if (!dc) return false;
       if (declinedByProgram.get(prog.id)?.has(inst.id)) return false;  // turned this class down
@@ -499,12 +613,20 @@ serve(async (req) => {
     // knew they were a pair. Allowing back-to-back only made it POSSIBLE; without this
     // it never actually HAPPENED, because whoever got the first class had no edge on the
     // second. This is what makes the pair land on one person instead of by luck.
+    // CAMP SLOTS DO NOT COUNT AS BEING THERE. The whole point is one trip for
+    // two adjacent classes; a December camp and a term-time Monday class are not
+    // one trip. Without the filter a camp at the same school hands rank 0 - the
+    // top of the winner order - on a premise that is false, and the real
+    // adjacent-class pair this exists to produce can lose to it. Third reader of
+    // committedSlots to need this; the slot list carries isCamp so that each
+    // reader states which it means.
     function alreadyAtSchoolToday(inst: PoolInstr, prog: any): boolean {
       const dc = dayCode(prog.day_of_week);
       if (!dc) return false;
       const locationId = prog.program_location_id ?? null;
       if (!locationId) return false;
-      return (committedSlots.get(inst.id) ?? []).some((s) => s.dc === dc && s.locationId === locationId);
+      return (committedSlots.get(inst.id) ?? [])
+        .some((s) => !s.isCamp && s.dc === dc && s.locationId === locationId);
     }
 
     // Assign one program to its best candidate. Winner order:
@@ -612,6 +734,16 @@ serve(async (req) => {
       if (blockedByArea.length > 0) {
         const names = blockedByArea.map((i) => i.name).join(', ');
         reason = `${names} could take this class but marked this area as unavailable. Assign by hand if you'd like.`;
+      } else if (isCampProgram(prog)) {
+        // A CAMP IS NOT STAFFED OFF WEEKDAYS, so it must not be explained in
+        // them. "No instructor is available for this weekday and time window"
+        // would send the operator to look at a weekday answer that had nothing
+        // to do with the refusal. The real question is whether anyone said yes
+        // to THIS camp, and whether the ones who did are already busy across it.
+        const saidYes = pool.filter((inst) => inst.campYes.has(prog.id));
+        reason = saidYes.length === 0
+          ? 'Nobody has said they can work this camp yet. Ask on the availability survey, or assign by hand.'
+          : 'Everyone who said they can work this camp is already booked across its dates.';
       } else {
         const dc = dayCode(prog.day_of_week);
         const s = parse12h(prog.start_time)!, e = parse12h(prog.end_time)!;
@@ -702,10 +834,17 @@ serve(async (req) => {
       term,
       summary: {
         programs_total: programs.length,
-        // Camps this term that the agent deliberately did not touch. The board
-        // says so out loud; without it the operator sees "matched 8 of 8" and
-        // has no way to know two camps were never in the 8.
-        camps_skipped: campsSkipped,
+        // Camps are now IN the run, not skipped past it. Kept as a named count
+        // because the board's copy leans on knowing how much of a term is camp:
+        // "matched 8 of 8" reads differently when two of the eight are camps
+        // staffed off a different question.
+        //
+        // camps_skipped stays in the payload, now always 0, because the board
+        // deployed today still reads it. Removing the key would make the strip
+        // render `undefined camps skipped` until both ship - and they ship
+        // separately. It goes when the board stops asking.
+        camps_in_term: campsInTerm,
+        camps_skipped: 0,
         locked_confirmed: lockedProgram.size,
         assigned: assignedDecisions.length,
         needs_hire: decisions.filter((d) => d.status === 'needs_hire').length,

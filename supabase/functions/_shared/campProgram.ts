@@ -91,6 +91,34 @@ export function campDayLabel(
     : shorts.join(", ");
 }
 
+/**
+ * WHICH WEEKDAYS A PROGRAM OCCUPIES, lowercase, in calendar order.
+ *
+ * For a weekly class that is the single day it repeats on. For a CAMP it is
+ * EVERY day of its run, and that difference is the whole point: a camp's
+ * day_of_week holds only its FIRST day, so anything that asks "which day is
+ * this on" and reads that column gets Monday for a Mon-Thu camp - and then
+ * believes the instructor is free Tuesday, Wednesday and Thursday.
+ *
+ * Twin of programWeekdays() in src/lib/programSchedule.js, asserted against it
+ * by campProgram.test.ts. The browser one has been the scheduling board's
+ * answer since the camp build; this is the Deno end so the auto-matcher can ask
+ * the same question the board already asks.
+ *
+ * Returns [] when neither is known, so a caller can skip rather than guess.
+ */
+export function programWeekdays(
+  program: { class_days?: unknown; day_of_week?: unknown } | null | undefined,
+): string[] {
+  const days = Array.isArray(program?.class_days) ? program!.class_days as unknown[] : null;
+  if (days && days.length > 0) {
+    const lower = days.map((d) => String(d).toLowerCase());
+    return CLASS_DAY_ORDER.filter((d) => lower.includes(d));
+  }
+  const single = String(program?.day_of_week ?? "").trim().toLowerCase();
+  return CLASS_DAY_ORDER.includes(single) ? [single] : [];
+}
+
 // "2026-12-21" -> "December 21". Local parse via T00:00:00, not Date(iso),
 // which is UTC and lands a date on the day before for anyone behind it. Same
 // spelling as fmt() in these functions already, so a camp's dates and a

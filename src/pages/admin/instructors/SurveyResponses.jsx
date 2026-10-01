@@ -15,6 +15,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase";
 import { fetchOrgTerms } from "../../../lib/terms.js";
+import { isCampProgram } from "../../../lib/programSchedule.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -298,7 +299,7 @@ export default function SurveyResponses() {
 // ---- Data loaders -------------------------------------------------------------
 
 async function loadAfterschool(orgId, term) {
-  const [instRes, availRes, areaRes, cfgRes] = await Promise.all([
+  const [instRes, availRes, areaRes, cfgRes, campRes] = await Promise.all([
     supabase
       .from("instructors")
       .select("id, first_name, last_name, preferred_name, email")
@@ -307,7 +308,7 @@ async function loadAfterschool(orgId, term) {
       .order("first_name", { ascending: true }),
     supabase
       .from("instructor_term_availability")
-      .select("instructor_id, weekday_availability, min_days, max_days, preferred_categories, unavailable_dates, notes, submitted_at")
+      .select("instructor_id, weekday_availability, min_days, max_days, preferred_categories, unavailable_dates, notes, submitted_at, camp_availability")
       .eq("organization_id", orgId)
       .eq("term", term),
     supabase
@@ -321,10 +322,25 @@ async function loadAfterschool(orgId, term) {
       .eq("organization_id", orgId)
       .eq("context", "afterschool")
       .maybeSingle(),
+    // The term's camps, so an answer can be shown as the camp's NAME rather
+    // than the program id it is keyed on. Read here rather than carried on the
+    // answer so a renamed camp reads correctly for answers already given.
+    supabase
+      .from("programs")
+      .select("id, curriculum, class_days, day_of_week, first_session_date, end_date")
+      .eq("organization_id", orgId)
+      .eq("term", term)
+      .in("status", ["open", "closed"])
+      .order("first_session_date", { ascending: true }),
   ]);
   if (instRes.error) throw instRes.error;
   if (availRes.error) throw availRes.error;
   if (areaRes.error) throw areaRes.error;
+  // Throws like its siblings rather than degrading to an empty list. This screen
+  // exists to answer "who can work which camp", and `campRes.data ?? []` would
+  // hide the Camps row on every card - which an operator reads as "this term has
+  // no camps", the opposite of "this did not load".
+  if (campRes.error) throw campRes.error;
 
   const disabled = new Set(Array.isArray(cfgRes?.data?.disabled_questions) ? cfgRes.data.disabled_questions : []);
 
@@ -347,7 +363,8 @@ async function loadAfterschool(orgId, term) {
     }
   }
   responded.sort((a, b) => new Date(b.av.submitted_at) - new Date(a.av.submitted_at));
-  return { responded, nonResponders, activeCount: (instRes.data ?? []).length, disabled };
+  const termCamps = (campRes.data ?? []).filter((p) => isCampProgram(p));
+  return { responded, nonResponders, activeCount: (instRes.data ?? []).length, disabled, termCamps };
 }
 
 async function loadCamp(orgId, cycleId, cycle) {
@@ -430,7 +447,7 @@ function Body({ state, mode, onNudge }) {
     return <Empty title="Pick a term" body="Choose a term or cycle above to see responses." />;
   }
 
-  const { responded = [], nonResponders = [], activeCount = 0, weeks = [], disabled = new Set() } = state;
+  const { responded = [], nonResponders = [], activeCount = 0, weeks = [], disabled = new Set(), termCamps = [] } = state;
   const respondedCount = responded.length;
 
   return (
@@ -449,7 +466,7 @@ function Body({ state, mode, onNudge }) {
         <div style={{ display: "grid", gap: 14 }}>
           {responded.map((r) =>
             mode === "afterschool"
-              ? <AfterschoolCard key={r.instructor.id} row={r} disabled={disabled} />
+              ? <AfterschoolCard key={r.instructor.id} row={r} disabled={disabled} termCamps={termCamps} />
               : <CampCard key={r.instructor.id} row={r} weeks={weeks} disabled={disabled} />
           )}
         </div>
@@ -518,7 +535,7 @@ function PrefChips({ prefs, vocab, nameKey }) {
   );
 }
 
-function AfterschoolCard({ row, disabled = new Set() }) {
+function AfterschoolCard({ row, disabled = new Set(), termCamps = [] }) {
   const { instructor, av, areas } = row;
   const wd = av.weekday_availability || {};
   const availDays = DAYS.filter((d) => wd[d.key] && wd[d.key].from);
@@ -548,6 +565,23 @@ function AfterschoolCard({ row, disabled = new Set() }) {
         <Field label="Subjects">
           {subjects.length === 0 ? <span style={{ color: MUTED }}>—</span> :
             subjects.map((c) => <Chip key={c} color={BRIGHT}>{titleCaseCategory(c)}</Chip>)}
+        </Field>
+      )}
+      {/* WHO CAN WORK WHICH CAMP - the answer an operator needs before they can
+          assign one. Driven off the TERM'S camps rather than off the stored
+          answer, so a camp created AFTER this instructor submitted shows as
+          "not asked" instead of silently vanishing or reading as a no. That
+          distinction is the whole reason the answer is stored per camp. */}
+      {!disabled.has("camps") && termCamps.length > 0 && (
+        <Field label="Camps">
+          {termCamps.map((c) => {
+            const answer = (av.camp_availability && typeof av.camp_availability === "object")
+              ? av.camp_availability[c.id]
+              : undefined;
+            const color = answer === true ? OK_GREEN : answer === false ? CORAL : MUTED;
+            const mark = answer === true ? "Yes" : answer === false ? "No" : "not asked";
+            return <Chip key={c.id} color={color}>{c.curriculum} · {mark}</Chip>;
+          })}
         </Field>
       )}
       {!disabled.has("unavailable_dates") && dates.length > 0 && (
@@ -620,11 +654,15 @@ function NonResponders({ instructors, onNudge }) {
             background: "#fff", color: BRIGHT, border: `1.5px solid ${BRIGHT}`, borderRadius: 8,
             padding: "7px 14px", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit",
           }}
-          title="Open the availability survey on the Schedule board — non-responders are pre-selected there"
+          title="Opens the Schedule board, where you choose who to send to"
         >
-          Nudge non-responders
+          Nudge non-responders &rarr;
         </button>
       </div>
+      <p style={{ margin: "0 0 10px", fontSize: 12.5, color: MUTED, lineHeight: 1.4 }}>
+        This opens the availability survey on the Schedule board with these non-responders
+        pre-selected. Nothing sends until you review the list, pick who to email, and hit send.
+      </p>
       <div>
         {instructors.map((inst) => (
           <Chip key={inst.id} color={MUTED}>{instructorName(inst)}</Chip>
