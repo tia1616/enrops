@@ -7,6 +7,7 @@ import {
   formatStartDate,
   programScheduleSummary,
   formatDayLabel,
+  campDayCoverage,
 } from './programSchedule.js';
 
 const NOW = new Date('2026-08-04T12:00:00');
@@ -71,5 +72,30 @@ eq('camp: empty class_days falls back to the weekly label',
 eq('camp: junk class_days falls back to the weekly label',
   formatDayLabel({ day_of_week: 'Monday', session_count: 8, class_days: ['funday'] }), 'Mondays');
 
+
+// --- campDayCoverage ---
+// Jessica, 2026-10-01, on Presidents Week LEGO Camp: "dates don't match days
+// and still saved". class_days said mon-thu; the window ended Wednesday, so the
+// camp ran three days while every label advertised four.
+eq('coverage: a chosen day the dates never reach',
+  campDayCoverage(['monday', 'tuesday', 'wednesday', 'thursday'], ['2027-02-15', '2027-02-16', '2027-02-17']),
+  { meets: ['monday', 'tuesday', 'wednesday'], never: ['thursday'] });
+eq('coverage: every chosen day occurs -> nothing to refuse',
+  campDayCoverage(['monday', 'tuesday', 'wednesday', 'thursday'], ['2027-02-15', '2027-02-16', '2027-02-17', '2027-02-18']).never,
+  []);
+// A day lost to the site's own closure_dates is never met either: the camp does
+// not run it, so the label must not name it.
+eq('coverage: a day lost to a closure counts as never met',
+  campDayCoverage(['monday', 'tuesday', 'wednesday'], ['2027-02-15', '2027-02-17']).never,
+  ['tuesday']);
+// Bare 'YYYY-MM-DD' parses as UTC and lands on the previous day west of
+// Greenwich; if that regressed every weekday below shifts by one.
+eq('coverage: TZ safe (Feb 15 2027 is a Monday)',
+  campDayCoverage(['monday'], ['2027-02-15']).meets, ['monday']);
+// Unusable input must NOT look like a violation - the caller skips the check
+// rather than refusing a save on a shape it cannot read.
+eq('coverage: null in -> empty, not a refusal', campDayCoverage(null, null), { meets: [], never: [] });
+eq('coverage: non-array dates -> no false "never"', campDayCoverage(['monday'], 'nope').never, []);
+eq('coverage: junk day names are not reported missing', campDayCoverage(['funday'], ['2027-02-15']).never, []);
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

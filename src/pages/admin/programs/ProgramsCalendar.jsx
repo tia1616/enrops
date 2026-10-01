@@ -24,7 +24,7 @@ import ShareProgram from "../../../components/ShareProgram.jsx";
 // The camp vocabulary, shared with the builder so the two forms cannot drift on
 // which days a camp may run, how a day is toggled, or what a half day is called.
 import { CAMP_DAY_LENGTHS, CAMP_WEEKDAYS, toggleCampDay } from "../../../lib/campCycle.js";
-import { isCampProgram, firstMeetingDayOnOrAfter } from "../../../lib/programSchedule.js";
+import { isCampProgram, firstMeetingDayOnOrAfter, campDayMismatchMessage } from "../../../lib/programSchedule.js";
 import FamiliesPayNote, { useOrgFeeConfig } from "../../../components/FamiliesPayNote.jsx";
 import ShareLink from "../../../components/ShareLink.jsx";
 import EnnieTip from "../../../components/EnnieTip.jsx";
@@ -750,7 +750,18 @@ export default function ProgramsCalendar() {
       setLoading(true);
       setError("");
       try {
-        // Programs for this term, joined to location for school name
+        // Programs for this term, joined to location for school name.
+        //
+        // class_days makes a row a camp; session_type is what its days PAY.
+        // session_type was missing from this list while the editor read it, so a
+        // camp with a saved "Full day" rendered the blank "Choose one..." - and
+        // the guard that refuses to save a camp without one could never be
+        // satisfied, which would have made every camp uneditable. A field the
+        // form reads has to be a field the query fetches.
+        //
+        // NOTE: the list below is a PostgREST column string, not code. A `//`
+        // line inside it is sent to the server as a column name and 400s the
+        // whole query - keep commentary out here, where it is really a comment.
         const { data: progRows, error: progErr } = await supabase
           .from("programs")
           .select(`
@@ -761,7 +772,7 @@ export default function ProgramsCalendar() {
             grade_min, grade_max, age_min, age_max, age_format,
             runs_own_registration, external_registration_url, list_in_public_catalog,
             first_session_date, session_count, schedule_mode, end_date, organization_id,
-            class_days,
+            class_days, session_type,
             facility_requested_at, facility_approved_at, facility_notes,
             program_location_id,
             program_locations (id, name, district)
@@ -2104,7 +2115,10 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
   // Range mode live preview: as the operator types start/end, ask the DB to derive
   // the count + skipped no-school days for THIS location's calendar. Params-based
   // (preview_program_range_schedule) so it reflects the typed-but-unsaved dates,
-  // not the stored row. { count, skipped, first_session, last_session } | { error }.
+  // not the stored row.
+  // { count, skipped, first_session, last_session, dates } | { error }.
+  // `dates` is the real session list, and the camp day/date check at save time
+  // reads it - so it is part of this shape's contract, not an extra.
   const [rangePreview, setRangePreview] = useState(null);
   const [rangeLoading, setRangeLoading] = useState(false);
   useEffect(() => {
@@ -2253,6 +2267,22 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         rangeFirstSession = rangePreview.first_session;
         if (!rangeFirstSession) {
           throw new Error("Couldn't determine the first class date — check the day and dates.");
+        }
+        // A CAMP MUST NOT NAME A DAY IT NEVER MEETS. class_days is what the
+        // catalog, the roster email and every family-facing label read to say
+        // "Mon-Thu" - but the sessions actually delivered come from the DATE
+        // WINDOW. Turning Thursday on without moving the end date left a camp
+        // advertising four days and running three, which is the exact bug class
+        // this whole build exists to fix, and it saved silently.
+        //
+        // Checked against the preview's own dates rather than the weekday span,
+        // so a day lost to one of the site's closure_dates is caught too: either
+        // way the camp does not meet that day, and saying it does is the lie.
+        // Skipped if the preview has no dates array, because refusing to save on
+        // a shape we cannot read would brick editing rather than protect it.
+        if (isCampDraft) {
+          const mismatch = campDayMismatchMessage(draft.class_days, rangePreview.dates);
+          if (mismatch) throw new Error(mismatch);
         }
       } else {
         // Count mode: session_count is NOT NULL and 0 is meaningless. Guard here so a
