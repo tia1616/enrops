@@ -132,6 +132,16 @@ verify_jwt = false
 # last deploy happened to set.
 verify_jwt = true
 
+[functions.parent-update-card]
+# MUST stay true. This hands back a Stripe card-entry page tied to a specific
+# family's Stripe Customer, and it decides whose plan that is by reading
+# parents.auth_id for the caller - which only exists if a JWT was verified. With
+# verify_jwt = false the anon key alone would satisfy the gateway and there would
+# be no caller to match, so the ownership check would be deciding on nothing.
+# Pinned rather than left to the default, because the CLI omits the field for an
+# unlisted function and the API then keeps whatever the last deploy set.
+verify_jwt = true
+
 [functions.stripe-webhook]
 verify_jwt = false
 
