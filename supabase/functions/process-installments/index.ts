@@ -1226,8 +1226,13 @@ async function sendParentDeclineNotice({
   // Where the family goes to fix it. The portal is tenant-scoped, so this is
   // /{slug}/dashboard - the same path parent-update-card returns them to - and
   // the banner there carries the button.
+  // Escaped at every use below, like every other value in this template.
+  // organizations.slug carries no CHECK constraint, so it is unconstrained text
+  // as far as the database is concerned, and an unescaped one in an href would
+  // break the button on the one email whose whole job is to carry a working
+  // link.
   const fixUrl = orgSlug
-    ? `${(Deno.env.get('PUBLIC_SITE_URL') ?? 'https://enrops.com').replace(/\/+$/, '')}/${orgSlug}/dashboard`
+    ? `${(Deno.env.get('PUBLIC_SITE_URL') ?? 'https://enrops.com').replace(/\/+$/, '')}/${encodeURIComponent(orgSlug)}/dashboard`
     : null;
   const installmentLabel = installmentNumber === 1 ? 'first' : installmentNumber === 2 ? 'second' : 'third';
 
@@ -1283,8 +1288,8 @@ async function sendParentDeclineNotice({
   <p><strong>${childPrograms.length === 1 ? `${escapeHtml(childPrograms[0].name)}'s spot is` : 'Their spots are'} still held</strong> — we won't drop the registration${childPrograms.length === 1 ? '' : 's'} while we sort this out.</p>
   ${fixUrl
     ? `<p>You can put a new card on file in a couple of minutes, and we'll take the payment automatically.</p>
-  <p style="margin:20px 0;"><a href="${fixUrl}" style="background:${brand.primary_color};color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:700;display:inline-block;">Update your card</a></p>
-  <p style="font-size:13px;color:#666;">If the button doesn't work, paste this into your browser:<br/><a href="${fixUrl}" style="color:${brand.primary_color};">${fixUrl}</a></p>`
+  <p style="margin:20px 0;"><a href="${escapeHtml(fixUrl)}" style="background:${brand.primary_color};color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:700;display:inline-block;">Update your card</a></p>
+  <p style="font-size:13px;color:#666;">If the button doesn't work, paste this into your browser:<br/><a href="${escapeHtml(fixUrl)}" style="color:${brand.primary_color};">${escapeHtml(fixUrl)}</a></p>`
     : `<p>To update your card on file, reply to this email and we'll send you a secure link.</p>`}
   <p>Thanks for your patience,<br/>${escapeHtml(senderFirst)}<br/><span style="color:#666;">${escapeHtml(brand.org_name)}</span><br/><a href="mailto:${brand.reply_to}" style="color:${brand.primary_color};">${brand.reply_to}</a></p>
 </div>`.trim();

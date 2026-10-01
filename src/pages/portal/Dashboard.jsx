@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
-import { Link, useNavigate, useOutletContext } from 'react-router-dom';
+import { Link, useNavigate, useOutletContext, useSearchParams } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { supportEmailOf } from '../../lib/supportContact.js';
@@ -189,6 +189,14 @@ export default function Dashboard() {
   const [stalledPlans, setStalledPlans] = useState([]);
   const [fixingPlan, setFixingPlan] = useState(null);
   const [fixError, setFixError] = useState('');
+  // JUST BACK FROM THE CARD FORM. Stripe redirects the instant the card is
+  // saved, but the rows only un-pause when the webhook lands a moment later, and
+  // the two are not ordered. Without this the family lands straight back on "A
+  // PAYMENT DIDN'T GO THROUGH", concludes it failed, and either clicks again or
+  // emails the provider about a payment they already fixed - the exact support
+  // conversation this feature exists to delete.
+  const [searchParams] = useSearchParams();
+  const [cardJustSaved, setCardJustSaved] = useState(searchParams.get('card') === 'updated');
 
   // Hand the family off to Stripe's own card form. parent-update-card decides
   // whether there is anything to fix and which Stripe account the form belongs
@@ -226,6 +234,19 @@ export default function Dashboard() {
       setFixingPlan(null);
     }
   }, []);
+
+  useEffect(() => {
+    if (!cardJustSaved) return;
+    // Re-read TWICE rather than once, so a slow webhook still clears the banner
+    // without the family doing anything. Then stop suppressing: if the rows are
+    // still stalled after this, something genuinely did not work, and showing
+    // the truth beats a reassurance that has stopped being true.
+    const t1 = setTimeout(() => { if (user) fetchData(); }, 3000);
+    const t2 = setTimeout(() => { if (user) fetchData(); }, 8000);
+    const t3 = setTimeout(() => setCardJustSaved(false), 12000);
+    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cardJustSaved]);
 
   const toggleCard = useCallback((id) => {
     setExpandedCards((prev) => {
@@ -747,7 +768,19 @@ export default function Dashboard() {
       {/* A stalled payment comes BEFORE a credit balance. One is a problem the
           family has to act on and the other is good news; putting the good news
           first would bury the thing they came here for. */}
-      {stalledPlans.length > 0 && (
+      {cardJustSaved && (
+        <div className="mb-4 rounded-2xl border border-green-200 bg-green-50 p-5">
+          <p className="text-xs font-bold uppercase tracking-widest text-green-800">
+            Thanks &mdash; we&rsquo;ve got your new card
+          </p>
+          <p className="mt-2 text-sm text-j2s-ink/70">
+            There&rsquo;s nothing else for you to do. We&rsquo;ll take the payment that didn&rsquo;t
+            go through, and the rest of the plan carries on as normal.
+          </p>
+        </div>
+      )}
+
+      {stalledPlans.length > 0 && !cardJustSaved && (
         <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 p-5">
           <p className="text-xs font-bold uppercase tracking-widest text-red-700">
             A payment didn&rsquo;t go through
@@ -758,10 +791,15 @@ export default function Dashboard() {
           {/* Says the spot is safe FIRST. The family's actual fear on reading
               this is that their child has lost their place, and the decline
               email says the same thing - the two must not disagree. */}
+          {/* Number-neutral on purpose. This used to choose between "child's
+              spot" and "children's spots" from the number of PLANS, which is not
+              the number of children: one child in two classes has two stalled
+              registrations, so a parent with one child was told about their
+              "children". Small, but it is the reassuring half of a message a
+              worried parent reads closely. */}
           <p className="mt-2 text-sm text-j2s-ink/70">
-            Your {stalledPlans.length === 1 ? 'child’s spot is' : 'children’s spots are'} still
-            held. This usually means the card expired or was replaced, so putting a new one on
-            takes a moment and we&rsquo;ll collect the payment automatically.
+            No one has lost their spot. This usually means the card expired or was replaced, so
+            putting a new one on takes a moment and we&rsquo;ll collect the payment automatically.
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             {stalledPlans.map((p) => (
