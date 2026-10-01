@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { Link, useNavigate, useOutletContext, useSearchParams } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 import { useAuth } from '../../context/AuthContext.jsx';
@@ -167,6 +167,15 @@ export default function Dashboard() {
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  // Which fetchData run is allowed to write. More than one can be in flight -
+  // the card-update effect fires one at 3s and another at 8s - and fetchData
+  // spans 13 awaits, writing ten separate pieces of state at different points
+  // in its sequence. Two overlapping runs therefore do not merely race to be
+  // last; they INTERLEAVE, and the screen ends up showing a combination neither
+  // run ever read from the database (enrollments from the newer run next to
+  // stalledPlans from the older one, which is the stalled-payment banner
+  // reappearing for a family whose card update actually worked).
+  const fetchSeqRef = useRef(0);
   const [tab, setTab] = useState('today');
   const [expandedCards, setExpandedCards] = useState(new Set());
   const [prefs, setPrefs] = useState(null);
@@ -287,7 +296,27 @@ export default function Dashboard() {
   // `undefined`, not `null`, which would throw. `opts?.quiet === true` cannot.
   async function fetchData(opts) {
     const quiet = opts?.quiet === true;
-    const fail = (code) => { if (!quiet) { setError(code); setLoading(false); } };
+    const myFetch = ++fetchSeqRef.current;
+    // Every data write goes through `apply`, so a run a newer run has overtaken
+    // writes NOTHING rather than writing half of an older picture.
+    const apply = (fn) => { if (fetchSeqRef.current === myFetch) fn(); };
+    // `loading` is owned by the foreground path alone: a background refresh must
+    // not raise a spinner, and equally must not CLEAR one it never raised. It is
+    // also the one write deliberately left unguarded at the end - a superseded
+    // foreground run clearing the spinner a moment early is survivable, a hung
+    // spinner nobody is left to clear is not.
+    const fail = (code) => {
+      if (quiet) {
+        // Quiet mode shows nothing, so without this a failed background refresh
+        // would leave no trace anywhere. The family then sees the stalled banner
+        // return at 12s and there is no way to tell "the webhook never arrived"
+        // from "the read that would have seen it failed".
+        console.warn(`[dashboard] background refresh failed (${code}); leaving the data on screen`);
+        return;
+      }
+      apply(() => setError(code));
+      setLoading(false);
+    };
     try {
       if (!quiet) {
         setLoading(true);
@@ -330,8 +359,10 @@ export default function Dashboard() {
         if (roles.isAdmin) { navigate('/admin', { replace: true }); return; }
         fail('no_account'); return;
       }
-      setParent(p);
-      setPrefs({ ...DEFAULT_PREFS, ...(p.communication_preferences || {}) });
+      apply(() => {
+        setParent(p);
+        setPrefs({ ...DEFAULT_PREFS, ...(p.communication_preferences || {}) });
+      });
 
       // Org's recurring weekly classes (outside-registration tenants). Read from
       // the anon-safe view (no coach email/notes). Only renders when rows exist,
@@ -340,7 +371,7 @@ export default function Dashboard() {
         .from('class_schedule_public')
         .select('id, title, day_of_week, start_time, end_time, location_text')
         .eq('organization_id', org.id);
-      setWeeklyClasses(wc || []);
+      apply(() => setWeeklyClasses(wc || []));
 
       // CREDIT WITH THIS PROVIDER, and the org filter is the whole point rather
       // than a habit. Ten parents on production have children at TWO different
@@ -368,7 +399,7 @@ export default function Dashboard() {
       // parent_id, so it can only ever answer for whoever is signed in, and it
       // delegates to the same balance function the checkout spends against.
       // One balance rule, one implementation.
-      setCreditCents(Number(creditRows) || 0);
+      apply(() => setCreditCents(Number(creditRows) || 0));
 
       // Stalled instalments. Read directly: parents_see_own_installments already
       // scopes SELECT to the signed-in family through current_parent_id(), so
@@ -399,7 +430,7 @@ export default function Dashboard() {
           cur.count += 1;
           byReg.set(r.registration_id, cur);
         }
-        setStalledPlans([...byReg.values()]);
+        apply(() => setStalledPlans([...byReg.values()]));
       }
 
       // 2a. Afterschool registrations
@@ -470,7 +501,7 @@ export default function Dashboard() {
           }))
           .filter((w) => w.missingRegIds.length > 0);
       }
-      setUnsignedWaivers(needsWaivers);
+      apply(() => setUnsignedWaivers(needsWaivers));
 
       // Backfill gate: after-school kids who registered before the pickup/dismissal
       // questions existed still need that info. Only gate when THIS org actually
@@ -502,7 +533,7 @@ export default function Dashboard() {
           }
         }
       }
-      setIncompleteStudents(incomplete);
+      apply(() => setIncompleteStudents(incomplete));
 
       // 3. Normalize + cap sessions at program.session_count
       const merged = [];
@@ -664,15 +695,17 @@ export default function Dashboard() {
         .order('sent_at', { ascending: false })
         .limit(10);
 
-      setNotifications((notifs || []).map((n) => ({
-        id: n.id,
-        name: n.automations?.automation_templates?.display_name || 'Update',
-        sentAt: n.sent_at,
-        status: n.status,
-      })));
-
-      setEnrollments(merged);
-      setLoading(false);
+      apply(() => {
+        setNotifications((notifs || []).map((n) => ({
+          id: n.id,
+          name: n.automations?.automation_templates?.display_name || 'Update',
+          sentAt: n.sent_at,
+          status: n.status,
+        })));
+        setEnrollments(merged);
+      });
+      // Unguarded, and only on the foreground path - see the note on `fail`.
+      if (!quiet) setLoading(false);
     } catch (err) {
       console.error('Dashboard error:', err);
       fail('fetch_failed');
