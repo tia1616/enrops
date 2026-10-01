@@ -78,6 +78,7 @@ import {
 import { withResolvedFee, loadPlatformFeeDefaults } from '../_shared/feeConfig.ts';
 import { allocateFeeAcrossInstallments } from '../_shared/feeAllocation.ts';
 import { logEnrollmentEvent, ENROLLMENT_ACTIONS } from '../_shared/logEnrollmentEvent.ts';
+import { programScheduleLabel } from '../_shared/campProgram.ts';
 import { validateGift, scholarshipLineItem, ScholarshipFundConfig } from '../_shared/scholarshipFund.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
@@ -1112,6 +1113,67 @@ serve(async (req) => {
     }
 
     // STANDARD (NON-INSTALLMENTS) PATH
+
+    // WHEN DOES THIS RUN - the line the family reads on the Stripe page and
+    // again on the receipt they keep.
+    //
+    // It used to be `${l.day_of_week}s` straight off the posted cart. A camp's
+    // day_of_week holds only its FIRST day (a camp became a program row on
+    // 2026-09-25), so a family buying a Mon-Thu winter camp was charged for
+    // "Mondays" - wrong on the page where they pay and wrong on their receipt.
+    //
+    // DERIVED FROM THE PROGRAM ROW, not from the posted field. This is a money
+    // document: what it says was bought should come from the row the charge is
+    // for, not from a value a browser hands us. Same rule and same module as the
+    // instructor offer emails - campProgram.ts is the one Deno spelling of this,
+    // and a second one here is the divergence that produced the bug.
+    //
+    // FAILS SOFT, DELIBERATELY. A lookup failure falls back to the posted
+    // weekday, which is exactly what shipped before this. A description is never
+    // worth blocking a family's checkout over.
+    //
+    // The payment-plan path above needs none of this: its description is the
+    // instalment schedule and names no day at all.
+    // SCOPED TO THE ORG THE REGISTRATIONS PROVE, never to the ids alone. These
+    // program_ids come off the browser's cart, and until this change the field
+    // was inert - nothing in this function read it. guardAdmin is service-role
+    // and bypasses RLS, so an unscoped `.in('id', ...)` would happily read a
+    // DIFFERENT provider's program and print its schedule on this family's
+    // receipt. giftOrgId is the organization_id of the registration rows the
+    // server itself loaded, with no fallback to another row.
+    //
+    // A foreign or stale id simply returns no row, which lands on the same
+    // posted-weekday fallback as a failed lookup. giftOrgId null means the
+    // registration carries no org - already broken for the credit and
+    // scholarship paths above - so there is nothing to scope by and nothing
+    // trustworthy to look up; the fallback covers it.
+    const scheduleLabels = new Map<string, string>();
+    {
+      const labelIds = [...new Set(
+        (line_items as Array<{ program_id?: string }>)
+          .map((l) => l.program_id)
+          .filter((id): id is string => typeof id === 'string' && id.length > 0),
+      )];
+      if (labelIds.length > 0 && giftOrgId) {
+        const { data: labelRows, error: labelErr } = await guardAdmin
+          .from('programs')
+          .select('id, day_of_week, class_days, first_session_date, end_date')
+          .eq('organization_id', giftOrgId)
+          .in('id', labelIds);
+        if (labelErr) {
+          console.warn(
+            '[create-checkout] schedule-label lookup failed; falling back to the posted weekday:',
+            labelErr.message,
+          );
+        } else {
+          for (const p of (labelRows ?? []) as Array<Record<string, unknown>>) {
+            const label = programScheduleLabel(p);
+            if (label) scheduleLabels.set(String(p.id), label);
+          }
+        }
+      }
+    }
+
     const stripeLineItems = line_items.map((l: any) => ({
       price_data: {
         currency: 'usd',
@@ -1119,7 +1181,7 @@ serve(async (req) => {
           name: l.program_name,
           description: [
             l.school_name,
-            l.day_of_week ? `${l.day_of_week}s` : null,
+            scheduleLabels.get(l.program_id) ?? (l.day_of_week ? `${l.day_of_week}s` : null),
             l.start_time,
             l.child_label,
           ]
