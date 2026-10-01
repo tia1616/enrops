@@ -23,6 +23,7 @@ import { loadOrgBrand, renderSignatureBlock, formatFromAddress } from '../_share
 import { roomDisplay } from '../_shared/roomLabel.ts';
 import { sortRosterRows, isOnRoster } from '../_shared/rosterOrder.ts';
 import { ROSTER_COLUMNS, ROSTER_PAGE_WIDTH, ROSTER_MARGIN_X } from './rosterColumns.ts';
+import { isCampProgram, programScheduleLabel } from '../_shared/campProgram.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -78,7 +79,8 @@ serve(async (req: Request) => {
       .select(`
         id, organization_id, program_location_id, status,
         curriculum, term, day_of_week, start_time, end_time, room,
-        first_session_date, session_count, instructor_name, max_capacity
+        first_session_date, session_count, instructor_name, max_capacity,
+        class_days, end_date
       `)
       .eq('id', programId)
       .maybeSingle();
@@ -395,11 +397,34 @@ function dayPlural(d: string | null | undefined): string {
   const l = DAY_LABELS[d.toLowerCase()];
   return l ? `${l}s` : '';
 }
-function scheduleLabel(program: any): string {
+// WHEN THIS PROGRAM RUNS, as the school partner reads it on the roster.
+//
+// Was day_of_week and nothing else, so a Mon-Thu winter camp went to the school
+// as "Mondays from December 21" - in the subject line, the email body, the
+// plain-text half and the PDF header. A camp's day_of_week holds only its FIRST
+// day. programScheduleLabel is the one Deno spelling of this rule, already
+// behind the Stripe checkout line and the instructor offer emails.
+//
+// A CAMP'S LABEL ALREADY CARRIES ITS DATES, so the separate "from <first day>"
+// is dropped for one: "Mon-Thu, December 21-24 from December 21" says December
+// 21 twice in one breath.
+//
+// A WEEKLY CLASS IS UNCHANGED, byte for byte - it keeps dayPlural, which
+// deliberately returns '' for anything not in DAY_LABELS ("Mon/Wed" from a
+// legacy import). programScheduleLabel would echo that back pluralised, so the
+// class branch is left exactly as it was rather than quietly widened.
+function scheduleParts(program: any): string[] {
+  if (isCampProgram(program)) {
+    const when = programScheduleLabel(program);
+    return when ? [when] : [];
+  }
   const parts: string[] = [];
   if (program.day_of_week) parts.push(dayPlural(program.day_of_week));
   if (program.first_session_date) parts.push(`from ${fmtDate(program.first_session_date)}`);
-  return parts.filter(Boolean).join(' ');
+  return parts;
+}
+function scheduleLabel(program: any): string {
+  return scheduleParts(program).filter(Boolean).join(' ');
 }
 function makePdfFilename(p: { name: string; locationName: string; term: string }): string {
   const safe = (s: string) => (s || '').replace(/[^A-Za-z0-9_-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
@@ -482,9 +507,14 @@ async function buildRosterPdf(params: {
     p.drawText(program.curriculum ?? 'Program', { x: MARGIN_X, y, size: 16, font: bold, color: rgb(ink.r, ink.g, ink.b) });
     y -= 18;
     const subParts: string[] = [];
-    if (program.day_of_week) subParts.push(dayPlural(program.day_of_week));
+    // Same rule as the email body, via the same helper, so the PDF a school
+    // prints and the message it arrived in cannot describe the camp differently.
+    // scheduleParts already drops the redundant "from <first day>" for a camp,
+    // which is why the start-date line below is only added for a class.
+    const whenParts = scheduleParts(program);
+    if (whenParts.length > 0) subParts.push(whenParts[0]);
     if (program.start_time && program.end_time) subParts.push(`${fmtTime(program.start_time)}–${fmtTime(program.end_time)}`);
-    if (program.first_session_date) subParts.push(`from ${fmtDate(program.first_session_date)}`);
+    if (whenParts.length > 1) subParts.push(whenParts[1]);
     if (program.session_count) subParts.push(`${program.session_count} sessions`);
     if (program.term) subParts.push(program.term);
     p.drawText(subParts.filter(Boolean).join('  ·  '), { x: MARGIN_X, y, size: 10, font, color: rgb(muted.r, muted.g, muted.b) });
