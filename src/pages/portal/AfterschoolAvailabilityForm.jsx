@@ -21,6 +21,7 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import { planTimeCopy, applyTimeCopy, timeWindowLabel, listSentence } from "../../lib/weekTimes.js";
+import { isCampProgram, formatDayLabel, campRunLabel } from "../../lib/programSchedule.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Enrops default)
@@ -124,6 +125,7 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
   const weekRef = useRef(null);
   const daysRef = useRef(null);
   const areasRef = useRef(null);
+  const campsRef = useRef(null);
   const errorNoteRef = useRef(null);
 
   function fail(field, message) {
@@ -199,15 +201,27 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
   // Questions the operator turned off in Settings (org_survey_config). Hidden here
   // and skipped in validation. Empty = ask everything (default).
   const [disabled, setDisabled] = useState(() => new Set());
+  // The term's CAMPS, and this instructor's answer for each.
+  //
+  // The weekday question above is an after-school question - "Mondays, from
+  // 1:00" means after dismissal. A break camp runs 9-3 on named dates, so that
+  // answer says nothing about whether someone can work it, and an operator with
+  // a winter camp to staff had to ask by hand.
+  //
+  // Jessica asked for "week 1, week 2" boxes. These are better and are the same
+  // thing for summer: the list IS her camps, so it cannot drift from what she
+  // scheduled, and it names them instead of making an instructor count weeks.
+  const [camps, setCamps] = useState([]);
+  const [campAvail, setCampAvail] = useState(() => ({}));
 
   useEffect(() => {
     if (!instructorId || !orgId || !term) return;
     let alive = true;
     (async () => {
-      const [availRes, locRes, areaPrefRes, currRes, cfgRes] = await Promise.all([
+      const [availRes, locRes, areaPrefRes, currRes, cfgRes, campRes] = await Promise.all([
         supabase
           .from("instructor_term_availability")
-          .select("weekday_availability, min_days, max_days, notes, submitted_at, preferred_categories, unavailable_dates")
+          .select("weekday_availability, min_days, max_days, notes, submitted_at, preferred_categories, unavailable_dates, camp_availability")
           .eq("instructor_id", instructorId)
           .eq("term", term)
           .maybeSingle(),
@@ -242,10 +256,24 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
           .eq("organization_id", orgId)
           .eq("context", "afterschool")
           .maybeSingle(),
+        // The term's camps, in the order they run. Cancelled and draft camps are
+        // excluded: nobody should be asked to commit to a camp that is not
+        // happening or has not been published. isCampProgram is applied below
+        // rather than in the filter because an EMPTY class_days is a weekly
+        // class and no PostgREST filter expresses that as cleanly.
+        supabase
+          .from("programs")
+          .select("id, curriculum, class_days, day_of_week, first_session_date, end_date, start_time, end_time")
+          .eq("organization_id", orgId)
+          .eq("term", term)
+          .in("status", ["open", "closed"])
+          .order("first_session_date", { ascending: true }),
       ]);
       if (!alive) return;
 
       setDisabled(new Set(Array.isArray(cfgRes.data?.disabled_questions) ? cfgRes.data.disabled_questions : []));
+      const termCamps = (campRes.data ?? []).filter((p) => isCampProgram(p));
+      setCamps(termCamps);
 
       if (availRes.data) {
         setHasExisting(!!availRes.data.submitted_at);
@@ -262,6 +290,18 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
         setDaysRange(r ? r.value : "no_limit");
         setNotes(availRes.data.notes ?? "");
         setCategories(Array.isArray(availRes.data.preferred_categories) ? availRes.data.preferred_categories : []);
+        // Prefill ONLY the camps they actually answered. A camp created after
+        // they submitted stays absent rather than arriving pre-ticked or
+        // pre-crossed - they have not been asked about it, and the board shows
+        // it as unanswered until they are.
+        const saved = availRes.data.camp_availability;
+        if (saved && typeof saved === "object" && !Array.isArray(saved)) {
+          const prefill = {};
+          for (const c of termCamps) {
+            if (typeof saved[c.id] === "boolean") prefill[c.id] = saved[c.id];
+          }
+          setCampAvail(prefill);
+        }
         setUnavailableDates(
           Array.isArray(availRes.data.unavailable_dates)
             ? [...availRes.data.unavailable_dates].map((d) => String(d).slice(0, 10)).sort()
@@ -375,6 +415,16 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
       const unrated = areas.filter((a) => !areaPrefs[a]);
       if (unrated.length > 0) { fail("areas", `Please rate every area — still missing: ${unrated.join(", ")}.`); return; }
     }
+    // EVERY CAMP NEEDS A YES OR A NO. Left blank, "didn't answer" and "can't do
+    // it" are the same thing on the operator's staffing board, and only one of
+    // them is worth chasing. Same rule as the areas question above.
+    if (!disabled.has("camps") && camps.length > 0) {
+      const unanswered = camps.filter((c) => typeof campAvail[c.id] !== "boolean");
+      if (unanswered.length > 0) {
+        fail("camps", `Please answer yes or no for every camp — still missing: ${unanswered.map((c) => c.curriculum).join(", ")}.`);
+        return;
+      }
+    }
 
     setSaving(true);
     try {
@@ -401,6 +451,13 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
             needs_confirmation: false,
             preferred_categories: categories,
             unavailable_dates: unavailableDates.length ? unavailableDates : null,
+            // Written ONLY for the camps this instructor was actually shown, so
+            // a camp created later stays absent and reads as "not asked" rather
+            // than as a no. Null when there were none to ask about, which keeps
+            // "this term has no camps" distinct from "answered nothing".
+            camp_availability: camps.length
+              ? Object.fromEntries(camps.filter((c) => typeof campAvail[c.id] === "boolean").map((c) => [c.id, campAvail[c.id]]))
+              : null,
           },
           { onConflict: "organization_id,instructor_id,term" },
         );
@@ -612,6 +669,56 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
             })}
           </div>
         </Card>
+      )}
+
+      {/* ONLY WHEN THERE ARE CAMPS. A term with none asks nothing - the question
+          is generated from the operator's own camps, so an empty list means
+          there is genuinely nothing to ask, whatever the setting says.
+
+          Every camp gets an explicit yes or no before this form will submit,
+          because a blank is ambiguous in the direction that costs an operator
+          real time: "didn't tick it" and "can't do it" look identical on a
+          staffing board, and only one of them is worth a phone call. */}
+      {!disabled.has("camps") && camps.length > 0 && (
+      <Card innerRef={campsRef} title="Which camps can you work?" subtitle="Camps run during school breaks, usually a full day rather than after school — so this is a separate question from your weekly availability above. Say yes only to the ones you could actually take.">
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {camps.map((c) => {
+            const answer = campAvail[c.id];
+            const dayLabel = formatDayLabel(c);
+            const runLabel = campRunLabel(c);
+            const timeLabel = c.start_time && c.end_time ? `${c.start_time}-${c.end_time}` : null;
+            const when = [dayLabel, runLabel, timeLabel].filter(Boolean).join(" · ");
+            return (
+              <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", padding: "10px 12px", borderRadius: 8, border: `1px solid ${answer === undefined ? RULE : BRIGHT}55`, background: answer === undefined ? "#fff" : "#FAF9FE" }}>
+                <div style={{ flex: "1 1 240px", minWidth: 0 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: INK }}>{c.curriculum}</div>
+                  {when && <div style={{ fontSize: 12.5, color: MUTED, marginTop: 2 }}>{when}</div>}
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  {[{ v: true, l: "Yes" }, { v: false, l: "No" }].map((o) => {
+                    const on = answer === o.v;
+                    return (
+                      <button
+                        key={o.l}
+                        type="button"
+                        aria-pressed={on}
+                        onClick={() => setCampAvail((prev) => ({ ...prev, [c.id]: o.v }))}
+                        style={{
+                          padding: "7px 18px", borderRadius: 7, cursor: "pointer", fontFamily: "inherit",
+                          fontSize: 13.5, fontWeight: on ? 700 : 500,
+                          border: `1px solid ${on ? (o.v ? OK_GREEN : CORAL) : RULE}`,
+                          background: on ? (o.v ? `${OK_GREEN}1A` : `${CORAL}1A`) : "#fff",
+                          color: on ? (o.v ? OK_GREEN : CORAL) : MUTED,
+                        }}
+                      >{o.l}</button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
       )}
 
       {!disabled.has("unavailable_dates") && (

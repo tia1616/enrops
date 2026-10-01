@@ -131,6 +131,37 @@ export function formatDayLabel(program) {
   return Number(program?.session_count) === 1 ? day : `${day}s`;
 }
 
+// WHEN A CAMP RUNS: "December 21-24", or "December 28-January 2" across a month.
+//
+// Twin of campRunLabel() in supabase/functions/_shared/campProgram.ts, and
+// asserted against it by campProgram.test.ts, which runs both over the same
+// rows. Deno and Vite cannot share a module, so the rule is written twice and
+// pinned once - the same arrangement as formatDayLabel above.
+//
+// It exists on this side because the availability survey asks an instructor
+// which camps they can work, and "Mon-Thu" alone does not tell them WHICH
+// Mon-Thu. The dates are the question.
+//
+// Returns null when the dates are not both known, so a caller drops the segment
+// rather than printing a range to nowhere. A one-day camp reads as one date,
+// not as a range from a day to itself.
+export function campRunLabel(program) {
+  if (!isCampProgram(program)) return null;
+  const startsOn = typeof program?.first_session_date === 'string' ? program.first_session_date : '';
+  const endsOn = typeof program?.end_date === 'string' ? program.end_date : '';
+  const long = { month: 'long', day: 'numeric' };
+  const start = formatCalendarDate(startsOn, long);
+  if (!start) return null;
+  const end = formatCalendarDate(endsOn, long);
+  if (!end || startsOn.slice(0, 10) === endsOn.slice(0, 10)) return start;
+  // Same month: "December 21-24" rather than repeating the month.
+  if (startsOn.slice(0, 7) === endsOn.slice(0, 7)) {
+    const endDay = formatCalendarDate(endsOn, { day: 'numeric' });
+    return endDay ? `${start}-${endDay}` : start;
+  }
+  return `${start}-${end}`;
+}
+
 // Which weekdays a program OCCUPIES, lowercase, in calendar order.
 //
 // For a weekly class that is the single day it repeats on. For a CAMP it is

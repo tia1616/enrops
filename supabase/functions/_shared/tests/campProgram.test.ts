@@ -22,7 +22,7 @@ import {
 import { isCampProgram as isCampProgramCron } from "../../lifecycle-automations-cron/noSchoolDates.ts";
 
 const WEB = new URL("../../../../src/lib/programSchedule.js", import.meta.url);
-const { formatDayLabel } = await import(WEB.href);
+const { formatDayLabel, campRunLabel: webCampRunLabel } = await import(WEB.href);
 
 const CAMP_MON_THU = {
   class_days: ["monday", "tuesday", "wednesday", "thursday"],
@@ -105,6 +105,29 @@ Deno.test("campDayLabel matches the browser's formatDayLabel for every camp shap
   for (const class_days of shapes) {
     const row = { class_days, day_of_week: "Monday" };
     assertEquals(campDayLabel(row), formatDayLabel(row), class_days.join("+"));
+  }
+});
+
+Deno.test("campRunLabel matches the browser's campRunLabel for every date shape", () => {
+  // The availability survey asks an instructor which camps they can work and
+  // renders the browser twin; the offer email that follows renders this one.
+  // The two naming the same dates differently is the confusion this replaces,
+  // and a date rendered in UTC lands a day early for everyone west of
+  // Greenwich - which is every operator this platform serves.
+  const shapes = [
+    ["2026-12-21", "2026-12-24"], // inside one month
+    ["2026-12-28", "2027-01-02"], // across a month AND a year
+    ["2026-12-21", "2026-12-21"], // one day
+    ["2027-02-15", "2027-02-19"],
+    ["2026-06-15", "2026-06-19"],
+    ["2026-12-21", ""],           // no end date known
+    ["2026-07-31", "2026-08-04"],
+  ];
+  for (const [first_session_date, end_date] of shapes) {
+    const row = { class_days: ["monday", "tuesday"], day_of_week: "Monday", first_session_date, end_date };
+    // The Deno side returns '' where the browser returns null - both mean "say
+    // nothing" to their caller, so compare them as the absence they are.
+    assertEquals(campRunLabel(row) || null, webCampRunLabel(row) || null, `${first_session_date}..${end_date}`);
   }
 });
 

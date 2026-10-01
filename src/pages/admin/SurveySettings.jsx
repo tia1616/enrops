@@ -37,6 +37,12 @@ const QUESTIONS = {
     { key: "days_per_week", label: "How many days per week they want" },
     { key: "areas", label: "Which areas they want to work in", source: { label: "Programs & Partners", to: "/admin/schools" } },
     { key: "subjects", label: "What subjects they like to teach", source: { label: "Offerings", to: "/admin/curricula" } },
+    // Asked only when the term actually HAS camps, and generated from them, so
+    // turning it off means "don't ask", not "hide an empty question". The camp
+    // context below is the OLD summer-cycle survey; this one rides on the term
+    // survey an operator already sends, which is what lets a winter break camp
+    // be staffed without standing up a cycle for it.
+    { key: "camps", label: "Which camps they can work", hint: "Lists this term's camps by name and dates. Only appears when the term has some.", source: { label: "Scheduled Programs", to: "/admin/programs" } },
     { key: "unavailable_dates", label: "Specific dates they can't work" },
     { key: "notes", label: "Anything else (free-text note)" },
   ],
