@@ -22,7 +22,7 @@ import { formatTermLabel } from "../../../lib/terms.js";
 // campTermForDate lives beside the other camp helpers in programSchedule.js,
 // which imports nothing - terms.js pulls in the supabase client, so anything
 // defined there cannot be unit-tested by the repo's plain-node runner.
-import { campTermForDate, firstMeetingDayOnOrAfter } from "../../../lib/programSchedule.js";
+import { campTermForDate, firstMeetingDayOnOrAfter, campDayMismatchMessage } from "../../../lib/programSchedule.js";
 import ShareProgram from "../../../components/ShareProgram.jsx";
 import FamiliesPayNote, { useOrgFeeConfig } from "../../../components/FamiliesPayNote.jsx";
 import ProgramSteps from "../../../components/ProgramSteps.jsx";
@@ -1030,6 +1030,14 @@ export default function QuickProgramBuilder() {
         if (!campCount || !campFirst) {
           throw new Error("None of the days you picked fall between the first and last day. Check the dates and the days.");
         }
+        // AND NOT *SOME* OF THEM EITHER. The guard above only fires when NO
+        // chosen day lands in the window; a camp whose Thursday falls outside it
+        // sailed through with count 3, then advertised "Mon-Thu" everywhere
+        // class_days is read. Same check the editor makes, from the same
+        // function, so create and edit cannot disagree about what a camp is
+        // allowed to claim.
+        const campMismatch = campDayMismatchMessage(campDays, campPreview?.dates);
+        if (campMismatch) throw new Error(campMismatch);
 
         payload.class_days = campDays;
         payload.schedule_mode = "range";

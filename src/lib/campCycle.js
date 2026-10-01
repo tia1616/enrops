@@ -111,3 +111,41 @@ export function computeWeeks(startISO, endISO) {
   }
   return weeks;
 }
+
+/**
+ * Is `v` a day length a CAMP may legitimately be stored with?
+ *
+ * Wider than CAMP_DAY_LENGTHS on purpose. That list is what the builder OFFERS
+ * for a new camp; this is what the database already HOLDS. 'afternoon' is a
+ * valid session_type, pays exactly what 'morning' pays (Pay rates has one Half
+ * day box per role that writes both cells), and prod has an OPEN camp using it.
+ *
+ * Validating an existing camp against the offer list instead of this made that
+ * camp uneditable: the picker had no option matching 'afternoon', so it showed
+ * blank, and the save guard then refused the only value the row had. An
+ * operator could not change its price without first being made to re-answer a
+ * question - and the obvious answer, "Half day", would have silently rewritten
+ * recorded data about a camp that is already selling.
+ *
+ * 'after_school' is excluded deliberately: it is what a weekly class pays, and
+ * a camp priced at it is the money bug this column was added to stop.
+ */
+export function isCampDayLength(v) {
+  return v === "morning" || v === "afternoon" || v === "full_day";
+}
+
+/**
+ * The options to render for a camp whose stored day length is `stored`.
+ *
+ * Normally the two the builder offers. When the row holds 'afternoon' - which
+ * no longer has its own question - it gains an entry so the select SHOWS "Half
+ * day" and round-trips unchanged if the operator does not touch it. Picking
+ * "Half day" from the list still writes 'morning', because that is then a
+ * deliberate answer rather than a silent migration, and the two pay the same.
+ */
+export function campDayLengthOptions(stored) {
+  if (stored === "afternoon") {
+    return [{ value: "afternoon", label: "Half day" }, ...CAMP_DAY_LENGTHS.filter((t) => t.value !== "morning")];
+  }
+  return CAMP_DAY_LENGTHS;
+}

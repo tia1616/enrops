@@ -269,3 +269,66 @@ export function campTermForDate(iso) {
 
   return `${season}${String(termYear % 100).padStart(2, "0")}`;
 }
+
+// Which of a camp's chosen days its real session dates NEVER reach.
+//
+// class_days is what every family-facing label reads - the catalog, the roster
+// email, formatDayLabel's "Mon-Thu". The sessions actually DELIVERED come from
+// the date window instead. Nothing forced the two to agree, so a camp could be
+// saved claiming four days and running three: turn Thursday on, leave the end
+// date on Wednesday, and it saves silently. That gap is the bug class this
+// whole camp build exists to close, and it sat on BOTH the builder and the
+// editor - the builder only refused when NO day landed in the window.
+//
+// Takes the session dates rather than re-deriving them, so a day lost to one of
+// the site's closure_dates counts as never met too. Either way the camp does
+// not meet that day, and the label saying it does is the lie.
+//
+// Returns { meets, never }, both ordered Mon-first, both lowercase. An unusable
+// argument yields empty arrays, so a caller skips the check rather than
+// refusing a save on a shape it cannot read.
+export function campDayCoverage(classDays, sessionDates) {
+  const wanted = Array.isArray(classDays)
+    ? CLASS_DAY_ORDER.filter((d) => classDays.map((x) => String(x).trim().toLowerCase()).includes(d))
+    : [];
+  const met = new Set();
+  if (Array.isArray(sessionDates)) {
+    for (const iso of sessionDates) {
+      if (typeof iso !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(iso.trim())) continue;
+      // Local midnight, not Date.parse of a bare date - a bare 'YYYY-MM-DD' is
+      // parsed as UTC, which lands on the PREVIOUS day west of Greenwich and
+      // would report the wrong weekday for every session.
+      const d = new Date(`${iso.trim()}T00:00:00`);
+      if (Number.isNaN(d.getTime())) continue;
+      // CLASS_DAY_ORDER is Monday-first; getDay() is Sunday-first. Same shift
+      // firstMeetingDayOnOrAfter uses, so the two cannot drift apart.
+      met.add(CLASS_DAY_ORDER[(d.getDay() + 6) % 7]);
+    }
+  }
+  // NOTHING READ MEANS NOTHING TO ACCUSE. With no usable dates every chosen day
+  // would otherwise come back as "never met" and the caller would refuse a save
+  // it cannot actually judge - failing in the damaging direction, which is the
+  // opposite of what this function is for. The genuinely-zero-sessions case is
+  // already owned by the count guard that runs before this.
+  if (met.size === 0) return { meets: [], never: [] };
+  return {
+    meets: CLASS_DAY_ORDER.filter((d) => met.has(d)),
+    never: wanted.filter((d) => !met.has(d)),
+  };
+}
+
+// The operator-facing refusal for campDayCoverage, or null when there is
+// nothing to refuse.
+//
+// Lives here rather than in each screen because the builder and the editor were
+// about to carry the same sentence twice, and a camp must not be told different
+// things depending on which screen it is being saved from. Names the days both
+// ways round: which ones it does not meet, and which ones it does, so the
+// operator can see at a glance whether the dates or the day toggles are wrong.
+export function campDayMismatchMessage(classDays, sessionDates) {
+  const { meets, never } = campDayCoverage(classDays, sessionDates);
+  if (!never.length) return null;
+  const title = (d) => d.charAt(0).toUpperCase() + d.slice(1);
+  return `This camp never meets on ${never.map(title).join(', ')} — it meets `
+    + `${meets.map(title).join(', ')}. Change the dates, or turn those days off.`;
+}

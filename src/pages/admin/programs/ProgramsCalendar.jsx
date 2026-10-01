@@ -21,6 +21,10 @@ import EditProgramCurriculumModal from "./EditProgramCurriculumModal.jsx";
 import CancelClassModal from "./CancelClassModal.jsx";
 import MessageFamiliesModal from "./MessageFamiliesModal.jsx";
 import ShareProgram from "../../../components/ShareProgram.jsx";
+// The camp vocabulary, shared with the builder so the two forms cannot drift on
+// which days a camp may run, how a day is toggled, or what a half day is called.
+import { CAMP_WEEKDAYS, toggleCampDay, isCampDayLength, campDayLengthOptions } from "../../../lib/campCycle.js";
+import { isCampProgram, firstMeetingDayOnOrAfter, campDayMismatchMessage } from "../../../lib/programSchedule.js";
 import FamiliesPayNote, { useOrgFeeConfig } from "../../../components/FamiliesPayNote.jsx";
 import ShareLink from "../../../components/ShareLink.jsx";
 import EnnieTip from "../../../components/EnnieTip.jsx";
@@ -746,7 +750,18 @@ export default function ProgramsCalendar() {
       setLoading(true);
       setError("");
       try {
-        // Programs for this term, joined to location for school name
+        // Programs for this term, joined to location for school name.
+        //
+        // class_days makes a row a camp; session_type is what its days PAY.
+        // session_type was missing from this list while the editor read it, so a
+        // camp with a saved "Full day" rendered the blank "Choose one..." - and
+        // the guard that refuses to save a camp without one could never be
+        // satisfied, which would have made every camp uneditable. A field the
+        // form reads has to be a field the query fetches.
+        //
+        // NOTE: the list below is a PostgREST column string, not code. A `//`
+        // line inside it is sent to the server as a column name and 400s the
+        // whole query - keep commentary out here, where it is really a comment.
         const { data: progRows, error: progErr } = await supabase
           .from("programs")
           .select(`
@@ -757,7 +772,7 @@ export default function ProgramsCalendar() {
             grade_min, grade_max, age_min, age_max, age_format,
             runs_own_registration, external_registration_url, list_in_public_catalog,
             first_session_date, session_count, schedule_mode, end_date, organization_id,
-            class_days,
+            class_days, session_type,
             facility_requested_at, facility_approved_at, facility_notes,
             program_location_id,
             program_locations (id, name, district)
@@ -1890,6 +1905,14 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
     // derives from start+end). end_date is only used in range mode.
     schedule_mode: program.schedule_mode === "range" ? "range" : "count",
     end_date: program.end_date ?? "",
+    // A CAMP'S DAYS AND ITS HALF/FULL DAY, editable from here since 2026-10-01.
+    // Until then a camp was fixed the moment it was created: the only way to
+    // change which days it ran, or that it was a half day rather than a full
+    // one, was to cancel it and build it again - taking its registrations with
+    // it. Both are plain columns the builder already writes; nothing here is a
+    // second way to decide them, only a way to change them.
+    class_days: Array.isArray(program.class_days) ? [...program.class_days] : null,
+    session_type: program.session_type ?? "",
     max_capacity: program.max_capacity ?? "",
     // Families-facing blurb on the registration page. Editable here so a program
     // that already exists can get one - the lean builder only just started
@@ -2092,7 +2115,10 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
   // Range mode live preview: as the operator types start/end, ask the DB to derive
   // the count + skipped no-school days for THIS location's calendar. Params-based
   // (preview_program_range_schedule) so it reflects the typed-but-unsaved dates,
-  // not the stored row. { count, skipped, first_session, last_session } | { error }.
+  // not the stored row.
+  // { count, skipped, first_session, last_session, dates } | { error }.
+  // `dates` is the real session list, and the camp day/date check at save time
+  // reads it - so it is part of this shape's contract, not an extra.
   const [rangePreview, setRangePreview] = useState(null);
   const [rangeLoading, setRangeLoading] = useState(false);
   useEffect(() => {
@@ -2121,9 +2147,12 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
       // the preview takes the weekly arm, counts only day_of_week (a camp's
       // FIRST day), and this count is materialized straight into session_count
       // by the save below -- so editing a ten-day Mon-Fri camp's price would
-      // silently store "2 sessions". Read from the saved row, not the draft:
-      // class_days is not editable here, and the patch never writes it.
-      p_class_days: program.class_days ?? null,
+      // silently store "2 sessions".
+      //
+      // READ FROM THE DRAFT, not the saved row, now that the days ARE editable:
+      // turning Friday off has to change the count the operator sees BEFORE
+      // they save, and it is this same preview the save materializes.
+      p_class_days: draft.class_days?.length ? draft.class_days : null,
     }).then(({ data, error }) => {
       if (!alive) return;
       setRangeLoading(false);
@@ -2132,7 +2161,9 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
     return () => { alive = false; };
     // early_release_start_time is a dependency for the same reason: typing it
     // changes the count this preview is about to hand to the save.
-  }, [draft.schedule_mode, draft.day_of_week, draft.first_session_date, draft.end_date, draft.program_location_id, draft.early_release_start_time, program.organization_id, program.term, program.class_days]);
+    // class_days joins the deps as a STRING: it is an array, and a fresh array
+    // with the same days would otherwise re-run this on every render.
+  }, [draft.schedule_mode, draft.day_of_week, draft.first_session_date, draft.end_date, draft.program_location_id, draft.early_release_start_time, program.organization_id, program.term, (draft.class_days ?? []).join(",")]);
 
   function set(field, value) {
     setDraft((d) => ({ ...d, [field]: value }));
@@ -2165,6 +2196,16 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
     }
   }
 
+  // Is the row being edited a CAMP? Asked of the SAVED program, not the draft:
+  // it decides which controls to show, and a camp whose days were all toggled
+  // off mid-edit must not turn into a weekly class under the operator's hands.
+  // isCampProgram, never `class_days != null` - an empty array is a class.
+  //
+  // Declared ABOVE handleSave, which reads it. A const read before its
+  // declaration is safe inside a callback that runs after render, but that is a
+  // distinction worth not relying on in a file this size.
+  const isCampDraft = isCampProgram(program);
+
   async function handleSave() {
     setSaving(true);
     setSaveError(null);
@@ -2184,6 +2225,28 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         }
         if (draft.end_date < draft.first_session_date) {
           throw new Error("The end date is before the start date.");
+        }
+        // A CAMP WITH NO DAYS IS NOT A CLASS, it is an unfinished edit. Without
+        // this the save writes neither class_days nor session_type (the patch
+        // only writes them for a camp with days), so turning every day off and
+        // pressing Save looked like it worked and changed nothing. Refusing
+        // says which knob is wrong; silently converting a camp into a weekly
+        // class would be far worse, and is what writing `[]` here would do.
+        if (isCampDraft && !(draft.class_days ?? []).length) {
+          throw new Error("Pick at least one day the camp runs.");
+        }
+        // AND IT STILL HAS TO SAY WHAT ITS DAYS PAY. The builder refuses to
+        // CREATE a camp without this; refusing to SAVE one without it is the
+        // other half of the same rule, and the half that was missing. The blank
+        // option in the select is reachable, and choosing it would write NULL -
+        // after which no instructor can mark a day of that camp taught and the
+        // nightly seeder skips its pay rows, with nothing on screen to say why.
+        // Validated against what a camp may be STORED with, not against the two
+        // the builder offers: 'afternoon' is a real stored value that pays the
+        // same as a morning, and an open camp on prod uses it. Checking the
+        // offer list made that camp uneditable.
+        if (isCampDraft && !isCampDayLength(draft.session_type)) {
+          throw new Error("Say whether this camp is a half day or a full day.");
         }
         if (rangeLoading) {
           throw new Error("Still calculating the sessions — give it a second, then save.");
@@ -2209,6 +2272,22 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         if (!rangeFirstSession) {
           throw new Error("Couldn't determine the first class date — check the day and dates.");
         }
+        // A CAMP MUST NOT NAME A DAY IT NEVER MEETS. class_days is what the
+        // catalog, the roster email and every family-facing label read to say
+        // "Mon-Thu" - but the sessions actually delivered come from the DATE
+        // WINDOW. Turning Thursday on without moving the end date left a camp
+        // advertising four days and running three, which is the exact bug class
+        // this whole build exists to fix, and it saved silently.
+        //
+        // Checked against the preview's own dates rather than the weekday span,
+        // so a day lost to one of the site's closure_dates is caught too: either
+        // way the camp does not meet that day, and saying it does is the lie.
+        // Skipped if the preview has no dates array, because refusing to save on
+        // a shape we cannot read would brick editing rather than protect it.
+        if (isCampDraft) {
+          const mismatch = campDayMismatchMessage(draft.class_days, rangePreview.dates);
+          if (mismatch) throw new Error(mismatch);
+        }
       } else {
         // Count mode: session_count is NOT NULL and 0 is meaningless. Guard here so a
         // blanked/zero field gives a plain message instead of a raw Postgres NOT NULL
@@ -2230,9 +2309,30 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
           && durationMinutes(draft.early_release_start_time, draft.early_release_end_time) === null) {
         throw new Error("The early-release end time must be after the start time.");
       }
+      // A CAMP KEEPS ITS OWN SHAPE. class_days is what makes it a camp, and
+      // day_of_week is DERIVED from it rather than chosen: the column is NOT
+      // NULL and the public catalog matches it with `=`, so it has to be the
+      // camp's first ACTUAL meeting day. An operator who moves a Mon-Thu camp's
+      // start to a Sunday, or turns Monday off, would otherwise leave
+      // day_of_week naming a day the camp no longer meets - which is the exact
+      // column every "Mondays" bug in this build came from. Same derivation the
+      // builder uses on create.
+      const editingCamp = isRange && Array.isArray(draft.class_days) && draft.class_days.length > 0;
+      const campFirstDay = editingCamp
+        ? (rangeFirstSession || firstMeetingDayOnOrAfter(draft.first_session_date, draft.class_days))
+        : null;
       const patch = {
-        // The class weekday is the operator's choice in BOTH modes.
-        day_of_week: draft.day_of_week ? titleDay(draft.day_of_week) : null,
+        // The class weekday is the operator's choice in BOTH modes - except on a
+        // camp, where it is derived from the days it runs (above).
+        day_of_week: editingCamp
+          ? (campFirstDay ? WEEKDAY_NAMES[new Date(`${campFirstDay}T00:00:00`).getDay()] : (program.day_of_week ?? null))
+          : (draft.day_of_week ? titleDay(draft.day_of_week) : null),
+        // Only ever written for a camp. A weekly class keeps class_days NULL and
+        // session_type NULL - writing '' or [] here would make isCampProgram and
+        // the pay rules disagree about what this row is.
+        ...(editingCamp
+          ? { class_days: draft.class_days, session_type: draft.session_type || null }
+          : {}),
         // Convert the 24-hour input values back to the stored 12-hour text format.
         start_time: draft.start_time ? to12hText(draft.start_time) : null,
         end_time: draft.end_time ? to12hText(draft.end_time) : null,
@@ -2465,6 +2565,11 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
     schedNorm(draft.end_date) !== schedNorm(program.end_date) ||
     schedNorm(draft.day_of_week ? titleDay(draft.day_of_week) : null) !== schedNorm(program.day_of_week ? titleDay(program.day_of_week) : null) ||
     schedNorm(draft.program_location_id) !== schedNorm(program.program_location_id) ||
+    // The days a camp runs are a schedule input like its dates are. Without
+    // this, turning Friday off looked like no change at all: the unsaved-changes
+    // banner stayed quiet and the drift notice kept comparing against a count
+    // the operator had already edited away from.
+    (draft.class_days ?? []).join(",") !== (program.class_days ?? []).join(",") ||
     (draft.schedule_mode !== "range" && Number(draft.session_count) !== Number(program.session_count));
 
   // Chunk 4 drift notice: this range program's materialized session_count went
@@ -2571,6 +2676,37 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         gap: 12,
         marginBottom: 12,
       }}>
+        {/* A CAMP PICKS DAYS, NOT A DAY. Showing the single weekday select for
+            a camp would be offering to edit day_of_week, which on a camp is a
+            DERIVED value holding its first meeting day - changing it by hand
+            would make the column disagree with the days it actually runs. The
+            toggles write class_days and the save re-derives day_of_week from
+            them, exactly as the builder does on create. Same list and same
+            toggle as the builder, so the two cannot drift. */}
+        {isCampDraft ? (
+          <ExpandField label="Days it runs">
+            <div style={{ display: "flex", gap: 4 }}>
+              {CAMP_WEEKDAYS.map((d) => {
+                const on = (draft.class_days ?? []).includes(d.value);
+                return (
+                  <button
+                    key={d.value}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => set("class_days", toggleCampDay(draft.class_days ?? [], d.value))}
+                    style={{
+                      flex: 1, padding: "7px 0", borderRadius: 6, cursor: "pointer", fontFamily: "inherit",
+                      fontSize: 12, fontWeight: on ? 700 : 500,
+                      background: on ? "#EEEDFE" : "#fff",
+                      color: on ? "#26215C" : MUTED,
+                      border: `1px solid ${on ? BRIGHT : RULE}`,
+                    }}
+                  >{d.label}</button>
+                );
+              })}
+            </div>
+          </ExpandField>
+        ) : (
         <ExpandField label="Day of week">
           {/* Editable in BOTH modes. In range mode this IS the class weekday the
               derivation follows -- the start date is only the window's earliest edge,
@@ -2585,6 +2721,19 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
             ))}
           </select>
         </ExpandField>
+        )}
+        {/* WHAT EACH DAY PAYS. Camp only - a weekly class always pays the
+            after-school rate and keeps session_type NULL. */}
+        {isCampDraft && (
+          <ExpandField label="Half day or full day">
+            <select value={draft.session_type ?? ""} onChange={(e) => set("session_type", e.target.value)} style={expandInputStyle}>
+              <option value="">Choose one…</option>
+              {campDayLengthOptions(program.session_type).map((t) => (
+                <option key={t.value} value={t.value}>{t.label}</option>
+              ))}
+            </select>
+          </ExpandField>
+        )}
         <ExpandField label="Start time">
           <input type="time" value={draft.start_time ?? ""} onChange={(e) => set("start_time", e.target.value)} style={expandInputStyle} />
         </ExpandField>
@@ -2625,6 +2774,15 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
             </ExpandField>
           </>
         )}
+        {/* NOT OFFERED FOR A CAMP. A camp IS a by-dates program - the CHECK
+            constraint programs_class_days_need_range_mode says so - and the
+            toggle was rendered for one anyway. Clicking "By count" wrote
+            schedule_mode 'count' and end_date null while the row kept its
+            class_days, so the save came back as a raw Postgres constraint
+            message on a button the screen had just offered. Removing the choice
+            is better than explaining the error: there is no such thing as a
+            camp counted by sessions. */}
+        {!isCampDraft && (
         <ExpandField label="Scheduling">
           {/* Count = the usual way (set a number of sessions). Range = set a start
               and end date; the count derives. Default count; range is opt-in per program. */}
@@ -2647,6 +2805,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
             })}
           </div>
         </ExpandField>
+        )}
 
         {draft.schedule_mode === "range" ? (
           <>
