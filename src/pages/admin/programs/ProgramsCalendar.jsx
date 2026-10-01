@@ -3341,9 +3341,20 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         />
       )}
 
+      {/* A list of one: the composer takes the classes to write to, and from
+          here there is exactly one. Choosing several is a roster-list job,
+          which is where the tick boxes are.
+
+          PLURAL IS THE CONTRACT. The modal destructures `programs` and reads
+          `programs?.[0]`; passing `program` left that undefined, so this panel
+          titled the message "This class" and posted program_id undefined to
+          notify-program-families. Rosters.jsx already passed `programs`; this
+          was the only caller that did not. The inline array is safe: the modal
+          keys its selection on the ids STRING, not this array's identity,
+          precisely so a re-render here cannot reset the recipient count. */}
       {tellingFamilies && (
         <MessageFamiliesModal
-          program={program}
+          programs={[program]}
           orgId={panelOrg?.id}
           onClose={() => setTellingFamilies(false)}
         />
