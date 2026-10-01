@@ -180,6 +180,52 @@ export default function Dashboard() {
   // the account the place you see a balance, so this is the surface that matters
   // more than any notification.
   const [creditCents, setCreditCents] = useState(0);
+  // Payment plans of THIS family, with THIS provider, that have stalled on a
+  // dead card. Until this existed a family got a decline email telling them to
+  // reply and ask for a link, and there was no surface anywhere in the product
+  // where they could fix it themselves - so every failure cost the operator a
+  // conversation. Grouped by registration because that is what the card-update
+  // function takes.
+  const [stalledPlans, setStalledPlans] = useState([]);
+  const [fixingPlan, setFixingPlan] = useState(null);
+  const [fixError, setFixError] = useState('');
+
+  // Hand the family off to Stripe's own card form. parent-update-card decides
+  // whether there is anything to fix and which Stripe account the form belongs
+  // to; this only opens what it returns.
+  const startCardUpdate = useCallback(async (registrationId) => {
+    setFixingPlan(registrationId);
+    setFixError('');
+    try {
+      // Attach the access token explicitly. functions.invoke otherwise sends the
+      // ANON key, the edge function sees no signed-in user, and the family gets
+      // a 401 on the one screen that exists to help them - the same trap
+      // FeedbackWidget documents.
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('Your session has expired. Please sign in again.');
+      const { data, error } = await supabase.functions.invoke('parent-update-card', {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+        body: { registration_id: registrationId, origin: window.location.origin },
+      });
+      if (error || !data?.url) {
+        // The function writes a sentence for every refusal a family can hit, but
+        // a non-2xx arrives as an error object with the body tucked inside
+        // context. Reading `message` FIRST is the whole point of those
+        // sentences; without this the parent would see the generic line below
+        // instead of the one that tells them what actually happened.
+        let body = null;
+        try { body = await error?.context?.json?.(); } catch (_e) { /* noop */ }
+        throw new Error(body?.message || body?.error || "We couldn't open the card form just now. Please try again in a moment.");
+      }
+      // Deliberately not clearing fixingPlan: we are leaving the page, and
+      // flipping the button back to its idle label on the way out reads as if
+      // nothing happened.
+      window.location.href = data.url;
+    } catch (e) {
+      setFixError(e?.message || "We couldn't open the card form just now. Please try again in a moment.");
+      setFixingPlan(null);
+    }
+  }, []);
 
   const toggleCard = useCallback((id) => {
     setExpandedCards((prev) => {
@@ -279,6 +325,38 @@ export default function Dashboard() {
       // delegates to the same balance function the checkout spends against.
       // One balance rule, one implementation.
       setCreditCents(Number(creditRows) || 0);
+
+      // Stalled instalments. Read directly: parents_see_own_installments already
+      // scopes SELECT to the signed-in family through current_parent_id(), so
+      // this can only ever return their own rows.
+      //
+      // Scoped to THIS org as well, even though RLS does not require it. A
+      // parent registered with two providers shares one portal login, and the
+      // dashboard they are standing in belongs to one of them; showing a
+      // stalled plan from the OTHER provider here would send them to fix a
+      // payment on a site that is not the one they are looking at.
+      //
+      // Statuses named explicitly rather than "not paid": 'paused_program_cancelled'
+      // is also unpaid, and a family whose programme was cancelled must never be
+      // asked for a card.
+      const { data: stalledRows, error: stalledErr } = await supabase
+        .from('installments')
+        .select('id, registration_id, amount_cents, due_date, installment_number')
+        .eq('organization_id', org.id)
+        .in('status', ['paused_card_failed', 'failed'])
+        .order('due_date');
+      if (stalledErr) {
+        console.warn('[dashboard] stalled instalments unavailable:', stalledErr.message);
+      } else {
+        const byReg = new Map();
+        for (const r of stalledRows ?? []) {
+          const cur = byReg.get(r.registration_id) ?? { registration_id: r.registration_id, totalCents: 0, count: 0 };
+          cur.totalCents += r.amount_cents ?? 0;
+          cur.count += 1;
+          byReg.set(r.registration_id, cur);
+        }
+        setStalledPlans([...byReg.values()]);
+      }
 
       // 2a. Afterschool registrations
       const { data: asRegs } = await supabase
@@ -666,6 +744,44 @@ export default function Dashboard() {
           consumes the refundable ceiling, so the refund drawer offers them $0
           until the credit is voided, and there is no void surface yet. A card
           that invited a request nobody can service would be worse than silence. */}
+      {/* A stalled payment comes BEFORE a credit balance. One is a problem the
+          family has to act on and the other is good news; putting the good news
+          first would bury the thing they came here for. */}
+      {stalledPlans.length > 0 && (
+        <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 p-5">
+          <p className="text-xs font-bold uppercase tracking-widest text-red-700">
+            A payment didn&rsquo;t go through
+          </p>
+          <p className="mt-1 font-titan text-2xl text-j2s-ink">
+            {formatMoney(stalledPlans.reduce((n, p) => n + p.totalCents, 0))}
+          </p>
+          {/* Says the spot is safe FIRST. The family's actual fear on reading
+              this is that their child has lost their place, and the decline
+              email says the same thing - the two must not disagree. */}
+          <p className="mt-2 text-sm text-j2s-ink/70">
+            Your {stalledPlans.length === 1 ? 'child’s spot is' : 'children’s spots are'} still
+            held. This usually means the card expired or was replaced, so putting a new one on
+            takes a moment and we&rsquo;ll collect the payment automatically.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {stalledPlans.map((p) => (
+              <button
+                key={p.registration_id}
+                type="button"
+                onClick={() => startCardUpdate(p.registration_id)}
+                disabled={fixingPlan === p.registration_id}
+                className="rounded-lg bg-j2s-purple px-5 py-3 font-bold text-white transition hover:bg-j2s-purple-dark disabled:opacity-60"
+              >
+                {fixingPlan === p.registration_id
+                  ? 'Opening…'
+                  : `Update your card${stalledPlans.length > 1 ? ` — ${formatMoney(p.totalCents)}` : ''}`}
+              </button>
+            ))}
+          </div>
+          {fixError && <p className="mt-2 text-sm font-semibold text-red-700">{fixError}</p>}
+        </div>
+      )}
+
       {creditCents > 0 && (
         <div className="mb-4 rounded-2xl border border-j2s-purple/15 bg-white p-5 shadow-card">
           <p className="text-xs font-bold uppercase tracking-widest text-j2s-purple">
