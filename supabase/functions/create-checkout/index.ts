@@ -1147,6 +1147,19 @@ serve(async (req) => {
     //
     // The payment-plan path above needs none of this: its description is the
     // instalment schedule and names no day at all.
+    // SCOPED TO THE ORG THE REGISTRATIONS PROVE, never to the ids alone. These
+    // program_ids come off the browser's cart, and until this change the field
+    // was inert - nothing in this function read it. guardAdmin is service-role
+    // and bypasses RLS, so an unscoped `.in('id', ...)` would happily read a
+    // DIFFERENT provider's program and print its schedule on this family's
+    // receipt. giftOrgId is the organization_id of the registration rows the
+    // server itself loaded, with no fallback to another row.
+    //
+    // A foreign or stale id simply returns no row, which lands on the same
+    // posted-weekday fallback as a failed lookup. giftOrgId null means the
+    // registration carries no org - already broken for the credit and
+    // scholarship paths above - so there is nothing to scope by and nothing
+    // trustworthy to look up; the fallback covers it.
     const scheduleLabels = new Map<string, string>();
     {
       const labelIds = [...new Set(
@@ -1154,10 +1167,11 @@ serve(async (req) => {
           .map((l) => l.program_id)
           .filter((id): id is string => typeof id === 'string' && id.length > 0),
       )];
-      if (labelIds.length > 0) {
+      if (labelIds.length > 0 && giftOrgId) {
         const { data: labelRows, error: labelErr } = await guardAdmin
           .from('programs')
           .select('id, day_of_week, class_days, first_session_date, end_date')
+          .eq('organization_id', giftOrgId)
           .in('id', labelIds);
         if (labelErr) {
           console.warn(
