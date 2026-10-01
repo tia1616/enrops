@@ -110,30 +110,56 @@ for (const fn of FUNCTIONS) {
   });
 }
 
-Deno.test("match-afterschool refuses camps rather than matching them on one day", async () => {
-  // Its whole schedule model is one weekday per program: availability, the
-  // time-overlap test and the max_days cap all key on day_of_week. A camp run
-  // through it is matched as its FIRST day, so the instructor is never checked
-  // for the other three and can be double-booked inside them.
+Deno.test("match-afterschool matches a camp on EVERY day it runs", async () => {
+  // This guard used to pin the opposite: camps were excluded, because the whole
+  // schedule model was one weekday per program and a camp run through it would
+  // be matched as its FIRST day. Camps are now matched (2026-10-01) on their own
+  // rules, and what has to hold is that none of the old one-weekday reasoning
+  // survives on the camp path - that is the shape that double-books someone for
+  // the three days their camp runs after the first.
   const src = await Deno.readTextFile(
     new URL("../../match-afterschool/index.ts", import.meta.url),
   );
   const code = codeOnly(src);
   assert(
     /from '\.\.\/_shared\/campProgram\.ts'/.test(code),
-    "match-afterschool does not import isCampProgram",
+    "match-afterschool does not import the camp predicates",
   );
   assert(
+    code.includes("programWeekdays"),
+    "match-afterschool is not asking programWeekdays, so a camp occupies only its first day again",
+  );
+  assertEquals(
     /\.filter\(\(p: any\) => !isCampProgram\(p\)\)/.test(code),
-    "match-afterschool no longer excludes camps from the matched set",
+    false,
+    "match-afterschool is excluding camps from the matched set again",
+  );
+  // OCCUPANCY AND CONFLICT ARE THE TWO THAT BITE. Either one reading
+  // day_of_week directly books a Mon-Thu camp as a Monday and leaves the
+  // instructor free on the other three.
+  assertEquals(
+    /function addSlot[\s\S]{0,200}?dayCode\(prog\.day_of_week\)/.test(code),
+    false,
+    "addSlot reads day_of_week again, so a camp occupies one day instead of four",
+  );
+  assertEquals(
+    /function wouldConflict[\s\S]{0,200}?dayCode\(prog\.day_of_week\)/.test(code),
+    false,
+    "wouldConflict reads day_of_week again, so a camp is only checked against its first day",
+  );
+  // A camp's availability comes from the survey's camp question, never from the
+  // after-school weekday window - "Mondays from 1:00" says nothing about 9-3.
+  assert(
+    code.includes("camp_availability"),
+    "match-afterschool's availability select is missing camp_availability, so campYes is always empty and no camp is ever matched",
+  );
+  assert(
+    /inst\.campYes\.has\(prog\.id\)/.test(code),
+    "camp eligibility is no longer gated on an explicit yes to THAT camp",
   );
   assert(
     code.includes("class_days"),
-    "match-afterschool's programs select is missing class_days, so isCampProgram() sees undefined and excludes nothing",
-  );
-  assert(
-    code.includes("camps_skipped"),
-    "match-afterschool no longer reports camps_skipped, so the board cannot tell the operator what it left alone",
+    "match-afterschool's programs select is missing class_days, so isCampProgram() sees undefined and nothing is a camp",
   );
 });
 

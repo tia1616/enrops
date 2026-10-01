@@ -18,11 +18,12 @@ import {
   isCampProgram,
   programRunLabel,
   programScheduleLabel,
+  programWeekdays,
 } from "../campProgram.ts";
 import { isCampProgram as isCampProgramCron } from "../../lifecycle-automations-cron/noSchoolDates.ts";
 
 const WEB = new URL("../../../../src/lib/programSchedule.js", import.meta.url);
-const { formatDayLabel, campRunLabel: webCampRunLabel } = await import(WEB.href);
+const { formatDayLabel, campRunLabel: webCampRunLabel, programWeekdays: webProgramWeekdays } = await import(WEB.href);
 
 const CAMP_MON_THU = {
   class_days: ["monday", "tuesday", "wednesday", "thursday"],
@@ -106,6 +107,32 @@ Deno.test("campDayLabel matches the browser's formatDayLabel for every camp shap
     const row = { class_days, day_of_week: "Monday" };
     assertEquals(campDayLabel(row), formatDayLabel(row), class_days.join("+"));
   }
+});
+
+Deno.test("programWeekdays matches the browser's for every program shape", () => {
+  // The board has used the browser's answer to decide "already teaches that day"
+  // since the camp build. The auto-matcher now asks the same question, and the
+  // two disagreeing would let the matcher double-book a day the board refuses.
+  const shapes = [
+    { class_days: ["monday", "tuesday", "wednesday", "thursday"], day_of_week: "Monday" },
+    { class_days: ["monday", "wednesday", "friday"], day_of_week: "Monday" },
+    { class_days: ["wednesday", "monday", "tuesday"], day_of_week: "Monday" }, // stored out of order
+    { class_days: ["SATURDAY", "sunday"], day_of_week: "Saturday" },           // stored upper-case
+    { class_days: [], day_of_week: "Wednesday" },                               // empty = CLASS
+    { class_days: null, day_of_week: "Friday" },
+    { day_of_week: "Tuesday" },
+    { day_of_week: "" },
+    {},
+  ];
+  for (const row of shapes) {
+    assertEquals(programWeekdays(row), webProgramWeekdays(row), JSON.stringify(row));
+  }
+});
+
+Deno.test("programWeekdays: a camp occupies EVERY day, not just its first", () => {
+  // The specific regression: day_of_week alone says Monday for a Mon-Thu camp.
+  assertEquals(programWeekdays(CAMP_MON_THU), ["monday", "tuesday", "wednesday", "thursday"]);
+  assertEquals(programWeekdays({ class_days: null, day_of_week: "Monday" }), ["monday"]);
 });
 
 Deno.test("campRunLabel matches the browser's campRunLabel for every date shape", () => {
