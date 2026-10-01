@@ -1,5 +1,5 @@
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
-import { Link, useNavigate, useOutletContext } from 'react-router-dom';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { Link, useNavigate, useOutletContext, useSearchParams } from 'react-router-dom';
 import { supabase } from '../../lib/supabase.js';
 import { useAuth } from '../../context/AuthContext.jsx';
 import { supportEmailOf } from '../../lib/supportContact.js';
@@ -167,6 +167,15 @@ export default function Dashboard() {
   const [notifications, setNotifications] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  // Which fetchData run is allowed to write. More than one can be in flight -
+  // the card-update effect fires one at 3s and another at 8s - and fetchData
+  // spans 13 awaits, writing ten separate pieces of state at different points
+  // in its sequence. Two overlapping runs therefore do not merely race to be
+  // last; they INTERLEAVE, and the screen ends up showing a combination neither
+  // run ever read from the database (enrollments from the newer run next to
+  // stalledPlans from the older one, which is the stalled-payment banner
+  // reappearing for a family whose card update actually worked).
+  const fetchSeqRef = useRef(0);
   const [tab, setTab] = useState('today');
   const [expandedCards, setExpandedCards] = useState(new Set());
   const [prefs, setPrefs] = useState(null);
@@ -180,6 +189,75 @@ export default function Dashboard() {
   // the account the place you see a balance, so this is the surface that matters
   // more than any notification.
   const [creditCents, setCreditCents] = useState(0);
+  // Payment plans of THIS family, with THIS provider, that have stalled on a
+  // dead card. Until this existed a family got a decline email telling them to
+  // reply and ask for a link, and there was no surface anywhere in the product
+  // where they could fix it themselves - so every failure cost the operator a
+  // conversation. Grouped by registration because that is what the card-update
+  // function takes.
+  const [stalledPlans, setStalledPlans] = useState([]);
+  const [fixingPlan, setFixingPlan] = useState(null);
+  const [fixError, setFixError] = useState('');
+  // JUST BACK FROM THE CARD FORM. Stripe redirects the instant the card is
+  // saved, but the rows only un-pause when the webhook lands a moment later, and
+  // the two are not ordered. Without this the family lands straight back on "A
+  // PAYMENT DIDN'T GO THROUGH", concludes it failed, and either clicks again or
+  // emails the provider about a payment they already fixed - the exact support
+  // conversation this feature exists to delete.
+  const [searchParams] = useSearchParams();
+  const [cardJustSaved, setCardJustSaved] = useState(searchParams.get('card') === 'updated');
+
+  // Hand the family off to Stripe's own card form. parent-update-card decides
+  // whether there is anything to fix and which Stripe account the form belongs
+  // to; this only opens what it returns.
+  const startCardUpdate = useCallback(async (registrationId) => {
+    setFixingPlan(registrationId);
+    setFixError('');
+    try {
+      // Attach the access token explicitly. functions.invoke otherwise sends the
+      // ANON key, the edge function sees no signed-in user, and the family gets
+      // a 401 on the one screen that exists to help them - the same trap
+      // FeedbackWidget documents.
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('Your session has expired. Please sign in again.');
+      const { data, error } = await supabase.functions.invoke('parent-update-card', {
+        headers: { Authorization: `Bearer ${session.access_token}` },
+        body: { registration_id: registrationId, origin: window.location.origin },
+      });
+      if (error || !data?.url) {
+        // The function writes a sentence for every refusal a family can hit, but
+        // a non-2xx arrives as an error object with the body tucked inside
+        // context. Reading `message` FIRST is the whole point of those
+        // sentences; without this the parent would see the generic line below
+        // instead of the one that tells them what actually happened.
+        let body = null;
+        try { body = await error?.context?.json?.(); } catch (_e) { /* noop */ }
+        throw new Error(body?.message || body?.error || "We couldn't open the card form just now. Please try again in a moment.");
+      }
+      // Deliberately not clearing fixingPlan: we are leaving the page, and
+      // flipping the button back to its idle label on the way out reads as if
+      // nothing happened.
+      window.location.href = data.url;
+    } catch (e) {
+      setFixError(e?.message || "We couldn't open the card form just now. Please try again in a moment.");
+      setFixingPlan(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!cardJustSaved) return;
+    // Re-read TWICE rather than once, so a slow webhook still clears the banner
+    // without the family doing anything. Then stop suppressing: if the rows are
+    // still stalled after this, something genuinely did not work, and showing
+    // the truth beats a reassurance that has stopped being true.
+    // Quiet: the family is reading "card saved" right now. A spinner here would
+    // blank that message twice while they looked at it.
+    const t1 = setTimeout(() => { if (user) fetchData({ quiet: true }); }, 3000);
+    const t2 = setTimeout(() => { if (user) fetchData({ quiet: true }); }, 8000);
+    const t3 = setTimeout(() => setCardJustSaved(false), 12000);
+    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cardJustSaved]);
 
   const toggleCard = useCallback((id) => {
     setExpandedCards((prev) => {
@@ -196,13 +274,54 @@ export default function Dashboard() {
       return;
     }
     if (user) fetchData();
+    // KEY ON THE ID, NEVER THE USER OBJECT. supabase-js hands back a brand-new
+    // user object on every token refresh and again when the tab regains focus,
+    // so `[user]` meant "the signed-in person changed" roughly hourly and on
+    // every alt-tab. React compares with Object.is, saw a different object, and
+    // re-ran this - and fetchData's first act is setLoading(true), which renders
+    // the full-page spinner. To the family the dashboard blanked and rebuilt
+    // itself for no reason. The id is what actually identifies the person.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, authLoading]);
+  }, [user?.id, authLoading]);
 
-  async function fetchData() {
+  // `quiet` refreshes the data underneath a dashboard the family is already
+  // reading: no spinner, and no error screen either. A background re-read that
+  // fails is not a reason to take away data that is on screen, real, and still
+  // theirs - the loud path (first load, sign-in) is where a failure has to be
+  // told. Every exit below routes through `fail` so that stays true at all four
+  // of them, including the catch.
+  // Read the option off the argument rather than destructuring it. This function
+  // is also handed to child gates as a bare `onComplete` callback, so it can be
+  // invoked with whatever they choose to pass - and `= {}` only defends against
+  // `undefined`, not `null`, which would throw. `opts?.quiet === true` cannot.
+  async function fetchData(opts) {
+    const quiet = opts?.quiet === true;
+    const myFetch = ++fetchSeqRef.current;
+    // Every data write goes through `apply`, so a run a newer run has overtaken
+    // writes NOTHING rather than writing half of an older picture.
+    const apply = (fn) => { if (fetchSeqRef.current === myFetch) fn(); };
+    // `loading` is owned by the foreground path alone: a background refresh must
+    // not raise a spinner, and equally must not CLEAR one it never raised. It is
+    // also the one write deliberately left unguarded at the end - a superseded
+    // foreground run clearing the spinner a moment early is survivable, a hung
+    // spinner nobody is left to clear is not.
+    const fail = (code) => {
+      if (quiet) {
+        // Quiet mode shows nothing, so without this a failed background refresh
+        // would leave no trace anywhere. The family then sees the stalled banner
+        // return at 12s and there is no way to tell "the webhook never arrived"
+        // from "the read that would have seen it failed".
+        console.warn(`[dashboard] background refresh failed (${code}); leaving the data on screen`);
+        return;
+      }
+      apply(() => setError(code));
+      setLoading(false);
+    };
     try {
-      setLoading(true);
-      setError(null);
+      if (!quiet) {
+        setLoading(true);
+        setError(null);
+      }
 
       // 1. Parent
       let { data: p, error: pErr } = await supabase
@@ -210,7 +329,7 @@ export default function Dashboard() {
         .select('id, first_name, last_name, communication_preferences')
         .eq('auth_id', user.id)
         .maybeSingle();
-      if (pErr) { setError('fetch_failed'); setLoading(false); return; }
+      if (pErr) { fail('fetch_failed'); return; }
 
       // A family that already had an enrops account before they registered has a
       // parents row with no auth_id, because the auth.users trigger only links
@@ -238,10 +357,12 @@ export default function Dashboard() {
         const roles = await getUserRoles(user.id);
         if (roles.isInstructor) { navigate(`/${slug}/instructor`, { replace: true }); return; }
         if (roles.isAdmin) { navigate('/admin', { replace: true }); return; }
-        setError('no_account'); setLoading(false); return;
+        fail('no_account'); return;
       }
-      setParent(p);
-      setPrefs({ ...DEFAULT_PREFS, ...(p.communication_preferences || {}) });
+      apply(() => {
+        setParent(p);
+        setPrefs({ ...DEFAULT_PREFS, ...(p.communication_preferences || {}) });
+      });
 
       // Org's recurring weekly classes (outside-registration tenants). Read from
       // the anon-safe view (no coach email/notes). Only renders when rows exist,
@@ -250,7 +371,7 @@ export default function Dashboard() {
         .from('class_schedule_public')
         .select('id, title, day_of_week, start_time, end_time, location_text')
         .eq('organization_id', org.id);
-      setWeeklyClasses(wc || []);
+      apply(() => setWeeklyClasses(wc || []));
 
       // CREDIT WITH THIS PROVIDER, and the org filter is the whole point rather
       // than a habit. Ten parents on production have children at TWO different
@@ -278,7 +399,39 @@ export default function Dashboard() {
       // parent_id, so it can only ever answer for whoever is signed in, and it
       // delegates to the same balance function the checkout spends against.
       // One balance rule, one implementation.
-      setCreditCents(Number(creditRows) || 0);
+      apply(() => setCreditCents(Number(creditRows) || 0));
+
+      // Stalled instalments. Read directly: parents_see_own_installments already
+      // scopes SELECT to the signed-in family through current_parent_id(), so
+      // this can only ever return their own rows.
+      //
+      // Scoped to THIS org as well, even though RLS does not require it. A
+      // parent registered with two providers shares one portal login, and the
+      // dashboard they are standing in belongs to one of them; showing a
+      // stalled plan from the OTHER provider here would send them to fix a
+      // payment on a site that is not the one they are looking at.
+      //
+      // Statuses named explicitly rather than "not paid": 'paused_program_cancelled'
+      // is also unpaid, and a family whose programme was cancelled must never be
+      // asked for a card.
+      const { data: stalledRows, error: stalledErr } = await supabase
+        .from('installments')
+        .select('id, registration_id, amount_cents, due_date, installment_number')
+        .eq('organization_id', org.id)
+        .in('status', ['paused_card_failed', 'failed'])
+        .order('due_date');
+      if (stalledErr) {
+        console.warn('[dashboard] stalled instalments unavailable:', stalledErr.message);
+      } else {
+        const byReg = new Map();
+        for (const r of stalledRows ?? []) {
+          const cur = byReg.get(r.registration_id) ?? { registration_id: r.registration_id, totalCents: 0, count: 0 };
+          cur.totalCents += r.amount_cents ?? 0;
+          cur.count += 1;
+          byReg.set(r.registration_id, cur);
+        }
+        apply(() => setStalledPlans([...byReg.values()]));
+      }
 
       // 2a. Afterschool registrations
       const { data: asRegs } = await supabase
@@ -348,7 +501,7 @@ export default function Dashboard() {
           }))
           .filter((w) => w.missingRegIds.length > 0);
       }
-      setUnsignedWaivers(needsWaivers);
+      apply(() => setUnsignedWaivers(needsWaivers));
 
       // Backfill gate: after-school kids who registered before the pickup/dismissal
       // questions existed still need that info. Only gate when THIS org actually
@@ -380,7 +533,7 @@ export default function Dashboard() {
           }
         }
       }
-      setIncompleteStudents(incomplete);
+      apply(() => setIncompleteStudents(incomplete));
 
       // 3. Normalize + cap sessions at program.session_count
       const merged = [];
@@ -542,19 +695,20 @@ export default function Dashboard() {
         .order('sent_at', { ascending: false })
         .limit(10);
 
-      setNotifications((notifs || []).map((n) => ({
-        id: n.id,
-        name: n.automations?.automation_templates?.display_name || 'Update',
-        sentAt: n.sent_at,
-        status: n.status,
-      })));
-
-      setEnrollments(merged);
-      setLoading(false);
+      apply(() => {
+        setNotifications((notifs || []).map((n) => ({
+          id: n.id,
+          name: n.automations?.automation_templates?.display_name || 'Update',
+          sentAt: n.sent_at,
+          status: n.status,
+        })));
+        setEnrollments(merged);
+      });
+      // Unguarded, and only on the foreground path - see the note on `fail`.
+      if (!quiet) setLoading(false);
     } catch (err) {
       console.error('Dashboard error:', err);
-      setError('fetch_failed');
-      setLoading(false);
+      fail('fetch_failed');
     }
   }
 
@@ -636,10 +790,10 @@ export default function Dashboard() {
 
   // Blocking waiver gate — must sign required waivers before seeing details.
   if (unsignedWaivers.length > 0) {
-    return <WaiverGate waivers={unsignedWaivers} parent={parent} orgId={org.id} onComplete={fetchData} />;
+    return <WaiverGate waivers={unsignedWaivers} parent={parent} orgId={org.id} onComplete={() => fetchData()} />;
   }
   if (incompleteStudents.length > 0) {
-    return <PickupInfoGate students={incompleteStudents} parent={parent} orgId={org.id} onComplete={fetchData} />;
+    return <PickupInfoGate students={incompleteStudents} parent={parent} orgId={org.id} onComplete={() => fetchData()} />;
   }
 
   return (
@@ -666,6 +820,61 @@ export default function Dashboard() {
           consumes the refundable ceiling, so the refund drawer offers them $0
           until the credit is voided, and there is no void surface yet. A card
           that invited a request nobody can service would be worse than silence. */}
+      {/* A stalled payment comes BEFORE a credit balance. One is a problem the
+          family has to act on and the other is good news; putting the good news
+          first would bury the thing they came here for. */}
+      {cardJustSaved && (
+        <div className="mb-4 rounded-2xl border border-green-200 bg-green-50 p-5">
+          <p className="text-xs font-bold uppercase tracking-widest text-green-800">
+            Thanks &mdash; we&rsquo;ve got your new card
+          </p>
+          <p className="mt-2 text-sm text-j2s-ink/70">
+            There&rsquo;s nothing else for you to do. We&rsquo;ll take the payment that didn&rsquo;t
+            go through, and the rest of the plan carries on as normal.
+          </p>
+        </div>
+      )}
+
+      {stalledPlans.length > 0 && !cardJustSaved && (
+        <div className="mb-4 rounded-2xl border border-red-200 bg-red-50 p-5">
+          <p className="text-xs font-bold uppercase tracking-widest text-red-700">
+            A payment didn&rsquo;t go through
+          </p>
+          <p className="mt-1 font-titan text-2xl text-j2s-ink">
+            {formatMoney(stalledPlans.reduce((n, p) => n + p.totalCents, 0))}
+          </p>
+          {/* Says the spot is safe FIRST. The family's actual fear on reading
+              this is that their child has lost their place, and the decline
+              email says the same thing - the two must not disagree. */}
+          {/* Number-neutral on purpose. This used to choose between "child's
+              spot" and "children's spots" from the number of PLANS, which is not
+              the number of children: one child in two classes has two stalled
+              registrations, so a parent with one child was told about their
+              "children". Small, but it is the reassuring half of a message a
+              worried parent reads closely. */}
+          <p className="mt-2 text-sm text-j2s-ink/70">
+            No one has lost their spot. This usually means the card expired or was replaced, so
+            putting a new one on takes a moment and we&rsquo;ll collect the payment automatically.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {stalledPlans.map((p) => (
+              <button
+                key={p.registration_id}
+                type="button"
+                onClick={() => startCardUpdate(p.registration_id)}
+                disabled={fixingPlan === p.registration_id}
+                className="rounded-lg bg-j2s-purple px-5 py-3 font-bold text-white transition hover:bg-j2s-purple-dark disabled:opacity-60"
+              >
+                {fixingPlan === p.registration_id
+                  ? 'Opening…'
+                  : `Update your card${stalledPlans.length > 1 ? ` — ${formatMoney(p.totalCents)}` : ''}`}
+              </button>
+            ))}
+          </div>
+          {fixError && <p className="mt-2 text-sm font-semibold text-red-700">{fixError}</p>}
+        </div>
+      )}
+
       {creditCents > 0 && (
         <div className="mb-4 rounded-2xl border border-j2s-purple/15 bg-white p-5 shadow-card">
           <p className="text-xs font-bold uppercase tracking-widest text-j2s-purple">
