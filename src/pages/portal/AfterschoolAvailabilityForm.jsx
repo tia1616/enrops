@@ -177,7 +177,11 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
   // that scrolls without rendering a note still lands somewhere sensible.
   useEffect(() => {
     if (!fieldError) return;
-    const card = fieldError.field === "week" ? weekRef : fieldError.field === "days" ? daysRef : areasRef;
+    const CARDS = { week: weekRef, days: daysRef, areas: areasRef, camps: campsRef };
+    // A map, not a ternary chain. The chain ended in `: areasRef`, so a field
+    // nobody had added a branch for scrolled to Areas - a card with nothing
+    // wrong with it. `camps` was exactly that case on the day it was added.
+    const card = CARDS[fieldError.field] ?? weekRef;
     const target = errorNoteRef.current ?? card.current;
     target?.scrollIntoView({ block: "start" });
   }, [fieldError]);
@@ -718,6 +722,10 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
             );
           })}
         </div>
+        {/* The refusal has to be SAYABLE. Without this the camps check blocked
+            Submit with nothing on screen explaining why - the form simply did
+            nothing. Mounted inside the card it is about, like the other three. */}
+        <FieldError innerRef={errorNoteRef} on="camps" fieldError={fieldError} />
       </Card>
       )}
 

@@ -336,6 +336,11 @@ async function loadAfterschool(orgId, term) {
   if (instRes.error) throw instRes.error;
   if (availRes.error) throw availRes.error;
   if (areaRes.error) throw areaRes.error;
+  // Throws like its siblings rather than degrading to an empty list. This screen
+  // exists to answer "who can work which camp", and `campRes.data ?? []` would
+  // hide the Camps row on every card - which an operator reads as "this term has
+  // no camps", the opposite of "this did not load".
+  if (campRes.error) throw campRes.error;
 
   const disabled = new Set(Array.isArray(cfgRes?.data?.disabled_questions) ? cfgRes.data.disabled_questions : []);
 
