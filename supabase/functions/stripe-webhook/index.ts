@@ -170,6 +170,24 @@ serve(async (req) => {
   try {
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object as Stripe.Checkout.Session;
+
+      // A CARD UPDATE IS NOT A PURCHASE. parent-update-card opens a session in
+      // `setup` mode, which completes through this same event but carries no
+      // registration_ids, no payment and no donation - so it has to divert
+      // BEFORE the first line that assumes a purchase. settleDonation below is
+      // the first of those, and everything after it reads payment metadata that
+      // a setup session does not have.
+      //
+      // Deliberately this event rather than setup_intent.succeeded: this one is
+      // already subscribed and already arrives, for connected accounts as well
+      // as the platform. Depending on a new event type would have meant the
+      // whole feature hanging on a Stripe endpoint setting nobody can see from
+      // the code.
+      if (session.mode === 'setup') {
+        await handleCardUpdate(admin, stripe, event, session);
+        return new Response('ok', { status: 200 });
+      }
+
       const meta = session.metadata || {};
       const regIds = (meta.registration_ids || '').split(',').filter(Boolean);
       const parentEmail = session.customer_email || meta.parent_email;
@@ -2806,6 +2824,144 @@ interface OrgConnectRow {
   // Telling every operator the destination story was false for all of them
   // except J2S.
   stripe_charge_model: string | null;
+}
+
+/**
+ * A family finished the card form from parent-update-card. Put the new card on
+ * their plan and let the nightly charger pick it up.
+ *
+ * WHY THERE IS NO RETRY HERE. process-installments already collects anything
+ * with status='pending' and due_date <= today, so un-pausing an overdue row IS
+ * the retry - it runs on the next cron pass. Writing a second charging path
+ * beside the one that already works would be a second spelling of the most
+ * dangerous rule in the system.
+ *
+ * SCOPED BY CUSTOMER **AND** ORGANISATION, never customer alone. On the
+ * platform, customers are looked up by email at checkout, so one parent who
+ * registers with two different destination operators shares a single Stripe
+ * Customer across both. Scoping by customer alone would reach into another
+ * operator's plan and un-pause rows that family never asked about.
+ *
+ * PENDING ROWS GET THE NEW CARD TOO. The stalled rows are the visible problem,
+ * but a plan with instalment 2 dead and instalment 3 still 'pending' has the
+ * dead card on BOTH: fixing only what is paused leaves the next charge to fail
+ * for exactly the reason the family just fixed. Their status is left alone -
+ * they were never paused - but the card is replaced.
+ *
+ * parent_notified_failed_at IS CLEARED on the rows we un-pause. It is a
+ * once-per-failure guard, so leaving it set would silently swallow the decline
+ * notice if the NEW card also failed, and the family would hear nothing at all
+ * the second time.
+ *
+ * NEVER THROWS. A webhook that 500s is retried by Stripe indefinitely; every
+ * problem here is logged and answered 200, because the money has not moved and
+ * there is nothing for a retry to fix.
+ */
+async function handleCardUpdate(
+  admin: SupabaseClient,
+  stripe: Stripe,
+  event: Stripe.Event,
+  session: Stripe.Checkout.Session,
+): Promise<void> {
+  const setupIntentId = typeof session.setup_intent === 'string'
+    ? session.setup_intent
+    : session.setup_intent?.id ?? null;
+  if (!setupIntentId) {
+    console.warn('[card-update] setup session with no setup_intent:', session.id);
+    return;
+  }
+
+  // Scoped to the account the event came from. event.account is set exactly for
+  // a connected account's own events, which is where a DIRECT operator's setup
+  // intent lives - retrieving it platform-scoped would simply not find it.
+  const acct = event.account ? { stripeAccount: event.account as string } : undefined;
+
+  let si: Stripe.SetupIntent;
+  try {
+    si = await stripe.setupIntents.retrieve(setupIntentId, acct);
+  } catch (err) {
+    console.error('[card-update] could not read setup intent', setupIntentId, err);
+    return;
+  }
+
+  const meta = si.metadata || {};
+  if (meta.enrops_purpose !== 'card_update') {
+    // Some other setup session. Not ours to act on, and acting on it would mean
+    // rewriting payment details off the back of an intent we did not create.
+    console.log('[card-update] ignoring setup intent with purpose', meta.enrops_purpose ?? '(none)');
+    return;
+  }
+
+  const paymentMethodId = typeof si.payment_method === 'string'
+    ? si.payment_method
+    : si.payment_method?.id ?? null;
+  const customerId = meta.enrops_customer_id
+    || (typeof session.customer === 'string' ? session.customer : session.customer?.id)
+    || null;
+  const orgId = meta.enrops_org_id || null;
+
+  // All three are required to write safely. Without the org we cannot scope the
+  // update to one operator; without the customer we cannot find the plan; and
+  // without a payment method there is nothing to put on it. Any of them missing
+  // is a bug upstream, not something to paper over with a partial write.
+  if (!paymentMethodId || !customerId || !orgId) {
+    console.error('[card-update] refusing to write, missing:', {
+      payment_method: !!paymentMethodId, customer: !!customerId, org: !!orgId, setup_intent: setupIntentId,
+    });
+    return;
+  }
+
+  // 1. Every row that will ever be charged gets the new card.
+  //
+  //    NAMED EXPLICITLY rather than "everything except paid and refunded",
+  //    which was the first version. The status CHECK also allows
+  //    'paused_program_cancelled' - instalments for a programme that was
+  //    cancelled - and a deny-list hands those the family's new card too. They
+  //    never charge today, so nothing breaks now; but if one is ever resumed it
+  //    would charge a card this family supplied for a different plan entirely.
+  //    These three are the states a card update is actually for.
+  //
+  //    Naming them also makes this NULL-safe for free: a NULL status matches
+  //    neither list, and `NOT IN` would have silently dropped it anyway.
+  const { data: carded, error: cardErr } = await admin
+    .from('installments')
+    .update({ stripe_payment_method_id: paymentMethodId })
+    .eq('stripe_customer_id', customerId)
+    .eq('organization_id', orgId)
+    .in('status', ['pending', 'failed', 'paused_card_failed'])
+    .select('id, installment_number, status');
+  if (cardErr) {
+    console.error('[card-update] failed to attach the new card:', cardErr);
+    return;
+  }
+
+  // 2. Only the STALLED rows change status. A pending row was never paused and
+  //    has a due date in the future; flipping it would not make it charge any
+  //    sooner, and re-dating somebody's payment plan is not ours to do.
+  const { data: resumed, error: resumeErr } = await admin
+    .from('installments')
+    .update({
+      status: 'pending',
+      failure_reason: null,
+      parent_notified_failed_at: null,
+    })
+    .eq('stripe_customer_id', customerId)
+    .eq('organization_id', orgId)
+    .in('status', ['paused_card_failed', 'failed'])
+    .select('id, installment_number, amount_cents, due_date');
+  if (resumeErr) {
+    console.error('[card-update] card attached but rows could not be un-paused:', resumeErr);
+    return;
+  }
+
+  console.log('[card-update] done', {
+    customer: customerId,
+    org: orgId,
+    connected_account: event.account ?? null,
+    rows_recarded: carded?.length ?? 0,
+    rows_resumed: resumed?.length ?? 0,
+    resumed: (resumed ?? []).map((r) => `#${r.installment_number} $${((r.amount_cents ?? 0) / 100).toFixed(2)} due ${r.due_date}`),
+  });
 }
 
 async function handleAccountUpdated(
