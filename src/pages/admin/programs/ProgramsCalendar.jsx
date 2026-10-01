@@ -2221,6 +2221,15 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         if (isCampDraft && !(draft.class_days ?? []).length) {
           throw new Error("Pick at least one day the camp runs.");
         }
+        // AND IT STILL HAS TO SAY WHAT ITS DAYS PAY. The builder refuses to
+        // CREATE a camp without this; refusing to SAVE one without it is the
+        // other half of the same rule, and the half that was missing. The blank
+        // option in the select is reachable, and choosing it would write NULL -
+        // after which no instructor can mark a day of that camp taught and the
+        // nightly seeder skips its pay rows, with nothing on screen to say why.
+        if (isCampDraft && !CAMP_DAY_LENGTHS.some((t) => t.value === draft.session_type)) {
+          throw new Error("Say whether this camp is a half day or a full day.");
+        }
         if (rangeLoading) {
           throw new Error("Still calculating the sessions — give it a second, then save.");
         }
@@ -2731,6 +2740,15 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
             </ExpandField>
           </>
         )}
+        {/* NOT OFFERED FOR A CAMP. A camp IS a by-dates program - the CHECK
+            constraint programs_class_days_need_range_mode says so - and the
+            toggle was rendered for one anyway. Clicking "By count" wrote
+            schedule_mode 'count' and end_date null while the row kept its
+            class_days, so the save came back as a raw Postgres constraint
+            message on a button the screen had just offered. Removing the choice
+            is better than explaining the error: there is no such thing as a
+            camp counted by sessions. */}
+        {!isCampDraft && (
         <ExpandField label="Scheduling">
           {/* Count = the usual way (set a number of sessions). Range = set a start
               and end date; the count derives. Default count; range is opt-in per program. */}
@@ -2753,6 +2771,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
             })}
           </div>
         </ExpandField>
+        )}
 
         {draft.schedule_mode === "range" ? (
           <>
