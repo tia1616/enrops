@@ -248,7 +248,7 @@ serve(async (req) => {
       // in the select left `org.alert_email` sitting in scope as an inviting,
       // wrong answer for the next person editing this block.
       .select(`
-        id, name,
+        id, name, slug,
         stripe_account_id, stripe_charges_enabled,
         statement_descriptor_suffix,
         platform_fee_card_pct, platform_fee_ach_pct, platform_fee_cap_cents, platform_fee_ach_cap_cents,
@@ -257,8 +257,15 @@ serve(async (req) => {
       `)
       .in('id', orgIds);
 
+    // Kept OUT of ConnectOrgConfig deliberately. That type is shared with
+    // connectChargeParams and every charge path that imports it; the slug is a
+    // URL-building detail this file needs for one email, not a fact about how a
+    // charge is routed. A second map costs nothing and keeps the shared type
+    // about charging.
+    const orgSlugMap = new Map<string, string | null>();
     const orgConfigMap = new Map<string, ConnectOrgConfig>();
     for (const org of orgs || []) {
+      orgSlugMap.set(org.id, (org as { slug?: string | null }).slug ?? null);
       orgConfigMap.set(org.id, {
         stripe_account_id: org.stripe_account_id,
         stripe_charges_enabled: org.stripe_charges_enabled,
@@ -318,7 +325,7 @@ serve(async (req) => {
       // addressed to Enrops. That is the intended reading, not an accident.
       const alertEmail = brand.tenant_alert_email;
       try {
-        await processGroup(admin, groupRows, summary, alertEmail, orgConfig, brand);
+        await processGroup(admin, groupRows, summary, alertEmail, orgConfig, brand, orgSlugMap.get(orgId) ?? null);
       } catch (err) {
         console.error(`Unhandled error for group ${groupKey}:`, err);
         summary.errors++;
@@ -375,6 +382,10 @@ async function processGroup(
   alertEmail: string | null,
   orgConfig: ConnectOrgConfig | null,
   brand: OrgBrand,
+  // The tenant's portal slug, for the card-update link in the parent's decline
+  // email. Passed down for the same reason alertEmail is: derived once, so
+  // every message about this group points at the same place.
+  orgSlug: string | null,
 ) {
   // Fetch registration + program + parent data for all rows in the group
   const regIds = groupRows.map((r) => r.registration_id);
@@ -853,6 +864,7 @@ async function processGroup(
         installmentNumber,
         regDataById,
         rows: activeRows,
+        orgSlug,
       });
       if (sent) {
         // Stamp ALL rows in the group so we don't re-notify
@@ -1029,14 +1041,32 @@ async function sendOperatorAlert(
 }
 
 async function sendParentDeclineNotice({
-  brand, parent, installmentNumber, regDataById, rows,
+  brand, parent, installmentNumber, regDataById, rows, orgSlug,
 }: {
   brand: OrgBrand;
   parent: ParentRow;
   installmentNumber: number;
   regDataById: Map<string, any>;
   rows: InstallmentRow[];
+  /**
+   * The tenant's portal slug, for the fix-it link. NULL is a legitimate answer
+   * and the email drops the link rather than inventing a URL: a half-built
+   * address on the one email that is supposed to solve the family's problem is
+   * worse than the old "reply to this email" sentence, which still works.
+   */
+  orgSlug: string | null;
 }): Promise<boolean> {
+  // Where the family goes to fix it. The portal is tenant-scoped, so this is
+  // /{slug}/dashboard - the same path parent-update-card returns them to - and
+  // the banner there carries the button.
+  // Escaped at every use below, like every other value in this template.
+  // organizations.slug carries no CHECK constraint, so it is unconstrained text
+  // as far as the database is concerned, and an unescaped one in an href would
+  // break the button on the one email whose whole job is to carry a working
+  // link.
+  const fixUrl = orgSlug
+    ? `${(Deno.env.get('PUBLIC_SITE_URL') ?? 'https://enrops.com').replace(/\/+$/, '')}/${encodeURIComponent(orgSlug)}/dashboard`
+    : null;
   const installmentLabel = installmentNumber === 1 ? 'first' : installmentNumber === 2 ? 'second' : 'third';
 
   // For multi-child: combine child names + program names. Single-child: same shape, just one line.
@@ -1072,7 +1102,9 @@ async function sendParentDeclineNotice({
     ``,
     `${childPrograms.length === 1 ? `${childPrograms[0].name}'s spot is` : 'Their spots are'} still held — we won't drop the registration${childPrograms.length === 1 ? '' : 's'} while we sort this out.`,
     ``,
-    `To update your card on file, reply to this email and we'll send you a secure link.`,
+    fixUrl
+      ? `You can put a new card on file here, and we'll take the payment automatically:\n${fixUrl}`
+      : `To update your card on file, reply to this email and we'll send you a secure link.`,
     ``,
     `Thanks for your patience,`,
     senderFirst,
@@ -1087,7 +1119,11 @@ async function sendParentDeclineNotice({
   <p>Hi ${escapeHtml(parent.first_name)},</p>
   <p>A quick note — the ${installmentLabel} installment for <strong>${escapeHtml(summary)}</strong> didn't go through this morning. Cards sometimes decline for routine reasons (expired, new card issued, bank flagging an unusual charge), so this is usually a quick fix.</p>
   <p><strong>${childPrograms.length === 1 ? `${escapeHtml(childPrograms[0].name)}'s spot is` : 'Their spots are'} still held</strong> — we won't drop the registration${childPrograms.length === 1 ? '' : 's'} while we sort this out.</p>
-  <p>To update your card on file, reply to this email and we'll send you a secure link.</p>
+  ${fixUrl
+    ? `<p>You can put a new card on file in a couple of minutes, and we'll take the payment automatically.</p>
+  <p style="margin:20px 0;"><a href="${escapeHtml(fixUrl)}" style="background:${brand.primary_color};color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:700;display:inline-block;">Update your card</a></p>
+  <p style="font-size:13px;color:#666;">If the button doesn't work, paste this into your browser:<br/><a href="${escapeHtml(fixUrl)}" style="color:${brand.primary_color};">${escapeHtml(fixUrl)}</a></p>`
+    : `<p>To update your card on file, reply to this email and we'll send you a secure link.</p>`}
   <p>Thanks for your patience,<br/>${escapeHtml(senderFirst)}<br/><span style="color:#666;">${escapeHtml(brand.org_name)}</span><br/><a href="mailto:${brand.reply_to}" style="color:${brand.primary_color};">${brand.reply_to}</a></p>
 </div>`.trim();
 
