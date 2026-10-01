@@ -1717,7 +1717,14 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
 
   async function handleMatch() {
     const ok = window.confirm(
-      "Match instructors for this term? This fills empty classes from instructor availability, and re-does its own earlier suggestions. It never touches a class you picked yourself, approved, or already emailed, and it does not fill camps — assign those yourself."
+      // CAMPS ARE FILLED NOW. This sentence used to end "and it does not fill
+      // camps — assign those yourself", which was true until 2026-10-01 and is
+      // the last thing an operator reads before the button that fills them.
+      // A camp is filled from the availability survey's camp question, not from
+      // the weekday answer, so it is named separately rather than folded into
+      // "classes" - someone who has not sent that question should know why their
+      // camps came back unfilled.
+      "Match instructors for this term? This fills empty classes from instructor availability, and camps from who said they can work them. It re-does its own earlier suggestions, and never touches a class or camp you picked yourself, approved, or already emailed."
     );
     if (!ok) return;
     setBusy("matching");
@@ -2556,15 +2563,20 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         <div style={{ background: `${VIOLET}14`, border: `1px solid ${VIOLET}55`, borderRadius: 8, padding: "12px 16px", fontSize: 14, color: INK }}>
           Matched <strong>{matchResult.assigned}</strong> of {matchResult.programs_total} classes.{" "}
           {matchResult.needs_hire > 0 && <span>{matchResult.needs_hire} still need an instructor. </span>}
-          {/* SAY WHAT IT DID NOT DO. Auto-matching reasons about one weekday per
-              program, and a camp runs several - so camps are deliberately left
-              alone (see the note in match-afterschool). Without this line the
-              operator reads "matched 8 of 8" and has no way to learn that their
-              camps were never among the 8. */}
-          {Number(matchResult.camps_skipped) > 0 && (
+          {/* SAY THAT CAMPS WERE IN IT. This line used to say the opposite -
+              that camps were left alone - because they were. Now they are
+              matched from the survey's camp question, and the operator still
+              needs to know how much of "matched 8 of 8" was camp, because a
+              camp that came back unfilled points at a different question from a
+              class that did.
+
+              Guarded on the number being present, not just truthy: a board
+              talking to a not-yet-redeployed matcher gets undefined here and
+              must render nothing rather than "undefined of them are camps". */}
+          {Number.isFinite(Number(matchResult.camps_in_term)) && Number(matchResult.camps_in_term) > 0 && (
             <span>
-              {matchResult.camps_skipped} camp{matchResult.camps_skipped === 1 ? " was" : "s were"} left for you
-              — matching works a weekday at a time, so assign camps yourself in the Camps row.{" "}
+              {matchResult.camps_in_term} of them {matchResult.camps_in_term === 1 ? "is a camp" : "are camps"},
+              filled from who said they can work it on the availability survey.{" "}
             </span>
           )}
           {Array.isArray(matchResult.missing_surveys) && matchResult.missing_surveys.length > 0 && (
