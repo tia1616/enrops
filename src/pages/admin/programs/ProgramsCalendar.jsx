@@ -23,7 +23,7 @@ import MessageFamiliesModal from "./MessageFamiliesModal.jsx";
 import ShareProgram from "../../../components/ShareProgram.jsx";
 // The camp vocabulary, shared with the builder so the two forms cannot drift on
 // which days a camp may run, how a day is toggled, or what a half day is called.
-import { CAMP_DAY_LENGTHS, CAMP_WEEKDAYS, toggleCampDay } from "../../../lib/campCycle.js";
+import { CAMP_WEEKDAYS, toggleCampDay, isCampDayLength, campDayLengthOptions } from "../../../lib/campCycle.js";
 import { isCampProgram, firstMeetingDayOnOrAfter, campDayMismatchMessage } from "../../../lib/programSchedule.js";
 import FamiliesPayNote, { useOrgFeeConfig } from "../../../components/FamiliesPayNote.jsx";
 import ShareLink from "../../../components/ShareLink.jsx";
@@ -2241,7 +2241,11 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         // option in the select is reachable, and choosing it would write NULL -
         // after which no instructor can mark a day of that camp taught and the
         // nightly seeder skips its pay rows, with nothing on screen to say why.
-        if (isCampDraft && !CAMP_DAY_LENGTHS.some((t) => t.value === draft.session_type)) {
+        // Validated against what a camp may be STORED with, not against the two
+        // the builder offers: 'afternoon' is a real stored value that pays the
+        // same as a morning, and an open camp on prod uses it. Checking the
+        // offer list made that camp uneditable.
+        if (isCampDraft && !isCampDayLength(draft.session_type)) {
           throw new Error("Say whether this camp is a half day or a full day.");
         }
         if (rangeLoading) {
@@ -2724,7 +2728,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
           <ExpandField label="Half day or full day">
             <select value={draft.session_type ?? ""} onChange={(e) => set("session_type", e.target.value)} style={expandInputStyle}>
               <option value="">Choose one…</option>
-              {CAMP_DAY_LENGTHS.map((t) => (
+              {campDayLengthOptions(program.session_type).map((t) => (
                 <option key={t.value} value={t.value}>{t.label}</option>
               ))}
             </select>
