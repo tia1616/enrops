@@ -260,6 +260,9 @@ export default function Home() {
   // 'classes' | 'camps'. Classes first: it is what most providers sell most of,
   // and a family arriving from a class share link should land where they expect.
   const [catalogTab, setCatalogTab] = useState('classes');
+  // Which city's camps to show; '' is all of them, and is the default so a
+  // family never has to choose before seeing anything.
+  const [campArea, setCampArea] = useState('');
   // Fee config, so the class card can show what a family will actually pay.
   // The doc's rule is "never a surprise at the end" - until now the service fee
   // first appeared at the Pay step, after they had entered a child's details.
@@ -416,7 +419,11 @@ export default function Home() {
         .from('programs')
         // Aliased to `program_locations` so every downstream reader of
         // p.program_locations?.name (the class meta line below) is untouched.
-        .select('*, program_locations:program_locations_public(name, district_id)')
+        // `area` is the CITY a venue sits in ("Vancouver", "Beaverton"), and it
+        // is what the camps tab groups by: a camp family never picks a district
+        // or a school, so area is the only thing that answers "is this one near
+        // me". Already on the public view, so this asks for nothing new.
+        .select('*, program_locations:program_locations_public(name, district_id, area)')
         .eq('organization_id', org.id)
         // A CLASS BELONGS TO A TERM. A CAMP BELONGS TO ITS DATES.
         //
@@ -659,10 +666,48 @@ export default function Home() {
   // NAME ("Friday" before "Monday"), which is meaningless to a parent.
   const finderListed = useMemo(() => {
     if (!finderShowingCamps) return programsAtSchool;
-    return [...campPrograms].sort((a, b) =>
+    // Narrowed to one city when the family has picked one. A camp whose venue
+    // has no area is NOT dropped silently - it has no button to be reached by,
+    // so it stays visible under "All areas", which is the default.
+    const inArea = campArea
+      ? campPrograms.filter((p) => (p.program_locations?.area ?? '') === campArea)
+      : campPrograms;
+    return [...inArea].sort((a, b) =>
       String(a.first_session_date || '').localeCompare(String(b.first_session_date || '')),
     );
-  }, [finderShowingCamps, campPrograms, programsAtSchool]);
+  }, [finderShowingCamps, campPrograms, programsAtSchool, campArea]);
+
+  // THE CITIES THAT ACTUALLY HAVE A CAMP, with a count each, in alphabetical
+  // order. Built from the camps themselves rather than from the location list,
+  // so a city whose camp has finished or sold out stops being offered on its
+  // own and no button ever leads to an empty list.
+  //
+  // A camp venue with no area contributes no button. It is still reachable
+  // under "All areas"; inventing an "Other" bucket would put a real camp behind
+  // a label that tells a parent nothing about where it is.
+  const campAreas = useMemo(() => {
+    const counts = new Map();
+    for (const p of campPrograms) {
+      const a = p.program_locations?.area;
+      if (!a) continue;
+      counts.set(a, (counts.get(a) ?? 0) + 1);
+    }
+    return [...counts.entries()]
+      .map(([area, count]) => ({ area, count }))
+      .sort((x, y) => x.area.localeCompare(y.area));
+  }, [campPrograms]);
+
+  // A filter that offers one choice is not a filter. With every camp in a
+  // single city the row would say "Vancouver (4)" next to "All areas (4)",
+  // which is two buttons for one outcome.
+  const showCampAreas = finderShowingCamps && campAreas.length > 1;
+
+  // If the chosen city stops having camps - the last one there sells out or
+  // finishes while the page is open - fall back to all rather than leaving the
+  // family on an empty list they did not ask for.
+  useEffect(() => {
+    if (campArea && !campAreas.some((a) => a.area === campArea)) setCampArea('');
+  }, [campArea, campAreas]);
 
   // Deep link from a shared per-program link (/<slug>?program=<id>): auto-select
   // the class's district + school so its card renders, then flag it to highlight.
@@ -1315,7 +1360,44 @@ export default function Home() {
 
             {loading ? (
               <div className="mt-8 animate-pulse text-j2s-ink/50">Loading schools&hellip;</div>
-            ) : finderShowingCamps ? null : (
+            ) : finderShowingCamps ? (
+              /* WHERE THE CAMPS ARE. The classes tab answers this with the
+                 district and school pickers; the camps tab had nothing in this
+                 slot at all, so a family read four camps with no way to tell
+                 which were near them - J2S currently sells camps in Vancouver
+                 WA and in Beaverton OR, an hour apart, from one list.
+
+                 Cities, not districts: a camp runs at a community center or a
+                 library, so the school district a venue happens to sit in is
+                 not how a parent thinks about it, and several camp venues sit
+                 in districts their families have no connection to.
+
+                 Shown only when there is more than one city with a camp, so a
+                 provider running everything in one place sees the page exactly
+                 as before. */
+              showCampAreas ? (
+                <div className="mt-6">
+                  <p className="label-field">Where</p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {[{ area: '', count: campPrograms.length }, ...campAreas].map((a) => (
+                      <button
+                        key={a.area || 'all'}
+                        type="button"
+                        onClick={() => setCampArea(a.area)}
+                        aria-pressed={campArea === a.area}
+                        className={
+                          campArea === a.area
+                            ? 'rounded-full bg-j2s-purple px-4 py-2 text-sm font-semibold text-white'
+                            : 'rounded-full border border-j2s-purple/20 bg-white px-4 py-2 text-sm font-semibold text-j2s-ink/70'
+                        }
+                      >
+                        {a.area || 'All areas'} ({a.count})
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null
+            ) : (
               <div className="mt-6 grid gap-4 sm:grid-cols-2">
                 <div>
                   <label className="label-field">District</label>
@@ -1395,7 +1477,26 @@ export default function Home() {
                     // all, and it is the only one on THIS layout - so this change is
                     // inert on every live registration page.
                     const gradeStr = audienceLabel(p);
-                    const metaStr = [dayLabel, timeStr, gradeStr].filter(Boolean).join(' · ');
+                    // WHERE IT RUNS, on a camp only. This list serves both tabs:
+                    // for a class the family has already picked the district and
+                    // the school, so the venue is on screen above the card and
+                    // repeating it says nothing. A CAMP is reached without that
+                    // picker at all - camps are deliberately not school-bound -
+                    // so nothing else on the page says where it is, and a family
+                    // could book a camp an hour from the one they meant. J2S
+                    // currently sells winter camps at Firstenburg in Vancouver
+                    // and at Bricks and Mini Figs in Beaverton from the same
+                    // four-card list.
+                    //
+                    // The name is already loaded (the catalog query joins
+                    // program_locations_public) and sits in the same slot the
+                    // lean card puts it in, so the two layouts read alike.
+                    const metaStr = [
+                      dayLabel,
+                      timeStr,
+                      isCampProgram(p) ? p.program_locations?.name : null,
+                      gradeStr,
+                    ].filter(Boolean).join(' · ');
                     // Partner-run, listed program: families register on the partner's
                     // site, so render a link-out card (no price, no VIP, no checkout).
                     if (p.runs_own_registration) {
