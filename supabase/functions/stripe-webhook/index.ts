@@ -2895,8 +2895,16 @@ async function handleCardUpdate(
   const paymentMethodId = typeof si.payment_method === 'string'
     ? si.payment_method
     : si.payment_method?.id ?? null;
-  const customerId = meta.enrops_customer_id
+
+  // THE SETUP INTENT'S OWN CUSTOMER WINS over the metadata copy, and that order
+  // matters. Metadata on a connected account is written by whoever created the
+  // session; si.customer is Stripe's own record of who this card was saved for
+  // and cannot be pointed at somebody else's customer without also moving the
+  // card there. Reading the metadata first - which is how this was written -
+  // let a forged session name a customer it had nothing to do with.
+  const customerId = (typeof si.customer === 'string' ? si.customer : si.customer?.id)
     || (typeof session.customer === 'string' ? session.customer : session.customer?.id)
+    || meta.enrops_customer_id
     || null;
   const orgId = meta.enrops_org_id || null;
 
@@ -2907,6 +2915,43 @@ async function handleCardUpdate(
   if (!paymentMethodId || !customerId || !orgId) {
     console.error('[card-update] refusing to write, missing:', {
       payment_method: !!paymentMethodId, customer: !!customerId, org: !!orgId, setup_intent: setupIntentId,
+    });
+    return;
+  }
+
+  // ── DID THIS EVENT COME FROM THE ORGANISATION IT CLAIMS? ──────────────
+  //
+  // Without this, the organisation being written to is whatever the metadata
+  // says, and metadata on a connected account is written by whoever created the
+  // session. Direct-charge operators are onboarded with a FULL Stripe dashboard
+  // (controller.stripe_dashboard.type='full' in stripe-connect-onboard), so any
+  // of them can create a setup session carrying another tenant's org id and
+  // customer id, complete it with any card, and have this handler rewrite that
+  // tenant's payment methods, un-pause their rows and clear their notification
+  // guard. The families would then get decline emails for a card they never
+  // touched.
+  //
+  // The rule is exact in both directions. A DIRECT org's sessions are created on
+  // its own connected account, so its events must carry event.account equal to
+  // that account. A DESTINATION org's are created on the platform, so its events
+  // must carry no account at all. Anything else is an event pretending to be
+  // from somewhere it is not.
+  const { data: orgRow, error: orgErr } = await admin
+    .from('organizations')
+    .select('stripe_account_id, stripe_charge_model')
+    .eq('id', orgId)
+    .maybeSingle();
+  if (orgErr || !orgRow) {
+    console.error('[card-update] could not load the org named in metadata:', orgId, orgErr);
+    return;
+  }
+  const expectedAccount = (orgRow as { stripe_charge_model?: string; stripe_account_id?: string | null })
+    .stripe_charge_model === 'direct'
+    ? ((orgRow as { stripe_account_id?: string | null }).stripe_account_id ?? null)
+    : null;
+  if ((event.account ?? null) !== expectedAccount) {
+    console.error('[card-update] REFUSED: event account does not own this org', {
+      org: orgId, event_account: event.account ?? null, expected: expectedAccount,
     });
     return;
   }
