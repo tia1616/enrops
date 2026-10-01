@@ -1395,7 +1395,26 @@ export default function Home() {
                     // all, and it is the only one on THIS layout - so this change is
                     // inert on every live registration page.
                     const gradeStr = audienceLabel(p);
-                    const metaStr = [dayLabel, timeStr, gradeStr].filter(Boolean).join(' · ');
+                    // WHERE IT RUNS, on a camp only. This list serves both tabs:
+                    // for a class the family has already picked the district and
+                    // the school, so the venue is on screen above the card and
+                    // repeating it says nothing. A CAMP is reached without that
+                    // picker at all - camps are deliberately not school-bound -
+                    // so nothing else on the page says where it is, and a family
+                    // could book a camp an hour from the one they meant. J2S
+                    // currently sells winter camps at Firstenburg in Vancouver
+                    // and at Bricks and Mini Figs in Beaverton from the same
+                    // four-card list.
+                    //
+                    // The name is already loaded (the catalog query joins
+                    // program_locations_public) and sits in the same slot the
+                    // lean card puts it in, so the two layouts read alike.
+                    const metaStr = [
+                      dayLabel,
+                      timeStr,
+                      isCampProgram(p) ? p.program_locations?.name : null,
+                      gradeStr,
+                    ].filter(Boolean).join(' · ');
                     // Partner-run, listed program: families register on the partner's
                     // site, so render a link-out card (no price, no VIP, no checkout).
                     if (p.runs_own_registration) {
