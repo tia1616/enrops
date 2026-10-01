@@ -73,7 +73,8 @@ export default function StudentCare() {
       const next = encodeURIComponent(`${location.pathname}${location.search}`);
       navigate(`/${slug}/login?next=${next}`, { replace: true });
     }
-  }, [authLoading, user, slug, navigate, location.pathname, location.search]);
+    // user?.id, not user - see the note on the fetch effect below.
+  }, [authLoading, user?.id, slug, navigate, location.pathname, location.search]);
 
   useEffect(() => {
     let cancelled = false;
@@ -143,8 +144,14 @@ export default function StudentCare() {
       }
     })();
     return () => { cancelled = true; };
+    // KEY ON THE ID, NEVER THE USER OBJECT. supabase-js returns a new user object
+    // on every token refresh and when the tab regains focus, so `[user]` re-ran
+    // this read roughly hourly and on every alt-tab. Worse here than on the
+    // dashboard: this effect calls setData(), so a parent who was half way
+    // through the pickup form, switched tabs to look up a phone number and came
+    // back had their typing silently replaced by what the server still had.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [org?.id, studentId, authLoading, user]);
+  }, [org?.id, studentId, authLoading, user?.id]);
 
   function update(patch) {
     setSaved(false);

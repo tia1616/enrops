@@ -241,8 +241,10 @@ export default function Dashboard() {
     // without the family doing anything. Then stop suppressing: if the rows are
     // still stalled after this, something genuinely did not work, and showing
     // the truth beats a reassurance that has stopped being true.
-    const t1 = setTimeout(() => { if (user) fetchData(); }, 3000);
-    const t2 = setTimeout(() => { if (user) fetchData(); }, 8000);
+    // Quiet: the family is reading "card saved" right now. A spinner here would
+    // blank that message twice while they looked at it.
+    const t1 = setTimeout(() => { if (user) fetchData({ quiet: true }); }, 3000);
+    const t2 = setTimeout(() => { if (user) fetchData({ quiet: true }); }, 8000);
     const t3 = setTimeout(() => setCardJustSaved(false), 12000);
     return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -263,13 +265,34 @@ export default function Dashboard() {
       return;
     }
     if (user) fetchData();
+    // KEY ON THE ID, NEVER THE USER OBJECT. supabase-js hands back a brand-new
+    // user object on every token refresh and again when the tab regains focus,
+    // so `[user]` meant "the signed-in person changed" roughly hourly and on
+    // every alt-tab. React compares with Object.is, saw a different object, and
+    // re-ran this - and fetchData's first act is setLoading(true), which renders
+    // the full-page spinner. To the family the dashboard blanked and rebuilt
+    // itself for no reason. The id is what actually identifies the person.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, authLoading]);
+  }, [user?.id, authLoading]);
 
-  async function fetchData() {
+  // `quiet` refreshes the data underneath a dashboard the family is already
+  // reading: no spinner, and no error screen either. A background re-read that
+  // fails is not a reason to take away data that is on screen, real, and still
+  // theirs - the loud path (first load, sign-in) is where a failure has to be
+  // told. Every exit below routes through `fail` so that stays true at all four
+  // of them, including the catch.
+  // Read the option off the argument rather than destructuring it. This function
+  // is also handed to child gates as a bare `onComplete` callback, so it can be
+  // invoked with whatever they choose to pass - and `= {}` only defends against
+  // `undefined`, not `null`, which would throw. `opts?.quiet === true` cannot.
+  async function fetchData(opts) {
+    const quiet = opts?.quiet === true;
+    const fail = (code) => { if (!quiet) { setError(code); setLoading(false); } };
     try {
-      setLoading(true);
-      setError(null);
+      if (!quiet) {
+        setLoading(true);
+        setError(null);
+      }
 
       // 1. Parent
       let { data: p, error: pErr } = await supabase
@@ -277,7 +300,7 @@ export default function Dashboard() {
         .select('id, first_name, last_name, communication_preferences')
         .eq('auth_id', user.id)
         .maybeSingle();
-      if (pErr) { setError('fetch_failed'); setLoading(false); return; }
+      if (pErr) { fail('fetch_failed'); return; }
 
       // A family that already had an enrops account before they registered has a
       // parents row with no auth_id, because the auth.users trigger only links
@@ -305,7 +328,7 @@ export default function Dashboard() {
         const roles = await getUserRoles(user.id);
         if (roles.isInstructor) { navigate(`/${slug}/instructor`, { replace: true }); return; }
         if (roles.isAdmin) { navigate('/admin', { replace: true }); return; }
-        setError('no_account'); setLoading(false); return;
+        fail('no_account'); return;
       }
       setParent(p);
       setPrefs({ ...DEFAULT_PREFS, ...(p.communication_preferences || {}) });
@@ -652,8 +675,7 @@ export default function Dashboard() {
       setLoading(false);
     } catch (err) {
       console.error('Dashboard error:', err);
-      setError('fetch_failed');
-      setLoading(false);
+      fail('fetch_failed');
     }
   }
 
@@ -735,10 +757,10 @@ export default function Dashboard() {
 
   // Blocking waiver gate — must sign required waivers before seeing details.
   if (unsignedWaivers.length > 0) {
-    return <WaiverGate waivers={unsignedWaivers} parent={parent} orgId={org.id} onComplete={fetchData} />;
+    return <WaiverGate waivers={unsignedWaivers} parent={parent} orgId={org.id} onComplete={() => fetchData()} />;
   }
   if (incompleteStudents.length > 0) {
-    return <PickupInfoGate students={incompleteStudents} parent={parent} orgId={org.id} onComplete={fetchData} />;
+    return <PickupInfoGate students={incompleteStudents} parent={parent} orgId={org.id} onComplete={() => fetchData()} />;
   }
 
   return (
