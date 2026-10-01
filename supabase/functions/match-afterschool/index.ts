@@ -360,7 +360,15 @@ serve(async (req) => {
     // assignedCurricula tracks which curricula each instructor already holds (incl.
     // confirmed ones) so continuity carries across re-runs.
     //
-    // committedSlots holds every class an instructor already has on a weekday — not
+    // committedSlots holds every WEEKDAY an instructor is already committed to -
+    // one entry per weekday, so a camp contributes one per day it runs. Each
+    // reader has to say whether it means camps too: wouldConflict does (a day
+    // taught is a day taught), daysUsed and alreadyAtSchoolToday do not (one is
+    // a term-time weekly cap, the other is about a single trip). The isCamp flag
+    // on the slot is what lets them differ out loud instead of by accident - not
+    // saying so is how the days cap broke.
+    //
+    // It is not just the fact that they have a class that day — not
     // just the fact that they have one. It used to be Set<dayCode>, i.e. "one class per
     // instructor per weekday, full stop", which is STRICTER than both the picker and the
     // DB trigger and quietly wrong: OES runs LEGO Game Makers 2:00-3:25 and LEGO
@@ -605,12 +613,20 @@ serve(async (req) => {
     // knew they were a pair. Allowing back-to-back only made it POSSIBLE; without this
     // it never actually HAPPENED, because whoever got the first class had no edge on the
     // second. This is what makes the pair land on one person instead of by luck.
+    // CAMP SLOTS DO NOT COUNT AS BEING THERE. The whole point is one trip for
+    // two adjacent classes; a December camp and a term-time Monday class are not
+    // one trip. Without the filter a camp at the same school hands rank 0 - the
+    // top of the winner order - on a premise that is false, and the real
+    // adjacent-class pair this exists to produce can lose to it. Third reader of
+    // committedSlots to need this; the slot list carries isCamp so that each
+    // reader states which it means.
     function alreadyAtSchoolToday(inst: PoolInstr, prog: any): boolean {
       const dc = dayCode(prog.day_of_week);
       if (!dc) return false;
       const locationId = prog.program_location_id ?? null;
       if (!locationId) return false;
-      return (committedSlots.get(inst.id) ?? []).some((s) => s.dc === dc && s.locationId === locationId);
+      return (committedSlots.get(inst.id) ?? [])
+        .some((s) => !s.isCamp && s.dc === dc && s.locationId === locationId);
     }
 
     // Assign one program to its best candidate. Winner order:
