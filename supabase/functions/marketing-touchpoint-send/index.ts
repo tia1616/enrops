@@ -37,6 +37,7 @@ import {
   renderDownloadButtonsText,
   type CommsAttachment,
 } from "../_shared/attachments.ts";
+import { isCampProgram, programScheduleLabel } from "../_shared/campProgram.ts";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -281,6 +282,11 @@ type ProgramRow = {
   term: string | null;
   program_location_id: string | null;
   day_of_week: string;
+  // A camp is a program row with class_days set, and its day_of_week holds only
+  // its FIRST day - so these two are what stop buildProgramDetails advertising a
+  // Mon-Thu camp as "Mondays". Both selects below carry them.
+  class_days: string[] | null;
+  end_date: string | null;
   first_session_date: string | null;
   session_count: number | null;
   price_cents: number;
@@ -510,7 +516,7 @@ serve(async (req: Request) => {
   if (programIds.length > 0) {
     const { data: progs } = await supabase
       .from("programs")
-      .select("id, curriculum, term, program_location_id, day_of_week, first_session_date, session_count, price_cents, early_bird_price_cents, early_bird_deadline, vip_price_cents")
+      .select("id, curriculum, term, program_location_id, day_of_week, class_days, end_date, first_session_date, session_count, price_cents, early_bird_price_cents, early_bird_deadline, vip_price_cents")
       .eq("organization_id", campaign.organization_id)
       // Exclude cancelled programs so a program cancelled after a draft was built
       // isn't advertised (parity with the camp render).
@@ -1850,9 +1856,27 @@ function buildProgramDetails(
     // missing a start date degrades to just its name rather than emitting
     // "starting ." — the same failure the inline token was suppressed for.
     const bits: string[] = [];
-    const day = (p.day_of_week ?? "").trim();
-    if (day) bits.push(escapeHtml(pluralDay(day)));
-    if (p.first_session_date) bits.push(`starting ${escapeHtml(formatHumanDate(p.first_session_date))}`);
+    // A CAMP IS NOT "MONDAYS". Its day_of_week holds only its first day, so this
+    // line advertised a Mon-Thu winter camp to families as "Mondays, starting
+    // December 21". programScheduleLabel is the one Deno spelling of when a
+    // program runs - the same one behind the Stripe checkout line, the roster a
+    // school gets and the instructor offer emails.
+    //
+    // The camp label already names its dates, so "starting <first day>" is
+    // dropped for one: it would say December 21 twice in the same sentence.
+    //
+    // A WEEKLY CLASS IS UNCHANGED. It keeps pluralDay, which deliberately
+    // ECHOES anything that is not a plain weekday ("Mon/Wed" typed by an
+    // operator) rather than guessing - a rule programScheduleLabel does not
+    // have, so the class branch is left exactly as it was.
+    if (isCampProgram(p)) {
+      const when = programScheduleLabel(p);
+      if (when) bits.push(escapeHtml(when));
+    } else {
+      const day = (p.day_of_week ?? "").trim();
+      if (day) bits.push(escapeHtml(pluralDay(day)));
+      if (p.first_session_date) bits.push(`starting ${escapeHtml(formatHumanDate(p.first_session_date))}`);
+    }
     const close = registrationCloseDate(p.first_session_date, daysBefore);
     const closeSentence = close ? ` Sign-ups close ${escapeHtml(close)}.` : "";
     // Name on its own line, not "Name: Mondays, ...". Curriculum names carry
@@ -2046,7 +2070,7 @@ async function renderPreview(
   if (programIds.length > 0) {
     const { data: progs } = await supabase
       .from("programs")
-      .select("id, curriculum, term, program_location_id, day_of_week, first_session_date, session_count, price_cents, early_bird_price_cents, early_bird_deadline, vip_price_cents")
+      .select("id, curriculum, term, program_location_id, day_of_week, class_days, end_date, first_session_date, session_count, price_cents, early_bird_price_cents, early_bird_deadline, vip_price_cents")
       .eq("organization_id", campaign.organization_id)
       // Exclude cancelled programs so a program cancelled after a draft was built
       // isn't advertised (parity with the camp render).

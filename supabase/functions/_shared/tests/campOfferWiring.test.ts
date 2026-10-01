@@ -136,3 +136,64 @@ Deno.test("match-afterschool refuses camps rather than matching them on one day"
     "match-afterschool no longer reports camps_skipped, so the board cannot tell the operator what it left alone",
   );
 });
+
+// ---------------------------------------------------------------------------
+// The two surfaces outside the offer emails that still read day_of_week and
+// stopped, found by sweeping every place the Deno side pluralises a weekday
+// (2026-10-01). Same construction and the same reason as the guards above: the
+// decision is proved in campProgram.test.ts, this proves the caller ASKS it.
+// ---------------------------------------------------------------------------
+
+Deno.test("email-program-roster: a camp roster to a school is not 'Mondays'", async () => {
+  // The roster PDF, its covering email and the subject line all described a
+  // Mon-Thu camp as "Mondays from December 21" to the school partner.
+  const src = await Deno.readTextFile(
+    new URL("../../email-program-roster/index.ts", import.meta.url),
+  );
+  const code = codeOnly(src);
+  assert(
+    /from '\.\.\/_shared\/campProgram\.ts'/.test(code),
+    "email-program-roster does not import programScheduleLabel",
+  );
+  assert(
+    code.includes("class_days") && code.includes("end_date"),
+    "email-program-roster's programs select is missing class_days/end_date, so a camp reads as its first day again",
+  );
+  assert(
+    /isCampProgram\(program\)/.test(code),
+    "email-program-roster no longer branches on isCampProgram, so camps take the weekly path",
+  );
+  // The PDF header is the half nobody re-reads: it had its OWN copy of the day
+  // expression, so fixing only scheduleLabel() left the printed roster wrong.
+  assertEquals(
+    /subParts\.push\(dayPlural\(program\.day_of_week\)\)/.test(code),
+    false,
+    "the roster PDF header reads day_of_week directly again",
+  );
+});
+
+Deno.test("marketing-touchpoint-send: a camp advertised to families is not 'Mondays'", async () => {
+  const src = await Deno.readTextFile(
+    new URL("../../marketing-touchpoint-send/index.ts", import.meta.url),
+  );
+  const code = codeOnly(src);
+  assert(
+    /from "\.\.\/_shared\/campProgram\.ts"/.test(code),
+    "marketing-touchpoint-send does not import programScheduleLabel",
+  );
+  assert(
+    code.includes("class_days") && code.includes("end_date"),
+    "marketing-touchpoint-send's programs select is missing class_days/end_date, so a camp reads as its first day again",
+  );
+  assert(
+    /isCampProgram\(p\)/.test(code),
+    "buildProgramDetails no longer branches on isCampProgram, so camps take the weekly path",
+  );
+  // TWO selects feed this function and both must carry the columns; one of them
+  // alone leaves whichever path uses the other advertising "Mondays".
+  assertEquals(
+    (code.match(/class_days, end_date, first_session_date/g) ?? []).length,
+    2,
+    "marketing-touchpoint-send has two programs selects; both must carry class_days + end_date",
+  );
+});
