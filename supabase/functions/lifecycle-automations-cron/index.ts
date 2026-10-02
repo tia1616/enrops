@@ -3098,6 +3098,14 @@ async function resolveNoSchoolDayAudience(
     if (sessions.length === 0) continue;
     const lastMeeting = sessions[sessions.length - 1];
     const dow = String(p.day_of_week).toLowerCase();
+    // derive IS the schedule, so a date it still returns as a meeting is a day
+    // this class RUNS, and the reminder must never call it a closure. Two real
+    // cases the calendar alone cannot see: a class with an early-release time set
+    // still meets (shorter) on an occasional early-release day, and a camp does
+    // not follow the school calendar at all. Deferring to derive keeps ONE answer
+    // to "does this class meet on this date" rather than leaving the reminder a
+    // second opinion of its own to drift from the schedule families are shown.
+    const meetingDays = new Set(sessions);
 
     for (const period of firing) {
       // The closure dates that would have been THIS program's class days — only
@@ -3107,7 +3115,8 @@ async function resolveNoSchoolDayAudience(
       // very first session is skipped BY derive, so anchoring on derive[0] would
       // drop exactly the case that matters most (a cancelled week-1 class).
       const affected = period.dates.filter((d) =>
-        nsdWeekdayLower(d.iso) === dow && d.iso >= today && d.iso >= p.first_session_date && d.iso <= lastMeeting,
+        nsdWeekdayLower(d.iso) === dow && d.iso >= today && d.iso >= p.first_session_date && d.iso <= lastMeeting &&
+        !meetingDays.has(d.iso),
       );
       if (affected.length === 0) continue;
 

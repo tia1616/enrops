@@ -14,6 +14,9 @@ import { useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { isGroupingDistrict } from "../../lib/districts.js";
 import EarlyReleaseChoice from "./EarlyReleaseChoice.jsx";
+import ClosureScopeChoice from "./ClosureScopeChoice.jsx";
+import { unansweredSecondaryOnlyDates } from "../../lib/schoolBands";
+import { matchCalendarForRow } from "../../lib/districtCalendarMatch";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -95,6 +98,9 @@ export default function CalendarsList() {
   // Asked here rather than buried in Scheduled Programs because this is the
   // moment the dates arrive and the operator has the context in front of them.
   const [erPrompt, setErPrompt] = useState(null); // { key } | null
+  // Asked BEFORE the early-release question, because it can remove dates and
+  // the early-release screen reasons about what is left. { key, explicit } | null
+  const [scopePrompt, setScopePrompt] = useState(null);
   const [viewing, setViewing] = useState(() => new Set()); // row keys currently showing their dates inline
   const [topError, setTopError] = useState(null);
   // Schools with no district at all, which this page could not previously offer a
@@ -325,13 +331,12 @@ export default function CalendarsList() {
   // calendar_key while it hasn't been stamped yet); a legacy row matches by the
   // free-text district string on an unstamped calendar.
   function calendarForRow(row) {
-    if (row.districtId) {
-      return calendars.find(
-        (c) => c.district_id === row.districtId
-          || (row.calendarKey && !c.district_id && c.district === row.calendarKey),
-      ) ?? null;
-    }
-    return calendars.find((c) => !c.district_id && c.district === row.label) ?? null;
+    // The rule lives in one place now, because ClosureScopeChoice has to agree
+    // with it exactly - a second spelling had the badge counting one calendar
+    // while the panel wrote to another.
+    return matchCalendarForRow(calendars, {
+      districtId: row.districtId, calendarKey: row.calendarKey, label: row.label,
+    });
   }
 
   if (!org) return <div style={{ color: MUTED, fontSize: 14 }}>Loading…</div>;
@@ -426,7 +431,30 @@ export default function CalendarsList() {
             const isEditing = editing?.key === row.key;
             return (
               <div key={row.key}>
-                {erPrompt?.key === row.key ? (
+                {scopePrompt?.key === row.key ? (
+                  // Runs first and hands over to the early-release question, so
+                  // a save asks both in one pass instead of stranding the second
+                  // behind a screen the operator has to find.
+                  <ClosureScopeChoice
+                    org={org}
+                    // The id when the list already has it, so the badge and the
+                    // panel are provably the same row. districtId/calendarKey
+                    // are the fallback for a calendar saved seconds ago that
+                    // this list has not reloaded yet.
+                    calId={cal?.id ?? null}
+                    districtId={row.districtId}
+                    calendarKey={row.calendarKey}
+                    schoolYear={schoolYear}
+                    districtLabel={row.label}
+                    explicit={!!scopePrompt.explicit}
+                    onDone={async ({ changed }) => {
+                      const wasAuto = !scopePrompt.explicit;
+                      setScopePrompt(null);
+                      if (changed) await loadAll();
+                      if (wasAuto) setErPrompt({ key: row.key });
+                    }}
+                  />
+                ) : erPrompt?.key === row.key ? (
                   <EarlyReleaseChoice
                     org={org}
                     districtId={row.districtId}
@@ -457,18 +485,26 @@ export default function CalendarsList() {
                     onClose={() => setEditing(null)}
                     onSaved={async (savedSchoolYear) => {
                       setEditing(null);
-                      // Ask the early-release question now. The component works
-                      // out whether there is anything to ask and closes itself
-                      // if not, so this never leaves an empty row behind.
-                      setErPrompt({ key: row.key });
+                      // Ask which closures actually apply FIRST - it can remove
+                      // dates, and the early-release question then reasons about
+                      // what is left. It hands over to that question itself.
+                      // Both components work out whether there is anything to
+                      // ask and close themselves if not, so this never leaves an
+                      // empty row behind.
                       // Jump the dropdown to the year just saved so the new
                       // row shows up immediately. No-op if it already matches.
                       if (savedSchoolYear && savedSchoolYear !== schoolYear) {
                         setSchoolYear(savedSchoolYear);
                         // schoolYear state change will trigger loadAll via the
                         // useEffect dependency — no need to call it here too.
+                        setScopePrompt({ key: row.key });
                       } else {
+                        // AFTER the reload, not before: loadAll flips the whole
+                        // list to "Loading…", which unmounts the panel mid-fetch
+                        // and remounts it. Harmless but it costs a wasted query
+                        // and a flicker on the screen that just saved.
                         await loadAll();
+                        setScopePrompt({ key: row.key });
                       }
                     }}
                   />
@@ -481,6 +517,7 @@ export default function CalendarsList() {
                     onToggleView={() => toggleViewing(row.key)}
                     onEdit={() => setEditing({ key: row.key })}
                     onEditEarlyRelease={() => setErPrompt({ key: row.key, explicit: true })}
+                    onCheckClosureScope={() => setScopePrompt({ key: row.key, explicit: true })}
                   />
                 )}
               </div>
@@ -560,9 +597,14 @@ function isCalendarConfigured(cal) {
   return hasBounds || hasDates;
 }
 
-function DistrictRow({ district, locationCount, cal, isViewing, onToggleView, onEdit, onEditEarlyRelease }) {
+function DistrictRow({ district, locationCount, cal, isViewing, onToggleView, onEdit, onEditEarlyRelease, onCheckClosureScope }) {
   const noSchoolCount = Array.isArray(cal?.no_school_dates) ? cal.no_school_dates.length : 0;
   const earlyReleaseCount = Array.isArray(cal?.early_release_dates) ? cal.early_release_dates.length : 0;
+  // Closures whose label names only middle or high school and that nobody has
+  // ruled on yet. Counted with the SAME helper the panel uses, so the row can
+  // never advertise a question the panel would then say it has nothing to ask.
+  const scopeCount = unansweredSecondaryOnlyDates(cal?.no_school_dates).length
+    + unansweredSecondaryOnlyDates(cal?.early_release_dates).length;
   const status = isCalendarConfigured(cal) ? "configured" : cal ? "started" : "missing";
   const safeSourceUrl = isSafeHttpUrl(cal?.source_url) ? cal.source_url.trim() : null;
   const hasViewableDates = noSchoolCount > 0 || earlyReleaseCount > 0;
@@ -637,6 +679,14 @@ function DistrictRow({ district, locationCount, cal, isViewing, onToggleView, on
         {earlyReleaseCount > 0 && (
           <button type="button" onClick={onEditEarlyRelease} style={btn("transparent", BRIGHT, true)}>
             Class times
+          </button>
+        )}
+        {/* Same "permanent way back in" standard as Class times beside it. Only
+            drawn when there is genuinely something to rule on, so it disappears
+            once the operator has answered rather than nagging forever. */}
+        {scopeCount > 0 && (
+          <button type="button" onClick={onCheckClosureScope} style={btn("transparent", BRIGHT, true)}>
+            Check {scopeCount} day{scopeCount === 1 ? "" : "s"}
           </button>
         )}
         <button type="button" onClick={onEdit} style={btn(cal ? "transparent" : BRIGHT, cal ? BRIGHT : "#fff", !!cal)}>
@@ -948,7 +998,13 @@ function CalendarEditor({ org, districtId, districtLabel, districtCalendarKey, s
         if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
         if (seen.has(date)) continue;
         seen.add(date);
-        out.push({ date, reason: (row?.reason ?? "").trim().slice(0, 80) });
+        // `applies` carries forward: it records that the operator was shown this
+        // date and said it DOES affect their classes. Dropping it here would
+        // make every later edit of the calendar re-ask the same question about
+        // the same dates, which is how a one-shot prompt becomes a nag.
+        const kept = { date, reason: (row?.reason ?? "").trim().slice(0, 80) };
+        if (row?.applies === true) kept.applies = true;
+        out.push(kept);
       }
       out.sort((a, b) => a.date.localeCompare(b.date));
       return out;
