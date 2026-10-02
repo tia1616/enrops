@@ -2761,7 +2761,15 @@ async function resolveReviewRequestAudience(
       .select("id", { count: "exact", head: true })
       .eq("organization_id", a.organization_id);
     if (regCountErr) throw regCountErr;
-    const tenantRunsRegistrations = (regCount ?? 0) > 0;
+    // `?? 0` WOULD FAIL IN THE DANGEROUS DIRECTION. A null count with no error
+    // is not "this tenant has no registrations", it is "we do not know" — and
+    // reading it as zero is exactly what re-opens the contact anchor and mails
+    // an entire list. There is no safe default here, so refuse the tick; the
+    // cron retries tomorrow and nothing was sent in the meantime.
+    if (regCount === null || regCount === undefined) {
+      throw new Error("review_request: registration count unavailable, refusing to run the contact anchor");
+    }
+    const tenantRunsRegistrations = regCount > 0;
 
     const { data, error } = tenantRunsRegistrations
       ? { data: [] as any[], error: null }

@@ -50,7 +50,13 @@ const HEADER_RULES: Array<{ field: LeadField; test: (k: string) => boolean }> = 
   // only other one that could ever carry the word "school".
   { field: 'school_or_city', test: (k) => (k.includes('school') || k.includes('city')) && !k.includes('grade') },
   { field: 'grade_notes', test: (k) => k.includes('grade') },
-  { field: 'interests', test: (k) => k.includes('tellyou') || k.includes('interested') },
+  // Matches BOTH interest questions, and tolerates the operator rewording
+  // either one. "interest" covers interested/interests; topic and subject cover
+  // the obvious rephrasings of "what is your child into". Deliberately wider
+  // than the exact question text, because a question this rule fails to match
+  // is a question whose answers vanish without an error — the same silent loss
+  // the place rule above was widened to prevent.
+  { field: 'interests', test: (k) => k.includes('tellyou') || k.includes('interest') || k.includes('topic') || k.includes('subject') },
   // "child" excluded so that adding a "Your child's name" question to the form
   // cannot land the CHILD's name in parent_name just because it sorts first.
   { field: 'parent_name', test: (k) => k.includes('name') && !k.includes('child') },

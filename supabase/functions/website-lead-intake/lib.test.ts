@@ -125,6 +125,20 @@ Deno.test('a second interest question is read as well, not instead', () => {
   assertEquals(m.interests, 'Winter break camps, LEGO building, Robotics');
 });
 
+Deno.test('the second question still maps if its wording is changed', () => {
+  // The operator owns this question's text. Several plausible rewordings must
+  // all still land, because one that does not reads as nobody answering.
+  for (const header of [
+    'What is your child most interested in?',
+    'What are your child&apos;s interests?',
+    'Which topics is your child into?',
+    'Favourite subjects',
+  ]) {
+    const m = mapRow({ 'Email': 'a@b.com', [header]: 'Robotics' });
+    assertEquals(m.interests, 'Robotics', `header did not map: ${header}`);
+  }
+});
+
 Deno.test('the subject tags come out of that second question', () => {
   const { tags, unmapped } = parseInterests(
     'Winter break camps, LEGO building, Robotics, Minecraft, Video game design',
