@@ -138,6 +138,15 @@ interface ParentRow {
   last_name: string;
 }
 
+/**
+ * What happened to the family's decline email. The operator's alert tells them
+ * to stand down or to step in, and those are opposite instructions, so the
+ * reason has to survive as a VALUE rather than be re-derived from `parent` in
+ * the message builder - which is how it came to claim an email had gone out
+ * when the dedup had silently suppressed it.
+ */
+type ParentNoticeOutcome = 'sent' | 'already_notified' | 'no_email' | 'send_failed';
+
 serve(async (req) => {
   if (CRON_SECRET) {
     const headerSecret = req.headers.get('X-Cron-Secret');
@@ -838,7 +847,57 @@ async function processGroup(
     summary.paused_card_failed_rows += activeRows.length;
     summary.details.push(`FAILED group ${idempotencyKey}: ${declineCode} (${activeRows.length} rows)`);
 
-    // Operator alert (one per group, not per row)
+    // THE FAMILY IS EMAILED FIRST, AND THE OPERATOR'S ALERT REPORTS WHAT
+    // ACTUALLY HAPPENED. The order is the point.
+    //
+    // The alert used to be built first and state "The parent has been
+    // auto-notified by email" unconditionally, while the send was gated on the
+    // dedup flag below. On a REPEAT decline no email goes out at all, so the
+    // alert told the operator to stand down at precisely the moment they were
+    // the only one who could help - and the same for a family with no address,
+    // or a send that Resend rejected. Reporting an outcome we had not observed
+    // yet is what made it wrong; so observe it, then report it.
+    //
+    // Safe to reorder: sendParentDeclineNotice catches everything and returns a
+    // boolean, so it cannot throw past this point and cost the operator their
+    // alert.
+    //
+    // notifiableParent carries the PARENT rather than a boolean so the one
+    // value both decides the outcome and narrows the type at the send. A bare
+    // boolean type-checks here and then loses `parent` to "possibly undefined"
+    // three lines down, which is how a second spelling of the rule gets
+    // reintroduced to appease the compiler.
+    const firstRow = activeRows[0];
+    const notifiableParent: ParentRow | null =
+      parent?.email && !firstRow.parent_notified_failed_at ? parent : null;
+
+    let parentNotice: ParentNoticeOutcome = notifiableParent
+      ? 'send_failed'
+      : parent?.email
+      ? 'already_notified'
+      : 'no_email';
+
+    if (notifiableParent) {
+      const sent = await sendParentDeclineNotice({
+        brand,
+        parent: notifiableParent,
+        installmentNumber,
+        regDataById,
+        rows: activeRows,
+        orgSlug,
+      });
+      if (sent) {
+        parentNotice = 'sent';
+        // Stamp ALL rows in the group so we don't re-notify
+        await admin.from('installments').update({
+          parent_notified_failed_at: new Date().toISOString(),
+        }).in('id', sortedRowIds);
+        summary.parents_notified++;
+        summary.details.push(`PARENT_NOTIFIED group ${idempotencyKey}: ${notifiableParent.email}`);
+      }
+    }
+
+    // Operator alert (one per group, not per row), now that the outcome is known
     await sendOperatorAlert({
       brand,
       to: alertEmail,
@@ -852,29 +911,13 @@ async function processGroup(
         totalAmount,
         customerId,
         connectedAccountId: routing.direct ? (orgConfig?.stripe_account_id ?? null) : null,
+        parentNotice,
+        // The operator needs the link in their own hands on every branch where
+        // the family was NOT emailed, because they have no other lever: no
+        // admin screen reads or writes paused_card_failed.
+        fixUrl: portalDashboardUrl(orgSlug),
       }),
     });
-
-    // Parent decline notice — only once per parent per failure (use first row's flag)
-    const firstRow = activeRows[0];
-    if (parent?.email && !firstRow.parent_notified_failed_at) {
-      const sent = await sendParentDeclineNotice({
-        brand,
-        parent,
-        installmentNumber,
-        regDataById,
-        rows: activeRows,
-        orgSlug,
-      });
-      if (sent) {
-        // Stamp ALL rows in the group so we don't re-notify
-        await admin.from('installments').update({
-          parent_notified_failed_at: new Date().toISOString(),
-        }).in('id', sortedRowIds);
-        summary.parents_notified++;
-        summary.details.push(`PARENT_NOTIFIED group ${idempotencyKey}: ${parent.email}`);
-      }
-    }
     return;
   }
 
@@ -930,7 +973,7 @@ async function processGroup(
 
 function buildDeclineAlertBody({
   rows, regDataById, parent, declineCode, failureReason, totalAmount, customerId,
-  connectedAccountId,
+  connectedAccountId, parentNotice, fixUrl,
 }: {
   rows: InstallmentRow[];
   regDataById: Map<string, any>;
@@ -942,6 +985,12 @@ function buildDeclineAlertBody({
   /** Set only for direct-charge orgs, whose Customers live on the connected
    *  account — a platform dashboard URL would 404 for them. */
   connectedAccountId?: string | null;
+  /** What ACTUALLY happened to the family's decline email, observed by the
+   *  caller before this body is built, so the two cannot disagree. */
+  parentNotice: ParentNoticeOutcome;
+  /** The family's portal link, for the operator to send by hand when we are
+   *  not emailing. null when the tenant has no slug. */
+  fixUrl: string | null;
 }) {
   const parentName = parent ? `${parent.first_name} ${parent.last_name}` : 'parent';
   const parentEmail = parent?.email || 'unknown email';
@@ -972,9 +1021,30 @@ function buildDeclineAlertBody({
       ? `https://dashboard.stripe.com/${connectedAccountId}/customers/${customerId}`
       : `https://dashboard.stripe.com/customers/${customerId}`}`,
     ``,
-    `All ${rows.length} installment row${rows.length > 1 ? 's are' : ' is'} now status=paused_card_failed. Future charges will not be retried automatically. Reach out to the parent to update their card, then manually flip rows back to status=pending if you want to re-attempt.`,
+    `This payment plan is paused, so nothing further will be charged automatically until a working card is on it.`,
     ``,
-    `NOTE: The parent has been auto-notified by email about the decline.`,
+    // Keyed on what was OBSERVED, not on what we were about to try. The two
+    // shapes ask for opposite things from the operator - stand down, or you are
+    // the only one who can move this - which is why getting it wrong mattered.
+    ...(parentNotice === 'sent'
+      ? [
+        `You do not need to do anything right now. ${parent?.first_name || 'The family'} has been emailed a link to put a new card on file, and the moment they do, the plan un-pauses on its own and the next nightly run collects the payment.`,
+        ``,
+        `If nothing has changed in a few days, a nudge from you is what helps.`,
+      ]
+      : [
+        `THE FAMILY HAS NOT BEEN EMAILED ABOUT THIS, so reaching out to them is the only thing that will move it.`,
+        ``,
+        parentNotice === 'already_notified'
+          ? `They were already told about an earlier failed payment on this plan, and we do not email them about it twice, so this one is silent to them.`
+          : parentNotice === 'send_failed'
+          ? `We tried to email them and it did not go through. Their address on file may be wrong.`
+          : `We have no email address on file for them.`,
+        ``,
+        ...(fixUrl
+          ? [`Send them this link and they can put a new card on themselves, which un-pauses the plan automatically:`, fixUrl]
+          : [`Once they have given you a new card, contact Enrops to get the plan restarted.`]),
+      ]),
   );
   return lines.join('\n');
 }
@@ -1064,9 +1134,7 @@ async function sendParentDeclineNotice({
   // as far as the database is concerned, and an unescaped one in an href would
   // break the button on the one email whose whole job is to carry a working
   // link.
-  const fixUrl = orgSlug
-    ? `${(Deno.env.get('PUBLIC_SITE_URL') ?? 'https://enrops.com').replace(/\/+$/, '')}/${encodeURIComponent(orgSlug)}/dashboard`
-    : null;
+  const fixUrl = portalDashboardUrl(orgSlug);
   const installmentLabel = installmentNumber === 1 ? 'first' : installmentNumber === 2 ? 'second' : 'third';
 
   // For multi-child: combine child names + program names. Single-child: same shape, just one line.
@@ -1157,6 +1225,26 @@ async function sendParentDeclineNotice({
     console.error(`Parent decline notice exception for ${parent.email}:`, err);
     return false;
   }
+}
+
+/**
+ * Where a family goes to put a new card on: the tenant-scoped parent portal at
+ * /{slug}/dashboard - the same path parent-update-card returns them to, and the
+ * banner there carries the button.
+ *
+ * ONE spelling, because two callers need it now: the family's decline email and
+ * the operator's alert, which has to hand the operator a link to send by hand
+ * on the branch where we are not emailing the family. A second copy of this URL
+ * is a future divergence on the one link whose entire job is to work.
+ *
+ * null is a legitimate answer and both callers drop the link rather than invent
+ * a URL: a half-built address on the message that is supposed to solve the
+ * problem is worse than no address at all.
+ */
+function portalDashboardUrl(orgSlug: string | null): string | null {
+  if (!orgSlug) return null;
+  const base = (Deno.env.get('PUBLIC_SITE_URL') ?? 'https://enrops.com').replace(/\/+$/, '');
+  return `${base}/${encodeURIComponent(orgSlug)}/dashboard`;
 }
 
 function escapeHtml(s: string | undefined | null): string {
