@@ -149,6 +149,25 @@ Deno.test('the subject tags come out of that second question', () => {
   assertEquals(unmapped, []);
 });
 
+Deno.test('prose cannot produce a subject tag', () => {
+  // The keyword rules are right for an option label and wrong for a sentence.
+  // mapRow accumulates every column whose header matches the interests rule and
+  // the operator owns those headers, so a future free-text question could feed
+  // prose in here.
+  const { tags, unmapped } = parseInterests(
+    'he loves playing games on the switch and we are moving to Spokane',
+  );
+  assertEquals(tags, []);
+  assertEquals(unmapped.length, 1);
+});
+
+Deno.test('a short option naming Pokemon still tags, with or without the accent', () => {
+  assertEquals(parseInterests('Pokemon').tags, ['game-design']);
+  assertEquals(parseInterests('Pokémon card club').tags, ['game-design']);
+  // ...but the town does not.
+  assertEquals(parseInterests('Spokane').tags, []);
+});
+
 Deno.test('the subject rules leave the six original options alone', () => {
   // Added after the subject rules went in: if one of them matched an existing
   // option, every past lead's tags would change meaning.

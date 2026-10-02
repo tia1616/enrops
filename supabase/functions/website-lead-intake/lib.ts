@@ -164,7 +164,10 @@ const INTEREST_RULES: Array<{ tag: string; test: (s: string) => boolean }> = [
   { tag: 'lego', test: (s) => s.includes('lego') },
   { tag: 'robotics', test: (s) => s.includes('robot') || s.includes('mbot') },
   { tag: 'minecraft', test: (s) => s.includes('minecraft') },
-  { tag: 'game-design', test: (s) => s.includes('game') || s.includes('coding') || s.includes('mario') || s.includes('pok') },
+  // "pok" was too short to be safe — it is inside "Spokane", "spoken" and
+  // "bespoke", so a stray sentence reaching this rule would have produced a
+  // game-design tag out of ordinary prose.
+  { tag: 'game-design', test: (s) => s.includes('game') || s.includes('coding') || s.includes('mario') || /pok[eé]mon/.test(s) },
 ];
 
 // Every tag this form can produce, so a caller can offer them as a target list
@@ -194,6 +197,20 @@ export function parseInterests(raw: unknown): InterestParse {
     const p = piece.trim();
     if (!p) continue;
     const s = p.toLowerCase();
+    // A SENTENCE IS NOT A CHECKBOX. These rules match keywords, which is right
+    // for an option label and wrong for prose: "he loves playing games on the
+    // switch" would yield game-design. Options are short by nature (the longest
+    // real one is five words), so anything longer is treated as free text and
+    // reported as unmapped instead of mined for tags.
+    //
+    // This matters because mapRow accumulates EVERY column whose header matches
+    // the interests rule, and the operator owns those headers — a future
+    // free-text question worded "Other subjects you'd like us to know about"
+    // would otherwise feed prose straight into these rules.
+    if (p.split(/\s+/).length > 8) {
+      unmapped.push(p);
+      continue;
+    }
     // EVERY rule a piece satisfies, not just the first. The real form joins its
     // checkboxes with commas so one piece is normally one option — but a person
     // typing "After school and no school days" into one line means both, and

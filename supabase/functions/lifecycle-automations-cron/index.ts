@@ -2737,13 +2737,30 @@ async function resolveReviewRequestAudience(
   // 1. IF THE BUSINESS RUNS REGISTRATIONS, REVIEWS COME FROM REGISTRATIONS.
   //    This anchor exists for the opposite shape: a tenant that keeps no
   //    registrations and imports its families by hand (Kumon — 19 contacts, 0
-  //    registrations). For a tenant that DOES run registrations, every real
-  //    customer is already covered by the two registration anchors above, so
-  //    everyone this anchor could add is by definition someone who never
-  //    enrolled. It is not a near-miss either: the contact anchor passes no
-  //    program name, and a tenant whose review copy names the program then
-  //    sends a subject line that stops mid-sentence.
-  //    The test is the tenant's DATA SHAPE, never its identity.
+  //    registrations). The test is the tenant's DATA SHAPE, never its identity.
+  //
+  //    WHAT THIS GIVES UP, stated plainly rather than waved away: a tenant that
+  //    runs registrations AND has imported real past customers who have no
+  //    registration row loses the review ask for those people. That is a real
+  //    trade, not a tautology — an earlier draft of this comment claimed such a
+  //    contact was "by definition" a non-customer, which is false. J2S has 1,972
+  //    such contacts (the am_afterschool import).
+  //
+  //    It is still the right trade, for two reasons that are about the EMAIL,
+  //    not about who the person is. The contact anchor dates off when the row
+  //    was ADDED, which for a bulk import is one day for the whole list and
+  //    bears no relation to when anyone attended; and it passes no program name,
+  //    so a tenant whose review copy names the program sends a subject line that
+  //    stops mid-sentence. Asking those 1,972 people on the 42nd day after an
+  //    import would be one mass blast about nothing nameable.
+  //
+  //    In practice it takes nothing from them today either: the forward-only
+  //    rule above already excludes every contact added before enabled_at, and
+  //    all 1,972 were imported 2026-05-06 against an automation enabled
+  //    2026-09-23.
+  //
+  //    The skip is LOGGED with its count below, so this never becomes a silent
+  //    behaviour change the way it would be if it just returned nothing.
   //
   // 2. A WEBSITE LEAD NEVER QUALIFIES, even for a contact-only tenant. Someone
   //    who filled in a "Get Notified" form (source='website_notify', written by
@@ -2770,6 +2787,22 @@ async function resolveReviewRequestAudience(
       throw new Error("review_request: registration count unavailable, refusing to run the contact anchor");
     }
     const tenantRunsRegistrations = regCount > 0;
+
+    if (tenantRunsRegistrations) {
+      // Say what was skipped and how many it would have been. A gate that
+      // silently returns nothing is indistinguishable from an empty window, and
+      // the one thing this change must not become is an invisible behaviour
+      // change nobody can audit later.
+      const { count: skippedCount } = await supabase
+        .from("marketing_recipients")
+        .select("id", { count: "exact", head: true })
+        .eq("organization_id", a.organization_id)
+        .neq("source", "website_notify")
+        .gte("created_at", earliest);
+      console.log(
+        `review_request: contact anchor skipped for org ${a.organization_id} — it runs registrations (${regCount}), so reviews come from registrations. ${skippedCount ?? "unknown"} contact(s) in the window were not asked.`,
+      );
+    }
 
     const { data, error } = tenantRunsRegistrations
       ? { data: [] as any[], error: null }
