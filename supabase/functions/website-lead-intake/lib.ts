@@ -57,10 +57,22 @@ const HEADER_RULES: Array<{ field: LeadField; test: (k: string) => boolean }> = 
   { field: 'source', test: (k) => k === 'source' },
 ];
 
-// Maps a row's raw header-keyed values onto our field names. First header that
-// satisfies a rule wins that field; a second header matching the same rule is
-// ignored rather than overwriting (Squarespace has been known to leave an empty
-// duplicate column at the end of a sheet).
+// Fields that ACCUMULATE across every column matching their rule, instead of
+// taking the first and ignoring the rest.
+//
+// The form asks about interest twice, on two different axes — "What should we
+// tell you about" (when: after-school, winter break, birthdays) and a second
+// question about what the child is into (which subject: LEGO, robotics…). Both
+// produce tags, and first-column-wins would have thrown one whole question
+// away: the operator adds the question, the answers arrive, and nothing at all
+// happens. Joined with a comma because that is already the separator the parser
+// splits options on.
+const MULTI_COLUMN_FIELDS = new Set<LeadField>(['interests']);
+
+// Maps a row's raw header-keyed values onto our field names. For single-value
+// fields the first header that satisfies a rule wins and a second matching
+// header is ignored rather than overwriting (Squarespace has been known to
+// leave an empty duplicate column at the end of a sheet).
 export function mapRow(values: Record<string, unknown>): Partial<Record<LeadField, string>> {
   const out: Partial<Record<LeadField, string>> = {};
   for (const [header, raw] of Object.entries(values)) {
@@ -68,8 +80,15 @@ export function mapRow(values: Record<string, unknown>): Partial<Record<LeadFiel
     if (!k) continue;
     const rule = HEADER_RULES.find((r) => r.test(k));
     if (!rule) continue;
-    if (out[rule.field] !== undefined) continue;
-    out[rule.field] = String(raw ?? '').trim();
+    const value = String(raw ?? '').trim();
+    const existing = out[rule.field];
+    if (existing === undefined) {
+      out[rule.field] = value;
+      continue;
+    }
+    if (!MULTI_COLUMN_FIELDS.has(rule.field)) continue;
+    if (!value) continue;
+    out[rule.field] = existing ? `${existing}, ${value}` : value;
   }
   return out;
 }
@@ -118,12 +137,28 @@ export function isTestRow(email: string | null, parentName: string | null): bool
 // no-school rule has to be tested before anything that keys on "school"; and
 // the after-school rule requires the word "after" so it cannot steal it.
 const INTEREST_RULES: Array<{ tag: string; test: (s: string) => boolean }> = [
+  // WHEN / WHAT KIND — "What should we tell you about".
   { tag: 'no-school-day-camps', test: (s) => /no\s*[-]?\s*school/.test(s) },
   { tag: 'after-school', test: (s) => s.includes('after') && s.includes('school') },
   { tag: 'winter-break-camps', test: (s) => s.includes('winter') },
   { tag: 'spring-break-camps', test: (s) => s.includes('spring') },
   { tag: 'summer-camps-2027', test: (s) => s.includes('summer') },
   { tag: 'birthday-parties', test: (s) => s.includes('birthday') },
+
+  // WHICH SUBJECT — a second question on the form, asking what the child is
+  // into. A different axis from the six above: "Winter break camps" is a WHEN,
+  // "Robotics" is a WHAT, and a family can want both. Matched on a keyword
+  // rather than the exact option text so the wording can be edited on the form
+  // without silently dropping the answer.
+  //
+  // The four map onto what J2S actually runs: LEGO Architects / Inventors Lab /
+  // Brickopolis / Toy Designers; Intro to Robotics / Robotics Explorers /
+  // Builders / mBot2; Minecraft Makers; and Super Mario, Pokémon and Creative
+  // Coders. Generic enough for another tenant's catalog to use the same slugs.
+  { tag: 'lego', test: (s) => s.includes('lego') },
+  { tag: 'robotics', test: (s) => s.includes('robot') || s.includes('mbot') },
+  { tag: 'minecraft', test: (s) => s.includes('minecraft') },
+  { tag: 'game-design', test: (s) => s.includes('game') || s.includes('coding') || s.includes('mario') || s.includes('pok') },
 ];
 
 // Every tag this form can produce, so a caller can offer them as a target list

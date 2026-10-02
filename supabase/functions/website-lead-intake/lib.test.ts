@@ -113,6 +113,37 @@ Deno.test('the place question survives losing "or your city" from its wording', 
   assertEquals(m.grade_notes, '1st grade');
 });
 
+Deno.test('a second interest question is read as well, not instead', () => {
+  // The form asks twice on two axes: WHEN they want to hear from us, and WHAT
+  // the child is into. First-column-wins would have silently thrown one whole
+  // question away - answers arriving, nothing happening.
+  const m = mapRow({
+    'Email': 'a@b.com',
+    'What should we tell you about': 'Winter break camps',
+    'What is your child most interested in?': 'LEGO building, Robotics',
+  });
+  assertEquals(m.interests, 'Winter break camps, LEGO building, Robotics');
+});
+
+Deno.test('the subject tags come out of that second question', () => {
+  const { tags, unmapped } = parseInterests(
+    'Winter break camps, LEGO building, Robotics, Minecraft, Video game design',
+  );
+  assertEquals(tags, [
+    'winter-break-camps', 'lego', 'robotics', 'minecraft', 'game-design',
+  ]);
+  assertEquals(unmapped, []);
+});
+
+Deno.test('the subject rules leave the six original options alone', () => {
+  // Added after the subject rules went in: if one of them matched an existing
+  // option, every past lead's tags would change meaning.
+  const { tags } = parseInterests(
+    "After-school at my child's school, Winter break camps, No-school-day camps, Spring break camps, Summer camps 2027, Birthday parties",
+  );
+  assertEquals(tags.filter((t) => ['lego', 'robotics', 'minecraft', 'game-design'].includes(t)), []);
+});
+
 Deno.test('a child-name column does not become the parent name', () => {
   const m = mapRow({
     "Your child's name": 'Donovan',
@@ -167,9 +198,18 @@ Deno.test('"No-school-day camps" does not read as after-school', () => {
 });
 
 Deno.test('an option we have no rule for is reported, not silently dropped', () => {
-  const { tags, unmapped } = parseInterests('Summer camps 2027, Teen robotics league');
+  const { tags, unmapped } = parseInterests('Summer camps 2027, Chess club');
   assertEquals(tags, ['summer-camps-2027']);
-  assertEquals(unmapped, ['Teen robotics league']);
+  assertEquals(unmapped, ['Chess club']);
+});
+
+Deno.test('an option naming a subject we DO run is tagged, not reported as unknown', () => {
+  // "Teen robotics league" was the unmapped example here until the subject
+  // rules went in. It is a robotics interest, so it now gets the tag - which is
+  // the point of matching on a keyword rather than on the exact option text.
+  const { tags, unmapped } = parseInterests('Teen robotics league');
+  assertEquals(tags, ['robotics']);
+  assertEquals(unmapped, []);
 });
 
 Deno.test('parseInterests on an empty answer yields nothing', () => {
