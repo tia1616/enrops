@@ -217,6 +217,14 @@ verify_jwt = false
 [functions.apps-script-roster-sync]
 verify_jwt = false
 
+# Called by a Google Apps Script on the tenant's own "Get Notified" sheet, which
+# has no Supabase session to present. It authenticates itself the same way
+# apps-script-roster-sync does: the tenant's opaque secret in the
+# x-enrops-secret header, matched against organizations.apps_script_sync_secret,
+# which is also the only way the org is identified.
+[functions.website-lead-intake]
+verify_jwt = false
+
 [functions.marketing-touchpoint-send]
 verify_jwt = false
 
