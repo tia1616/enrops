@@ -43,6 +43,14 @@ import {
   acceptTermsOfService,
   TOS_STATUS_UNKNOWN,
 } from "../../lib/termsOfService.js";
+// The RESOLVED fee, from the same endpoint the family flow asks. The org row
+// this page already loads carries the RAW columns, and an org's own terms can
+// carry an end date - so reading those columns prints the rate the operator
+// used to be on, not the one their families are charged today. The expiry rule
+// lives once, in _shared/feeConfig.ts; src/lib/platformFee.js says in so many
+// words that it "deliberately has no second copy here", so this page asks the
+// server rather than growing one.
+import { useOrgFeeConfig } from "../../components/FamiliesPayNote.jsx";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -86,6 +94,12 @@ export default function Finances() {
   // Registration-only operators: no school invoicing, no instructor payroll.
   const isLean = org?.instructor_pay_model === "enrops_platform";
   const [searchParams] = useSearchParams();
+  // What a family would actually be quoted today, resolved server-side. Kept
+  // SEPARATE from `config` on purpose: `config` is the org row, and this page
+  // writes three of its columns back. Merging resolved platform defaults into
+  // that object would put them one careless whole-row save away from being
+  // written over an org's negotiated terms.
+  const resolvedFee = useOrgFeeConfig(org?.slug);
   const [config, setConfig] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -1250,7 +1264,7 @@ export default function Finances() {
               <div style={{ fontSize: 12, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, margin: "4px 0 8px" }}>
                 enrops service fee
               </div>
-              <FeeReadout config={config} />
+              <FeeReadout config={resolvedFee} />
 
               <div style={{ fontSize: 12, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, margin: "16px 0 8px" }}>
                 Stripe processing fee
@@ -3012,6 +3026,27 @@ function OnboardingBody({ status, onContinue, onCheckStatus, checking, busy, can
 }
 
 function FeeReadout({ config }) {
+  // SAY NOTHING RATHER THAN SAY ZERO.
+  //
+  // `config` is org-fee-config's answer, and that function fails SAFE for the
+  // family flow: its catch returns HTTP 200 carrying card 0%, bank 0% and cap
+  // 0, so StepPay shows a family no fee rather than a wrong one. Rendered here
+  // unguarded, that same payload becomes "0.00%" on the operator's money page -
+  // a confident number nobody is charged, printed on the one screen they would
+  // copy onto a flyer.
+  //
+  // The success payload always carries stripe_charges_enabled; the catch
+  // payload has no such key. That absence is the only thing separating a real
+  // 0% org from a failed lookup, so it is what this tests. If the catch payload
+  // ever grows that key, this guard goes blind - keep them together.
+  const unavailable = !config || !("stripe_charges_enabled" in config);
+  if (unavailable) {
+    return (
+      <em style={{ color: MUTED, fontSize: 13 }}>
+        Checking your current rates…
+      </em>
+    );
+  }
   const floor = config.platform_fee_floor_cents;
   const cap = config.platform_fee_cap_cents;
   const hasFloor = typeof floor === "number" && floor > 0;
