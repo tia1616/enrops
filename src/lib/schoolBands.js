@@ -170,3 +170,18 @@ export function secondaryOnlyDates(dates) {
     .filter((d) => isSecondaryOnly(d?.reason ?? ''))
     .map((d) => ({ date: d.date.trim(), reason: (d?.reason ?? '').trim() }));
 }
+
+/**
+ * The secondary-only dates a provider has NOT already ruled on. A date they
+ * confirmed does apply carries `applies: true` and is never asked about again.
+ * One spelling, because the confirm panel and the badge that advertises it must
+ * agree - a badge offering a question the panel then says it has nothing to ask
+ * is the dead end this product keeps having to fix.
+ * @param {Array<{date?: string, reason?: string, applies?: boolean}>} dates
+ * @returns {Array<{date: string, reason: string}>}
+ */
+export function unansweredSecondaryOnlyDates(dates) {
+  const rows = Array.isArray(dates) ? dates : [];
+  const answered = new Set(rows.filter((r) => r?.applies === true).map((r) => r?.date));
+  return secondaryOnlyDates(rows).filter((r) => !answered.has(r.date));
+}
