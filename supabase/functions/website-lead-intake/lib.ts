@@ -258,7 +258,10 @@ export function parseGradesFromText(raw: unknown): number[] {
   };
 
   // Word forms first, for the same reason parseGrade tests them first.
-  for (const m of text.matchAll(/\b(pre\s*[-_]?\s*k(?:indergarten)?|kindergarten|kinder|kg)\b/gi)) {
+  // "preschool" is in here because the form now offers a Preschool STEAM
+  // option, so parents write it - and without it, "preschool, age 4" fell
+  // through to the number rules and came back as GRADE FOUR.
+  for (const m of text.matchAll(/\b(pre\s*[-_]?\s*k(?:indergarten)?|preschool|kindergarten|kinder|kg)\b/gi)) {
     add(parseGrade(m[1]));
   }
   // A bare "K" only counts when it stands alone as a word — otherwise every
@@ -269,9 +272,19 @@ export function parseGradesFromText(raw: unknown): number[] {
   // not tag a twelfth-grader. A digit counts only when the text says it is a
   // grade — an ordinal suffix ("5th"), the word grade before it ("grade 3") —
   // or when it is the only number in the answer, which is the "5" case.
+  // AN AGE IS NOT A GRADE, and the two are one year apart at best. A parent
+  // writing "preschool, age 4" was being tagged grade-4 - a four-year-old filed
+  // as a nine-year-old, by the rule that was supposed to be the forgiving one.
+  // So a number wearing age clothing is rejected outright, before the
+  // sole-number allowance can rescue it.
+  const AGE_CONTEXT = /(?:\bages?d?\b|\bturning\b|\balmost\b|\byears?\s*old\b|\byrs?\b|\byo\b)/i;
   const numMatches = [...text.matchAll(/\b(?:(grade|grader|grades)\s*)?(\d{1,2})\s*(st|nd|rd|th)?\b/gi)];
   const soleNumber = numMatches.length === 1;
   for (const m of numMatches) {
+    const at = m.index ?? 0;
+    // Look just either side of the digits for the age words.
+    const around = text.slice(Math.max(0, at - 14), at + m[0].length + 12);
+    if (AGE_CONTEXT.test(around) && !m[1] && !m[3]) continue;
     const qualified = Boolean(m[1]) || Boolean(m[3]) || soleNumber;
     if (qualified) add(parseGrade(m[2]));
   }

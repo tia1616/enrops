@@ -303,6 +303,17 @@ Deno.test('a family with two children keeps BOTH grades', () => {
   assertEquals(parseGradesFromText('3rd and 5th'), [3, 5]);
 });
 
+Deno.test('an age is never read as a grade', () => {
+  // Caught by running the LIVE form's shape through staging: "preschool, age 4"
+  // came back as grade-4, filing a four-year-old as a nine-year-old.
+  assertEquals(parseGradesFromText('preschool, age 4'), [-1]);
+  assertEquals(parseGradesFromText('she is 5 years old'), []);
+  assertEquals(parseGradesFromText('turning 6 in May'), []);
+  assertEquals(parseGradesFromText('age 7'), []);
+  // An explicit grade still wins even next to an age.
+  assertEquals(parseGradesFromText('age 7, 2nd grade'), [2]);
+});
+
 Deno.test('a number that is not a grade is not read as one', () => {
   // "room 12" would otherwise tag a twelfth-grader onto a third-grader's family.
   assertEquals(parseGradesFromText('grade 3, room 12'), [3]);
