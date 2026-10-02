@@ -2729,24 +2729,48 @@ async function resolveReviewRequestAudience(
 
   // ── Contact anchor: marketing_recipients added N days ago.
   //
-  // NOT EVERY CONTACT ROW IS A FAMILY WE HAVE SERVED. This anchor asks "how did
-  // it go?", so it may only fire for a contact whose relationship actually
-  // started. A website "Get Notified" lead (source='website_notify', written by
-  // the website-lead-intake function) has by construction started nothing — they
-  // asked to hear from us and have bought no program — so the question is false
-  // for them on the day it is asked. Excluded here rather than in the intake,
-  // because the intake cannot know which automations read the row it writes.
+  // A CONTACT ROW IS NOT EVIDENCE THAT ANYTHING HAPPENED. This anchor asks "how
+  // did it go?", so it may only fire for someone whose relationship actually
+  // started — and being on a mailing list is not that. Two gates, because they
+  // fail for different reasons:
   //
-  // This is the ONLY source excluded. A contact imported by the operator is
-  // still anchored on, which is what serves contact-only tenants (Kumon).
+  // 1. IF THE BUSINESS RUNS REGISTRATIONS, REVIEWS COME FROM REGISTRATIONS.
+  //    This anchor exists for the opposite shape: a tenant that keeps no
+  //    registrations and imports its families by hand (Kumon — 19 contacts, 0
+  //    registrations). For a tenant that DOES run registrations, every real
+  //    customer is already covered by the two registration anchors above, so
+  //    everyone this anchor could add is by definition someone who never
+  //    enrolled. It is not a near-miss either: the contact anchor passes no
+  //    program name, and a tenant whose review copy names the program then
+  //    sends a subject line that stops mid-sentence.
+  //    The test is the tenant's DATA SHAPE, never its identity.
+  //
+  // 2. A WEBSITE LEAD NEVER QUALIFIES, even for a contact-only tenant. Someone
+  //    who filled in a "Get Notified" form (source='website_notify', written by
+  //    website-lead-intake) has asked to hear from us and bought nothing.
+  //    Gate 1 already covers every tenant that runs registrations; this covers
+  //    the contact-only tenant that later adds a website form.
+  //
+  // Both FAIL CLOSED. The registration count below throws on a read error
+  // rather than assuming zero — assuming zero would turn a slow database into a
+  // review request sent to an entire mailing list.
   const contactEntries: AudienceEntry[] = [];
   {
-    const { data, error } = await supabase
-      .from("marketing_recipients")
-      .select("id, email, parent_name, child_first_name, created_at")
-      .eq("organization_id", a.organization_id)
-      .neq("source", "website_notify")
-      .gte("created_at", earliest);
+    const { count: regCount, error: regCountErr } = await supabase
+      .from("registrations")
+      .select("id", { count: "exact", head: true })
+      .eq("organization_id", a.organization_id);
+    if (regCountErr) throw regCountErr;
+    const tenantRunsRegistrations = (regCount ?? 0) > 0;
+
+    const { data, error } = tenantRunsRegistrations
+      ? { data: [] as any[], error: null }
+      : await supabase
+        .from("marketing_recipients")
+        .select("id, email, parent_name, child_first_name, created_at")
+        .eq("organization_id", a.organization_id)
+        .neq("source", "website_notify")
+        .gte("created_at", earliest);
     if (error) throw error;
     for (const c of (data ?? []) as any[]) {
       if (!c.email || !c.created_at) continue;
