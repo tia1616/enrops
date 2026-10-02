@@ -225,6 +225,37 @@ Deno.test('parseInterests maps every option the form offers', () => {
   assertEquals(unmapped, []);
 });
 
+Deno.test('every option on the LIVE form maps to a tag', () => {
+  // Read off journeytosteam.com/notify on 2026-10-02. This is the test that
+  // catches an option being added to the form with no slug to put it in - which
+  // is exactly how "Preschool STEAM" shipped untagged. If the operator adds an
+  // option, this fails until somebody decides what it means.
+  const LIVE_OPTIONS: Array<[string, string]> = [
+    ["After-school at my child's school", 'after-school'],
+    ['Winter break camps', 'winter-break-camps'],
+    ['No-school-day camps', 'no-school-day-camps'],
+    ['Spring break camps', 'spring-break-camps'],
+    ['Summer camps 2027', 'summer-camps-2027'],
+    ['Birthday parties', 'birthday-parties'],
+    ['Preschool STEAM (ages 3 to 5)', 'preschool-steam'],
+    ['LEGO Building', 'lego'],
+    ['Robotics', 'robotics'],
+    ['Coding and Game Design', 'game-design'],
+    ['Minecraft', 'minecraft'],
+  ];
+  for (const [option, expected] of LIVE_OPTIONS) {
+    const { tags, unmapped } = parseInterests(option);
+    assertEquals(unmapped, [], `no rule for live option: ${option}`);
+    assertEquals(tags.includes(expected), true, `${option} should tag ${expected}, got ${tags.join('+')}`);
+  }
+});
+
+Deno.test('"Preschool STEAM" is not read as a school-day option', () => {
+  // "preschool" contains the word "school", which is what the other two
+  // school-shaped rules key on.
+  assertEquals(parseInterests('Preschool STEAM (ages 3 to 5)').tags, ['preschool-steam']);
+});
+
 Deno.test('"No-school-day camps" does not read as after-school', () => {
   assertEquals(parseInterests('No-school-day camps').tags, ['no-school-day-camps']);
   assertEquals(parseInterests('No school day camps').tags, ['no-school-day-camps']);

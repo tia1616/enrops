@@ -150,6 +150,11 @@ const INTEREST_RULES: Array<{ tag: string; test: (s: string) => boolean }> = [
   { tag: 'spring-break-camps', test: (s) => s.includes('spring') },
   { tag: 'summer-camps-2027', test: (s) => s.includes('summer') },
   { tag: 'birthday-parties', test: (s) => s.includes('birthday') },
+  // Added 2026-10-02, the day the option appeared on the live form. Note it does
+  // NOT collide with the two rules above that also key on the word "school":
+  // "preschool" contains "school" but has no "after" and no "no" in front of it,
+  // so it lands here and only here. Checked against every live option.
+  { tag: 'preschool-steam', test: (s) => s.includes('preschool') },
 
   // WHICH SUBJECT — a second question on the form, asking what the child is
   // into. A different axis from the six above: "Winter break camps" is a WHEN,
