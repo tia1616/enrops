@@ -25,6 +25,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import { unansweredSecondaryOnlyDates, classifyBands } from "../../lib/schoolBands";
+import { matchCalendarForRow } from "../../lib/districtCalendarMatch";
 
 const BRIGHT = "#5847C9";
 const INK = "#1a1a1a";
@@ -70,7 +71,7 @@ function formatDay(iso) {
 // uploaded. Matching mirrors calendarForRow: structured district_id first, the
 // legacy free-text key second.
 export default function ClosureScopeChoice({
-  org, districtId, districtText, districtLabel, schoolYear, explicit = false, onDone,
+  org, calId, districtId, calendarKey, districtLabel, schoolYear, explicit = false, onDone,
 }) {
   const [cal, setCal] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -89,10 +90,19 @@ export default function ClosureScopeChoice({
           .eq("school_year", schoolYear);
         if (error) throw error;
         const rows = data ?? [];
-        const match = districtId
-          ? rows.find((c) => c.district_id === districtId
-              || (districtText && !c.district_id && c.district === districtText))
-          : rows.find((c) => !c.district_id && c.district === districtText);
+        // The id when the list behind us already has it, so the badge and this
+        // panel are provably talking about the SAME row. The matcher is only a
+        // fallback for the one case where there is no id yet - the instant a
+        // brand-new calendar is saved - and it is matchCalendarForRow, the same
+        // function the list uses, never a second spelling of the rule.
+        // The id first, then the matcher as a FALLBACK rather than an either/or.
+        // calId comes from a list filtered by the currently selected school
+        // year, so saving a calendar for a DIFFERENT year hands us an id that
+        // does not exist in these rows: the find missed, cal went null, and the
+        // panel auto-closed without ever asking about the calendar just
+        // uploaded. Falling through to the matcher covers that.
+        const match = (calId ? rows.find((c) => c.id === calId) : null)
+          ?? matchCalendarForRow(rows, { districtId, calendarKey, label: districtLabel });
         if (!cancelled) setCal(match ?? null);
       } catch (e) {
         console.error("Closure scope load failed:", e);
@@ -104,7 +114,7 @@ export default function ClosureScopeChoice({
       }
     })();
     return () => { cancelled = true; };
-  }, [org?.id, districtId, districtText, schoolYear]);
+  }, [org?.id, calId, districtId, calendarKey, districtLabel, schoolYear]);
 
   const noSchool = useMemo(() => unansweredSecondaryOnlyDates(cal?.no_school_dates), [cal]);
   const earlyRelease = useMemo(() => unansweredSecondaryOnlyDates(cal?.early_release_dates), [cal]);
@@ -139,13 +149,24 @@ export default function ClosureScopeChoice({
   useEffect(() => {
     if (loading || loadError) return;
     if (candidates.length === 0 && !explicit && !done) onDone?.({ changed: false });
-  }, [loading, loadError, candidates.length, explicit, done, onDone]);
+    // onDone is deliberately NOT a dependency, matching EarlyReleaseChoice next
+    // door: the parent passes a fresh inline arrow every render, so including
+    // it re-runs this on every parent render. It is harmless today only because
+    // the single call unmounts us; it would become a render loop the moment
+    // this panel stayed mounted after onDone.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, loadError, candidates.length, explicit, done]);
 
   async function confirm() {
     setSaving(true);
     setSaveError("");
     try {
       const patch = {};
+      // Candidate dates are trimmed on the way out of secondaryOnlyDates, so
+      // the stored value has to be trimmed on the way back in or the two sets
+      // never meet: a row stored as " 2026-11-06" would be reported removed
+      // and silently survive, and be re-asked forever.
+      const key = (r) => (typeof r?.date === "string" ? r.date.trim() : "");
       for (const listName of ["no_school_dates", "early_release_dates"]) {
         const current = Array.isArray(cal?.[listName]) ? cal[listName] : [];
         const dropping = new Set(
@@ -153,18 +174,26 @@ export default function ClosureScopeChoice({
         );
         const asked = new Set(candidates.filter((c) => c.list === listName).map((c) => c.date));
         const next = current
-          .filter((r) => !dropping.has(r?.date))
+          .filter((r) => !dropping.has(key(r)))
           // Only the rows actually ASKED about get the marker. Everything else
           // is written back byte-identical, so this cannot quietly rewrite a
           // date nobody was shown.
-          .map((r) => (asked.has(r?.date) ? { ...r, applies: true } : r));
+          .map((r) => (asked.has(key(r)) ? { ...r, applies: true } : r));
         if (next.length !== current.length || asked.size > 0) patch[listName] = next;
       }
       // Only the two date columns move. A whole-row write here would revert
       // whatever another screen changed on this calendar in the meantime.
       patch.updated_at = new Date().toISOString();
-      const { error } = await supabase.from("district_calendars").update(patch).eq("id", cal.id);
+      // .select() because a PostgREST update that matches NO row returns no
+      // error. Without reading a row back this screen would say "Saved" having
+      // written nothing - the dishonest-state failure, on the screen whose
+      // whole job is telling the operator what happened to their calendar.
+      const { data: written, error } = await supabase
+        .from("district_calendars").update(patch).eq("id", cal.id).select("id");
       if (error) throw error;
+      if (!written || written.length === 0) {
+        throw new Error("that calendar could not be found to update. Nothing was changed.");
+      }
       setDone({ removed: drop.size, kept: candidates.length - drop.size });
     } catch (e) {
       console.error("Closure scope save failed:", e);
@@ -194,13 +223,33 @@ export default function ClosureScopeChoice({
         <div style={{ fontSize: 17, fontWeight: 700, color: INK }}>Saved</div>
         <div style={{ fontSize: 14, color: INK, lineHeight: 1.55 }}>
           {done.removed > 0 ? (
-            <><strong>{done.removed}</strong> {done.removed === 1 ? "day is" : "days are"} off this calendar, so {done.removed === 1 ? "it" : "they"} will not cancel a class or email a family.</>
+            <><strong>{done.removed}</strong> {done.removed === 1 ? "day is" : "days are"} off this calendar, so from now on {done.removed === 1 ? "it will not cancel" : "they will not cancel"} a class.</>
           ) : (
-            <>Nothing changed. Those days stay on the calendar.</>
+            <>No days were removed. They all stay on the calendar.</>
           )}
           {done.kept > 0 && <> The other <strong>{done.kept}</strong> stay, and you will not be asked about {done.kept === 1 ? "it" : "them"} again.</>}
         </div>
-        <div><button type="button" style={btnPrimary} onClick={() => onDone?.({ changed: done.removed > 0 })}>Done</button></div>
+        {/* Two things removal really does, both previously unsaid. A family
+            already emailed about a closure is NOT un-emailed - the reminder
+            goes out days ahead and the receipt is already written. And a class
+            that now meets on a day it used to skip finishes earlier, because
+            the schedule stops pushing its last session out. This comment sits
+            OUTSIDE the prose below, because a JSX comment inside prose eats a
+            space - and must never contain a close-comment marker itself, which
+            ends the comment early and prints the rest onto the screen. */}
+        {done.removed > 0 && (
+          <div style={{ fontSize: 13, color: MUTED, lineHeight: 1.5 }}>
+            Two things to know. If a reminder about {done.removed === 1 ? "that day" : "those days"} already went
+            out, families have had it and removing the day does not unsend it. And any class that now meets on
+            a day it used to skip will finish earlier than it did before.
+          </div>
+        )}
+        {/* changed:true on ANY successful confirm, not only a removal. Keeping
+            every date still WRITES the applies marker, and reporting false
+            skipped the parent's refresh - so the row went on advertising
+            "Check 3 days" while the panel it opened said there was nothing to
+            check. The dead end the shared helper exists to prevent. */}
+        <div><button type="button" style={btnPrimary} onClick={() => onDone?.({ changed: true })}>Done</button></div>
       </>
     );
   }
@@ -210,8 +259,14 @@ export default function ClosureScopeChoice({
     return shell(
       <>
         <div style={{ fontSize: 17, fontWeight: 700, color: INK }}>Nothing to check for {districtLabel}</div>
+        {/* Says only what the classifier can actually support. The old wording
+            asserted every remaining closure APPLIES, which it cannot know:
+            "Grading Day", "Licensed Non-Contract" and "Work Day/In-service Day"
+            are all real prod labels that name no band at all and are kept by
+            default, not by evidence. */}
         <div style={{ fontSize: 14, color: INK, lineHeight: 1.55 }}>
-          None of this calendar&rsquo;s closures are marked as middle or high school only, so every one of them applies to your classes.
+          None of this calendar&rsquo;s closures say they are for middle or high school only, so none of them
+          were singled out to check. Anything you do want off the calendar can be removed under <strong>Edit</strong>.
         </div>
         <div><button type="button" style={btnPlain} onClick={() => onDone?.({ changed: false })}>Close</button></div>
       </>
@@ -226,8 +281,18 @@ export default function ClosureScopeChoice({
       <div style={{ fontSize: 14, color: INK, lineHeight: 1.55 }}>
         {districtLabel} wrote {candidates.length === 1 ? "this one" : "these"} down for part of the district. Untick anything that <em>does</em> affect your classes.
       </div>
+      {/* The honest version of what ticking does. It was "stops cancelling
+          classes and stops families being emailed" - which skipped that ONE
+          calendar serves EVERY class this business runs in the district (so a
+          middle-school club here loses a real closure), and that an
+          early-release row was never cancelling anything, it was moving the
+          start time earlier. Removing that one puts the class back at its
+          normal time, which is the version that leaves an instructor in front
+          of an empty room. */}
       <div style={{ fontSize: 13, color: MUTED, lineHeight: 1.5 }}>
-        A ticked day comes off this calendar, so it stops cancelling classes and stops families being emailed about it.
+        A ticked day comes off this calendar for <strong>every class you run in {districtLabel}</strong>, so
+        leave one ticked only if none of them is affected. A ticked <em>early release</em> day is different
+        again: the class goes back to its normal time rather than the earlier one.
       </div>
 
       <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, overflow: "hidden" }}>

@@ -10,7 +10,7 @@
 //     "contains HS" rule drops exactly these.
 //   - "US Conferences" is UPPER SCHOOL, not a country, and does NOT apply.
 
-import { classifyBands, isSecondaryOnly, secondaryOnlyDates } from './schoolBands.js';
+import { classifyBands, isSecondaryOnly, secondaryOnlyDates, unansweredSecondaryOnlyDates } from './schoolBands.js';
 
 let pass = 0, fail = 0;
 function ok(name, cond) {
@@ -45,6 +45,10 @@ const REAL_LABELS = [
   ['No School: HS Grade Prep', true],
   ['No School: MS Grade Prep', true],
   ['US Conferences - no US classes', true],
+  // Briefly lost when "no" was a blanket negation word, and recovered when
+  // that was restricted to the plural "... schools" form. Kept as a REAL
+  // expectation rather than a documented miss: "no US classes" means upper
+  // school is the band that is out, which is exactly what should be suggested.
   ['US Spring Break starts - no US classes', true],
 ];
 for (const [label, expected] of REAL_LABELS) {
@@ -105,6 +109,113 @@ ok('non-array input is safe', secondaryOnlyDates(null).length === 0 && secondary
 // --- the three LOSD dates this whole build exists for ---
 ok('LOSD 6 Nov / 11 Dec / 19 Mar are all suggested', ['No School: HS Grade Prep', 'No School: MS Grade Prep']
   .every((r) => isSecondaryOnly(r) === true));
+
+// --- BLOCKERS found in review 2026-10-02. Each one deleted a REAL closure. ---
+
+// 1. Any two numbers joined by a dash read as a grade range, and anything from
+//    6 up counted as secondary. "Winter Break 22-31" was pre-ticked for
+//    deletion: one click would have wiped a whole winter break, scheduled five
+//    sessions into a shut school and pulled every class's last day five weeks
+//    earlier. A grade range now needs the word grade/gr, or to start at K.
+for (const label of [
+  'Winter Break 22-31', 'Thanksgiving Break 26-28', 'No School 11-27',
+  'Conferences (No School) 6-8 pm', 'No School (teacher PD) 8-3', 'Conference Day 12-4',
+  'Winter Break Dec 21-31', 'Spring Break 3/22-3/26',
+]) {
+  ok(`date/time range is not a grade range: ${label}`, isSecondaryOnly(label) === false);
+}
+ok('an explicit grade range still counts', isSecondaryOnly('Grades 6-8 testing') === true);
+ok('gr. 6-8 counts too', isSecondaryOnly('No School gr. 6-8') === true);
+ok('a negated grade range is kept', isSecondaryOnly('Early Release except grades 9-12') === false);
+
+// 2. Bare secondary words matched ordinary English. "High Holy Days" is a
+//    standard all-school closure; deleting it sends an instructor to a locked
+//    building. Secondary words are multi-word only now.
+for (const label of [
+  'No School: High Holy Days', 'High Holidays - No School', 'Junior Achievement Day - No School',
+  'Senior Project Day - No School', 'Middle of Winter Break', 'Upper Field closed',
+]) {
+  ok(`ordinary English is not a band: ${label}`, isSecondaryOnly(label) === false);
+}
+ok('"high school" still counts', isSecondaryOnly('No School - High School Finals') === true);
+ok('"middle school" still counts', isSecondaryOnly('Middle School Conferences') === true);
+
+// 3. "US" is Upper School in a school calendar and the COUNTRY everywhere
+//    else, and both are capitalised. It counts only before a school word.
+ok('US Holiday is the country, kept', isSecondaryOnly('No School - Veterans Day (US Holiday)') === false);
+ok('US Thanksgiving Holiday is the country, kept', isSecondaryOnly('US Thanksgiving Holiday') === false);
+ok('US Conferences is Upper School, dropped', isSecondaryOnly('US Conferences - no US classes') === true);
+
+// 4. The negation guard covered two spellings and nothing adjacent. Every word
+//    added can only move an answer towards KEEP, so this list is liberal.
+for (const label of [
+  'Early Release (excl. HS)', 'Early Release - no high schools',
+  'Early Release Day - all schools but high schools', 'Early Release Day, high schools excepted',
+  'Early Release, high schools exempt', 'Early release excluding high school',
+]) {
+  ok(`negation spelling handled: ${label}`, isSecondaryOnly(label) === false);
+}
+
+// 5. An infinite loop, hit the moment "no" became a negator: lastIndexOf(x, -1)
+//    searches from 0 and returns 0 forever. Any label whose window starts with
+//    a negator used to hang the browser tab.
+ok('a negator at index 0 terminates', (() => {
+  const t0 = Date.now();
+  isSecondaryOnly('No School 11-27');
+  isSecondaryOnly('not');
+  isSecondaryOnly('no no no no high school');
+  return Date.now() - t0 < 1000;
+})());
+
+// --- unansweredSecondaryOnlyDates: the one function the row badge and the
+// panel must agree on, and it had no coverage at all. ---
+const mixed = [
+  { date: '2026-11-06', reason: 'No School: HS Grade Prep' },
+  { date: '2026-12-11', reason: 'No School: MS Grade Prep', applies: true },
+  { date: '2027-03-19', reason: 'No School: MS Grade Prep', applies: false },
+  { date: '2026-11-26', reason: 'Holiday: Thanksgiving' },
+  { date: '2026-10-29', reason: 'No School: Elem, MS Conferences', applies: true },
+];
+const un = unansweredSecondaryOnlyDates(mixed);
+ok('a date already answered is not re-asked', !un.some((r) => r.date === '2026-12-11'));
+ok('applies:false is still asked', un.some((r) => r.date === '2027-03-19'));
+ok('an unanswered secondary date is asked', un.some((r) => r.date === '2026-11-06'));
+ok('a non-secondary date is never asked', !un.some((r) => r.date === '2026-11-26'));
+ok('answering one date does not suppress another', un.length === 2);
+ok('non-array input is safe', unansweredSecondaryOnlyDates(null).length === 0);
+
+// --- BLOCKERS the FIX ROUND itself introduced, 2026-10-02. ---
+// Making "no" a negation word inverted the safety property: it stripped the
+// ELEMENTARY band off a label and left it reading secondary-only, so a day
+// elementary is actually shut came back pre-ticked for deletion.
+for (const label of [
+  'No Elementary Classes, MS Conferences',
+  'No Preschool - HS Exams',
+  'No Kindergarten; MS Conferences',
+  'No K-5 Classes; MS Conferences',
+  'No LS Classes, US Exams',
+  'No PK Classes - HS Finals',
+  'No pre-k, MS/HS conferences',
+]) {
+  ok(`"no <elementary>" must NOT strip the keep-guard: ${label}`, isSecondaryOnly(label) === false);
+}
+// ...and it killed the feature's main case, because "No MS Classes" negated
+// its own MS. Both directions came from the same token.
+for (const label of ['No MS Classes', 'No HS Classes', 'No Middle School Classes', 'No High School Finals']) {
+  ok(`"no <secondary>" still flags: ${label}`, isSecondaryOnly(label) === true);
+}
+// "no" survives only for the plural "... schools" exclusion, which is the real
+// PPS wording it was added for.
+ok('"no high schools" is still an exclusion', isSecondaryOnly('Early Release - no high schools') === false);
+ok('"No School: MS Grade Prep" does not self-negate', isSecondaryOnly('No School: MS Grade Prep') === true);
+
+// The trim fix had been applied in confirm() but not here, so an answered row
+// whose stored date had whitespace was re-asked forever.
+ok('an answered date with stored whitespace is not re-asked',
+  unansweredSecondaryOnlyDates([
+    { date: ' 2026-11-06', reason: 'No School: HS Grade Prep', applies: true },
+    { date: '2026-12-11 ', reason: 'No School: MS Grade Prep', applies: true },
+  ]).length === 0);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

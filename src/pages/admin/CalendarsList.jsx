@@ -16,6 +16,7 @@ import { isGroupingDistrict } from "../../lib/districts.js";
 import EarlyReleaseChoice from "./EarlyReleaseChoice.jsx";
 import ClosureScopeChoice from "./ClosureScopeChoice.jsx";
 import { unansweredSecondaryOnlyDates } from "../../lib/schoolBands";
+import { matchCalendarForRow } from "../../lib/districtCalendarMatch";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -330,13 +331,12 @@ export default function CalendarsList() {
   // calendar_key while it hasn't been stamped yet); a legacy row matches by the
   // free-text district string on an unstamped calendar.
   function calendarForRow(row) {
-    if (row.districtId) {
-      return calendars.find(
-        (c) => c.district_id === row.districtId
-          || (row.calendarKey && !c.district_id && c.district === row.calendarKey),
-      ) ?? null;
-    }
-    return calendars.find((c) => !c.district_id && c.district === row.label) ?? null;
+    // The rule lives in one place now, because ClosureScopeChoice has to agree
+    // with it exactly - a second spelling had the badge counting one calendar
+    // while the panel wrote to another.
+    return matchCalendarForRow(calendars, {
+      districtId: row.districtId, calendarKey: row.calendarKey, label: row.label,
+    });
   }
 
   if (!org) return <div style={{ color: MUTED, fontSize: 14 }}>Loading…</div>;
@@ -437,8 +437,13 @@ export default function CalendarsList() {
                   // behind a screen the operator has to find.
                   <ClosureScopeChoice
                     org={org}
+                    // The id when the list already has it, so the badge and the
+                    // panel are provably the same row. districtId/calendarKey
+                    // are the fallback for a calendar saved seconds ago that
+                    // this list has not reloaded yet.
+                    calId={cal?.id ?? null}
                     districtId={row.districtId}
-                    districtText={cal?.district ?? row.calendarKey ?? row.label}
+                    calendarKey={row.calendarKey}
                     schoolYear={schoolYear}
                     districtLabel={row.label}
                     explicit={!!scopePrompt.explicit}
@@ -486,15 +491,20 @@ export default function CalendarsList() {
                       // Both components work out whether there is anything to
                       // ask and close themselves if not, so this never leaves an
                       // empty row behind.
-                      setScopePrompt({ key: row.key });
                       // Jump the dropdown to the year just saved so the new
                       // row shows up immediately. No-op if it already matches.
                       if (savedSchoolYear && savedSchoolYear !== schoolYear) {
                         setSchoolYear(savedSchoolYear);
                         // schoolYear state change will trigger loadAll via the
                         // useEffect dependency — no need to call it here too.
+                        setScopePrompt({ key: row.key });
                       } else {
+                        // AFTER the reload, not before: loadAll flips the whole
+                        // list to "Loading…", which unmounts the panel mid-fetch
+                        // and remounts it. Harmless but it costs a wasted query
+                        // and a flicker on the screen that just saved.
                         await loadAll();
+                        setScopePrompt({ key: row.key });
                       }
                     }}
                   />
