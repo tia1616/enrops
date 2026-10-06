@@ -67,9 +67,14 @@ const TOKENS_BY_TEMPLATE_KEY = {
   survey_nudge:           ["first_name", "child_first_name", "org_name", "sender_name", "program_name"],
   // review_request reaches enrolled families AND bare contacts, so it only
   // exposes tokens that resolve for both. Program-specific tokens are omitted:
-  // a contact has no program, so {{program_name}} would render empty. The review
-  // link itself is a plain URL the operator pastes into the body (not a token).
-  review_request:         ["first_name", "child_first_name", "org_name", "sender_name"],
+  // a contact has no program, so {{program_name}} would render empty.
+  // review_rate_url_1..5 (Phase 2, ops manual section 10): per-recipient,
+  // signed star-rating links the cron mints per registration — "" for the
+  // contact anchor (no registration to score). Added alongside the single
+  // pasted "Your review link" field below rather than replacing it, since a
+  // contact-only tenant (no registrations at all) can't use these and still
+  // needs a plain link.
+  review_request:         ["first_name", "child_first_name", "org_name", "sender_name", "review_rate_url_1", "review_rate_url_2", "review_rate_url_3", "review_rate_url_4", "review_rate_url_5"],
   // no_school_day: program-centric (no child name — a parent may have several
   // kids in one class). {{no_school_dates}} = the affected class day(s);
   // {{no_school_reason}} = why (falls back to "a no-school day" if blank).
@@ -262,6 +267,17 @@ function normalizeReviewUrl(raw) {
   return `https://${s.replace(/^[a-z][a-z0-9+.-]*:\/*/i, "").replace(/^\/+/, "")}`;
 }
 
+// Phase 2 (ops manual section 10): a review_request body built around the 5
+// per-recipient {{review_rate_url_N}} star-rating tokens has no SINGLE review
+// link to extract — the whole point is 5 different, per-registration,
+// per-score links the cron mints, never a URL the operator pastes. Detecting
+// this by the literal token text (present in the STORED template, before
+// substitution) rather than counting <a> tags: it's the one unambiguous
+// signal that doesn't depend on how many anchors happen to be in the body.
+function usesStarLinkTokens(body) {
+  return /\{\{review_rate_url_[1-5]\}\}/.test(body || "");
+}
+
 // Pull the review URL out of the body's anchor — "" when it's still the
 // placeholder or there is no anchor.
 function extractReviewUrl(body) {
@@ -368,10 +384,16 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
   const timingAnchorLabel = timingCfg?.anchor ?? "";
 
   // review_request: a dedicated "Your review link" field so the operator never
-  // hand-edits HTML to set the link. It reads/writes the single <a> in the body.
-  const isReviewLink = template.key === "review_request";
+  // hand-edits HTML to set the link. It reads/writes the single <a> in the
+  // body — which only makes sense for the single-link design (a contact-only
+  // tenant with no registrations to score). Gated OFF for a body already
+  // using the Phase-2 {{review_rate_url_N}} star-rating tokens: that design
+  // has 5 anchors, not 1, and this field's single-anchor replace would
+  // silently clobber one of them the moment an operator touched it.
+  const currentReviewBody = automation?.body_override ?? template.default_body;
+  const isReviewLink = template.key === "review_request" && !usesStarLinkTokens(currentReviewBody);
   const [reviewLink, setReviewLink] = useState(
-    isReviewLink ? extractReviewUrl(automation?.body_override ?? template.default_body) : "",
+    isReviewLink ? extractReviewUrl(currentReviewBody) : "",
   );
   function handleReviewLinkChange(value) {
     setReviewLink(value);

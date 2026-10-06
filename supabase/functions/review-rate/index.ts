@@ -8,11 +8,16 @@
 //
 // GET /review-rate?r=<registration_id>&org=<organization_id>&t=<token>&score=1..5
 //
-// HMAC token is computed over `${registration_id}:${organization_id}` using
-// REVIEW_RATE_SECRET — same shape as marketing-unsubscribe's token over
-// `${email}:${orgId}`. Constant-time compare on verify. Not a POST + one-click
-// design like unsubscribe: this is a link a family TAPS from an email, one
-// request, no form.
+// HMAC token is computed over `${registration_id}:${organization_id}:${score}`
+// using REVIEW_RATE_SECRET — the SCORE is part of the signed message, not just
+// a free query param riding alongside a token that only proves (registration,
+// org). Each of the 5 star links for one registration is signed separately and
+// carries a DIFFERENT token; without this, one valid link's token would
+// authenticate any of the 5 scores (edit `score=` in the URL, signature still
+// "verifies"), silently corrupting the average review-rate exists to protect
+// and letting a family dodge or spoof the low-score operator alert below.
+// Constant-time compare on verify. Not a POST + one-click design like
+// unsubscribe: this is a link a family TAPS from an email, one request, no form.
 //
 // Multi-tenant safety: the token proves the (registration_id, organization_id)
 // pair wasn't tampered with; the DB lookup below still re-confirms the
@@ -23,11 +28,17 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 import { loadOrgBrand, formatFromAddress } from "../_shared/orgBrand.ts";
+import { hmacBase64Url, constantTimeEquals } from "../_shared/hmac.ts";
+import { esc as escapeHtml } from "../_shared/escapeHtml.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const SECRET = Deno.env.get("REVIEW_RATE_SECRET") ?? "";
-const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
+// Defaulted + checked at the low-score notification call site below, same
+// fail-soft posture the rest of this function uses for RESEND_API_KEY-adjacent
+// failures: a missing key must not crash the family's redirect, but it also
+// must not look like a notification that actually went out.
+const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY") ?? "";
 // PUBLIC_SITE_URL mirrors every other sender in this repo — never hardcode
 // the domain, or a staging-fired low-score alert links an operator to prod.
 const PUBLIC_SITE_URL = (Deno.env.get("PUBLIC_SITE_URL") ?? "https://enrops.com").replace(/\/+$/, "");
@@ -70,7 +81,7 @@ serve(async (req: Request) => {
 
   let signatureOk = false;
   try {
-    signatureOk = await verifyToken(registrationId, orgId, token);
+    signatureOk = await verifyToken(registrationId, orgId, score, token);
   } catch (_e) {
     signatureOk = false;
   }
@@ -140,30 +151,55 @@ serve(async (req: Request) => {
   // either; a genuinely NEW low score after a prior high one is rare enough
   // that re-notifying is the safe direction, not worth a special case.
   if (score <= 2 && !existing?.notified_at) {
-    try {
-      const brand = await loadOrgBrand(supabase, orgId);
-      // Not a per-registration deep link — no such page exists today (ProgramRoster
-      // only resolves a program_id, not a camp_session_id, and this notification
-      // fires for either). /admin/rosters is the one page that's always right.
-      const rosterUrl = `${PUBLIC_SITE_URL}/admin/rosters`;
-      await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${RESEND_API_KEY}` },
-        body: JSON.stringify({
-          from: formatFromAddress(brand),
-          to: brand.reply_to,
-          subject: `Score ${score}: ${programName || "a review"} — follow up today`,
-          html: `<p>${escapeHtml(parentName)} rated <strong>${escapeHtml(programName || "a program")}</strong>${locationName ? ` at ${escapeHtml(locationName)}` : ""} ${score} star${score === 1 ? "" : "s"}.</p>`
-            + `<p>Child: ${escapeHtml(childName)}<br>Parent email: ${escapeHtml(parent?.email ?? "unknown")}</p>`
-            + `<p><a href="${rosterUrl}">View the roster</a></p>`,
-          text: `${parentName} rated ${programName || "a program"}${locationName ? ` at ${locationName}` : ""} ${score} star${score === 1 ? "" : "s"}.\nChild: ${childName}\nParent email: ${parent?.email ?? "unknown"}\nRoster: ${rosterUrl}`,
-        }),
-      });
-      await supabase.from("program_reviews").update({ notified_at: new Date().toISOString() }).eq("registration_id", registrationId);
-    } catch (e) {
-      // Non-fatal — the score is already recorded; a failed alert email must
-      // not turn into a 500 that makes the family's tap look like it failed.
-      console.error("[review-rate] low-score notification failed:", e instanceof Error ? e.message : String(e));
+    if (!RESEND_API_KEY) {
+      // Loud, not silent: this is the ONE signal an operator has that the
+      // alert didn't go out. notified_at is deliberately left unset — there is
+      // NO automated retry today (nothing re-scans unnotified low scores), but
+      // leaving it unset is still strictly better than the old unconditional
+      // stamp: it's honest about what happened, and if a retry mechanism is
+      // ever built, or the SAME family taps again, this row is still eligible.
+      console.error("[review-rate] low-score notification skipped — RESEND_API_KEY is not set");
+    } else {
+      try {
+        const brand = await loadOrgBrand(supabase, orgId);
+        // Not a per-registration deep link — no such page exists today (ProgramRoster
+        // only resolves a program_id, not a camp_session_id, and this notification
+        // fires for either). /admin/rosters is the one page that's always right.
+        const rosterUrl = `${PUBLIC_SITE_URL}/admin/rosters`;
+        const resp = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${RESEND_API_KEY}` },
+          body: JSON.stringify({
+            from: formatFromAddress(brand),
+            to: brand.reply_to,
+            subject: `Score ${score}: ${programName || "a review"} — follow up today`,
+            html: `<p>${escapeHtml(parentName)} rated <strong>${escapeHtml(programName || "a program")}</strong>${locationName ? ` at ${escapeHtml(locationName)}` : ""} ${score} star${score === 1 ? "" : "s"}.</p>`
+              + `<p>Child: ${escapeHtml(childName)}<br>Parent email: ${escapeHtml(parent?.email ?? "unknown")}</p>`
+              + `<p><a href="${rosterUrl}">View the roster</a></p>`,
+            text: `${parentName} rated ${programName || "a program"}${locationName ? ` at ${locationName}` : ""} ${score} star${score === 1 ? "" : "s"}.\nChild: ${childName}\nParent email: ${parent?.email ?? "unknown"}\nRoster: ${rosterUrl}`,
+          }),
+        });
+        // fetch only rejects on a network failure — a bad/rotated API key, a
+        // rate limit, or a malformed payload all resolve normally with an
+        // error STATUS, which the old code never checked. Checking resp.ok
+        // is what makes notified_at actually mean "the alert was sent",
+        // rather than "we tried once and moved on" — the latter permanently
+        // marked a failed alert as sent with no way to tell afterward. There
+        // is still no automated retry (see the RESEND_API_KEY branch above);
+        // this just stops the failure from being indistinguishable from
+        // success in the data.
+        if (resp.ok) {
+          await supabase.from("program_reviews").update({ notified_at: new Date().toISOString() }).eq("registration_id", registrationId);
+        } else {
+          const body = await resp.text().catch(() => "");
+          console.error(`[review-rate] low-score notification rejected by Resend (${resp.status}): ${body}`);
+        }
+      } catch (e) {
+        // Non-fatal — the score is already recorded; a failed alert email must
+        // not turn into a 500 that makes the family's tap look like it failed.
+        // notified_at is NOT set here either, for the same reason as above.
+        console.error("[review-rate] low-score notification failed:", e instanceof Error ? e.message : String(e));
+      }
     }
   }
 
@@ -177,51 +213,32 @@ serve(async (req: Request) => {
   if (!landingBase) {
     return textResponse("Thanks — your answer was recorded.");
   }
-  const dest = new URL(landingBase);
+  // review_landing_url has no CHECK constraint enforcing a valid absolute URL
+  // (free-text column) — a malformed value must degrade to the same plain
+  // thank-you the "unset" case gets, never an unhandled crash on an
+  // otherwise-valid, correctly-signed tap.
+  let dest: URL;
+  try {
+    dest = new URL(landingBase);
+  } catch {
+    console.error(`[review-rate] organizations.review_landing_url is not a valid URL: ${landingBase}`);
+    return textResponse("Thanks — your answer was recorded.");
+  }
   dest.searchParams.set("score", String(score));
   if (programName) dest.searchParams.set("p", programName);
   return Response.redirect(dest.toString(), 302);
 });
 
 // =====================================================================
-// HMAC token verification — same shape as marketing-unsubscribe/index.ts
+// HMAC token verification — same primitive as marketing-unsubscribe/index.ts
+// (see _shared/hmac.ts), message shape extended to bind the score.
 // =====================================================================
 
-async function verifyToken(registrationId: string, orgId: string, token: string): Promise<boolean> {
-  const expected = await computeToken(registrationId, orgId);
+async function verifyToken(registrationId: string, orgId: string, score: number, token: string): Promise<boolean> {
+  const expected = await computeToken(registrationId, orgId, score);
   return constantTimeEquals(expected, token);
 }
 
-async function computeToken(registrationId: string, orgId: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(SECRET),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${registrationId}:${orgId}`));
-  return base64UrlEncode(new Uint8Array(sig));
-}
-
-function base64UrlEncode(bytes: Uint8Array): string {
-  let bin = "";
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-function constantTimeEquals(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
-}
-
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;");
+async function computeToken(registrationId: string, orgId: string, score: number): Promise<string> {
+  return hmacBase64Url(SECRET, `${registrationId}:${orgId}:${score}`);
 }

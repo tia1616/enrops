@@ -212,13 +212,23 @@ export default function ScheduleReview({
   // program on a review link (the GA4 event and the thank-you page both need
   // it), so this one disables Approve rather than just flagging it. Empty
   // result when no touchpoint in this campaign even uses the token.
+  // null = not yet resolved (still loading, or no campaign/org to check yet).
+  // A failed RPC call is tracked SEPARATELY from "clean" (empty array) — both
+  // used to collapse to the same null/falsy state, which meant a network
+  // blip or Supabase hiccup silently UN-blocked Approve instead of blocking
+  // it (caught in /code-review: the one failure mode a fail-safe check must
+  // not have). Pending and failed both block below; only a completed, clean
+  // check (an array, even an empty one) allows Approve through.
   const [missingProgramRecipients, setMissingProgramRecipients] = useState(null);
+  const [missingProgramCheckFailed, setMissingProgramCheckFailed] = useState(false);
   const [missingProgramOpen, setMissingProgramOpen] = useState(false);
+  const campaignId = draft?.campaign_id;
+  const orgId = org?.id;
   useEffect(() => {
-    const campaignId = draft?.campaign_id;
-    const orgId = org?.id;
-    if (!campaignId || !orgId) { setMissingProgramRecipients(null); return; }
+    if (!campaignId || !orgId) { setMissingProgramRecipients(null); setMissingProgramCheckFailed(false); return; }
     let alive = true;
+    setMissingProgramRecipients(null);
+    setMissingProgramCheckFailed(false);
     (async () => {
       const { data, error } = await supabase.rpc("marketing_campaign_missing_program_name_preview", {
         p_campaign_id: campaignId,
@@ -228,14 +238,15 @@ export default function ScheduleReview({
       if (error) {
         // eslint-disable-next-line no-console
         console.error("[ScheduleReview] missing-program-name check failed:", error.message);
-        setMissingProgramRecipients(null);
+        setMissingProgramCheckFailed(true);
         return;
       }
       setMissingProgramRecipients(data ?? []);
     })();
     return () => { alive = false; };
-  }, [draft?.campaign_id, org?.id, touchpoints.map((t) => t.subject + t.body_html).join("|")]);
-  const blockedOnMissingProgram = (missingProgramRecipients?.length ?? 0) > 0;
+  }, [campaignId, orgId, touchpoints.map((t) => t.subject + t.body_html).join("|")]);
+  const missingProgramCheckPending = !!(campaignId && orgId) && missingProgramRecipients === null && !missingProgramCheckFailed;
+  const blockedOnMissingProgram = missingProgramCheckFailed || missingProgramCheckPending || (missingProgramRecipients?.length ?? 0) > 0;
 
   return (
     <div style={{ maxWidth: 820, margin: "0 auto", paddingBottom: 96 }}>
@@ -277,43 +288,56 @@ export default function ScheduleReview({
           background: "#FDECEA", border: "1px solid #E5A6A0", borderRadius: 12,
           padding: "10px 14px", marginBottom: 12, fontSize: 13, color: "#7A1F19",
         }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          {missingProgramCheckFailed ? (
             <div>
-              <strong style={{ fontWeight: 700 }}>
-                Approve is blocked — {missingProgramRecipients.length} recipient{missingProgramRecipients.length === 1 ? "" : "s"} would get a broken review link
-              </strong>
-              {" "}— this email links each star to a page using {"{{program_name_url}}"}, and these recipients have no program on file, so their link would read "...&p=" with nothing after it. Fix their program on the contact, or remove them from the list.
+              <strong style={{ fontWeight: 700 }}>Approve is blocked — couldn't check for broken review links.</strong>
+              {" "}The check that looks for recipients with no program on file failed to run. Refresh the page to try again; Approve stays off until it completes clean.
             </div>
-            <button
-              onClick={() => setMissingProgramOpen((v) => !v)}
-              style={{
-                background: "#fff", border: "1px solid #E5A6A0", color: "#7A1F19",
-                padding: "6px 12px", borderRadius: 6, cursor: "pointer",
-                fontSize: 12, fontFamily: "inherit", flexShrink: 0,
-              }}
-            >
-              {missingProgramOpen ? "Hide names" : "See who"}
-            </button>
-          </div>
-          {missingProgramOpen && (
-            <div style={{
-              marginTop: 10, border: "1px solid #E5A6A0", borderRadius: 6,
-              maxHeight: 200, overflowY: "auto", background: "#fff",
-            }}>
-              {missingProgramRecipients.slice(0, 100).map((r) => (
-                <div key={r.recipient_id} style={{
-                  padding: "6px 10px", borderBottom: "1px solid #F4D9D6", fontSize: 12.5, color: INK,
-                }}>
-                  <strong>{r.parent_name || "(no name on file)"}</strong>
-                  <span style={{ color: MUTED }}> · {r.email}</span>
+          ) : missingProgramCheckPending ? (
+            <div>
+              <strong style={{ fontWeight: 700 }}>Approve is blocked — checking for broken review links…</strong>
+            </div>
+          ) : (
+            <>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                <div>
+                  <strong style={{ fontWeight: 700 }}>
+                    Approve is blocked — {missingProgramRecipients.length} recipient{missingProgramRecipients.length === 1 ? "" : "s"} would get a broken review link
+                  </strong>
+                  {" "}— this email links each star to a page using {"{{program_name_url}}"}, and these recipients have no program on file, so their link would read "...&p=" with nothing after it. Fix their program on the contact, or remove them from the list.
                 </div>
-              ))}
-              {missingProgramRecipients.length > 100 && (
-                <div style={{ padding: "6px 10px", fontSize: 11, color: MUTED }}>
-                  Showing first 100 of {missingProgramRecipients.length}.
+                <button
+                  onClick={() => setMissingProgramOpen((v) => !v)}
+                  style={{
+                    background: "#fff", border: "1px solid #E5A6A0", color: "#7A1F19",
+                    padding: "6px 12px", borderRadius: 6, cursor: "pointer",
+                    fontSize: 12, fontFamily: "inherit", flexShrink: 0,
+                  }}
+                >
+                  {missingProgramOpen ? "Hide names" : "See who"}
+                </button>
+              </div>
+              {missingProgramOpen && (
+                <div style={{
+                  marginTop: 10, border: "1px solid #E5A6A0", borderRadius: 6,
+                  maxHeight: 200, overflowY: "auto", background: "#fff",
+                }}>
+                  {missingProgramRecipients.slice(0, 100).map((r) => (
+                    <div key={r.recipient_id} style={{
+                      padding: "6px 10px", borderBottom: "1px solid #F4D9D6", fontSize: 12.5, color: INK,
+                    }}>
+                      <strong>{r.parent_name || "(no name on file)"}</strong>
+                      <span style={{ color: MUTED }}> · {r.email}</span>
+                    </div>
+                  ))}
+                  {missingProgramRecipients.length > 100 && (
+                    <div style={{ padding: "6px 10px", fontSize: 11, color: MUTED }}>
+                      Showing first 100 of {missingProgramRecipients.length}.
+                    </div>
+                  )}
                 </div>
               )}
-            </div>
+            </>
           )}
         </div>
       )}
@@ -514,7 +538,7 @@ export default function ScheduleReview({
             <button
               onClick={onApprove}
               disabled={busy || touchpoints.length === 0 || blockedOnMissingProgram}
-              title={blockedOnMissingProgram ? "Blocked: some recipients would get a broken review link (see above)" : undefined}
+              title={blockedOnMissingProgram ? "Blocked — see the banner above for why" : undefined}
               style={{
                 background: busyAction === "approve"
                   ? "#9b87b9"  // softened purple while the approve write is in-flight

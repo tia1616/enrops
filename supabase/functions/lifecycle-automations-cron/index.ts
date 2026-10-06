@@ -75,6 +75,7 @@ import { rosterStudentIds, rosterChanged, shouldResendRoster } from "./rosterCha
 import { isOnRoster } from "../_shared/rosterOrder.ts";
 import { abandonedResumeUrl } from "./abandonedResumeUrl.ts";
 import { formatChildNameList } from "../_shared/childNameList.ts";
+import { hmacBase64Url } from "../_shared/hmac.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -3634,37 +3635,26 @@ async function hmacToken(email: string, orgId: string): Promise<string> {
 }
 
 // Five "how did we do" star links for ONE registration — review-rate verifies
-// the same HMAC over the same `${registrationId}:${orgId}` message (see its
-// index.ts). Empty strings (not thrown) when either the secret isn't
-// configured or there's no registration to score against — the contact
-// anchor of this same automation has no registration_id at all (see
-// resolveReviewRequestAudience), and a template that doesn't reference these
-// tokens is completely unaffected either way.
+// the same HMAC over the same `${registrationId}:${orgId}:${score}` message
+// (see its index.ts). A SEPARATE token per score, not one token shared across
+// all 5: the score is part of the signed message specifically so that editing
+// `score=` in a URL (or forwarding one star's link) can't submit a different,
+// still-"valid" rating for this registration — the signature only verifies
+// for the exact score it was minted for. Empty strings (not thrown) when
+// either the secret isn't configured or there's no registration to score
+// against — the contact anchor of this same automation has no registration_id
+// at all (see resolveReviewRequestAudience), and a template that doesn't
+// reference these tokens is completely unaffected either way.
 async function buildReviewRateUrls(registrationId: string | null, orgId: string): Promise<Record<1 | 2 | 3 | 4 | 5, string>> {
   const empty = { 1: "", 2: "", 3: "", 4: "", 5: "" } as Record<1 | 2 | 3 | 4 | 5, string>;
   if (!registrationId || !REVIEW_RATE_SECRET) return empty;
-  const token = await hmacBase64Url(REVIEW_RATE_SECRET, `${registrationId}:${orgId}`);
   const out = { ...empty };
   for (const score of [1, 2, 3, 4, 5] as const) {
+    const token = await hmacBase64Url(REVIEW_RATE_SECRET, `${registrationId}:${orgId}:${score}`);
     const params = new URLSearchParams({ r: registrationId, org: orgId, t: token, score: String(score) });
     out[score] = `${REVIEW_RATE_ENDPOINT}?${params.toString()}`;
   }
   return out;
-}
-
-async function hmacBase64Url(secret: string, message: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(secret),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(message));
-  const bytes = new Uint8Array(sig);
-  let bin = "";
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 // unsubscribeUrl is "" for informational sends (welcome/recaps/birthday) — the

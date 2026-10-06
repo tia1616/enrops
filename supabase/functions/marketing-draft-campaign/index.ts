@@ -45,6 +45,7 @@ import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supa
 import Anthropic from "npm:@anthropic-ai/sdk@0.96.0";
 import { loadOrgBrand } from "../_shared/orgBrand.ts";
 import { assertCommsFull } from "../_shared/entitlements.ts";
+import { APPROVED_MARKETING_TOKENS } from "../_shared/approvedMarketingTokens.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
@@ -1035,40 +1036,12 @@ function formatCurriculaForPrompt(matches: CurriculumMatch[]): string {
 
 // Approved merge tokens — must match docs/marketing-merge-tokens.md exactly.
 // The mechanical-check pass rejects drafts that use a {{token}} not in this set.
-const APPROVED_TOKENS = new Set([
-  // per-recipient
-  "first_name", "parent_name", "child_first_name", "child_last_name",
-  "school", "city", "zip", "geo_segment", "unsubscribe_url",
-  // Per-recipient program snapshot (plain text + URL-safe form for a query
-  // string). KEEP IN SYNC with marketing-touchpoint-send's APPROVED_TOKENS —
-  // added 2026-10-06 after both were missing there and a review-style send's
-  // "how did we do" star links all rendered with an empty &p=.
-  "program_name", "program_name_url",
-  // per-org
-  "org_name", "sender_name", "sender_email", "register_url", "register_button", "reply_to",
-  "logo_url", "closer", "phone", "website",
-  // per-program (computed from this recipient's school's programs)
-  "savings", "early_bird_price", "regular_price", "early_bird_deadline",
-  "first_session_date", "session_count", "day_of_week", "curriculum", "vip_price",
-  // The day registration closes for this recipient's program. Afterschool only
-  // (empty for camps). KEEP IN SYNC with marketing-touchpoint-send's APPROVED_TOKENS.
-  "registration_close_date",
-  // Per-program <ul> for this recipient's school, one row per program with its
-  // own day, start date, sessions and deadline. The afterschool sibling of
-  // camp_details, and the correct choice for a multi-program school.
-  "program_details",
-  // per-area camps (resolves to an HTML <ul> with each camp's name, venue, dates
-  // in THIS recipient's area). The camps-mode equivalent of the per-school
-  // program tokens for afterschool. Empty for afterschool campaigns.
-  "camp_details",
-  // per-campaign
-  "topic", "topics_list", "promo_code", "promo_amount",
-  // VIP/annual-pass block — resolves per recipient at send time. Empty when
-  // the recipient's school is in org.vip_offering.excluded_location_ids or
-  // when the org has no VIP offering enabled. Otherwise an HTML paragraph
-  // built from the org's label/price_cents/description.
-  "vip_block",
-]);
+// Shared with marketing-touchpoint-send — see _shared/approvedMarketingTokens.ts
+// for the full per-token documentation, and for why this used to be two
+// independently-hand-maintained copies and what that cost on 2026-10-01
+// (program_name/program_name_url shipped missing from the SEND side's copy
+// and silently rendered empty in a live campaign).
+const APPROVED_TOKENS = APPROVED_MARKETING_TOKENS;
 
 // Extracts inputs.what.intent_key (set by the Q1 intent-first cards as of
 // 2026-06-02). Returns null when the operator used the legacy/manual path —

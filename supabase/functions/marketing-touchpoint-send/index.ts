@@ -31,6 +31,8 @@ import { loadOrgBrand, formatFromAddress, renderSignatureBlock, type OrgBrand } 
 import { listUnsubscribeHeaders } from "../_shared/listUnsubscribe.ts";
 import { assertCommsFull } from "../_shared/entitlements.ts";
 import { formatChildNameList } from "../_shared/childNameList.ts";
+import { APPROVED_MARKETING_TOKENS } from "../_shared/approvedMarketingTokens.ts";
+import { hmacBase64Url } from "../_shared/hmac.ts";
 import {
   parseEmailAttachments,
   loadCommsAttachments,
@@ -136,61 +138,10 @@ const SEND_TIME_BUDGET_MS = 130_000;
 
 // Tokens Ennie's draft pass approved. Anything outside this set in the touchpoint
 // body is a bug from earlier in the pipeline; we replace with empty string but log.
-const APPROVED_TOKENS = new Set([
-  "first_name", "parent_name", "child_first_name", "child_last_name",
-  "school", "city", "zip", "geo_segment", "unsubscribe_url",
-  "org_name", "sender_name", "sender_email", "register_url", "register_button", "reply_to",
-  "logo_url", "closer", "phone", "website",
-  "savings", "early_bird_price", "regular_price", "early_bird_deadline",
-  "first_session_date", "session_count", "day_of_week", "curriculum", "vip_price",
-  // The day registration closes for THIS recipient's program:
-  // first_session_date - organizations.registration_close_days_before. Per
-  // recipient, so one campaign spanning schools that start on different days
-  // states the right deadline to each parent instead of the earliest one to
-  // everybody. Empty for camps (see the camps branch), when the program has no
-  // first_session_date, and when a school's picked programs do not share one
-  // close date — a deadline that is right for only some of the programs named
-  // in the same sentence is worse than no deadline at all.
-  "registration_close_date",
-  // Per-program list for THIS recipient's school: an HTML <ul>, one <li> per
-  // program, each carrying its OWN day, start date, session count and sign-up
-  // deadline. The afterschool sibling of {{camp_details}}.
-  //
-  // This is the honest answer for a multi-program school. The inline tokens
-  // above describe ONE program while {{curriculum}} names them all, so at a
-  // school running two classes on different dates they can only ever be right
-  // about one of them. A block per program is right about each, and because it
-  // renders as a whole <ul> or as nothing, it cannot leave the half-sentence an
-  // empty inline token leaves behind ("sign-ups close on .").
-  "program_details",
-  "topic", "topics_list", "promo_code", "promo_amount",
-  // VIP/annual-pass block: resolves to an HTML <p> built from org.vip_offering
-  // for recipients whose school offers it, and to an empty string for
-  // recipients whose school is in org.vip_offering.excluded_location_ids (or
-  // when the org has no offering enabled). This is the per-school suppression
-  // mechanism — same body_html, different rendered output per recipient.
-  "vip_block",
-  // Per-area camp list (camps mode): an HTML <ul> with each picked camp's name,
-  // venue, and date range in THIS recipient's area. Empty for afterschool
-  // campaigns. KEEP IN SYNC with marketing-draft-campaign's APPROVED_TOKENS.
-  "camp_details",
-  // Plain-text and URL-safe forms of the recipient's program_name snapshot —
-  // added 2026-10-06. Found missing while investigating the 2026-10-01 J2S
-  // "Summer 2026 review catch-up" send: its stored body_html uses BOTH of
-  // these in the how-did-we-do star links and the body copy
-  // ("How was {{child_first_name}}'s {{program_name}} this summer?"), but
-  // neither was ever an approved token — every occurrence silently rendered
-  // as "" for all 229 real recipients (replaceTokens drops an unrecognized
-  // token to empty, by design, so nothing errored). The body read "...'s
-  // this summer?" with a double-space hole, and EVERY star link's href ended
-  // "&p=" with nothing after it — a GA4 how_did_we_do event with no program,
-  // for the whole send. Two tokens, not one: {{program_name}} is prose and
-  // gets escapeHtml()'d like every other token; {{program_name_url}} is for
-  // an href query string and must be percent-encoded instead, or a curriculum
-  // name containing "&" (e.g. "Minecraft Makers: Coding & Game Design")
-  // truncates the query string at its own ampersand.
-  "program_name", "program_name_url",
-]);
+// Shared with marketing-draft-campaign — see _shared/approvedMarketingTokens.ts
+// for why this used to be two independently-hand-maintained copies and what
+// that cost on 2026-10-01.
+const APPROVED_TOKENS = APPROVED_MARKETING_TOKENS;
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -2042,18 +1993,10 @@ async function computeUnsubscribeUrl(email: string, orgId: string): Promise<stri
 }
 
 async function hmacToken(email: string, orgId: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(unsubscribeSecretRaw()),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${email}:${orgId}`));
-  const bytes = new Uint8Array(sig);
-  let bin = "";
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  // unsubscribeSecretRaw() is READ HERE, at call time — not cached — same
+  // reasoning as its own doc comment: a long-lived isolate must pick up a
+  // secret added after cold start on the very next request.
+  return hmacBase64Url(unsubscribeSecretRaw(), `${email}:${orgId}`);
 }
 
 // ---------------------------------------------------------------------------
