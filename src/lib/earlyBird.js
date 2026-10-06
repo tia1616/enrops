@@ -1,3 +1,5 @@
+import { isEarlyBirdActive } from "./pricing.js";
+
 // Early-bird eligibility, as the operator reads it.
 //
 // The RULE itself lives in SQL (early_bird_skip_reason, migration 20261006b) and
@@ -91,4 +93,62 @@ export function skipReasonLabel(code) {
 // reads as an answer.
 export function isReasonReversible(code) {
   return code === "opted_out";
+}
+
+// How the term's discount reads in a sentence: "$25 off" or "10% off".
+// Numeric columns arrive over PostgREST as strings ("25.0000000000000000"), so
+// this goes through Number() rather than printing what the API handed back.
+export function describeOffer(preview) {
+  const raw = preview?.discount_value;
+  // Number(null) is 0 and Number("") is 0, both finite -- so a Number.isFinite
+  // guard alone turns "this term has no single discount" into "$0 off". Reject
+  // the absent values before converting, not after.
+  if (raw == null || raw === "") return "";
+  const v = Number(raw);
+  if (!Number.isFinite(v)) return "";
+  return preview.discount_type === "percent"
+    ? `${v}% off`
+    : `${formatDollars(Math.round(v * 100))} off`;
+}
+
+// WHICH COLUMNS A SAVE WRITES. Takes what program_early_bird_preview answered
+// and the position of the form's switch; returns the columns to write, or NULL
+// meaning "don't touch this program's early-bird columns at all".
+//
+// NULL IS THE FAIL-SAFE DIRECTION and it is returned in three states, all of
+// them "we do not know enough to write a price":
+//   - the preview has not come back, or the lookup FAILED. A failed read must
+//     never wipe a discount families may already be registering under; an error
+//     that becomes `null` that becomes a cleared column is how money disappears.
+//   - no price has been typed yet, so nothing has been decided.
+//   - the term's eligible programs carry DIFFERENT discounts, so there is no
+//     single price this form could honestly write.
+// The row tells the operator which of those it is; this function's job is only
+// to make sure none of them writes anything.
+export function earlyBirdPatch(preview, enabled, today = new Date()) {
+  if (!preview) return null;             // still asking, or the lookup failed
+  if (preview.needs_price) return null;  // no price typed yet, nothing decided
+  if (preview.skip_reason) {
+    // Not allowed one. CLEAR any it is carrying -- this is what stops a class
+    // cancelled in November keeping its discount until the term ends -- but do
+    // NOT record an opt-out. The operator did not choose this, and recording it
+    // would keep the class out of the term discount even after it is
+    // un-cancelled, re-priced, or moved off the preschool tier.
+    return { early_bird_price_cents: null, early_bird_deadline: null };
+  }
+  // `== null`, never falsiness: an early bird of 0 cents is a real value.
+  if (preview.early_bird_cents == null) return null; // no offer, or no single one
+  // An offer whose deadline has passed is not one to join a class to. Checkout
+  // would ignore it anyway, so this is about not storing a price that is already
+  // untrue -- and about not having the term keep reporting a dead deal as its
+  // current one. Gated by the SAME function the family-facing price uses; `today`
+  // is injectable so the branch is testable without waiting for a date.
+  if (!isEarlyBirdActive(preview.deadline, today)) return null;
+  return enabled
+    ? {
+        early_bird_price_cents: preview.early_bird_cents,
+        early_bird_deadline: preview.deadline,
+        early_bird_opt_out: false,
+      }
+    : { early_bird_price_cents: null, early_bird_deadline: null, early_bird_opt_out: true };
 }

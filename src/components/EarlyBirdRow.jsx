@@ -17,7 +17,10 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase.js";
+import { isEarlyBirdActive } from "../lib/pricing.js";
 import {
+  earlyBirdPatch,
+  describeOffer,
   formatDeadlineShort,
   formatDollars,
   skipReasonSentence,
@@ -41,10 +44,29 @@ const GREEN_INK = "#166534";
 export function useEarlyBirdPreview({ orgId, term, priceCents, status, runsOwnRegistration, priceTier }) {
   // undefined = still asking. null = the lookup failed, which is NOT "no early
   // bird": a save must leave the stored value alone rather than act on a guess.
+  // { needs_price: true } = there is nothing to ask about yet.
   const [preview, setPreview] = useState(undefined);
+
+  // "" / null / undefined is a price NOT YET TYPED. Zero is a price: a free
+  // class. Collapsing the two sends 0 to the rule, which answers 'free' -- so a
+  // create form with an empty price box would tell the operator "this class is
+  // free, so there's nothing to take off" about a class whose price they are
+  // still deciding. The same wrong-by-a-falsy-value trap as grade K being 0.
+  const noPriceYet = priceCents == null || priceCents === "";
 
   useEffect(() => {
     if (!orgId || !term) { setPreview(undefined); return; }
+    if (noPriceYet) { setPreview({ needs_price: true }); return; }
+    // DROP THE OLD ANSWER THE MOMENT THE QUESTION CHANGES.
+    //
+    // Without this the hook holds the previous program's answer through the
+    // debounce, and a save inside that window writes it: change the price from
+    // $285 to $190, hit Save within 300ms, and the row is stored with $190 as the
+    // standard price and an early bird computed off $285. Clearing to undefined
+    // first makes earlyBirdPatch return null for that window, so a save that
+    // lands mid-flight writes nothing to the early-bird columns rather than
+    // writing a number that belongs to a price the operator just replaced.
+    setPreview(undefined);
     let cancelled = false;
     const t = setTimeout(async () => {
       const { data, error } = await supabase.rpc("program_early_bird_preview", {
@@ -53,7 +75,7 @@ export function useEarlyBirdPreview({ orgId, term, priceCents, status, runsOwnRe
         p_status: status ?? "open",
         p_runs_own_registration: !!runsOwnRegistration,
         p_price_tier: priceTier ?? "standard",
-        p_price_cents: priceCents == null || priceCents === "" ? 0 : Number(priceCents),
+        p_price_cents: Number(priceCents),
         p_opt_out: false,
       });
       if (cancelled) return;
@@ -61,60 +83,41 @@ export function useEarlyBirdPreview({ orgId, term, priceCents, status, runsOwnRe
       setPreview((Array.isArray(data) ? data[0] : data) ?? null);
     }, 300);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [orgId, term, priceCents, status, runsOwnRegistration, priceTier]);
+  }, [orgId, term, priceCents, noPriceYet, status, runsOwnRegistration, priceTier]);
 
   return preview;
 }
 
-// The columns a save should write, or null meaning "don't touch the early-bird
-// fields at all".
-//
-// Returning null is the fail-safe direction and it is used twice. A lookup that
-// failed must not wipe a discount a family is registering under, and a term whose
-// programs carry DIFFERENT discounts has no price this form could honestly write
-// -- in both cases the stored value is the best answer available, so it stays.
-// The operator is told which of those two it is by the row itself.
-export function earlyBirdPatch(preview, enabled) {
-  if (!preview) return null;                       // still asking, or lookup failed
-  if (preview.skip_reason) {
-    // Not allowed one. Clear any it is carrying -- this is what stops a cancelled
-    // class keeping its discount -- but do NOT record an opt-out: the operator
-    // did not choose this, and recording it would keep the class out of the term
-    // discount even after it is un-cancelled.
-    return { early_bird_price_cents: null, early_bird_deadline: null };
-  }
-  if (preview.early_bird_cents == null) return null; // no offer, or no single one
-  return enabled
-    ? {
-        early_bird_price_cents: preview.early_bird_cents,
-        early_bird_deadline: preview.deadline,
-        early_bird_opt_out: false,
-      }
-    : { early_bird_price_cents: null, early_bird_deadline: null, early_bird_opt_out: true };
-}
-
-// How the term's discount reads in a sentence: "$25 off" or "10% off".
-function describeOffer(preview) {
-  const v = Number(preview?.discount_value);
-  if (!Number.isFinite(v)) return "";
-  return preview.discount_type === "percent" ? `${v}% off` : `${formatDollars(Math.round(v * 100))} off`;
-}
+// earlyBirdPatch -- which columns a save writes -- lives in src/lib/earlyBird.js
+// and is re-exported here so the three forms keep importing it from one place.
+// It moved out of this file for one reason: it decides what gets written to a
+// money column, and a .jsx file cannot be covered by the plain-node test runner
+// that `npm test` uses. Logic that picks a price belongs where a test can reach it.
+export { earlyBirdPatch };
 
 export default function EarlyBirdRow({ preview, enabled, onChange, disabled, termLabel }) {
-  // Six states, six sentences. The one that is easy to skip is the fifth -- a
-  // term whose programs are on different deals -- and it is the state most in
-  // need of an explanation, because the switch is off through no choice of the
-  // operator's and nothing else on screen says why.
+  // Seven states, seven sentences, and two of them exist because the sentence
+  // that would otherwise be shown is FALSE rather than merely unhelpful:
+  // "no price typed yet" would read as "this class is free", and a term whose
+  // programs are on different deals would read as "this term has no early bird".
+  // Both are states where the switch is off through no choice of the operator's,
+  // and nothing else on screen says why.
   const term = termLabel || "this term";
   let body;
   let live = false;
 
   if (preview === undefined) {
-    body = <span style={{ color: MUTED }}>Checking this term's early bird…</span>;
+    body = <span style={{ color: MUTED }}>Checking {term}'s early bird…</span>;
   } else if (preview === null) {
     body = (
       <span style={{ color: "#991b1b" }}>
-        Couldn't check {term}'s early bird. Saving won't change this program's early-bird price.
+        Couldn't check {term}'s early bird. Saving will leave this class's early-bird price as it is.
+      </span>
+    );
+  } else if (preview.needs_price) {
+    body = (
+      <span style={{ color: MUTED }}>
+        Enter a price above and this will show what families pay if they sign up early.
       </span>
     );
   } else if (preview.skip_reason) {
@@ -136,6 +139,18 @@ export default function EarlyBirdRow({ preview, enabled, onChange, disabled, ter
       <span style={{ color: "#92400e" }}>
         {term}'s programs aren't all on the same early-bird deal, so there's no single price to
         put here. Set one in Money &gt; Discounts and every program gets it.
+      </span>
+    );
+  } else if (!isEarlyBirdActive(preview.deadline)) {
+    // An offer whose deadline has passed is still the term's offer -- the
+    // Discounts card needs to know about it to badge the term "Ended" -- but
+    // joining a class to it would promise a price families cannot get. The gate
+    // is the SAME function the family-facing price uses, not a second reading of
+    // what "expired" means.
+    body = (
+      <span style={{ color: "#92400e" }}>
+        {term}'s early bird ended {formatDeadlineShort(preview.deadline)}, so families are
+        paying the standard price. Set a later end date in Money &gt; Discounts to run it again.
       </span>
     );
   } else {

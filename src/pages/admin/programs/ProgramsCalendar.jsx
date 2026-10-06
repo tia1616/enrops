@@ -1953,6 +1953,25 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
   // this is a switch position, not a column. What it writes (two prices and the
   // opt-out flag) is worked out by earlyBirdPatch at save time.
   const [earlyBirdOn, setEarlyBirdOn] = useState(!program.early_bird_opt_out);
+  // A SAVE THE OPERATOR DID NOT AIM AT THE EARLY BIRD MUST NOT WRITE IT -- the
+  // same rule, for the same reason, as audienceTouched below.
+  //
+  // The preview is a snapshot of the TERM's offer taken when the panel opened,
+  // and nothing in this panel makes it refresh when that offer changes. So an
+  // operator who opens this panel, leaves it, and comes back after a colleague
+  // has run Apply with a new deal would, on saving an unrelated room edit, write
+  // the OLD deal back over the new one. The changed-fields filter below does not
+  // catch it: once the panel re-reads the row, the stale patch and the fresh row
+  // genuinely differ, which is exactly when the filter lets a write through.
+  // Ref alongside the state for the same reason audienceTouchedRef exists: the
+  // resync effect below must read it without listing it as a dependency.
+  const [earlyBirdTouched, setEarlyBirdTouched] = useState(false);
+  const earlyBirdTouchedRef = useRef(false);
+  function touchEarlyBird(v) {
+    setEarlyBirdOn(v);
+    setEarlyBirdTouched(true);
+    earlyBirdTouchedRef.current = true;
+  }
   const earlyBirdPreview = useEarlyBirdPreview({
     orgId: isLean ? null : panelOrg?.id,   // lean orgs have no term-wide early bird
     term: program.term,
@@ -2060,10 +2079,10 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
       return next;
     });
     if (!audienceTouchedRef.current) setPanelMode(audienceMode(program));
-    // The early-bird switch follows the row too. Without this, a term-wide Apply
-    // run in another tab would leave the switch showing the position it had when
-    // the panel opened, and the next save would write that stale position back.
-    setEarlyBirdOn(!program.early_bird_opt_out);
+    // The early-bird switch follows the row too -- unless the operator has moved
+    // it, in which case adopting the row would throw away the edit they are in the
+    // middle of making. Same shape, and same reason, as audienceTouchedRef above.
+    if (!earlyBirdTouchedRef.current) setEarlyBirdOn(!program.early_bird_opt_out);
   }, [program]);
   // SWITCHING THE TAB IS NOT AN EDIT. Only entering a VALUE is.
   //
@@ -2417,14 +2436,15 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
           : {}),
         price_cents: draft.price_cents === "" || draft.price_cents === null ? null : Number(draft.price_cents),
         ...(isLean ? {} : { price_tier: draft.price_tier || "standard" }),
-        // Spread, not assigned: earlyBirdPatch returns null for "leave the stored
-        // early bird alone", and the two cases where it does are the ones worth
-        // being careful about -- the lookup failed, or this term's programs carry
-        // different discounts so there is no single price to write. Writing nulls
-        // in either case would strip a discount families may already be
-        // registering under. The changed-fields filter below then drops anything
-        // that already matches the row, so an ordinary room edit writes nothing here.
-        ...(isLean ? {} : earlyBirdPatch(earlyBirdPreview, earlyBirdOn) ?? {}),
+        // Spread, not assigned, and only when the operator moved the switch.
+        // earlyBirdPatch ALSO returns null for "leave the stored early bird
+        // alone" -- the lookup failed, no price is typed, or this term's programs
+        // carry different discounts so there is no single price to write. Writing
+        // nulls in any of those would strip a discount families may already be
+        // registering under.
+        ...(isLean || !earlyBirdTouched
+          ? {}
+          : earlyBirdPatch(earlyBirdPreview, earlyBirdOn) ?? {}),
         program_location_id: draft.program_location_id || null,
         room: draft.room || null,
         runs_own_registration: !!draft.runs_own_registration,
@@ -2507,6 +2527,11 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
       function reconcileDraftToStored() {
         setAudienceTouched(false);
         audienceTouchedRef.current = false;
+        // The early-bird edit is SPENT once stored, for the same reason: leaving
+        // it "touched" would resend a snapshot of the term's offer on every later
+        // save, which is the stale write this flag exists to prevent.
+        setEarlyBirdTouched(false);
+        earlyBirdTouchedRef.current = false;
         setDraft((d) => ({
           ...d,
           curriculum: patch.curriculum ?? d.curriculum,
@@ -3074,7 +3099,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
           <EarlyBirdRow
             preview={earlyBirdPreview}
             enabled={earlyBirdOn}
-            onChange={setEarlyBirdOn}
+            onChange={touchEarlyBird}
             disabled={saving}
             termLabel={formatTermLabel(program.term)}
           />
