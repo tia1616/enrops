@@ -74,6 +74,8 @@ import { rosterStudentIds, rosterChanged, shouldResendRoster } from "./rosterCha
 // The membership rule itself, shared with the PDF the school receives.
 import { isOnRoster } from "../_shared/rosterOrder.ts";
 import { abandonedResumeUrl } from "./abandonedResumeUrl.ts";
+import { formatChildNameList } from "../_shared/childNameList.ts";
+import { hmacBase64Url } from "../_shared/hmac.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -87,6 +89,13 @@ const PUBLIC_SITE_URL = Deno.env.get("PUBLIC_SITE_URL") ?? "https://enrops.com";
 // render a broken unsubscribe link.
 const UNSUBSCRIBE_SECRET = Deno.env.get("MARKETING_UNSUBSCRIBE_SECRET") ?? "";
 const UNSUBSCRIBE_ENDPOINT = `${SUPABASE_URL}/functions/v1/marketing-unsubscribe`;
+// review_request's star links — see review-rate/index.ts, which verifies the
+// SAME secret over the SAME `${registrationId}:${orgId}` message. Phase 2 of
+// the J2S review flow (ops manual section 10): the star tap now records a
+// score against the registration before redirecting, instead of going
+// straight to the Squarespace landing page with no server-side record.
+const REVIEW_RATE_SECRET = Deno.env.get("REVIEW_RATE_SECRET") ?? "";
+const REVIEW_RATE_ENDPOINT = `${SUPABASE_URL}/functions/v1/review-rate`;
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -227,6 +236,25 @@ interface AudienceEntry {
   body_template?: string;
   no_school_dates_display?: string; // drives {{no_school_dates}} — the affected class day(s), formatted (e.g. "Monday, September 7")
   no_school_reason?: string;        // drives {{no_school_reason}} — always readable; falls back to "a no-school day"
+  // ── review_request only ──
+  // The registration this review ask is about — null for the contact anchor
+  // (no registration exists to score). Drives the Phase-2 {{review_rate_url_N}}
+  // tokens (see buildReviewRateUrls): a family with multiple matching
+  // registrations (siblings) still gets only one scoring link, same "first
+  // one wins" rule mergeChildNamesByEmail already applies to every other
+  // non-name field on a merged entry.
+  registration_id?: string | null;
+  // Filled in by resolveReviewRequestAudience AFTER dedup (buildReviewRateUrls
+  // is async; this type stays plain strings so buildTokens can stay sync).
+  // "" for the contact anchor (no registration_id) or when REVIEW_RATE_SECRET
+  // isn't configured — a template using these tokens then renders an empty
+  // href rather than throwing, same degrade-gracefully posture as every other
+  // optional token here.
+  review_rate_url_1?: string;
+  review_rate_url_2?: string;
+  review_rate_url_3?: string;
+  review_rate_url_4?: string;
+  review_rate_url_5?: string;
 }
 
 // Tailored instructor copy for no_school_day. Parents get the operator-editable
@@ -2643,7 +2671,7 @@ async function resolveReviewRequestAudience(
   const year = new Date().getUTCFullYear();
   const nextTermAvailable = await hasFutureProgramsForOrg(supabase, a.organization_id);
 
-  const regEntries: AudienceEntry[] = [];
+  let regEntries: AudienceEntry[] = [];
 
   // ── Registration anchor, afterschool: one per (parent, student, program).
   {
@@ -2673,6 +2701,7 @@ async function resolveReviewRequestAudience(
         programName: r.programs.curriculum ?? "",
         orgSlug: a.org.slug,
         nextTermAvailable,
+        registrationId: r.id,
       }));
     }
   }
@@ -2686,7 +2715,7 @@ async function resolveReviewRequestAudience(
     const { data, error } = await supabase
       .from("registrations")
       .select(`
-        parent_id,
+        id, parent_id,
         students!inner ( id, first_name ),
         parents!inner ( id, first_name, email ),
         camp_sessions!inner ( id, curriculum_name, starts_on, location_id, location_name, curriculum_id )
@@ -2723,6 +2752,7 @@ async function resolveReviewRequestAudience(
         programName: cs.curriculum_name ?? "",
         orgSlug: a.org.slug,
         nextTermAvailable,
+        registrationId: r.id,
       }));
     }
   }
@@ -2840,6 +2870,16 @@ async function resolveReviewRequestAudience(
   if (suppErr) throw suppErr;
   const suppressed = new Set(((supp ?? []) as Array<{ email: string }>).map((s) => (s.email || "").toLowerCase()));
 
+  // ── Merge siblings within the registration anchor BEFORE the email dedup
+  // below picks a winner. Same resolver rule as the marketing-campaign fix
+  // (get_campaign_recipients.resolved_child_first_names /
+  // _shared/childNameList.ts): a family with more than one confirmed
+  // registration in the window is not "one child, arbitrarily chosen" — it's
+  // every matching child, listed ("Ava and Liam"). Without this, a two-kid
+  // family's review ask named whichever child's registration query returned
+  // first, which is an accident of row order, not a decision anyone made.
+  regEntries = mergeChildNamesByEmail(regEntries);
+
   // ── Merge + dedup by email: one entry per family per run, registration
   // preferred over contact (processed first). context_key is email+year, so a
   // family is asked once per year regardless of which anchor or child surfaced
@@ -2855,7 +2895,43 @@ async function resolveReviewRequestAudience(
   };
   regEntries.forEach(take);
   contactEntries.forEach(take);
+
+  // Mint the 5 scoring links AFTER dedup, only for the entries that will
+  // actually be sent — not once per candidate registration, which for a
+  // family with several matching regs would sign tokens for siblings whose
+  // entry never survives the email dedup above.
+  for (const entry of out) {
+    const urls = await buildReviewRateUrls(entry.registration_id ?? null, a.organization_id);
+    entry.review_rate_url_1 = urls[1];
+    entry.review_rate_url_2 = urls[2];
+    entry.review_rate_url_3 = urls[3];
+    entry.review_rate_url_4 = urls[4];
+    entry.review_rate_url_5 = urls[5];
+  }
   return out;
+}
+
+// One entry per email, carrying every matching child's name joined into one
+// phrase. Other fields (program_name, etc.) come from whichever entry
+// appeared first for that email — same "first wins" rule the final
+// dedup-by-email loop already applies to everything else; only the NAME
+// stops being an arbitrary pick.
+function mergeChildNamesByEmail(entries: AudienceEntry[]): AudienceEntry[] {
+  const order: string[] = [];
+  const groups = new Map<string, AudienceEntry[]>();
+  for (const e of entries) {
+    const key = e.parent_email.toLowerCase();
+    if (!groups.has(key)) {
+      groups.set(key, []);
+      order.push(key);
+    }
+    groups.get(key)!.push(e);
+  }
+  return order.map((key) => {
+    const group = groups.get(key)!;
+    const joined = formatChildNameList(group.map((e) => e.child_first_name));
+    return { ...group[0], child_first_name: joined || group[0].child_first_name };
+  });
 }
 
 // Build a review-request AudienceEntry with the program-specific blocks empty
@@ -2869,6 +2945,7 @@ function makeReviewEntry(p: {
   programName: string;
   orgSlug: string;
   nextTermAvailable: boolean;
+  registrationId?: string | null;
 }): AudienceEntry {
   return {
     // Email+year → one review ask per family per calendar year, whichever anchor
@@ -2892,6 +2969,7 @@ function makeReviewEntry(p: {
     session_dates_raw: [],
     register_url: `${PUBLIC_SITE_URL}/${p.orgSlug}/register`,
     next_term_available: p.nextTermAvailable,
+    registration_id: p.registrationId ?? null,
   };
 }
 
@@ -3325,6 +3403,13 @@ function buildTokens(entry: AudienceEntry, brand: OrgBrand): Record<string, stri
     // so including them here is harmless for existing automations.
     no_school_dates: entry.no_school_dates_display ?? "",
     no_school_reason: entry.no_school_reason?.trim() || "a no-school day",
+    // review_request's star links (Phase 2, ops manual section 10) — "" for
+    // every other template, same as the no_school_day tokens above.
+    review_rate_url_1: entry.review_rate_url_1 ?? "",
+    review_rate_url_2: entry.review_rate_url_2 ?? "",
+    review_rate_url_3: entry.review_rate_url_3 ?? "",
+    review_rate_url_4: entry.review_rate_url_4 ?? "",
+    review_rate_url_5: entry.review_rate_url_5 ?? "",
   };
 }
 
@@ -3546,18 +3631,30 @@ async function computeUnsubscribeUrl(email: string, orgId: string): Promise<stri
 }
 
 async function hmacToken(email: string, orgId: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(UNSUBSCRIBE_SECRET),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${email}:${orgId}`));
-  const bytes = new Uint8Array(sig);
-  let bin = "";
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return hmacBase64Url(UNSUBSCRIBE_SECRET, `${email}:${orgId}`);
+}
+
+// Five "how did we do" star links for ONE registration — review-rate verifies
+// the same HMAC over the same `${registrationId}:${orgId}:${score}` message
+// (see its index.ts). A SEPARATE token per score, not one token shared across
+// all 5: the score is part of the signed message specifically so that editing
+// `score=` in a URL (or forwarding one star's link) can't submit a different,
+// still-"valid" rating for this registration — the signature only verifies
+// for the exact score it was minted for. Empty strings (not thrown) when
+// either the secret isn't configured or there's no registration to score
+// against — the contact anchor of this same automation has no registration_id
+// at all (see resolveReviewRequestAudience), and a template that doesn't
+// reference these tokens is completely unaffected either way.
+async function buildReviewRateUrls(registrationId: string | null, orgId: string): Promise<Record<1 | 2 | 3 | 4 | 5, string>> {
+  const empty = { 1: "", 2: "", 3: "", 4: "", 5: "" } as Record<1 | 2 | 3 | 4 | 5, string>;
+  if (!registrationId || !REVIEW_RATE_SECRET) return empty;
+  const out = { ...empty };
+  for (const score of [1, 2, 3, 4, 5] as const) {
+    const token = await hmacBase64Url(REVIEW_RATE_SECRET, `${registrationId}:${orgId}:${score}`);
+    const params = new URLSearchParams({ r: registrationId, org: orgId, t: token, score: String(score) });
+    out[score] = `${REVIEW_RATE_ENDPOINT}?${params.toString()}`;
+  }
+  return out;
 }
 
 // unsubscribeUrl is "" for informational sends (welcome/recaps/birthday) — the

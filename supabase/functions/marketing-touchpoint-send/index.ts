@@ -30,6 +30,9 @@ import { resolveFeeConfig, loadPlatformFeeDefaults } from "../_shared/feeConfig.
 import { loadOrgBrand, formatFromAddress, renderSignatureBlock, type OrgBrand } from "../_shared/orgBrand.ts";
 import { listUnsubscribeHeaders } from "../_shared/listUnsubscribe.ts";
 import { assertCommsFull } from "../_shared/entitlements.ts";
+import { formatChildNameList } from "../_shared/childNameList.ts";
+import { APPROVED_MARKETING_TOKENS } from "../_shared/approvedMarketingTokens.ts";
+import { hmacBase64Url } from "../_shared/hmac.ts";
 import {
   parseEmailAttachments,
   loadCommsAttachments,
@@ -135,45 +138,10 @@ const SEND_TIME_BUDGET_MS = 130_000;
 
 // Tokens Ennie's draft pass approved. Anything outside this set in the touchpoint
 // body is a bug from earlier in the pipeline; we replace with empty string but log.
-const APPROVED_TOKENS = new Set([
-  "first_name", "parent_name", "child_first_name", "child_last_name",
-  "school", "city", "zip", "geo_segment", "unsubscribe_url",
-  "org_name", "sender_name", "sender_email", "register_url", "register_button", "reply_to",
-  "logo_url", "closer", "phone", "website",
-  "savings", "early_bird_price", "regular_price", "early_bird_deadline",
-  "first_session_date", "session_count", "day_of_week", "curriculum", "vip_price",
-  // The day registration closes for THIS recipient's program:
-  // first_session_date - organizations.registration_close_days_before. Per
-  // recipient, so one campaign spanning schools that start on different days
-  // states the right deadline to each parent instead of the earliest one to
-  // everybody. Empty for camps (see the camps branch), when the program has no
-  // first_session_date, and when a school's picked programs do not share one
-  // close date — a deadline that is right for only some of the programs named
-  // in the same sentence is worse than no deadline at all.
-  "registration_close_date",
-  // Per-program list for THIS recipient's school: an HTML <ul>, one <li> per
-  // program, each carrying its OWN day, start date, session count and sign-up
-  // deadline. The afterschool sibling of {{camp_details}}.
-  //
-  // This is the honest answer for a multi-program school. The inline tokens
-  // above describe ONE program while {{curriculum}} names them all, so at a
-  // school running two classes on different dates they can only ever be right
-  // about one of them. A block per program is right about each, and because it
-  // renders as a whole <ul> or as nothing, it cannot leave the half-sentence an
-  // empty inline token leaves behind ("sign-ups close on .").
-  "program_details",
-  "topic", "topics_list", "promo_code", "promo_amount",
-  // VIP/annual-pass block: resolves to an HTML <p> built from org.vip_offering
-  // for recipients whose school offers it, and to an empty string for
-  // recipients whose school is in org.vip_offering.excluded_location_ids (or
-  // when the org has no offering enabled). This is the per-school suppression
-  // mechanism — same body_html, different rendered output per recipient.
-  "vip_block",
-  // Per-area camp list (camps mode): an HTML <ul> with each picked camp's name,
-  // venue, and date range in THIS recipient's area. Empty for afterschool
-  // campaigns. KEEP IN SYNC with marketing-draft-campaign's APPROVED_TOKENS.
-  "camp_details",
-]);
+// Shared with marketing-draft-campaign — see _shared/approvedMarketingTokens.ts
+// for why this used to be two independently-hand-maintained copies and what
+// that cost on 2026-10-01.
+const APPROVED_TOKENS = APPROVED_MARKETING_TOKENS;
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -228,10 +196,25 @@ type Recipient = {
   child_first_name: string | null;
   child_last_name: string | null;
   school_name: string | null;
+  // Per-recipient program snapshot — set by auto_add_registrant_to_marketing_list
+  // or written deliberately for a retroactive campaign (see
+  // 20261006d_campaign_child_name_resolver.sql). Drives {{program_name}} /
+  // {{program_name_url}}. Absent on the test-mode admin-recipient select (an
+  // _internal_admin test row has no program), so a test of a review-style
+  // touchpoint renders those tokens empty — expected, not a bug.
+  program_name: string | null;
   city: string | null;
   zip: string | null;
   geo_segment: string | null;
   segments: string[] | null;
+  // get_campaign_recipients() only (absent on the test-mode admin-recipient
+  // select, which has no registration to resolve against). The real child(ren)
+  // on a registration scoped to this campaign's program/camp picks, or to the
+  // recipient's program_name snapshot — see 20261006d_campaign_child_name_resolver.sql.
+  // null = "couldn't resolve, fall back to the denormalized child_first_name
+  // column"; this is NEVER itself an empty array (the SQL side returns null,
+  // not {}, when nothing matched).
+  resolved_child_first_names?: string[] | null;
 };
 
 type VipOffering = {
@@ -497,7 +480,7 @@ serve(async (req: Request) => {
     }
     const { data: adminRow, error: aErr } = await supabase
       .from("marketing_recipients")
-      .select("id, email, parent_name, child_first_name, child_last_name, school_name, city, zip, geo_segment, segments")
+      .select("id, email, parent_name, child_first_name, child_last_name, school_name, program_name, city, zip, geo_segment, segments")
       .eq("id", adminRecipientId)
       .single<Recipient>();
     if (aErr || !adminRow) return json({ error: `admin recipient lookup failed: ${aErr?.message ?? "unknown"}` }, 500);
@@ -1262,9 +1245,23 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
   // back to empty, so a family with no child name on file received the sentence
   // with a gap in it. One of Jeff's 127 contacts is in that state today.
   // Jessica's wording, 2026-09-07: "your child".
+  //
+  // PREFER THE RESOLVED REGISTRATION OVER THE DENORMALIZED FIELD. r.child_first_name
+  // is ONE value per contact, set once at a family's first registration and never
+  // corrected for a later one — wrong for any multi-child family once the campaign
+  // is scoped to a specific program/term (the 2026-10-01 J2S "Summer 2026 review
+  // catch-up" send: 76 blank + 2 stale-placeholder of 229, see
+  // project_enrops_su26_review_campaign). resolved_child_first_names comes from
+  // get_campaign_recipients() reading the ACTUAL confirmed registration(s) that
+  // match this campaign's scope; multiple siblings are listed ("Ava and Liam")
+  // rather than one being picked arbitrarily. null (not just absent — see the
+  // Recipient type) means "couldn't resolve", so the old field is still the
+  // right fallback for a plain master-list send or a contact with no registration
+  // at all (e.g. the squarespace_summer import — see the same memory).
+  const resolvedChildName = formatChildNameList(r.resolved_child_first_names ?? []);
   tokens.set(
     "child_first_name",
-    r.child_first_name?.trim() || (isTestSend && isInternalAdmin ? SAMPLE_CHILD_FIRST : "your child"),
+    resolvedChildName || r.child_first_name?.trim() || (isTestSend && isInternalAdmin ? SAMPLE_CHILD_FIRST : "your child"),
   );
   // Last name has no safe generic ("your child Smith" reads wrong), so a real
   // send with no last name still resolves to empty. Seeded for the test only for
@@ -1275,6 +1272,19 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
     r.child_last_name?.trim() || (isTestSend && isInternalAdmin ? SAMPLE_CHILD_LAST : ""),
   );
   tokens.set("school", r.school_name?.trim() || adminSchoolFallback || "your school");
+  // {{program_name}} / {{program_name_url}} — see APPROVED_TOKENS above for the
+  // 2026-10-01 bug this closes (every occurrence of both rendered empty; the
+  // star links in the "how did we do" review email all read "...&p=" with
+  // nothing after it). No generic fallback text here, deliberately: unlike
+  // {{child_first_name}}'s "your child", there is no honest placeholder for a
+  // program name — "program_name_url" feeding an empty string into the href
+  // is the same failure this fix exists to close, so leaving it blank when
+  // r.program_name is unset is the correct behavior for THIS token; the new
+  // pre-send check (ScheduleReview) is what catches that case before a send,
+  // not a fallback string here.
+  const programNameRaw = r.program_name?.trim() || "";
+  tokens.set("program_name", programNameRaw);
+  tokens.set("program_name_url", programNameRaw ? encodeURIComponent(programNameRaw) : "");
   tokens.set("city", r.city?.trim() || "");
   tokens.set("zip", r.zip?.trim() || "");
   tokens.set("geo_segment", r.geo_segment?.trim() || "");
@@ -1983,18 +1993,10 @@ async function computeUnsubscribeUrl(email: string, orgId: string): Promise<stri
 }
 
 async function hmacToken(email: string, orgId: string): Promise<string> {
-  const key = await crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(unsubscribeSecretRaw()),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign"],
-  );
-  const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(`${email}:${orgId}`));
-  const bytes = new Uint8Array(sig);
-  let bin = "";
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  // unsubscribeSecretRaw() is READ HERE, at call time — not cached — same
+  // reasoning as its own doc comment: a long-lived isolate must pick up a
+  // secret added after cold start on the very next request.
+  return hmacBase64Url(unsubscribeSecretRaw(), `${email}:${orgId}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -2162,6 +2164,12 @@ async function renderPreview(
     child_first_name: SAMPLE_CHILD_FIRST,
     child_last_name: SAMPLE_CHILD_LAST,
     school_name: loc.name,
+    // {{program_name}}/{{program_name_url}} preview value — the SAME program
+    // {{curriculum}} already resolves to at this location below, so a review-
+    // style touchpoint's star links preview with a real-looking program
+    // instead of rendering blank (which would look like the bug this was
+    // added to fix, not a preview artifact).
+    program_name: programAtLocation?.curriculum ?? null,
     city: null,
     zip: null,
     geo_segment: (loc as { district?: string | null }).district ?? null,

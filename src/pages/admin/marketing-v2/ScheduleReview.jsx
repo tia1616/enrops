@@ -172,6 +172,82 @@ export default function ScheduleReview({
   const operatorNotes = draft?.schedule?.notes_to_operator?.trim();
   const zeroRecipients = draft?.warning === "no_recipients_matched" || recipients.count === 0;
 
+  // Pre-send check: who will render {{child_first_name}} as the generic
+  // "your child" fallback if this sends right now. Built after the SU26
+  // "Summer 2026 review catch-up" send quoted "your child's" for 76 of 229
+  // families (and a stale placeholder for 2 more) with nothing surfacing it
+  // before Send — see project_enrops_su26_review_campaign. Shown as soon as
+  // the campaign + recipients are known, same timing as the zero-recipients
+  // warning above; not a hard gate on Approve (the fallback is sometimes the
+  // honest answer — a contact with no Enrops registration at all has no
+  // child to resolve).
+  const [fallbackRecipients, setFallbackRecipients] = useState(null); // null = loading/unknown
+  const [fallbackOpen, setFallbackOpen] = useState(false);
+  useEffect(() => {
+    const campaignId = draft?.campaign_id;
+    const orgId = org?.id;
+    if (!campaignId || !orgId) { setFallbackRecipients(null); return; }
+    let alive = true;
+    (async () => {
+      const { data, error } = await supabase.rpc("marketing_campaign_child_name_fallback_preview", {
+        p_campaign_id: campaignId,
+        p_organization_id: orgId,
+      });
+      if (!alive) return;
+      if (error) {
+        // eslint-disable-next-line no-console
+        console.error("[ScheduleReview] child-name fallback check failed:", error.message);
+        setFallbackRecipients(null);
+        return;
+      }
+      setFallbackRecipients(data ?? []);
+    })();
+    return () => { alive = false; };
+  }, [draft?.campaign_id, org?.id]);
+
+  // Hard block, not a warning: the SAME send also shipped 229 "how did we do"
+  // star links reading "...&p=" with nothing after it — {{program_name_url}}
+  // was never a resolved token, so it rendered empty for every recipient.
+  // Unlike a missing child name, there's no honest fallback for a missing
+  // program on a review link (the GA4 event and the thank-you page both need
+  // it), so this one disables Approve rather than just flagging it. Empty
+  // result when no touchpoint in this campaign even uses the token.
+  // null = not yet resolved (still loading, or no campaign/org to check yet).
+  // A failed RPC call is tracked SEPARATELY from "clean" (empty array) — both
+  // used to collapse to the same null/falsy state, which meant a network
+  // blip or Supabase hiccup silently UN-blocked Approve instead of blocking
+  // it (caught in /code-review: the one failure mode a fail-safe check must
+  // not have). Pending and failed both block below; only a completed, clean
+  // check (an array, even an empty one) allows Approve through.
+  const [missingProgramRecipients, setMissingProgramRecipients] = useState(null);
+  const [missingProgramCheckFailed, setMissingProgramCheckFailed] = useState(false);
+  const [missingProgramOpen, setMissingProgramOpen] = useState(false);
+  const campaignId = draft?.campaign_id;
+  const orgId = org?.id;
+  useEffect(() => {
+    if (!campaignId || !orgId) { setMissingProgramRecipients(null); setMissingProgramCheckFailed(false); return; }
+    let alive = true;
+    setMissingProgramRecipients(null);
+    setMissingProgramCheckFailed(false);
+    (async () => {
+      const { data, error } = await supabase.rpc("marketing_campaign_missing_program_name_preview", {
+        p_campaign_id: campaignId,
+        p_organization_id: orgId,
+      });
+      if (!alive) return;
+      if (error) {
+        // eslint-disable-next-line no-console
+        console.error("[ScheduleReview] missing-program-name check failed:", error.message);
+        setMissingProgramCheckFailed(true);
+        return;
+      }
+      setMissingProgramRecipients(data ?? []);
+    })();
+    return () => { alive = false; };
+  }, [campaignId, orgId, touchpoints.map((t) => t.subject + t.body_html).join("|")]);
+  const missingProgramCheckPending = !!(campaignId && orgId) && missingProgramRecipients === null && !missingProgramCheckFailed;
+  const blockedOnMissingProgram = missingProgramCheckFailed || missingProgramCheckPending || (missingProgramRecipients?.length ?? 0) > 0;
+
   return (
     <div style={{ maxWidth: 820, margin: "0 auto", paddingBottom: 96 }}>
       <button
@@ -204,6 +280,111 @@ export default function ScheduleReview({
           padding: "10px 14px", marginBottom: 12, fontSize: 13, color: "#7A1F19",
         }}>
           <strong style={{ fontWeight: 700 }}>No recipients matched.</strong> Ennie drafted the schedule, but no parents fit this filter yet. Go back and widen the audience, or save as a draft for later.
+        </div>
+      )}
+
+      {blockedOnMissingProgram && (
+        <div style={{
+          background: "#FDECEA", border: "1px solid #E5A6A0", borderRadius: 12,
+          padding: "10px 14px", marginBottom: 12, fontSize: 13, color: "#7A1F19",
+        }}>
+          {missingProgramCheckFailed ? (
+            <div>
+              <strong style={{ fontWeight: 700 }}>Approve is blocked — couldn't check for broken review links.</strong>
+              {" "}The check that looks for recipients with no program on file failed to run. Refresh the page to try again; Approve stays off until it completes clean.
+            </div>
+          ) : missingProgramCheckPending ? (
+            <div>
+              <strong style={{ fontWeight: 700 }}>Approve is blocked — checking for broken review links…</strong>
+            </div>
+          ) : (
+            <>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                <div>
+                  <strong style={{ fontWeight: 700 }}>
+                    Approve is blocked — {missingProgramRecipients.length} recipient{missingProgramRecipients.length === 1 ? "" : "s"} would get a broken review link
+                  </strong>
+                  {" "}— this email links each star to a page using {"{{program_name_url}}"}, and these recipients have no program on file, so their link would read "...&p=" with nothing after it. Fix their program on the contact, or remove them from the list.
+                </div>
+                <button
+                  onClick={() => setMissingProgramOpen((v) => !v)}
+                  style={{
+                    background: "#fff", border: "1px solid #E5A6A0", color: "#7A1F19",
+                    padding: "6px 12px", borderRadius: 6, cursor: "pointer",
+                    fontSize: 12, fontFamily: "inherit", flexShrink: 0,
+                  }}
+                >
+                  {missingProgramOpen ? "Hide names" : "See who"}
+                </button>
+              </div>
+              {missingProgramOpen && (
+                <div style={{
+                  marginTop: 10, border: "1px solid #E5A6A0", borderRadius: 6,
+                  maxHeight: 200, overflowY: "auto", background: "#fff",
+                }}>
+                  {missingProgramRecipients.slice(0, 100).map((r) => (
+                    <div key={r.recipient_id} style={{
+                      padding: "6px 10px", borderBottom: "1px solid #F4D9D6", fontSize: 12.5, color: INK,
+                    }}>
+                      <strong>{r.parent_name || "(no name on file)"}</strong>
+                      <span style={{ color: MUTED }}> · {r.email}</span>
+                    </div>
+                  ))}
+                  {missingProgramRecipients.length > 100 && (
+                    <div style={{ padding: "6px 10px", fontSize: 11, color: MUTED }}>
+                      Showing first 100 of {missingProgramRecipients.length}.
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+
+      {fallbackRecipients != null && fallbackRecipients.length > 0 && (
+        <div style={{
+          background: "#FFF8E1", border: "1px solid #E6C77A", borderRadius: 12,
+          padding: "10px 14px", marginBottom: 12, fontSize: 13, color: "#5C4A1C",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+            <div>
+              <strong style={{ fontWeight: 700 }}>
+                {fallbackRecipients.length} of {recipients.count} recipient{fallbackRecipients.length === 1 ? "" : "s"} will read "your child" instead of a name
+              </strong>
+              {" "}— no child on file for this program/term that {"{{child_first_name}}"} can resolve.
+            </div>
+            <button
+              onClick={() => setFallbackOpen((v) => !v)}
+              style={{
+                background: "#fff", border: "1px solid #E6C77A", color: "#5C4A1C",
+                padding: "6px 12px", borderRadius: 6, cursor: "pointer",
+                fontSize: 12, fontFamily: "inherit", flexShrink: 0,
+              }}
+            >
+              {fallbackOpen ? "Hide names" : "See who"}
+            </button>
+          </div>
+          {fallbackOpen && (
+            <div style={{
+              marginTop: 10, border: "1px solid #E6C77A", borderRadius: 6,
+              maxHeight: 200, overflowY: "auto", background: "#fff",
+            }}>
+              {fallbackRecipients.slice(0, 100).map((r) => (
+                <div key={r.recipient_id} style={{
+                  padding: "6px 10px", borderBottom: "1px solid #F0E6C8", fontSize: 12.5, color: INK,
+                }}>
+                  <strong>{r.parent_name || "(no name on file)"}</strong>
+                  <span style={{ color: MUTED }}> · {r.email}</span>
+                </div>
+              ))}
+              {fallbackRecipients.length > 100 && (
+                <div style={{ padding: "6px 10px", fontSize: 11, color: MUTED }}>
+                  Showing first 100 of {fallbackRecipients.length}.
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -356,14 +537,15 @@ export default function ScheduleReview({
           {canApprove && (
             <button
               onClick={onApprove}
-              disabled={busy || touchpoints.length === 0}
+              disabled={busy || touchpoints.length === 0 || blockedOnMissingProgram}
+              title={blockedOnMissingProgram ? "Blocked — see the banner above for why" : undefined}
               style={{
                 background: busyAction === "approve"
                   ? "#9b87b9"  // softened purple while the approve write is in-flight
-                  : (busy || touchpoints.length === 0 ? "#cfcfcf" : PURPLE),
+                  : (busy || touchpoints.length === 0 || blockedOnMissingProgram ? "#cfcfcf" : PURPLE),
                 color: "#fff", border: "none",
                 padding: "10px 16px", borderRadius: 6,
-                cursor: busy || touchpoints.length === 0 ? "wait" : "pointer",
+                cursor: busy ? "wait" : (touchpoints.length === 0 || blockedOnMissingProgram ? "not-allowed" : "pointer"),
                 fontSize: 14, fontWeight: 600, fontFamily: "inherit",
                 transition: "background 0.15s ease",
                 opacity: busy && busyAction !== "approve" ? 0.5 : 1,
