@@ -694,7 +694,9 @@ export default function QuickProgramBuilder() {
   const earlyBirdPreview = useEarlyBirdPreview({
     orgId: isLean ? null : org?.id,
     term: effectiveTerm,
-    priceCents: priceValid ? priceCents : 0,
+    // null, not 0, while the box is empty or half-typed: 0 IS a price (a free
+    // class) and the rule would answer 'free' about a class still being priced.
+    priceCents: priceValid ? priceCents : null,
     // Saving as a draft is not a reason to withhold the early bird, so the rule
     // is asked about the publishable state.
     status: "open",

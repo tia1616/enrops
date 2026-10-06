@@ -225,9 +225,10 @@ begin
   return query
   with eb_rows as (
     select
-      p.early_bird_deadline as dl,
-      p.price_cents - p.early_bird_price_cents as off_cents,
-      round((p.price_cents - p.early_bird_price_cents)::numeric * 100 / p.price_cents, 2) as off_pct
+      p.early_bird_deadline                      as dl,
+      p.price_cents                              as price,
+      p.early_bird_price_cents                   as eb,
+      p.price_cents - p.early_bird_price_cents   as off_cents
     from programs p
     where p.organization_id = p_org
       and p.term = p_term
@@ -240,26 +241,44 @@ begin
                                  p.price_cents, p.early_bird_opt_out, null) is null
   ),
   agg as (
-    select
-      count(*)::int            as n,
-      count(distinct dl)       as n_dl,
-      count(distinct off_cents) as n_fixed,
-      count(distinct off_pct)  as n_pct,
-      max(dl)                  as dl,
-      max(off_cents)           as off_cents,
-      max(off_pct)             as off_pct
+    select count(*)::int as n, count(distinct dl) as n_dl,
+           count(distinct off_cents) as n_fixed,
+           max(dl) as dl, max(off_cents) as off_cents
     from eb_rows
+  ),
+  -- A PERCENT CANNOT BE RECOVERED BY DIVISION. Each early-bird price was already
+  -- rounded to the cent, so dividing the difference back out gives a slightly
+  -- different percentage per program: 10% off $19.99 recovers as 10.01 and 10%
+  -- off $25.00 as 10.00. Counting those distinct values reported a term that had
+  -- been discounted perfectly uniformly as "varies" -- which blanked the operator's
+  -- discount boxes right after a successful Apply, and left every program form
+  -- refusing to show a price.
+  --
+  -- So: don't recover it, TEST it. Take each program's percentage as a candidate
+  -- and keep one that REPRODUCES every program's stored price exactly, through
+  -- the same expression apply_term_early_bird writes with. A candidate that
+  -- reproduces all of them IS the term's discount, whatever the rounding did.
+  fitted as (
+    select c.pct
+    from (select distinct round(r.off_cents::numeric * 100 / r.price, 2) as pct from eb_rows r) c
+    where not exists (
+      select 1 from eb_rows r
+      where round(r.price * (1 - c.pct / 100.0))::int is distinct from r.eb
+    )
+    order by c.pct
+    limit 1
   )
   select
     case when a.n > 0 and a.n_dl = 1 then a.dl end,
     -- A single dollar amount is the plainer description, so it wins when both fit
     -- (they only both fit when every program in the term costs the same).
     case when a.n > 0 and a.n_dl = 1 and a.n_fixed = 1 then 'fixed'
-         when a.n > 0 and a.n_dl = 1 and a.n_pct   = 1 then 'percent' end,
+         when a.n > 0 and a.n_dl = 1 and f.pct is not null then 'percent' end,
     case when a.n > 0 and a.n_dl = 1 and a.n_fixed = 1 then (a.off_cents / 100.0)::numeric
-         when a.n > 0 and a.n_dl = 1 and a.n_pct   = 1 then a.off_pct end,
+         when a.n > 0 and a.n_dl = 1 and f.pct is not null then f.pct end,
     a.n
-  from agg a;
+  from agg a
+  left join fitted f on true;
 end;
 $$;
 

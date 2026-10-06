@@ -666,6 +666,12 @@ function EarlyBirdTermCard({ term, progs, offer, onRun }) {
   useEffect(() => {
     if (!canApply) { setPreview(undefined); return; }
     if (type === "percent" && Number(value) > 100) { setPreview(undefined); return; }
+    // Drop the previous answer the moment the question changes, so the button
+    // cannot keep showing a count for a discount the operator has already edited.
+    // Changing $20 to $30 can move a $25 class from "gets it" to "the discount is
+    // bigger than the price", and "Apply to 28" in the half-second before the new
+    // dry run lands is a promise about a different discount.
+    setPreview(undefined);
     let cancelled = false;
     const t = setTimeout(async () => {
       const rows = await onRun(term, type, value, deadline, { dryRun: true });
@@ -753,10 +759,18 @@ function EarlyBirdTermCard({ term, progs, offer, onRun }) {
           </div>
         </div>
         {/* The count is the DRY RUN's, never progs.length: it has to be the number
-            this Apply will actually change. Until the dry run answers, the button
-            says "Apply" rather than a number it would have to take back. */}
-        <button type="button" onClick={apply} disabled={busy || !canApply} style={primaryBtn(busy || !canApply)}>
-          {busy ? "Applying…" : applied ? `Apply to ${applied.length}` : "Apply"}
+            this Apply will actually change. While the dry run is in flight the
+            button reads "Checking…" and is disabled -- pressing it in that window
+            is how a count and a write come to disagree, which is the one thing
+            this whole screen is built not to do. */}
+        <button type="button" onClick={apply}
+          disabled={busy || !canApply || preview === undefined}
+          style={primaryBtn(busy || !canApply || preview === undefined)}>
+          {busy ? "Applying…"
+            : !canApply ? "Apply"
+            : preview === undefined ? "Checking…"
+            : applied ? `Apply to ${applied.length}`
+            : "Apply"}
         </button>
         {derived.hasEb && (
           <button type="button" onClick={turnOff} disabled={busy} style={ghostBtn}>Turn off</button>

@@ -29,4 +29,4 @@ alter table programs
   add column if not exists early_bird_opt_out boolean not null default false;
 
 comment on column programs.early_bird_opt_out is
-  'True when an operator turned this program''s early bird off by hand. apply_term_early_bird skips the row rather than re-applying the term discount to it.';
+  'True when an operator turned this program''s early bird off by hand. apply_term_early_bird then CLEARS the row''s early-bird columns instead of re-applying the term discount to it. Turning the whole term off ignores this flag: it removes every program''s early bird, opted-out ones included.';
