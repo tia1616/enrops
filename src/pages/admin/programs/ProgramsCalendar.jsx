@@ -41,6 +41,8 @@ import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 import { durationMinutes, addMinutes24h, earlyReleaseLine } from "../../../lib/timeText.js";
 import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib/programText.js";
 import { GRADE_OPTIONS, audienceMode, audiencePatch, rangeBackwards, rangeBackwardsMessage } from "../../../lib/grades.js";
+import EarlyBirdRow, { useEarlyBirdPreview, earlyBirdPatch } from "../../../components/EarlyBirdRow.jsx";
+import PriceTierField from "../../../components/PriceTierField.jsx";
 import {
   publishBlockedByStripe,
   publishErrorMessage,
@@ -768,6 +770,7 @@ export default function ProgramsCalendar() {
             id, curriculum, curriculum_id, day_of_week, start_time, end_time, room,
             early_release_start_time, early_release_end_time,
             max_capacity, status, term, instructor_name, price_cents,
+            price_tier, early_bird_price_cents, early_bird_deadline, early_bird_opt_out,
             short_description,
             grade_min, grade_max, age_min, age_max, age_format,
             runs_own_registration, external_registration_url, list_in_public_catalog,
@@ -1932,6 +1935,9 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
     age_min: program.age_min ?? "",
     age_max: program.age_max ?? "",
     price_cents: program.price_cents ?? "",
+    // Which pricing-sheet tier this class sits in. Read by the early-bird rule:
+    // preschool classes are left out of term-wide early-bird pricing.
+    price_tier: program.price_tier ?? "standard",
     program_location_id: program.program_location_id ?? "",
     room: program.room ?? "",
     runs_own_registration: program.runs_own_registration ?? false,
@@ -1941,6 +1947,23 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
   const [savedFlash, setSavedFlash] = useState(false);
+
+  // Whether this class takes its term's early bird. Held OUTSIDE `draft` for the
+  // same reason panelMode is: every key in draft is a real `programs` column, and
+  // this is a switch position, not a column. What it writes (two prices and the
+  // opt-out flag) is worked out by earlyBirdPatch at save time.
+  const [earlyBirdOn, setEarlyBirdOn] = useState(!program.early_bird_opt_out);
+  const earlyBirdPreview = useEarlyBirdPreview({
+    orgId: isLean ? null : panelOrg?.id,   // lean orgs have no term-wide early bird
+    term: program.term,
+    // The DRAFT values, not the stored row: an operator who has just typed a new
+    // price, or just ticked "the partner runs registration", must be told what
+    // THAT means before they save it.
+    priceCents: draft.price_cents,
+    status: program.status,
+    runsOwnRegistration: draft.runs_own_registration,
+    priceTier: draft.price_tier,
+  });
 
   // How many OCCASIONAL early-release days land on this class's weekday.
   //
@@ -2029,7 +2052,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
       // adopt an outside change AND wrote its stale value back on the next save -
       // exactly the clobber this effect exists to prevent.
       const same = (a, b) => String(a ?? "") === String(b ?? "");
-      for (const k of ["curriculum", "room", "short_description", "price_cents", "max_capacity", "program_location_id", "grade_min", "grade_max", "age_min", "age_max"]) {
+      for (const k of ["curriculum", "room", "short_description", "price_cents", "price_tier", "max_capacity", "program_location_id", "grade_min", "grade_max", "age_min", "age_max"]) {
         const was = prev?.[k] ?? "";
         const now = program?.[k] ?? "";
         if (!same(was, now) && same(d[k], was)) next[k] = now;
@@ -2037,6 +2060,10 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
       return next;
     });
     if (!audienceTouchedRef.current) setPanelMode(audienceMode(program));
+    // The early-bird switch follows the row too. Without this, a term-wide Apply
+    // run in another tab would leave the switch showing the position it had when
+    // the panel opened, and the next save would write that stale position back.
+    setEarlyBirdOn(!program.early_bird_opt_out);
   }, [program]);
   // SWITCHING THE TAB IS NOT AN EDIT. Only entering a VALUE is.
   //
@@ -2389,6 +2416,15 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
           })
           : {}),
         price_cents: draft.price_cents === "" || draft.price_cents === null ? null : Number(draft.price_cents),
+        ...(isLean ? {} : { price_tier: draft.price_tier || "standard" }),
+        // Spread, not assigned: earlyBirdPatch returns null for "leave the stored
+        // early bird alone", and the two cases where it does are the ones worth
+        // being careful about -- the lookup failed, or this term's programs carry
+        // different discounts so there is no single price to write. Writing nulls
+        // in either case would strip a discount families may already be
+        // registering under. The changed-fields filter below then drops anything
+        // that already matches the row, so an ordinary room edit writes nothing here.
+        ...(isLean ? {} : earlyBirdPatch(earlyBirdPreview, earlyBirdOn) ?? {}),
         program_location_id: draft.program_location_id || null,
         room: draft.room || null,
         runs_own_registration: !!draft.runs_own_registration,
@@ -2868,6 +2904,20 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
             style={{ fontSize: 12.5 }}
           />
         </ExpandField>
+        {/* Which pricing-sheet row this class sits on. Next to the price because
+            that is what it decides, and asked only of organisations that run
+            term-wide early-bird pricing -- the tier names are after-school
+            pricing-sheet terms and mean nothing to an organisation without them. */}
+        {!isLean && (
+          <ExpandField label="Price tier">
+            <PriceTierField
+              id={`price-tier-${program.id}`}
+              value={draft.price_tier}
+              onChange={(v) => set("price_tier", v)}
+              disabled={saving}
+            />
+          </ExpandField>
+        )}
         <ExpandField label="Location *">
           <select value={draft.program_location_id ?? ""} onChange={(e) => set("program_location_id", e.target.value)} style={expandInputStyle}>
             {/* A prompt, not a choice. Location is required, so this option
@@ -3012,6 +3062,23 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
           </div>
         )}
       </div>
+      )}
+
+      {/* Early bird sits OUTSIDE the field grid for the same reason Description
+          does: it is a sentence, and a 160px grid cell would wrap it to five
+          lines. Also deliberately NOT inside an ExpandField -- its switch is a
+          real checkbox, and a bare <label> wrapper would forward every click on
+          the caption to it, flipping a price the operator was only reading. */}
+      {!isLean && (
+        <div style={{ marginTop: 12 }}>
+          <EarlyBirdRow
+            preview={earlyBirdPreview}
+            enabled={earlyBirdOn}
+            onChange={setEarlyBirdOn}
+            disabled={saving}
+            termLabel={formatTermLabel(program.term)}
+          />
+        </div>
       )}
 
       {/* Description sits OUTSIDE the field grid because it needs the full width

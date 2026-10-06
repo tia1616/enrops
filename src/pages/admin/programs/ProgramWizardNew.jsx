@@ -22,6 +22,9 @@ import FamiliesPayNote, { useOrgFeeConfig } from "../../../components/FamiliesPa
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib/programText.js";
 import { isUnset, rangeBackwards, rangeBackwardsMessage } from "../../../lib/grades.js";
+import { formatTermLabel } from "../../../lib/terms.js";
+import EarlyBirdRow, { useEarlyBirdPreview, earlyBirdPatch } from "../../../components/EarlyBirdRow.jsx";
+import PriceTierField from "../../../components/PriceTierField.jsx";
 import {
   publishBlockedByStripe,
   PUBLISH_GATE_CTA_SAVE,
@@ -200,6 +203,9 @@ const INITIAL_FORM_DATA = {
   age_min: null,
   age_max: null,
   price_cents: null,
+  // Which pricing-sheet tier this class is on. Read by the early-bird rule --
+  // preschool classes are left out of term-wide early-bird pricing.
+  price_tier: "standard",
   short_description: "",
   // false = we run checkout (public catalog). true = the partner/venue runs
   // their own registration; program is live + scheduled but never shown in the
@@ -245,6 +251,19 @@ export default function ProgramWizardNew() {
   // happen in the curriculum-change handler.
   const [currentStep, setCurrentStep] = useState(1);
   const [formData, setFormData] = useState(() => ({ ...INITIAL_FORM_DATA }));
+  // On by default: a new class in a term that is running an early bird joins it.
+  // Switch position, not a column -- what it writes is worked out at submit.
+  const [earlyBirdOn, setEarlyBirdOn] = useState(true);
+  const earlyBirdPreview = useEarlyBirdPreview({
+    orgId: org?.id,
+    term: formData.term,
+    priceCents: formData.price_cents,
+    // A new program is created as a draft or as open, and neither is a reason to
+    // withhold the early bird, so the rule is asked about the publishable state.
+    status: "open",
+    runsOwnRegistration: formData.runs_own_registration,
+    priceTier: formData.price_tier,
+  });
   // What the curriculum pick ACTUALLY filled, as display labels — not a boolean.
   // It was a boolean behind copy that named three specific things ("number of
   // sessions, age or grade range, and class size"). Sessions and the audience no
@@ -770,6 +789,12 @@ export default function ProgramWizardNew() {
           : formData.price_cents,
         short_description: formData.short_description || null,
         program_type: "standard",
+        price_tier: formData.price_tier || "standard",
+        // Null when the term has no early bird, when its programs are on
+        // different ones, or when the lookup failed -- in all three the insert
+        // simply doesn't name the columns and the row is created without one,
+        // which is what a program created today already gets.
+        ...(earlyBirdPatch(earlyBirdPreview, earlyBirdOn) ?? {}),
         runs_own_registration: formData.runs_own_registration,
         external_registration_url: formData.runs_own_registration
           ? (formData.external_registration_url.trim() || null)
@@ -906,6 +931,9 @@ export default function ProgramWizardNew() {
             orgActiveTerm={org?.active_registration_term}
             orgId={org?.id}
             orgName={org?.name}
+            earlyBirdPreview={earlyBirdPreview}
+            earlyBirdOn={earlyBirdOn}
+            onEarlyBirdChange={setEarlyBirdOn}
             usesEnropsRegistration={org?.uses_enrops_registration}
             onSubmit={handleSubmit}
             onSaveDraftAndConnect={handleSaveDraftAndConnect}
@@ -1531,6 +1559,9 @@ function Step3PriceAndOpen({
   orgActiveTerm,
   orgId,
   orgName,
+  earlyBirdPreview,
+  earlyBirdOn,
+  onEarlyBirdChange,
   usesEnropsRegistration,
   onSubmit,
   onSaveDraftAndConnect,
@@ -1703,9 +1734,31 @@ function Step3PriceAndOpen({
             />
           </div>
           <FamiliesPayNote priceCents={formData.price_cents} feeConfig={feeConfig} style={{ color: INK }} />
+          {/* "You can add early-bird discounts after this is created" was true
+              until the row below started applying the term's early bird at
+              creation. Promo codes are still an afterwards job. */}
           <div style={{ marginTop: 6, fontSize: 13, color: MUTED, lineHeight: 1.5 }}>
-            Set to 0 for a free program. You can add early-bird discounts and
-            promo codes after this is created — they usually boost sign-ups.
+            Set to 0 for a free program. You can add promo codes after this is
+            created — they usually boost sign-ups.
+          </div>
+          <div style={{ marginTop: 14, maxWidth: 420 }}>
+            <label htmlFor="price-tier" style={{ display: "block", fontSize: 13, fontWeight: 600, color: INK, marginBottom: 5 }}>
+              Price tier
+            </label>
+            <PriceTierField
+              value={formData.price_tier}
+              onChange={(v) => onField("price_tier", v)}
+              disabled={submitting}
+            />
+          </div>
+          <div style={{ marginTop: 14 }}>
+            <EarlyBirdRow
+              preview={earlyBirdPreview}
+              enabled={earlyBirdOn}
+              onChange={onEarlyBirdChange}
+              disabled={submitting}
+              termLabel={formatTermLabel(formData.term)}
+            />
           </div>
           <div style={{ marginTop: 12, fontSize: 12.5, color: MUTED, lineHeight: 1.5 }}>
             {/* Same qualifier as the lean builder's waiver line: a family only

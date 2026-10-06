@@ -21,6 +21,7 @@ import { supabase } from "../../lib/supabase.js";
 import { usePermissions } from "../../lib/permissions.js";
 import { useAdminNarrow } from "../../lib/adminViewport.js";
 import EnnieTip from "../../components/EnnieTip.jsx";
+import { skipReasonLabel } from "../../lib/earlyBird.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -61,13 +62,9 @@ function termSortKey(t) {
   return Number(m[2]) * 100 + SEASON_MONTH[m[1].toUpperCase()];
 }
 
-// Compute a program's early-bird price from a term-wide discount, clamped to >= 0.
-function earlyPriceFor(priceCents, type, value) {
-  const v = Number(value);
-  if (!Number.isFinite(v) || v <= 0 || priceCents == null) return null;
-  const off = type === "percent" ? Math.round(priceCents * (v / 100)) : Math.round(v * 100);
-  return Math.max(0, priceCents - off);
-}
+// (The per-program early-bird price used to be computed here as well as in SQL.
+// It is now computed once, by apply_term_early_bird, and this screen renders what
+// that call reports. src/lib/earlyBird.js holds the one copy the forms need.)
 
 // Derive the badge an operator sees from the raw row + today.
 function statusOf(c, now = new Date()) {
@@ -78,10 +75,15 @@ function statusOf(c, now = new Date()) {
   return { label: "Active", bg: GREEN_BG, ink: GREEN_INK };
 }
 
-// Early-bird term badge: honest about an expired deadline (not just "on").
+// Early-bird term badge. Honest about four things, in order: that it doesn't
+// know yet, that the deadline has passed, that the term's programs disagree about
+// the discount, and only then that it is simply on. "Off" is a claim, so it is
+// never the answer while the lookup is still in flight.
 function ebBadge(d) {
+  if (d.loading) return { text: "Checking…", background: "#f3f4f6", color: "#6b7280" };
   if (!d.hasEb) return { text: "Off", background: "#f3f4f6", color: "#6b7280" };
   if (d.ended) return { text: "Ended", background: "#fef3c7", color: "#92400e" };
+  if (d.mixed) return { text: "On · varies", background: GREEN_BG, color: GREEN_INK };
   return { text: "Early-bird on", background: GREEN_BG, color: GREEN_INK };
 }
 
@@ -126,6 +128,11 @@ export default function Discounts() {
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
   const [draft, setDraft] = useState(null); // null = drawer closed
+  // term -> what that term is currently offering, read from the database rather
+  // than inferred from the program rows on screen. Inferring it was wrong in a
+  // way nobody could see: a term whose only remaining early bird sat on a
+  // CANCELLED class still badged "Early-bird on".
+  const [offers, setOffers] = useState({});
 
   const flash = (m) => { setToast(m); setTimeout(() => setToast(""), 3000); };
 
@@ -148,9 +155,36 @@ export default function Discounts() {
       setSiblingPct(sp);
       setSiblingSaved(sp);
       setLoading(false);
+
+      // One lookup per term the operator can see. Lean orgs don't get the
+      // early-bird section at all, so they don't pay for these.
+      if (isLean) return;
+      const terms = Array.from(new Set((progRows ?? []).map((p) => p.term).filter(Boolean)));
+      const results = await Promise.all(terms.map(async (t) => {
+        const { data, error: oErr } = await supabase.rpc("term_early_bird_offer", {
+          p_org: org.id, p_term: t,
+        });
+        // An offer we could not read is NOT "no offer". Left undefined so the
+        // badge says it doesn't know, rather than confidently saying "Off" about
+        // a term that has an early bird running.
+        if (oErr) return [t, undefined];
+        return [t, (Array.isArray(data) ? data[0] : data) ?? null];
+      }));
+      if (cancelled) return;
+      setOffers(Object.fromEntries(results.filter(([, v]) => v !== undefined)));
     })();
     return () => { cancelled = true; };
-  }, [org?.id]);
+  }, [org?.id, isLean]);
+
+  // Re-read one term's offer after a write. Declared as a function so it is
+  // hoisted above runTermEarlyBird, which calls it.
+  async function loadOffer(term) {
+    const { data, error: oErr } = await supabase.rpc("term_early_bird_offer", {
+      p_org: org.id, p_term: term,
+    });
+    if (oErr) return;
+    setOffers((m) => ({ ...m, [term]: (Array.isArray(data) ? data[0] : data) ?? null }));
+  }
 
   const programName = useMemo(() => {
     const m = new Map();
@@ -175,26 +209,51 @@ export default function Discounts() {
   }
 
   // Term-wide early-bird. discountType/value null => clear the term.
-  async function applyTermEarlyBird(term, discountType, value, deadline) {
-    setError("");
+  //
+  // dryRun asks the SAME function what it WOULD do and writes nothing. The count
+  // on the Apply button, the list of programs it skips, and the write itself all
+  // come from this one call, so the preview cannot promise something the apply
+  // then doesn't do.
+  //
+  // Returns the per-program rows, or null on failure. Callers must distinguish
+  // those: an empty array means "this term has no programs", null means "we don't
+  // know" -- and showing "Apply to 0" for a failed lookup would read as a fact.
+  async function runTermEarlyBird(term, discountType, value, deadline, { dryRun }) {
     const clearing = value == null;
-    const { error: e } = await supabase.rpc("apply_term_early_bird", {
+    const { data, error: e } = await supabase.rpc("apply_term_early_bird", {
       p_org: org.id,
       p_term: term,
       p_discount_type: clearing ? null : discountType,
       p_discount_value: clearing ? null : Number(value),
       p_deadline: clearing ? null : deadline,
+      p_dry_run: !!dryRun,
     });
-    if (e) { setError(e.message ?? "Couldn't apply early-bird pricing."); return false; }
-    // Sync local state to what the RPC just wrote (same math). Feedback is shown
-    // inline at the term card (not a far-away top toast).
-    setPrograms((list) => list.map((p) => {
-      if (p.term !== term) return p;
-      return clearing
-        ? { ...p, early_bird_price_cents: null, early_bird_deadline: null }
-        : { ...p, early_bird_price_cents: earlyPriceFor(p.price_cents, discountType, value), early_bird_deadline: deadline };
-    }));
-    return true;
+    if (e) {
+      // A dry run is a background refresh; shouting at the top of the page about
+      // one would be noise the operator can't act on. The card says so instead.
+      if (!dryRun) setError(e.message ?? "Couldn't apply early-bird pricing.");
+      return null;
+    }
+    const rows = data ?? [];
+    if (!dryRun) {
+      // Sync local state from what the RPC REPORTS it wrote, not from re-running
+      // the arithmetic here. Two spellings of one number is how the screen and
+      // the database start disagreeing.
+      const byId = new Map(rows.map((r) => [r.program_id, r]));
+      setPrograms((list) => list.map((p) => {
+        const r = byId.get(p.id);
+        if (!r) return p;
+        return {
+          ...p,
+          early_bird_price_cents: r.early_bird_cents,
+          early_bird_deadline: r.early_bird_cents == null ? null : deadline,
+        };
+      }));
+      // The term's badge is derived from the database, so re-read it rather than
+      // guessing what the write did to it.
+      loadOffer(term);
+    }
+    return rows;
   }
 
   async function saveDraft() {
@@ -349,7 +408,7 @@ export default function Discounts() {
           discounts and promo codes; term-wide early-bird pricing is gated out
           rather than shown as something they can set. Hidden, not disabled — a
           greyed-out control still reads as a feature you have. */}
-      {!isLean && <EarlyBirdSection programs={programs} onApply={applyTermEarlyBird} />}
+      {!isLean && <EarlyBirdSection programs={programs} offers={offers} onRun={runTermEarlyBird} />}
 
       {/* Promo codes */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
@@ -511,7 +570,7 @@ function DrawerForm({ draft, setDraft, programs, error, onCancel, onSave }) {
 // Term-wide early-bird editor: one card per term. Each card sets a single
 // deadline + a single discount ($ or % off standard) applied to every program
 // in that term, with an expandable per-program price preview.
-function EarlyBirdSection({ programs, onApply }) {
+function EarlyBirdSection({ programs, offers, onRun }) {
   const terms = useMemo(() => {
     const map = new Map();
     for (const p of programs) {
@@ -535,7 +594,8 @@ function EarlyBirdSection({ programs, onApply }) {
       ) : (
         <div style={{ display: "grid", gap: 12 }}>
           {terms.map(([term, progs]) => (
-            <EarlyBirdTermCard key={term} term={term} progs={progs} onApply={onApply} />
+            <EarlyBirdTermCard key={term} term={term} progs={progs}
+              offer={offers[term]} onRun={onRun} />
           ))}
         </div>
       )}
@@ -543,45 +603,115 @@ function EarlyBirdSection({ programs, onApply }) {
   );
 }
 
-function EarlyBirdTermCard({ term, progs, onApply }) {
-  // Derive current state: whether early-bird is set, whether its deadline has
-  // already passed (so the badge tells the truth), the common deadline, and a
-  // uniform $ off if one exists (to prefill the discount box).
+function EarlyBirdTermCard({ term, progs, offer, onRun }) {
+  // What the term is offering RIGHT NOW, as the database reads it. `offer` is
+  // undefined while it loads (or if the lookup failed), null-ish fields when the
+  // term's programs disagree about the discount -- three states, three sentences,
+  // because "no early bird" and "we couldn't tell you" are not the same news.
   const derived = useMemo(() => {
-    const withEb = progs.filter((p) => p.early_bird_price_cents != null);
-    const deadline = toDateInput(withEb.find((p) => p.early_bird_deadline)?.early_bird_deadline || "");
-    const offs = withEb.map((p) => (p.price_cents ?? 0) - p.early_bird_price_cents);
-    const uniform = offs.length && offs.every((o) => o === offs[0]) ? offs[0] : null;
+    if (offer === undefined) return { loading: true, hasEb: false, ended: false, deadline: "", uniformOffDollars: "", mixed: false };
+    const count = Number(offer?.program_count ?? 0);
+    const deadline = toDateInput(offer?.deadline || "");
+    const hasEb = count > 0;
+    // A term can have an early bird AND no single description of it (two
+    // different discounts, or two different end dates). Prefilling the boxes
+    // from one of them would invite an Apply that silently overwrites the other.
+    const mixed = hasEb && (offer?.discount_type == null || !deadline);
     const todayISO = new Date().toISOString().slice(0, 10);
-    const ended = withEb.length > 0 && !!deadline && deadline < todayISO;
-    return { hasEb: withEb.length > 0, ended, deadline, uniformOffDollars: uniform != null ? centsToDollars(uniform) : "" };
-  }, [progs]);
+    const ended = hasEb && !!deadline && deadline < todayISO;
+    return {
+      loading: false,
+      hasEb,
+      ended,
+      mixed,
+      deadline,
+      programCount: count,
+      type: offer?.discount_type ?? "fixed",
+      uniformOffDollars:
+        offer?.discount_value == null || mixed
+          ? ""
+          : String(Number(offer.discount_value)),
+    };
+  }, [offer]);
 
   const [deadline, setDeadline] = useState(derived.deadline);
-  const [type, setType] = useState("fixed");
+  const [type, setType] = useState(derived.type ?? "fixed");
   const [value, setValue] = useState(derived.uniformOffDollars);
   const [expanded, setExpanded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState(null); // { ok: bool, text } — inline feedback at the card
+  // The dry run: what Apply WOULD do, per program. undefined = not asked yet or
+  // in flight; null = the lookup failed and we must not pretend to know.
+  const [preview, setPreview] = useState(undefined);
+  // The same rows mean two different things either side of an Apply -- "this is
+  // what would happen" and "this is what happened" -- and a skipped row saying
+  // "its early bird will be removed" after the removal has already happened is a
+  // badge that outlived its state. One flag, so the tense follows the fact.
+  const [applyDone, setApplyDone] = useState(false);
 
   const canApply = !!value && Number(value) > 0 && !!deadline;
+
+  // Seed the boxes once the offer arrives. Guarded on `derived.loading` so an
+  // operator who has started typing while it loads doesn't get overwritten --
+  // and keyed on the offer itself so a re-read after Apply refreshes them.
+  useEffect(() => {
+    if (derived.loading) return;
+    setDeadline(derived.deadline);
+    setType(derived.type ?? "fixed");
+    setValue(derived.uniformOffDollars);
+  }, [derived.loading, derived.deadline, derived.type, derived.uniformOffDollars]);
+
+  // Ask what Apply would do, whenever the three inputs make a real offer.
+  // Debounced: this fires on every keystroke in the discount box.
+  useEffect(() => {
+    if (!canApply) { setPreview(undefined); return; }
+    if (type === "percent" && Number(value) > 100) { setPreview(undefined); return; }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      const rows = await onRun(term, type, value, deadline, { dryRun: true });
+      if (cancelled) return;
+      setPreview(rows);
+      setApplyDone(false); // a fresh proposal, not a result
+    }, 350);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [term, type, value, deadline, canApply, onRun]);
+
+  const applied = preview?.filter((r) => !r.skip_reason) ?? null;
+  const skipped = preview?.filter((r) => r.skip_reason) ?? null;
 
   async function apply() {
     if (!value || Number(value) <= 0) { setNote({ ok: false, text: "Enter a discount amount first." }); return; }
     if (type === "percent" && Number(value) > 100) { setNote({ ok: false, text: "A percentage can't be more than 100%." }); return; }
     if (!deadline) { setNote({ ok: false, text: "Pick an early-bird end date." }); return; }
     setBusy(true); setNote(null);
-    const ok = await onApply(term, type, value, deadline);
+    const rows = await onRun(term, type, value, deadline, { dryRun: false });
     setBusy(false);
-    setNote(ok
-      ? { ok: true, text: `Applied to all ${progs.length} ${prettyTerm(term)} program${progs.length === 1 ? "" : "s"}.` }
-      : { ok: false, text: "Couldn't apply — see the message at the top." });
+    if (!rows) { setNote({ ok: false, text: "Couldn't apply — see the message at the top." }); return; }
+    setPreview(rows);
+    setApplyDone(true);
+    const got = rows.filter((r) => !r.skip_reason).length;
+    const left = rows.length - got;
+    // Counts, not "these": "8 of these" beats "these", and an operator who sees
+    // 28 where they expected 34 needs the 6 named, which the list below does.
+    setNote({
+      ok: true,
+      text: `Applied to ${got} ${prettyTerm(term)} program${got === 1 ? "" : "s"}` +
+            (left ? `. ${left} skipped — see below.` : "."),
+    });
   }
   async function turnOff() {
     setBusy(true); setNote(null);
-    const ok = await onApply(term, null, null, null);
+    const rows = await onRun(term, null, null, null, { dryRun: false });
     setBusy(false);
-    if (ok) { setValue(""); setNote({ ok: true, text: `Early-bird turned off for ${prettyTerm(term)}.` }); }
+    if (!rows) { setNote({ ok: false, text: "Couldn't turn it off — see the message at the top." }); return; }
+    setValue("");
+    setPreview(undefined);
+    const cleared = rows.filter((r) => r.cleared).length;
+    setNote({
+      ok: true,
+      text: `Early-bird turned off for ${prettyTerm(term)}` +
+            (cleared ? ` — removed from ${cleared} program${cleared === 1 ? "" : "s"}.` : "."),
+    });
   }
 
   return (
@@ -622,8 +752,11 @@ function EarlyBirdTermCard({ term, progs, onApply }) {
             </div>
           </div>
         </div>
+        {/* The count is the DRY RUN's, never progs.length: it has to be the number
+            this Apply will actually change. Until the dry run answers, the button
+            says "Apply" rather than a number it would have to take back. */}
         <button type="button" onClick={apply} disabled={busy || !canApply} style={primaryBtn(busy || !canApply)}>
-          {busy ? "Applying…" : `Apply to ${progs.length}`}
+          {busy ? "Applying…" : applied ? `Apply to ${applied.length}` : "Apply"}
         </button>
         {derived.hasEb && (
           <button type="button" onClick={turnOff} disabled={busy} style={ghostBtn}>Turn off</button>
@@ -635,7 +768,7 @@ function EarlyBirdTermCard({ term, progs, onApply }) {
           {note.ok ? "✓ " : ""}{note.text}
         </div>
       )}
-      {!derived.hasEb && (
+      {!derived.loading && !derived.hasEb && (
         <div style={{ marginTop: 10, fontSize: 12, color: MUTED }}>
           Early-bird is off for this term. Enter a discount and an end date, then Apply to turn it on.
         </div>
@@ -645,9 +778,42 @@ function EarlyBirdTermCard({ term, progs, onApply }) {
           Early-bird ended {fmtDate(derived.deadline)}. Families are paying standard price now — set a later end date and Apply to run it again.
         </div>
       )}
-      {derived.hasEb && !derived.ended && !canApply && !note && (
+      {derived.hasEb && derived.mixed && !note && (
+        <div style={{ marginTop: 10, fontSize: 12, color: "#92400e" }}>
+          These {derived.programCount} programs aren't all on the same early-bird deal, so there's no single
+          discount to show here. Applying a discount below puts them all on the same one.
+        </div>
+      )}
+      {derived.hasEb && !derived.ended && !derived.mixed && !canApply && !note && (
         <div style={{ marginTop: 10, fontSize: 12, color: MUTED }}>
           Enter a discount and an end date, then Apply.
+        </div>
+      )}
+
+      {/* The skipped programs, in the viewport, before Apply is pressed -- not
+          hidden behind the expander. An operator who reads "Apply to 28" under a
+          header saying "34 programs" needs the other 6 explained right there. */}
+      {skipped && skipped.length > 0 && (
+        <div style={{ marginTop: 10, fontSize: 12, color: MUTED }}>
+          <div style={{ fontWeight: 700, color: INK, marginBottom: 4 }}>
+            {skipped.length} {skipped.length === 1 ? "program isn't" : "programs aren't"} offered this early bird:
+          </div>
+          {skipped.map((r) => (
+            <div key={r.program_id} style={{ display: "flex", gap: 6, flexWrap: "wrap", lineHeight: 1.7 }}>
+              <span style={{ color: INK }}>{r.curriculum}</span>
+              <span>— {skipReasonLabel(r.skip_reason)}</span>
+              {r.cleared && (
+                <span style={{ color: "#92400e", fontWeight: 600 }}>
+                  {applyDone ? "(its early bird was removed)" : "(its early bird will be removed)"}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      {preview === null && (
+        <div style={{ marginTop: 10, fontSize: 12, color: "#991b1b" }}>
+          Couldn't check which programs this applies to. Reload the page before applying.
         </div>
       )}
 
@@ -656,14 +822,23 @@ function EarlyBirdTermCard({ term, progs, onApply }) {
       </button>
       {expanded && (
         <div style={{ marginTop: 8, border: `1px solid ${RULE}`, borderRadius: 8, overflow: "hidden" }}>
-          {progs.map((p, i) => {
-            const preview = value ? earlyPriceFor(p.price_cents, type, value) : p.early_bird_price_cents;
+          {/* Every row here comes from the dry run, so this list IS what Apply
+              does -- prices and skips together. Before the dry run has answered,
+              it falls back to the stored prices with no arrow, which is the
+              honest "nothing proposed yet" state. */}
+          {(preview ?? progs.map((p) => ({
+            program_id: p.id, curriculum: p.curriculum, price_cents: p.price_cents,
+            early_bird_cents: p.early_bird_price_cents, skip_reason: null,
+          }))).map((r, i) => {
+            const newPrice = r.early_bird_cents;
             return (
-              <div key={p.id} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, padding: "7px 12px", borderTop: i ? `1px solid ${RULE}` : "none", fontSize: 13 }}>
-                <span style={{ color: INK }}>{p.curriculum}</span>
+              <div key={r.program_id} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, padding: "7px 12px", borderTop: i ? `1px solid ${RULE}` : "none", fontSize: 13 }}>
+                <span style={{ color: INK }}>{r.curriculum}</span>
                 <span style={{ color: MUTED }}>
-                  ${centsToDollars(p.price_cents)}
-                  {preview != null && <span style={{ color: GREEN_INK, fontWeight: 600 }}> → ${centsToDollars(preview)}</span>}
+                  ${centsToDollars(r.price_cents)}
+                  {r.skip_reason
+                    ? <span style={{ color: "#92400e" }}> · {skipReasonLabel(r.skip_reason)}</span>
+                    : newPrice != null && <span style={{ color: GREEN_INK, fontWeight: 600 }}> → ${centsToDollars(newPrice)}</span>}
                 </span>
               </div>
             );
