@@ -19,6 +19,8 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate, useOutletContext, useSearchParams } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import { formatTermLabel } from "../../../lib/terms.js";
+import EarlyBirdRow, { useEarlyBirdPreview, earlyBirdPatch } from "../../../components/EarlyBirdRow.jsx";
+import PriceTierField from "../../../components/PriceTierField.jsx";
 // campTermForDate lives beside the other camp helpers in programSchedule.js,
 // which imports nothing - terms.js pulls in the supabase client, so anything
 // defined there cannot be unit-tested by the repo's plain-node runner.
@@ -681,6 +683,27 @@ export default function QuickProgramBuilder() {
   // directly underneath it. Only ever shown to registration operators, and only
   // until they answer.
   const isLean = org?.instructor_pay_model === "enrops_platform";
+
+  // Term-wide early bird and price tiers belong to organisations that run them
+  // -- the same gate the Discounts card uses to decide whether to show its
+  // early-bird section at all. A lean operator sent to a tier they have never
+  // heard of, or told to "set one in Money > Discounts" where that section does
+  // not exist, is being given a dead end.
+  const [priceTier, setPriceTier] = useState("standard");
+  const [earlyBirdOn, setEarlyBirdOn] = useState(true);
+  const earlyBirdPreview = useEarlyBirdPreview({
+    orgId: isLean ? null : org?.id,
+    term: effectiveTerm,
+    priceCents: priceValid ? priceCents : 0,
+    // Saving as a draft is not a reason to withhold the early bird, so the rule
+    // is asked about the publishable state.
+    status: "open",
+    // Every class this builder makes takes enrops checkout; the payload below
+    // hardcodes the same false.
+    runsOwnRegistration: false,
+    priceTier,
+  });
+
   // An org that already has programs is demonstrably not setting up its FIRST
   // class, whatever onboarding_completed_at says. That column only landed in
   // 20260725d, so every org created before it is NULL forever and was being
@@ -963,6 +986,14 @@ export default function QuickProgramBuilder() {
         ...audiencePatch(audienceMode, { gradeMin, gradeMax, ageMin, ageMax }),
         price_cents: priceCents,
         program_type: "standard",
+        ...(isLean ? {} : {
+          price_tier: priceTier || "standard",
+          // Null when the term has no early bird, when its programs are on
+          // different ones, or when the lookup failed -- in all three the insert
+          // leaves the columns out and the class is created without one, which
+          // is what a class created here already gets today.
+          ...(earlyBirdPatch(earlyBirdPreview, earlyBirdOn) ?? {}),
+        }),
         photo_url: photoUrl || null, // optional; NULL renders the no-image card
         runs_own_registration: false, // native enrops checkout
         // Live the moment it's created, unless the operator chose Save as draft.
@@ -2056,6 +2087,17 @@ export default function QuickProgramBuilder() {
               feeConfig={feeConfig}
               style={{ color: INK }}
             />
+            {!isLean && (
+              <div style={{ marginTop: 10 }}>
+                <label style={labelStyle} htmlFor="qpb-price-tier">Price tier</label>
+                <PriceTierField
+                  id="qpb-price-tier"
+                  value={priceTier}
+                  onChange={setPriceTier}
+                  disabled={submitting}
+                />
+              </div>
+            )}
           </div>
           <div>
             <label style={labelStyle} htmlFor="qpb-spots">Spots</label>
@@ -2069,6 +2111,17 @@ export default function QuickProgramBuilder() {
             />
           </div>
         </div>
+
+        {/* Full width, below the price pair: it is a sentence, not a field. */}
+        {!isLean && (
+          <EarlyBirdRow
+            preview={earlyBirdPreview}
+            enabled={earlyBirdOn}
+            onChange={setEarlyBirdOn}
+            disabled={submitting}
+            termLabel={formatTermLabel(effectiveTerm)}
+          />
+        )}
 
         <div>
           <label style={labelStyle} htmlFor="qpb-photo">Photo <span style={{ fontWeight: 400, color: "#6b6b6b" }}>(optional)</span></label>
