@@ -748,18 +748,55 @@ export default function Home() {
     // the deps is how that stops being true silently.
   }, [programs, schools, searchParams, selectedSchool, districtsById]);
 
-  // Once the highlighted card is in the DOM, scroll to it and fade the ring.
+  // Once the highlighted card is in the DOM, scroll to it (clearing the
+  // sticky header) and fade the ring.
+  //
+  // Scrolled MANUALLY rather than via scrollIntoView: the header is
+  // `position: sticky`, so centering the card in the viewport still leaves
+  // its top edge under the header on a short screen, and scrollIntoView has
+  // no way to offset for that. The header's own height is measured live, not
+  // hardcoded — on a phone its nav row wraps onto a second line (see
+  // PublicLayout) and a fixed offset would under-shoot there.
+  //
+  // Double rAF before the first measurement: this effect used to fire
+  // scrollIntoView the instant the card mounted, which raced the browser's
+  // own layout pass for the tab switch and usually won, landing a few
+  // hundred px short. One rAF waits for that frame; the second accounts for
+  // a layout the first rAF itself can still trigger.
+  //
+  // Re-armed on fullFlags: program_full_flags (the capacity lookup) resolves
+  // in a SEPARATE fetch after the catalog has already rendered (see the
+  // effect above). A program ABOVE the highlighted one flipping to "full"
+  // grows its card by the waitlist paragraph (the ACTION_WAITLIST branches),
+  // which pushes every card below it — including the highlighted one — down
+  // the page. Reproduced on staging: the first scroll landed correctly, then
+  // fullFlags arrived ~1s later and the target card had quietly moved out
+  // from under it, leaving the page scrolled to nothing in particular.
+  // Re-running the scroll when fullFlags changes corrects for that instead
+  // of leaving the family looking at the wrong spot.
   useEffect(() => {
     if (!highlightProgram) return;
-    const el = document.getElementById(`program-card-${highlightProgram}`);
-    if (!el) return;
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    let cancelled = false;
+    const scrollToCard = () => {
+      if (cancelled) return;
+      const el = document.getElementById(`program-card-${highlightProgram}`);
+      if (!el) return;
+      const header = document.querySelector('header');
+      const headerOffset = (header?.getBoundingClientRect().height || 0) + 16;
+      const top = el.getBoundingClientRect().top + window.scrollY - headerOffset;
+      window.scrollTo({ top: Math.max(top, 0), behavior: 'smooth' });
+    };
+    const raf = requestAnimationFrame(() => requestAnimationFrame(scrollToCard));
     const t = setTimeout(() => setHighlightProgram(''), 3000);
-    return () => clearTimeout(t);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+      clearTimeout(t);
+    };
     // finderListed, not programsAtSchool: a highlighted CAMP renders from that
     // list, so keying on the class list alone would run this before the camp
     // card exists and never again.
-  }, [highlightProgram, finderListed]);
+  }, [highlightProgram, finderListed, fullFlags]);
 
   function startRegistration(programId, isVip = false) {
     if (!keepCart) clearCart();
