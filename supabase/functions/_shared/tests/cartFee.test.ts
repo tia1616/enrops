@@ -4,7 +4,9 @@
 // module exists: "Six children at $228 shows $6.84 six times, not $41.04 once."
 
 import { assertEquals } from 'https://deno.land/std@0.208.0/assert/mod.ts';
-import { cartFeeCents, feePerLine, allocateCartFeeByLine } from '../cartFee.ts';
+import {
+  cartFeeCents, feePerLine, allocateCartFeeByLine, encodeLineFees, decodeLineFees,
+} from '../cartFee.ts';
 import { computePlatformFee } from '../computePlatformFee.ts';
 
 // The doc's pricing, so these tests say what section 4 says even before any
@@ -241,4 +243,41 @@ Deno.test('installments: FINDING - one registration id for a whole cart collapse
   // The small case is stated too, so the test says plainly that a placeholder
   // id is not harmless just because it sometimes agrees.
   assertEquals(sum(allocateCartFeeByLine(placeholderAttribution, 'card', NEW_PRICING)), 1440);
+});
+
+// ── carrying a pay-in-full cart's per-line fee through Stripe metadata ──────
+// (money doc item 14: record what enrops earns, at charge time)
+
+Deno.test('encodeLineFees/decodeLineFees: round-trips a multi-child cart', () => {
+  const fees = new Map([
+    ['11111111-1111-1111-1111-111111111111', 684],
+    ['22222222-2222-2222-2222-222222222222', 199],
+  ]);
+  const encoded = encodeLineFees(fees);
+  assertEquals(decodeLineFees(encoded), fees);
+});
+
+Deno.test('encodeLineFees: a zero-fee org still carries its lines (zero is a real number)', () => {
+  const fees = new Map([['r1', 0], ['r2', 0]]);
+  assertEquals(decodeLineFees(encodeLineFees(fees)), fees);
+});
+
+Deno.test('decodeLineFees: empty, null and undefined all decode to an empty map', () => {
+  assertEquals(decodeLineFees(''), new Map());
+  assertEquals(decodeLineFees(null), new Map());
+  assertEquals(decodeLineFees(undefined), new Map());
+});
+
+Deno.test('decodeLineFees: malformed input is dropped, not thrown — half a map is worse than none', () => {
+  // A UUID has no ':' of its own, so a dropped/garbled entry (no colon, or a
+  // non-numeric amount) must not corrupt or crash the read of the entries
+  // that ARE well-formed — same principle as credit_alloc's drop-not-truncate.
+  assertEquals(decodeLineFees('r1:100,garbage,r2:notanumber,r3:200'), new Map([
+    ['r1', 100],
+    ['r3', 200],
+  ]));
+});
+
+Deno.test('decodeLineFees: rounds a non-integer cents value rather than truncating silently', () => {
+  assertEquals(decodeLineFees('r1:100.6'), new Map([['r1', 101]]));
 });

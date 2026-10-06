@@ -133,3 +133,39 @@ export function allocateCartFeeByLine(
 
   return shares;
 }
+
+// --- Carrying a pay-in-full cart's per-line fee from create-checkout to the
+// webhook (money doc item 14: record what enrops earns, at charge time) -----
+//
+// A pay-in-full charge can cover several registrations at once (siblings in
+// one cart), and the fee is a property of the LINE (feePerLine above), not of
+// the charge as a whole. create-checkout already knows each line's share
+// before the charge; the webhook, which is what actually writes the paid row,
+// only sees the completed Stripe session. So the shares ride along on the
+// session's own metadata — read directly off the event, no extra Stripe call
+// and nothing recomputed from org config on the other end.
+//
+// Installments carry the equivalent fact through checkout_schedules.per_line
+// instead (see stripe-webhook's PerLineEntry) because that path already has a
+// side-table keyed by session id; a pay-in-full session has no such table.
+
+export const LINE_FEE_METADATA_KEY = 'enrops_line_fee_cents';
+
+/** registrationId:cents pairs, comma-separated. IDs are UUIDs, so ':' and ',' are safe separators. */
+export function encodeLineFees(feesByRegistration: Map<string, number>): string {
+  return [...feesByRegistration.entries()].map(([id, cents]) => `${id}:${cents}`).join(',');
+}
+
+/** Inverse of encodeLineFees. Malformed or empty input decodes to an empty map, never throws. */
+export function decodeLineFees(raw: string | null | undefined): Map<string, number> {
+  const out = new Map<string, number>();
+  if (!raw) return out;
+  for (const pair of raw.split(',')) {
+    const sep = pair.lastIndexOf(':');
+    if (sep <= 0) continue;
+    const id = pair.slice(0, sep);
+    const cents = Number(pair.slice(sep + 1));
+    if (Number.isFinite(cents)) out.set(id, Math.round(cents));
+  }
+  return out;
+}

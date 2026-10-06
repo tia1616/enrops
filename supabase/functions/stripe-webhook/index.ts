@@ -91,7 +91,7 @@ import { feeReturnOutcome } from '../_shared/feeReturnOutcome.ts';
 import { allocateRefundAcrossRegistrations } from '../_shared/refundAllocation.ts';
 import { sendRefundReceipt } from '../_shared/refundReceipt.ts';
 import { receiptFeeCents } from '../_shared/receiptFee.ts';
-import { cartFeeCents } from '../_shared/cartFee.ts';
+import { cartFeeCents, decodeLineFees, LINE_FEE_METADATA_KEY } from '../_shared/cartFee.ts';
 import { resolveFeeConfig, loadPlatformFeeDefaults } from '../_shared/feeConfig.ts';
 import { isEmailAllowed } from '../_shared/emailGuard.ts';
 import { logTransactionalSend, formatSendError } from '../_shared/sendLog.ts';
@@ -134,6 +134,13 @@ interface PerLineEntry {
   registration_id: string;
   amount_cents: number;
   due_date: string;
+  // The enrops margin this exact (registration, installment) line carries —
+  // see create-checkout's allocateCartFeeByLine call. Absent (schedule row
+  // from before this field existed) or explicitly null (the legacy
+  // no-attribution request shape, which still charged a real fee but cannot
+  // say which registration owns which share of it) both mean "not recorded".
+  // Never 0 unless the fee genuinely was zero.
+  margin_cents?: number | null;
 }
 
 serve(async (req) => {
@@ -287,6 +294,38 @@ serve(async (req) => {
         // intended. Refunds read this instead of the org's current charge model.
         stripe_charge_account_id: (event.account as string | null) ?? null,
       }).in('id', regIds);
+
+      // Money doc item 14: what enrops actually earns on this charge, per
+      // registration. A pay-in-full session can cover several registrations
+      // (siblings in one cart) off ONE charge, so the fee is carried per
+      // registration from create-checkout rather than stamped once per row —
+      // summing platform_fee_charged_cents must equal the charge's real
+      // margin, never a multiple of it. decodeLineFees reads what
+      // create-checkout already computed (never recomputed from org config
+      // here, which could have changed). Best-effort: a missing or malformed
+      // map just leaves the column null, same as a pre-this-field charge —
+      // it must never fail the confirmation write above.
+      //
+      // Gated the same way the FAMILY CREDIT block just below is: !confirmErr,
+      // so an unconfirmed registration (the row the operator alert further
+      // down tells a human to go fix by hand) is never stamped with a fee it
+      // has not been recorded as actually earning. AND isPaid: an ACH session
+      // completes Checkout before the debit settles, and settlementForCheckout
+      // Completed already distinguishes that — a fee is a claim about money
+      // collected, not merely attempted, so it stays null until settled. A
+      // later ACH bounce (async_payment_failed) never clears this column, but
+      // it was never SET for an unsettled ACH in the first place.
+      const lineFees = isPaid && !confirmErr ? decodeLineFees(meta[LINE_FEE_METADATA_KEY]) : new Map();
+      for (const id of regIds) {
+        if (!lineFees.has(id)) continue;
+        const { error: feeStampErr } = await admin
+          .from('registrations')
+          .update({ platform_fee_charged_cents: lineFees.get(id) })
+          .eq('id', id);
+        if (feeStampErr) {
+          console.error('[webhook] could not stamp platform_fee_charged_cents:', feeStampErr.message);
+        }
+      }
 
       // --- FAMILY CREDIT: turn the hold into a spend (chunk 3b) ---------------
       // AFTER the confirmation write, deliberately. Both orders can tear, but
@@ -708,6 +747,15 @@ serve(async (req) => {
                     amount_cents: entry.amount_cents,
                     due_date: entry.due_date,
                     status: isPaid ? 'paid' : 'pending',
+                    // Money doc item 14: what enrops actually earned on THIS
+                    // charge, margin only (never the Stripe-fee uplift a
+                    // pass-through org's family also covers). Only for the row
+                    // that was actually charged (charge 1) — process-installments
+                    // writes this same field for charges 2/3 when they are
+                    // actually charged, using its own shareByRow allocation, not
+                    // this snapshot, so a plan that never reaches charge 2 never
+                    // claims a fee it did not collect.
+                    platform_fee_charged_cents: isPaid ? (entry.margin_cents ?? null) : null,
                     stripe_customer_id: customerId,
                     stripe_payment_method_id: paymentMethodId,
                     organization_id: orgId,

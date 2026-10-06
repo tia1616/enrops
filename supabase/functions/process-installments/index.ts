@@ -1004,6 +1004,24 @@ async function processGroup(
       stripe_transfer_destination_id: builtDest,
     }).in('id', sortedRowIds);
 
+    // Money doc item 14: what enrops actually earned on THIS charge, per row,
+    // using the SAME shareByRow allocation that sized application_fee_amount
+    // above — not recomputed, and margin only (never the uplift a
+    // pass-through org's family also covers). Per-row updates, not one
+    // upsert: installments has NOT NULL columns (amount_cents, due_date,
+    // installment_number) with no default, so an upsert built from only
+    // {id, platform_fee_charged_cents} would fail even though every row
+    // already exists and only the UPDATE half would ever run.
+    for (const row of activeRows) {
+      const { error: feeStampErr } = await admin
+        .from('installments')
+        .update({ platform_fee_charged_cents: shareByRow.get(row.id) ?? null })
+        .eq('id', row.id);
+      if (feeStampErr) {
+        console.error('[process-installments] could not stamp platform_fee_charged_cents:', feeStampErr.message);
+      }
+    }
+
     // ...and on the REST of each plan, not only the rows we just charged.
     //
     // sortedRowIds is THIS instalment number only. Stamping there alone leaves

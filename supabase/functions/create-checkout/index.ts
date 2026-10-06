@@ -68,7 +68,9 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { buildChargeRouting, ConnectOrgConfig } from '../_shared/connectChargeParams.ts';
 import { UPLIFT_METADATA_KEY } from '../_shared/chargeFeeFacts.ts';
 import { passThroughLineItemForAmount } from '../_shared/passThroughFee.ts';
-import { cartFeeCents, allocateCartFeeByLine } from '../_shared/cartFee.ts';
+import {
+  cartFeeCents, allocateCartFeeByLine, feePerLine, LINE_FEE_METADATA_KEY, encodeLineFees,
+} from '../_shared/cartFee.ts';
 import {
   allocateCreditAcrossLines,
   creditApplicationKey,
@@ -201,6 +203,11 @@ interface PerLineEntry {
   registration_id: string;
   amount_cents: number;
   due_date: string;
+  // Added by perLineWithFee below before persisting to checkout_schedules —
+  // not part of the wire shape the client sends. Mirrors stripe-webhook's
+  // own PerLineEntry, which is what actually reads this field back. null on
+  // the legacy (no-attribution) request shape — see perLineWithFee.
+  margin_cents?: number | null;
 }
 
 serve(async (req) => {
@@ -880,6 +887,12 @@ serve(async (req) => {
       // the three charges. The distribution across charges is approximate there
       // because nothing in that payload can make it exact; the total is right,
       // which is the half that decides what anyone is charged.
+      // Populated only on the per-line (scheduleAttributesLines) path below —
+      // the per-registration margin share for each per_line entry, keyed by
+      // its index. Captured here so it can ride onto the checkout_schedules
+      // row further down (money doc item 14: record what enrops earns per
+      // registration, not just per charge) without a second allocation call.
+      let scheduleFeeShares: Map<string, number> | null = null;
       const installmentFeeShares = (() => {
         if (!orgConfig) return [0, 0, 0];
 
@@ -896,6 +909,7 @@ serve(async (req) => {
             'card',
             orgConfig,
           );
+          scheduleFeeShares = shares;
           // Charge N's margin is the sum of every line's share of charge N.
           const shareForInstallment = (n: number) =>
             perLine!.reduce(
@@ -1061,11 +1075,26 @@ serve(async (req) => {
         return json({ error: 'Could not start checkout. Please try again.' }, 500);
       }
 
-      // Persist the per-line schedule to checkout_schedules — webhook reads it after payment
+      // Persist the per-line schedule to checkout_schedules — webhook reads it after payment.
+      // margin_cents rides along per entry (money doc item 14) — the SAME
+      // shares allocateCartFeeByLine already computed above for charge 1's
+      // application_fee_amount, not a second calculation. Only present when
+      // scheduleFeeShares was populated (the per-line path).
+      //
+      // NULL, not 0, on the legacy (no-attribution) request shape: that path
+      // still charges a real, nonzero fee via the cartFeeCents/legacyFee
+      // branch above, it just cannot say which registration owns which share
+      // of it — the exact case migration 20261006d calls "not recorded".
+      // `?? 0` here would have recorded a false zero (money enrops did
+      // collect, reported as none), which is worse than recording nothing.
+      const perLineWithFee = perLine.map((p, i) => ({
+        ...p,
+        margin_cents: scheduleFeeShares?.get(String(i)) ?? null,
+      }));
       const { error: scheduleErr } = await admin.from('checkout_schedules').insert({
         stripe_session_id: session.id,
         organization_id: orgId,
-        schedule: { aggregated, per_line: perLine },
+        schedule: { aggregated, per_line: perLineWithFee },
         // Freeze the fee decision the family is agreeing to RIGHT NOW, on the
         // same orgConfig that priced the fee line in this very session (see
         // feeLineInst above) — so the snapshot and what they were shown at
@@ -1338,9 +1367,18 @@ serve(async (req) => {
         ((r.amount_cents as number) || 0) - (creditByRegStd.get(r.id as string) ?? 0),
       ),
     }));
-    const cartFeeStd = orgConfigStd
-      ? cartFeeCents(cartLinesStd, selectedMethod, orgConfigStd)
-      : 0;
+    // Per-registration shares, same lines same order — so a multi-child cart's
+    // charge can be attributed back to each registration (money doc item 14)
+    // instead of recording the whole charge's fee once per line it covers.
+    // cartFeeStd is their sum, not a second calculation: cartFeeCents IS
+    // feePerLine reduced, so summing what we already computed per line keeps
+    // the two numbers identical by construction rather than by two calls that
+    // happen to agree.
+    const feeSharesStd = orgConfigStd ? feePerLine(cartLinesStd, selectedMethod, orgConfigStd) : [];
+    const cartFeeStd = feeSharesStd.reduce((s, f) => s + f, 0);
+    const feeByRegStd = new Map<string, number>(
+      feeSharesStd.map((cents, i) => [cartLinesStd[i].registrationId, cents]),
+    );
     const marginBaseStd = orgConfigStd ? cartFeeStd : undefined;
     const routingStd = buildChargeRouting(chargeBaseStd, selectedMethod, orgConfigStd, orgIdStd, marginBaseStd);
     if (routingStd.blocked) {
@@ -1421,6 +1459,19 @@ serve(async (req) => {
     const creditAllocEncoded = creditPlan.alloc && creditAppliedStd > 0
       ? encodeCreditAllocation(creditPlan.alloc)
       : '';
+    // Same 500-char Stripe metadata cap as credit_alloc below, and the same
+    // drop-not-truncate rule — a half-written map would misattribute money
+    // rather than just go unrecorded. Computed here (not inline in the
+    // metadata object) so the overflow case can be logged exactly like
+    // credit_alloc's, which this had been missing.
+    const lineFeesEncoded = encodeLineFees(feeByRegStd);
+    if (lineFeesEncoded.length > 500) {
+      console.warn(
+        `[create-checkout] per-registration fee map for session is ${lineFeesEncoded.length} chars ` +
+        `and will not fit in Stripe metadata; platform_fee_charged_cents will be left unrecorded for ` +
+        `every registration on this charge (charge itself is unaffected).`,
+      );
+    }
     if (creditAllocEncoded.length > 500) {
       console.warn(
         `[create-checkout] credit allocation for ${creditPlan.key} is ${creditAllocEncoded.length} ` +
@@ -1594,6 +1645,11 @@ serve(async (req) => {
         // a big cart's credit was taken and never returned; that path now reads
         // the movements instead, so it no longer depends on this field.
         credit_alloc: creditAllocEncoded.length <= 500 ? creditAllocEncoded : '',
+        // Per-registration enrops margin for THIS charge (money doc item 14),
+        // read back by the webhook when it confirms the registrations — see
+        // _shared/cartFee.ts for why this rides on metadata instead of being
+        // recomputed there. lineFeesEncoded is capped and logged above.
+        [LINE_FEE_METADATA_KEY]: lineFeesEncoded.length <= 500 ? lineFeesEncoded : '',
       },
       payment_intent_data: piData,
     }, acctStd);
