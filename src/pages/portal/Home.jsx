@@ -758,41 +758,31 @@ export default function Home() {
   // hardcoded — on a phone its nav row wraps onto a second line (see
   // PublicLayout) and a fixed offset would under-shoot there.
   //
-  // Double rAF before the first measurement: this effect used to fire
-  // scrollIntoView the instant the card mounted, which raced the browser's
-  // own layout pass for the tab switch and usually won, landing a few
-  // hundred px short. One rAF waits for that frame; the second accounts for
-  // a layout the first rAF itself can still trigger.
+  // Called directly, not deferred to a rAF: an effect already runs after
+  // React has committed the tab-switch's DOM, so the card's layout is there
+  // to read the instant this runs — a rAF add-on here only waits on the
+  // browser's next PAINT, which a backgrounded/inactive tab can suspend
+  // indefinitely, turning a harmless defer into a dropped scroll.
   //
   // Re-armed on fullFlags: program_full_flags (the capacity lookup) resolves
   // in a SEPARATE fetch after the catalog has already rendered (see the
   // effect above). A program ABOVE the highlighted one flipping to "full"
-  // grows its card by the waitlist paragraph (the ACTION_WAITLIST branches),
-  // which pushes every card below it — including the highlighted one — down
-  // the page. Reproduced on staging: the first scroll landed correctly, then
-  // fullFlags arrived ~1s later and the target card had quietly moved out
-  // from under it, leaving the page scrolled to nothing in particular.
+  // grows its card by the waitlist paragraph (the ACTION_WAITLIST branches
+  // below), which pushes every card under it — including the highlighted
+  // one — down the page a moment after the first scroll already landed.
   // Re-running the scroll when fullFlags changes corrects for that instead
   // of leaving the family looking at the wrong spot.
   useEffect(() => {
     if (!highlightProgram) return;
-    let cancelled = false;
-    const scrollToCard = () => {
-      if (cancelled) return;
-      const el = document.getElementById(`program-card-${highlightProgram}`);
-      if (!el) return;
+    const el = document.getElementById(`program-card-${highlightProgram}`);
+    if (el) {
       const header = document.querySelector('header');
       const headerOffset = (header?.getBoundingClientRect().height || 0) + 16;
       const top = el.getBoundingClientRect().top + window.scrollY - headerOffset;
       window.scrollTo({ top: Math.max(top, 0), behavior: 'smooth' });
-    };
-    const raf = requestAnimationFrame(() => requestAnimationFrame(scrollToCard));
+    }
     const t = setTimeout(() => setHighlightProgram(''), 3000);
-    return () => {
-      cancelled = true;
-      cancelAnimationFrame(raf);
-      clearTimeout(t);
-    };
+    return () => clearTimeout(t);
     // finderListed, not programsAtSchool: a highlighted CAMP renders from that
     // list, so keying on the class list alone would run this before the camp
     // card exists and never again.
