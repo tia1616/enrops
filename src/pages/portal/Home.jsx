@@ -775,12 +775,16 @@ export default function Home() {
   useEffect(() => {
     if (!highlightProgram) return;
     const el = document.getElementById(`program-card-${highlightProgram}`);
-    if (el) {
-      const header = document.querySelector('header');
-      const headerOffset = (header?.getBoundingClientRect().height || 0) + 16;
-      const top = el.getBoundingClientRect().top + window.scrollY - headerOffset;
-      window.scrollTo({ top: Math.max(top, 0), behavior: 'smooth' });
-    }
+    // Bail WITHOUT starting the clear timer when the card isn't there yet - the
+    // original shape, preserved on purpose. A deep link to a program that is
+    // slow to appear (or never does, e.g. filtered out) must not have its
+    // 3-second highlight window burned down before anyone sees it; the effect
+    // simply reruns once finderListed changes and the card exists.
+    if (!el) return;
+    const header = document.querySelector('header');
+    const headerOffset = (header?.getBoundingClientRect().height || 0) + 16;
+    const top = el.getBoundingClientRect().top + window.scrollY - headerOffset;
+    window.scrollTo({ top: Math.max(top, 0), behavior: 'smooth' });
     const t = setTimeout(() => setHighlightProgram(''), 3000);
     return () => clearTimeout(t);
     // finderListed, not programsAtSchool: a highlighted CAMP renders from that
