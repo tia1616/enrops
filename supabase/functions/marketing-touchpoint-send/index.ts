@@ -30,6 +30,7 @@ import { resolveFeeConfig, loadPlatformFeeDefaults } from "../_shared/feeConfig.
 import { loadOrgBrand, formatFromAddress, renderSignatureBlock, type OrgBrand } from "../_shared/orgBrand.ts";
 import { listUnsubscribeHeaders } from "../_shared/listUnsubscribe.ts";
 import { assertCommsFull } from "../_shared/entitlements.ts";
+import { formatChildNameList } from "../_shared/childNameList.ts";
 import {
   parseEmailAttachments,
   loadCommsAttachments,
@@ -232,6 +233,14 @@ type Recipient = {
   zip: string | null;
   geo_segment: string | null;
   segments: string[] | null;
+  // get_campaign_recipients() only (absent on the test-mode admin-recipient
+  // select, which has no registration to resolve against). The real child(ren)
+  // on a registration scoped to this campaign's program/camp picks, or to the
+  // recipient's program_name snapshot — see 20261006d_campaign_child_name_resolver.sql.
+  // null = "couldn't resolve, fall back to the denormalized child_first_name
+  // column"; this is NEVER itself an empty array (the SQL side returns null,
+  // not {}, when nothing matched).
+  resolved_child_first_names?: string[] | null;
 };
 
 type VipOffering = {
@@ -1262,9 +1271,23 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
   // back to empty, so a family with no child name on file received the sentence
   // with a gap in it. One of Jeff's 127 contacts is in that state today.
   // Jessica's wording, 2026-09-07: "your child".
+  //
+  // PREFER THE RESOLVED REGISTRATION OVER THE DENORMALIZED FIELD. r.child_first_name
+  // is ONE value per contact, set once at a family's first registration and never
+  // corrected for a later one — wrong for any multi-child family once the campaign
+  // is scoped to a specific program/term (the 2026-10-01 J2S "Summer 2026 review
+  // catch-up" send: 76 blank + 2 stale-placeholder of 229, see
+  // project_enrops_su26_review_campaign). resolved_child_first_names comes from
+  // get_campaign_recipients() reading the ACTUAL confirmed registration(s) that
+  // match this campaign's scope; multiple siblings are listed ("Ava and Liam")
+  // rather than one being picked arbitrarily. null (not just absent — see the
+  // Recipient type) means "couldn't resolve", so the old field is still the
+  // right fallback for a plain master-list send or a contact with no registration
+  // at all (e.g. the squarespace_summer import — see the same memory).
+  const resolvedChildName = formatChildNameList(r.resolved_child_first_names ?? []);
   tokens.set(
     "child_first_name",
-    r.child_first_name?.trim() || (isTestSend && isInternalAdmin ? SAMPLE_CHILD_FIRST : "your child"),
+    resolvedChildName || r.child_first_name?.trim() || (isTestSend && isInternalAdmin ? SAMPLE_CHILD_FIRST : "your child"),
   );
   // Last name has no safe generic ("your child Smith" reads wrong), so a real
   // send with no last name still resolves to empty. Seeded for the test only for

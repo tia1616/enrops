@@ -172,6 +172,39 @@ export default function ScheduleReview({
   const operatorNotes = draft?.schedule?.notes_to_operator?.trim();
   const zeroRecipients = draft?.warning === "no_recipients_matched" || recipients.count === 0;
 
+  // Pre-send check: who will render {{child_first_name}} as the generic
+  // "your child" fallback if this sends right now. Built after the SU26
+  // "Summer 2026 review catch-up" send quoted "your child's" for 76 of 229
+  // families (and a stale placeholder for 2 more) with nothing surfacing it
+  // before Send — see project_enrops_su26_review_campaign. Shown as soon as
+  // the campaign + recipients are known, same timing as the zero-recipients
+  // warning above; not a hard gate on Approve (the fallback is sometimes the
+  // honest answer — a contact with no Enrops registration at all has no
+  // child to resolve).
+  const [fallbackRecipients, setFallbackRecipients] = useState(null); // null = loading/unknown
+  const [fallbackOpen, setFallbackOpen] = useState(false);
+  useEffect(() => {
+    const campaignId = draft?.campaign_id;
+    const orgId = org?.id;
+    if (!campaignId || !orgId) { setFallbackRecipients(null); return; }
+    let alive = true;
+    (async () => {
+      const { data, error } = await supabase.rpc("marketing_campaign_child_name_fallback_preview", {
+        p_campaign_id: campaignId,
+        p_organization_id: orgId,
+      });
+      if (!alive) return;
+      if (error) {
+        // eslint-disable-next-line no-console
+        console.error("[ScheduleReview] child-name fallback check failed:", error.message);
+        setFallbackRecipients(null);
+        return;
+      }
+      setFallbackRecipients(data ?? []);
+    })();
+    return () => { alive = false; };
+  }, [draft?.campaign_id, org?.id]);
+
   return (
     <div style={{ maxWidth: 820, margin: "0 auto", paddingBottom: 96 }}>
       <button
@@ -204,6 +237,52 @@ export default function ScheduleReview({
           padding: "10px 14px", marginBottom: 12, fontSize: 13, color: "#7A1F19",
         }}>
           <strong style={{ fontWeight: 700 }}>No recipients matched.</strong> Ennie drafted the schedule, but no parents fit this filter yet. Go back and widen the audience, or save as a draft for later.
+        </div>
+      )}
+
+      {fallbackRecipients != null && fallbackRecipients.length > 0 && (
+        <div style={{
+          background: "#FFF8E1", border: "1px solid #E6C77A", borderRadius: 12,
+          padding: "10px 14px", marginBottom: 12, fontSize: 13, color: "#5C4A1C",
+        }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+            <div>
+              <strong style={{ fontWeight: 700 }}>
+                {fallbackRecipients.length} of {recipients.count} recipient{fallbackRecipients.length === 1 ? "" : "s"} will read "your child" instead of a name
+              </strong>
+              {" "}— no child on file for this program/term that {"{{child_first_name}}"} can resolve.
+            </div>
+            <button
+              onClick={() => setFallbackOpen((v) => !v)}
+              style={{
+                background: "#fff", border: "1px solid #E6C77A", color: "#5C4A1C",
+                padding: "6px 12px", borderRadius: 6, cursor: "pointer",
+                fontSize: 12, fontFamily: "inherit", flexShrink: 0,
+              }}
+            >
+              {fallbackOpen ? "Hide names" : "See who"}
+            </button>
+          </div>
+          {fallbackOpen && (
+            <div style={{
+              marginTop: 10, border: "1px solid #E6C77A", borderRadius: 6,
+              maxHeight: 200, overflowY: "auto", background: "#fff",
+            }}>
+              {fallbackRecipients.slice(0, 100).map((r) => (
+                <div key={r.recipient_id} style={{
+                  padding: "6px 10px", borderBottom: "1px solid #F0E6C8", fontSize: 12.5, color: INK,
+                }}>
+                  <strong>{r.parent_name || "(no name on file)"}</strong>
+                  <span style={{ color: MUTED }}> · {r.email}</span>
+                </div>
+              ))}
+              {fallbackRecipients.length > 100 && (
+                <div style={{ padding: "6px 10px", fontSize: 11, color: MUTED }}>
+                  Showing first 100 of {fallbackRecipients.length}.
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 

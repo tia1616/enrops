@@ -74,6 +74,7 @@ import { rosterStudentIds, rosterChanged, shouldResendRoster } from "./rosterCha
 // The membership rule itself, shared with the PDF the school receives.
 import { isOnRoster } from "../_shared/rosterOrder.ts";
 import { abandonedResumeUrl } from "./abandonedResumeUrl.ts";
+import { formatChildNameList } from "../_shared/childNameList.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -2643,7 +2644,7 @@ async function resolveReviewRequestAudience(
   const year = new Date().getUTCFullYear();
   const nextTermAvailable = await hasFutureProgramsForOrg(supabase, a.organization_id);
 
-  const regEntries: AudienceEntry[] = [];
+  let regEntries: AudienceEntry[] = [];
 
   // ── Registration anchor, afterschool: one per (parent, student, program).
   {
@@ -2840,6 +2841,16 @@ async function resolveReviewRequestAudience(
   if (suppErr) throw suppErr;
   const suppressed = new Set(((supp ?? []) as Array<{ email: string }>).map((s) => (s.email || "").toLowerCase()));
 
+  // ── Merge siblings within the registration anchor BEFORE the email dedup
+  // below picks a winner. Same resolver rule as the marketing-campaign fix
+  // (get_campaign_recipients.resolved_child_first_names /
+  // _shared/childNameList.ts): a family with more than one confirmed
+  // registration in the window is not "one child, arbitrarily chosen" — it's
+  // every matching child, listed ("Ava and Liam"). Without this, a two-kid
+  // family's review ask named whichever child's registration query returned
+  // first, which is an accident of row order, not a decision anyone made.
+  regEntries = mergeChildNamesByEmail(regEntries);
+
   // ── Merge + dedup by email: one entry per family per run, registration
   // preferred over contact (processed first). context_key is email+year, so a
   // family is asked once per year regardless of which anchor or child surfaced
@@ -2856,6 +2867,29 @@ async function resolveReviewRequestAudience(
   regEntries.forEach(take);
   contactEntries.forEach(take);
   return out;
+}
+
+// One entry per email, carrying every matching child's name joined into one
+// phrase. Other fields (program_name, etc.) come from whichever entry
+// appeared first for that email — same "first wins" rule the final
+// dedup-by-email loop already applies to everything else; only the NAME
+// stops being an arbitrary pick.
+function mergeChildNamesByEmail(entries: AudienceEntry[]): AudienceEntry[] {
+  const order: string[] = [];
+  const groups = new Map<string, AudienceEntry[]>();
+  for (const e of entries) {
+    const key = e.parent_email.toLowerCase();
+    if (!groups.has(key)) {
+      groups.set(key, []);
+      order.push(key);
+    }
+    groups.get(key)!.push(e);
+  }
+  return order.map((key) => {
+    const group = groups.get(key)!;
+    const joined = formatChildNameList(group.map((e) => e.child_first_name));
+    return { ...group[0], child_first_name: joined || group[0].child_first_name };
+  });
 }
 
 // Build a review-request AudienceEntry with the program-specific blocks empty
