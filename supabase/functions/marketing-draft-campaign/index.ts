@@ -1039,6 +1039,11 @@ const APPROVED_TOKENS = new Set([
   // per-recipient
   "first_name", "parent_name", "child_first_name", "child_last_name",
   "school", "city", "zip", "geo_segment", "unsubscribe_url",
+  // Per-recipient program snapshot (plain text + URL-safe form for a query
+  // string). KEEP IN SYNC with marketing-touchpoint-send's APPROVED_TOKENS —
+  // added 2026-10-06 after both were missing there and a review-style send's
+  // "how did we do" star links all rendered with an empty &p=.
+  "program_name", "program_name_url",
   // per-org
   "org_name", "sender_name", "sender_email", "register_url", "register_button", "reply_to",
   "logo_url", "closer", "phone", "website",

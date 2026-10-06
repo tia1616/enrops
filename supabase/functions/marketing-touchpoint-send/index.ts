@@ -174,6 +174,22 @@ const APPROVED_TOKENS = new Set([
   // venue, and date range in THIS recipient's area. Empty for afterschool
   // campaigns. KEEP IN SYNC with marketing-draft-campaign's APPROVED_TOKENS.
   "camp_details",
+  // Plain-text and URL-safe forms of the recipient's program_name snapshot —
+  // added 2026-10-06. Found missing while investigating the 2026-10-01 J2S
+  // "Summer 2026 review catch-up" send: its stored body_html uses BOTH of
+  // these in the how-did-we-do star links and the body copy
+  // ("How was {{child_first_name}}'s {{program_name}} this summer?"), but
+  // neither was ever an approved token — every occurrence silently rendered
+  // as "" for all 229 real recipients (replaceTokens drops an unrecognized
+  // token to empty, by design, so nothing errored). The body read "...'s
+  // this summer?" with a double-space hole, and EVERY star link's href ended
+  // "&p=" with nothing after it — a GA4 how_did_we_do event with no program,
+  // for the whole send. Two tokens, not one: {{program_name}} is prose and
+  // gets escapeHtml()'d like every other token; {{program_name_url}} is for
+  // an href query string and must be percent-encoded instead, or a curriculum
+  // name containing "&" (e.g. "Minecraft Makers: Coding & Game Design")
+  // truncates the query string at its own ampersand.
+  "program_name", "program_name_url",
 ]);
 
 const corsHeaders = {
@@ -229,6 +245,13 @@ type Recipient = {
   child_first_name: string | null;
   child_last_name: string | null;
   school_name: string | null;
+  // Per-recipient program snapshot — set by auto_add_registrant_to_marketing_list
+  // or written deliberately for a retroactive campaign (see
+  // 20261006d_campaign_child_name_resolver.sql). Drives {{program_name}} /
+  // {{program_name_url}}. Absent on the test-mode admin-recipient select (an
+  // _internal_admin test row has no program), so a test of a review-style
+  // touchpoint renders those tokens empty — expected, not a bug.
+  program_name: string | null;
   city: string | null;
   zip: string | null;
   geo_segment: string | null;
@@ -506,7 +529,7 @@ serve(async (req: Request) => {
     }
     const { data: adminRow, error: aErr } = await supabase
       .from("marketing_recipients")
-      .select("id, email, parent_name, child_first_name, child_last_name, school_name, city, zip, geo_segment, segments")
+      .select("id, email, parent_name, child_first_name, child_last_name, school_name, program_name, city, zip, geo_segment, segments")
       .eq("id", adminRecipientId)
       .single<Recipient>();
     if (aErr || !adminRow) return json({ error: `admin recipient lookup failed: ${aErr?.message ?? "unknown"}` }, 500);
@@ -1298,6 +1321,19 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
     r.child_last_name?.trim() || (isTestSend && isInternalAdmin ? SAMPLE_CHILD_LAST : ""),
   );
   tokens.set("school", r.school_name?.trim() || adminSchoolFallback || "your school");
+  // {{program_name}} / {{program_name_url}} — see APPROVED_TOKENS above for the
+  // 2026-10-01 bug this closes (every occurrence of both rendered empty; the
+  // star links in the "how did we do" review email all read "...&p=" with
+  // nothing after it). No generic fallback text here, deliberately: unlike
+  // {{child_first_name}}'s "your child", there is no honest placeholder for a
+  // program name — "program_name_url" feeding an empty string into the href
+  // is the same failure this fix exists to close, so leaving it blank when
+  // r.program_name is unset is the correct behavior for THIS token; the new
+  // pre-send check (ScheduleReview) is what catches that case before a send,
+  // not a fallback string here.
+  const programNameRaw = r.program_name?.trim() || "";
+  tokens.set("program_name", programNameRaw);
+  tokens.set("program_name_url", programNameRaw ? encodeURIComponent(programNameRaw) : "");
   tokens.set("city", r.city?.trim() || "");
   tokens.set("zip", r.zip?.trim() || "");
   tokens.set("geo_segment", r.geo_segment?.trim() || "");
@@ -2185,6 +2221,12 @@ async function renderPreview(
     child_first_name: SAMPLE_CHILD_FIRST,
     child_last_name: SAMPLE_CHILD_LAST,
     school_name: loc.name,
+    // {{program_name}}/{{program_name_url}} preview value — the SAME program
+    // {{curriculum}} already resolves to at this location below, so a review-
+    // style touchpoint's star links preview with a real-looking program
+    // instead of rendering blank (which would look like the bug this was
+    // added to fix, not a preview artifact).
+    program_name: programAtLocation?.curriculum ?? null,
     city: null,
     zip: null,
     geo_segment: (loc as { district?: string | null }).district ?? null,
