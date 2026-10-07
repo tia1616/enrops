@@ -867,7 +867,7 @@ export default function Dashboard() {
           </p>
           <p className="mt-2 text-sm text-j2s-ink/70">
             There&rsquo;s nothing else for you to do. We&rsquo;ll take the payment that didn&rsquo;t
-            go through, and the rest of the plan carries on as normal.
+            go through within the next day, and the rest of the plan carries on as normal.
           </p>
         </div>
       )}
@@ -891,7 +891,8 @@ export default function Dashboard() {
               worried parent reads closely. */}
           <p className="mt-2 text-sm text-j2s-ink/70">
             No one has lost their spot. This usually means the card expired or was replaced, so
-            putting a new one on takes a moment and we&rsquo;ll collect the payment automatically.
+            putting a new one on takes a moment. Once you save it, we&rsquo;ll take this payment
+            automatically within a day.
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             {stalledPlans.map((p) => (
