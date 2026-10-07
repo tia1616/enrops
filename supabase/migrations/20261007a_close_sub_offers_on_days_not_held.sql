@@ -22,7 +22,11 @@
 -- WHAT IT WRITES. The same shape cancel-sub-cover writes for a withdrawn offer
 -- whose day needs nobody: status 'cancelled', cover_still_needed false, which
 -- the admin modal labels "Cancelled, no sub needed", the portal stops showing,
--- get_sub_coverage drops, and accept_sub_offer refuses ('already_responded').
+-- and accept_sub_offer refuses ('already_responded'). get_sub_coverage drops
+-- the day only when ALL its rows end up like that: if somebody DECLINED before
+-- the day closed, the board still reads 'uncovered' until the date passes,
+-- because get_sub_coverage does not ask the schedule either. Known gap, left
+-- for a separate change to that function.
 -- No email: these people never accepted anything, and nothing has been
 -- promised to them.
 --
