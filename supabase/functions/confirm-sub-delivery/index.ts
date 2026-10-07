@@ -31,6 +31,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, resolveInstructor, adminClient } from '../_shared/instructor.ts';
 import { resolvePayAmount } from '../_shared/payRates.ts';
 import { programSessionType } from '../_shared/programPay.ts';
+import { isProgramClassDay } from '../_shared/programScheduleDay.ts';
 
 type Tier = 'lead' | 'developing';
 type SessionType = 'morning' | 'afternoon' | 'full_day' | 'after_school';
@@ -128,6 +129,16 @@ serve(async (req: Request) => {
         return json({ error: 'lookup_failed' }, 500);
       }
       sessionType = programSessionType(prog) as SessionType | null;
+      // A sub whose day was taken off the schedule ("Reschedule a session")
+      // and who was not released must not be able to create pay for it.
+      const day = await isProgramClassDay(supabase, parent.program_id, subRow.date);
+      if (day.error) {
+        console.error('[confirm-sub-delivery] schedule lookup failed:', day.error);
+        return json({ error: 'lookup_failed' }, 500);
+      }
+      if (!day.onSchedule) {
+        return json({ error: 'not_a_class_day', session_date: subRow.date }, 409);
+      }
     } else {
       return json({ error: 'invalid_parent_assignment_type' }, 400);
     }

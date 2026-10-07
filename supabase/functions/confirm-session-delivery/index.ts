@@ -22,6 +22,7 @@ import {
 } from '../_shared/instructor.ts';
 import { resolvePayAmount } from '../_shared/payRates.ts';
 import { fetchProgramRunState, mayBecomePay } from '../_shared/programRunning.ts';
+import { isProgramClassDay } from '../_shared/programScheduleDay.ts';
 
 interface ConfirmDeliveryBody {
   confirmation_id?: string;
@@ -138,6 +139,18 @@ serve(async (req: Request) => {
       }
       if (!mayBecomePay(runState)) {
         return json({ error: 'program_not_running', program_status: progStatus }, 409);
+      }
+
+      // A day taken off the schedule after its placeholder was seeded keeps
+      // that (withheld) row; self-confirming it would pay a class that did not
+      // meet. Same check confirm-session-taught makes.
+      const day = await isProgramClassDay(supabase, row.program_id!, row.session_date);
+      if (day.error) {
+        console.error('schedule lookup failed:', day.error);
+        return json({ error: 'lookup_failed' }, 500);
+      }
+      if (!day.onSchedule) {
+        return json({ error: 'not_a_class_day', session_date: row.session_date }, 409);
       }
 
       // Afterschool path — look up program_assignments instead.
