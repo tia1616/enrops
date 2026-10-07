@@ -82,7 +82,8 @@ import { allocateCartFeeByLine } from '../_shared/cartFee.ts';
 import { withResolvedFee, loadPlatformFeeDefaults } from '../_shared/feeConfig.ts';
 import { loadOrgBrand, formatFromAddress, OrgBrand } from '../_shared/orgBrand.ts';
 import {
-  chargeIdempotencyKey, DeclinePlan, formatRetryDate, planDeclineRetry,
+  chargeIdempotencyKey, declineFollowUp, DeclinePlan, formatRetryDate,
+  NOT_CHARGEABLE_REGISTRATION_STATUSES, planDeclineRetry,
 } from '../_shared/declineRetry.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
@@ -200,23 +201,28 @@ serve(async (req) => {
     // path every other charge takes - grouping, fee, routing, idempotency -
     // rather than a second way of charging a card.
     //
-    // ONLY REGISTRATIONS STILL 'confirmed'. When a business removes a family,
-    // refund-registration stops the plan by pausing its PENDING rows; a row
-    // already sitting in paused_card_failed is not touched. Before retries
-    // existed that was harmless, because nothing ever charged such a row again.
-    // Now it would be charged on its retry date, after the family was removed -
-    // so a removed registration is never re-armed, and its retry simply never
-    // happens.
+    // NEVER A REMOVED OR REFUNDED REGISTRATION. When a business removes a
+    // family, refund-registration stops the plan by pausing its PENDING rows; a
+    // row already sitting in paused_card_failed is not touched. So a removed
+    // registration is never re-armed here, and processGroup refuses to charge
+    // one whichever path put it back to 'pending' (see
+    // NOT_CHARGEABLE_REGISTRATION_STATUSES there).
     //
     // FAIL DIRECTION: if this read fails we retry nobody today. That charges
     // LESS, never more, and tomorrow's run picks the same rows up because
     // next_retry_on is still in the past.
-    const { data: dueRetries, error: retryErr } = await admin
+    let dueRetriesQuery = admin
       .from('installments')
       .select('id, card_retries_done, registrations!inner(status)')
       .eq('status', 'paused_card_failed')
-      .lte('next_retry_on', today)
-      .eq('registrations.status', 'confirmed');
+      .lte('next_retry_on', today);
+    // One neq per status rather than a hand-built not.in filter STRING, for the
+    // reason given at the sibling-stamp below: a mis-quoted filter string does
+    // not error, it matches the wrong set.
+    for (const s of NOT_CHARGEABLE_REGISTRATION_STATUSES) {
+      dueRetriesQuery = dueRetriesQuery.neq('registrations.status', s);
+    }
+    const { data: dueRetries, error: retryErr } = await dueRetriesQuery;
     if (retryErr) {
       console.error('[process-installments] could not load due retries; none attempted today:', retryErr.message);
       summary.errors++;
@@ -427,7 +433,7 @@ serve(async (req) => {
       // addressed to Enrops. That is the intended reading, not an accident.
       const alertEmail = brand.tenant_alert_email;
       try {
-        await processGroup(admin, groupRows, summary, alertEmail, orgConfig, brand, orgSlugMap.get(orgId) ?? null);
+        await processGroup(admin, groupRows, summary, alertEmail, orgConfig, brand, orgSlugMap.get(orgId) ?? null, today);
       } catch (err) {
         console.error(`Unhandled error for group ${groupKey}:`, err);
         summary.errors++;
@@ -488,12 +494,15 @@ async function processGroup(
   // email. Passed down for the same reason alertEmail is: derived once, so
   // every message about this group points at the same place.
   orgSlug: string | null,
+  // The run's own calendar day (UTC), so a retry is booked from the same
+  // "today" the run selected its rows by.
+  today: string,
 ) {
   // Fetch registration + program + parent data for all rows in the group
   const regIds = groupRows.map((r) => r.registration_id);
   const { data: regsData } = await admin
     .from('registrations')
-    .select('id, program_id, parent_id, students(first_name, last_name), programs(id, curriculum, status), parents(email, first_name, last_name)')
+    .select('id, status, program_id, parent_id, students(first_name, last_name), programs(id, curriculum, status), parents(email, first_name, last_name)')
     .in('id', regIds);
 
   if (!regsData || regsData.length === 0) {
@@ -530,6 +539,27 @@ async function processGroup(
       }).eq('id', row.id);
       summary.errors++;
       summary.details.push(`ERR ${row.id}: missing registration`);
+      continue;
+    }
+    // A REMOVED OR REFUNDED REGISTRATION IS NEVER CHARGED, whatever put its row
+    // back to 'pending'. refund-registration pauses only a plan's PENDING rows
+    // when a business removes a family, so a row that was already paused after
+    // a decline survives it - and the card-update webhook re-pends every paused
+    // row for that Stripe customer, which includes a removed sibling's. The
+    // retry re-arm skips these too, but the guard has to live here, where
+    // every path meets. Parked exactly as refund-registration parks its own.
+    if (NOT_CHARGEABLE_REGISTRATION_STATUSES.includes(regData.status)) {
+      const { error: parkErr } = await admin.from('installments').update({
+        status: 'paused_program_cancelled',
+        next_retry_on: null,
+        last_attempt_at: new Date().toISOString(),
+      }).eq('id', row.id);
+      summary.paused_cancelled++;
+      summary.details.push(
+        `SKIPPED ${row.id}: registration is ${regData.status}`
+          + (parkErr ? ` (could not park it: ${parkErr.message})` : ''),
+      );
+      if (parkErr) summary.errors++;
       continue;
     }
     parent = parent || (regData.parents as ParentRow);
@@ -1021,40 +1051,69 @@ async function processGroup(
     // move, so a retry is safe. Anything else (a timeout, a Stripe outage) has
     // an UNKNOWN outcome and is never retried automatically - a retry on a new
     // key after a charge that secretly succeeded is how a family pays twice.
-    // An idempotency refusal also definitely did not charge, so it moves the
-    // key on, but it is not the family's bank and is not retried either.
     const errType = (stripeErr as { type?: string }).type;
     const isCardDecline = errType === 'StripeCardError';
-    const definitelyNotCharged = isCardDecline || errType === 'StripeIdempotencyError';
 
-    // A retry cycle belongs to ONE card. If the family has put a different card
-    // on since the last decline, this was that card's first attempt and it gets
-    // its own retries.
-    const sameCardAsCycle = activeRows.every((r) => r.retry_payment_method_id === paymentMethodId);
-    const retriesDone = sameCardAsCycle
-      ? Math.max(0, ...activeRows.map((r) => r.card_retries_done ?? 0))
-      : 0;
-    // Whether THIS attempt was one of our automatic retries (STEP 0 counts a
-    // retry before it is attempted). Decides who hears about it below.
-    const wasAutoRetry = retriesDone > 0;
+    // AN IDEMPOTENCY REFUSAL TOUCHES NOTHING BUT THE KEY. Stripe refused the
+    // request before running it, so nothing was charged, and there are two
+    // ways to get here:
+    //   - another run is charging this same group right now (a double
+    //     invocation). That run owns the outcome and writes it; pausing the
+    //     rows or emailing from here would overwrite its booked retry with
+    //     "no retry" and send a second, contradictory alert.
+    //   - the card on the rows changed since this key was first used - a
+    //     family replaced their card within 24h of a decline on a row from
+    //     before card_decline_count existed. Proven in Stripe test mode: the
+    //     old key plus the new card is a flat 400.
+    // Either way: move the key on, leave the row as it is, tell nobody. In the
+    // second case the row is still 'pending', so the next run charges the new
+    // card on a fresh key instead of stranding a family whose card is fine.
+    if (errType === 'StripeIdempotencyError') {
+      const { error: keyErr } = await admin.from('installments')
+        .update({ card_decline_count: priorDeclines + 1 })
+        .in('id', sortedRowIds)
+        .eq('card_decline_count', priorDeclines);
+      summary.errors++;
+      summary.details.push(
+        `IDEMPOTENCY REFUSED group ${idempotencyKey}: ${failureReason}`
+          + (keyErr ? ` (could not move the key on: ${keyErr.message})` : ' - key moved on, rows left as they were'),
+      );
+      return;
+    }
+
+    // A retry cycle belongs to ONE card, and its count is read only from rows
+    // that carry that card. A sibling that joined the group later (another
+    // child, same plan payment) has no cycle of its own yet and must not reset
+    // this one - with `every` it did, restarting the retries and re-sending the
+    // first email. A card the family has just put on matches no row, so it
+    // starts at 0 and gets its own retries.
+    const retriesDone = Math.max(
+      0,
+      ...activeRows
+        .filter((r) => r.retry_payment_method_id === paymentMethodId)
+        .map((r) => r.card_retries_done ?? 0),
+    );
     const plan = planDeclineRetry({
       isCardDecline,
       codes: [(stripeErr as any).decline_code, stripeErr.code],
       retriesDone,
-      today: new Date().toISOString().slice(0, 10),
+      today,
     });
 
     // Mark ALL active rows in this group as failed. next_retry_on is written on
     // every failure - null when nothing is booked - so a stale date from an
     // earlier cycle can never survive onto a row that should not be retried.
-    await admin.from('installments').update({
+    const { error: failWriteErr } = await admin.from('installments').update({
       status: 'paused_card_failed',
       failure_reason: `${declineCode}: ${failureReason}`,
       last_attempt_at: new Date().toISOString(),
       next_retry_on: plan.nextRetryOn,
-      ...(definitelyNotCharged ? { card_decline_count: priorDeclines + 1 } : {}),
       ...(isCardDecline
-        ? { retry_payment_method_id: paymentMethodId, card_retries_done: retriesDone }
+        ? {
+          card_decline_count: priorDeclines + 1,
+          retry_payment_method_id: paymentMethodId,
+          card_retries_done: retriesDone,
+        }
         : {}),
     }).in('id', sortedRowIds);
 
@@ -1065,10 +1124,30 @@ async function processGroup(
         + (plan.nextRetryOn ? ` ${plan.nextRetryOn}` : ''),
     );
 
+    // If that write failed the rows are still 'pending', so the next run tries
+    // the same dead card again - daily, unpaused, until someone notices. Say so
+    // to someone who can act on the database. Row ids only: this goes to the
+    // platform, not the tenant, so it must not name a family.
+    if (failWriteErr) {
+      summary.errors++;
+      summary.details.push(`DECLINE NOT RECORDED group ${idempotencyKey}: ${failWriteErr.message}`);
+      await alertPlatform(
+        admin,
+        'Installment decline could not be recorded',
+        `A card was declined but the rows could not be marked as failed, so they are still pending and will be tried again on the next run.\n\nError: ${failWriteErr.message}\n\nRow IDs: ${sortedRowIds.join(', ')}`,
+      );
+    }
+
+    const followUp = declineFollowUp({
+      plan,
+      retriesDone,
+      familyAlreadyTold: activeRows.some((r) => !!r.parent_notified_failed_at),
+      hasEmail: !!parent?.email,
+    });
     // A failed retry with another one still booked is quiet. The family was
     // told on the first decline and the business was told the retry dates;
     // a second pair of emails three days later says nothing new to either.
-    if (wasAutoRetry && plan.outcome === 'retry_scheduled') {
+    if (!followUp.alertBusiness && !followUp.familyEmail) {
       return;
     }
 
@@ -1096,10 +1175,10 @@ async function processGroup(
     // THE LAST RETRY IS THE EXCEPTION TO THE DEDUP. parent_notified_failed_at
     // stops us repeating the FIRST email; the final one says something new (we
     // have stopped trying), so it goes out whenever the family has an address.
-    const firstRow = activeRows[0];
+    // declineFollowUp owns that rule.
     const isFinalNotice = plan.outcome === 'retries_exhausted';
     const notifiableParent: ParentRow | null =
-      parent?.email && (isFinalNotice || !firstRow.parent_notified_failed_at) ? parent : null;
+      parent?.email && followUp.familyEmail ? parent : null;
 
     let parentNotice: ParentNoticeOutcome = notifiableParent
       ? 'send_failed'
@@ -1115,7 +1194,7 @@ async function processGroup(
         regDataById,
         rows: activeRows,
         orgSlug,
-        variant: isFinalNotice ? 'final' : 'first',
+        variant: followUp.familyEmail === 'final' ? 'final' : 'first',
         retryOn: plan.nextRetryOn,
       });
       if (sent) {
@@ -1130,6 +1209,7 @@ async function processGroup(
     }
 
     // Operator alert (one per group, not per row), now that the outcome is known
+    if (!followUp.alertBusiness) return;
     await sendOperatorAlert({
       brand,
       to: alertEmail,
@@ -1156,8 +1236,13 @@ async function processGroup(
   }
 
   if (paymentIntent.status === 'succeeded') {
-    // Mark all active rows as paid against this single PaymentIntent
-    await admin.from('installments').update({
+    // Mark all active rows as paid against this single PaymentIntent.
+    //
+    // The error is READ. If this write fails the family has paid but the rows
+    // still say 'pending', and the next run charges them again on a key Stripe
+    // may already have forgotten - so it is a double charge waiting to happen,
+    // and someone who can fix the rows must hear about it today.
+    const { error: paidWriteErr } = await admin.from('installments').update({
       status: 'paid',
       stripe_payment_intent_id: paymentIntent.id,
       paid_at: new Date().toISOString(),
@@ -1172,6 +1257,15 @@ async function processGroup(
       // sibling stamp below for why this alone is not enough.
       stripe_transfer_destination_id: builtDest,
     }).in('id', sortedRowIds);
+    if (paidWriteErr) {
+      summary.errors++;
+      summary.details.push(`PAID BUT NOT RECORDED ${paymentIntent.id}: ${paidWriteErr.message}`);
+      await alertPlatform(
+        admin,
+        'URGENT: installment charged but not marked paid',
+        `PaymentIntent ${paymentIntent.id} succeeded, but the rows could not be marked paid, so they are still pending and the next run will try to charge them again. Mark them paid before the next run.\n\nError: ${paidWriteErr.message}\n\nRow IDs: ${sortedRowIds.join(', ')}`,
+      );
+    }
 
     // Money doc item 14: what enrops actually earned on THIS charge, per row,
     // using the SAME shareByRow allocation that sized application_fee_amount
@@ -1441,6 +1535,21 @@ async function sendOperatorAlert(
   } catch (err) {
     console.error('Operator alert failed:', err);
   }
+}
+
+/**
+ * A notice for Enrops itself, for a failure only someone with database access
+ * can fix (a row write that did not land). Goes to the PLATFORM brand's own
+ * alert address - the same one the fatal-crash notice uses - and so must carry
+ * no family data: row and PaymentIntent ids only, never a name or an email.
+ */
+async function alertPlatform(admin: AdminClient, subject: string, body: string) {
+  const platformBrand = await loadOrgBrand(admin, null).catch(() => null);
+  if (!platformBrand) {
+    console.error('[process-installments] platform alert NOT sent - no platform brand', { subject, body });
+    return;
+  }
+  await sendOperatorAlert({ brand: platformBrand, to: platformBrand.alert_email, subject, body });
 }
 
 async function sendParentDeclineNotice({

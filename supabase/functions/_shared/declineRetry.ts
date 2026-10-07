@@ -17,6 +17,19 @@
 //     late fee is charged.
 //   - A NEW card resets the cycle: it gets its own two retries.
 
+/**
+ * Registration states whose payment plan must never be charged again: the
+ * business removed the family (cancelled) or gave the money back (refunded).
+ * One list, read by every place that decides whether a plan row may be charged
+ * - the retry re-arm and the charger itself - so the rule cannot drift.
+ *
+ * A DENY-list on purpose, like the instalment-status lists in this codebase:
+ * 'pending' and 'waitlist' registrations do not normally carry instalments,
+ * and if one ever does, blocking it here would silently stop a family's plan
+ * on a state nobody chose to block.
+ */
+export const NOT_CHARGEABLE_REGISTRATION_STATUSES: readonly string[] = ['cancelled', 'refunded'];
+
 /** Days to wait before each automatic retry, counted from the previous attempt.
  *  [3, 4] = retry 1 on day 3, retry 2 on day 7. */
 export const RETRY_GAPS_DAYS: readonly number[] = [3, 4];
@@ -111,6 +124,36 @@ export function planDeclineRetry({ isCardDecline, codes, retriesDone, today }: {
     retryNumber: done + 1,
     totalRetries,
   };
+}
+
+/**
+ * Who hears about a failed charge. Pure, so the branching that decides what a
+ * family and a business are told is tested rather than read.
+ *
+ * @param retriesDone        retries already attempted on THIS card (as passed
+ *                           to planDeclineRetry). > 0 means this attempt was
+ *                           one of our automatic retries.
+ * @param familyAlreadyTold  the first decline email already went out for this
+ *                           plan (parent_notified_failed_at is set).
+ * @param hasEmail           the family has an address on file.
+ */
+export function declineFollowUp({ plan, retriesDone, familyAlreadyTold, hasEmail }: {
+  plan: DeclinePlan;
+  retriesDone: number;
+  familyAlreadyTold: boolean;
+  hasEmail: boolean;
+}): { familyEmail: 'first' | 'final' | null; alertBusiness: boolean } {
+  // A failed retry with another still booked says nothing new to anyone: the
+  // family was told on the first decline and the business was given the dates.
+  if (retriesDone > 0 && plan.outcome === 'retry_scheduled') {
+    return { familyEmail: null, alertBusiness: false };
+  }
+  // The final email is the one exception to "tell the family once": it says
+  // something new (we have stopped trying).
+  if (plan.outcome === 'retries_exhausted') {
+    return { familyEmail: hasEmail ? 'final' : null, alertBusiness: true };
+  }
+  return { familyEmail: hasEmail && !familyAlreadyTold ? 'first' : null, alertBusiness: true };
 }
 
 /** 'YYYY-MM-DD' + n days, in UTC so the date never shifts with a timezone. */

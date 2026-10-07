@@ -1,8 +1,58 @@
 import { assertEquals, assertNotEquals } from 'https://deno.land/std@0.208.0/assert/mod.ts';
 import {
-  addDaysUtc, chargeIdempotencyKey, formatRetryDate, NO_RETRY_DECLINE_CODES, planDeclineRetry,
-  RETRY_GAPS_DAYS,
+  addDaysUtc, chargeIdempotencyKey, declineFollowUp, formatRetryDate, NO_RETRY_DECLINE_CODES,
+  NOT_CHARGEABLE_REGISTRATION_STATUSES, planDeclineRetry, RETRY_GAPS_DAYS,
 } from '../declineRetry.ts';
+
+const plan = (outcome: 'retry_scheduled' | 'retries_exhausted' | 'hard_decline' | 'not_a_decline') =>
+  ({ outcome, nextRetryOn: outcome === 'retry_scheduled' ? '2026-10-10' : null, retryNumber: null, totalRetries: 2 });
+
+Deno.test('follow-up: first decline tells the family once and the business', () => {
+  assertEquals(
+    declineFollowUp({ plan: plan('retry_scheduled'), retriesDone: 0, familyAlreadyTold: false, hasEmail: true }),
+    { familyEmail: 'first', alertBusiness: true },
+  );
+  // already told about this plan payment - no second first-email, business still alerted
+  assertEquals(
+    declineFollowUp({ plan: plan('hard_decline'), retriesDone: 0, familyAlreadyTold: true, hasEmail: true }),
+    { familyEmail: null, alertBusiness: true },
+  );
+});
+
+Deno.test('follow-up: a failed retry with another booked is silent to both sides', () => {
+  assertEquals(
+    declineFollowUp({ plan: plan('retry_scheduled'), retriesDone: 1, familyAlreadyTold: true, hasEmail: true }),
+    { familyEmail: null, alertBusiness: false },
+  );
+  // ...even if the first email never went out (silence is about the retry, not the dedup)
+  assertEquals(
+    declineFollowUp({ plan: plan('retry_scheduled'), retriesDone: 1, familyAlreadyTold: false, hasEmail: true }),
+    { familyEmail: null, alertBusiness: false },
+  );
+});
+
+Deno.test('follow-up: the last retry always sends the final email, past the dedup', () => {
+  assertEquals(
+    declineFollowUp({ plan: plan('retries_exhausted'), retriesDone: 2, familyAlreadyTold: true, hasEmail: true }),
+    { familyEmail: 'final', alertBusiness: true },
+  );
+  assertEquals(
+    declineFollowUp({ plan: plan('retries_exhausted'), retriesDone: 2, familyAlreadyTold: true, hasEmail: false }),
+    { familyEmail: null, alertBusiness: true },
+  );
+  // a dead card found BY a retry is not quiet - the business must hear the retries ended
+  assertEquals(
+    declineFollowUp({ plan: plan('hard_decline'), retriesDone: 1, familyAlreadyTold: true, hasEmail: true }).alertBusiness,
+    true,
+  );
+});
+
+Deno.test('a removed or refunded registration is never chargeable; an active one is', () => {
+  assertEquals([...NOT_CHARGEABLE_REGISTRATION_STATUSES].sort(), ['cancelled', 'refunded']);
+  for (const s of ['confirmed', 'pending', 'waitlist']) {
+    assertEquals(NOT_CHARGEABLE_REGISTRATION_STATUSES.includes(s), false, s);
+  }
+});
 
 const TODAY = '2026-10-07';
 
