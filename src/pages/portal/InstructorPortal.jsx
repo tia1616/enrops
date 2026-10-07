@@ -1465,6 +1465,11 @@ export default function InstructorPortal() {
   const currentAssignments = assignments.filter((a) => !isArchived(a));
   const pastAssignments = assignments.filter(isArchived);
   const confirmedSubCount = subAssignments.filter((s) => s.status === "confirmed" || s.status === "taught").length;
+  // An unanswered offer stops being an offer once its day has gone. Without the
+  // date check, a 9/29 offer nobody answered still showed Accept/Decline on
+  // 10/7. Days CLOSED before they arrive are cancelled server-side by
+  // close_sub_offers_on_days_not_held; this covers the ones that simply passed.
+  const openSubOffers = subAssignments.filter((s) => s.status === "pending" && s.date >= todayLocalISO());
   // Offers closed out because somebody else accepted first, for a day that has
   // not happened yet. 'covered_by_other' is written by accept_sub_offer alone —
   // it is the product's record that this person LOST A RACE, not that they
@@ -1882,9 +1887,9 @@ export default function InstructorPortal() {
         </div>
       )}
 
-      {subAssignments.filter((s) => s.status === "pending").length > 0 && (
+      {openSubOffers.length > 0 && (
         <Section title="Sub day offers">
-          {subAssignments.filter((s) => s.status === "pending").map((s) => (
+          {openSubOffers.map((s) => (
             <SubOfferCard
               key={s.id}
               sub={s}
