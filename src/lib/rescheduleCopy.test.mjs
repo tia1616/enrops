@@ -55,7 +55,8 @@ for (const [name, d] of all) {
 {
   const t = instructorRescheduledDraft({ ...inst, ...base, makeup: false });
   ok('instructor no make-up gives the next class', t.bodyText.includes('Your next class is Monday, October 26'));
-  ok('instructor subject is short-dated', t.subject.endsWith('Oct 19'));
+  ok('instructor subject leads with the short date', t.subject.startsWith('Schedule change for Oct 19'));
+  ok('instructor subject adds no colon of its own', (t.subject.match(/:/g) ?? []).length === (inst.className.match(/:/g) ?? []).length);
   const noSchool = instructorRescheduledDraft({ ...inst, school: '', ...base, makeup: true });
   ok('no school name leaves no dangling "at"', !/ at :| at  /.test(noSchool.subject) && !noSchool.bodyText.includes(' at  '));
 }

@@ -87,15 +87,36 @@ export default function RescheduleSessionModal({ mode = "skip", program, schedul
     (async () => {
       const { data, error } = await supabase
         .from("program_assignments")
-        .select("instructor_id, instructors:instructor_id(id, first_name, preferred_name, last_name, email)")
+        .select("role, instructor_id, instructors:instructor_id(id, first_name, preferred_name, last_name, email)")
         .eq("program_id", program.id)
-        .eq("status", "confirmed");
+        // "On this class" = accepted (confirmed) OR offered and not yet answered
+        // (published) - the set email-program-roster and the curriculum-change
+        // notice already use. An instructor holding an open offer would accept
+        // later and turn up on a day that is not happening.
+        .in("status", ["confirmed", "published"]);
       if (cancelled) return;
       if (error) { setLeadsErr(error.message); setLeads([]); return; }
-      setLeads((data ?? []).map((r) => r.instructors).filter(Boolean));
+      setLeads((data ?? []).filter((r) => r.instructors).map((r) => ({ ...r.instructors, role: r.role })));
     })();
     return () => { cancelled = true; };
   }, [program?.id]);
+
+  // The sign-off, spelled the way cancel-sub-cover spells it for the sub on
+  // the same day: the first word of the org's email sender name ("Jessica"
+  // from "Jessica @ Journey to STEAM"), falling back to the org name. A miss
+  // just leaves the org name - this is a signature, not a decision.
+  const [signOff, setSignOff] = useState(senderName || "");
+  useEffect(() => {
+    if (!orgId) return;
+    let cancelled = false;
+    (async () => {
+      const { data } = await supabase.from("org_branding").select("email_from_name").eq("organization_id", orgId).maybeSingle();
+      if (cancelled) return;
+      const first = (data?.email_from_name ?? senderName ?? "").split(" ")[0];
+      if (first) setSignOff(first);
+    })();
+    return () => { cancelled = true; };
+  }, [orgId, senderName]);
 
   const isLast = date && date === lastDate;
   // The two server rules, mirrored so the operator is never offered a choice
@@ -104,6 +125,9 @@ export default function RescheduleSessionModal({ mode = "skip", program, schedul
   const makeupAllowed = !isRange;
   const noMakeupAllowed = !isLast;
   const effectiveMakeup = !makeupAllowed ? false : !noMakeupAllowed ? true : makeup;
+  // Both rules at once: the LAST class of a date-range class has no allowed
+  // choice, so say that instead of offering a button the server will refuse.
+  const noChoice = !makeupAllowed && !noMakeupAllowed;
 
   async function doSkip() {
     setBusy(true); setErr("");
@@ -142,8 +166,31 @@ export default function RescheduleSessionModal({ mode = "skip", program, schedul
   const [showFamilies, setShowFamilies] = useState(false);
   const [familiesOpened, setFamiliesOpened] = useState(false);
 
-  if (showFamilies && familyDraft) {
-    return (
+  // Accepted subs this panel has released. Done warns once while anyone is
+  // left: the RPC's confirmed_covers exists only in THIS response, and nothing
+  // else ever releases an accepted sub, so closing here would leave a person
+  // booked for a day with no class.
+  const [releasedIds, setReleasedIds] = useState(() => new Set());
+  const [doneWarned, setDoneWarned] = useState(false);
+  const unreleased = step === "tell"
+    ? (result?.confirmed_covers ?? []).filter((c) => !releasedIds.has(c.substitution_id))
+    : [];
+  function done() {
+    if (unreleased.length > 0 && !doneWarned) { setDoneWarned(true); return; }
+    onClose?.();
+  }
+
+  // Put back, but a no-school day now covers that date: nothing to be "back
+  // on" for, so no "good news" drafts.
+  const backButStillOff = step === "tell-back" && result && result.back_on_schedule === false;
+
+  return (
+    <>
+    {/* Message families opens ON TOP; this panel stays mounted underneath so
+        the instructor's "Emailed" and the sub's "Released" survive the trip -
+        unmounting it put the Send and Release buttons back, one click from a
+        second email. */}
+    {showFamilies && familyDraft && (
       <MessageFamiliesModal
         programs={[program]}
         orgId={orgId}
@@ -151,13 +198,13 @@ export default function RescheduleSessionModal({ mode = "skip", program, schedul
         initialBodyHtml={familyDraft.bodyHtml}
         onClose={() => { setShowFamilies(false); setFamiliesOpened(true); }}
       />
-    );
-  }
-
-  return (
+    )}
     <div
-      onClick={() => !busy && onClose?.()}
-      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "6vh 16px", zIndex: 300, overflowY: "auto" }}
+      // A stray click outside may close the CHOICE, never the "let people
+      // know" step: by then the day is already off the schedule, and closing
+      // would silently drop the instructor, the sub and the families.
+      onClick={() => !busy && (step === "choose" || step === "confirm-restore") && onClose?.()}
+      style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", display: showFamilies ? "none" : "flex", alignItems: "flex-start", justifyContent: "center", padding: "6vh 16px", zIndex: 300, overflowY: "auto" }}
     >
       <div onClick={(e) => e.stopPropagation()} style={{ background: "#fff", borderRadius: 12, maxWidth: 520, width: "100%", padding: 20, boxShadow: "0 10px 40px rgba(0,0,0,0.25)", fontFamily: "inherit", textAlign: "left" }}>
 
@@ -202,10 +249,16 @@ export default function RescheduleSessionModal({ mode = "skip", program, schedul
                 : "Not available for the last class: it can only move with a make-up."}
             </button>
 
+            {noChoice && (
+              <div style={{ fontSize: 12.5, color: RED, margin: "8px 0" }}>
+                This is the last class of a class that runs between fixed dates, so it can't be rescheduled here.
+                To move it, change the class's end date instead.
+              </div>
+            )}
             {err && <div style={{ fontSize: 12.5, color: RED, margin: "8px 0" }}>{err}</div>}
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 10 }}>
               <button type="button" onClick={onClose} disabled={busy} style={btn(false, busy)}>Close</button>
-              <button type="button" onClick={doSkip} disabled={busy || !date} style={btn(true, busy || !date)}>
+              <button type="button" onClick={doSkip} disabled={busy || !date || noChoice} style={btn(true, busy || !date || noChoice)}>
                 {busy ? "Saving…" : "Reschedule this session"}
               </button>
             </div>
@@ -230,6 +283,21 @@ export default function RescheduleSessionModal({ mode = "skip", program, schedul
 
         {(step === "tell" || step === "tell-back") && (
           <>
+            {backButStillOff ? (
+              <>
+                <div style={{ fontSize: 16, fontWeight: 700, color: RED, marginBottom: 6 }}>
+                  {longDate(told)} is still not a class day.
+                </div>
+                <div style={{ fontSize: 13, color: INK, lineHeight: 1.5, marginBottom: 12 }}>
+                  It's no longer a rescheduled day, but a no-school day now covers that date, so there's still no class.
+                  Nobody needs to be told anything new.
+                </div>
+                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                  <button type="button" onClick={onClose} style={btn(false, false)}>Done</button>
+                </div>
+              </>
+            ) : (
+            <>
             <div style={{ fontSize: 16, fontWeight: 700, color: OK_GREEN, marginBottom: 4 }}>
               ✓ {longDate(told)} is {step === "tell" ? "off the schedule" : "back on the schedule"}.
             </div>
@@ -255,17 +323,21 @@ export default function RescheduleSessionModal({ mode = "skip", program, schedul
                 draft={step === "tell"
                   ? instructorRescheduledDraft({
                       firstName: inst.preferred_name || inst.first_name, className, school, date: told,
-                      makeup: result?.makeup, lastDate: result?.last_date, nextDate: nextAfter(told), senderName,
+                      makeup: result?.makeup, lastDate: result?.last_date, nextDate: nextAfter(told), senderName: signOff,
                     })
                   : instructorBackOnDraft({
                       firstName: inst.preferred_name || inst.first_name, className, school, date: told,
-                      makeup: skip?.makeup, previousLastDate: result?.last_date, senderName,
+                      makeup: skip?.makeup, previousLastDate: result?.last_date, senderName: signOff,
                     })}
               />
             ))}
 
             {step === "tell" && (result?.confirmed_covers ?? []).map((c) => (
-              <SubRow key={c.substitution_id} cover={c} />
+              <SubRow
+                key={c.substitution_id}
+                cover={c}
+                onReleased={(id) => setReleasedIds((prev) => new Set(prev).add(id))}
+              />
             ))}
 
             <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, padding: "10px 12px", marginBottom: 8, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -278,13 +350,22 @@ export default function RescheduleSessionModal({ mode = "skip", program, schedul
               </button>
             </div>
 
+            {doneWarned && unreleased.length > 0 && (
+              <div style={{ fontSize: 12.5, color: RED, marginTop: 8 }}>
+                {unreleased.map((c) => c.name || "A sub").join(", ")} {unreleased.length === 1 ? "is" : "are"} still booked for {longDate(told)}.
+                Release them above, or press Done again and let them know yourself.
+              </div>
+            )}
             <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 12 }}>
-              <button type="button" onClick={onClose} style={btn(false, false)}>Done</button>
+              <button type="button" onClick={done} style={btn(false, false)}>Done</button>
             </div>
+            </>
+            )}
           </>
         )}
       </div>
     </div>
+    </>
   );
 }
 
@@ -317,8 +398,10 @@ function InstructorRow({ inst, orgId, draft }) {
     <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, padding: "10px 12px", marginBottom: 8 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <div style={{ flex: "1 1 220px", fontSize: 13, color: INK }}>
-          <strong>{name}</strong> teaches this class.
-          {state === "sent" && <div style={{ fontSize: 12, color: OK_GREEN, fontWeight: 600 }}>✓ Emailed {inst.email}</div>}
+          <strong>{name}</strong> {inst.role === "developing" ? "assists with" : "teaches"} this class.
+          {/* No address here: this one was read when the panel opened, and the
+              server sends to whatever is on file at send time. */}
+          {state === "sent" && <div style={{ fontSize: 12, color: OK_GREEN, fontWeight: 600 }}>✓ Emailed {name}</div>}
           {state === "error" && <div style={{ fontSize: 12, color: RED }}>{err}</div>}
         </div>
         {state !== "sent" && (
@@ -351,7 +434,7 @@ function InstructorRow({ inst, orgId, draft }) {
 
 // A sub who had accepted this day. Releasing tells them there is no class; the
 // lead is not told "you're back on" (cancel-sub-cover checks the schedule).
-function SubRow({ cover }) {
+function SubRow({ cover, onReleased }) {
   const [state, setState] = useState("idle");
   const [err, setErr] = useState("");
   const name = cover.name || "The sub";
@@ -369,6 +452,7 @@ function SubRow({ cover }) {
       return;
     }
     setState(data.notified_sub ? "sent" : "released-untold");
+    onReleased?.(cover.substitution_id);
   }
 
   return (
@@ -382,7 +466,7 @@ function SubRow({ cover }) {
       </div>
       {(state === "idle" || state === "error" || state === "sending") && (
         <button type="button" onClick={release} disabled={state === "sending"} style={btn(true, state === "sending")}>
-          {state === "sending" ? "Releasing…" : `Release ${name.split(" ")[0]}`}
+          {state === "sending" ? "Releasing…" : (cover.name ? `Release ${cover.name.split(" ")[0]}` : "Release")}
         </button>
       )}
     </div>

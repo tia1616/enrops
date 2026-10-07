@@ -10,23 +10,18 @@
 // server. Instructors get plain text for notify-instructor-removed, which sends
 // exactly what it is given, so names are filled in here.
 
-// "Monday, October 19". Calendar dates are parsed at UTC midnight and printed
-// in UTC so the day can never slide by one west of Greenwich.
+import { formatCalendarDate } from "./programSchedule.js";
+
+// "Monday, October 19". formatCalendarDate is the one parser for calendar
+// dates (local midnight, rejects rolled-over dates); anything it cannot read
+// is returned as given rather than printed as a confident wrong day.
 export function longDate(iso) {
-  if (!iso || !/^\d{4}-\d{2}-\d{2}/.test(iso)) return iso ?? "";
-  const [y, m, d] = iso.slice(0, 10).split("-").map(Number);
-  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", {
-    timeZone: "UTC", weekday: "long", month: "long", day: "numeric",
-  });
+  return formatCalendarDate(iso, { weekday: "long", month: "long", day: "numeric" }) ?? (iso ?? "");
 }
 
 // "Oct 19", for subjects.
 export function shortDate(iso) {
-  if (!iso || !/^\d{4}-\d{2}-\d{2}/.test(iso)) return iso ?? "";
-  const [y, m, d] = iso.slice(0, 10).split("-").map(Number);
-  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString("en-US", {
-    timeZone: "UTC", month: "short", day: "numeric",
-  });
+  return formatCalendarDate(iso, { month: "short", day: "numeric" }) ?? (iso ?? "");
 }
 
 const p = (s) => `<p>${s}</p>`;
@@ -88,8 +83,10 @@ export function instructorRescheduledDraft({ firstName, className, school, date,
   if (makeup && lastDate) lines.push(`We've added a make-up session at the end, so your last day is now ${longDate(lastDate)}.`, "");
   else if (!makeup && nextDate) lines.push(`Your next class is ${longDate(nextDate)}.`, "");
   lines.push("Thanks!", senderName || "");
+  // Date first: class names often carry their own colon ("Robotics Explorers:
+  // Build and Mold"), so "{class}: schedule change" read as a chain of colons.
   return {
-    subject: `${className}${where}: schedule change for ${shortDate(date)}`,
+    subject: `Schedule change for ${shortDate(date)} - ${className}`,
     bodyText: lines.join("\n").trim(),
   };
 }
