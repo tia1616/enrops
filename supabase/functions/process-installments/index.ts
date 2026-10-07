@@ -933,6 +933,24 @@ async function processGroup(
       stripe_charge_account_id: recordedAcct,
     }).in('id', sortedRowIds);
 
+    // Money doc item 14: what enrops actually earned on THIS charge, per row,
+    // using the SAME shareByRow allocation that sized application_fee_amount
+    // above — not recomputed, and margin only (never the uplift a
+    // pass-through org's family also covers). Per-row updates, not one
+    // upsert: installments has NOT NULL columns (amount_cents, due_date,
+    // installment_number) with no default, so an upsert built from only
+    // {id, platform_fee_charged_cents} would fail even though every row
+    // already exists and only the UPDATE half would ever run.
+    for (const row of activeRows) {
+      const { error: feeStampErr } = await admin
+        .from('installments')
+        .update({ platform_fee_charged_cents: shareByRow.get(row.id) ?? null })
+        .eq('id', row.id);
+      if (feeStampErr) {
+        console.error('[process-installments] could not stamp platform_fee_charged_cents:', feeStampErr.message);
+      }
+    }
+
     summary.charged_groups++;
     summary.charged_rows += activeRows.length;
     summary.details.push(`PAID group ${idempotencyKey}: ${paymentIntent.id} ($${(totalAmount / 100).toFixed(2)} across ${activeRows.length} rows)`);

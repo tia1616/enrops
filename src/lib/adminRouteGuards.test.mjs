@@ -88,6 +88,12 @@ const BARE_ROUTES = new Set([
   // Dev + platform consoles. No nav entry by design; gated by platform_admins in
   // the UI and again in the database.
   'dev/extraction-test', 'dev/refund-watch', 'platform/operators',
+  // platform/revenue-by-state is read-only (money doc item 14). Bare for the
+  // same reason as its neighbours: platform_admins checked in the component,
+  // and again by RLS on registrations/installments (is_platform_admin() in
+  // their SELECT policies), which is what actually bounds a non-admin caller
+  // of platform_revenue_by_state() to their own org rather than every org.
+  'platform/revenue-by-state',
 ]);
 
 // ---------------------------------------------------------------------------
