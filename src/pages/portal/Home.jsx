@@ -784,7 +784,12 @@ export default function Home() {
     const header = document.querySelector('header');
     const headerOffset = (header?.getBoundingClientRect().height || 0) + 16;
     const top = el.getBoundingClientRect().top + window.scrollY - headerOffset;
-    window.scrollTo({ top: Math.max(top, 0), behavior: 'smooth' });
+    // 'instant', not 'smooth': verified on the deployed staging build that a
+    // smooth scroll's own rAF-driven animation can simply never complete (the
+    // target position is set, window.scrollY still reads 0 three seconds
+    // later) - same failure class as the rest of this bug, just one layer
+    // down. An instant jump plus the highlight ring is unambiguous either way.
+    window.scrollTo({ top: Math.max(top, 0), behavior: 'instant' });
     const t = setTimeout(() => setHighlightProgram(''), 3000);
     return () => clearTimeout(t);
     // finderListed, not programsAtSchool: a highlighted CAMP renders from that
