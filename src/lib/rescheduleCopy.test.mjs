@@ -24,6 +24,7 @@ const all = [
   ['family no makeup credited', familyRescheduledDraft({ ...base, makeup: false, credited: true })],
   ['family back on makeup', familyBackOnDraft({ ...base, makeup: true })],
   ['family back on', familyBackOnDraft({ ...base, makeup: false })],
+  ['family back on credits removed', familyBackOnDraft({ ...base, makeup: false, creditsRemoved: true })],
   ['instructor makeup', instructorRescheduledDraft({ ...inst, ...base, makeup: true })],
   ['instructor no makeup', instructorRescheduledDraft({ ...inst, ...base, makeup: false })],
   ['instructor back on makeup', instructorBackOnDraft({ ...inst, ...base, makeup: true })],
@@ -46,6 +47,7 @@ for (const [name, d] of all) {
   ok('no make-up says when class picks back up', nm.bodyHtml.includes('Monday, October 26'));
   ok('no credit, no credit sentence', !/credit/i.test(nm.bodyHtml));
   ok('credited families are told about the credit', /credit to your account/.test(familyRescheduledDraft({ ...base, makeup: false, credited: true }).bodyHtml));
+  ok('the credit sentence is conditional (one message reaches unpaid families too)', /If you've paid for this class/.test(familyRescheduledDraft({ ...base, makeup: false, credited: true }).bodyHtml));
   ok('families draft uses the server merge fields', mk.bodyHtml.includes('{{parent_first_name}}') && mk.bodyHtml.includes('{{program_location}}'));
 }
 

@@ -83,26 +83,70 @@ BEGIN
       CONTINUE;
     END IF;
 
+    -- CASH paid, the way refund-registration counts it. A pay-in-full
+    -- registration's amount_cents includes whatever the family paid from
+    -- their CREDIT balance, and that leg goes back to them separately (the
+    -- return-credit path) - counting it here too would let one class pay out
+    -- twice: $285 paid entirely in credit, credited $35.63 now, then the $285
+    -- returned on a later withdrawal = $320.63 back on $285. Installment rows
+    -- are already the cash charged, so only the pay-in-full branch is netted.
     v_paid := CASE
       WHEN v_reg.n_inst > 0 THEN v_reg.inst_paid
-      WHEN v_reg.payment_status IN ('paid', 'partial') THEN v_reg.amount_cents
+      WHEN v_reg.payment_status IN ('paid', 'partial') THEN
+        GREATEST(v_reg.amount_cents - COALESCE((
+          SELECT sum(m.amount_cents) FROM family_credit_movements m
+           WHERE m.registration_id = v_reg.id AND m.kind = 'applied'), 0), 0)
       ELSE 0
     END;
+
+    -- ONE CREDIT PER DAY PER FAMILY, across undo and redo. Undo keeps a credit
+    -- the family had already started to use; skipping that same day again
+    -- would otherwise mint a second one under the new skip's key.
+    IF EXISTS (
+      SELECT 1 FROM family_credits fc
+        JOIN program_session_skips s
+          ON fc.idempotency_key LIKE 'skip:' || s.id::text || ':%'
+       WHERE fc.source_registration_id = v_reg.id
+         AND fc.status <> 'void'
+         AND s.program_id = v_skip.program_id
+         AND s.session_date = v_skip.session_date
+         AND s.id <> p_skip_id
+    ) THEN
+      v_skipped := v_skipped || jsonb_build_object('registration_id', v_reg.id, 'name', v_reg.parent_name,
+                     'why', 'already credited for this day');
+      CONTINUE;
+    END IF;
     v_share := round(v_reg.amount_cents::numeric / v_count)::int;
     v_avail := registration_available_cents(v_reg.id, v_paid);
     v_amt := LEAST(v_share, v_avail);
 
     IF v_amt <= 0 THEN
       v_skipped := v_skipped || jsonb_build_object('registration_id', v_reg.id, 'name', v_reg.parent_name,
-                     'why', CASE WHEN v_paid <= 0 THEN 'nothing paid yet' ELSE 'nothing left to credit' END);
+                     'why', CASE
+                              WHEN v_paid <= 0 AND v_reg.n_inst = 0 AND v_reg.payment_status IN ('paid', 'partial')
+                                THEN 'paid with account credit'
+                              WHEN v_paid <= 0 THEN 'nothing paid yet'
+                              ELSE 'nothing left to credit' END);
       CONTINUE;
     END IF;
 
-    SELECT * INTO v_out FROM issue_family_credit(
-      v_skip.organization_id, v_reg.parent_id, v_reg.id, v_amt, 'business_cancelled',
-      'No class on ' || to_char(v_skip.session_date, 'FMMonth FMDD') || ' (rescheduled)',
-      'skip:' || p_skip_id::text || ':' || v_reg.id::text,
-      v_paid);
+    -- The ceiling above was read outside issue_family_credit's registration
+    -- lock. If a refund lands in between, it refuses with FC001; that one
+    -- family is reported (credit them from the roster) rather than rolling the
+    -- whole reschedule back with a technical message.
+    BEGIN
+      -- 'goodwill', not 'business_cancelled': no enrollment ended, and the
+      -- finance export reads the reason as "which side ended it".
+      SELECT * INTO v_out FROM issue_family_credit(
+        v_skip.organization_id, v_reg.parent_id, v_reg.id, v_amt, 'goodwill',
+        'No class on ' || to_char(v_skip.session_date, 'FMMonth FMDD') || ' (rescheduled)',
+        'skip:' || p_skip_id::text || ':' || v_reg.id::text,
+        v_paid);
+    EXCEPTION WHEN SQLSTATE 'FC001' THEN
+      v_skipped := v_skipped || jsonb_build_object('registration_id', v_reg.id, 'name', v_reg.parent_name,
+                     'why', 'their payment changed while this was saving - credit them from the roster');
+      CONTINUE;
+    END;
 
     v_total := v_total + v_out.amount_cents;
     v_done := v_done || jsonb_build_object('registration_id', v_reg.id, 'name', v_reg.parent_name,
@@ -158,6 +202,10 @@ BEGIN
   END IF;
   IF v_class_days IS NOT NULL AND array_length(v_class_days, 1) > 0 THEN
     RAISE EXCEPTION 'camp days cannot be rescheduled one at a time';
+  END IF;
+  -- Crediting families moves money: the money gate, not only the schedule one.
+  IF COALESCE(p_credit_families, false) AND NOT (can_handle_money(v_org) OR is_platform_admin()) THEN
+    RAISE EXCEPTION 'not authorized to credit families for this program';
   END IF;
 
   -- One schedule change per class at a time: two operators taking two days off

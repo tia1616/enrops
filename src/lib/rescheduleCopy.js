@@ -51,7 +51,9 @@ export function familyRescheduledDraft({ date, makeup, lastDate, nextDate, credi
       nextDate
         ? p(`Class picks back up on ${longDate(nextDate)}, and everything else stays the same.`)
         : p("Everything else stays the same."),
-      credited ? p("We've added a credit to your account for the missed class, which you can use toward a future class.") : "",
+      // Conditional on purpose: this one message goes to EVERY family in the
+      // class, and a family who has not paid anything yet was not credited.
+      credited ? p("If you've paid for this class, we've added a credit to your account for the missed class, which you can use toward a future class.") : "",
       p("If you added class dates to your calendar, please update that one day."),
       p("Thank you for understanding!<br>{{org_name}}"),
     ].join(""),
@@ -60,13 +62,16 @@ export function familyRescheduledDraft({ date, makeup, lastDate, nextDate, credi
 
 // What families read when the day is put back.
 //   previousLastDate - when a make-up had been added, the original last day it returns to.
-export function familyBackOnDraft({ date, makeup, previousLastDate }) {
+//   creditsRemoved - credits issued for the missed day were taken back on undo.
+export function familyBackOnDraft({ date, makeup, previousLastDate, creditsRemoved = false }) {
   return {
     subject: `{{program_name}} is back on for ${longDate(date)}`,
     bodyHtml: [
       p("Hi {{parent_first_name}},"),
       p(`Good news! {{program_name}} at {{program_location}} is back on for ${longDate(date)}. Please disregard our earlier note.`),
       makeup && previousLastDate ? p(`That means the last day goes back to ${longDate(previousLastDate)}.`) : "",
+      // Conditional, like the sentence that announced it: one message, every family.
+      creditsRemoved ? p("Since class is happening after all, the credit we added for that day has been removed from your account.") : "",
       p("See you there!<br>{{org_name}}"),
     ].join(""),
   };

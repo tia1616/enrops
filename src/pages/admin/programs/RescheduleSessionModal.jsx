@@ -176,7 +176,7 @@ export default function RescheduleSessionModal({ mode = "skip", program, schedul
         credited: result?.credit_families === true && creditedCount > 0,
       })
     : step === "tell-back"
-      ? familyBackOnDraft({ date: told, makeup: skip?.makeup, previousLastDate: result?.last_date })
+      ? familyBackOnDraft({ date: told, makeup: skip?.makeup, previousLastDate: result?.last_date, creditsRemoved: (result?.credits_voided ?? 0) > 0 })
       : null;
 
   const [showFamilies, setShowFamilies] = useState(false);
@@ -404,7 +404,7 @@ export default function RescheduleSessionModal({ mode = "skip", program, schedul
                 )}
                 {(result.credits_kept ?? []).length > 0 && (
                   <div style={{ fontSize: 12, color: RED }}>
-                    Kept, because the family has already started using it: {result.credits_kept.map((k) => k.name || "a family").join(", ")}.
+                    Kept, because it has already been used or is being used at a checkout: {result.credits_kept.map((k) => k.name || "a family").join(", ")}.
                   </div>
                 )}
               </div>
