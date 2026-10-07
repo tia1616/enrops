@@ -176,7 +176,10 @@ export default function RescheduleSessionModal({ mode = "skip", program, schedul
         credited: result?.credit_families === true && creditedCount > 0,
       })
     : step === "tell-back"
-      ? familyBackOnDraft({ date: told, makeup: skip?.makeup, previousLastDate: result?.last_date, creditsRemoved: (result?.credits_voided ?? 0) > 0 })
+      ? familyBackOnDraft({ date: told, makeup: skip?.makeup, previousLastDate: result?.last_date, creditsRemoved: (result?.credits_voided ?? 0) > 0 && (result?.credits_kept ?? []).length === 0 })
+      // Only when EVERY credit was removed: a family whose credit was kept
+      // (already used) would otherwise read that theirs was taken back. With
+      // any kept, the panel names them and the operator words that one.
       : null;
 
   const [showFamilies, setShowFamilies] = useState(false);

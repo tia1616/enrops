@@ -71,7 +71,7 @@ export function familyBackOnDraft({ date, makeup, previousLastDate, creditsRemov
       p(`Good news! {{program_name}} at {{program_location}} is back on for ${longDate(date)}. Please disregard our earlier note.`),
       makeup && previousLastDate ? p(`That means the last day goes back to ${longDate(previousLastDate)}.`) : "",
       // Conditional, like the sentence that announced it: one message, every family.
-      creditsRemoved ? p("Since class is happening after all, the credit we added for that day has been removed from your account.") : "",
+      creditsRemoved ? p("If we added a credit to your account for that day, it has been removed, since class is happening after all.") : "",
       p("See you there!<br>{{org_name}}"),
     ].join(""),
   };
