@@ -24,6 +24,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, adminClient } from '../_shared/instructor.ts';
 import { resolvePayAmount } from '../_shared/payRates.ts';
 import { fetchProgramRunState, mayBecomePay } from '../_shared/programRunning.ts';
+import { isProgramClassDay } from '../_shared/programScheduleDay.ts';
 
 type Role = 'lead' | 'developing';
 
@@ -132,6 +133,17 @@ serve(async (req: Request) => {
       }
       if (!mayBecomePay(state)) {
         return json({ error: 'program_not_running', program_status: status }, 409);
+      }
+      // A day taken off the schedule ("Reschedule a session") keeps its
+      // withheld placeholder; confirming it would pay for a class that did not
+      // meet. Same check confirm-session-taught makes.
+      const day = await isProgramClassDay(supabase, row.program_id!, row.session_date);
+      if (day.error) {
+        console.error('[admin-confirm-session] schedule lookup failed:', day.error);
+        return json({ error: 'lookup_failed' }, 500);
+      }
+      if (!day.onSchedule) {
+        return json({ error: 'not_a_class_day', session_date: row.session_date }, 409);
       }
     }
 

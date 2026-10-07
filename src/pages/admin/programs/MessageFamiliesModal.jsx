@@ -183,15 +183,19 @@ function describeProgressSoFar(perClass, total) {
 // programs array, because ProgramsCalendar passes a raw program row with no
 // enrolled/departed counts on it at all - inferring would have read those as
 // zero and silently widened the audience on every send from the calendar.
-export default function MessageFamiliesModal({ programs, orgId, onClose, onSent, defaultIncludeCancelled = false }) {
+export default function MessageFamiliesModal({ programs, orgId, onClose, onSent, defaultIncludeCancelled = false, initialSubject = "", initialBodyHtml = "" }) {
   // The class the panel is titled after and whose name fills a merge field in
   // the test send. With several, it is simply the first.
   const program = programs?.[0];
   const [tab, setTab] = useState("write");          // write | sent
-  const [subject, setSubject] = useState("");
+  // A starting draft ONLY when a caller hands one in. The blank default above
+  // still stands for every other entry point; the one caller that passes a
+  // draft is "Reschedule a session", whose wording Jessica approved on
+  // 2026-10-07, and the operator still reads and edits it before Send.
+  const [subject, setSubject] = useState(initialSubject);
   // HTML is the canonical form, the same as every other body editor. The
   // operator never sees it; RichBodyEditor shows them words and a toolbar.
-  const [bodyHtml, setBodyHtml] = useState("");
+  const [bodyHtml, setBodyHtml] = useState(initialBodyHtml);
   const [includeWaitlist, setIncludeWaitlist] = useState(false);
   // THE THIRD GROUP, and it exists because of a dead end Jessica spotted: a
   // refund sets the registration to cancelled, which takes the family off the

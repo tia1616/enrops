@@ -20,6 +20,7 @@ import { useAdminNarrow, tapTarget } from "../../../lib/adminViewport.js";
 import EditProgramCurriculumModal from "./EditProgramCurriculumModal.jsx";
 import CancelClassModal from "./CancelClassModal.jsx";
 import MessageFamiliesModal from "./MessageFamiliesModal.jsx";
+import RescheduleSessionModal from "./RescheduleSessionModal.jsx";
 import ShareProgram from "../../../components/ShareProgram.jsx";
 // The camp vocabulary, shared with the builder so the two forms cannot drift on
 // which days a camp may run, how a day is toggled, or what a half day is called.
@@ -3405,6 +3406,34 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, onScheduleChan
   // to location). Drives the write target, the reason field, and the copy.
   const [skipScope, setSkipScope] = useState("district");
 
+  // "Reschedule a session" (one date off THIS class, with or without a
+  // make-up) and its undo. Days the operator took off live in
+  // program_session_skips; the schedule shows them as no-class rows, and this
+  // map is how a row knows it can be put back (a school closure cannot, here).
+  const [rescheduleOpen, setRescheduleOpen] = useState(false);
+  const [restoreSkip, setRestoreSkip] = useState(null);
+  const [liveSkips, setLiveSkips] = useState(new Map());
+  const [skipsErr, setSkipsErr] = useState("");
+  const isCamp = isCampProgram(program);
+  useEffect(() => {
+    if (!program?.id || isCamp) return;
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from("program_session_skips")
+        .select("id, session_date, makeup")
+        .eq("program_id", program.id)
+        .is("restored_at", null);
+      if (cancelled) return;
+      // Shown, not swallowed: without it a rescheduled day silently loses its
+      // "Put back" link and looks like an ordinary closure.
+      if (error) { setSkipsErr(error.message); return; }
+      setSkipsErr("");
+      setLiveSkips(new Map((data ?? []).map((s) => [s.session_date, s])));
+    })();
+    return () => { cancelled = true; };
+  }, [program?.id, isCamp, dates]);
+
   // `dates` is the full schedule: [{ date, kind: 'session'|'no_school', reason }].
   const schedule = Array.isArray(dates) ? dates : [];
   const sessions = schedule.filter((x) => x?.kind === "session");
@@ -3536,7 +3565,22 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, onScheduleChan
             Mark a no-school day
           </button>
         )}
+        {!isCamp && (
+          <button
+            type="button"
+            onClick={() => setRescheduleOpen(true)}
+            style={{ ...editLinkStyle }}
+            title="Take one date off just this class, with or without a make-up week, then let the instructor and families know"
+          >
+            Reschedule a session
+          </button>
+        )}
       </div>
+      {skipsErr && (
+        <div style={{ fontSize: 12, color: "#b3261e", marginBottom: 6 }}>
+          Couldn't load this class's rescheduled days ({skipsErr}), so "Put back" isn't shown. Reload to try again.
+        </div>
+      )}
       <div style={{ fontSize: 13, color: INK, marginBottom: 10, display: "flex", gap: 16, flexWrap: "wrap" }}>
         {!isLean && (
           <div>
@@ -3587,6 +3631,18 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, onScheduleChan
             <div key={`${x.date}-ns-${idx}`} style={{ fontSize: 13, fontVariantNumeric: "tabular-nums", color: MUTED }}>
               <span style={{ textDecoration: "line-through" }}>{formatSessionDate(x.date)}</span>
               <span style={{ fontStyle: "italic" }}> · {x.reason || "No school"}</span>
+              {/* Only for a day still ahead: restore_program_session refuses a
+                  day that has passed, so offering it would be a dead button. */}
+              {liveSkips.has(x.date) && x.date >= new Date().toLocaleDateString("en-CA") && (
+                <button
+                  type="button"
+                  onClick={() => setRestoreSkip(liveSkips.get(x.date))}
+                  style={{ ...editLinkStyle, marginLeft: 6, fontSize: 11.5 }}
+                  title="Put this day back on the schedule"
+                >
+                  Put back
+                </button>
+              )}
             </div>
           ) : x.reason === "Early release" ? (
             // A KEPT early-release date. It is a real session, so it is not
@@ -3606,6 +3662,19 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, onScheduleChan
           )
         ))}
       </div>
+
+      {(rescheduleOpen || restoreSkip) && (
+        <RescheduleSessionModal
+          mode={restoreSkip ? "restore" : "skip"}
+          program={program}
+          schedule={schedule}
+          skip={restoreSkip}
+          orgId={sdpOrg?.id}
+          senderName={sdpOrg?.name}
+          onChanged={onScheduleChanged}
+          onClose={() => { setRescheduleOpen(false); setRestoreSkip(null); }}
+        />
+      )}
 
       {skipDone && (
         <div style={{ marginTop: 8, fontSize: 12.5, color: OK_GREEN, fontWeight: 600 }}>

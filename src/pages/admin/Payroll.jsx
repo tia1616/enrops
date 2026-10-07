@@ -45,7 +45,14 @@ const STATUS_COLOR = {
   withheld: RED,
   paid: '#7a7a7a',
   mixed: AMBER,
+  no_class: MUTED,
 };
+
+// skip_program_session (migration 20261007c) withholds an unpaid placeholder
+// with EXACTLY this reason, and restore_program_session matches on it to put the
+// line back. One spelling in SQL, mirrored here only to label the row.
+const NO_CLASS_REASON = 'No class (rescheduled)';
+const isNoClassRow = (r) => r.pay_status === 'withheld' && r.pay_adjustment_reason === NO_CLASS_REASON;
 
 const STATUS_LABEL = {
   pending: 'Pending',
@@ -54,6 +61,7 @@ const STATUS_LABEL = {
   withheld: 'Withheld',
   paid: 'Paid',
   mixed: 'Mixed',
+  no_class: 'No class',
 };
 
 function dollars(cents) {
@@ -264,7 +272,7 @@ export default function Payroll() {
         const sessionIds = [...new Set(rows.map((r) => r.camp_session_id).filter(Boolean))];
         const programIds = [...new Set(rows.map((r) => r.program_id).filter(Boolean))];
 
-        const [instR, sessR, progR, onbR] = await Promise.all([
+        const [instR, sessR, progR, onbR, skipR] = await Promise.all([
           supabase.from('instructors')
             .select('id, first_name, last_name, preferred_name, contractor_tier')
             .in('id', instructorIds),
@@ -281,8 +289,28 @@ export default function Payroll() {
           supabase.from('contractor_onboarding_status')
             .select('instructor_id, stripe_payouts_enabled, stripe_connect_account_id')
             .in('instructor_id', instructorIds),
+          // Days the operator took off a class ("Reschedule a session"). Most
+          // never get a pay line at all, because nothing seeds one for a day
+          // that is not on the schedule, so without this the week just looks
+          // one class short with no reason given.
+          programIds.length === 0
+            ? Promise.resolve({ data: [] })
+            : supabase.from('program_session_skips')
+              .select('program_id, session_date, makeup')
+              .in('program_id', programIds)
+              .is('restored_at', null)
+              .gte('session_date', sinceDate),
         ]);
         if (cancelled) return;
+        // Informational only: no money is computed from it, so a failed read
+        // costs an explanation line, never a payment. Say so in the console
+        // rather than throwing away the whole screen.
+        if (skipR.error) console.warn('[Payroll] rescheduled days lookup failed:', skipR.error.message);
+        const skipsByProgram = new Map();
+        for (const s of skipR.data ?? []) {
+          if (!skipsByProgram.has(s.program_id)) skipsByProgram.set(s.program_id, []);
+          skipsByProgram.get(s.program_id).push(s);
+        }
 
         const locationIds = [...new Set((progR.data ?? []).map((p) => p.program_location_id).filter(Boolean))];
         const locR = locationIds.length === 0
@@ -335,6 +363,16 @@ export default function Payroll() {
         // Decorate each group with totals + status.
         const decorated = [...groupMap.values()].map((g) => {
           g.rows.sort((a, b) => (a.session_date ?? '').localeCompare(b.session_date ?? ''));
+          // Rescheduled days with NO pay line, shown under the regular
+          // instructor's class only (a sub's group is about the day they
+          // covered). A day that DID have a placeholder already appears as its
+          // own "No class" row, so it is not listed twice.
+          const rowDates = new Set(g.rows.map((r) => r.session_date));
+          g.skippedDays = (g.kind === 'program' && g.rows.some((r) => r.source === 'regular'))
+            ? (skipsByProgram.get(g.program_id) ?? [])
+              .filter((s) => !rowDates.has(s.session_date))
+              .sort((a, b) => a.session_date.localeCompare(b.session_date))
+            : [];
 
           // Base sum (rows that aren't withheld and have pay_amount_cents).
           const totalPayable = g.rows
@@ -396,8 +434,14 @@ export default function Payroll() {
           const subbedForOne = origIds.length === 1 ? (instById.get(origIds[0]) ?? null) : null;
 
           // Aggregate status.
-          const statuses = [...new Set(g.rows.map((r) => r.pay_status))];
-          const groupStatus = statuses.length === 1 ? statuses[0] : 'mixed';
+          // A rescheduled day's line is not a pay decision, so it does not get a
+          // vote: one withheld "no class" line beside approved days must not turn
+          // the badge red/"Mixed", and a week of only that line reads "No class".
+          const taughtRows = g.rows.filter((r) => !isNoClassRow(r));
+          const statuses = [...new Set(taughtRows.map((r) => r.pay_status))];
+          const groupStatus = taughtRows.length === 0 ? 'no_class'
+            : statuses.length === 1 ? statuses[0] : 'mixed';
+          g.sessionRowCount = taughtRows.length;
 
           // Eligibility for the Pay action. THIS IS THE MIRROR of pay-instructor's
           // own `eligible` filter (index.ts:235-244) and the last two lines were
@@ -668,7 +712,12 @@ export default function Payroll() {
       } else {
         // Week bonus: attach to a payable line on this group (sum if one
         // already carries an adjustment). Reason is prefixed "Bonus:".
-        const row = target.group.rows.find((r) => r.pay_status !== 'paid') ?? target.group.rows[0];
+        // Never a rescheduled day's line: that day had no class, its line can
+        // never be confirmed or paid (the DB refuses it), so a bonus parked
+        // there would never reach the instructor - and would stop the line
+        // reading "No class".
+        const bonusRows = target.group.rows.filter((r) => !isNoClassRow(r));
+        const row = bonusRows.find((r) => r.pay_status !== 'paid') ?? bonusRows[0];
         if (!row) throw new Error('No pay line to attach the bonus to.');
         const newAdj = (row.pay_adjustment_cents ?? 0) + amountCents;
         if ((row.pay_amount_cents ?? 0) + newAdj < 0) { setError('That deduction is larger than the pay.'); setBusy(false); return; }
@@ -1156,7 +1205,7 @@ function GroupRow({
             ) : (
               <>
                 {g.program?.curriculum ?? 'Program'} · {g.school?.name ?? ''}
-                {g.program?.session_count && <> · {g.rows.length} of {g.program.session_count} sessions</>}
+                {g.program?.session_count && <> · {g.sessionRowCount} of {g.program.session_count} sessions</>}
               </>
             )}
           </div>
@@ -1216,6 +1265,7 @@ function GroupRow({
       {expanded && (
         <DayBreakdown
           rows={g.rows}
+          skippedDays={g.skippedDays}
           onApproveRow={onApproveRow}
           onConfirmRow={onConfirmRow}
           onWithholdRow={onWithholdRow}
@@ -1261,7 +1311,7 @@ function GroupRow({
 // the group-level display it existed for is the one deleted above - and leaving an
 // unused prop carrying the arbitrary-first-row value is an invitation to render it,
 // which is the exact bug /code-review found in the header badge.
-function DayBreakdown({ rows, onApproveRow, onConfirmRow, onWithholdRow, onReapproveRow, onAdjustRow, canManage, busy }) {
+function DayBreakdown({ rows, skippedDays, onApproveRow, onConfirmRow, onWithholdRow, onReapproveRow, onAdjustRow, canManage, busy }) {
   return (
     <div style={{ borderTop: `1px solid ${RULE}`, padding: 12, background: '#fafafa' }}>
       {rows.map((r) => {
@@ -1274,6 +1324,23 @@ function DayBreakdown({ rows, onApproveRow, onConfirmRow, onWithholdRow, onReapp
         // suppress them and route to confirm instead.
         const neverConfirmed = r.confirmed_by === 'pending' && r.instructor_payout_id == null;
         const unconfirmed = neverConfirmed && r.pay_status !== 'withheld';
+        // A day taken off the schedule after its line was seeded. Not a
+        // decision to withhold earned pay, so it does not read "Withheld", and
+        // it gets no Confirm: the server refuses that day anyway (not_a_class_day).
+        if (isNoClassRow(r)) {
+          return (
+            <div key={r.confirmation_id} style={{
+              display: 'flex', alignItems: 'center', gap: 12, padding: '6px 0',
+              borderBottom: `1px dashed ${RULE}`, fontSize: 13,
+            }}>
+              <div style={{ flex: '0 0 110px', color: INK }}>{fmtDate(r.session_date)}</div>
+              <div style={{ flex: '1 1 auto', color: MUTED, fontStyle: 'italic' }}>No class (rescheduled)</div>
+              <div style={{ flex: '0 0 90px' }}>
+                <span style={{ color: MUTED, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.3 }}>Not paid</span>
+              </div>
+            </div>
+          );
+        }
         return (
           <div key={r.confirmation_id} style={{
             display: 'flex', alignItems: 'center', gap: 12, padding: '6px 0',
@@ -1323,7 +1390,21 @@ function DayBreakdown({ rows, onApproveRow, onConfirmRow, onWithholdRow, onReapp
           </div>
         );
       })}
-      {rows[0]?.pay_adjustment_reason && (
+      {(skippedDays ?? []).map((s) => (
+        <div key={`skip-${s.session_date}`} style={{
+          display: 'flex', alignItems: 'center', gap: 12, padding: '6px 0',
+          borderBottom: `1px dashed ${RULE}`, fontSize: 13,
+        }}>
+          <div style={{ flex: '0 0 110px', color: INK }}>{fmtDate(s.session_date)}</div>
+          <div style={{ flex: '1 1 auto', color: MUTED, fontStyle: 'italic' }}>
+            {s.makeup ? 'No class (rescheduled, make-up added)' : 'No class (rescheduled)'}
+          </div>
+          <div style={{ flex: '0 0 90px' }}>
+            <span style={{ color: MUTED, fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.3 }}>Not paid</span>
+          </div>
+        </div>
+      ))}
+      {rows[0]?.pay_adjustment_reason && !isNoClassRow(rows[0]) && (
         <div style={{ marginTop: 8, fontSize: 12, color: MUTED, fontStyle: 'italic' }}>
           Note: {rows[0].pay_adjustment_reason}
         </div>
