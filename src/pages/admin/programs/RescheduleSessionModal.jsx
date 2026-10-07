@@ -71,6 +71,10 @@ export default function RescheduleSessionModal({ mode = "skip", program, schedul
   const [step, setStep] = useState(mode === "restore" ? "confirm-restore" : "choose");
   const [date, setDate] = useState(upcoming[0] ?? sessions[0] ?? "");
   const [makeup, setMakeup] = useState(isRange ? false : true);
+  // Credit families for a lost day? null = not answered yet. Deliberately no
+  // default: it is the provider's own policy, and a pre-ticked answer is one
+  // somebody could submit without reading.
+  const [credit, setCredit] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [result, setResult] = useState(null); // RPC result
@@ -133,6 +137,7 @@ export default function RescheduleSessionModal({ mode = "skip", program, schedul
     setBusy(true); setErr("");
     const { data, error } = await supabase.rpc("skip_program_session", {
       p_program_id: program.id, p_date: date, p_makeup: effectiveMakeup,
+      p_credit_families: !effectiveMakeup && credit === true,
     });
     if (error) { setErr(error.message || "That day couldn't be rescheduled."); setBusy(false); return; }
     const fresh = onChanged ? await onChanged(program.id) : true;
@@ -153,12 +158,23 @@ export default function RescheduleSessionModal({ mode = "skip", program, schedul
     setBusy(false);
   }
 
+  // Credits are written INSIDE skip_program_session (same transaction as the
+  // day itself), so by the time the tell step shows they have all happened or
+  // the whole save failed - there is no half-credited state to warn about.
+  // Declared above familyDraft, which reads it.
+  const creditedCount = (result?.credits?.credited ?? []).length;
+
   // ── the "tell" step: what changed, and who to tell ────────────────────
   const told = result?.date ?? skip?.session_date ?? date;
   const nextAfter = (d) => sessions.find((x) => x > d) ?? null;
 
   const familyDraft = step === "tell"
-    ? familyRescheduledDraft({ date: told, makeup: result?.makeup, lastDate: result?.last_date, nextDate: nextAfter(told) })
+    ? familyRescheduledDraft({
+        date: told, makeup: result?.makeup, lastDate: result?.last_date, nextDate: nextAfter(told),
+        // Only once a credit has actually been written: the sentence promises
+        // money on the family's account.
+        credited: result?.credit_families === true && creditedCount > 0,
+      })
     : step === "tell-back"
       ? familyBackOnDraft({ date: told, makeup: skip?.makeup, previousLastDate: result?.last_date })
       : null;
@@ -249,6 +265,19 @@ export default function RescheduleSessionModal({ mode = "skip", program, schedul
                 : "Not available for the last class: it can only move with a make-up."}
             </button>
 
+            {!effectiveMakeup && !noChoice && (
+              <>
+                <div style={{ fontSize: 12, color: MUTED, margin: "6px 0" }}>Credit families for the missed day?</div>
+                <button type="button" disabled={busy} onClick={() => setCredit(true)} style={choiceStyle(credit === true, false)}>
+                  <strong>Yes, credit families.</strong>{" "}
+                  Each family gets 1/{program?.session_count || sessions.length} of what they paid for the class (not counting fees), added to their account automatically.
+                </button>
+                <button type="button" disabled={busy} onClick={() => setCredit(false)} style={choiceStyle(credit === false, false)}>
+                  <strong>No credit.</strong>{" "}
+                  For example, if your sign-up policy says a skipped day isn't refunded.
+                </button>
+              </>
+            )}
             {noChoice && (
               <div style={{ fontSize: 12.5, color: RED, margin: "8px 0" }}>
                 This is the last class of a class that runs between fixed dates, so it can't be rescheduled here.
@@ -258,7 +287,7 @@ export default function RescheduleSessionModal({ mode = "skip", program, schedul
             {err && <div style={{ fontSize: 12.5, color: RED, margin: "8px 0" }}>{err}</div>}
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 10 }}>
               <button type="button" onClick={onClose} disabled={busy} style={btn(false, busy)}>Close</button>
-              <button type="button" onClick={doSkip} disabled={busy || !date || noChoice} style={btn(true, busy || !date || noChoice)}>
+              <button type="button" onClick={doSkip} disabled={busy || !date || noChoice || (!effectiveMakeup && credit === null)} style={btn(true, busy || !date || noChoice || (!effectiveMakeup && credit === null))}>
                 {busy ? "Saving…" : "Reschedule this session"}
               </button>
             </div>
@@ -339,6 +368,47 @@ export default function RescheduleSessionModal({ mode = "skip", program, schedul
                 onReleased={(id) => setReleasedIds((prev) => new Set(prev).add(id))}
               />
             ))}
+
+            {step === "tell" && result?.credit_families && (
+              <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, padding: "10px 12px", marginBottom: 8, fontSize: 13, color: INK }}>
+                <strong>Credits for families</strong>
+                {creditedCount > 0 ? (
+                  <div style={{ fontSize: 12, color: OK_GREEN, fontWeight: 600 }}>
+                    ✓ {creditedCount} famil{creditedCount === 1 ? "y" : "ies"} credited,
+                    {" "}${((result.credits?.total_cents ?? 0) / 100).toFixed(2)} in total. It's on their account now.
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 12, color: MUTED }}>
+                    No family had paid for this class yet, so nobody was credited.
+                  </div>
+                )}
+                {(result.credits?.credited ?? []).some((c) => c.capped) && (
+                  <div style={{ fontSize: 12, color: MUTED }}>
+                    {(result.credits.credited.filter((c) => c.capped)).map((c) => c.name || "A family").join(", ")}: credited what they've paid so far, which is less than one session's share.
+                  </div>
+                )}
+                {(result.credits?.skipped ?? []).length > 0 && (
+                  <div style={{ fontSize: 12, color: MUTED }}>
+                    Not credited: {result.credits.skipped.map((s) => `${s.name || "a family"} (${s.why})`).join(", ")}.
+                  </div>
+                )}
+              </div>
+            )}
+            {step === "tell-back" && (result?.credits_voided > 0 || (result?.credits_kept ?? []).length > 0) && (
+              <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, padding: "10px 12px", marginBottom: 8, fontSize: 13, color: INK }}>
+                <strong>Credits</strong>
+                {result.credits_voided > 0 && (
+                  <div style={{ fontSize: 12, color: OK_GREEN }}>
+                    ✓ {result.credits_voided} credit{result.credits_voided === 1 ? "" : "s"} for this day removed (nobody had used them yet).
+                  </div>
+                )}
+                {(result.credits_kept ?? []).length > 0 && (
+                  <div style={{ fontSize: 12, color: RED }}>
+                    Kept, because the family has already started using it: {result.credits_kept.map((k) => k.name || "a family").join(", ")}.
+                  </div>
+                )}
+              </div>
+            )}
 
             <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, padding: "10px 12px", marginBottom: 8, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
               <div style={{ flex: "1 1 220px", fontSize: 13, color: INK }}>

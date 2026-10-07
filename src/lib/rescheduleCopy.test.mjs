@@ -21,6 +21,7 @@ const inst = { firstName: 'Liberty', className: 'LEGO Brickopolis', school: 'Wes
 const all = [
   ['family makeup', familyRescheduledDraft({ ...base, makeup: true })],
   ['family no makeup', familyRescheduledDraft({ ...base, makeup: false })],
+  ['family no makeup credited', familyRescheduledDraft({ ...base, makeup: false, credited: true })],
   ['family back on makeup', familyBackOnDraft({ ...base, makeup: true })],
   ['family back on', familyBackOnDraft({ ...base, makeup: false })],
   ['instructor makeup', instructorRescheduledDraft({ ...inst, ...base, makeup: true })],
@@ -43,6 +44,8 @@ for (const [name, d] of all) {
   ok('make-up tells families the new last day', mk.bodyHtml.includes('Monday, November 16'));
   ok('no make-up never promises a make-up', !/make-up/i.test(nm.bodyHtml));
   ok('no make-up says when class picks back up', nm.bodyHtml.includes('Monday, October 26'));
+  ok('no credit, no credit sentence', !/credit/i.test(nm.bodyHtml));
+  ok('credited families are told about the credit', /credit to your account/.test(familyRescheduledDraft({ ...base, makeup: false, credited: true }).bodyHtml));
   ok('families draft uses the server merge fields', mk.bodyHtml.includes('{{parent_first_name}}') && mk.bodyHtml.includes('{{program_location}}'));
 }
 

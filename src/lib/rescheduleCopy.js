@@ -29,7 +29,8 @@ const p = (s) => `<p>${s}</p>`;
 // What families read when a day comes off the schedule.
 //   makeup  - true: a make-up week was added at the end; lastDate is the new last day.
 //   nextDate - the next class after the skipped day (no make-up case).
-export function familyRescheduledDraft({ date, makeup, lastDate, nextDate }) {
+//   credited - families were credited for the missed day (no make-up only).
+export function familyRescheduledDraft({ date, makeup, lastDate, nextDate, credited = false }) {
   if (makeup) {
     return {
       subject: `{{program_name}} on ${longDate(date)} is rescheduled`,
@@ -50,6 +51,7 @@ export function familyRescheduledDraft({ date, makeup, lastDate, nextDate }) {
       nextDate
         ? p(`Class picks back up on ${longDate(nextDate)}, and everything else stays the same.`)
         : p("Everything else stays the same."),
+      credited ? p("We've added a credit to your account for the missed class, which you can use toward a future class.") : "",
       p("If you added class dates to your calendar, please update that one day."),
       p("Thank you for understanding!<br>{{org_name}}"),
     ].join(""),
