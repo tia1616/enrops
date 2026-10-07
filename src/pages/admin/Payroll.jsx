@@ -45,6 +45,7 @@ const STATUS_COLOR = {
   withheld: RED,
   paid: '#7a7a7a',
   mixed: AMBER,
+  no_class: MUTED,
 };
 
 // skip_program_session (migration 20261007c) withholds an unpaid placeholder
@@ -60,6 +61,7 @@ const STATUS_LABEL = {
   withheld: 'Withheld',
   paid: 'Paid',
   mixed: 'Mixed',
+  no_class: 'No class',
 };
 
 function dollars(cents) {
@@ -432,8 +434,14 @@ export default function Payroll() {
           const subbedForOne = origIds.length === 1 ? (instById.get(origIds[0]) ?? null) : null;
 
           // Aggregate status.
-          const statuses = [...new Set(g.rows.map((r) => r.pay_status))];
-          const groupStatus = statuses.length === 1 ? statuses[0] : 'mixed';
+          // A rescheduled day's line is not a pay decision, so it does not get a
+          // vote: one withheld "no class" line beside approved days must not turn
+          // the badge red/"Mixed", and a week of only that line reads "No class".
+          const taughtRows = g.rows.filter((r) => !isNoClassRow(r));
+          const statuses = [...new Set(taughtRows.map((r) => r.pay_status))];
+          const groupStatus = taughtRows.length === 0 ? 'no_class'
+            : statuses.length === 1 ? statuses[0] : 'mixed';
+          g.sessionRowCount = taughtRows.length;
 
           // Eligibility for the Pay action. THIS IS THE MIRROR of pay-instructor's
           // own `eligible` filter (index.ts:235-244) and the last two lines were
@@ -704,7 +712,12 @@ export default function Payroll() {
       } else {
         // Week bonus: attach to a payable line on this group (sum if one
         // already carries an adjustment). Reason is prefixed "Bonus:".
-        const row = target.group.rows.find((r) => r.pay_status !== 'paid') ?? target.group.rows[0];
+        // Never a rescheduled day's line: that day had no class, its line can
+        // never be confirmed or paid (the DB refuses it), so a bonus parked
+        // there would never reach the instructor - and would stop the line
+        // reading "No class".
+        const bonusRows = target.group.rows.filter((r) => !isNoClassRow(r));
+        const row = bonusRows.find((r) => r.pay_status !== 'paid') ?? bonusRows[0];
         if (!row) throw new Error('No pay line to attach the bonus to.');
         const newAdj = (row.pay_adjustment_cents ?? 0) + amountCents;
         if ((row.pay_amount_cents ?? 0) + newAdj < 0) { setError('That deduction is larger than the pay.'); setBusy(false); return; }
@@ -1192,7 +1205,7 @@ function GroupRow({
             ) : (
               <>
                 {g.program?.curriculum ?? 'Program'} · {g.school?.name ?? ''}
-                {g.program?.session_count && <> · {g.rows.length} of {g.program.session_count} sessions</>}
+                {g.program?.session_count && <> · {g.sessionRowCount} of {g.program.session_count} sessions</>}
               </>
             )}
           </div>

@@ -69,7 +69,7 @@ create policy program_session_skips_org_read on public.program_session_skips
   for select using (is_org_member(organization_id) or is_platform_admin());
 
 revoke all on public.program_session_skips from anon;
-revoke insert, update, delete on public.program_session_skips from authenticated;
+revoke all on public.program_session_skips from authenticated;
 grant select on public.program_session_skips to authenticated;
 
 -- ------------------------------------------- what the schedule may read --
@@ -392,12 +392,13 @@ DECLARE
   v_blocking   int;
   v_covers     jsonb;
   v_dates      date[];
+  v_mode       text;
 BEGIN
   IF p_program_id IS NULL OR p_date IS NULL OR p_makeup IS NULL THEN
     RAISE EXCEPTION 'program, date and make-up choice are all required';
   END IF;
 
-  SELECT p.organization_id, p.class_days INTO v_org, v_class_days
+  SELECT p.organization_id, p.class_days, p.schedule_mode INTO v_org, v_class_days, v_mode
     FROM programs p WHERE p.id = p_program_id;
   IF v_org IS NULL THEN
     RAISE EXCEPTION 'program not found';
@@ -413,17 +414,43 @@ BEGIN
   -- at once would each check the schedule before the other's row existed.
   PERFORM pg_advisory_xact_lock(hashtext('program_schedule:' || p_program_id::text));
 
-  IF NOT (p_date = ANY (derive_program_session_dates(p_program_id))) THEN
+  v_dates := derive_program_session_dates(p_program_id);
+  IF NOT (p_date = ANY (v_dates)) THEN
     RAISE EXCEPTION 'that date is not a class day for this class';
   END IF;
 
+  -- A class sold by DATE RANGE told families its end date; a make-up week
+  -- would meet after it, and nothing that reads end_date (emails, roster,
+  -- range drift check) would know.
+  IF p_makeup AND v_mode = 'range' THEN
+    RAISE EXCEPTION 'this class runs between fixed dates, so a make-up can''t be added at the end - skip the day without one';
+  END IF;
+
+  -- Skipping the LAST class without a make-up moves the "final session" back a
+  -- week. The instructor's distance bonus rides the final session's pay line;
+  -- if that earlier line is already paid the bonus can never be paid.
+  IF NOT p_makeup AND p_date = (SELECT max(d) FROM unnest(v_dates) d) THEN
+    RAISE EXCEPTION 'that''s the last class, so it can only be rescheduled with a make-up';
+  END IF;
+
+  -- Lock this day's pay lines BEFORE judging them, so an instructor confirming
+  -- the day at the same moment either lands first (and blocks this) or waits
+  -- and finds it withheld.
+  PERFORM 1 FROM session_delivery_confirmations c
+    WHERE c.program_id = p_program_id AND c.session_date = p_date
+    FOR UPDATE;
+
   -- A day somebody said they taught, or that has moved money, is not a
-  -- schedule change any more. Only the untouched cron placeholder may go.
+  -- schedule change any more. An unconfirmed placeholder an admin already
+  -- WITHHELD by hand does not block: nothing was taught or paid, and it is
+  -- left exactly as the admin set it (the UPDATE below only takes 'pending').
   SELECT count(*) INTO v_blocking
     FROM session_delivery_confirmations c
    WHERE c.program_id = p_program_id
      AND c.session_date = p_date
-     AND (c.confirmed_by <> 'pending' OR c.pay_status <> 'pending' OR c.instructor_payout_id IS NOT NULL);
+     AND (c.confirmed_by <> 'pending'
+          OR c.instructor_payout_id IS NOT NULL
+          OR c.pay_status IN ('approved', 'adjusted', 'paid'));
   IF v_blocking > 0 THEN
     RAISE EXCEPTION 'that class was already marked taught or paid, so it can''t be rescheduled - correct it in payroll instead';
   END IF;
@@ -446,6 +473,13 @@ BEGIN
     (organization_id, program_id, session_date, makeup, voided_confirmation_ids, created_by)
   VALUES (v_org, p_program_id, p_date, p_makeup, v_voided, auth.uid())
   RETURNING id INTO v_skip_id;
+
+  -- Unanswered sub offers for this day close NOW, not at tonight's sweep:
+  -- the stale 9/29 offer is what started this feature. Same function the
+  -- nightly job runs (one spelling of "close an offer whose day is not
+  -- held"), confined to this class so one admin's click does not walk every
+  -- org's schedule.
+  PERFORM close_sub_offers_on_days_not_held(p_program_id);
 
   -- Anyone who ACCEPTED a sub day on this date. The pop-up releases them
   -- through cancel-sub-cover so they are told; the schedule change alone
@@ -503,24 +537,40 @@ BEGIN
   IF v_row.restored_at IS NOT NULL THEN
     RAISE EXCEPTION 'that day is already back on the schedule';
   END IF;
+  -- Putting a day back after it has passed would rewrite history: a class
+  -- that did not meet would reappear as held, and with a make-up the extra
+  -- week (possibly already taught and paid) would vanish from the schedule.
+  -- The make-up always falls after the skipped day, so this one guard covers
+  -- both.
+  -- The ORG's today, not the database's: current_date is UTC, which is already
+  -- tomorrow by late afternoon in the Pacific, and would refuse today's class.
+  IF v_row.session_date < (now() AT TIME ZONE COALESCE(
+       (SELECT o.timezone FROM organizations o WHERE o.id = v_row.organization_id),
+       'America/Los_Angeles'))::date THEN
+    RAISE EXCEPTION 'that day has already passed, so it can''t be put back on the schedule';
+  END IF;
 
   UPDATE program_session_skips
      SET restored_at = now(), restored_by = auth.uid()
    WHERE id = p_skip_id;
 
+  v_dates := derive_program_session_dates(v_row.program_id);
+
   -- Only the placeholders THIS skip withheld, and only while they still carry
   -- its reason: an admin who has since decided something else about that line
-  -- keeps their decision.
-  UPDATE session_delivery_confirmations c
-     SET pay_status = 'pending',
-         pay_adjustment_reason = NULL,
-         updated_at = now()
-   WHERE c.id = ANY (v_row.voided_confirmation_ids)
-     AND c.pay_status = 'withheld'
-     AND c.pay_adjustment_reason = 'No class (rescheduled)'
-     AND c.instructor_payout_id IS NULL;
-
-  v_dates := derive_program_session_dates(v_row.program_id);
+  -- keeps their decision. And only if the day really is back: if a closure
+  -- now covers it, the line stays "no class" (the pay-line guard would refuse
+  -- the flip anyway, and failing the whole undo over it would be worse).
+  IF v_row.session_date = ANY (v_dates) THEN
+    UPDATE session_delivery_confirmations c
+       SET pay_status = 'pending',
+           pay_adjustment_reason = NULL,
+           updated_at = now()
+     WHERE c.id = ANY (v_row.voided_confirmation_ids)
+       AND c.pay_status = 'withheld'
+       AND c.pay_adjustment_reason = 'No class (rescheduled)'
+       AND c.instructor_payout_id IS NULL;
+  END IF;
 
   RETURN jsonb_build_object(
     'date', v_row.session_date,
@@ -535,3 +585,86 @@ revoke all on function public.skip_program_session(uuid, date, boolean) from pub
 grant execute on function public.skip_program_session(uuid, date, boolean) to authenticated, service_role;
 revoke all on function public.restore_program_session(uuid) from public, anon;
 grant execute on function public.restore_program_session(uuid) to authenticated, service_role;
+
+-- ------------------------------ the sub-offer sweep, scoped on request --
+-- Same body as 20261007b plus an optional program filter, so skip can close
+-- this one class's offers immediately without walking every org's schedule.
+-- The old zero-argument signature is dropped first: keeping both would make
+-- the nightly cron's `select close_sub_offers_on_days_not_held()` ambiguous.
+drop function if exists public.close_sub_offers_on_days_not_held();
+
+create or replace function public.close_sub_offers_on_days_not_held(p_program_id uuid default null)
+returns integer
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_closed integer;
+begin
+  update assignment_substitutions s
+     set status             = 'cancelled',
+         cover_still_needed = false,
+         cancelled_at       = now(),
+         cancel_reason      = 'Class not held on this day',
+         updated_at         = now()
+    from program_assignments pa
+    join programs p on p.id = pa.program_id
+   where pa.id = s.parent_assignment_id
+     and s.parent_assignment_type = 'program'
+     and s.status = 'pending'
+     and s.date >= current_date
+     and (p_program_id is null or p.id = p_program_id)
+     and (coalesce(p.status, 'open') = 'cancelled'
+          or not program_meets_on(p.id, s.date));
+
+  get diagnostics v_closed = row_count;
+  return v_closed;
+end;
+$$;
+
+revoke all on function public.close_sub_offers_on_days_not_held(uuid) from public, anon, authenticated;
+grant execute on function public.close_sub_offers_on_days_not_held(uuid) to service_role;
+
+-- ------------------------------------- a no-class line stays unpaid --
+-- The edge functions check the schedule before confirming a day, but a skip
+-- can commit between that check and their write. This closes the gap where
+-- the money is: a line skip_program_session withheld cannot be moved off
+-- 'withheld' while its day is still off the schedule, and no CONFIRMED line
+-- can be created for a program day that is not on it. restore_program_session
+-- puts the day back first, so its own update passes. Pending placeholders
+-- (the seeding cron) are untouched: they are not pay.
+create or replace function public.guard_pay_line_against_skipped_day()
+returns trigger
+language plpgsql
+set search_path = public, pg_temp
+as $$
+BEGIN
+  IF NEW.program_id IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  IF TG_OP = 'UPDATE'
+     AND OLD.pay_status = 'withheld'
+     AND OLD.pay_adjustment_reason = 'No class (rescheduled)'
+     AND (NEW.pay_status <> 'withheld' OR NEW.confirmed_by <> 'pending')
+     AND NOT (NEW.session_date = ANY (derive_program_session_dates(NEW.program_id))) THEN
+    RAISE EXCEPTION 'no class met on % - that day was rescheduled, so it can''t be confirmed or paid', NEW.session_date
+      USING ERRCODE = 'RS001';
+  END IF;
+
+  IF TG_OP = 'INSERT'
+     AND NEW.confirmed_by <> 'pending'
+     AND EXISTS (SELECT 1 FROM program_skipped_dates(NEW.program_id) k WHERE k.session_date = NEW.session_date) THEN
+    RAISE EXCEPTION 'no class met on % - that day was rescheduled, so it can''t be confirmed or paid', NEW.session_date
+      USING ERRCODE = 'RS001';
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+drop trigger if exists trg_guard_pay_line_against_skipped_day on public.session_delivery_confirmations;
+create trigger trg_guard_pay_line_against_skipped_day
+  before insert or update on public.session_delivery_confirmations
+  for each row execute function public.guard_pay_line_against_skipped_day();
