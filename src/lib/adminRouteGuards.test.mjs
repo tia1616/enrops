@@ -94,6 +94,12 @@ const BARE_ROUTES = new Set([
   // checked in the component, again by RLS on organizations, again by both edge
   // functions, and again by guard_organizations_locked_columns on the write.
   'platform/stripe-moves',
+  // platform/revenue-by-state is read-only (money doc item 14). Bare for the
+  // same reason as its neighbours: platform_admins checked in the component,
+  // and again by RLS on registrations/installments (is_platform_admin() in
+  // their SELECT policies), which is what actually bounds a non-admin caller
+  // of platform_revenue_by_state() to their own org rather than every org.
+  'platform/revenue-by-state',
 ]);
 
 // ---------------------------------------------------------------------------
