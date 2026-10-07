@@ -75,7 +75,37 @@ function timeAgo(dateStr) {
 // session list is CONTENT that may run out - never the source of truth for the
 // count. Deriving the total from sessions.length told families their class was
 // "complete" as soon as the lesson plans ran out, weeks before it actually ended.
-function getSessionInfo(program, sessions) {
+//
+// THE REAL DATES WIN when we have them. `sessionDates` are the meeting dates
+// from derive_program_session_schedule, so a no-school week, a make-up week or
+// a session taken off without one is already counted. The weekly arithmetic
+// below is only the fallback for when that lookup came back empty: it assumes
+// one meeting every week from the first date, which is wrong after any
+// closure (it called class "today" on a no-school Monday and finished the term
+// a week early).
+function getSessionInfo(program, sessions, sessionDates) {
+  if (Array.isArray(sessionDates) && sessionDates.length > 0) {
+    const dates = [...sessionDates].map((d) => String(d).slice(0, 10)).sort();
+    const now = new Date();
+    const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const total = dates.length;
+    if (todayIso < dates[0]) {
+      return { state: 'upcoming', nextDate: dates[0], session: sessions?.[0] ?? null, totalSessions: total };
+    }
+    if (todayIso > dates[total - 1]) return { state: 'complete' };
+    // The most recent meeting on or before today: today's class on a class day.
+    const idx = dates.filter((d) => d <= todayIso).length - 1;
+    return {
+      state: dates[idx] === todayIso ? 'today' : 'in-progress',
+      session: sessions?.[idx] ?? null,
+      sessionNumber: idx + 1,
+      totalSessions: total,
+      nextSession: idx + 1 < total ? (sessions?.[idx + 1] ?? null) : null,
+      nextSessionNumber: idx + 2,
+      nextDate: dates[idx + 1] ?? null,
+    };
+  }
+
   const total = program?.session_count || sessions?.length || 0;
   if (!program?.first_session_date || !total) return null;
   const today = new Date();
@@ -643,6 +673,13 @@ export default function Dashboard() {
             entry.sessionDates = schedule
               .filter((x) => x?.kind === 'session')
               .map((x) => x.date);
+            // Recount against the real dates now that we have them; the value
+            // set above was the weekly-arithmetic fallback.
+            entry.sessionInfo = getSessionInfo(
+              { session_count: entry.sessionCount, first_session_date: entry.firstDate, day_of_week: entry.day },
+              entry.sessions,
+              entry.sessionDates,
+            );
           }
         });
       }

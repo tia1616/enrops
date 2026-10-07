@@ -29,6 +29,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
+import { isProgramClassDay } from '../_shared/programScheduleDay.ts';
 
 const PUBLIC_SITE_URL = (Deno.env.get('PUBLIC_SITE_URL') ?? 'https://enrops.com').replace(/\/+$/, '');
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
@@ -173,12 +174,17 @@ serve(async (req: Request) => {
       ? { column: 'camp_session_id', value: (parentForPay as { camp_session_id?: string } | null)?.camp_session_id }
       : { column: 'program_id', value: (parentForPay as { program_id?: string } | null)?.program_id };
     if (payKey.value) {
-      const { data: delivered, error: deliveredErr } = await supabase
+      const { data: dayLines, error: deliveredErr } = await supabase
         .from('session_delivery_confirmations')
-        .select('id')
+        .select('id, pay_status, pay_adjustment_reason')
         .eq(payKey.column, payKey.value)
-        .eq('session_date', row.date)
-        .limit(1);
+        .eq('session_date', row.date);
+      // A line "Reschedule a session" withheld is the record that NO class met,
+      // the opposite of delivered. Counting it would refuse to release the very
+      // sub the reschedule pop-up hands here.
+      const delivered = (dayLines ?? []).filter(
+        (l) => !(l.pay_status === 'withheld' && l.pay_adjustment_reason === 'No class (rescheduled)'),
+      );
       // FAIL CLOSED. Not knowing whether this day has been paid for is not a
       // reason to move somebody's pay line.
       if (deliveredErr) {
@@ -236,7 +242,24 @@ serve(async (req: Request) => {
     // asserted anyway" - the outcome is REPORTED, so the modal can say what
     // actually happened. Telling an operator "Dana has been told" when Resend
     // was rate-limited is how Dana turns up to a class that was given away.
-    const notified = await notifyCancelled(supabase, row, wasConfirmed, reason, stillNeedsCover)
+    // IS THE CLASS EVEN MEETING THAT DAY? "Reschedule a session" releases a
+    // sub because the day came off the schedule. The usual release copy would
+    // then tell the regular instructor "you're back on" for a class that is
+    // not happening. On a lookup error we cannot tell, so we say nothing to the
+    // regular rather than risk that sentence; the sub is still told.
+    let dayNotHeld = false;
+    let dayUnknown = false;
+    if (row.parent_assignment_type === 'program' && payKey.value) {
+      const day = await isProgramClassDay(supabase, payKey.value, row.date);
+      if (day.error) {
+        console.error('[cancel-sub-cover] schedule lookup failed:', day.error);
+        dayUnknown = true;
+      } else {
+        dayNotHeld = !day.onSchedule;
+      }
+    }
+
+    const notified = await notifyCancelled(supabase, row, wasConfirmed, reason, stillNeedsCover, dayNotHeld, dayUnknown)
       .catch((e) => {
         console.error('[cancel-sub-cover] notification failed:', e);
         return { sub: false, regular: false };
@@ -274,6 +297,8 @@ async function notifyCancelled(
   wasConfirmed: boolean,
   reason: string,
   stillNeedsCover: boolean,
+  dayNotHeld = false,
+  dayUnknown = false,
 ): Promise<{ sub: boolean; regular: boolean }> {
   const sent = { sub: false, regular: false };
   // Nobody was ever emailed about a pending offer whose send failed, so there
@@ -402,11 +427,18 @@ async function notifyCancelled(
   const headline = wasConfirmed
     ? `you're no longer needed for ${className} on ${friendlyDate}`
     : `we've withdrawn the sub request for ${className} on ${friendlyDate}`;
-  const bodyLine = wasConfirmed
-    ? `Plans changed on our end, so please don't hold the time. Sorry for the disruption.`
-    : `No need to reply to that one. Sorry for the noise.`;
+  // A day taken off the schedule says so plainly: the sub may hear from the
+  // school or a family, and "plans changed" would leave them guessing whether
+  // the class still runs with somebody else.
+  const bodyLine = dayNotHeld
+    ? `There's no class that day, so please don't hold the time. Sorry for the disruption!`
+    : wasConfirmed
+      ? `Plans changed on our end, so please don't hold the time. Sorry for the disruption.`
+      : `No need to reply to that one. Sorry for the noise.`;
+  // Never "Cancelled" in a subject (Jessica, 2026-10-07: "we never want to say
+  // cancel").
   const subSubject = wasConfirmed
-    ? `Cancelled: ${className} on ${friendlyDate.replace(/^[A-Za-z]+, /, '')}`
+    ? `Update: ${className} on ${friendlyDate.replace(/^[A-Za-z]+, /, '')}`
     : `Withdrawn: sub request for ${friendlyDate.replace(/^[A-Za-z]+, /, '')}`;
   const subMail = shell(subFirst, [
     `Quick update: ${headline}${where}.`,
@@ -414,6 +446,12 @@ async function notifyCancelled(
     bodyLine,
   ]);
   sent.sub = await sendOne(sub.email, subSubject, subMail.html, subMail.text);
+
+  // A day that is not being held has no class to be "back on" for, and the
+  // regular hears about the day itself from the operator's own message in the
+  // reschedule pop-up. If we could not tell whether it is held, silence beats
+  // a possibly false "you're back on".
+  if (dayNotHeld || dayUnknown) return sent;
 
   // ── 2. the regular instructor ──
   // They were told this person was covering, by the 3-way coordination email
