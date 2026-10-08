@@ -273,6 +273,7 @@ serve(async (req) => {
     let followUpsQuery = admin
       .from('installments')
       .select(`id, organization_id, stripe_customer_id, installment_number, amount_cents, provider_followup_on,
+        stripe_payment_method_id, retry_payment_method_id,
         registrations!inner(status, students(first_name, last_name), programs(curriculum), parents(email, first_name, last_name))`)
       .eq('status', 'paused_card_failed')
       .lte('provider_followup_on', today);
@@ -1509,9 +1510,12 @@ function buildDeclineAlertBody({
     // the only one who can move this - which is why getting it wrong mattered.
     ...(parentNotice === 'sent' && plan.outcome === 'retries_exhausted'
       ? [
-        `${parent?.first_name || 'The family'} has been emailed to say we've stopped retrying, with a link to put a new card on file`
+        // "with a link" only when the email really carried one: a tenant with
+        // no portal slug gets the reply-to-us sentence instead.
+        `${parent?.first_name || 'The family'} has been emailed to say we've stopped retrying, `
+          + (fixUrl ? `with a link to put a new card on file` : `and asked to reply for a link to put a new card on file`)
           + (plan.payBy ? ` by ${formatRetryDate(plan.payBy)} to keep the spot` : '')
-          + `. If they do, the plan un-pauses on its own and the next daily run collects the payment.`,
+          + `. Once a new card is on, the plan un-pauses on its own and the next daily run collects the payment.`,
         ``,
         followUpBookedOn
           ? `If it's still unpaid, we'll email you again on ${formatRetryDate(followUpBookedOn)} so you can decide whether to release the spot. We never remove a child or add a late fee on our own.`
@@ -1573,13 +1577,16 @@ function buildCancelledAlertBody({
 // to Enrops instead" that is acceptable for any of them.
 async function sendOperatorAlert(
   { brand, to, subject, body }: { brand: OrgBrand; to: string | null; subject: string; body: string },
-) {
+): Promise<'sent' | 'no_inbox' | 'failed'> {
+  // Returns what happened rather than throwing, so every existing caller can
+  // keep ignoring it; the missed-deadline sender reads it, because it has
+  // already claimed its row and must know whether to put the booking back.
   if (!to) {
     console.error('[process-installments] operator alert NOT sent - org has no inbox of its own', {
       organization_id: brand.org_id,
       subject,
     });
-    return;
+    return 'no_inbox';
   }
   try {
     const resp = await fetch('https://api.resend.com/emails', {
@@ -1599,9 +1606,12 @@ async function sendOperatorAlert(
     if (!resp.ok) {
       const errText = await resp.text();
       console.error('Resend send failed:', resp.status, errText);
+      return 'failed';
     }
+    return 'sent';
   } catch (err) {
     console.error('Operator alert failed:', err);
+    return 'failed';
   }
 }
 
@@ -1612,6 +1622,8 @@ interface FollowUpRow {
   installment_number: number;
   amount_cents: number;
   provider_followup_on: string;
+  stripe_payment_method_id: string | null;
+  retry_payment_method_id: string | null;
   registrations: {
     status: string;
     students: { first_name?: string; last_name?: string } | null;
@@ -1625,10 +1637,9 @@ interface FollowUpRow {
  *
  * Each group is CLAIMED before it is sent - provider_followup_on is cleared by a
  * conditional update, and only the run that clears it sends. Two runs at once
- * therefore cannot email the business twice. The cost is that a send that
- * fails after the claim is not retried; it is logged and counted in the
- * summary. That direction is deliberate: a missed reminder is recoverable, a
- * duplicate "please remove this family" email is confusing.
+ * therefore cannot email the business twice. A send that Resend rejects puts
+ * the booking back for tomorrow's run; a business with no inbox at all is
+ * logged and not re-booked, since tomorrow would be no different.
  */
 async function sendMissedDeadlineFollowUps(
   admin: AdminClient,
@@ -1636,9 +1647,29 @@ async function sendMissedDeadlineFollowUps(
   today: string,
   summary: any,
 ) {
+  // STILL THE SAME DEAD CARD, or the email is a lie. The card-update webhook
+  // re-pends a row but does not know about this booking, so a family who put a
+  // new card on and whose new charge was then paused for some OTHER reason (a
+  // "charge blocked" pause) would still carry the date - and the business would
+  // be told to release the spot of a family who did exactly what was asked. The
+  // new card is on the row as stripe_payment_method_id; the card the retries
+  // gave up on is retry_payment_method_id. Different = they acted. Those rows
+  // lose the stale booking and are never emailed about.
+  const stale = rows.filter((r) => r.stripe_payment_method_id !== r.retry_payment_method_id);
+  if (stale.length) {
+    const { error: staleErr } = await admin.from('installments')
+      .update({ provider_followup_on: null })
+      .in('id', stale.map((r) => r.id).sort());
+    summary.details.push(
+      `FOLLOW-UP DROPPED (family changed card) ${stale.map((r) => r.id).join(',')}`
+        + (staleErr ? ` - could not clear: ${staleErr.message}` : ''),
+    );
+  }
+  const due = rows.filter((r) => r.stripe_payment_method_id === r.retry_payment_method_id);
+
   // Grouped the way the charge was: one family payment, one email.
   const groups = new Map<string, FollowUpRow[]>();
-  for (const r of rows) {
+  for (const r of due) {
     const key = `${r.organization_id}__${r.stripe_customer_id}__${r.installment_number}__${r.provider_followup_on}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key)!.push(r);
@@ -1677,7 +1708,7 @@ async function sendMissedDeadlineFollowUps(
     const finalNoticeOn = addDaysUtc(followUpOn, -PROVIDER_FOLLOWUP_DAYS);
     const payBy = addDaysUtc(finalNoticeOn, FAMILY_PAY_BY_DAYS);
 
-    await sendOperatorAlert({
+    const outcome = await sendOperatorAlert({
       brand,
       to: brand.tenant_alert_email,
       subject: `Unpaid after the deadline: ${parentName}, installment ${mine[0].installment_number}`,
@@ -1695,8 +1726,28 @@ async function sendMissedDeadlineFollowUps(
         `This is the last automatic email about this payment.`,
       ].join('\n'),
     });
-    summary.deadline_followups_sent++;
-    summary.details.push(`DEADLINE FOLLOW-UP ${mine.map((r) => r.id).join(',')}`);
+    const mineIds = mine.map((r) => r.id).sort();
+    if (outcome === 'sent') {
+      summary.deadline_followups_sent++;
+      summary.details.push(`DEADLINE FOLLOW-UP ${mineIds.join(',')}`);
+    } else if (outcome === 'failed') {
+      // Put the booking back so tomorrow's run tries again. Only onto rows
+      // still paused with nothing booked, so it cannot resurrect a row that was
+      // paid or re-pended in the meantime.
+      const { error: rebookErr } = await admin.from('installments')
+        .update({ provider_followup_on: followUpOn })
+        .in('id', mineIds)
+        .eq('status', 'paused_card_failed')
+        .is('provider_followup_on', null);
+      summary.errors++;
+      summary.details.push(
+        `DEADLINE FOLLOW-UP SEND FAILED ${mineIds.join(',')}`
+          + (rebookErr ? ` - could not re-book: ${rebookErr.message}` : ' - re-booked for the next run'),
+      );
+    } else {
+      summary.errors++;
+      summary.details.push(`DEADLINE FOLLOW-UP NOT SENT (business has no inbox) ${mineIds.join(',')}`);
+    }
   }
 }
 
