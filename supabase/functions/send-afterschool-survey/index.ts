@@ -267,7 +267,7 @@ function renderHtml(params: {
       ${introHtml(intro, termDisplay)}
     </p>
     <p style="margin:0 0 16px;font-size:15px;line-height:1.55;">
-      The survey takes about 2 minutes. You'll pick the weekdays you're free, the time window that works for you, any dates you can't make, and which schools you prefer.
+      The survey takes about 2 minutes. You'll pick the days you're free, the time window that works for you, any dates you can't make, and which schools you prefer.
     </p>
     <div style="margin:24px 0;text-align:center;">
       <a href="${portalUrl}" style="display:inline-block;background:${primaryColor};color:#fff;padding:12px 24px;border-radius:6px;text-decoration:none;font-weight:600;font-size:15px;">
@@ -302,7 +302,7 @@ function renderText(params: {
 
 ${introText}
 
-The survey takes about 2 minutes. You'll pick the weekdays you're free, the time window that works for you, any dates you can't make, and which schools you prefer.
+The survey takes about 2 minutes. You'll pick the days you're free, the time window that works for you, any dates you can't make, and which schools you prefer.
 
 Open the survey: ${portalUrl}
 ${deadlineLine}

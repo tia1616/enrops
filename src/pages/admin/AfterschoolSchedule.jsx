@@ -42,14 +42,30 @@ const OK_GREEN = "#3a7c3a";
 const CHANGE_REQ = "#8B4FB5";
 const CREAM = "#FBFBFB";
 
+// All seven, in board order (Monday first, matching weekStartOf). The index is
+// the offset from Monday that dates a column, so Saturday is +5 and Sunday +6.
+// A weekend day is only DRAWN as a column when the term has a weekly class on
+// it - see boardDaysFor. Jessica, 2026-10-08: the board has to hold every
+// program that was scheduled, and WI27 has two Saturday classes it was dropping.
 const DAYS = [
   { key: "monday", code: "mon", label: "Monday", short: "Mon" },
   { key: "tuesday", code: "tue", label: "Tuesday", short: "Tue" },
   { key: "wednesday", code: "wed", label: "Wednesday", short: "Wed" },
   { key: "thursday", code: "thu", label: "Thursday", short: "Thu" },
   { key: "friday", code: "fri", label: "Friday", short: "Fri" },
+  { key: "saturday", code: "sat", label: "Saturday", short: "Sat" },
+  { key: "sunday", code: "sun", label: "Sunday", short: "Sun" },
 ];
-const DAY_TO_CODE = { monday: "mon", tuesday: "tue", wednesday: "wed", thursday: "thu", friday: "fri" };
+const DAY_TO_CODE = Object.fromEntries(DAYS.map((d) => [d.key, d.code]));
+const WEEKEND_CODES = new Set(["sat", "sun"]);
+
+// The columns this term needs: Monday to Friday always, plus Saturday or Sunday
+// only when a weekly class meets that day. A term with none keeps its five.
+// Camps are left out because they render in their own band, not a day column.
+function boardDaysFor(programs) {
+  const used = new Set((programs ?? []).filter((p) => !isCampProgram(p)).map((p) => DAY_TO_CODE[dayKey(p.day_of_week)]));
+  return DAYS.filter((d) => !WEEKEND_CODES.has(d.code) || used.has(d.code));
+}
 
 const LOCATION_PALETTE = ["#F2E4D2", "#E5EDDC", "#DDE7F0", "#ECDFEC", "#F0E0E0", "#E1ECEA"];
 
@@ -88,12 +104,11 @@ function todayIso() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
-// Today's column code ("mon".."fri"), or null at the weekend. Used to open the
-// phone day picker on today rather than always on Monday. Null on Saturday and
-// Sunday because DAYS is Mon-Fri, so there is no column for it.
+// Today's day code ("mon".."sun"). Used to open the phone day picker on today
+// rather than always on Monday. The caller falls back to the first column when
+// today has no column (a weekend, in a term with no weekend classes).
 function todayDayCode() {
-  const code = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][new Date().getDay()];
-  return DAYS.some((d) => d.code === code) ? code : null;
+  return ["sun", "mon", "tue", "wed", "thu", "fri", "sat"][new Date().getDay()];
 }
 
 // "2026-11-12" -> "Nov 12" (parsed at local noon so it never slips a day).
@@ -357,9 +372,12 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   // strip further down for why fewer-days-plus-a-picker is the shape.
   const narrow = useAdminNarrow();
   // Open on today when there is a today to open on - what every calendar does.
-  // todayDayCode() is null at the weekend, when Monday is the sensible landing.
-  const [activeDayCode, setActiveDayCode] = useState(() => todayDayCode() ?? DAYS[0].code);
-  const visibleDays = narrow ? DAYS.filter((d) => d.code === activeDayCode) : DAYS;
+  // When today has no column, Monday is the sensible landing (resolved below,
+  // once the term's columns are known).
+  const [activeDayCode, setActiveDayCode] = useState(() => todayDayCode());
+  const boardDays = useMemo(() => boardDaysFor(state.status === "ready" ? state.programs : []), [state]);
+  const shownDayCode = boardDays.some((d) => d.code === activeDayCode) ? activeDayCode : boardDays[0].code;
+  const visibleDays = narrow ? boardDays.filter((d) => d.code === shownDayCode) : boardDays;
   const [searchText, setSearchText] = useState("");
   const [selectedLocations, setSelectedLocations] = useState(() => new Set());
   const [selectedStatuses, setSelectedStatuses] = useState(() => new Set());
@@ -1149,12 +1167,14 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     const first = inst?.preferred_name || inst?.first_name || "This instructor";
     const warnings = [];
     const wd = av?.weekday_availability || {};
-    // EVERY weekday this program occupies. A weekly class yields exactly one, so
+    // EVERY day this program occupies. A weekly class yields exactly one, so
     // every check below behaves precisely as it always has - that is the safety
     // property of this change. A camp yields all of its days, which is the
     // difference between "is she free Monday" and "is she free Monday to
-    // Thursday". Weekend days are dropped: this board has only Mon-Fri columns,
-    // so it cannot reason about them either way.
+    // Thursday". Weekend days count too: the survey asks about Saturday or
+    // Sunday whenever the term has a weekly class that day. A weekend CAMP is
+    // not asked about there (it has its own yes/no), so a camp's weekend day
+    // lands on the overridable "hasn't said" block below.
     const dayCodes = programWeekdays(program).map((d) => DAY_TO_CODE[d]).filter(Boolean);
     const labelFor = (c) => DAYS.find((d) => d.code === c)?.label ?? "that day";
     // AREA AND DATE CONFLICTS ARE COMPUTED FIRST — DO NOT MOVE THEM BACK DOWN.
@@ -1196,9 +1216,8 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     if (!av || !Object.values(wd).some((w) => w && w.from)) {
       return { ok: false, overridable: true, blockKind: "no_survey", reason: `${first} hasn't submitted availability for this term.`, warnings };
     }
-    // FAIL CLOSED when this board cannot place the program on any of its five
-    // columns - a weekday it does not recognise, or a camp whose days are all at
-    // the weekend. Every check below is keyed on dayCodes, so an empty list would
+    // FAIL CLOSED when this board cannot tell which day the program meets - a
+    // day_of_week it does not recognise. Every check below is keyed on dayCodes, so an empty list would
     // skip ALL of them, including the double-booking block that is deliberately
     // not overridable, and report the instructor as eligible. The old single-day
     // code failed closed here by accident (wd[undefined] is undefined, so it hit
@@ -1208,7 +1227,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         ok: false,
         overridable: true,
         blockKind: "day_off",
-        reason: `This board only schedules Monday to Friday, so it can't check ${first}'s availability for this one.`,
+        reason: `This board can't tell which day this one meets, so ${first}'s availability can't be checked for it.`,
         warnings,
       };
     }
@@ -1217,7 +1236,14 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     // run is still a camp they cannot take.
     const offCode = dayCodes.find((c) => !wd[c] || !wd[c].from);
     if (offCode) {
-      return { ok: false, overridable: true, blockKind: "day_off", reason: `${first} isn't available on ${labelFor(offCode)}.`, warnings };
+      // A weekend day is only asked when the term has a program on it, so an
+      // instructor who answered before a Saturday class was added was never
+      // asked. Only available days are stored, so "not asked" and "said no"
+      // look the same here - say the thing that is true of both.
+      const reason = WEEKEND_CODES.has(offCode)
+        ? `${first} hasn't said they're available on ${labelFor(offCode)}.`
+        : `${first} isn't available on ${labelFor(offCode)}.`;
+      return { ok: false, overridable: true, blockKind: "day_off", reason, warnings };
     }
     const start = parse12h(program.start_time), end = parse12h(program.end_time);
     if (start == null || end == null) {
@@ -2731,11 +2757,12 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
               FullCalendar - which most of this category is built on - ships Day
               as a first-class view beside Week. Fewer days plus a way to move
               between them is the settled answer, so that is what this is.
-              Desktop still gets all five columns, untouched. */}
+              Desktop still gets every column, untouched. A term with a weekend
+              class adds a sixth (or seventh) chip, and the strip scrolls. */}
           {narrow && (
             <TabStrip role="tablist" label="Day of the week" style={{ gap: 6, marginBottom: 12 }}>
-              {DAYS.map((d) => {
-                const on = d.code === activeDayCode;
+              {boardDays.map((d) => {
+                const on = d.code === shownDayCode;
                 const count = (grid.get(d.code) ?? []).length;
                 return (
                   <button

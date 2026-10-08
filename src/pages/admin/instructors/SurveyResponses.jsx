@@ -33,6 +33,10 @@ const DAYS = [
   { key: "wed", label: "Wed" },
   { key: "thu", label: "Thu" },
   { key: "fri", label: "Fri" },
+  // Asked only in a term with a weekend program (see AfterschoolAvailabilityForm),
+  // and only shown here when answered, so a weekday-only term reads as before.
+  { key: "sat", label: "Sat" },
+  { key: "sun", label: "Sun" },
 ];
 
 // Camp session types + role, mirrored from InstructorAvailabilityForm.
@@ -544,7 +548,7 @@ function AfterschoolCard({ row, disabled = new Set(), termCamps = [] }) {
 
   return (
     <ResponseCard name={instructorName(instructor)} submittedAt={av.submitted_at}>
-      <Field label="Weekday availability">
+      <Field label="Day availability">
         {availDays.length === 0 ? <span style={{ color: MUTED }}>None given</span> : (
           <div>
             {availDays.map((d) => {
