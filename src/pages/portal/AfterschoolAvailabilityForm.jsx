@@ -21,7 +21,7 @@
 import { useEffect, useRef, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import { planTimeCopy, applyTimeCopy, timeWindowLabel, listSentence } from "../../lib/weekTimes.js";
-import { isCampProgram, formatDayLabel, campRunLabel } from "../../lib/programSchedule.js";
+import { isCampProgram, formatDayLabel, campRunLabel, programWeekdays } from "../../lib/programSchedule.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Enrops default)
@@ -40,6 +40,19 @@ const DAYS = [
   { value: "thu", label: "Thursday" },
   { value: "fri", label: "Friday" },
 ];
+
+// Saturday and Sunday are asked ONLY when this term has a program meeting that
+// day (open or closed, the same set the camps question reads). A term with none
+// keeps the five-day form. Jessica, 2026-10-08: WI27 has two Saturday classes,
+// and the board, the matcher and pay all need an answer for them.
+const WEEKEND_DAYS = [
+  { value: "sat", key: "saturday", label: "Saturday" },
+  { value: "sun", key: "sunday", label: "Sunday" },
+];
+function daysForTerm(termPrograms) {
+  const met = new Set((termPrograms ?? []).flatMap((p) => programWeekdays(p)));
+  return [...DAYS, ...WEEKEND_DAYS.filter((d) => met.has(d.key))];
+}
 
 const DAYS_RANGES = [
   { value: "no_limit", label: "No limit", min: null, max: null },
@@ -91,6 +104,8 @@ const EMPTY_WEEK = () => ({
   wed: { available: false, from: "", until: "" },
   thu: { available: false, from: "", until: "" },
   fri: { available: false, from: "", until: "" },
+  sat: { available: false, from: "", until: "" },
+  sun: { available: false, from: "", until: "" },
 });
 
 export default function AfterschoolAvailabilityForm({ instructor, term, onSaved, onCancel }) {
@@ -187,6 +202,8 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
   }, [fieldError]);
 
   const [week, setWeek] = useState(EMPTY_WEEK());   // { mon: { from: "13:00", until: "17:00" }, ... }
+  // The days this term asks about: Mon-Fri, plus a weekend day the term meets on.
+  const [days, setDays] = useState(DAYS);
   const [daysRange, setDaysRange] = useState("");
   const [notes, setNotes] = useState("");
   const [areaPrefs, setAreaPrefs] = useState({});   // area -> preference
@@ -278,12 +295,14 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
       setDisabled(new Set(Array.isArray(cfgRes.data?.disabled_questions) ? cfgRes.data.disabled_questions : []));
       const termCamps = (campRes.data ?? []).filter((p) => isCampProgram(p));
       setCamps(termCamps);
+      const termDays = daysForTerm(campRes.data);
+      setDays(termDays);
 
       if (availRes.data) {
         setHasExisting(!!availRes.data.submitted_at);
         const wd = availRes.data.weekday_availability ?? {};
         const next = EMPTY_WEEK();
-        for (const d of DAYS) {
+        for (const d of termDays) {
           const from = wd[d.value]?.from ?? "";
           next[d.value] = { available: !!from, from, until: wd[d.value]?.until ?? "" };
         }
@@ -356,7 +375,7 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
   // Which day the repeat button copies FROM, and which days it would change.
   // Both come from planTimeCopy so the button's label, its visibility, the write
   // and the confirmation all read the same rule — see lib/weekTimes.js.
-  const { source: copySource, targets: copyTargets } = planTimeCopy(week, DAYS);
+  const { source: copySource, targets: copyTargets } = planTimeCopy(week, days);
 
   // Jeff's team, 2026-08-26: "would be nice to have first time added auto repeat
   // for others". Five weekdays x two fields is up to ten passes through a native
@@ -404,9 +423,9 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
   async function save() {
     setError(null);
     setFieldError(null);
-    const anyDay = DAYS.some((d) => week[d.value]?.available);
-    if (!anyDay) { fail("week", "Mark at least one weekday as available."); return; }
-    for (const d of DAYS) {
+    const anyDay = days.some((d) => week[d.value]?.available);
+    if (!anyDay) { fail("week", "Mark at least one day as available."); return; }
+    for (const d of days) {
       const w = week[d.value];
       if (!w.available) continue;
       if (!w.from) { fail("week", `Set a start time for ${d.label}, or mark it unavailable.`); return; }
@@ -433,9 +452,9 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
     setSaving(true);
     try {
       const range = DAYS_RANGES.find((x) => x.value === daysRange) ?? DAYS_RANGES[0];
-      // Only persist weekdays explicitly marked available (with a start time).
+      // Only persist days explicitly marked available (with a start time).
       const weekday_availability = {};
-      for (const d of DAYS) {
+      for (const d of days) {
         const w = week[d.value];
         if (w && w.available && w.from) weekday_availability[d.value] = w.until ? { from: w.from, until: w.until } : { from: w.from };
       }
@@ -520,10 +539,10 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
         </p>
       </header>
 
-      <Card innerRef={weekRef} title="Which days and times can you teach?" subtitle="Mark each weekday available or unavailable. For the days you're available, set the earliest you can start (add an 'until' time only if you have to leave by a certain point). We'll only assign a class you can reach in time (about 15 minutes before it starts).">
+      <Card innerRef={weekRef} title="Which days and times can you teach?" subtitle="Mark each day available or unavailable. For the days you're available, set the earliest you can start (add an 'until' time only if you have to leave by a certain point). We'll only assign a class you can reach in time (about 15 minutes before it starts).">
         <FieldError innerRef={errorNoteRef} on="week" fieldError={fieldError} />
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {DAYS.map((d) => {
+          {days.map((d) => {
             const w = week[d.value];
             return (
               <div key={d.value} style={{ display: "grid", gridTemplateColumns: "minmax(90px, 96px) auto 1fr", gap: 12, alignItems: "center" }}>

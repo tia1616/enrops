@@ -55,8 +55,12 @@ const cors = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
+// All seven. Saturday and Sunday were left out until the survey could ask about
+// them (2026-10-08); the survey now asks a weekend day whenever the term has a
+// program meeting on it, so a weekend class is matched like any other.
 const DAY_MAP: Record<string, string> = {
   monday: 'mon', tuesday: 'tue', wednesday: 'wed', thursday: 'thu', friday: 'fri',
+  saturday: 'sat', sunday: 'sun',
 };
 
 // Instructors arrive this many minutes before class start (and stay to the end).
@@ -213,13 +217,12 @@ serve(async (req) => {
     // answers the first for both shapes: every day for a camp, the one repeating
     // day for a class.
     //
-    // THE SECOND HALF IS NOT TIDINESS. The old filter was dayCode() != null, and
-    // DAY_MAP holds monday-friday only, so weekend programs were never in the
-    // run. programWeekdays knows all seven, so swapping to it alone quietly
-    // pulled Saturday CLASSES in - where the class path then fails on `!dc` and
-    // reports them as needs_hire with a reason about weekday availability, which
-    // is not why. Prod has three. A camp is different: its path never touches
-    // dayCode, so a weekend CAMP genuinely can be matched and is kept.
+    // THE SECOND HALF IS NOT TIDINESS. A class whose day_of_week dayCode cannot
+    // read would fail the class path on `!dc` and be reported as needs_hire for
+    // a reason that is not why. DAY_MAP covers all seven days since 2026-10-08
+    // (weekend classes used to be excluded here for exactly that reason), so
+    // this now only drops a class with no recognisable day. A camp's path never
+    // touches dayCode, so a camp is kept regardless.
     const programs = termPrograms.filter((p: any) => {
       const days = programWeekdays(p);
       if (days.length === 0) return false;
