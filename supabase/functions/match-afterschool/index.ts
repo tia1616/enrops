@@ -758,7 +758,7 @@ serve(async (req) => {
         });
         reason = anyDayTime
           ? 'Everyone who fits this day and time is already booked elsewhere.'
-          : 'No instructor is available for this weekday and time window.';
+          : 'No instructor is available for this day and time window.';
       }
       decisions.push({ ...base, status: 'needs_hire', reason });
     }

@@ -1234,7 +1234,14 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     // run is still a camp they cannot take.
     const offCode = dayCodes.find((c) => !wd[c] || !wd[c].from);
     if (offCode) {
-      return { ok: false, overridable: true, blockKind: "day_off", reason: `${first} isn't available on ${labelFor(offCode)}.`, warnings };
+      // A weekend day is only asked when the term has a program on it, so an
+      // instructor who answered before a Saturday class was added was never
+      // asked. Only available days are stored, so "not asked" and "said no"
+      // look the same here - say the thing that is true of both.
+      const reason = WEEKEND_CODES.has(offCode)
+        ? `${first} hasn't said they're available on ${labelFor(offCode)}.`
+        : `${first} isn't available on ${labelFor(offCode)}.`;
+      return { ok: false, overridable: true, blockKind: "day_off", reason, warnings };
     }
     const start = parse12h(program.start_time), end = parse12h(program.end_time);
     if (start == null || end == null) {
@@ -2748,7 +2755,8 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
               FullCalendar - which most of this category is built on - ships Day
               as a first-class view beside Week. Fewer days plus a way to move
               between them is the settled answer, so that is what this is.
-              Desktop still gets all five columns, untouched. */}
+              Desktop still gets every column, untouched. A term with a weekend
+              class adds a sixth (or seventh) chip, and the strip scrolls. */}
           {narrow && (
             <TabStrip role="tablist" label="Day of the week" style={{ gap: 6, marginBottom: 12 }}>
               {boardDays.map((d) => {

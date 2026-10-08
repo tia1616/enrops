@@ -533,7 +533,7 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
           {title} availability
         </h1>
         <p style={{ color: MUTED, fontSize: 14, margin: 0, lineHeight: 1.5 }}>
-          After-school classes run once a week on the same weekday all term. Tell us
+          After-school classes run once a week on the same day all term. Tell us
           which days and times you can teach and which areas you prefer — you'll still
           get to accept or request changes on each class before it's confirmed.
         </p>
