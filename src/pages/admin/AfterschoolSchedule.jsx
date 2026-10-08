@@ -1172,7 +1172,9 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     // property of this change. A camp yields all of its days, which is the
     // difference between "is she free Monday" and "is she free Monday to
     // Thursday". Weekend days count too: the survey asks about Saturday or
-    // Sunday whenever the term has a program meeting that day.
+    // Sunday whenever the term has a weekly class that day. A weekend CAMP is
+    // not asked about there (it has its own yes/no), so a camp's weekend day
+    // lands on the overridable "hasn't said" block below.
     const dayCodes = programWeekdays(program).map((d) => DAY_TO_CODE[d]).filter(Boolean);
     const labelFor = (c) => DAYS.find((d) => d.code === c)?.label ?? "that day";
     // AREA AND DATE CONFLICTS ARE COMPUTED FIRST — DO NOT MOVE THEM BACK DOWN.
@@ -1225,7 +1227,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         ok: false,
         overridable: true,
         blockKind: "day_off",
-        reason: `This class has no day of the week set, so ${first}'s availability can't be checked for it.`,
+        reason: `This board can't tell which day this one meets, so ${first}'s availability can't be checked for it.`,
         warnings,
       };
     }

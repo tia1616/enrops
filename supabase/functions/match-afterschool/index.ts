@@ -57,7 +57,7 @@ const cors = {
 
 // All seven. Saturday and Sunday were left out until the survey could ask about
 // them (2026-10-08); the survey now asks a weekend day whenever the term has a
-// program meeting on it, so a weekend class is matched like any other.
+// weekly class on it, so a weekend class is matched like any other.
 const DAY_MAP: Record<string, string> = {
   monday: 'mon', tuesday: 'tue', wednesday: 'wed', thursday: 'thu', friday: 'fri',
   saturday: 'sat', sunday: 'sun',

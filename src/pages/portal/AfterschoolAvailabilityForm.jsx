@@ -41,16 +41,18 @@ const DAYS = [
   { value: "fri", label: "Friday" },
 ];
 
-// Saturday and Sunday are asked ONLY when this term has a program meeting that
-// day (open or closed, the same set the camps question reads). A term with none
-// keeps the five-day form. Jessica, 2026-10-08: WI27 has two Saturday classes,
-// and the board, the matcher and pay all need an answer for them.
+// Saturday and Sunday are asked ONLY when this term has a weekly CLASS meeting
+// that day (open or closed, the same set the camps question reads) - the same
+// rule the schedule board uses to draw a weekend column. Camps are left out:
+// this card is the weekly-hours question, and a camp has its own yes/no below.
+// A term with none keeps the five-day form. Jessica, 2026-10-08: WI27 has two
+// Saturday classes, and the board, the matcher and pay all need an answer.
 const WEEKEND_DAYS = [
   { value: "sat", key: "saturday", label: "Saturday" },
   { value: "sun", key: "sunday", label: "Sunday" },
 ];
 function daysForTerm(termPrograms) {
-  const met = new Set((termPrograms ?? []).flatMap((p) => programWeekdays(p)));
+  const met = new Set((termPrograms ?? []).filter((p) => !isCampProgram(p)).flatMap((p) => programWeekdays(p)));
   return [...DAYS, ...WEEKEND_DAYS.filter((d) => met.has(d.key))];
 }
 
@@ -204,6 +206,10 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
   const [week, setWeek] = useState(EMPTY_WEEK());   // { mon: { from: "13:00", until: "17:00" }, ... }
   // The days this term asks about: Mon-Fri, plus a weekend day the term meets on.
   const [days, setDays] = useState(DAYS);
+  // The stored answer for any day this form is NOT showing - a weekend day
+  // whose class has since gone, or one hidden because the programs read failed.
+  // Carried through save untouched, so not asking about a day never erases it.
+  const [unshownDays, setUnshownDays] = useState(() => ({}));
   const [daysRange, setDaysRange] = useState("");
   const [notes, setNotes] = useState("");
   const [areaPrefs, setAreaPrefs] = useState({});   // area -> preference
@@ -306,6 +312,8 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
           const from = wd[d.value]?.from ?? "";
           next[d.value] = { available: !!from, from, until: wd[d.value]?.until ?? "" };
         }
+        const shown = new Set(termDays.map((d) => d.value));
+        setUnshownDays(Object.fromEntries(Object.entries(wd).filter(([k]) => !shown.has(k))));
         setWeek(next);
         const r = DAYS_RANGES.find(
           (x) => x.min === (availRes.data.min_days ?? null) && x.max === (availRes.data.max_days ?? null),
@@ -452,8 +460,9 @@ export default function AfterschoolAvailabilityForm({ instructor, term, onSaved,
     setSaving(true);
     try {
       const range = DAYS_RANGES.find((x) => x.value === daysRange) ?? DAYS_RANGES[0];
-      // Only persist days explicitly marked available (with a start time).
-      const weekday_availability = {};
+      // Only persist days explicitly marked available (with a start time), plus
+      // whatever was stored for a day this form did not ask about.
+      const weekday_availability = { ...unshownDays };
       for (const d of days) {
         const w = week[d.value];
         if (w && w.available && w.from) weekday_availability[d.value] = w.until ? { from: w.from, until: w.until } : { from: w.from };
