@@ -5,7 +5,10 @@ import {
 } from '../declineRetry.ts';
 
 const plan = (outcome: 'retry_scheduled' | 'retries_exhausted' | 'hard_decline' | 'not_a_decline') =>
-  ({ outcome, nextRetryOn: outcome === 'retry_scheduled' ? '2026-10-10' : null, retryNumber: null, totalRetries: 2 });
+  ({
+    outcome, nextRetryOn: outcome === 'retry_scheduled' ? '2026-10-10' : null, retryNumber: null, totalRetries: 2,
+    payBy: null, providerFollowUpOn: null,
+  });
 
 Deno.test('follow-up: first decline tells the family once and the business', () => {
   assertEquals(
@@ -60,14 +63,20 @@ Deno.test('policy: retries on day 3 and day 7, then stops', () => {
   assertEquals(RETRY_GAPS_DAYS, [3, 4]);
 
   const first = planDeclineRetry({ isCardDecline: true, codes: ['insufficient_funds', 'card_declined'], retriesDone: 0, today: TODAY });
-  assertEquals(first, { outcome: 'retry_scheduled', nextRetryOn: '2026-10-10', retryNumber: 1, totalRetries: 2 });
+  assertEquals(first, { outcome: 'retry_scheduled', nextRetryOn: '2026-10-10', retryNumber: 1, totalRetries: 2, payBy: null, providerFollowUpOn: null });
 
   // Retry 1 ran on day 3 (10 Oct) and failed: retry 2 is four days later = day 7.
   const second = planDeclineRetry({ isCardDecline: true, codes: ['insufficient_funds'], retriesDone: 1, today: '2026-10-10' });
-  assertEquals(second, { outcome: 'retry_scheduled', nextRetryOn: '2026-10-14', retryNumber: 2, totalRetries: 2 });
+  assertEquals(second, { outcome: 'retry_scheduled', nextRetryOn: '2026-10-14', retryNumber: 2, totalRetries: 2, payBy: null, providerFollowUpOn: null });
 
+  // Final notice on 14 Oct: the family has until the 18th, the business hears
+  // on the morning of the 19th - five days after the final notice, the day
+  // after the deadline, so "the deadline has passed" is true when it arrives.
   const last = planDeclineRetry({ isCardDecline: true, codes: ['insufficient_funds'], retriesDone: 2, today: '2026-10-14' });
-  assertEquals(last, { outcome: 'retries_exhausted', nextRetryOn: null, retryNumber: null, totalRetries: 2 });
+  assertEquals(last, {
+    outcome: 'retries_exhausted', nextRetryOn: null, retryNumber: null, totalRetries: 2,
+    payBy: '2026-10-18', providerFollowUpOn: '2026-10-19',
+  });
 
   // Past the end stays exhausted - never wraps round into a new schedule.
   assertEquals(planDeclineRetry({ isCardDecline: true, codes: [], retriesDone: 9, today: TODAY }).outcome, 'retries_exhausted');
@@ -94,7 +103,10 @@ Deno.test('policy: the common temporary declines ARE retried', () => {
 Deno.test('policy: an error that is not a bank decline is never retried automatically', () => {
   // A timeout or outage has an unknown outcome - retrying on a new key could charge twice.
   const p = planDeclineRetry({ isCardDecline: false, codes: ['api_connection_error'], retriesDone: 0, today: TODAY });
-  assertEquals(p, { outcome: 'not_a_decline', nextRetryOn: null, retryNumber: null, totalRetries: 2 });
+  assertEquals(p, { outcome: 'not_a_decline', nextRetryOn: null, retryNumber: null, totalRetries: 2, payBy: null, providerFollowUpOn: null });
+  // and a dead card gets no deadline or business follow-up from this policy
+  const hard = planDeclineRetry({ isCardDecline: true, codes: ['lost_card'], retriesDone: 0, today: TODAY });
+  assertEquals([hard.payBy, hard.providerFollowUpOn], [null, null]);
 });
 
 Deno.test('policy: a garbage retry count cannot book a retry off the end of the schedule', () => {

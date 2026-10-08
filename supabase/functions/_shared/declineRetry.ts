@@ -12,9 +12,12 @@
 //   - Anything that is not a decline from the family's bank (a Stripe outage, a
 //     timeout) is not retried automatically either: we cannot be sure it did not
 //     charge, and a second key on an unknown outcome is how a family pays twice.
-//   - After the last retry fails, we stop. The family gets one last email, the
-//     business is told it is theirs to follow up, and nobody is removed and no
-//     late fee is charged.
+//   - After the last retry fails, we stop. The family gets one last email with
+//     a deadline to put a new card on, and the business is told. Jessica
+//     2026-10-08: the business gets one more email 5 days after that final
+//     notice, the morning after the family's deadline, so it can decide whether
+//     to release the spot. Nobody is removed automatically and no late fee is
+//     charged - releasing a spot is always the business's own action.
 //   - A NEW card resets the cycle: it gets its own two retries.
 
 /**
@@ -33,6 +36,15 @@ export const NOT_CHARGEABLE_REGISTRATION_STATUSES: readonly string[] = ['cancell
 /** Days to wait before each automatic retry, counted from the previous attempt.
  *  [3, 4] = retry 1 on day 3, retry 2 on day 7. */
 export const RETRY_GAPS_DAYS: readonly number[] = [3, 4];
+
+/**
+ * After the final notice: the business hears again this many days later. The
+ * family's deadline is the day BEFORE, so the business's email can truthfully
+ * say the deadline has passed - the charger runs in the morning, and a deadline
+ * that is still running when the business is told to act on it is no deadline.
+ */
+export const PROVIDER_FOLLOWUP_DAYS = 5;
+export const FAMILY_PAY_BY_DAYS = PROVIDER_FOLLOWUP_DAYS - 1;
 
 /**
  * Decline codes that mean trying the same card again cannot succeed. Matched
@@ -86,6 +98,12 @@ export interface DeclinePlan {
   /** Which retry nextRetryOn is (1-based). null when none is booked. */
   retryNumber: number | null;
   totalRetries: number;
+  /** retries_exhausted only: the date the family is asked to have a new card
+   *  on by ('YYYY-MM-DD'). null otherwise. */
+  payBy: string | null;
+  /** retries_exhausted only: the day the business gets its follow-up email,
+   *  the morning after payBy. null otherwise. */
+  providerFollowUpOn: string | null;
 }
 
 /**
@@ -108,7 +126,7 @@ export function planDeclineRetry({ isCardDecline, codes, retriesDone, today }: {
 }): DeclinePlan {
   const totalRetries = RETRY_GAPS_DAYS.length;
   const none = (outcome: DeclineOutcome): DeclinePlan =>
-    ({ outcome, nextRetryOn: null, retryNumber: null, totalRetries });
+    ({ outcome, nextRetryOn: null, retryNumber: null, totalRetries, payBy: null, providerFollowUpOn: null });
 
   if (!isCardDecline) return none('not_a_decline');
   if (codes.some((c) => !!c && NO_RETRY_DECLINE_CODES.has(c))) return none('hard_decline');
@@ -116,13 +134,21 @@ export function planDeclineRetry({ isCardDecline, codes, retriesDone, today }: {
   // A negative or fractional count would be a bug upstream; floor it to a
   // valid index rather than booking a retry the schedule does not have.
   const done = Math.max(0, Math.floor(Number.isFinite(retriesDone) ? retriesDone : 0));
-  if (done >= totalRetries) return none('retries_exhausted');
+  if (done >= totalRetries) {
+    return {
+      ...none('retries_exhausted'),
+      payBy: addDaysUtc(today, FAMILY_PAY_BY_DAYS),
+      providerFollowUpOn: addDaysUtc(today, PROVIDER_FOLLOWUP_DAYS),
+    };
+  }
 
   return {
     outcome: 'retry_scheduled',
     nextRetryOn: addDaysUtc(today, RETRY_GAPS_DAYS[done]),
     retryNumber: done + 1,
     totalRetries,
+    payBy: null,
+    providerFollowUpOn: null,
   };
 }
 
