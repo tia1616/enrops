@@ -18,6 +18,10 @@
 //     notice, the morning after the family's deadline, so it can decide whether
 //     to release the spot. Nobody is removed automatically and no late fee is
 //     charged - releasing a spot is always the business's own action.
+//   - A dead card goes STRAIGHT to that final notice (Jessica 2026-10-08,
+//     "yes"): same deadline, same follow-up to the business. Without this a
+//     lost, stolen or closed card - the family least able to fix it by waiting -
+//     never reached a deadline and sat paused with nobody prompted to decide.
 //   - A NEW card resets the cycle: it gets its own two retries.
 
 /**
@@ -98,12 +102,22 @@ export interface DeclinePlan {
   /** Which retry nextRetryOn is (1-based). null when none is booked. */
   retryNumber: number | null;
   totalRetries: number;
-  /** retries_exhausted only: the date the family is asked to have a new card
-   *  on by ('YYYY-MM-DD'). null otherwise. */
+  /** A final notice only (retries_exhausted, hard_decline): the date the
+   *  family is asked to have a new card on by ('YYYY-MM-DD'). null otherwise. */
   payBy: string | null;
-  /** retries_exhausted only: the day the business gets its follow-up email,
-   *  the morning after payBy. null otherwise. */
+  /** A final notice only: the day the business gets its follow-up email, the
+   *  morning after payBy. null otherwise. */
   providerFollowUpOn: string | null;
+}
+
+/**
+ * Whether this outcome ends the automatic process with a final notice: the
+ * family is told a deadline and the business is booked a follow-up. ONE
+ * definition, read by the charger's email, alert and booking, so the three
+ * cannot disagree about which declines get a deadline.
+ */
+export function isFinalNotice(plan: DeclinePlan): boolean {
+  return plan.outcome === 'retries_exhausted' || plan.outcome === 'hard_decline';
 }
 
 /**
@@ -127,20 +141,20 @@ export function planDeclineRetry({ isCardDecline, codes, retriesDone, today }: {
   const totalRetries = RETRY_GAPS_DAYS.length;
   const none = (outcome: DeclineOutcome): DeclinePlan =>
     ({ outcome, nextRetryOn: null, retryNumber: null, totalRetries, payBy: null, providerFollowUpOn: null });
+  // Both final outcomes get the same deadline and the same follow-up day.
+  const final = (outcome: 'retries_exhausted' | 'hard_decline'): DeclinePlan => ({
+    ...none(outcome),
+    payBy: addDaysUtc(today, FAMILY_PAY_BY_DAYS),
+    providerFollowUpOn: addDaysUtc(today, PROVIDER_FOLLOWUP_DAYS),
+  });
 
   if (!isCardDecline) return none('not_a_decline');
-  if (codes.some((c) => !!c && NO_RETRY_DECLINE_CODES.has(c))) return none('hard_decline');
+  if (codes.some((c) => !!c && NO_RETRY_DECLINE_CODES.has(c))) return final('hard_decline');
 
   // A negative or fractional count would be a bug upstream; floor it to a
   // valid index rather than booking a retry the schedule does not have.
   const done = Math.max(0, Math.floor(Number.isFinite(retriesDone) ? retriesDone : 0));
-  if (done >= totalRetries) {
-    return {
-      ...none('retries_exhausted'),
-      payBy: addDaysUtc(today, FAMILY_PAY_BY_DAYS),
-      providerFollowUpOn: addDaysUtc(today, PROVIDER_FOLLOWUP_DAYS),
-    };
-  }
+  if (done >= totalRetries) return final('retries_exhausted');
 
   return {
     outcome: 'retry_scheduled',
@@ -175,8 +189,9 @@ export function declineFollowUp({ plan, retriesDone, familyAlreadyTold, hasEmail
     return { familyEmail: null, alertBusiness: false };
   }
   // The final email is the one exception to "tell the family once": it says
-  // something new (we have stopped trying).
-  if (plan.outcome === 'retries_exhausted') {
+  // something new (we have stopped trying, and here is the deadline). A dead
+  // card found by a retry, after the first email already went, gets it too.
+  if (isFinalNotice(plan)) {
     return { familyEmail: hasEmail ? 'final' : null, alertBusiness: true };
   }
   return { familyEmail: hasEmail && !familyAlreadyTold ? 'first' : null, alertBusiness: true };

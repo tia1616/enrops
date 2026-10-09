@@ -82,7 +82,7 @@ import { allocateCartFeeByLine } from '../_shared/cartFee.ts';
 import { withResolvedFee, loadPlatformFeeDefaults } from '../_shared/feeConfig.ts';
 import { loadOrgBrand, formatFromAddress, OrgBrand } from '../_shared/orgBrand.ts';
 import {
-  addDaysUtc, chargeIdempotencyKey, declineFollowUp, DeclinePlan, FAMILY_PAY_BY_DAYS, formatRetryDate,
+  addDaysUtc, chargeIdempotencyKey, declineFollowUp, DeclinePlan, FAMILY_PAY_BY_DAYS, formatRetryDate, isFinalNotice,
   NOT_CHARGEABLE_REGISTRATION_STATUSES, planDeclineRetry, PROVIDER_FOLLOWUP_DAYS,
 } from '../_shared/declineRetry.ts';
 
@@ -1106,7 +1106,7 @@ async function processGroup(
     // stops us repeating the FIRST email; the final one says something new (we
     // have stopped trying), so it goes out whenever the family has an address.
     // declineFollowUp owns that rule.
-    const isFinalNotice = plan.outcome === 'retries_exhausted';
+    const finalNotice = isFinalNotice(plan);
     const notifiableParent: ParentRow | null =
       parent?.email && followUp.familyEmail ? parent : null;
 
@@ -1128,6 +1128,9 @@ async function processGroup(
         rows: activeRows,
         orgSlug,
         variant: followUp.familyEmail === 'final' ? 'final' : 'first',
+        // Why it is final decides the opening sentence: "we tried again" is
+        // only true after retries; a dead card was tried once.
+        cardIsDead: plan.outcome === 'hard_decline',
         retryOn: plan.nextRetryOn,
         payBy: plan.payBy,
       });
@@ -1163,7 +1166,8 @@ async function processGroup(
       brand,
       to: alertEmail,
       subject: `Card declined for ${parent?.first_name || ''} ${parent?.last_name || ''} — installment ${installmentNumber}`
-        + (isFinalNotice ? ' (automatic retries finished)' : ''),
+        + (plan.outcome === 'retries_exhausted' ? ' (automatic retries finished)'
+          : plan.outcome === 'hard_decline' ? ' (card can\'t be retried)' : ''),
       body: buildDeclineAlertBody({
         plan,
         rows: activeRows,
@@ -1335,17 +1339,19 @@ function buildDeclineAlertBody({
       : plan.outcome === 'retries_exhausted'
       ? `That was the last automatic retry. We tried this card ${plan.totalRetries + 1} times and have stopped, so the payment plan stays paused until a working card is on it.`
       : plan.outcome === 'hard_decline'
-      ? `The bank's answer means this card can't be charged again, so we won't retry it automatically. The payment plan stays paused until a working card is on it.`
+      ? `The bank's answer means retrying this card won't work, so we won't retry it automatically. The payment plan stays paused until a working card is on it.`
       : `This payment plan is paused, so nothing further will be charged automatically until a working card is on it.`,
     ``,
     // Keyed on what was OBSERVED, not on what we were about to try. The two
     // shapes ask for opposite things from the operator - stand down, or you are
     // the only one who can move this - which is why getting it wrong mattered.
-    ...(parentNotice === 'sent' && plan.outcome === 'retries_exhausted'
+    ...(parentNotice === 'sent' && isFinalNotice(plan)
       ? [
         // "with a link" only when the email really carried one: a tenant with
-        // no portal slug gets the reply-to-us sentence instead.
-        `${parent?.first_name || 'The family'} has been emailed to say we've stopped retrying, `
+        // no portal slug gets the reply-to-us sentence instead. Worded for
+        // BOTH final outcomes - "stopped retrying" is false for a dead card,
+        // which was tried once.
+        `${parent?.first_name || 'The family'} has been emailed that we won't try this card again, `
           + (fixUrl ? `with a link to put a new card on file` : `and asked to reply for a link to put a new card on file`)
           + (plan.payBy ? ` by ${formatRetryDate(plan.payBy)} to keep the spot` : '')
           + `. Once a new card is on, the plan un-pauses on its own and the next daily run collects the payment.`,
@@ -1549,7 +1555,9 @@ async function sendMissedDeadlineFollowUps(
         `${parentName}${parent?.email ? ` (${parent.email})` : ''} has not paid installment ${mine[0].installment_number} of 3`
           + ` for ${children.join(' and ')}: $${(total / 100).toFixed(2)}.`,
         ``,
-        `Their card was declined and our automatic retries didn't go through. On ${formatRetryDate(finalNoticeOn)} we emailed them`
+        // Neutral on WHY: this row may have run out of retries or had a card
+        // the bank says is dead, and the row does not record which.
+        `Their card was declined and the payment couldn't be collected. On ${formatRetryDate(finalNoticeOn)} we emailed them`
           + ` that they needed to put a new card on by ${formatRetryDate(payBy)} to keep the spot. That date has passed and the payment still hasn't been collected.`,
         ``,
         `What you can do:`,
@@ -1600,7 +1608,7 @@ async function alertPlatform(admin: AdminClient, subject: string, body: string) 
 }
 
 async function sendParentDeclineNotice({
-  brand, parent, installmentNumber, regDataById, rows, orgSlug, variant, retryOn, payBy,
+  brand, parent, installmentNumber, regDataById, rows, orgSlug, variant, cardIsDead, retryOn, payBy,
 }: {
   /** 'final' only: the date to have a new card on by ('YYYY-MM-DD'). */
   payBy: string | null;
@@ -1612,6 +1620,9 @@ async function sendParentDeclineNotice({
   /** 'first' = the first decline on this card; 'final' = the last automatic
    *  retry just failed and we have stopped trying. */
   variant: 'first' | 'final';
+  /** 'final' only: the bank says this card can't be charged again, so it was
+   *  tried once, not retried. Changes the opening sentence and subject. */
+  cardIsDead: boolean;
   /** The day we will try the same card again ('YYYY-MM-DD'), or null when no
    *  retry is booked. Only ever said to the family when it is real. */
   retryOn: string | null;
@@ -1665,9 +1676,21 @@ async function sendParentDeclineNotice({
   const retryLine = !isFinal && retryOn
     ? `If it was just a temporary hold, you don't need to do anything: we'll try the same card again on ${formatRetryDate(retryOn)}.`
     : null;
-  const opening = isFinal
-    ? `We tried your card again for the ${installmentLabel} installment for ${summary}, and it still didn't go through, so we've stopped trying it automatically.`
-    : `A quick note — the ${installmentLabel} installment for ${summary} didn't go through this morning. Cards sometimes decline for routine reasons (expired, new card issued, bank flagging an unusual charge), so this is usually a quick fix.`;
+  // THREE OPENINGS, one per state, each true in the state that selects it:
+  // the first decline; a final notice after the retries ran out ("we tried
+  // again" is true); and a final notice for a card the bank says is dead, which
+  // was tried exactly once - "tried again" would be false there.
+  const isDeadCardFinal = isFinal && cardIsDead;
+  const openingFor = (s: string) => isDeadCardFinal
+    // Worded for EVERY no-retry code, not just a dead card: authentication_required
+    // is on that list and its card is fine - the bank just needs the family
+    // there to approve it. "Can't be used again" would be false for it; "trying
+    // it again won't work" is true for all of them.
+    ? `The ${installmentLabel} installment for ${s} didn't go through this morning. Your bank's response means trying this card again won't work, so we won't.`
+    : isFinal
+    ? `We tried your card again for the ${installmentLabel} installment for ${s}, and it still didn't go through, so we've stopped trying it automatically.`
+    : `A quick note — the ${installmentLabel} installment for ${s} didn't go through this morning. Cards sometimes decline for routine reasons (expired, new card issued, bank flagging an unusual charge), so this is usually a quick fix.`;
+  const opening = openingFor(summary);
   // THE SPOT LINE. The first notice promises the spot is held while we sort it
   // out. The final one may not: from 2026-10-08 a family that misses the
   // deadline can have their spot released by the business, so the final email
@@ -1684,10 +1707,15 @@ async function sendParentDeclineNotice({
     ? `<strong>${escapeHtml(`Please put a new card on file by ${formatRetryDate(payBy)} to keep ${single ? `${childPrograms[0].name}'s spot` : 'their spots'}.`)}</strong>`
       + ` ${escapeHtml(`If we can't collect the payment by then, ${single ? 'the spot' : 'the spots'} will be released.`)}`
     : `<strong>${single ? `${escapeHtml(childPrograms[0].name)}'s spot is` : 'Their spots are'} still held</strong> — we won't drop the registration${single ? '' : 's'} while we sort this out.`;
-  const heading = isFinal ? "Your payment still didn't go through" : 'Quick heads-up about your payment';
-  const subject = isFinal
-    ? `Your payment for ${childPrograms[0].program}${childPrograms.length > 1 ? ' & more' : ''} still didn't go through`
-    : `Quick heads-up about your payment for ${childPrograms[0].program}${childPrograms.length > 1 ? ' & more' : ''}`;
+  const forWhat = `${childPrograms[0].program}${childPrograms.length > 1 ? ' & more' : ''}`;
+  const heading = isDeadCardFinal
+    ? "Your payment didn't go through"
+    : isFinal ? "Your payment still didn't go through" : 'Quick heads-up about your payment';
+  const subject = isDeadCardFinal
+    ? `Your payment for ${forWhat} didn't go through`
+    : isFinal
+    ? `Your payment for ${forWhat} still didn't go through`
+    : `Quick heads-up about your payment for ${forWhat}`;
 
   const text = [
     `Hi ${parent.first_name},`,
@@ -1712,9 +1740,7 @@ async function sendParentDeclineNotice({
   <div style="color:${brand.accent_color};font-size:14px;font-weight:700;letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;">${escapeHtml(brand.org_name)}</div>
   <h2 style="font-size:20px;margin:0 0 16px 0;color:#1a1a1a;">${escapeHtml(heading)}</h2>
   <p>Hi ${escapeHtml(parent.first_name)},</p>
-  <p>${isFinal
-    ? `We tried your card again for the ${installmentLabel} installment for <strong>${escapeHtml(summary)}</strong>, and it still didn't go through, so we've stopped trying it automatically.`
-    : `A quick note — the ${installmentLabel} installment for <strong>${escapeHtml(summary)}</strong> didn't go through this morning. Cards sometimes decline for routine reasons (expired, new card issued, bank flagging an unusual charge), so this is usually a quick fix.`}</p>
+  <p>${openingFor(`<strong>${escapeHtml(summary)}</strong>`)}</p>
   <p>${spotLineHtml}</p>
   ${fixUrl
     ? `<p>${isFinal ? 'Please put a new card on file' : 'You can put a new card on file in a couple of minutes'}, and we'll take the payment automatically.</p>

@@ -1,6 +1,6 @@
 import { assertEquals, assertNotEquals } from 'https://deno.land/std@0.208.0/assert/mod.ts';
 import {
-  addDaysUtc, chargeIdempotencyKey, declineFollowUp, formatRetryDate, NO_RETRY_DECLINE_CODES,
+  addDaysUtc, chargeIdempotencyKey, declineFollowUp, formatRetryDate, isFinalNotice, NO_RETRY_DECLINE_CODES,
   NOT_CHARGEABLE_REGISTRATION_STATUSES, planDeclineRetry, RETRY_GAPS_DAYS,
 } from '../declineRetry.ts';
 
@@ -17,8 +17,21 @@ Deno.test('follow-up: first decline tells the family once and the business', () 
   );
   // already told about this plan payment - no second first-email, business still alerted
   assertEquals(
-    declineFollowUp({ plan: plan('hard_decline'), retriesDone: 0, familyAlreadyTold: true, hasEmail: true }),
+    declineFollowUp({ plan: plan('not_a_decline'), retriesDone: 0, familyAlreadyTold: true, hasEmail: true }),
     { familyEmail: null, alertBusiness: true },
+  );
+});
+
+Deno.test('follow-up: a dead card goes straight to the final notice (Jessica 2026-10-08)', () => {
+  // first attempt, never told before
+  assertEquals(
+    declineFollowUp({ plan: plan('hard_decline'), retriesDone: 0, familyAlreadyTold: false, hasEmail: true }),
+    { familyEmail: 'final', alertBusiness: true },
+  );
+  // already given the first email earlier in the cycle: the final still goes - it carries the deadline
+  assertEquals(
+    declineFollowUp({ plan: plan('hard_decline'), retriesDone: 1, familyAlreadyTold: true, hasEmail: true }),
+    { familyEmail: 'final', alertBusiness: true },
   );
 });
 
@@ -104,9 +117,20 @@ Deno.test('policy: an error that is not a bank decline is never retried automati
   // A timeout or outage has an unknown outcome - retrying on a new key could charge twice.
   const p = planDeclineRetry({ isCardDecline: false, codes: ['api_connection_error'], retriesDone: 0, today: TODAY });
   assertEquals(p, { outcome: 'not_a_decline', nextRetryOn: null, retryNumber: null, totalRetries: 2, payBy: null, providerFollowUpOn: null });
-  // and a dead card gets no deadline or business follow-up from this policy
-  const hard = planDeclineRetry({ isCardDecline: true, codes: ['lost_card'], retriesDone: 0, today: TODAY });
-  assertEquals([hard.payBy, hard.providerFollowUpOn], [null, null]);
+  assertEquals(isFinalNotice(p), false);
+});
+
+Deno.test('policy: a dead card gets the SAME deadline and follow-up as running out of retries', () => {
+  const hard = planDeclineRetry({ isCardDecline: true, codes: ['invalid_account', 'card_declined'], retriesDone: 0, today: TODAY });
+  assertEquals(hard, {
+    outcome: 'hard_decline', nextRetryOn: null, retryNumber: null, totalRetries: 2,
+    payBy: '2026-10-11', providerFollowUpOn: '2026-10-12',
+  });
+  const exhausted = planDeclineRetry({ isCardDecline: true, codes: ['insufficient_funds'], retriesDone: 2, today: TODAY });
+  assertEquals([hard.payBy, hard.providerFollowUpOn], [exhausted.payBy, exhausted.providerFollowUpOn]);
+  assertEquals([isFinalNotice(hard), isFinalNotice(exhausted)], [true, true]);
+  // a booked retry is never a final notice
+  assertEquals(isFinalNotice(planDeclineRetry({ isCardDecline: true, codes: [], retriesDone: 0, today: TODAY })), false);
 });
 
 Deno.test('policy: a garbage retry count cannot book a retry off the end of the schedule', () => {
