@@ -1573,7 +1573,7 @@ export default function Home() {
                     }
                     const bundle = vipBundles[p.id];
                     const vipEligible = !!bundle;
-                    const fallPricing = basePriceForItem({ program: p, isVip: false });
+                    const fallPricing = basePriceForItem({ program: p, isVip: false, timeZone: org?.timezone || 'UTC' });
                     const fallShowsEarlyBird = fallPricing.is_legacy;
                     const fallEarlyBirdLabel = fallPricing.early_bird_deadline
                       ? formatEarlyBirdDate(fallPricing.early_bird_deadline)

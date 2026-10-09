@@ -254,6 +254,9 @@ export default function ProgramWizardNew() {
   // On by default: a new class in a term that is running an early bird joins it.
   // Switch position, not a column -- what it writes is worked out at submit.
   const [earlyBirdOn, setEarlyBirdOn] = useState(true);
+  // The business's own clock decides when an early-bird deadline ends. Same
+  // column create-registration prices from, so the form and the charge agree.
+  const orgTimeZone = org?.timezone || "UTC";
   const earlyBirdPreview = useEarlyBirdPreview({
     orgId: org?.id,
     term: formData.term,
@@ -794,7 +797,7 @@ export default function ProgramWizardNew() {
         // different ones, or when the lookup failed -- in all three the insert
         // simply doesn't name the columns and the row is created without one,
         // which is what a program created today already gets.
-        ...(earlyBirdPatch(earlyBirdPreview, earlyBirdOn) ?? {}),
+        ...(earlyBirdPatch(earlyBirdPreview, earlyBirdOn, new Date(), orgTimeZone) ?? {}),
         runs_own_registration: formData.runs_own_registration,
         external_registration_url: formData.runs_own_registration
           ? (formData.external_registration_url.trim() || null)
@@ -934,6 +937,7 @@ export default function ProgramWizardNew() {
             earlyBirdPreview={earlyBirdPreview}
             earlyBirdOn={earlyBirdOn}
             onEarlyBirdChange={setEarlyBirdOn}
+            orgTimeZone={orgTimeZone}
             usesEnropsRegistration={org?.uses_enrops_registration}
             onSubmit={handleSubmit}
             onSaveDraftAndConnect={handleSaveDraftAndConnect}
@@ -1562,6 +1566,7 @@ function Step3PriceAndOpen({
   earlyBirdPreview,
   earlyBirdOn,
   onEarlyBirdChange,
+  orgTimeZone,
   usesEnropsRegistration,
   onSubmit,
   onSaveDraftAndConnect,
@@ -1758,6 +1763,7 @@ function Step3PriceAndOpen({
               onChange={onEarlyBirdChange}
               disabled={submitting}
               termLabel={formatTermLabel(formData.term)}
+              timeZone={orgTimeZone}
             />
           </div>
           <div style={{ marginTop: 12, fontSize: 12.5, color: MUTED, lineHeight: 1.5 }}>

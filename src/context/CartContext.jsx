@@ -199,6 +199,15 @@ export function CartProvider({ children }) {
     setCart((c) => ({ ...c, sibling_discount_pct: pct }));
   }
 
+  // The provider's timezone, threaded the same way and for the same reason: it
+  // decides whether the early-bird deadline has passed, and create-registration
+  // decides it from the same column. Without it the review screen falls back to
+  // UTC and can show the standard price on the deadline evening while the server
+  // charges the early-bird one — or the reverse. undefined = not loaded yet.
+  function setOrgTimeZone(tz) {
+    setCart((c) => ({ ...c, timezone: tz }));
+  }
+
   function setActiveChildIndex(i) {
     setCart((c) => ({ ...c, active_child_index: i }));
   }
@@ -231,6 +240,7 @@ export function CartProvider({ children }) {
     setPromoError,
     togglePaymentPlan,
     setSiblingPct,
+    setOrgTimeZone,
     setActiveChildIndex,
     clearCart,
   };

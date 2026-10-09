@@ -529,8 +529,15 @@ serve(async (req) => {
 
     // Org sibling-discount config (null = off).
     const { data: orgCfg } = await admin
-      .from('organizations').select('sibling_discount_pct').eq('id', orgId).single();
+      .from('organizations').select('sibling_discount_pct, timezone').eq('id', orgId).single();
     const siblingPct = orgCfg?.sibling_discount_pct ?? null;
+    // The business's own timezone decides whether the early-bird deadline has
+    // passed. Without it the gate falls back to UTC, which ends a Pacific
+    // business's early bird at 4pm on the deadline day — so a parent buying that
+    // evening is charged the standard price while the catalog still shows the
+    // discount. Falls back to UTC only if the column is empty, which no live
+    // organisation is.
+    const orgTimeZone = orgCfg?.timezone || 'UTC';
 
     // Validate + load the promo (if one was entered).
     let validatedPromo: Parameters<typeof priceCart>[1]['validatedPromo'] = null;
@@ -546,7 +553,7 @@ serve(async (req) => {
         admin.from('promo_redemptions').select('*', { count: 'exact', head: true }).eq('promo_code_id', codeId),
         admin.from('promo_redemptions').select('*', { count: 'exact', head: true }).eq('promo_code_id', codeId).eq('parent_id', parentId),
       ]);
-      const preview = priceCart(toLineInputs(), { siblingPct, validatedPromo: null });
+      const preview = priceCart(toLineInputs(), { siblingPct, validatedPromo: null, timeZone: orgTimeZone });
       const v = validatePromo(codeRow, {
         orgId,
         lineProgramIds: flat.map((f) => f.program_id),
@@ -558,7 +565,7 @@ serve(async (req) => {
       validatedPromo = codeRow;
     }
 
-    const priced = priceCart(toLineInputs(), { siblingPct, validatedPromo });
+    const priced = priceCart(toLineInputs(), { siblingPct, validatedPromo, timeZone: orgTimeZone });
 
     // --- For each child: upsert student, then one registration per cart item ---
     const registrationIds: string[] = [];

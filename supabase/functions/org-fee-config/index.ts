@@ -58,7 +58,7 @@ serve(async (req) => {
       // family up front that this provider can't take payment yet, instead of
       // letting them fill everything in and hit a wall at the Pay step. Not
       // sensitive (it's a yes/no about whether the provider is open for money).
-      .select('id, fee_pass_through, platform_fee_card_pct, platform_fee_ach_pct, platform_fee_cap_cents, platform_fee_ach_cap_cents, platform_fee_override_until, platform_fee_floor_cents, sibling_discount_pct, stripe_charges_enabled')
+      .select('id, fee_pass_through, platform_fee_card_pct, platform_fee_ach_pct, platform_fee_cap_cents, platform_fee_ach_cap_cents, platform_fee_override_until, platform_fee_floor_cents, sibling_discount_pct, stripe_charges_enabled, timezone')
       .eq('slug', slug)
       .eq('status', 'active')
       .single();
@@ -159,6 +159,12 @@ serve(async (req) => {
       // Sibling discount % so the review screen matches the server-authoritative
       // charge (create-registration reads the same org config). null = off.
       sibling_discount_pct: data.sibling_discount_pct == null ? null : Number(data.sibling_discount_pct),
+      // The provider's own timezone, for ONE job: deciding whether an early-bird
+      // deadline has passed. create-registration reads the same column, so the
+      // price on the review screen and the amount Stripe charges agree about when
+      // the deadline ends. Not sensitive — it is the business's operating region,
+      // already implied by every class time on the page.
+      timezone: data.timezone || null,
       // Can this provider actually take money? Used to stop a family before they
       // fill the whole form. The AUTHORITATIVE block lives in create-checkout —
       // this is only so the UI can say so early and kindly.

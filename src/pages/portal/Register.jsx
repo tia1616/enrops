@@ -45,6 +45,7 @@ export default function Register() {
     setPromoError,
     togglePaymentPlan,
     setSiblingPct,
+    setOrgTimeZone,
     addAnotherChild,
   } = useCart();
 
@@ -503,6 +504,9 @@ export default function Register() {
     // Thread the org's sibling % onto the cart so the review screen matches the
     // server charge. undefined (older org-fee-config) -> pricing.js keeps the 10% default.
     setSiblingPct(feeRes?.data?.sibling_discount_pct);
+    // And the org's timezone, which decides whether the early-bird deadline has
+    // passed. Same source, same reason: the server prices from the same column.
+    setOrgTimeZone(feeRes?.data?.timezone);
     setLoading(false);
   }
 

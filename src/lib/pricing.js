@@ -60,13 +60,54 @@ export function isLegacyActive(today = new Date()) {
   return today < deadline;
 }
 
-// UTC-safe early-bird gate. dateStr is 'YYYY-MM-DD' from a Postgres date column.
-// A parent on the west coast and one on the east coast see the same gate state.
-export function isEarlyBirdActive(dateStr, today = new Date()) {
+// How far a wall-clock reading in `timeZone` sits from UTC at a given instant.
+// Positive west of Greenwich. Derived from Intl rather than a table so it is
+// right across daylight saving without a dependency.
+function zoneOffsetMs(utcMs, timeZone) {
+  const dtf = new Intl.DateTimeFormat('en-US', {
+    timeZone, hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  });
+  const p = {};
+  for (const { type, value } of dtf.formatToParts(new Date(utcMs))) p[type] = value;
+  // Some engines render midnight as hour 24; % 24 normalises it.
+  const asUTC = Date.UTC(
+    Number(p.year), Number(p.month) - 1, Number(p.day),
+    Number(p.hour) % 24, Number(p.minute), Number(p.second),
+  );
+  return utcMs - asUTC;
+}
+
+// Is the early bird still running? dateStr is 'YYYY-MM-DD' from a Postgres date
+// column, and the deadline day COUNTS, to its last moment, in the BUSINESS's own
+// timezone (organizations.timezone).
+//
+// IT USED TO END AT THE UTC END OF DAY, which is not the end of anybody's day.
+// A Nov 2 deadline expired at 3:59:59pm Pacific — the clocks go back on Nov 1, so
+// Portland is UTC-8 — and a parent buying at 11pm on the last evening paid full
+// price. The last evening of an early bird is the one that matters. Worse, the
+// live class list on the business's own website compares against local midnight,
+// so for those eight hours the website advertised the early-bird price while
+// checkout charged the standard one.
+//
+// The zone is a parameter, never a constant: businesses on this platform run in
+// Eastern, Mountain and Phoenix as well as Pacific, and a hardcoded Pacific
+// cutoff would quietly end an Eastern business's early bird at 9pm. Defaults to
+// UTC so a caller that has not been given an organisation keeps exactly the
+// behaviour it had rather than silently moving a price.
+export function isEarlyBirdActive(dateStr, today = new Date(), timeZone = 'UTC') {
   if (!dateStr) return false;
-  const [y, m, d] = dateStr.split('-').map(Number);
-  const deadlineMs = Date.UTC(y, m - 1, d, 23, 59, 59);
-  return today.getTime() <= deadlineMs;
+  const [y, m, d] = String(dateStr).slice(0, 10).split('-').map(Number);
+  if (!y || !m || !d) return false;
+  // Midnight at the START of the day after the deadline, in that zone. Expressed
+  // as an exclusive upper bound so the deadline day is whole, to the millisecond.
+  const wall = Date.UTC(y, m - 1, d + 1, 0, 0, 0);
+  // Twice: the first offset is read at the wrong instant when the correction
+  // crosses a daylight-saving change, and the second lands on the right side.
+  let end = wall + zoneOffsetMs(wall, timeZone);
+  end = wall + zoneOffsetMs(end, timeZone);
+  return today.getTime() < end;
 }
 
 // 'YYYY-MM-DD' -> 'June 5'. Fixed to UTC to avoid TZ wobble shifting the day.
@@ -121,7 +162,11 @@ export function calculateProgramPrice(program) {
   return Math.round(sessionCount * rate);
 }
 
-export function basePriceForItem({ program, isVip, today = new Date() }) {
+// timeZone is the ORGANISATION's (organizations.timezone), and decides only one
+// thing: whether the early-bird deadline has passed. Omitted, it falls back to
+// UTC — the behaviour this had before — so a caller that has not been wired up
+// keeps its prices rather than having them move by a few hours unannounced.
+export function basePriceForItem({ program, isVip, today = new Date(), timeZone = 'UTC' }) {
   if (isVip) {
     // VIP is per-term anchor. Cart expands a VIP item into 3 lines (Fall +
     // Winter + Spring), each at $240. create-registration writes $240 to each
@@ -144,7 +189,7 @@ export function basePriceForItem({ program, isVip, today = new Date() }) {
   if (
     ebPrice != null &&
     ebPrice < standardPrice &&
-    isEarlyBirdActive(ebDeadline, today)
+    isEarlyBirdActive(ebDeadline, today, timeZone)
   ) {
     return {
       base_cents: ebPrice,
@@ -205,6 +250,10 @@ export function calculateCart(cart) {
       const { base_cents, label, is_legacy, is_vip } = basePriceForItem({
         program: item.program,
         isVip: item.isVip,
+        // Threaded onto the cart by Register once org-fee-config loads, exactly
+        // as sibling_discount_pct is. Undefined until then, which falls back to
+        // UTC — the behaviour this had before — rather than guessing a zone.
+        timeZone: cart.timezone || 'UTC',
       });
       const sibling_cents =
         child.child_index > 0
