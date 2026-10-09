@@ -11,22 +11,7 @@ function eq(name, actual, expected) {
   ok(`${name} (got ${JSON.stringify(actual)})`, JSON.stringify(actual) === JSON.stringify(expected));
 }
 
-// classPhotos.js imports the supabase client, which needs browser env; pull the
-// pure functions out of the SOURCE instead of importing the module.
-import { readFileSync } from 'node:fs';
-const src = readFileSync(new URL('./classPhotos.js', import.meta.url), 'utf8');
-function grab(name) {
-  const m = src.match(new RegExp(`export function ${name}\\([\\s\\S]*?\\n}\\n`));
-  if (!m) throw new Error(`could not find ${name}`);
-  return m[0].replace('export function', 'function');
-}
-const childrenWithoutPhotoPermission = new Function(`${grab('childrenWithoutPhotoPermission')}; return childrenWithoutPhotoPermission;`)();
-const groupByDay = new Function(`${grab('groupByDay')}; return groupByDay;`)();
-const uploadErrorMessage = new Function(
-  `const UPLOAD_ERRORS = ${src.match(/const UPLOAD_ERRORS = (\{[\s\S]*?\n\});/)[1]};
-   ${grab('uploadErrorMessage')}; return uploadErrorMessage;`,
-)();
-
+import { childrenWithoutPhotoPermission, groupByDay, uploadErrorMessage } from './classPhotoLogic.js';
 import { fitWithin } from './classPhotoPrep.js';
 
 const reg = (id, first, last, consent) => ({ id, photo_release_consent: consent, student: { id: `s${id}`, first_name: first, last_name: last } });
