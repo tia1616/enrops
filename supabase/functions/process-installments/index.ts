@@ -81,6 +81,10 @@ import { UPLIFT_METADATA_KEY } from '../_shared/chargeFeeFacts.ts';
 import { allocateCartFeeByLine } from '../_shared/cartFee.ts';
 import { withResolvedFee, loadPlatformFeeDefaults } from '../_shared/feeConfig.ts';
 import { loadOrgBrand, formatFromAddress, OrgBrand } from '../_shared/orgBrand.ts';
+import {
+  addDaysUtc, chargeIdempotencyKey, declineFollowUp, DeclinePlan, FAMILY_PAY_BY_DAYS, formatRetryDate,
+  NOT_CHARGEABLE_REGISTRATION_STATUSES, planDeclineRetry, PROVIDER_FOLLOWUP_DAYS,
+} from '../_shared/declineRetry.ts';
 
 const stripe = new Stripe(Deno.env.get('STRIPE_SECRET_KEY')!, {
   apiVersion: '2023-10-16',
@@ -123,6 +127,14 @@ interface InstallmentRow {
    * live config, which is the behaviour those rows already had.
    */
   fee_pass_through: boolean | null;
+  /** Automatic-retry bookkeeping - see migration 20261007e and
+   *  _shared/declineRetry.ts. Defaults 0 / null on every row. */
+  card_decline_count: number | null;
+  retry_payment_method_id: string | null;
+  card_retries_done: number | null;
+  next_retry_on: string | null;
+  /** The business's missed-deadline email - migration 20261008a. */
+  provider_followup_on: string | null;
 }
 
 interface ProgramRow {
@@ -169,11 +181,106 @@ serve(async (req) => {
     paused_card_failed_groups: 0,
     paused_card_failed_rows: 0,
     parents_notified: 0,
+    retries_rearmed: 0,
+    deadline_followups_sent: 0,
     errors: 0,
     details: [] as string[],
   };
 
   try {
+    // STEP 0: Automatic retries that are due today go back in line.
+    //
+    // A declined row books its retry in next_retry_on (see the decline path in
+    // processGroup). Flipping it back to 'pending' here hands it to the SAME
+    // path every other charge takes - grouping, fee, routing, idempotency -
+    // rather than a second way of charging a card.
+    //
+    // NEVER A REMOVED OR REFUNDED REGISTRATION. When a business removes a
+    // family, refund-registration stops the plan by pausing its PENDING rows; a
+    // row already sitting in paused_card_failed is not touched. So a removed
+    // registration is never re-armed here, and processGroup refuses to charge
+    // one whichever path put it back to 'pending' (see
+    // NOT_CHARGEABLE_REGISTRATION_STATUSES there).
+    //
+    // FAIL DIRECTION: if this read fails we retry nobody today. That charges
+    // LESS, never more, and tomorrow's run picks the same rows up because
+    // next_retry_on is still in the past.
+    let dueRetriesQuery = admin
+      .from('installments')
+      .select('id, card_retries_done, registrations!inner(status)')
+      .eq('status', 'paused_card_failed')
+      .lte('next_retry_on', today);
+    // One neq per status rather than a hand-built not.in filter STRING, for the
+    // reason given at the sibling-stamp below: a mis-quoted filter string does
+    // not error, it matches the wrong set.
+    for (const s of NOT_CHARGEABLE_REGISTRATION_STATUSES) {
+      dueRetriesQuery = dueRetriesQuery.neq('registrations.status', s);
+    }
+    const { data: dueRetries, error: retryErr } = await dueRetriesQuery;
+    if (retryErr) {
+      console.error('[process-installments] could not load due retries; none attempted today:', retryErr.message);
+      summary.errors++;
+      summary.details.push(`RETRY LOOKUP FAILED: ${retryErr.message}`);
+    }
+    for (const r of ((dueRetries ?? []) as unknown) as Array<{ id: string; card_retries_done: number | null }>) {
+      // Conditional on the row STILL being booked for a retry, so two runs at
+      // once cannot both count it: the second matches nothing. The count is
+      // taken from what we read, and this run is the only writer of it.
+      const { data: rearmed, error: rearmErr } = await admin
+        .from('installments')
+        .update({
+          status: 'pending',
+          next_retry_on: null,
+          card_retries_done: (r.card_retries_done ?? 0) + 1,
+        })
+        .eq('id', r.id)
+        .eq('status', 'paused_card_failed')
+        .lte('next_retry_on', today)
+        .select('id');
+      if (rearmErr) {
+        console.error(`[process-installments] could not re-arm retry for ${r.id}:`, rearmErr.message);
+        summary.errors++;
+        summary.details.push(`RETRY REARM FAILED ${r.id}: ${rearmErr.message}`);
+      } else if (rearmed && rearmed.length) {
+        summary.retries_rearmed++;
+        summary.details.push(`RETRY ${r.id}: attempt ${(r.card_retries_done ?? 0) + 1}`);
+      }
+    }
+
+    // STEP 0b: the business's missed-deadline emails.
+    //
+    // When the last retry fails the family is emailed a deadline, and only
+    // once that email has actually gone out is provider_followup_on booked
+    // (see the decline path). Today is that day for these rows: the deadline
+    // was yesterday, the plan is still paused, so tell the business it can
+    // decide about the spot. Never for a removed registration - same list the
+    // retry re-arm uses.
+    //
+    // A family who put a new card on in the meantime is no longer
+    // paused_card_failed (the card-update webhook re-pends the row), so they
+    // drop out of this query and the business is not told to remove a family
+    // that has fixed it. It runs BEFORE the charges so it can never be skipped
+    // by the "nothing due today" early return below.
+    let followUpsQuery = admin
+      .from('installments')
+      .select(`id, organization_id, stripe_customer_id, installment_number, amount_cents, provider_followup_on,
+        stripe_payment_method_id, retry_payment_method_id,
+        registrations!inner(status, students(first_name, last_name), programs(curriculum), parents(email, first_name, last_name))`)
+      .eq('status', 'paused_card_failed')
+      .lte('provider_followup_on', today);
+    for (const s of NOT_CHARGEABLE_REGISTRATION_STATUSES) {
+      followUpsQuery = followUpsQuery.neq('registrations.status', s);
+    }
+    const { data: dueFollowUps, error: followUpErr } = await followUpsQuery;
+    if (followUpErr) {
+      // Fail direction: nobody is emailed today, and the rows are still booked
+      // for tomorrow's run. Nothing is charged by this step either way.
+      console.error('[process-installments] could not load missed-deadline follow-ups:', followUpErr.message);
+      summary.errors++;
+      summary.details.push(`FOLLOW-UP LOOKUP FAILED: ${followUpErr.message}`);
+    }
+    await sendMissedDeadlineFollowUps(admin, ((dueFollowUps ?? []) as unknown) as FollowUpRow[], today, summary);
+
     // STEP 1: Find the "trigger set" — pending rows with due_date <= today.
     // These are the rows that ARE due. We use them to identify which (customer,
     // installment_number) groups need processing today.
@@ -334,7 +441,7 @@ serve(async (req) => {
       // addressed to Enrops. That is the intended reading, not an accident.
       const alertEmail = brand.tenant_alert_email;
       try {
-        await processGroup(admin, groupRows, summary, alertEmail, orgConfig, brand, orgSlugMap.get(orgId) ?? null);
+        await processGroup(admin, groupRows, summary, alertEmail, orgConfig, brand, orgSlugMap.get(orgId) ?? null, today);
       } catch (err) {
         console.error(`Unhandled error for group ${groupKey}:`, err);
         summary.errors++;
@@ -395,12 +502,15 @@ async function processGroup(
   // email. Passed down for the same reason alertEmail is: derived once, so
   // every message about this group points at the same place.
   orgSlug: string | null,
+  // The run's own calendar day (UTC), so a retry is booked from the same
+  // "today" the run selected its rows by.
+  today: string,
 ) {
   // Fetch registration + program + parent data for all rows in the group
   const regIds = groupRows.map((r) => r.registration_id);
   const { data: regsData } = await admin
     .from('registrations')
-    .select('id, program_id, parent_id, students(first_name, last_name), programs(id, curriculum, status), parents(email, first_name, last_name)')
+    .select('id, status, program_id, parent_id, students(first_name, last_name), programs(id, curriculum, status), parents(email, first_name, last_name)')
     .in('id', regIds);
 
   if (!regsData || regsData.length === 0) {
@@ -437,6 +547,27 @@ async function processGroup(
       }).eq('id', row.id);
       summary.errors++;
       summary.details.push(`ERR ${row.id}: missing registration`);
+      continue;
+    }
+    // A REMOVED OR REFUNDED REGISTRATION IS NEVER CHARGED, whatever put its row
+    // back to 'pending'. refund-registration pauses only a plan's PENDING rows
+    // when a business removes a family, so a row that was already paused after
+    // a decline survives it - and the card-update webhook re-pends every paused
+    // row for that Stripe customer, which includes a removed sibling's. The
+    // retry re-arm skips these too, but the guard has to live here, where
+    // every path meets. Parked exactly as refund-registration parks its own.
+    if (NOT_CHARGEABLE_REGISTRATION_STATUSES.includes(regData.status)) {
+      const { error: parkErr } = await admin.from('installments').update({
+        status: 'paused_program_cancelled',
+        next_retry_on: null,
+        last_attempt_at: new Date().toISOString(),
+      }).eq('id', row.id);
+      summary.paused_cancelled++;
+      summary.details.push(
+        `SKIPPED ${row.id}: registration is ${regData.status}`
+          + (parkErr ? ` (could not park it: ${parkErr.message})` : ''),
+      );
+      if (parkErr) summary.errors++;
       continue;
     }
     parent = parent || (regData.parents as ParentRow);
@@ -479,8 +610,12 @@ async function processGroup(
 
   // Idempotency key: stable across cron retries.
   // Sort row IDs to ensure consistent ordering even if query order changes.
+  // After a decline it gains a suffix (chargeIdempotencyKey says why), so the
+  // retry, or a charge on a card the family just replaced, reaches the bank
+  // instead of being answered with the saved decline.
   const sortedRowIds = activeRows.map((r) => r.id).sort();
-  const idempotencyKey = `installment_group_${sortedRowIds.join('_')}`;
+  const priorDeclines = Math.max(0, ...activeRows.map((r) => r.card_decline_count ?? 0));
+  const idempotencyKey = chargeIdempotencyKey(sortedRowIds, priorDeclines);
 
   // Description: name all the children/programs aggregated in this charge
   const desc = activeRows.map((r) => {
@@ -836,16 +971,115 @@ async function processGroup(
 
     console.error(`Charge failed for group ${idempotencyKey}:`, failureReason);
 
-    // Mark ALL active rows in this group as failed
-    await admin.from('installments').update({
+    // WHAT HAPPENS NEXT - the failed-payment policy in _shared/declineRetry.ts.
+    //
+    // isCardDecline is the family's bank saying no: money definitely did not
+    // move, so a retry is safe. Anything else (a timeout, a Stripe outage) has
+    // an UNKNOWN outcome and is never retried automatically - a retry on a new
+    // key after a charge that secretly succeeded is how a family pays twice.
+    const errType = (stripeErr as { type?: string }).type;
+    const isCardDecline = errType === 'StripeCardError';
+
+    // AN IDEMPOTENCY REFUSAL TOUCHES NOTHING BUT THE KEY. Stripe refused the
+    // request before running it, so nothing was charged, and there are two
+    // ways to get here:
+    //   - another run is charging this same group right now (a double
+    //     invocation). That run owns the outcome and writes it; pausing the
+    //     rows or emailing from here would overwrite its booked retry with
+    //     "no retry" and send a second, contradictory alert.
+    //   - the card on the rows changed since this key was first used - a
+    //     family replaced their card within 24h of a decline on a row from
+    //     before card_decline_count existed. Proven in Stripe test mode: the
+    //     old key plus the new card is a flat 400.
+    // Either way: move the key on, leave the row as it is, tell nobody. In the
+    // second case the row is still 'pending', so the next run charges the new
+    // card on a fresh key instead of stranding a family whose card is fine.
+    if (errType === 'StripeIdempotencyError') {
+      const { error: keyErr } = await admin.from('installments')
+        .update({ card_decline_count: priorDeclines + 1 })
+        .in('id', sortedRowIds)
+        .eq('card_decline_count', priorDeclines);
+      summary.errors++;
+      summary.details.push(
+        `IDEMPOTENCY REFUSED group ${idempotencyKey}: ${failureReason}`
+          + (keyErr ? ` (could not move the key on: ${keyErr.message})` : ' - key moved on, rows left as they were'),
+      );
+      return;
+    }
+
+    // A retry cycle belongs to ONE card, and its count is read only from rows
+    // that carry that card. A sibling that joined the group later (another
+    // child, same plan payment) has no cycle of its own yet and must not reset
+    // this one - with `every` it did, restarting the retries and re-sending the
+    // first email. A card the family has just put on matches no row, so it
+    // starts at 0 and gets its own retries.
+    const retriesDone = Math.max(
+      0,
+      ...activeRows
+        .filter((r) => r.retry_payment_method_id === paymentMethodId)
+        .map((r) => r.card_retries_done ?? 0),
+    );
+    const plan = planDeclineRetry({
+      isCardDecline,
+      codes: [(stripeErr as any).decline_code, stripeErr.code],
+      retriesDone,
+      today,
+    });
+
+    // Mark ALL active rows in this group as failed. next_retry_on is written on
+    // every failure - null when nothing is booked - so a stale date from an
+    // earlier cycle can never survive onto a row that should not be retried.
+    const { error: failWriteErr } = await admin.from('installments').update({
       status: 'paused_card_failed',
       failure_reason: `${declineCode}: ${failureReason}`,
       last_attempt_at: new Date().toISOString(),
+      next_retry_on: plan.nextRetryOn,
+      // Cleared on EVERY failure and booked only after the final email is
+      // confirmed sent (below), so a date left over from an earlier cycle can
+      // never fire a "they missed the deadline" email nobody was given.
+      provider_followup_on: null,
+      ...(isCardDecline
+        ? {
+          card_decline_count: priorDeclines + 1,
+          retry_payment_method_id: paymentMethodId,
+          card_retries_done: retriesDone,
+        }
+        : {}),
     }).in('id', sortedRowIds);
 
     summary.paused_card_failed_groups++;
     summary.paused_card_failed_rows += activeRows.length;
-    summary.details.push(`FAILED group ${idempotencyKey}: ${declineCode} (${activeRows.length} rows)`);
+    summary.details.push(
+      `FAILED group ${idempotencyKey}: ${declineCode} (${activeRows.length} rows) -> ${plan.outcome}`
+        + (plan.nextRetryOn ? ` ${plan.nextRetryOn}` : ''),
+    );
+
+    // If that write failed the rows are still 'pending', so the next run tries
+    // the same dead card again - daily, unpaused, until someone notices. Say so
+    // to someone who can act on the database. Row ids only: this goes to the
+    // platform, not the tenant, so it must not name a family.
+    if (failWriteErr) {
+      summary.errors++;
+      summary.details.push(`DECLINE NOT RECORDED group ${idempotencyKey}: ${failWriteErr.message}`);
+      await alertPlatform(
+        admin,
+        'Installment decline could not be recorded',
+        `A card was declined but the rows could not be marked as failed, so they are still pending and will be tried again on the next run.\n\nError: ${failWriteErr.message}\n\nRow IDs: ${sortedRowIds.join(', ')}`,
+      );
+    }
+
+    const followUp = declineFollowUp({
+      plan,
+      retriesDone,
+      familyAlreadyTold: activeRows.some((r) => !!r.parent_notified_failed_at),
+      hasEmail: !!parent?.email,
+    });
+    // A failed retry with another one still booked is quiet. The family was
+    // told on the first decline and the business was told the retry dates;
+    // a second pair of emails three days later says nothing new to either.
+    if (!followUp.alertBusiness && !followUp.familyEmail) {
+      return;
+    }
 
     // THE FAMILY IS EMAILED FIRST, AND THE OPERATOR'S ALERT REPORTS WHAT
     // ACTUALLY HAPPENED. The order is the point.
@@ -867,10 +1101,18 @@ async function processGroup(
     // boolean type-checks here and then loses `parent` to "possibly undefined"
     // three lines down, which is how a second spelling of the rule gets
     // reintroduced to appease the compiler.
-    const firstRow = activeRows[0];
+    //
+    // THE LAST RETRY IS THE EXCEPTION TO THE DEDUP. parent_notified_failed_at
+    // stops us repeating the FIRST email; the final one says something new (we
+    // have stopped trying), so it goes out whenever the family has an address.
+    // declineFollowUp owns that rule.
+    const isFinalNotice = plan.outcome === 'retries_exhausted';
     const notifiableParent: ParentRow | null =
-      parent?.email && !firstRow.parent_notified_failed_at ? parent : null;
+      parent?.email && followUp.familyEmail ? parent : null;
 
+    // Set only when the business's missed-deadline email is really booked; the
+    // final alert promises that email only when this is non-null.
+    let followUpBookedOn: string | null = null;
     let parentNotice: ParentNoticeOutcome = notifiableParent
       ? 'send_failed'
       : parent?.email
@@ -885,9 +1127,27 @@ async function processGroup(
         regDataById,
         rows: activeRows,
         orgSlug,
+        variant: followUp.familyEmail === 'final' ? 'final' : 'first',
+        retryOn: plan.nextRetryOn,
+        payBy: plan.payBy,
       });
       if (sent) {
         parentNotice = 'sent';
+        // The business's missed-deadline email is booked ONLY now, once the
+        // family has actually been given the deadline - its whole text is "we
+        // told them". A family with no address, or a send that bounced, never
+        // gets one booked, and the final alert below says so instead.
+        if (followUp.familyEmail === 'final' && plan.providerFollowUpOn) {
+          const { error: bookErr } = await admin.from('installments')
+            .update({ provider_followup_on: plan.providerFollowUpOn })
+            .in('id', sortedRowIds);
+          if (bookErr) {
+            summary.errors++;
+            summary.details.push(`FOLLOW-UP NOT BOOKED group ${idempotencyKey}: ${bookErr.message}`);
+          } else {
+            followUpBookedOn = plan.providerFollowUpOn;
+          }
+        }
         // Stamp ALL rows in the group so we don't re-notify
         await admin.from('installments').update({
           parent_notified_failed_at: new Date().toISOString(),
@@ -898,11 +1158,14 @@ async function processGroup(
     }
 
     // Operator alert (one per group, not per row), now that the outcome is known
+    if (!followUp.alertBusiness) return;
     await sendOperatorAlert({
       brand,
       to: alertEmail,
-      subject: `Card declined for ${parent?.first_name || ''} ${parent?.last_name || ''} — installment ${installmentNumber}`,
+      subject: `Card declined for ${parent?.first_name || ''} ${parent?.last_name || ''} — installment ${installmentNumber}`
+        + (isFinalNotice ? ' (automatic retries finished)' : ''),
       body: buildDeclineAlertBody({
+        plan,
         rows: activeRows,
         regDataById,
         parent,
@@ -916,22 +1179,41 @@ async function processGroup(
         // the family was NOT emailed, because they have no other lever: no
         // admin screen reads or writes paused_card_failed.
         fixUrl: portalDashboardUrl(orgSlug),
+        followUpBookedOn,
       }),
     });
     return;
   }
 
   if (paymentIntent.status === 'succeeded') {
-    // Mark all active rows as paid against this single PaymentIntent
-    await admin.from('installments').update({
+    // Mark all active rows as paid against this single PaymentIntent.
+    //
+    // The error is READ. If this write fails the family has paid but the rows
+    // still say 'pending', and the next run charges them again on a key Stripe
+    // may already have forgotten - so it is a double charge waiting to happen,
+    // and someone who can fix the rows must hear about it today.
+    const { error: paidWriteErr } = await admin.from('installments').update({
       status: 'paid',
       stripe_payment_intent_id: paymentIntent.id,
       paid_at: new Date().toISOString(),
       last_attempt_at: new Date().toISOString(),
+      // A row paid by its retry, or by a card the family replaced mid-cycle,
+      // must not keep a booked retry date or deadline email on it.
+      next_retry_on: null,
+      provider_followup_on: null,
       // Re-stamp where this PI actually landed, so a refund of installment 2 or
       // 3 scopes itself correctly without consulting the org's current model.
       stripe_charge_account_id: recordedAcct,
     }).in('id', sortedRowIds);
+    if (paidWriteErr) {
+      summary.errors++;
+      summary.details.push(`PAID BUT NOT RECORDED ${paymentIntent.id}: ${paidWriteErr.message}`);
+      await alertPlatform(
+        admin,
+        'URGENT: installment charged but not marked paid',
+        `PaymentIntent ${paymentIntent.id} succeeded, but the rows could not be marked paid, so they are still pending and the next run will try to charge them again. Mark them paid before the next run.\n\nError: ${paidWriteErr.message}\n\nRow IDs: ${sortedRowIds.join(', ')}`,
+      );
+    }
 
     // Money doc item 14: what enrops actually earned on THIS charge, per row,
     // using the SAME shareByRow allocation that sized application_fee_amount
@@ -990,9 +1272,14 @@ async function processGroup(
 }
 
 function buildDeclineAlertBody({
-  rows, regDataById, parent, declineCode, failureReason, totalAmount, customerId,
-  connectedAccountId, parentNotice, fixUrl,
+  plan, rows, regDataById, parent, declineCode, failureReason, totalAmount, customerId,
+  connectedAccountId, parentNotice, fixUrl, followUpBookedOn,
 }: {
+  /** What the failed-payment policy decided for this decline. */
+  plan: DeclinePlan;
+  /** The day the business's missed-deadline email is actually booked for, or
+   *  null when it is not (the family was never given the deadline). */
+  followUpBookedOn: string | null;
   rows: InstallmentRow[];
   regDataById: Map<string, any>;
   parent?: ParentRow;
@@ -1039,19 +1326,46 @@ function buildDeclineAlertBody({
       ? `https://dashboard.stripe.com/${connectedAccountId}/customers/${customerId}`
       : `https://dashboard.stripe.com/customers/${customerId}`}`,
     ``,
-    `This payment plan is paused, so nothing further will be charged automatically until a working card is on it.`,
+    // ONE SENTENCE PER OUTCOME, each true in the state that selects it. The
+    // old single line ("nothing further will be charged automatically") is
+    // false the moment a retry is booked.
+    plan.outcome === 'retry_scheduled' && plan.nextRetryOn
+      ? `We'll try the same card again automatically on ${formatRetryDate(plan.nextRetryOn)}`
+        + ` (retry ${plan.retryNumber} of ${plan.totalRetries}). Most declines like this are a temporary hold and clear on their own.`
+      : plan.outcome === 'retries_exhausted'
+      ? `That was the last automatic retry. We tried this card ${plan.totalRetries + 1} times and have stopped, so the payment plan stays paused until a working card is on it.`
+      : plan.outcome === 'hard_decline'
+      ? `The bank's answer means this card can't be charged again, so we won't retry it automatically. The payment plan stays paused until a working card is on it.`
+      : `This payment plan is paused, so nothing further will be charged automatically until a working card is on it.`,
     ``,
     // Keyed on what was OBSERVED, not on what we were about to try. The two
     // shapes ask for opposite things from the operator - stand down, or you are
     // the only one who can move this - which is why getting it wrong mattered.
-    ...(parentNotice === 'sent'
+    ...(parentNotice === 'sent' && plan.outcome === 'retries_exhausted'
       ? [
-        `You do not need to do anything right now. ${parent?.first_name || 'The family'} has been emailed a link to put a new card on file, and the moment they do, the plan un-pauses on its own and the next nightly run collects the payment.`,
+        // "with a link" only when the email really carried one: a tenant with
+        // no portal slug gets the reply-to-us sentence instead.
+        `${parent?.first_name || 'The family'} has been emailed to say we've stopped retrying, `
+          + (fixUrl ? `with a link to put a new card on file` : `and asked to reply for a link to put a new card on file`)
+          + (plan.payBy ? ` by ${formatRetryDate(plan.payBy)} to keep the spot` : '')
+          + `. Once a new card is on, the plan un-pauses on its own and the next daily run collects the payment.`,
         ``,
-        `If nothing has changed in a few days, a nudge from you is what helps.`,
+        followUpBookedOn
+          ? `If it's still unpaid, we'll email you again on ${formatRetryDate(followUpBookedOn)} so you can decide whether to release the spot. We never remove a child or add a late fee on our own.`
+          : `From here it's yours: a nudge from you is what moves it. We never remove a child or add a late fee on our own.`,
+      ]
+      : parentNotice === 'sent'
+      ? [
+        `You do not need to do anything right now. ${parent?.first_name || 'The family'} has been emailed a link to put a new card on file, and the moment they do, the plan un-pauses on its own and the next daily run collects the payment.`,
+        ``,
+        plan.outcome === 'retry_scheduled'
+          ? `We'll let you know if the retries don't work.`
+          : `If nothing has changed in a few days, a nudge from you is what helps.`,
       ]
       : [
-        `THE FAMILY HAS NOT BEEN EMAILED ABOUT THIS, so reaching out to them is the only thing that will move it.`,
+        plan.outcome === 'retry_scheduled'
+          ? `THE FAMILY HAS NOT BEEN EMAILED ABOUT THIS. The retry may still go through, but if it doesn't, reaching out to them is the only thing that will move it.`
+          : `THE FAMILY HAS NOT BEEN EMAILED ABOUT THIS, so reaching out to them is the only thing that will move it.`,
         ``,
         parentNotice === 'already_notified'
           ? `They were already told about an earlier failed payment on this plan, and we do not email them about it twice, so this one is silent to them.`
@@ -1096,13 +1410,16 @@ function buildCancelledAlertBody({
 // to Enrops instead" that is acceptable for any of them.
 async function sendOperatorAlert(
   { brand, to, subject, body }: { brand: OrgBrand; to: string | null; subject: string; body: string },
-) {
+): Promise<'sent' | 'no_inbox' | 'failed'> {
+  // Returns what happened rather than throwing, so every existing caller can
+  // keep ignoring it; the missed-deadline sender reads it, because it has
+  // already claimed its row and must know whether to put the booking back.
   if (!to) {
     console.error('[process-installments] operator alert NOT sent - org has no inbox of its own', {
       organization_id: brand.org_id,
       subject,
     });
-    return;
+    return 'no_inbox';
   }
   try {
     const resp = await fetch('https://api.resend.com/emails', {
@@ -1122,20 +1439,182 @@ async function sendOperatorAlert(
     if (!resp.ok) {
       const errText = await resp.text();
       console.error('Resend send failed:', resp.status, errText);
+      return 'failed';
     }
+    return 'sent';
   } catch (err) {
     console.error('Operator alert failed:', err);
+    return 'failed';
   }
 }
 
+interface FollowUpRow {
+  id: string;
+  organization_id: string;
+  stripe_customer_id: string;
+  installment_number: number;
+  amount_cents: number;
+  provider_followup_on: string;
+  stripe_payment_method_id: string | null;
+  retry_payment_method_id: string | null;
+  registrations: {
+    status: string;
+    students: { first_name?: string; last_name?: string } | null;
+    programs: { curriculum?: string } | null;
+    parents: { email?: string; first_name?: string; last_name?: string } | null;
+  };
+}
+
+/**
+ * STEP 0b's sender: one email per family payment, to the business's own inbox.
+ *
+ * Each group is CLAIMED before it is sent - provider_followup_on is cleared by a
+ * conditional update, and only the run that clears it sends. Two runs at once
+ * therefore cannot email the business twice. A send that Resend rejects puts
+ * the booking back for tomorrow's run; a business with no inbox at all is
+ * logged and not re-booked, since tomorrow would be no different.
+ */
+async function sendMissedDeadlineFollowUps(
+  admin: AdminClient,
+  rows: FollowUpRow[],
+  today: string,
+  summary: any,
+) {
+  // STILL THE SAME DEAD CARD, or the email is a lie. The card-update webhook
+  // re-pends a row but does not know about this booking, so a family who put a
+  // new card on and whose new charge was then paused for some OTHER reason (a
+  // "charge blocked" pause) would still carry the date - and the business would
+  // be told to release the spot of a family who did exactly what was asked. The
+  // new card is on the row as stripe_payment_method_id; the card the retries
+  // gave up on is retry_payment_method_id. Different = they acted. Those rows
+  // lose the stale booking and are never emailed about.
+  const stale = rows.filter((r) => r.stripe_payment_method_id !== r.retry_payment_method_id);
+  if (stale.length) {
+    const { error: staleErr } = await admin.from('installments')
+      .update({ provider_followup_on: null })
+      .in('id', stale.map((r) => r.id).sort());
+    summary.details.push(
+      `FOLLOW-UP DROPPED (family changed card) ${stale.map((r) => r.id).join(',')}`
+        + (staleErr ? ` - could not clear: ${staleErr.message}` : ''),
+    );
+  }
+  const due = rows.filter((r) => r.stripe_payment_method_id === r.retry_payment_method_id);
+
+  // Grouped the way the charge was: one family payment, one email.
+  const groups = new Map<string, FollowUpRow[]>();
+  for (const r of due) {
+    const key = `${r.organization_id}__${r.stripe_customer_id}__${r.installment_number}__${r.provider_followup_on}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(r);
+  }
+
+  for (const groupRows of groups.values()) {
+    const ids = groupRows.map((r) => r.id).sort();
+    const { data: claimed, error: claimErr } = await admin
+      .from('installments')
+      .update({ provider_followup_on: null })
+      .in('id', ids)
+      .eq('status', 'paused_card_failed')
+      .lte('provider_followup_on', today)
+      .select('id');
+    if (claimErr) {
+      console.error('[process-installments] could not claim a missed-deadline follow-up:', claimErr.message);
+      summary.errors++;
+      summary.details.push(`FOLLOW-UP CLAIM FAILED ${ids.join(',')}: ${claimErr.message}`);
+      continue;
+    }
+    const claimedIds = new Set(((claimed ?? []) as Array<{ id: string }>).map((c) => c.id));
+    const mine = groupRows.filter((r) => claimedIds.has(r.id));
+    if (!mine.length) continue; // another run took it
+
+    const orgId = mine[0].organization_id;
+    const brand = await loadOrgBrand(admin, orgId);
+    const parent = mine[0].registrations.parents;
+    const parentName = [parent?.first_name, parent?.last_name].filter(Boolean).join(' ') || 'A family';
+    const children = mine.map((r) => {
+      const stu = r.registrations.students;
+      const prog = r.registrations.programs;
+      return `${stu?.first_name || 'their child'} in ${prog?.curriculum || 'their class'}`;
+    });
+    const total = mine.reduce((s, r) => s + (r.amount_cents || 0), 0);
+    const followUpOn = mine[0].provider_followup_on;
+    const finalNoticeOn = addDaysUtc(followUpOn, -PROVIDER_FOLLOWUP_DAYS);
+    const payBy = addDaysUtc(finalNoticeOn, FAMILY_PAY_BY_DAYS);
+
+    const outcome = await sendOperatorAlert({
+      brand,
+      to: brand.tenant_alert_email,
+      subject: `Unpaid after the deadline: ${parentName}, installment ${mine[0].installment_number}`,
+      body: [
+        `${parentName}${parent?.email ? ` (${parent.email})` : ''} has not paid installment ${mine[0].installment_number} of 3`
+          + ` for ${children.join(' and ')}: $${(total / 100).toFixed(2)}.`,
+        ``,
+        `Their card was declined and our automatic retries didn't go through. On ${formatRetryDate(finalNoticeOn)} we emailed them`
+          + ` that they needed to put a new card on by ${formatRetryDate(payBy)} to keep the spot. That date has passed and the payment still hasn't been collected.`,
+        ``,
+        `What you can do:`,
+        `- Release the spot: use Refund / remove next to their child on the Rosters page. That also stops any payments left on their plan.`,
+        `- Give them more time: do nothing. If they put a new card on later, we'll still collect the payment automatically.`,
+        ``,
+        `This is the last automatic email about this payment.`,
+      ].join('\n'),
+    });
+    const mineIds = mine.map((r) => r.id).sort();
+    if (outcome === 'sent') {
+      summary.deadline_followups_sent++;
+      summary.details.push(`DEADLINE FOLLOW-UP ${mineIds.join(',')}`);
+    } else if (outcome === 'failed') {
+      // Put the booking back so tomorrow's run tries again. Only onto rows
+      // still paused with nothing booked, so it cannot resurrect a row that was
+      // paid or re-pended in the meantime.
+      const { error: rebookErr } = await admin.from('installments')
+        .update({ provider_followup_on: followUpOn })
+        .in('id', mineIds)
+        .eq('status', 'paused_card_failed')
+        .is('provider_followup_on', null);
+      summary.errors++;
+      summary.details.push(
+        `DEADLINE FOLLOW-UP SEND FAILED ${mineIds.join(',')}`
+          + (rebookErr ? ` - could not re-book: ${rebookErr.message}` : ' - re-booked for the next run'),
+      );
+    } else {
+      summary.errors++;
+      summary.details.push(`DEADLINE FOLLOW-UP NOT SENT (business has no inbox) ${mineIds.join(',')}`);
+    }
+  }
+}
+
+/**
+ * A notice for Enrops itself, for a failure only someone with database access
+ * can fix (a row write that did not land). Goes to the PLATFORM brand's own
+ * alert address - the same one the fatal-crash notice uses - and so must carry
+ * no family data: row and PaymentIntent ids only, never a name or an email.
+ */
+async function alertPlatform(admin: AdminClient, subject: string, body: string) {
+  const platformBrand = await loadOrgBrand(admin, null).catch(() => null);
+  if (!platformBrand) {
+    console.error('[process-installments] platform alert NOT sent - no platform brand', { subject, body });
+    return;
+  }
+  await sendOperatorAlert({ brand: platformBrand, to: platformBrand.alert_email, subject, body });
+}
+
 async function sendParentDeclineNotice({
-  brand, parent, installmentNumber, regDataById, rows, orgSlug,
+  brand, parent, installmentNumber, regDataById, rows, orgSlug, variant, retryOn, payBy,
 }: {
+  /** 'final' only: the date to have a new card on by ('YYYY-MM-DD'). */
+  payBy: string | null;
   brand: OrgBrand;
   parent: ParentRow;
   installmentNumber: number;
   regDataById: Map<string, any>;
   rows: InstallmentRow[];
+  /** 'first' = the first decline on this card; 'final' = the last automatic
+   *  retry just failed and we have stopped trying. */
+  variant: 'first' | 'final';
+  /** The day we will try the same card again ('YYYY-MM-DD'), or null when no
+   *  retry is booked. Only ever said to the family when it is real. */
+  retryOn: string | null;
   /**
    * The tenant's portal slug, for the fix-it link. NULL is a legitimate answer
    * and the email drops the link rather than inventing a URL: a half-built
@@ -1181,16 +1660,46 @@ async function sendParentDeclineNotice({
     ? brand.sender_name.split('@')[0].trim()
     : brand.sender_name;
 
+  const isFinal = variant === 'final';
+  // Only the first notice ever mentions a retry, and only when one is booked.
+  const retryLine = !isFinal && retryOn
+    ? `If it was just a temporary hold, you don't need to do anything: we'll try the same card again on ${formatRetryDate(retryOn)}.`
+    : null;
+  const opening = isFinal
+    ? `We tried your card again for the ${installmentLabel} installment for ${summary}, and it still didn't go through, so we've stopped trying it automatically.`
+    : `A quick note — the ${installmentLabel} installment for ${summary} didn't go through this morning. Cards sometimes decline for routine reasons (expired, new card issued, bank flagging an unusual charge), so this is usually a quick fix.`;
+  // THE SPOT LINE. The first notice promises the spot is held while we sort it
+  // out. The final one may not: from 2026-10-08 a family that misses the
+  // deadline can have their spot released by the business, so the final email
+  // names the date instead of promising to hold it forever (Jessica approved
+  // the wording). A final email without a deadline - which the policy never
+  // produces, but the type allows - keeps the old sentence rather than invent
+  // a date.
+  const single = childPrograms.length === 1;
+  const spotLine = isFinal && payBy
+    ? `Please put a new card on file by ${formatRetryDate(payBy)} to keep ${single ? `${childPrograms[0].name}'s spot` : 'their spots'}.`
+      + ` If we can't collect the payment by then, ${single ? 'the spot' : 'the spots'} will be released.`
+    : `${single ? `${childPrograms[0].name}'s spot is` : 'Their spots are'} still held — we won't drop the registration${single ? '' : 's'} while we sort this out.`;
+  const spotLineHtml = isFinal && payBy
+    ? `<strong>${escapeHtml(`Please put a new card on file by ${formatRetryDate(payBy)} to keep ${single ? `${childPrograms[0].name}'s spot` : 'their spots'}.`)}</strong>`
+      + ` ${escapeHtml(`If we can't collect the payment by then, ${single ? 'the spot' : 'the spots'} will be released.`)}`
+    : `<strong>${single ? `${escapeHtml(childPrograms[0].name)}'s spot is` : 'Their spots are'} still held</strong> — we won't drop the registration${single ? '' : 's'} while we sort this out.`;
+  const heading = isFinal ? "Your payment still didn't go through" : 'Quick heads-up about your payment';
+  const subject = isFinal
+    ? `Your payment for ${childPrograms[0].program}${childPrograms.length > 1 ? ' & more' : ''} still didn't go through`
+    : `Quick heads-up about your payment for ${childPrograms[0].program}${childPrograms.length > 1 ? ' & more' : ''}`;
+
   const text = [
     `Hi ${parent.first_name},`,
     ``,
-    `A quick note — the ${installmentLabel} installment for ${summary} didn't go through this morning. Cards sometimes decline for routine reasons (expired, new card issued, bank flagging an unusual charge), so this is usually a quick fix.`,
+    opening,
     ``,
-    `${childPrograms.length === 1 ? `${childPrograms[0].name}'s spot is` : 'Their spots are'} still held — we won't drop the registration${childPrograms.length === 1 ? '' : 's'} while we sort this out.`,
+    spotLine,
     ``,
     fixUrl
-      ? `You can put a new card on file here, and we'll take the payment automatically:\n${fixUrl}`
+      ? `${isFinal ? 'Please put a new card on file here' : 'You can put a new card on file here'}, and we'll take the payment automatically:\n${fixUrl}`
       : `To update your card on file, reply to this email and we'll send you a secure link.`,
+    ...(retryLine ? [``, retryLine] : []),
     ``,
     `Thanks for your patience,`,
     senderFirst,
@@ -1201,15 +1710,18 @@ async function sendParentDeclineNotice({
   const html = `
 <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#1a1a1a;max-width:560px;margin:0 auto;padding:24px;line-height:1.6;">
   <div style="color:${brand.accent_color};font-size:14px;font-weight:700;letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;">${escapeHtml(brand.org_name)}</div>
-  <h2 style="font-size:20px;margin:0 0 16px 0;color:#1a1a1a;">Quick heads-up about your payment</h2>
+  <h2 style="font-size:20px;margin:0 0 16px 0;color:#1a1a1a;">${escapeHtml(heading)}</h2>
   <p>Hi ${escapeHtml(parent.first_name)},</p>
-  <p>A quick note — the ${installmentLabel} installment for <strong>${escapeHtml(summary)}</strong> didn't go through this morning. Cards sometimes decline for routine reasons (expired, new card issued, bank flagging an unusual charge), so this is usually a quick fix.</p>
-  <p><strong>${childPrograms.length === 1 ? `${escapeHtml(childPrograms[0].name)}'s spot is` : 'Their spots are'} still held</strong> — we won't drop the registration${childPrograms.length === 1 ? '' : 's'} while we sort this out.</p>
+  <p>${isFinal
+    ? `We tried your card again for the ${installmentLabel} installment for <strong>${escapeHtml(summary)}</strong>, and it still didn't go through, so we've stopped trying it automatically.`
+    : `A quick note — the ${installmentLabel} installment for <strong>${escapeHtml(summary)}</strong> didn't go through this morning. Cards sometimes decline for routine reasons (expired, new card issued, bank flagging an unusual charge), so this is usually a quick fix.`}</p>
+  <p>${spotLineHtml}</p>
   ${fixUrl
-    ? `<p>You can put a new card on file in a couple of minutes, and we'll take the payment automatically.</p>
+    ? `<p>${isFinal ? 'Please put a new card on file' : 'You can put a new card on file in a couple of minutes'}, and we'll take the payment automatically.</p>
   <p style="margin:20px 0;"><a href="${escapeHtml(fixUrl)}" style="background:${brand.primary_color};color:#ffffff;text-decoration:none;padding:12px 22px;border-radius:8px;font-weight:700;display:inline-block;">Update your card</a></p>
   <p style="font-size:13px;color:#666;">If the button doesn't work, paste this into your browser:<br/><a href="${escapeHtml(fixUrl)}" style="color:${brand.primary_color};">${escapeHtml(fixUrl)}</a></p>`
     : `<p>To update your card on file, reply to this email and we'll send you a secure link.</p>`}
+  ${retryLine ? `<p>${escapeHtml(retryLine)}</p>` : ''}
   <p>Thanks for your patience,<br/>${escapeHtml(senderFirst)}<br/><span style="color:#666;">${escapeHtml(brand.org_name)}</span><br/><a href="mailto:${brand.reply_to}" style="color:${brand.primary_color};">${brand.reply_to}</a></p>
 </div>`.trim();
 
@@ -1224,11 +1736,11 @@ async function sendParentDeclineNotice({
         from: formatFromAddress(brand),
         to: parent.email,
         reply_to: brand.reply_to,
-        subject: `Quick heads-up about your payment for ${childPrograms[0].program}${childPrograms.length > 1 ? ' & more' : ''}`,
+        subject,
         text,
         html,
         tags: [
-          { name: 'type', value: 'parent_decline_notice' },
+          { name: 'type', value: isFinal ? 'parent_decline_final_notice' : 'parent_decline_notice' },
           { name: 'installment_number', value: String(installmentNumber) },
         ],
       }),
