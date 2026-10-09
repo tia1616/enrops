@@ -22,6 +22,7 @@ import { avatarUrl } from "../../lib/avatars";
 import InstructorAvailabilityForm from "./InstructorAvailabilityForm.jsx";
 import AfterschoolAvailabilityForm from "./AfterschoolAvailabilityForm.jsx";
 import InstructorProfile from "./InstructorProfile.jsx";
+import ClassPhotosSection from "./ClassPhotosSection.jsx";
 import Chevron from "../../components/Chevron.jsx";
 import WizardHost from "../onboarding/WizardHost.jsx";
 import { fetchLegalDocument } from "../../lib/legalDoc.js";
@@ -2972,6 +2973,12 @@ function AfterschoolDetailView({ assignment, instructor, coInstructors = [], sch
         programId={assignment.program_id}
         sessionDates={programSessionDates(schedule)}
       />
+      <ClassPhotosSection
+        programId={assignment.program_id}
+        organizationId={instructor?.organization_id}
+        instructorId={instructor?.id ?? instructor?.instructor_id}
+        sessionDates={programSessionDates(schedule)}
+      />
       <div style={{ marginTop: 16 }}>
         <RosterSection
           programId={assignment.program_id}
@@ -3565,6 +3572,15 @@ function SubDetailView({ sub, instructor, onBack, onMarkTaught, markBusy, error,
           subs_read_program_rosters RLS; attendance write by instructor_attendance_
           access (program-sub case); materials by get-instructor-curriculum-docs's
           program-sub branch. The day is locked to the sub's single covered date. */}
+      {!isCamp && prog?.id && sub.date && (
+        <ClassPhotosSection
+          programId={prog.id}
+          organizationId={instructor?.organization_id}
+          instructorId={instructor?.id ?? instructor?.instructor_id}
+          sessionDates={[sub.date]}
+          lockedDate={sub.date}
+        />
+      )}
       {(isCamp ? sess?.id : prog?.id) && (
         <RosterSection
           campSessionId={isCamp ? sess.id : undefined}

@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
 import { canManageInstructors } from "../../lib/entitlements.js";
+import ClassPhotosSettingsCard from "./ClassPhotosSettingsCard.jsx";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -338,6 +339,8 @@ export default function AdminSettings() {
         </div>
       </section>
       )}
+
+      <ClassPhotosSettingsCard org={org} />
 
       {/* Google Drive is for importing curriculum documents — a J2S workflow
           that has no counterpart for a registration operator. Hidden rather

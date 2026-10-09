@@ -49,6 +49,11 @@ verify_jwt = true
 [functions.reconcile-onboarding-gate]
 verify_jwt = true
 
+# Instructor uploads a class photo. JWT-authenticated; the function re-checks via
+# resolveInstructor and lets the class_photos INSERT policy decide the class.
+[functions.upload-class-photo]
+verify_jwt = true
+
 [functions.submit-training]
 verify_jwt = true
 
