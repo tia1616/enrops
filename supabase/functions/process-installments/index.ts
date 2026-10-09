@@ -1278,7 +1278,7 @@ async function processGroup(
       to: alertEmail,
       subject: `Card declined for ${parent?.first_name || ''} ${parent?.last_name || ''} — installment ${installmentNumber}`
         + (plan.outcome === 'retries_exhausted' ? ' (automatic retries finished)'
-          : plan.outcome === 'hard_decline' ? ' (card can\'t be used again)' : ''),
+          : plan.outcome === 'hard_decline' ? ' (card can\'t be retried)' : ''),
       body: buildDeclineAlertBody({
         plan,
         rows: activeRows,
@@ -1506,7 +1506,7 @@ function buildDeclineAlertBody({
       : plan.outcome === 'retries_exhausted'
       ? `That was the last automatic retry. We tried this card ${plan.totalRetries + 1} times and have stopped, so the payment plan stays paused until a working card is on it.`
       : plan.outcome === 'hard_decline'
-      ? `The bank's answer means this card can't be charged again, so we won't retry it automatically. The payment plan stays paused until a working card is on it.`
+      ? `The bank's answer means retrying this card won't work, so we won't retry it automatically. The payment plan stays paused until a working card is on it.`
       : `This payment plan is paused, so nothing further will be charged automatically until a working card is on it.`,
     ``,
     // Keyed on what was OBSERVED, not on what we were about to try. The two
@@ -1849,7 +1849,11 @@ async function sendParentDeclineNotice({
   // was tried exactly once - "tried again" would be false there.
   const isDeadCardFinal = isFinal && cardIsDead;
   const openingFor = (s: string) => isDeadCardFinal
-    ? `The ${installmentLabel} installment for ${s} didn't go through this morning, and your bank told us this card can't be used again, so we won't try it again.`
+    // Worded for EVERY no-retry code, not just a dead card: authentication_required
+    // is on that list and its card is fine - the bank just needs the family
+    // there to approve it. "Can't be used again" would be false for it; "trying
+    // it again won't work" is true for all of them.
+    ? `The ${installmentLabel} installment for ${s} didn't go through this morning. Your bank's response means trying this card again won't work, so we won't.`
     : isFinal
     ? `We tried your card again for the ${installmentLabel} installment for ${s}, and it still didn't go through, so we've stopped trying it automatically.`
     : `A quick note — the ${installmentLabel} installment for ${s} didn't go through this morning. Cards sometimes decline for routine reasons (expired, new card issued, bank flagging an unusual charge), so this is usually a quick fix.`;
