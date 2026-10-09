@@ -63,7 +63,7 @@ create table if not exists public.class_photos (
   -- then sign, and delete, a photo that is not theirs. The unique constraint
   -- stops a second row on a path that already has one; this stops the first.
   constraint class_photos_path_in_own_class check (
-    storage_path like organization_id::text || '/' || program_id::text || '/' || session_date::text || '/%.jpg'
+    storage_path like organization_id::text || '/' || program_id::text || '/' || to_char(session_date, 'YYYY-MM-DD') || '/%.jpg'
   )
 );
 

@@ -38,6 +38,7 @@ const UPLOAD_ERRORS = {
   image_unreadable: "That photo couldn't be read. Try taking it again.",
   file_too_large: "That photo is too large.",
   not_found: "That class couldn't be found.",
+  try_again_later: "Photo uploads are unavailable for a few minutes. Your photo is fine - try again shortly.",
 };
 
 export function uploadErrorMessage(code) {
