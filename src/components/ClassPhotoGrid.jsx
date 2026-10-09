@@ -26,7 +26,9 @@ export function PhotoGrid({ photos, urls, onOpen, badge }) {
             {url ? (
               <img src={url} alt="" loading="lazy" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
             ) : (
-              <span style={{ fontSize: 11, color: MUTED }}>Loading...</span>
+              // Rows and URLs arrive together, so a row with no URL is not "still
+              // loading": signing it failed, or its file is gone.
+              <span style={{ fontSize: 11, color: MUTED }}>Unavailable</span>
             )}
             {badge?.(p) && (
               <span style={{ position: "absolute", left: 4, top: 4, background: "#b0413e", color: "#fff", fontSize: 10, fontWeight: 700, padding: "2px 6px", borderRadius: 4 }}>
@@ -97,7 +99,7 @@ export function PhotoLightbox({ photo, url, onClose, actions = [] }) {
         {url ? (
           <img src={url} alt="" style={{ maxWidth: "100%", maxHeight: "70vh", borderRadius: 8, background: "#000" }} />
         ) : (
-          <div style={{ color: "#fff" }}>Loading...</div>
+          <div style={{ color: "#fff" }}>This photo is unavailable.</div>
         )}
         {pending ? (
           <div style={{ background: "#fff", borderRadius: 8, padding: 12, maxWidth: 460, fontSize: 13, color: INK }}>

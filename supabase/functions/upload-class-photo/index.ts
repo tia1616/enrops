@@ -89,6 +89,9 @@ serve(async (req: Request) => {
     try {
       marked = await watermarkJpeg(bytes);
     } catch (e) {
+      if (e instanceof Error && e.message === 'image_too_large') {
+        return json({ error: 'file_too_large' }, 413);
+      }
       console.error('[upload-class-photo] watermark failed:', e);
       return json({ error: 'image_unreadable' }, 422);
     }

@@ -55,7 +55,16 @@ create table if not exists public.class_photos (
   created_at               timestamptz not null default now(),
   -- A family reported this photo. Non-null hides it from every family.
   flagged_at               timestamptz,
-  flagged_by_parent_id     uuid references public.parents(id) on delete set null
+  flagged_by_parent_id     uuid references public.parents(id) on delete set null,
+  -- A row may only point at an object inside ITS OWN class's folder. Without
+  -- this an instructor could POST a row straight to the table carrying another
+  -- class's (or another provider's) object path: RLS on the row would pass, and
+  -- because the storage policies key on "a row exists for this path" they would
+  -- then sign, and delete, a photo that is not theirs. The unique constraint
+  -- stops a second row on a path that already has one; this stops the first.
+  constraint class_photos_path_in_own_class check (
+    storage_path like organization_id::text || '/' || program_id::text || '/' || session_date::text || '/%.jpg'
+  )
 );
 
 create index if not exists class_photos_program_date_idx
@@ -130,10 +139,36 @@ grant execute on function private.parent_enrolled_in_program(uuid) to authentica
 
 -- 5. Table policies.
 -- Instructors (regular or confirmed sub for that day) read the class's photos.
+--
+-- ACTIVE instructors only. private.current_instructor_id() does not look at
+-- instructors.is_active, and instructor_attendance_access only needs a
+-- 'confirmed' assignment row, so a deactivated instructor kept reading (and, by
+-- direct API, writing) children's photos for as long as that row stayed. The
+-- edge function already refuses them through resolveInstructor; these policies
+-- say the same thing so the database does not depend on the function being the
+-- only door.
+create or replace function private.current_active_instructor_id()
+returns uuid
+language sql
+stable
+security definer
+set search_path to 'public','pg_temp'
+as $function$
+  select i.id from public.instructors i
+  where i.auth_user_id = auth.uid() and i.is_active
+  limit 1;
+$function$;
+
+revoke all on function private.current_active_instructor_id() from public, anon;
+grant execute on function private.current_active_instructor_id() to authenticated;
+
 drop policy if exists class_photos_instructor_select on public.class_photos;
 create policy class_photos_instructor_select on public.class_photos
   for select to authenticated
-  using (private.instructor_attendance_access(program_id, null, session_date));
+  using (
+    private.current_active_instructor_id() is not null
+    and private.instructor_attendance_access(program_id, null, session_date)
+  );
 
 -- Families read only photos nobody has flagged, for a class they are enrolled in.
 drop policy if exists class_photos_parent_select on public.class_photos;
@@ -177,17 +212,20 @@ drop policy if exists class_photos_instructor_insert on public.class_photos;
 create policy class_photos_instructor_insert on public.class_photos
   for insert to authenticated
   with check (
-    uploaded_by_instructor_id = private.current_instructor_id()
+    uploaded_by_instructor_id = private.current_active_instructor_id()
     and private.instructor_attendance_access(program_id, null, session_date)
     and private.class_photos_enabled_for_program(program_id)
   );
 
--- Delete: the instructor who took it, or the provider's admins.
+-- Delete: the instructor who took it, or the provider's admins. The instructor
+-- can NOT delete a photo a family has reported: that photo is evidence for the
+-- admin who has to decide, and the person who took it should not be able to
+-- make it disappear first.
 drop policy if exists class_photos_delete on public.class_photos;
 create policy class_photos_delete on public.class_photos
   for delete to authenticated
   using (
-    uploaded_by_instructor_id = private.current_instructor_id()
+    (uploaded_by_instructor_id = private.current_active_instructor_id() and flagged_at is null)
     or public.can_edit_org(organization_id)
     or public.is_platform_admin()
   );
@@ -259,7 +297,7 @@ create policy class_photos_storage_delete on storage.objects
       select 1 from public.class_photos cp
       where cp.storage_path = name
         and (
-          cp.uploaded_by_instructor_id = private.current_instructor_id()
+          (cp.uploaded_by_instructor_id = private.current_active_instructor_id() and cp.flagged_at is null)
           or public.can_edit_org(cp.organization_id)
           or public.is_platform_admin()
         )

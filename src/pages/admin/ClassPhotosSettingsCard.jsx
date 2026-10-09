@@ -82,10 +82,16 @@ export default function ClassPhotosSettingsCard({ org }) {
     setSaving(true);
     setErr("");
     const next = !enabled;
-    const { error } = await supabase.from("organizations").update({ class_photos_enabled: next }).eq("id", orgId);
+    // .select() so a refused write is VISIBLE: the organizations UPDATE policy lets
+    // only an owner or admin change settings, and for anyone else Postgres affects
+    // zero rows and returns no error. Without reading the row back, a staff member
+    // saw the switch flip to "On" while nothing had changed, and it reverted on reload.
+    const { data, error } = await supabase
+      .from("organizations").update({ class_photos_enabled: next }).eq("id", orgId).select("class_photos_enabled");
     setSaving(false);
     if (error) { console.error("[ClassPhotosSettingsCard] save failed", error); setErr("That didn't save. Try again."); return; }
-    setEnabled(next);
+    if (!data || data.length === 0) { setErr("Only an owner or admin can change this setting."); return; }
+    setEnabled(data[0].class_photos_enabled === true);
   }
 
   const openPhoto = open ? (photos || []).find((p) => p.id === open) : null;
@@ -124,7 +130,7 @@ export default function ClassPhotosSettingsCard({ org }) {
               </div>
             )}
             {photos.length === 0 ? (
-              <div style={{ fontSize: 13, color: MUTED }}>No photos yet.</div>
+              !err && <div style={{ fontSize: 13, color: MUTED }}>No photos yet.</div>
             ) : (
               <>
                 <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>Recent photos, reported first</div>

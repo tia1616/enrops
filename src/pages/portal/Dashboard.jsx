@@ -258,6 +258,7 @@ export default function Dashboard() {
   // whole tenant into "not found" (see the deploy-order note in PublicLayout).
   // This read can only ever fail quietly, to "no Photos tab".
   const [classPhotosOn, setClassPhotosOn] = useState(false);
+  const [classPhotosChecked, setClassPhotosChecked] = useState(false);
   useEffect(() => {
     if (!org?.id) return undefined;
     let cancelled = false;
@@ -267,9 +268,16 @@ export default function Dashboard() {
       if (cancelled) return;
       if (error) console.error('[Dashboard] class photos flag failed', error);
       setClassPhotosOn(data?.class_photos_enabled === true);
+      setClassPhotosChecked(true);
     })();
     return () => { cancelled = true; };
   }, [org?.id]);
+  // The tab can be reached by a link (?tab=photos) as well as the button, so the
+  // switch has to gate the CONTENT too: a provider who turned photos off must not
+  // keep a gallery reachable by an old email link.
+  useEffect(() => {
+    if (classPhotosChecked && !classPhotosOn && tab === 'photos') setTab('today');
+  }, [classPhotosChecked, classPhotosOn, tab]);
 
   // Hand the family off to Stripe's own card form. parent-update-card decides
   // whether there is anything to fix and which Stripe account the form belongs
@@ -1058,7 +1066,7 @@ export default function Dashboard() {
         {tab === 'today' && <TodayTab todayClasses={todayClasses} enrollments={enrollments} notifications={notifications} slug={org.slug} org={org} />}
         {tab === 'schedule' && <ScheduleTab enrollments={enrollments} />}
         {tab === 'classes' && <ClassesTab enrollments={enrollments} expandedCards={expandedCards} toggleCard={toggleCard} slug={org.slug} />}
-        {tab === 'photos' && <ClassPhotosTab enrollments={enrollments} />}
+        {tab === 'photos' && classPhotosOn && <ClassPhotosTab enrollments={enrollments} />}
         {tab === 'settings' && <SettingsTab prefs={prefs} savingPrefs={savingPrefs} prefsSaved={prefsSaved} onToggle={(key) => savePrefs({ ...prefs, [key]: !prefs[key] })} supportEmail={supportEmail} />}
       </div>
     </div>

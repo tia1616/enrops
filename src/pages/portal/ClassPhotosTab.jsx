@@ -8,8 +8,10 @@
 // so a refunded family, or a photo someone reported, simply is not in the result.
 //
 // A family can save any photo to their phone and can report one. Reporting hides
-// it from every family at once and tells the provider's admins (the review list in
-// Settings); there is no per-child tagging, so this is the safety valve for a child
+// it from every family at once and lands it, marked Reported, at the top of the
+// provider's review list in Settings. NOTHING NOTIFIES the provider yet (an admin
+// finds it by opening Settings), so the confirmation here must not claim they were
+// told. There is no per-child tagging, so this is the safety valve for a child
 // whose family did not agree to photos appearing in one.
 
 import { useEffect, useMemo, useState, useCallback } from "react";
@@ -66,7 +68,7 @@ export default function ClassPhotosTab({ enrollments }) {
       {error && <div className="rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>}
       {reported && (
         <div className="rounded-lg bg-j2s-purple/5 px-4 py-3 text-sm text-j2s-ink">
-          Thanks. That photo is hidden for everyone now, and the team has been told.
+          Thanks. That photo is now hidden from every family.
         </div>
       )}
 
