@@ -1,8 +1,27 @@
 import { assertEquals, assertNotEquals } from 'https://deno.land/std@0.208.0/assert/mod.ts';
 import {
-  addDaysUtc, chargeIdempotencyKey, declineFollowUp, formatRetryDate, isFinalNotice, NO_RETRY_DECLINE_CODES,
+  addDaysUtc, chargeIdempotencyKey, classifyChargeError, declineFollowUp, formatRetryDate, isFinalNotice, NO_RETRY_DECLINE_CODES,
   NOT_CHARGEABLE_REGISTRATION_STATUSES, planDeclineRetry, RETRY_GAPS_DAYS,
 } from '../declineRetry.ts';
+
+Deno.test('a real Stripe decline is recognised although its class name is minified to "Me"', () => {
+  // The exact shape process-installments receives from esm.sh stripe@14.14.0,
+  // captured in Stripe test mode 2026-10-09. The old check read `type` and
+  // classed this as "not a decline", so prod's first retry booked no second one.
+  const realDecline = { type: 'Me', rawType: 'card_error', code: 'card_declined', decline_code: 'insufficient_funds' };
+  assertEquals(classifyChargeError(realDecline), { isCardDecline: true, isIdempotencyRefusal: false });
+  // rawType missing but the raw API body present
+  assertEquals(classifyChargeError({ type: 'Xe', raw: { type: 'card_error' } }).isCardDecline, true);
+  // an idempotency refusal, minified the same way
+  assertEquals(classifyChargeError({ type: 'Qe', rawType: 'idempotency_error' }), { isCardDecline: false, isIdempotencyRefusal: true });
+  // a timeout / connection error is NEITHER - it must never be retried on a new key
+  assertEquals(classifyChargeError({ type: 'Ze', rawType: undefined, message: 'connection closed' }), { isCardDecline: false, isIdempotencyRefusal: false });
+  assertEquals(classifyChargeError(new Error('boom')), { isCardDecline: false, isIdempotencyRefusal: false });
+  assertEquals(classifyChargeError(null), { isCardDecline: false, isIdempotencyRefusal: false });
+  // the instanceof signal works even with no rawType
+  class FakeCardError extends Error {}
+  assertEquals(classifyChargeError(new FakeCardError('x'), { StripeCardError: FakeCardError }).isCardDecline, true);
+});
 
 const plan = (outcome: 'retry_scheduled' | 'retries_exhausted' | 'hard_decline' | 'not_a_decline') =>
   ({

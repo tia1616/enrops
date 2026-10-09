@@ -197,6 +197,34 @@ export function declineFollowUp({ plan, retriesDone, familyAlreadyTold, hasEmail
   return { familyEmail: hasEmail && !familyAlreadyTold ? 'first' : null, alertBusiness: true };
 }
 
+/**
+ * What kind of failure a Stripe error is, read from the field Stripe itself
+ * sets - NOT from the error's class name.
+ *
+ * LIVE BUG THIS REPLACES (2026-10-09): the charger tested
+ * `err.type === 'StripeCardError'`. stripe-node fills `type` from the class
+ * name, and the esm.sh build of stripe@14.14.0 that every edge function imports
+ * is minified, so a real card decline arrives with `type: "Me"`. Reproduced in
+ * Stripe test mode with that exact import: { type: "Me", rawType: "card_error",
+ * code: "card_declined", decline_code: "generic_decline" }. Every decline was
+ * therefore classed "not a decline": Damon's first automatic retry declined on
+ * prod and booked no second one. `rawType` is the API's own `error.type`
+ * string, which minification cannot touch; `instanceof` is kept as a second
+ * signal because the class identity survives even when its name does not.
+ */
+export function classifyChargeError(err: unknown, errors?: {
+  StripeCardError?: abstract new (...a: never[]) => unknown;
+  StripeIdempotencyError?: abstract new (...a: never[]) => unknown;
+}): { isCardDecline: boolean; isIdempotencyRefusal: boolean } {
+  const e = (err ?? {}) as { rawType?: string; raw?: { type?: string } };
+  const raw = e.rawType ?? e.raw?.type;
+  const isA = (cls?: abstract new (...a: never[]) => unknown) => !!cls && err instanceof cls;
+  return {
+    isCardDecline: raw === 'card_error' || isA(errors?.StripeCardError),
+    isIdempotencyRefusal: raw === 'idempotency_error' || isA(errors?.StripeIdempotencyError),
+  };
+}
+
 /** 'YYYY-MM-DD' + n days, in UTC so the date never shifts with a timezone. */
 export function addDaysUtc(isoDate: string, days: number): string {
   const d = new Date(`${isoDate}T00:00:00Z`);

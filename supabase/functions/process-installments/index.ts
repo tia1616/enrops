@@ -82,7 +82,7 @@ import { allocateCartFeeByLine } from '../_shared/cartFee.ts';
 import { withResolvedFee, loadPlatformFeeDefaults } from '../_shared/feeConfig.ts';
 import { loadOrgBrand, formatFromAddress, OrgBrand } from '../_shared/orgBrand.ts';
 import {
-  addDaysUtc, chargeIdempotencyKey, declineFollowUp, DeclinePlan, FAMILY_PAY_BY_DAYS, formatRetryDate, isFinalNotice,
+  addDaysUtc, chargeIdempotencyKey, classifyChargeError, declineFollowUp, DeclinePlan, FAMILY_PAY_BY_DAYS, formatRetryDate, isFinalNotice,
   NOT_CHARGEABLE_REGISTRATION_STATUSES, planDeclineRetry, PROVIDER_FOLLOWUP_DAYS,
 } from '../_shared/declineRetry.ts';
 
@@ -1088,8 +1088,9 @@ async function processGroup(
     // move, so a retry is safe. Anything else (a timeout, a Stripe outage) has
     // an UNKNOWN outcome and is never retried automatically - a retry on a new
     // key after a charge that secretly succeeded is how a family pays twice.
-    const errType = (stripeErr as { type?: string }).type;
-    const isCardDecline = errType === 'StripeCardError';
+    // Classified by Stripe's own rawType, never by `err.type`: in this minified
+    // esm.sh build a card decline's `type` is "Me" (see classifyChargeError).
+    const { isCardDecline, isIdempotencyRefusal } = classifyChargeError(err, Stripe.errors);
 
     // AN IDEMPOTENCY REFUSAL TOUCHES NOTHING BUT THE KEY. Stripe refused the
     // request before running it, so nothing was charged, and there are two
@@ -1105,7 +1106,7 @@ async function processGroup(
     // Either way: move the key on, leave the row as it is, tell nobody. In the
     // second case the row is still 'pending', so the next run charges the new
     // card on a fresh key instead of stranding a family whose card is fine.
-    if (errType === 'StripeIdempotencyError') {
+    if (isIdempotencyRefusal) {
       const { error: keyErr } = await admin.from('installments')
         .update({ card_decline_count: priorDeclines + 1 })
         .in('id', sortedRowIds)
