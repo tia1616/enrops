@@ -10,6 +10,7 @@ import { renderWaiverText } from '../../lib/waiverText.js';
 import { venueLabel } from '../../lib/roomLabel.js';
 import { dismissalAnswerIncomplete, dismissalSummary } from '../../lib/dismissal.js';
 import { earlyReleaseLine } from '../../lib/timeText.js';
+import { earliestPayBy, formatDeadline, NOT_CHARGEABLE_REGISTRATION_STATUSES } from '../../lib/paymentDeadline.js';
 import WaiverGate from './WaiverGate.jsx';
 import PickupInfoGate from './PickupInfoGate.jsx';
 
@@ -226,6 +227,11 @@ export default function Dashboard() {
   // conversation. Grouped by registration because that is what the card-update
   // function takes.
   const [stalledPlans, setStalledPlans] = useState([]);
+  // The deadline from a FINAL payment notice, when one has been sent: the
+  // banner repeats the date the email gave, so the family is never told two
+  // different things. null = no final notice is running, and the banner keeps
+  // its "no one has lost their spot" reassurance.
+  const [stalledPayBy, setStalledPayBy] = useState(null);
   const [fixingPlan, setFixingPlan] = useState(null);
   const [fixError, setFixError] = useState('');
   // JUST BACK FROM THE CARD FORM. Stripe redirects the instant the card is
@@ -444,12 +450,21 @@ export default function Dashboard() {
       // Statuses named explicitly rather than "not paid": 'paused_program_cancelled'
       // is also unpaid, and a family whose programme was cancelled must never be
       // asked for a card.
-      const { data: stalledRows, error: stalledErr } = await supabase
+      //
+      // NOT FOR A REMOVED FAMILY. When the business removes a family whose plan
+      // was already paused on a declined card, that row stays paused - so
+      // without the registration's own status here the family would keep being
+      // told "no one has lost their spot" and asked for a card for a place they
+      // no longer have. Same list the charger refuses to charge.
+      let stalledQuery = supabase
         .from('installments')
-        .select('id, registration_id, amount_cents, due_date, installment_number')
+        .select('id, registration_id, amount_cents, due_date, installment_number, provider_followup_on, registrations!inner(status)')
         .eq('organization_id', org.id)
-        .in('status', ['paused_card_failed', 'failed'])
-        .order('due_date');
+        .in('status', ['paused_card_failed', 'failed']);
+      for (const s of NOT_CHARGEABLE_REGISTRATION_STATUSES) {
+        stalledQuery = stalledQuery.neq('registrations.status', s);
+      }
+      const { data: stalledRows, error: stalledErr } = await stalledQuery.order('due_date');
       if (stalledErr) {
         console.warn('[dashboard] stalled instalments unavailable:', stalledErr.message);
       } else {
@@ -460,7 +475,10 @@ export default function Dashboard() {
           cur.count += 1;
           byReg.set(r.registration_id, cur);
         }
-        apply(() => setStalledPlans([...byReg.values()]));
+        apply(() => {
+          setStalledPlans([...byReg.values()]);
+          setStalledPayBy(earliestPayBy(stalledRows));
+        });
       }
 
       // 2a. Afterschool registrations
@@ -889,8 +907,20 @@ export default function Dashboard() {
               registrations, so a parent with one child was told about their
               "children". Small, but it is the reassuring half of a message a
               worried parent reads closely. */}
+          {/* TWO STATES, each true in the state that selects it. After a FINAL
+              notice the email gave a deadline, so the banner repeats that exact
+              date (derived by the same rule - paymentDeadlineTwinParity) rather
+              than reassuring the family that nothing is at stake. Before one,
+              the spot genuinely is held and the banner says so. */}
           <p className="mt-2 text-sm text-j2s-ink/70">
-            No one has lost their spot. This usually means the card expired or was replaced, so
+            {stalledPayBy ? (
+              <>
+                <strong>Please put a new card on by {formatDeadline(stalledPayBy)} so no one loses their spot.</strong>{' '}
+              </>
+            ) : (
+              <>No one has lost their spot. </>
+            )}
+            This usually means the card expired or was replaced, so
             putting a new one on takes a moment. Once you save it, we&rsquo;ll take this payment
             automatically within a day.
           </p>
