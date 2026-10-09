@@ -13,6 +13,7 @@ import { earlyReleaseLine } from '../../lib/timeText.js';
 import { earliestPayBy, formatDeadline, NOT_CHARGEABLE_REGISTRATION_STATUSES } from '../../lib/paymentDeadline.js';
 import WaiverGate from './WaiverGate.jsx';
 import PickupInfoGate from './PickupInfoGate.jsx';
+import ClassPhotosTab from './ClassPhotosTab.jsx';
 
 /* ------------------------------------------------------------------ */
 /*  Constants                                                          */
@@ -21,6 +22,7 @@ const TABS = [
   { key: 'today', label: 'Today' },
   { key: 'schedule', label: 'Schedule' },
   { key: 'classes', label: 'Classes' },
+  { key: 'photos', label: 'Photos' },
   { key: 'settings', label: 'Settings' },
 ];
 
@@ -148,10 +150,13 @@ function IconClasses({ className }) {
 function IconSettings({ className }) {
   return <svg className={className} viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M11.49 3.17c-.38-1.56-2.6-1.56-2.98 0a1.532 1.532 0 01-2.286.948c-1.372-.836-2.942.734-2.106 2.106.54.886.061 2.042-.947 2.287-1.561.379-1.561 2.6 0 2.978a1.532 1.532 0 01.947 2.287c-.836 1.372.734 2.942 2.106 2.106a1.532 1.532 0 012.287.947c.379 1.561 2.6 1.561 2.978 0a1.533 1.533 0 012.287-.947c1.372.836 2.942-.734 2.106-2.106a1.533 1.533 0 01.947-2.287c1.561-.379 1.561-2.6 0-2.978a1.532 1.532 0 01-.947-2.287c.836-1.372-.734-2.942-2.106-2.106a1.532 1.532 0 01-2.287-.947zM10 13a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" /></svg>;
 }
+function IconPhotos({ className }) {
+  return <svg className={className} viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M4 5a2 2 0 00-2 2v8a2 2 0 002 2h12a2 2 0 002-2V7a2 2 0 00-2-2h-1.586a1 1 0 01-.707-.293l-1.121-1.121A2 2 0 0011.172 3H8.828a2 2 0 00-1.414.586L6.293 4.707A1 1 0 015.586 5H4zm6 9a3 3 0 100-6 3 3 0 000 6z" clipRule="evenodd" /></svg>;
+}
 function ChevronDown({ open, className = '' }) {
   return <svg className={`h-5 w-5 transition-transform duration-200 ${open ? 'rotate-180' : ''} ${className}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" /></svg>;
 }
-const TAB_ICONS = { today: IconToday, schedule: IconSchedule, classes: IconClasses, settings: IconSettings };
+const TAB_ICONS = { today: IconToday, schedule: IconSchedule, classes: IconClasses, photos: IconPhotos, settings: IconSettings };
 
 /* ------------------------------------------------------------------ */
 /*  Main component                                                     */
@@ -242,6 +247,29 @@ export default function Dashboard() {
   // conversation this feature exists to delete.
   const [searchParams] = useSearchParams();
   const [cardJustSaved, setCardJustSaved] = useState(searchParams.get('card') === 'updated');
+  // The class-photos email links straight to the Photos tab.
+  useEffect(() => {
+    if (searchParams.get('tab') === 'photos') setTab('photos');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // Whether this provider has class photos on. Read HERE, not added to
+  // PublicLayout's select: that one row is the Outlet context for every
+  // parent-facing page, and selecting a column an environment lacks turns the
+  // whole tenant into "not found" (see the deploy-order note in PublicLayout).
+  // This read can only ever fail quietly, to "no Photos tab".
+  const [classPhotosOn, setClassPhotosOn] = useState(false);
+  useEffect(() => {
+    if (!org?.id) return undefined;
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from('public_org_directory').select('class_photos_enabled').eq('id', org.id).maybeSingle();
+      if (cancelled) return;
+      if (error) console.error('[Dashboard] class photos flag failed', error);
+      setClassPhotosOn(data?.class_photos_enabled === true);
+    })();
+    return () => { cancelled = true; };
+  }, [org?.id]);
 
   // Hand the family off to Stripe's own card form. parent-update-card decides
   // whether there is anything to fix and which Stripe account the form belongs
@@ -1010,7 +1038,7 @@ export default function Dashboard() {
 
       <div className="sticky top-0 z-10 -mx-4 bg-white/95 px-4 backdrop-blur sm:-mx-6 sm:px-6">
         <nav className="flex border-b border-j2s-purple/10">
-          {TABS.map((t) => {
+          {TABS.filter((t) => t.key !== 'photos' || (classPhotosOn && enrollments.some((e) => e.programId))).map((t) => {
             const Icon = TAB_ICONS[t.key];
             const active = tab === t.key;
             return (
@@ -1030,6 +1058,7 @@ export default function Dashboard() {
         {tab === 'today' && <TodayTab todayClasses={todayClasses} enrollments={enrollments} notifications={notifications} slug={org.slug} org={org} />}
         {tab === 'schedule' && <ScheduleTab enrollments={enrollments} />}
         {tab === 'classes' && <ClassesTab enrollments={enrollments} expandedCards={expandedCards} toggleCard={toggleCard} slug={org.slug} />}
+        {tab === 'photos' && <ClassPhotosTab enrollments={enrollments} />}
         {tab === 'settings' && <SettingsTab prefs={prefs} savingPrefs={savingPrefs} prefsSaved={prefsSaved} onToggle={(key) => savePrefs({ ...prefs, [key]: !prefs[key] })} supportEmail={supportEmail} />}
       </div>
     </div>
