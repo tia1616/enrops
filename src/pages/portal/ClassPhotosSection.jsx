@@ -39,15 +39,19 @@ export default function ClassPhotosSection({ programId, organizationId, instruct
   const [rosterRows, setRosterRows] = useState(null);
 
   // Only days that have happened can take photos (the database refuses the rest).
+  // The parent passes a NEW array every render, so key the memo on its contents.
+  const datesKey = (sessionDates || []).join(",");
   const pickable = useMemo(() => {
     if (lockedDate) return lockedDate <= todayStr ? [lockedDate] : [];
-    // A class whose meeting dates are known but none has arrived yet takes no
-    // photos: the schedule is the evidence, so an empty list here means "not
-    // started", not "unknown". Only a genuinely unknown schedule (no dates at
-    // all) falls back to today.
-    if ((sessionDates || []).length === 0) return [todayStr];
-    return [...sessionDates].filter((d) => d <= todayStr).sort();
-  }, [sessionDates, lockedDate, todayStr]);
+    // The class's own meeting dates are the only days that take photos. While the
+    // schedule is still loading, or for a class that has not started, the list is
+    // empty and the section says photos open on the first class day. It used to
+    // fall back to "today" when the list was empty, which let an instructor file a
+    // photo against a day the class never met in the moment before the schedule
+    // arrived.
+    return datesKey ? datesKey.split(",").filter((d) => d <= todayStr).sort() : [];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [datesKey, lockedDate, todayStr]);
   const [day, setDay] = useState(() => pickable[pickable.length - 1] ?? todayStr);
   useEffect(() => {
     if (!pickable.includes(day)) setDay(pickable[pickable.length - 1] ?? todayStr);

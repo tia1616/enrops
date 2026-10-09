@@ -53,7 +53,14 @@ export function isJpeg(bytes: Uint8Array): boolean {
 }
 
 async function renderWordmark(width: number, colour: string): Promise<Image> {
-  await ensureWasm();
+  // Named separately from a bad photo: the CDN being down is not the instructor's
+  // photo being unreadable, and telling them to retake it would send them in circles.
+  try {
+    await ensureWasm();
+  } catch (e) {
+    console.error('[classPhotoWatermark] resvg wasm unavailable:', e);
+    throw new Error('watermark_unavailable');
+  }
   const svg = WORDMARK_SVG.replaceAll(`fill="${WORDMARK_CREAM}"`, `fill="${colour}"`);
   const png = new Resvg(svg, { fitTo: { mode: 'width', value: width } }).render().asPng();
   const img = await Image.decode(png);

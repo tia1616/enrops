@@ -92,6 +92,9 @@ serve(async (req: Request) => {
       if (e instanceof Error && e.message === 'image_too_large') {
         return json({ error: 'file_too_large' }, 413);
       }
+      if (e instanceof Error && e.message === 'watermark_unavailable') {
+        return json({ error: 'try_again_later' }, 503);
+      }
       console.error('[upload-class-photo] watermark failed:', e);
       return json({ error: 'image_unreadable' }, 422);
     }

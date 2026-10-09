@@ -76,7 +76,10 @@ export default function ClassPhotosSettingsCard({ org }) {
     }
   }, [orgId]);
 
-  useEffect(() => { loadPhotos(); }, [loadPhotos]);
+  // Only once the provider has the feature on: a provider that never enabled it
+  // should not pay for signing URLs, and on an environment without the table
+  // (frontend ahead of the migration) should not be shown a load error.
+  useEffect(() => { if (enabled === true) loadPhotos(); }, [enabled, loadPhotos]);
 
   async function toggle() {
     setSaving(true);

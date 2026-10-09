@@ -78,8 +78,12 @@ export async function signPhotoUrls(rows) {
 export async function deleteClassPhoto(row) {
   const { error: rmErr } = await supabase.storage.from(PHOTO_BUCKET).remove([row.storage_path]);
   if (rmErr) throw rmErr;
-  const { error } = await supabase.from("class_photos").delete().eq("id", row.id);
+  // Read the deleted row back: a DELETE the policy refuses affects ZERO rows and
+  // returns no error (the photo may have been reported since the screen loaded),
+  // which used to read as success while the photo sat there.
+  const { data, error } = await supabase.from("class_photos").delete().eq("id", row.id).select("id");
   if (error) throw error;
+  if (!data || data.length === 0) throw new Error("photo was not deleted");
 }
 
 /** A family reports a photo; it disappears for every family at once. */
