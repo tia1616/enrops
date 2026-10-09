@@ -2123,6 +2123,7 @@ export default function QuickProgramBuilder() {
             disabled={submitting}
             termLabel={formatTermLabel(effectiveTerm)}
             timeZone={org?.timezone || "UTC"}
+            feeConfig={feeConfig}
           />
         )}
 

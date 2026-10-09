@@ -1764,6 +1764,7 @@ function Step3PriceAndOpen({
               disabled={submitting}
               termLabel={formatTermLabel(formData.term)}
               timeZone={orgTimeZone}
+              feeConfig={feeConfig}
             />
           </div>
           <div style={{ marginTop: 12, fontSize: 12.5, color: MUTED, lineHeight: 1.5 }}>

@@ -17,6 +17,7 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase.js";
+import { totalWithFee } from "../lib/platformFee.js";
 import { isEarlyBirdActive } from "../lib/pricing.js";
 import {
   earlyBirdPatch,
@@ -95,7 +96,7 @@ export function useEarlyBirdPreview({ orgId, term, priceCents, status, runsOwnRe
 // that `npm test` uses. Logic that picks a price belongs where a test can reach it.
 export { earlyBirdPatch };
 
-export default function EarlyBirdRow({ preview, enabled, onChange, disabled, termLabel, timeZone = "UTC" }) {
+export default function EarlyBirdRow({ preview, enabled, onChange, disabled, termLabel, timeZone = "UTC", feeConfig = null }) {
   // Seven states, seven sentences, and two of them exist because the sentence
   // that would otherwise be shown is FALSE rather than merely unhelpful:
   // "no price typed yet" would read as "this class is free", and a term whose
@@ -156,14 +157,28 @@ export default function EarlyBirdRow({ preview, enabled, onChange, disabled, ter
   } else {
     live = true;
     const offer = `${describeOffer(preview)} through ${formatDeadlineShort(preview.deadline)}`;
+    // THE NUMBER TO PUT ON A FLYER, not the number in the column.
+    //
+    // Money layer sections 3 and 4: the price a family sees first has to be the
+    // price they pay. The price field directly above this row already says
+    // "families pay $307.97" — quoting a bare $274 here would put two conventions
+    // on one screen, and the bare one is the one an operator would copy.
+    //
+    // feeConfig null means org-fee-config has not answered (or failed). Say
+    // nothing rather than guess: a price note that guesses is worse than none,
+    // because it ends up on a flyer. Same rule FamiliesPayNote follows.
+    const allIn = feeConfig ? totalWithFee(preview.early_bird_cents, feeConfig) : null;
+    const price = allIn != null && allIn !== preview.early_bird_cents
+      ? <>{formatDollars(preview.early_bird_cents)} — families pay {formatDollars(allIn)}</>
+      : <>{formatDollars(preview.early_bird_cents)}</>;
     body = enabled ? (
       <span style={{ color: INK }}>
-        {offer} <span style={{ color: GREEN_INK, fontWeight: 700 }}>→ {formatDollars(preview.early_bird_cents)}</span>
+        {offer} <span style={{ color: GREEN_INK, fontWeight: 700 }}>→ {price}</span>
       </span>
     ) : (
       <span style={{ color: MUTED }}>
         Off for this class. Families pay the standard price. Switch on for {offer}
-        {" "}<span style={{ fontWeight: 700 }}>→ {formatDollars(preview.early_bird_cents)}</span>.
+        {" "}<span style={{ fontWeight: 700 }}>→ {price}</span>.
       </span>
     );
   }

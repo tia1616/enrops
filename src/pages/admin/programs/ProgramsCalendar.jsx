@@ -3104,6 +3104,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
             disabled={saving}
             termLabel={formatTermLabel(program.term)}
             timeZone={panelOrg?.timezone || "UTC"}
+            feeConfig={panelFeeConfig}
           />
         </div>
       )}
