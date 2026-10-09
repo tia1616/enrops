@@ -72,8 +72,13 @@ export default function PublicLayout() {
         // `timezone` decides whether an early-bird deadline has passed. Without
         // it the catalog card falls back to UTC and drops the early-bird price
         // at 4pm Pacific on the deadline day, hours before checkout agrees.
-        // Readable by anon (verified against column_privileges and a real anon
-        // read), and no more revealing than the class times already on the page.
+        //
+        // Against the contract above: this reads the VIEW public_org_directory,
+        // not the organizations table, and the view already exposes `timezone` on
+        // BOTH environments — checked there, and with a real anon read of the
+        // view returning America/Los_Angeles on each. No migration precedes this
+        // one. (Checking the table instead proves nothing: the table has no
+        // support_email at all, which is how the view got overlooked once already.)
         .select('id, slug, name, logo_url, status, active_registration_term, instructor_pay_model, stripe_charges_enabled, support_email, timezone')
         .eq('slug', slug)
         .maybeSingle();
