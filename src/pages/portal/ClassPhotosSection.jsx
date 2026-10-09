@@ -41,8 +41,12 @@ export default function ClassPhotosSection({ programId, organizationId, instruct
   // Only days that have happened can take photos (the database refuses the rest).
   const pickable = useMemo(() => {
     if (lockedDate) return lockedDate <= todayStr ? [lockedDate] : [];
-    const past = [...(sessionDates || [])].filter((d) => d <= todayStr).sort();
-    return past.length ? past : [todayStr];
+    // A class whose meeting dates are known but none has arrived yet takes no
+    // photos: the schedule is the evidence, so an empty list here means "not
+    // started", not "unknown". Only a genuinely unknown schedule (no dates at
+    // all) falls back to today.
+    if ((sessionDates || []).length === 0) return [todayStr];
+    return [...sessionDates].filter((d) => d <= todayStr).sort();
   }, [sessionDates, lockedDate, todayStr]);
   const [day, setDay] = useState(() => pickable[pickable.length - 1] ?? todayStr);
   useEffect(() => {
@@ -140,7 +144,9 @@ export default function ClassPhotosSection({ programId, organizationId, instruct
   const blocked = childrenWithoutPhotoPermission(rosterRows || []);
   const working = uploads.some((u) => u.state === "working");
   const openPhoto = open && photos ? photos.find((p) => p.id === open) : null;
-  const mine = (p) => instructorId && p.uploaded_by_instructor_id === instructorId;
+  // A reported photo is evidence for the admin who must decide, so the database
+  // does not let the instructor who took it delete it; do not offer the button.
+  const mine = (p) => instructorId && p.uploaded_by_instructor_id === instructorId && !p.flagged_at;
 
   return (
     <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10, padding: 14, marginTop: 16 }}>
@@ -190,7 +196,10 @@ export default function ClassPhotosSection({ programId, organizationId, instruct
 
       {uploads.length > 0 && (
         <ul style={{ listStyle: "none", margin: "10px 0 0", padding: 0, fontSize: 12.5 }}>
-          {uploads.slice(0, 6).map((u) => (
+          {/* Every failure stays on screen. Capping the list to the newest few hid
+              a photo that failed in the middle of a long batch, and the instructor
+              walked away believing it had been added. */}
+          {[...uploads.filter((u) => u.state === "failed"), ...uploads.filter((u) => u.state !== "failed").slice(0, 4)].map((u) => (
             <li key={u.key} style={{ color: u.state === "failed" ? "#b0413e" : u.state === "done" ? "#2f7d32" : MUTED, padding: "2px 0" }}>
               {u.state === "working" ? "Uploading" : u.state === "done" ? "Added" : "Not added"}: {u.name}{u.message ? ` - ${u.message}` : ""}
             </li>

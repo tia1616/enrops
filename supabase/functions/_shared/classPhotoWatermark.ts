@@ -68,8 +68,40 @@ export function markPlacement(photoW: number, photoH: number) {
   return { width, margin };
 }
 
+// The decoded size, not the file size, is what costs memory: a few hundred KB of
+// solid colour can declare 30000x30000 pixels and need ~3.6 GB as RGBA, and the
+// 6 MB upload cap says nothing about that. A phone camera is ~12-48 MP, so 64 MP
+// is generous and still only ~256 MB decoded.
+export const MAX_PIXELS = 64_000_000;
+
+/**
+ * Width and height from the first Start-Of-Frame marker, read WITHOUT decoding.
+ * Returns null when no frame header is found (corrupt or truncated file).
+ */
+export function jpegDimensions(b: Uint8Array): { width: number; height: number } | null {
+  let i = 2; // past the SOI marker
+  while (i + 9 < b.length) {
+    if (b[i] !== 0xff) { i++; continue; }
+    const marker = b[i + 1];
+    if (marker === 0xff) { i++; continue; } // fill byte
+    // Standalone markers carry no length: TEM, RSTn, SOI, EOI.
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd9)) { i += 2; continue; }
+    const len = (b[i + 2] << 8) | b[i + 3];
+    const isSof = marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+    if (isSof) {
+      return { height: (b[i + 5] << 8) | b[i + 6], width: (b[i + 7] << 8) | b[i + 8] };
+    }
+    if (len < 2) return null;
+    i += 2 + len;
+  }
+  return null;
+}
+
 export async function watermarkJpeg(input: Uint8Array): Promise<Uint8Array> {
   if (!isJpeg(input)) throw new Error('not_a_jpeg');
+  const dims = jpegDimensions(input);
+  if (!dims || dims.width === 0 || dims.height === 0) throw new Error('image_unreadable');
+  if (dims.width * dims.height > MAX_PIXELS) throw new Error('image_too_large');
   const decoded = await Image.decode(input);
   if (!(decoded instanceof Image)) throw new Error('not_a_still_image');
   let img: Image = decoded;
