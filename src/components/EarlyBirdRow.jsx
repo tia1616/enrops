@@ -95,7 +95,7 @@ export function useEarlyBirdPreview({ orgId, term, priceCents, status, runsOwnRe
 // that `npm test` uses. Logic that picks a price belongs where a test can reach it.
 export { earlyBirdPatch };
 
-export default function EarlyBirdRow({ preview, enabled, onChange, disabled, termLabel }) {
+export default function EarlyBirdRow({ preview, enabled, onChange, disabled, termLabel, timeZone = "UTC" }) {
   // Seven states, seven sentences, and two of them exist because the sentence
   // that would otherwise be shown is FALSE rather than merely unhelpful:
   // "no price typed yet" would read as "this class is free", and a term whose
@@ -141,7 +141,7 @@ export default function EarlyBirdRow({ preview, enabled, onChange, disabled, ter
         put here. Set one in Money &gt; Discounts and every program gets it.
       </span>
     );
-  } else if (!isEarlyBirdActive(preview.deadline)) {
+  } else if (!isEarlyBirdActive(preview.deadline, new Date(), timeZone)) {
     // An offer whose deadline has passed is still the term's offer -- the
     // Discounts card needs to know about it to badge the term "Ended" -- but
     // joining a class to it would promise a price families cannot get. The gate

@@ -2445,7 +2445,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         // registering under.
         ...(isLean || !earlyBirdTouched
           ? {}
-          : earlyBirdPatch(earlyBirdPreview, earlyBirdOn) ?? {}),
+          : earlyBirdPatch(earlyBirdPreview, earlyBirdOn, new Date(), panelOrg?.timezone || "UTC") ?? {}),
         program_location_id: draft.program_location_id || null,
         room: draft.room || null,
         runs_own_registration: !!draft.runs_own_registration,
@@ -3103,6 +3103,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
             onChange={touchEarlyBird}
             disabled={saving}
             termLabel={formatTermLabel(program.term)}
+            timeZone={panelOrg?.timezone || "UTC"}
           />
         </div>
       )}

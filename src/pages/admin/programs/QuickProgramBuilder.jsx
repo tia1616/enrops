@@ -994,7 +994,7 @@ export default function QuickProgramBuilder() {
           // different ones, or when the lookup failed -- in all three the insert
           // leaves the columns out and the class is created without one, which
           // is what a class created here already gets today.
-          ...(earlyBirdPatch(earlyBirdPreview, earlyBirdOn) ?? {}),
+          ...(earlyBirdPatch(earlyBirdPreview, earlyBirdOn, new Date(), org?.timezone || "UTC") ?? {}),
         }),
         photo_url: photoUrl || null, // optional; NULL renders the no-image card
         runs_own_registration: false, // native enrops checkout
@@ -2122,6 +2122,7 @@ export default function QuickProgramBuilder() {
             onChange={setEarlyBirdOn}
             disabled={submitting}
             termLabel={formatTermLabel(effectiveTerm)}
+            timeZone={org?.timezone || "UTC"}
           />
         )}
 

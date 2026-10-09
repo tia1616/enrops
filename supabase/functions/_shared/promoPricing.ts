@@ -63,19 +63,57 @@ export interface PricingResult {
   total_cents: number;            // NET total actually charged
 }
 
-// UTC-safe early-bird gate: a 'YYYY-MM-DD' deadline is active through end of that
-// UTC day. Matches src/lib/pricing.js isEarlyBirdActive so client and server agree.
-export function isEarlyBirdActive(dateStr: string | null, now: Date = new Date()): boolean {
-  if (!dateStr) return false;
-  const [y, m, d] = dateStr.split('-').map(Number);
-  const deadlineMs = Date.UTC(y, m - 1, d, 23, 59, 59);
-  return now.getTime() <= deadlineMs;
+// How far a wall-clock reading in `timeZone` sits from UTC at a given instant.
+// Positive west of Greenwich.
+function zoneOffsetMs(utcMs: number, timeZone: string): number {
+  const dtf = new Intl.DateTimeFormat('en-US', {
+    timeZone, hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  });
+  const p: Record<string, string> = {};
+  for (const { type, value } of dtf.formatToParts(new Date(utcMs))) p[type] = value;
+  const asUTC = Date.UTC(
+    Number(p.year), Number(p.month) - 1, Number(p.day),
+    Number(p.hour) % 24, Number(p.minute), Number(p.second),
+  );
+  return utcMs - asUTC;
 }
 
-export function basePriceForProgram(p: ProgramPricing, now: Date = new Date()): number {
+// The early-bird gate. The deadline day counts to its last moment in the
+// BUSINESS's timezone (organizations.timezone), not in UTC.
+//
+// LINE FOR LINE THE SAME as src/lib/pricing.js isEarlyBirdActive. This decides
+// the amount Stripe charges and that one decides the price on screen; if the two
+// readings of the calendar ever differ, a family is quoted one number and billed
+// another. Any change here is a change there, in the same commit.
+//
+// It used to end at 23:59:59 UTC, which is 3:59:59pm Pacific on a November date —
+// so a parent buying on the last evening paid full price while the business's own
+// website still advertised the discount. Defaults to UTC so a caller that has not
+// been handed an organisation keeps the behaviour it had.
+export function isEarlyBirdActive(
+  dateStr: string | null,
+  now: Date = new Date(),
+  timeZone = 'UTC',
+): boolean {
+  if (!dateStr) return false;
+  const [y, m, d] = String(dateStr).slice(0, 10).split('-').map(Number);
+  if (!y || !m || !d) return false;
+  const wall = Date.UTC(y, m - 1, d + 1, 0, 0, 0);
+  let end = wall + zoneOffsetMs(wall, timeZone);
+  end = wall + zoneOffsetMs(end, timeZone);
+  return now.getTime() < end;
+}
+
+export function basePriceForProgram(
+  p: ProgramPricing,
+  now: Date = new Date(),
+  timeZone = 'UTC',
+): number {
   const standard = p.price_cents;
   const eb = p.early_bird_price_cents;
-  if (eb != null && eb < standard && isEarlyBirdActive(p.early_bird_deadline, now)) {
+  if (eb != null && eb < standard && isEarlyBirdActive(p.early_bird_deadline, now, timeZone)) {
     return eb;
   }
   return standard;
@@ -133,14 +171,24 @@ function promoDiscountCents(code: PromoCodeRow, afterSiblingSubtotal: number): n
 // so the per-line nets sum EXACTLY to the charged total.
 export function priceCart(
   lines: CartLineInput[],
-  opts: { siblingPct: number | null; validatedPromo: PromoCodeRow | null; now?: Date },
+  // timeZone is the ORGANISATION's (organizations.timezone). It decides only one
+  // thing: whether the early-bird deadline has passed. Omitted, it falls back to
+  // UTC, which is the behaviour this had before — so an unwired caller keeps its
+  // prices rather than silently moving them by a few hours.
+  opts: {
+    siblingPct: number | null;
+    validatedPromo: PromoCodeRow | null;
+    now?: Date;
+    timeZone?: string;
+  },
 ): PricingResult {
   const now = opts.now ?? new Date();
+  const tz = opts.timeZone || 'UTC';
   const sibPct = opts.siblingPct == null ? 0 : Number(opts.siblingPct);
 
   // Pass 1: base + sibling per line.
   const work = lines.map((l) => {
-    const base = l.is_vip ? (l.vip_price_cents ?? 0) : basePriceForProgram(l.program, now);
+    const base = l.is_vip ? (l.vip_price_cents ?? 0) : basePriceForProgram(l.program, now, tz);
     // Sibling applies to every additional child (child_index > 0), VIP included —
     // matches src/lib/pricing.js so the server total equals the review screen.
     const sibling = l.child_index > 0 ? Math.round(base * (sibPct / 100)) : 0;

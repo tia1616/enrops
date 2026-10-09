@@ -125,7 +125,7 @@ export function describeOffer(preview) {
 //     single price this form could honestly write.
 // The row tells the operator which of those it is; this function's job is only
 // to make sure none of them writes anything.
-export function earlyBirdPatch(preview, enabled, today = new Date()) {
+export function earlyBirdPatch(preview, enabled, today = new Date(), timeZone = 'UTC') {
   if (!preview) return null;             // still asking, or the lookup failed
   if (preview.needs_price) return null;  // no price typed yet, nothing decided
   if (preview.skip_reason) {
@@ -143,7 +143,7 @@ export function earlyBirdPatch(preview, enabled, today = new Date()) {
   // untrue -- and about not having the term keep reporting a dead deal as its
   // current one. Gated by the SAME function the family-facing price uses; `today`
   // is injectable so the branch is testable without waiting for a date.
-  if (!isEarlyBirdActive(preview.deadline, today)) return null;
+  if (!isEarlyBirdActive(preview.deadline, today, timeZone)) return null;
   return enabled
     ? {
         early_bird_price_cents: preview.early_bird_cents,

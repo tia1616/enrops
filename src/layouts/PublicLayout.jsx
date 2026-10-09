@@ -69,7 +69,12 @@ export default function PublicLayout() {
         // 20260914a_public_org_directory_support_email.sql to that environment
         // before this build reaches it. The same rule binds anyone adding the
         // next column here.
-        .select('id, slug, name, logo_url, status, active_registration_term, instructor_pay_model, stripe_charges_enabled, support_email')
+        // `timezone` decides whether an early-bird deadline has passed. Without
+        // it the catalog card falls back to UTC and drops the early-bird price
+        // at 4pm Pacific on the deadline day, hours before checkout agrees.
+        // Readable by anon (verified against column_privileges and a real anon
+        // read), and no more revealing than the class times already on the page.
+        .select('id, slug, name, logo_url, status, active_registration_term, instructor_pay_model, stripe_charges_enabled, support_email, timezone')
         .eq('slug', slug)
         .maybeSingle();
       if (cancelled) return;
