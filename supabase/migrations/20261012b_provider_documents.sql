@@ -186,12 +186,24 @@ values ('provider-documents', 'provider-documents', false, 10485760,
         array['application/pdf', 'image/jpeg', 'image/png'])
 on conflict (id) do nothing;
 
+-- Readers: anyone who can read a row pointing at the file, PLUS the provider's
+-- own owners/admins for anything in their folder. The second half is not
+-- optional: Storage must SELECT an object before it will DELETE it, so without
+-- it the file removal after a row delete (or after a file is replaced) finds
+-- nothing and silently leaves the old file behind. Proven on staging
+-- 2026-10-12: delete left 1 orphan before this, 0 after.
 drop policy if exists provider_documents_storage_select on storage.objects;
 create policy provider_documents_storage_select on storage.objects
   for select to authenticated
   using (
-    bucket_id = 'provider-documents'
-    and exists (select 1 from public.provider_documents d where d.storage_path = name)
+    case when bucket_id = 'provider-documents' then
+      exists (select 1 from public.provider_documents d where d.storage_path = name)
+      or case when (storage.foldername(name))[1] ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+           then public.can_admin_org(((storage.foldername(name))[1])::uuid)
+           else false
+         end
+    else false
+    end
   );
 
 -- CASE, not AND: Postgres does not promise to test bucket_id first, and these
