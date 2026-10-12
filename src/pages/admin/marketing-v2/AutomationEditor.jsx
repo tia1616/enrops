@@ -710,6 +710,11 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
             // wording, with no error and nothing in the UI to show it. Everything
             // else is opt-in and correctly starts false.
             enabled: isOptOutAutomation(template.key),
+            // An opt-out row is created ENABLED, so stamp when it went on:
+            // class_photos never emails about days before enabled_at, and a
+            // null here would let the first run reach back over the whole
+            // look-back.
+            ...(isOptOutAutomation(template.key) ? { enabled_at: new Date().toISOString() } : {}),
             ...patch,
           })
           .select()

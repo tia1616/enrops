@@ -14,23 +14,16 @@
 // THE LOOK-BACK covers a missed or failed daily run. The context key carries the
 // day, so a day already emailed is never emailed again however often it is seen.
 
-import { addDays } from "./welcomeWindow.ts";
+import { addDays, orgToday } from "./welcomeWindow.ts";
 
 export const PHOTO_LOOKBACK_DAYS = 3;
 
 export interface PhotoRow { program_id: string; created_at: string }
 export interface PhotoDay { programId: string; day: string; count: number }
 
-/** YYYY-MM-DD of an instant in a timezone (UTC fallback), same shape as orgToday. */
+/** YYYY-MM-DD of an instant in a timezone - orgToday, applied to that instant. */
 export function localDay(iso: string, timezone: string | null | undefined): string {
-  const d = new Date(iso);
-  try {
-    return new Intl.DateTimeFormat("en-CA", {
-      timeZone: timezone || "UTC", year: "numeric", month: "2-digit", day: "2-digit",
-    }).format(d);
-  } catch {
-    return d.toISOString().slice(0, 10);
-  }
+  return orgToday(timezone, new Date(iso));
 }
 
 /**

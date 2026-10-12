@@ -407,7 +407,9 @@ serve(async (req) => {
   // (20261012a). Give every active provider without a row an enabled one before
   // loading. A provider who switched it off has enabled = false and is untouched.
   // Daily run only: the sweep and event mode never run this template anyway.
-  if (!eventRegistrationId && !sweepWelcome) {
+  // Not in an only_template run aimed at some OTHER template: that mode promises
+  // to narrow a daily run, never to do extra work.
+  if (!eventRegistrationId && !sweepWelcome && (!onlyTemplateKey || onlyTemplateKey === "class_photos")) {
     const { error: ensureErr } = await supabase.rpc("ensure_default_on_automation", { p_template_key: "class_photos" });
     if (ensureErr) {
       // Not fatal to the other automations; a provider without a row simply gets
@@ -1822,6 +1824,10 @@ async function resolveClassPhotosAudience(
 ): Promise<AudienceEntry[]> {
   // The provider's own switch for the whole feature. Off means the family has no
   // Photos tab to land on, so there is nothing to email about.
+  // A SEPARATE read, deliberately not a column added to the automations load
+  // above: that select feeds EVERY automation, and on an environment without
+  // class_photos_enabled (prod before 20261009b) it would 42703 and stop all of
+  // them. Here, a missing column fails only this one.
   const { data: org, error: orgErr } = await supabase
     .from("organizations").select("class_photos_enabled").eq("id", a.organization_id).maybeSingle();
   if (orgErr) throw orgErr;
