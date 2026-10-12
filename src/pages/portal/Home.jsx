@@ -22,7 +22,7 @@ import { buildCatalogPicker, OTHER_DISTRICT } from '../../lib/regCatalogPicker.j
 import { programAction, fullFlagMap, ACTION_WAITLIST, ACTION_EXTERNAL } from '../../lib/waitlistState.js';
 import WaitlistModal from '../../components/WaitlistModal.jsx';
 import { isGroupingDistrict } from '../../lib/districts.js';
-import { vipBundleAllowed } from '../../lib/vipOffering.js';
+import { vipBundleAllowed, fetchVipOfferingPublic } from '../../lib/vipOffering.js';
 
 // Tenant resolution: `org` (id, slug, name, active_registration_term, ...) is
 // provided by PublicLayout via Outlet context (from the public_org_directory
@@ -368,7 +368,7 @@ export default function Home() {
     // out {} either way, exactly as it did before.
     //
     // Fee config stays OUT of this batch deliberately - see below.
-    const [brRes, scRes, pgRes, futureRes, wcRes, dtRes, vipRes] = await Promise.all([
+    const [brRes, scRes, pgRes, futureRes, wcRes, dtRes, vipPublic] = await Promise.all([
       // Branding (hero copy, colors, etc) - multi-tenant ready. Any provider
       // can customize these via org_branding row; defaults apply if blank.
       supabase
@@ -506,15 +506,9 @@ export default function Home() {
         .from('districts_public')
         .select('id, name, district_type')
         .eq('organization_id', org.id),
-      // This business's year-bundle setting (20261012a). Its OWN query, not a
-      // column on PublicLayout's org read, on purpose: a missing column fails
-      // that read and takes every tenant page down, while failing here only
-      // means no bundle is offered (vipBundleAllowed treats null as off).
-      supabase
-        .from('public_org_directory')
-        .select('vip_offering_public')
-        .eq('id', org.id)
-        .maybeSingle(),
+      // This business's year-bundle setting (20261012a) - see vipOffering.js
+      // for why it is its own read. Resolves to null on failure, never throws.
+      fetchVipOfferingPublic(supabase, org.id),
     ]);
 
     const br = brRes.data;
@@ -564,10 +558,6 @@ export default function Home() {
       // the same rule create-registration enforces (vipOffering.js). A read
       // error leaves vipPublic null, which offers no bundle rather than one the
       // server would refuse at the last step.
-      if (vipRes?.error) {
-        console.warn('[registration] year-bundle setting unavailable; not offering bundles. Cause: %o', vipRes.error);
-      }
-      const vipPublic = vipRes?.data?.vip_offering_public ?? null;
       pg.filter((p) => !isCampProgram(p) && vipBundleAllowed(vipPublic, p.program_location_id)).forEach((fall) => {
         const winter = futureTerms?.find(
           (f) => f.term === bundleTerms.winter && f.program_location_id === fall.program_location_id && f.day_of_week === fall.day_of_week,
