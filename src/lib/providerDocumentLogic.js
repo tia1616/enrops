@@ -137,6 +137,11 @@ export function rowFromDraft(draft) {
   };
 }
 
+/** Soonest expiry first; a document with no expiry date sorts last. */
+export function compareByExpiry(a, b) {
+  return (a.expires_on || "9999-12-31").localeCompare(b.expires_on || "9999-12-31");
+}
+
 /**
  * Group documents by who sees them: "Every partner" first, then each partner by
  * name. A row whose partner is missing from `partners` (archived, or not loaded)
@@ -159,7 +164,7 @@ export function groupByAudience(rows, partners) {
   const all = groups.get("all");
   const rest = [...groups.values()].filter((g) => g.key !== "all").sort((a, b) => a.label.localeCompare(b.label));
   for (const g of groups.values()) {
-    g.rows.sort((a, b) => (a.expires_on || "9999-12-31").localeCompare(b.expires_on || "9999-12-31"));
+    g.rows.sort(compareByExpiry);
   }
   return all ? [all, ...rest] : rest;
 }

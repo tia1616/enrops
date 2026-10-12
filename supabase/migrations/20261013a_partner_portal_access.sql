@@ -16,9 +16,15 @@
 --
 -- LINKING. The first time the person signs in, partner_portal_memberships()
 -- links the grant to their auth user by matching the contact's email to the
--- signed-in account's (confirmed) email. If the contact's email is later
--- changed, the link is cleared, so the old address's account loses access and
--- the new address claims it on its next sign-in.
+-- signed-in account's (confirmed) email.
+--
+-- A CHANGED CONTACT REVOKES THE GRANT. partner_contacts is writable by any org
+-- member, staff and viewer included. If changing a granted contact's email (or
+-- moving it to another partner) merely re-pointed the grant, a staff member
+-- could aim an owner/admin's grant at any address they liked and that person
+-- would claim it. So a change to contact_email, partner_id or organization_id
+-- on a granted contact DELETES the grant; an owner/admin re-grants it. Found
+-- by an independent review on 2026-10-12, before this ever reached prod.
 --
 -- Additive: one new table, two functions, one new policy on provider_documents,
 -- one AFTER UPDATE trigger on partner_contacts that only ever touches this table.
@@ -30,8 +36,9 @@ create table if not exists public.partner_portal_access (
   organization_id    uuid not null references public.organizations(id) on delete cascade,
   partner_id         uuid not null references public.partners(id) on delete cascade,
   contact_id         uuid not null unique references public.partner_contacts(id) on delete cascade,
-  -- Set on first sign-in by partner_portal_memberships(); cleared when the
-  -- contact's email changes.
+  -- Set on first sign-in by partner_portal_memberships(). A change to the
+  -- contact deletes the whole grant (see the header), so this never outlives
+  -- the address it was claimed with.
   auth_user_id       uuid references auth.users(id) on delete set null,
   last_link_sent_at  timestamptz,
   last_signed_in_at  timestamptz,
@@ -85,30 +92,32 @@ create trigger partner_portal_access_guard
   before insert on public.partner_portal_access
   for each row execute function public.guard_partner_portal_access();
 
--- A changed email unlinks the old account. AFTER UPDATE OF contact_email only,
--- and it writes nothing but this table.
-create or replace function public.unlink_partner_portal_on_email_change()
+-- A changed contact revokes its grant (see the header). AFTER UPDATE of the
+-- three columns that decide who and where; it writes nothing but this table.
+create or replace function public.revoke_partner_portal_on_contact_change()
 returns trigger
 language plpgsql
 security definer
 set search_path to 'public', 'pg_temp'
 as $function$
 begin
-  if lower(coalesce(btrim(new.contact_email), '')) is distinct from lower(coalesce(btrim(old.contact_email), '')) then
-    update public.partner_portal_access
-       set auth_user_id = null
-     where contact_id = new.id;
+  if lower(coalesce(btrim(new.contact_email), '')) is distinct from lower(coalesce(btrim(old.contact_email), ''))
+     or new.partner_id is distinct from old.partner_id
+     or new.organization_id is distinct from old.organization_id then
+    delete from public.partner_portal_access where contact_id = new.id;
   end if;
   return null;
 end;
 $function$;
 
-revoke all on function public.unlink_partner_portal_on_email_change() from public, anon, authenticated;
+revoke all on function public.revoke_partner_portal_on_contact_change() from public, anon, authenticated;
 
 drop trigger if exists partner_contacts_unlink_portal on public.partner_contacts;
-create trigger partner_contacts_unlink_portal
-  after update of contact_email on public.partner_contacts
-  for each row execute function public.unlink_partner_portal_on_email_change();
+drop function if exists public.unlink_partner_portal_on_email_change();
+drop trigger if exists partner_contacts_revoke_portal on public.partner_contacts;
+create trigger partner_contacts_revoke_portal
+  after update of contact_email, partner_id, organization_id on public.partner_contacts
+  for each row execute function public.revoke_partner_portal_on_contact_change();
 
 -- Policies. The provider's team sees who has access; owners/admins grant and
 -- remove it. A signed-in partner sees their own grant. No client UPDATE: the

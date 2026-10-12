@@ -17,7 +17,9 @@
 //            partner contact holding a partner_portal_access grant from that provider;
 //            any other email is a silent no-op. The portal links the grant to the account
 //            on load via partner_portal_memberships().)
-// OUTPUT: { sent: true } or { error: "..." }
+// OUTPUT: { sent: true } or { error: "..." }. A partner request made by an
+//         owner/admin of org_id also gets partner_link: 'sent' | 'no_access' |
+//         'suppressed_on_staging'; nobody else does (no enumeration).
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
@@ -61,38 +63,63 @@ async function findUserByEmail(supabase: any, email: string) {
 // person's email lives on their partner contact (partner_contacts), never on the
 // grant, so the match is contact email -> grant. An archived partner grants
 // nothing, matching private.current_partner_access() in the database.
+//
+// Reads the provider's grants (a handful of rows) and compares the normalized
+// email in code, the same lower(btrim()) the database's claim uses. Filtering in
+// SQL with ilike missed a contact stored with surrounding spaces.
 async function findPartnerGrant(supabase: any, email: string, orgId: string) {
-  const target = String(email).trim().toLowerCase();
-  const { data: contacts, error } = await supabase
-    .from('partner_contacts')
-    .select('id, contact_name, contact_email, partner:partners(partner_name, inactive)')
-    .eq('organization_id', orgId)
-    .ilike('contact_email', target);
-  if (error) throw new Error(`partner contact lookup failed: ${error.message}`);
-  const exact = (contacts ?? []).filter(
-    (c: any) => String(c.contact_email ?? '').trim().toLowerCase() === target && c.partner && !c.partner.inactive,
-  );
-  if (exact.length === 0) return null;
-  const { data: grants, error: gErr } = await supabase
+  const { data: grants, error } = await supabase
     .from('partner_portal_access')
-    .select('id, contact_id')
-    .in('contact_id', exact.map((c: any) => c.id));
-  if (gErr) throw new Error(`partner access lookup failed: ${gErr.message}`);
-  const grant = (grants ?? [])[0];
+    .select('contact_id, contact:partner_contacts(contact_name, contact_email), partner:partners(partner_name, inactive)')
+    .eq('organization_id', orgId);
+  if (error) throw new Error(`partner access lookup failed: ${error.message}`);
+  const grant = (grants ?? []).find(
+    (g: any) => normalizeEmail(g.contact?.contact_email) === email && g.partner && !g.partner.inactive,
+  );
   if (!grant) return null;
-  const contact = exact.find((c: any) => c.id === grant.contact_id);
   return {
     contact_id: grant.contact_id as string,
-    first_name: String(contact?.contact_name ?? '').trim().split(/\s+/)[0] || null,
-    partner_name: (contact?.partner?.partner_name as string) ?? null,
+    first_name: String(grant.contact?.contact_name ?? '').trim().split(/\s+/)[0] || null,
+    partner_name: (grant.partner?.partner_name as string) ?? null,
   };
+}
+
+function normalizeEmail(v: unknown): string {
+  return String(v ?? '').trim().toLowerCase();
+}
+
+// Is the CALLER an owner/admin of this provider? Only then does a partner
+// request stamp "link sent" and get told what actually happened: the admin
+// screen needs the truth, a stranger on the public sign-in form must get the
+// same neutral answer whether or not the address has access.
+async function callerAdministers(supabase: any, req: Request, orgId: string): Promise<boolean> {
+  const token = (req.headers.get('Authorization') ?? '').replace(/^Bearer\s+/i, '');
+  if (!token) return false;
+  const { data, error } = await supabase.auth.getUser(token);
+  const uid = data?.user?.id;
+  if (error || !uid) return false; // the anon key is not a user
+  const { data: row } = await supabase
+    .from('org_members')
+    .select('id')
+    .eq('organization_id', orgId)
+    .eq('auth_user_id', uid)
+    .in('role', ['owner', 'admin'])
+    .not('accepted_at', 'is', null)
+    .limit(1)
+    .maybeSingle();
+  return !!row;
 }
 
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
   try {
-    const { email, redirect_to, context, org_id } = await req.json();
+    const { email: rawEmail, redirect_to, context, org_id } = await req.json();
+    // Normalized once, for every context. Sign-in accounts are case-insensitive,
+    // and an un-trimmed address made the user lookup miss and createUser fail
+    // loudly - a 400 that told an anonymous caller "this address holds access"
+    // where the silent no-op was meant to tell them nothing.
+    const email = normalizeEmail(rawEmail);
     if (!email) throw new Error('email is required');
 
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
@@ -100,11 +127,26 @@ serve(async (req: Request) => {
     let isOnboarding = context === 'onboarding';
     const isSignup = context === 'signup';
     const isPartner = context === 'partner';
-    // The partner grant this email holds from THIS provider, if any. Looked up
-    // before the auth-user check so a first-time partner can be created below.
-    // Scoped to org_id: a grant from another provider never authorizes a link
-    // into this one's portal.
-    const partnerGrant = isPartner && org_id ? await findPartnerGrant(supabase, email, org_id) : null;
+
+    // PARTNER CONTEXT DECIDES EVERYTHING HERE, before any account is looked up
+    // or created. It sends ONLY the partner email, ONLY to a partner contact
+    // holding a grant from org_id; anything else is a silent no-op, even for an
+    // address that already has an account (otherwise it would fall through to
+    // the parent/instructor/admin email). On staging the allowlist is applied
+    // here too, so no auth user is created for a real partner's copied address.
+    let partnerGrant: Awaited<ReturnType<typeof findPartnerGrant>> = null;
+    let adminCaller = false;
+    if (isPartner) {
+      adminCaller = org_id ? await callerAdministers(supabase, req, org_id) : false;
+      // `partner_link` is returned ONLY to the provider's own admins.
+      const quiet = (outcome: string) => json(adminCaller ? { sent: true, partner_link: outcome } : { sent: true });
+      partnerGrant = org_id ? await findPartnerGrant(supabase, email, org_id) : null;
+      if (!partnerGrant) return quiet('no_access');
+      if (!isEmailAllowed(email)) {
+        console.log('partner magic link suppressed by staging email allowlist');
+        return quiet('suppressed_on_staging');
+      }
+    }
     // Onboarding emails are sent to contractors who have an instructors row but may not
     // yet have an auth.users row (admin invited them but they haven't signed in). Same
     // auto-create-on-first-sign-in behavior as instructor context.
@@ -140,10 +182,8 @@ serve(async (req: Request) => {
           return json({ sent: true });
         }
       } else if (isPartner) {
-        if (!partnerGrant) {
-          // Not a partner contact with access from this provider — silent no-op.
-          return json({ sent: true });
-        }
+        // partnerGrant is guaranteed here: the partner block above returned for
+        // every address without one.
         const { data: created, error: createErr } = await supabase.auth.admin.createUser({
           email,
           email_confirm: true,
@@ -305,15 +345,6 @@ serve(async (req: Request) => {
     const fromLine = formatFromAddress(senderBrand);
     const replyTo: string | undefined = senderBrand.reply_to;
 
-    // Partner contacts are real people at real cities and schools, and staging
-    // holds copies of them. On staging (STAGING_EMAIL_ALLOWLIST set) a partner
-    // link goes only to an allowlisted test inbox; on prod the guard is off.
-    // Scoped to the partner email so no existing sign-in flow changes.
-    if (template === 'partner' && !isEmailAllowed(email)) {
-      console.log('partner magic link suppressed by staging email allowlist');
-      return json({ sent: true });
-    }
-
     // Send via Resend
     const resp = await fetch('https://api.resend.com/emails', {
       method: 'POST',
@@ -339,9 +370,12 @@ serve(async (req: Request) => {
 
     console.log(`Magic link email sent to ${email} (${context || 'parent'})`);
 
-    // So the provider can see when a partner was last sent a link. Best effort:
-    // the email has already gone, and a failed stamp must not report a failure.
-    if (template === 'partner' && partnerGrant) {
+    // So the provider can see when THEY last sent a partner a link. Stamped
+    // only for a send the provider's own admin asked for: anyone can request a
+    // link from the public sign-in form, and "Link sent <date>" must not report
+    // a stranger's request as the team's. Best effort: the email has gone, and a
+    // failed stamp must not report a failure.
+    if (template === 'partner' && partnerGrant && adminCaller) {
       const { error: stampErr } = await supabase
         .from('partner_portal_access')
         .update({ last_link_sent_at: new Date().toISOString() })
@@ -369,7 +403,7 @@ serve(async (req: Request) => {
       });
     }
 
-    return json({ sent: true });
+    return json(isPartner && adminCaller ? { sent: true, partner_link: 'sent' } : { sent: true });
   } catch (e) {
     console.error('auth-send-magic-link error:', (e as Error).message);
     return json({ error: (e as Error).message }, 400);
@@ -584,7 +618,7 @@ function buildPartnerEmail(firstName: string, signInUrl: string, brand: any, par
   <div style="padding:28px;">
     <p style="margin:0 0 16px;font-size:15px;color:#1A1530;">Hi ${escapeHtml(firstName)},</p>
     <p style="margin:0 0 24px;font-size:15px;color:#1A1530;line-height:1.6;">
-      ${escapeHtml(orgName)} keeps its insurance, agreements and instructor background checks in one place${forWhom}. Tap below to see them, with the date each one is good through.
+      ${escapeHtml(orgName)} keeps its insurance, agreements and other records in one place${forWhom}. Tap below to see them, with the date each one is good through.
     </p>
     <div style="text-align:center;margin:28px 0;">
       <a href="${escapeAttr(signInUrl)}" style="display:inline-block;background:${escapeAttr(accent)};color:#fff;text-decoration:none;padding:14px 36px;border-radius:8px;font-size:15px;font-weight:700;">

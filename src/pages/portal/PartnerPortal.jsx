@@ -15,7 +15,7 @@ import { useAuth } from "../../context/AuthContext.jsx";
 import DocumentStatusBadge from "../../components/DocumentStatusBadge.jsx";
 import { sendPartnerSignInLink, myPartnerMemberships } from "../../lib/partnerPortal.js";
 import { listProviderDocuments, openDocumentInNewTab } from "../../lib/providerDocuments.js";
-import { DOC_TYPES, formatDate } from "../../lib/providerDocumentLogic.js";
+import { DOC_TYPES, formatDate, compareByExpiry } from "../../lib/providerDocumentLogic.js";
 
 const SECTION_TITLES = { insurance: "Insurance", agreement: "Agreements", other: "Other documents" };
 
@@ -83,6 +83,11 @@ export default function PartnerPortal() {
   // Keyed on the user ID, not the user object: Supabase hands back a new user
   // object on every tab focus, which would re-run this and re-stamp sign-in.
   useEffect(() => {
+    // A different account must never see the previous one's records while its
+    // own load is in flight.
+    setMemberships(null);
+    setDocs(null);
+    setError("");
     if (!userId || !org?.id) return;
     let cancelled = false;
     (async () => {
@@ -108,9 +113,7 @@ export default function PartnerPortal() {
   const sections = useMemo(() => {
     const byType = new Map(DOC_TYPES.map((t) => [t.key, []]));
     for (const d of docs ?? []) (byType.get(d.doc_type) ?? byType.get("other")).push(d);
-    for (const list of byType.values()) {
-      list.sort((a, b) => (a.expires_on || "9999-12-31").localeCompare(b.expires_on || "9999-12-31"));
-    }
+    for (const list of byType.values()) list.sort(compareByExpiry);
     return [...byType.entries()].filter(([, list]) => list.length);
   }, [docs]);
 

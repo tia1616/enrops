@@ -52,8 +52,13 @@ export function partnerPortalUrl(org) {
 
 /**
  * Email a sign-in link. Used by the provider's admin ("Send sign-in link") and by
- * the partner on the portal's sign-in form. The function sends only when the
- * email holds a grant from this provider; otherwise it quietly does nothing.
+ * the partner on the portal's sign-in form. The function sends only the partner
+ * email, only when the address holds a grant from this provider; otherwise it
+ * quietly does nothing.
+ *
+ * Resolves the outcome ('sent' | 'no_access' | 'suppressed_on_staging') when the
+ * caller is one of the provider's owners/admins, and null for anyone else - the
+ * public form is never told whether an address has access.
  */
 export async function sendPartnerSignInLink(org, email) {
   const { data, error } = await supabase.functions.invoke("auth-send-magic-link", {
@@ -61,6 +66,7 @@ export async function sendPartnerSignInLink(org, email) {
   });
   if (error) throw error;
   if (data?.error) throw new Error(data.error);
+  return data?.partner_link ?? null;
 }
 
 /** The signed-in person's partner grants (links an unclaimed one on first sign-in). */

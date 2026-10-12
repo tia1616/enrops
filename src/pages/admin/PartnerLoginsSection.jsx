@@ -55,7 +55,6 @@ export default function PartnerLoginsSection({ org, partners, canManage, onMessa
 
   useEffect(() => { if (org?.id) load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [org?.id]);
 
-  const activePartnerIds = useMemo(() => new Set(partners.filter((p) => !p.inactive).map((p) => p.id)), [partners]);
   const available = useMemo(() => contactsWithoutAccess(contacts, grants), [contacts, grants]);
   const partnersWithContacts = useMemo(() => {
     const ids = new Set(available.map((c) => c.partner_id));
@@ -79,13 +78,20 @@ export default function PartnerLoginsSection({ org, partners, canManage, onMessa
   }
 
   async function send(row) {
-    const email = row.contact?.contact_email;
-    if (!email) return;
+    const email = (row.contact?.contact_email || "").trim();
+    if (!email) {
+      setError(`${row.contact?.contact_name || "This contact"} has no email address. Add one in Locations, then give them access again.`);
+      return;
+    }
     if (!window.confirm(`Email a sign-in link to ${row.contact?.contact_name || email} (${email})? They'll see the documents shown to ${row.partner?.partner_name || "their partner"}.`)) return;
     setBusy(row.id); setError("");
     try {
-      await sendPartnerSignInLink(org, email);
-      onMessage(`Sign-in link sent to ${email}.`);
+      // The function tells an owner/admin what really happened; say exactly that.
+      const outcome = await sendPartnerSignInLink(org, email);
+      if (outcome === "sent") onMessage(`Sign-in link sent to ${email}.`);
+      else if (outcome === "suppressed_on_staging") setError(`Not sent: this is the staging site, which only emails test inboxes.`);
+      else if (outcome === "no_access") setError(`Not sent: ${email} no longer has access. Refresh the page and check their partner and email.`);
+      else setError("Couldn't confirm the link was sent. Refresh the page to check.");
       await load();
     } catch (err) {
       setError(`Couldn't send the link: ${err?.message ?? "unknown error"}`);
@@ -127,7 +133,9 @@ export default function PartnerLoginsSection({ org, partners, canManage, onMessa
           grants.map((g, i) => {
             const st = accessStatus(g);
             const t = TONE[st.tone];
-            const archived = !activePartnerIds.has(g.partner_id);
+            // From the grant's own partner row, loaded with it, so this never
+            // flashes "archived" while the page's partner list is still loading.
+            const archived = g.partner?.inactive === true;
             return (
               <div key={g.id} style={{ display: "flex", gap: 12, justifyContent: "space-between", alignItems: "flex-start", padding: "14px 0", borderTop: i === 0 ? "none" : `1px solid ${RULE}`, flexWrap: "wrap" }}>
                 <div style={{ minWidth: 0, flex: "1 1 260px" }}>
@@ -174,7 +182,8 @@ export default function PartnerLoginsSection({ org, partners, canManage, onMessa
           </div>
           <div style={{ fontSize: 12.5, color: MUTED, marginTop: 8, lineHeight: 1.5 }}>
             Don't see the person? Add them as a contact on that partner in <Link to="/admin/schools" style={{ color: BRIGHT }}>Locations</Link>, with their email, then come back.
-            Giving access doesn't email anyone; use Send sign-in link when you're ready.
+            Giving access doesn't email anyone; use Send sign-in link when you're ready. If someone's email or partner is
+            changed later, their access is removed and you give it again here.
           </div>
         </div>
       )}
