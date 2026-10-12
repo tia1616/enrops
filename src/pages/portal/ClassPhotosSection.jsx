@@ -8,7 +8,8 @@
 // class today is the class_photos INSERT policy (the same rule that lets them
 // take attendance); whether the provider has the feature on is
 // organizations.class_photos_enabled. This component renders nothing when the
-// feature is off, and reports the server's refusal if it is asked anyway.
+// feature is off or the class is partner-run, and reports the server's refusal if
+// it is asked anyway.
 //
 // THE CONSENT WARNING. There is no per-child tagging: a photo belongs to the
 // class and every enrolled family sees it. So before the instructor shoots, the
@@ -66,19 +67,31 @@ export default function ClassPhotosSection({ programId, organizationId, instruct
   const dayRef = useRef(day);
   useEffect(() => { dayRef.current = day; }, [day]);
 
-  // The provider's switch. public_org_directory is the one door both portals read.
+  // The provider's switch (public_org_directory is the one door both portals
+  // read), AND not a partner-run class.
+  //
+  // PARTNER-RUN CLASSES ARE SKIPPED, Jessica 2026-10-12, until the backlog item
+  // "Class photos for partner-run classes" is done. In a class the school runs
+  // registration for, the families come from a roster import whose photo "yes" is
+  // filled in by default when the sheet has no photo column (so the warning below
+  // would not fire), none of those families has a portal login to see a photo,
+  // and the photo email deliberately skips them. Hidden FAIL-CLOSED: if the class
+  // cannot be read, the section stays hidden rather than guessing.
   useEffect(() => {
-    if (!organizationId) return;
+    if (!organizationId || !programId) return;
     let cancelled = false;
     (async () => {
-      const { data, error } = await supabase
-        .from("public_org_directory").select("class_photos_enabled").eq("id", organizationId).maybeSingle();
+      const [{ data: dir, error: dirErr }, { data: prog, error: progErr }] = await Promise.all([
+        supabase.from("public_org_directory").select("class_photos_enabled").eq("id", organizationId).maybeSingle(),
+        supabase.from("programs").select("runs_own_registration").eq("id", programId).maybeSingle(),
+      ]);
       if (cancelled) return;
-      if (error) console.error("[ClassPhotosSection] flag load failed", error);
-      setEnabled(data?.class_photos_enabled === true);
+      if (dirErr) console.error("[ClassPhotosSection] flag load failed", dirErr);
+      if (progErr) console.error("[ClassPhotosSection] class load failed", progErr);
+      setEnabled(dir?.class_photos_enabled === true && !!prog && prog.runs_own_registration !== true);
     })();
     return () => { cancelled = true; };
-  }, [organizationId]);
+  }, [organizationId, programId]);
 
   // Who is in the class and what they agreed to.
   useEffect(() => {
