@@ -19,8 +19,9 @@ import { DOC_TYPES, formatDate } from "../../lib/providerDocumentLogic.js";
 
 const SECTION_TITLES = { insurance: "Insurance", agreement: "Agreements", other: "Other documents" };
 
+// Null when there is no expiry date: the badge already says "No expiry date".
 function goodThrough(row) {
-  if (!row.expires_on) return "No expiry date";
+  if (!row.expires_on) return null;
   return row.expiry_status === "expired" ? `Expired ${formatDate(row.expires_on)}` : `Good through ${formatDate(row.expires_on)}`;
 }
 
@@ -172,7 +173,7 @@ export default function PartnerPortal() {
                     <span className="font-semibold text-j2s-ink">{d.title}</span>
                     <DocumentStatusBadge status={d.expiry_status} />
                   </div>
-                  <div className="mt-1 text-sm text-j2s-ink/70">{goodThrough(d)}</div>
+                  {goodThrough(d) && <div className="mt-1 text-sm text-j2s-ink/70">{goodThrough(d)}</div>}
                   {d.doc_type === "insurance" && (
                     <div className="mt-1 text-sm text-j2s-ink/70">
                       {[d.insurer, d.coverage_notes].filter(Boolean).join(" · ")}
