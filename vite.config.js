@@ -22,8 +22,8 @@ export default defineConfig({
         // "Create shortcut" because it can't confidently identify the PWA
         // as a single installable thing.
         id: '/',
-        name: 'Enrops',
-        short_name: 'Enrops',
+        name: 'enrops',
+        short_name: 'enrops',
         description: 'Enrichment operations — registration, scheduling, contractor portal.',
         start_url: '/',
         scope: '/',
