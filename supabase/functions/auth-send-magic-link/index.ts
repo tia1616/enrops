@@ -11,12 +11,19 @@
 //            brand-new email so the link actually signs them in, then routes them to name
 //            their business. Login contexts intentionally no-op on unknown emails to avoid
 //            enumeration; a signup surface inherently creates an account, so there's no leak.)
+//          | "partner" (someone at a partner - a parks department, a school - who has been
+//            given partner portal access by the provider in org_id. Like instructor, the
+//            auth user is created on first sign-in, but ONLY when the email belongs to a
+//            partner contact holding a partner_portal_access grant from that provider;
+//            any other email is a silent no-op. The portal links the grant to the account
+//            on load via partner_portal_memberships().)
 // OUTPUT: { sent: true } or { error: "..." }
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { logPlatformEvent, FEATURE, ACTION } from '../_shared/logPlatformEvent.ts';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
+import { isEmailAllowed } from '../_shared/emailGuard.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -50,6 +57,37 @@ async function findUserByEmail(supabase: any, email: string) {
   }
 }
 
+// The partner portal grant this email holds from THIS provider, or null. The
+// person's email lives on their partner contact (partner_contacts), never on the
+// grant, so the match is contact email -> grant. An archived partner grants
+// nothing, matching private.current_partner_access() in the database.
+async function findPartnerGrant(supabase: any, email: string, orgId: string) {
+  const target = String(email).trim().toLowerCase();
+  const { data: contacts, error } = await supabase
+    .from('partner_contacts')
+    .select('id, contact_name, contact_email, partner:partners(partner_name, inactive)')
+    .eq('organization_id', orgId)
+    .ilike('contact_email', target);
+  if (error) throw new Error(`partner contact lookup failed: ${error.message}`);
+  const exact = (contacts ?? []).filter(
+    (c: any) => String(c.contact_email ?? '').trim().toLowerCase() === target && c.partner && !c.partner.inactive,
+  );
+  if (exact.length === 0) return null;
+  const { data: grants, error: gErr } = await supabase
+    .from('partner_portal_access')
+    .select('id, contact_id')
+    .in('contact_id', exact.map((c: any) => c.id));
+  if (gErr) throw new Error(`partner access lookup failed: ${gErr.message}`);
+  const grant = (grants ?? [])[0];
+  if (!grant) return null;
+  const contact = exact.find((c: any) => c.id === grant.contact_id);
+  return {
+    contact_id: grant.contact_id as string,
+    first_name: String(contact?.contact_name ?? '').trim().split(/\s+/)[0] || null,
+    partner_name: (contact?.partner?.partner_name as string) ?? null,
+  };
+}
+
 serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
@@ -61,6 +99,12 @@ serve(async (req: Request) => {
     let isInstructor = context === 'instructor';
     let isOnboarding = context === 'onboarding';
     const isSignup = context === 'signup';
+    const isPartner = context === 'partner';
+    // The partner grant this email holds from THIS provider, if any. Looked up
+    // before the auth-user check so a first-time partner can be created below.
+    // Scoped to org_id: a grant from another provider never authorizes a link
+    // into this one's portal.
+    const partnerGrant = isPartner && org_id ? await findPartnerGrant(supabase, email, org_id) : null;
     // Onboarding emails are sent to contractors who have an instructors row but may not
     // yet have an auth.users row (admin invited them but they haven't signed in). Same
     // auto-create-on-first-sign-in behavior as instructor context.
@@ -95,6 +139,20 @@ serve(async (req: Request) => {
           // Email isn't a known instructor — silent no-op.
           return json({ sent: true });
         }
+      } else if (isPartner) {
+        if (!partnerGrant) {
+          // Not a partner contact with access from this provider — silent no-op.
+          return json({ sent: true });
+        }
+        const { data: created, error: createErr } = await supabase.auth.admin.createUser({
+          email,
+          email_confirm: true,
+        });
+        if (createErr || !created?.user) {
+          throw new Error(`Couldn't create auth user: ${createErr?.message ?? 'unknown error'}`);
+        }
+        user = created.user;
+        console.log(`Auto-created auth user for partner contact (context=partner, org=${org_id})`);
       } else if (isSignup) {
         // Operator self-serve signup: create the account for a brand-new email
         // so the magic link actually signs them in. (No enumeration concern — a
@@ -155,11 +213,15 @@ serve(async (req: Request) => {
 
     // Contractor still mid-onboarding keeps the gentler onboarding copy so we
     // never say "view your schedule" before they have one.
-    let template: 'admin' | 'onboarding' | 'instructor' | 'parent' | 'signup';
+    let template: 'admin' | 'onboarding' | 'instructor' | 'parent' | 'signup' | 'partner';
     if (isSignup) {
       template = 'signup';
     } else if (isOnboarding) {
       template = 'onboarding';
+    } else if (isPartner && partnerGrant) {
+      // Asked for from the partner portal and the person holds a grant: they
+      // get the partner email even if they are also a parent somewhere.
+      template = 'partner';
     } else if (context === 'admin' && adminRow) {
       template = 'admin';
     } else if (instructorRow) {
@@ -180,7 +242,8 @@ serve(async (req: Request) => {
     let firstName = user.user_metadata?.full_name
       ? user.user_metadata.full_name.split(' ')[0]
       : 'there';
-    if (instructorRow?.first_name) firstName = instructorRow.first_name;
+    if (template === 'partner' && partnerGrant?.first_name) firstName = partnerGrant.first_name;
+    else if (instructorRow?.first_name) firstName = instructorRow.first_name;
     else if (parentRow?.first_name) firstName = parentRow.first_name;
 
     // Tenant-branded sign-in emails. Parents, instructors and mid-onboarding
@@ -198,7 +261,10 @@ serve(async (req: Request) => {
     //
     // Unchanged for parents: that branch is only reached when instructorRow is
     // null, so the resolved org is still exactly `org_id ?? null`.
-    const tenantBrand = (template === 'parent' || template === 'instructor' || template === 'onboarding')
+    // Partner: the grant's own provider, which is org_id (findPartnerGrant is
+    // scoped to it), so the email always speaks as the provider whose records
+    // the partner is about to see.
+    const tenantBrand = (template === 'parent' || template === 'instructor' || template === 'onboarding' || template === 'partner')
       ? await loadOrgBrand(supabase, org_id ?? instructorRow?.organization_id ?? null)
       : null;
 
@@ -207,6 +273,7 @@ serve(async (req: Request) => {
       : template === 'admin' ? 'Sign in to Enrops Admin'
       : template === 'onboarding' ? `Continue your ${tenantBrand?.org_name ?? 'enrops'} onboarding`
       : template === 'instructor' ? 'Sign in to view your schedule'
+      : template === 'partner' ? `Your ${tenantBrand?.org_name ?? 'enrops'} vendor records`
       : `Sign in to ${tenantBrand?.org_name ?? 'enrops'}`;
 
     const html =
@@ -214,6 +281,7 @@ serve(async (req: Request) => {
       : template === 'admin' ? buildAdminEmail(firstName, signInUrl)
       : template === 'onboarding' ? buildOnboardingEmail(firstName, signInUrl, tenantBrand)
       : template === 'instructor' ? buildInstructorEmail(firstName, signInUrl, tenantBrand)
+      : template === 'partner' ? buildPartnerEmail(firstName, signInUrl, tenantBrand, partnerGrant?.partner_name ?? null)
       : buildParentEmail(firstName, signInUrl, tenantBrand);
 
     // Operator-facing auth emails (signup + admin) send AS enrops from the
@@ -236,6 +304,15 @@ serve(async (req: Request) => {
       : (tenantBrand ?? await loadOrgBrand(supabase, null));
     const fromLine = formatFromAddress(senderBrand);
     const replyTo: string | undefined = senderBrand.reply_to;
+
+    // Partner contacts are real people at real cities and schools, and staging
+    // holds copies of them. On staging (STAGING_EMAIL_ALLOWLIST set) a partner
+    // link goes only to an allowlisted test inbox; on prod the guard is off.
+    // Scoped to the partner email so no existing sign-in flow changes.
+    if (template === 'partner' && !isEmailAllowed(email)) {
+      console.log('partner magic link suppressed by staging email allowlist');
+      return json({ sent: true });
+    }
 
     // Send via Resend
     const resp = await fetch('https://api.resend.com/emails', {
@@ -261,6 +338,16 @@ serve(async (req: Request) => {
     }
 
     console.log(`Magic link email sent to ${email} (${context || 'parent'})`);
+
+    // So the provider can see when a partner was last sent a link. Best effort:
+    // the email has already gone, and a failed stamp must not report a failure.
+    if (template === 'partner' && partnerGrant) {
+      const { error: stampErr } = await supabase
+        .from('partner_portal_access')
+        .update({ last_link_sent_at: new Date().toISOString() })
+        .eq('contact_id', partnerGrant.contact_id);
+      if (stampErr) console.error('partner last_link_sent_at stamp failed:', stampErr.message);
+    }
 
     // ONBOARDING FUNNEL — top of funnel, signup context only. This is the one
     // step that leaves NO row behind when the operator abandons (they never
@@ -472,6 +559,42 @@ function readableOn(bg: string): { fg: string; muted: string } {
     (Math.max(aL, bL) + 0.05) / (Math.min(aL, bL) + 0.05);
   // Luminance of #fff is 1; #1A1530 is ~0.0113.
   return ratio(1, bgL) >= 3 ? WHITE : (ratio(0.0113, bgL) > ratio(1, bgL) ? DARK : WHITE);
+}
+
+// A partner (a parks department, a school) being let in to see a provider's
+// vendor records. Speaks as the provider. No support address is invented when
+// the provider has none on file.
+function buildPartnerEmail(firstName: string, signInUrl: string, brand: any, partnerName: string | null): string {
+  const orgName = brand?.org_name || 'enrops';
+  const support = brand?.reply_to || null;
+  const accent = brand?.primary_color || '#5847C9';
+  const logoBlock = brand?.logo_url
+    ? `<img src="${escapeAttr(brand.logo_url)}" alt="${escapeHtml(orgName)}" style="max-height:44px;width:auto;display:inline-block;" />`
+    : `<div style="color:#fff;font-size:14px;font-weight:700;letter-spacing:1px;text-transform:uppercase;">${escapeHtml(orgName)}</div>`;
+  const forWhom = partnerName ? ` for ${escapeHtml(partnerName)}` : '';
+  const helpLine = support
+    ? ` Questions? Reach ${escapeHtml(orgName)} at <a href="mailto:${escapeAttr(support)}" style="color:${escapeAttr(accent)};">${escapeHtml(support)}</a>`
+    : '';
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
+<body style="margin:0;padding:0;background:#f5f3ff;font-family:'Poppins',Arial,sans-serif;">
+<div style="max-width:500px;margin:40px auto;background:#fff;border-radius:8px;overflow:hidden;">
+  <div style="background:${escapeAttr(accent)};padding:28px;text-align:center;">
+    ${logoBlock}
+  </div>
+  <div style="padding:28px;">
+    <p style="margin:0 0 16px;font-size:15px;color:#1A1530;">Hi ${escapeHtml(firstName)},</p>
+    <p style="margin:0 0 24px;font-size:15px;color:#1A1530;line-height:1.6;">
+      ${escapeHtml(orgName)} keeps its insurance, agreements and instructor background checks in one place${forWhom}. Tap below to see them, with the date each one is good through.
+    </p>
+    <div style="text-align:center;margin:28px 0;">
+      <a href="${escapeAttr(signInUrl)}" style="display:inline-block;background:${escapeAttr(accent)};color:#fff;text-decoration:none;padding:14px 36px;border-radius:8px;font-size:15px;font-weight:700;">
+        See the records
+      </a>
+    </div>
+    <p style="margin:0;font-size:13px;color:#6b6880;">This link expires in 24 hours. You can ask for a new one any time from the same page.${helpLine}</p>
+  </div>
+</div>
+</body></html>`;
 }
 
 function escapeHtml(s: string): string {

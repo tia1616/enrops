@@ -109,6 +109,28 @@ export async function deleteProviderDocument(row) {
   await removeFile(row.storage_path);
 }
 
+/**
+ * Open a document in a new tab, from a click handler. The tab is opened
+ * synchronously (so the browser doesn't treat it as a popup) and cut off from
+ * this page before anything loads. Resolves null on success, or a sentence for
+ * the person when it couldn't open. Shared by the admin screen and the partner
+ * portal.
+ */
+export async function openDocumentInNewTab(storagePath) {
+  const tab = window.open("", "_blank");
+  if (!tab) return "Your browser blocked the new tab. Allow pop-ups for this site, then click Open again.";
+  tab.opener = null;
+  try {
+    const url = await signedDocumentUrl(storagePath);
+    if (!url) throw new Error("no link");
+    tab.location.href = url;
+    return null;
+  } catch (err) {
+    tab.close();
+    return `Couldn't open that file: ${err?.message ?? "unknown error"}`;
+  }
+}
+
 /** A short-lived link to open the file. */
 export async function signedDocumentUrl(storagePath) {
   const { data, error } = await supabase.storage.from(DOCUMENT_BUCKET).createSignedUrl(storagePath, SIGNED_URL_TTL);

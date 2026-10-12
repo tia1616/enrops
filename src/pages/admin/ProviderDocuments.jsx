@@ -15,15 +15,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import ModalShell from "../../components/ModalShell.jsx";
+import PartnerLoginsSection from "./PartnerLoginsSection.jsx";
 import { usePermissions } from "../../lib/permissions.js";
 import {
-  DOC_TYPES, EXPIRY_STATUS, docTypeLabel, blankDraft, draftFromRow, draftProblem,
+  DOC_TYPES, docTypeLabel, blankDraft, draftFromRow, draftProblem,
   fileProblem, groupByAudience, formatDate,
 } from "../../lib/providerDocumentLogic.js";
 import {
   listProviderDocuments, listPartners, createProviderDocument, updateProviderDocument,
-  deleteProviderDocument, signedDocumentUrl,
+  deleteProviderDocument, openDocumentInNewTab,
 } from "../../lib/providerDocuments.js";
+import DocumentStatusBadge from "../../components/DocumentStatusBadge.jsx";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -33,13 +35,6 @@ const RULE = "#e2dfd5";
 const PANEL = "#fff";
 const GREEN_BG = "#f0fdf4";
 const GREEN_INK = "#166534";
-
-const TONE = {
-  good: { bg: "#f0fdf4", ink: "#166534", border: "#bbf7d0" },
-  warn: { bg: "#fffbeb", ink: "#92400e", border: "#fde68a" },
-  bad: { bg: "#fef2f2", ink: "#991b1b", border: "#fecaca" },
-  neutral: { bg: "#f5f5f4", ink: "#57534e", border: "#e7e5e4" },
-};
 
 const lbl = { display: "block", fontSize: 13, fontWeight: 600, color: INK, marginBottom: 6 };
 const hint = { fontSize: 12.5, color: MUTED, marginTop: 6, lineHeight: 1.5 };
@@ -51,16 +46,6 @@ function primaryBtn(disabled) {
 }
 function secondaryBtn() {
   return { padding: "9px 16px", background: "#fff", color: INK, border: `1.5px solid ${RULE}`, borderRadius: 8, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" };
-}
-
-function StatusBadge({ status }) {
-  const s = EXPIRY_STATUS[status] ?? EXPIRY_STATUS.no_expiry;
-  const t = TONE[s.tone];
-  return (
-    <span style={{ display: "inline-block", padding: "2px 9px", borderRadius: 999, fontSize: 12, fontWeight: 600, background: t.bg, color: t.ink, border: `1px solid ${t.border}`, whiteSpace: "nowrap" }}>
-      {s.label}
-    </span>
-  );
 }
 
 function expiryLine(row) {
@@ -75,7 +60,7 @@ function DocumentRow({ row, canManage, onOpen, onEdit, onDelete, busy }) {
       <div style={{ minWidth: 0, flex: "1 1 260px" }}>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <span style={{ fontSize: 14.5, fontWeight: 600, color: INK }}>{row.title}</span>
-          <StatusBadge status={row.expiry_status} />
+          <DocumentStatusBadge status={row.expiry_status} />
         </div>
         <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5 }}>
           {docTypeLabel(row.doc_type)} · {expiryLine(row)}
@@ -263,22 +248,8 @@ export default function ProviderDocuments() {
   const groups = useMemo(() => groupByAudience(docs ?? [], partners), [docs, partners]);
 
   async function open(row) {
-    // Open the tab synchronously so the browser doesn't treat it as a popup,
-    // and cut its link back to this page before it loads anything.
-    const tab = window.open("", "_blank");
-    if (!tab) {
-      setError("Your browser blocked the new tab. Allow pop-ups for this site, then click Open again.");
-      return;
-    }
-    tab.opener = null;
-    try {
-      const url = await signedDocumentUrl(row.storage_path);
-      if (!url) throw new Error("no link");
-      tab.location.href = url;
-    } catch (err) {
-      tab.close();
-      setError(`Couldn't open that file: ${err?.message ?? "unknown error"}`);
-    }
+    const problem = await openDocumentInNewTab(row.storage_path);
+    if (problem) setError(problem);
   }
 
   async function save(draft, file) {
@@ -358,6 +329,8 @@ export default function ProviderDocuments() {
           </section>
         ))
       )}
+
+      <PartnerLoginsSection org={org} partners={partners} canManage={canManage} onMessage={flash} />
 
       {form && (
         <ModalShell title={form.editing ? "Edit document" : "Add a document"} onClose={() => setForm(null)} maxWidth={560}>

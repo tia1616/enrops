@@ -85,6 +85,7 @@ const WaiverManager = lazy(() => import('./pages/admin/WaiverManager.jsx'));
 const EmailSenderSettings = lazy(() => import('./pages/admin/EmailSenderSettings.jsx'));
 const BackgroundCheckSettings = lazy(() => import('./pages/admin/BackgroundCheckSettings.jsx'));
 const ProviderDocuments = lazy(() => import('./pages/admin/ProviderDocuments.jsx'));
+const PartnerPortal = lazy(() => import('./pages/portal/PartnerPortal.jsx'));
 const InstructorDocuments = lazy(() => import('./pages/admin/InstructorDocuments.jsx'));
 const TrainingSettings = lazy(() => import('./pages/admin/TrainingSettings.jsx'));
 const BrandLogoSettings = lazy(() => import('./pages/admin/BrandLogoSettings.jsx'));
@@ -260,6 +261,12 @@ export default function App() {
             family has no account, and the token in the URL is the credential. */}
         <Route path="waitlist/:token" element={<WaitlistAccept />} />
         <Route path="login" element={<Login />} />
+        {/* The partner portal: someone at a partner signs in and sees this
+            provider's documents shown to their partner. Authorization is the
+            database (partner_portal_memberships + provider_documents RLS), not
+            the URL: a signed-in person with no grant from this provider is told
+            so and sees nothing. */}
+        <Route path="partner" element={<PartnerPortal />} />
         <Route path="dashboard" element={<Dashboard />} />
         {/* One child's pickup, dismissal and homeroom, editable any time. Its own
             route rather than a modal so the "please update your info" email can
