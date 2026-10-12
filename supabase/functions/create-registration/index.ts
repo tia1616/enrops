@@ -734,13 +734,26 @@ serve(async (req) => {
       // --- Registrations: one per line item for this child ---
       // For VIP: item has vipBundle with fall/winter/spring → create 3 registrations.
       // For standard: one registration per item.
+      //
+      // THIS child's registration ids, collected as they are inserted. The
+      // waiver signatures below attach to exactly these rows. They used to be
+      // found by position - "the last N ids, where N is 3 per bundle and 1 per
+      // class" - which is only true when every bundle has all three terms. A
+      // bundle missing a term inserts 2 rows, the count still said 3, and the
+      // slice reached back into the PREVIOUS child's registration: that child's
+      // class got a second set of signatures and this child's got one too few.
+      const childRegIds: string[] = [];
       for (const item of child.items || []) {
         const programsToRegister = item.isVip && item.vipBundle
           ? [item.vipBundle.fall, item.vipBundle.winter, item.vipBundle.spring]
           : [item.program];
 
         for (const prog of programsToRegister) {
-          if (!prog) continue; // skip missing winter/spring if somehow null
+          // The SAME skip rule as the pricing pass at the top of the handler,
+          // because `priced.lines[priceIdx++]` below pairs each insert with a
+          // priced line by position. A looser rule here (it used to be `!prog`
+          // alone) lets a line with no id take the next line's price.
+          if (!prog || typeof prog.id !== 'string' || !prog.id) continue;
 
           // Authoritative amount for this line — same order as the pricing pass.
           const pl = priced.lines[priceIdx++];
@@ -783,6 +796,7 @@ serve(async (req) => {
             .single();
           if (rErr) throw new Error(`registration insert: ${rErr.message}`);
           registrationIds.push(reg!.id);
+          childRegIds.push(reg!.id);
           returnLines.push({
             registration_id: reg!.id,
             program_id: prog.id,
@@ -810,21 +824,18 @@ serve(async (req) => {
         // agreement this family signed. Low value to steal, but the rule in
         // this function is that nothing client-supplied is trusted without
         // being re-scoped server-side, and this line was the exception.
-        const { data: waiverRows } = await admin
+        const { data: waiverRows, error: waiverErr } = await admin
           .from('waivers')
           .select('id, name, content, version')
           .eq('organization_id', orgId)
           .in('id', waiverIds);
+        // Fail CLOSED. An unread error here used to become "no waivers", which
+        // completed the registration with no signature on file - a family
+        // enrolled with nothing recording what they agreed to.
+        if (waiverErr) throw new Error(`waiver lookup: ${waiverErr.message}`);
 
-        // Create signature for each agreed waiver on each registration for this child.
-        // For VIP carts, child.items.length=1 but 3 registrations were just inserted (Fall/Winter/Spring),
-        // so we count actual registrations created, not items in cart.
-        const totalRegsForThisChild = child.items.reduce(
-          (sum: number, item: any) =>
-            sum + (item.isVip && item.vipBundle ? 3 : 1),
-          0,
-        );
-        const childRegIds = registrationIds.slice(-totalRegsForThisChild);
+        // Create signature for each agreed waiver on each registration for this
+        // child - `childRegIds`, collected in the insert loop above.
 
         const sigsToInsert: any[] = [];
         let photoReleaseTrue = false;
