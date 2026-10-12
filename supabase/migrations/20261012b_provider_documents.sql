@@ -76,7 +76,7 @@ create index if not exists provider_documents_partner_idx
 alter table public.provider_documents enable row level security;
 
 -- A partner-specific row must name a partner of the SAME provider, and
--- updated_at is maintained here rather than trusted from the client.
+-- created_by / updated_at are set here rather than trusted from the client.
 create or replace function public.guard_provider_documents()
 returns trigger
 language plpgsql
@@ -91,7 +91,12 @@ begin
     raise exception 'provider_documents: that partner does not belong to this provider'
       using errcode = '23503';
   end if;
+  if tg_op = 'INSERT' then
+    -- Who added it is the caller, never a value the client sent.
+    new.created_by := auth.uid();
+  end if;
   if tg_op = 'UPDATE' then
+    new.created_by := old.created_by;
     if new.organization_id <> old.organization_id then
       raise exception 'provider_documents: a document cannot move to another provider'
         using errcode = '42501';

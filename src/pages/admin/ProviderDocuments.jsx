@@ -189,7 +189,7 @@ function DocumentForm({ editing, partners, onCancel, onSave }) {
           This document doesn't expire
         </label>
       )}
-      <div style={hint}>We'll warn you before it expires, and partners will see when it's current.</div>
+      <div style={hint}>It's on the document. This is how partners know it's still current.</div>
 
       {isInsurance && (
         <div style={{ borderTop: `1px solid ${RULE}`, marginTop: 20, paddingTop: 16 }}>
