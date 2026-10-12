@@ -14,7 +14,7 @@
 // passed - JSX is never type-checked, so a missing binding is a RUNTIME
 // ReferenceError, invisible to every static gate.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Link, useOutletContext } from "react-router-dom";
+import { Link, useNavigate, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import { useAdminNarrow, tapTarget } from "../../../lib/adminViewport.js";
 import EditProgramCurriculumModal from "./EditProgramCurriculumModal.jsx";
@@ -48,6 +48,7 @@ import {
   publishBlockedByStripe,
   publishErrorMessage,
   PUBLISH_GATE_CTA,
+  PUBLISH_GATE_CTA_SAVE,
   PUBLISH_GATE_WHY,
   PUBLISH_GATE_STAYS_DRAFT_HINT,
   STRIPE_CONNECT_ROUTE,
@@ -1692,6 +1693,12 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
               </span>
               {onPublish && (
                 publishBlocked ? (
+                  // While this row's edit panel is OPEN, the panel's own
+                  // "Save draft & connect Stripe" button is the way to Stripe.
+                  // This plain link would leave without saving what is typed
+                  // below it, so it steps aside rather than offering a second
+                  // route that throws the edits away.
+                  isDatesExpanded ? null : (
                   <Link
                     to={STRIPE_CONNECT_ROUTE}
                     title={`${PUBLISH_GATE_WHY} ${PUBLISH_GATE_STAYS_DRAFT_HINT}`}
@@ -1712,6 +1719,7 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
                   >
                     {PUBLISH_GATE_CTA} →
                   </Link>
+                  )
                 ) : (
                   <button
                     type="button"
@@ -1880,6 +1888,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
   // Lean ops don't have partner-run registration or instructors — hide those.
   const { org: panelOrg } = useOutletContext() ?? {};
   const isLean = panelOrg?.instructor_pay_model === "enrops_platform";
+  const navigate = useNavigate();
   // What a family is charged for the price in this panel. Same endpoint the
   // registration flow asks. See src/components/FamiliesPayNote.jsx.
   const panelFeeConfig = useOrgFeeConfig(orgSlug || panelOrg?.slug);
@@ -2490,7 +2499,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
           const ok = window.confirm(
             `${lead} Changing the schedule will move their class dates. Save anyway?`,
           );
-          if (!ok) return; // finally{} resets saving
+          if (!ok) return false; // NOT saved; finally{} resets saving
         }
       }
       // SEND ONLY WHAT CHANGED.
@@ -2565,7 +2574,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         reconcileDraftToStored();
         setSavedFlash(true);
         setTimeout(() => setSavedFlash(false), 1500);
-        return; // finally{} resets saving
+        return true; // nothing was unsaved; finally{} resets saving
       }
       const saveResult = await onUpdate(program.id, changed);
       // Sync the draft to what was actually STORED for every field the
@@ -2598,11 +2607,27 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         setSavedFlash(true);
         setTimeout(() => setSavedFlash(false), 1500);
       }
+      // The row IS written in both branches above (datesStale only means the
+      // dates below could not be re-read), so this save succeeded.
+      return true;
     } catch (err) {
       setSaveError(err.message ?? String(err));
+      return false;
     } finally {
       setSaving(false);
     }
+  }
+
+  // THE PANEL'S CONNECT-STRIPE CONTROLS SAVE FIRST. They used to be plain links
+  // to the Payments screen, so anything typed in this panel and not yet saved
+  // was thrown away on the way to Stripe - the same bug B1 the create forms had
+  // and fixed on 2026-08-10 (publishGate.js PUBLISH_GATE_CTA_SAVE). Same answer
+  // here: save, and leave only if the save succeeded. A refused or failed save
+  // keeps the operator on the panel with the reason showing, edits intact. With
+  // nothing unsaved, handleSave returns true at once and this just navigates.
+  async function saveThenConnectStripe() {
+    const saved = await handleSave();
+    if (saved) navigate(STRIPE_CONNECT_ROUTE);
   }
 
   const isDraft = program.status === "draft";
@@ -3237,17 +3262,22 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         {/* Same rule as the page-level share: no link handed out until the
             operator can be paid for it. */}
         {isLean && panelOrg?.stripe_charges_enabled === false ? (
-          <Link
-            to="/admin/finances"
+          // A BUTTON that saves first, not a link - see saveThenConnectStripe.
+          // The label says "Save" because it saves.
+          <button
+            type="button"
+            onClick={saveThenConnectStripe}
+            disabled={saving}
             style={{
               display: "inline-flex", alignItems: "center", gap: 6,
               padding: "7px 12px", borderRadius: 8, fontSize: 13, fontWeight: 600,
-              textDecoration: "none", background: "#FDF6E3",
+              fontFamily: "inherit", background: "#FDF6E3",
               border: "1px solid #F0D48A", color: "#8a5a00",
+              cursor: saving ? "wait" : "pointer", opacity: saving ? 0.6 : 1,
             }}
           >
-            Connect Stripe to share this →
-          </Link>
+            {saving ? "Saving…" : "Save & connect Stripe to share this →"}
+          </button>
         ) : (
         <ShareProgram
           slug={orgSlug}
@@ -3277,16 +3307,21 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
           publishBlocked ? (
             // The reason goes ON the control, where the operator is looking —
             // not in a banner at the top of a panel they have scrolled past.
-            <Link
-              to={STRIPE_CONNECT_ROUTE}
+            // Saves the panel first, then goes to Stripe - see
+            // saveThenConnectStripe. Same label as the create forms' button.
+            <button
+              type="button"
+              onClick={saveThenConnectStripe}
+              disabled={saving}
               title={`${PUBLISH_GATE_WHY} ${PUBLISH_GATE_STAYS_DRAFT_HINT}`}
               style={{
                 display: "inline-flex", alignItems: "center", gap: 6,
                 background: "#FDF6E3", color: "#8a5a00", border: "1px solid #F0D48A",
                 padding: "7px 14px", borderRadius: 6, fontSize: 12.5, fontWeight: 700,
-                fontFamily: "inherit", textDecoration: "none",
+                fontFamily: "inherit",
+                cursor: saving ? "wait" : "pointer", opacity: saving ? 0.6 : 1,
               }}
-            >{PUBLISH_GATE_CTA} →</Link>
+            >{saving ? "Saving…" : `${PUBLISH_GATE_CTA_SAVE} →`}</button>
           ) : (
             <button
               type="button"
