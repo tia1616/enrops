@@ -24,6 +24,29 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { priceCart, validatePromo } from '../_shared/promoPricing.ts';
 import { renderWaiverText } from '../_shared/waiverText.ts';
+import { isCampProgram } from '../_shared/campProgram.ts';
+
+// The winter and spring terms that complete a fall term's school year:
+// FA26 -> WI27 + SP27. TWIN of schoolYearTermsForFall() in src/lib/terms.js,
+// which the registration page uses to decide which classes it OFFERS as a
+// year bundle. Deno cannot import that module, so the rule is repeated here;
+// if one changes, change the other, or the page will offer bundles this
+// function refuses (or the reverse).
+function schoolYearTermsForFall(fallTerm: unknown): { winter: string; spring: string } | null {
+  if (typeof fallTerm !== 'string') return null;
+  const m = /^FA(\d{2})$/.exec(fallTerm.trim());
+  if (!m) return null;
+  const yy = String((Number(m[1]) + 1) % 100).padStart(2, '0');
+  return { winter: `WI${yy}`, spring: `SP${yy}` };
+}
+
+// One leg's share of the business's year-bundle price. Split evenly across the
+// three terms; any odd cents go on the FALL leg, which is the one charged today,
+// so the three legs always add up to exactly the price the business set.
+function vipLegPriceCents(totalCents: number, leg: number): number {
+  const base = Math.floor(totalCents / 3);
+  return leg === 0 ? totalCents - base * 2 : base;
+}
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -95,7 +118,9 @@ serve(async (req) => {
       .from('organizations')
       // name is needed to render {{org}} into the waiver text we snapshot
       // against each signature.
-      .select('id, name')
+      // vip_offering: the business's own year-bundle settings (on or off, price,
+      // excluded schools). The bundle check and the bundle price read it.
+      .select('id, name, vip_offering')
       .eq('slug', organization_slug)
       .single();
     if (orgErr || !org) {
@@ -120,21 +145,37 @@ serve(async (req) => {
 
     // Flatten the cart into priced lines in the EXACT order registrations are
     // inserted below (children -> items -> programs, skipping nulls).
-    type FlatLine = { child_index: number; program_id: string; is_vip: boolean };
+    //
+    // A line is a year-bundle line only when the item really carries a bundle.
+    // `is_vip` used to be `!!item.isVip` alone, while the programs came from
+    // `item.program` whenever vipBundle was missing - so `{isVip:true,
+    // program:{id:X}}` priced ANY single class at the bundle's per-term rate.
+    // `vip_item` groups an item's legs so the bundle check below can see them
+    // together; `vip_leg` is 0 fall, 1 winter, 2 spring.
+    type FlatLine = {
+      child_index: number; program_id: string; is_vip: boolean;
+      vip_item?: number; vip_leg?: number;
+    };
     const flat: FlatLine[] = [];
+    let vipItemSeq = 0;
     for (const child of children) {
       for (const item of child.items || []) {
-        const progs = item.isVip && item.vipBundle
+        const isBundle = !!(item.isVip && item.vipBundle);
+        const vipItem = isBundle ? vipItemSeq++ : undefined;
+        const progs = isBundle
           ? [item.vipBundle.fall, item.vipBundle.winter, item.vipBundle.spring]
           : [item.program];
-        for (const prog of progs) {
+        for (const [leg, prog] of progs.entries()) {
           // Guards the ID, not just the object. `{program:{}}` used to push
           // program_id: undefined, which reached PostgREST as `id=in.(undefined)`
           // and came back as a Postgres 22P02 - surfaced to the family as a 500
           // quoting "invalid input syntax for type uuid". A cart line with no id
           // is not a program; drop it and let the empty-cart 400 below speak.
           if (!prog || typeof prog.id !== 'string' || !prog.id) continue;
-          flat.push({ child_index: child.child_index, program_id: prog.id, is_vip: !!item.isVip });
+          flat.push({
+            child_index: child.child_index, program_id: prog.id, is_vip: isBundle,
+            ...(isBundle ? { vip_item: vipItem, vip_leg: leg } : {}),
+          });
         }
       }
     }
@@ -160,7 +201,7 @@ serve(async (req) => {
     const allProgramIds = [...new Set(flat.map((f) => f.program_id))];
     const { data: cartPrograms, error: pubErr } = await admin
       .from('programs')
-      .select('id, status, organization_id, runs_own_registration, grade_min, grade_max, age_format')
+      .select('id, status, organization_id, runs_own_registration, grade_min, grade_max, age_format, term, program_location_id, day_of_week, class_days')
       .in('id', allProgramIds);
     if (pubErr) throw new Error(`cart validation: ${pubErr.message}`);
     const byId = new Map((cartPrograms || []).map((p) => [p.id, p]));
@@ -176,6 +217,62 @@ serve(async (req) => {
     if (rejected.length) {
       console.warn('[create-registration] BLOCKED: cart holds programs that are not this org\'s, open and ours to sell', rejected);
       return json({ error: 'A class in your cart is no longer open for registration. Please refresh and try again.' }, 400);
+    }
+
+    // THE YEAR BUNDLE, server side. The registration page decides what it
+    // OFFERS as a bundle (portal/Home.jsx and Register.jsx); this decides what
+    // it SELLS, because a bundle is priced below the classes in it and this
+    // endpoint is public. A bundle is sold only when ALL of these hold:
+    //   - this business has year bundles switched on (vip_offering.enabled),
+    //     with a price set - not J2S's price, which used to be hardcoded here
+    //     for every business;
+    //   - it has all three legs: a fall class, and the winter and spring
+    //     classes of that same school year;
+    //   - all three are at the same school on the same weekday;
+    //   - none is a camp (isCampProgram - a non-empty class_days; an EMPTY
+    //     class_days is a weekly class);
+    //   - the school is not one this business excluded from bundles.
+    // The org / open / partner-run checks above already ran on every leg.
+    const vipCfg = (org as { vip_offering?: Record<string, unknown> | null }).vip_offering ?? null;
+    const vipPriceCents = Number(vipCfg?.price_cents);
+    const vipExcluded = Array.isArray(vipCfg?.excluded_location_ids)
+      ? (vipCfg!.excluded_location_ids as unknown[]).map(String)
+      : [];
+    const bundleLegs = new Map<number, FlatLine[]>();
+    for (const f of flat) {
+      if (f.vip_item === undefined) continue;
+      const legs = bundleLegs.get(f.vip_item) ?? [];
+      legs.push(f);
+      bundleLegs.set(f.vip_item, legs);
+    }
+    for (const legs of bundleLegs.values()) {
+      const problem = (() => {
+        if (vipCfg?.enabled !== true) return 'year bundles are off for this business';
+        if (!Number.isInteger(vipPriceCents) || vipPriceCents <= 0) return 'no year-bundle price set';
+        const at = (leg: number) => {
+          const f = legs.find((l) => l.vip_leg === leg);
+          return f ? byId.get(f.program_id) : undefined;
+        };
+        const fall = at(0), winter = at(1), spring = at(2);
+        if (legs.length !== 3 || !fall || !winter || !spring) return 'bundle is missing a term';
+        const terms = schoolYearTermsForFall(fall.term);
+        if (!terms || winter.term !== terms.winter || spring.term !== terms.spring) {
+          return 'terms are not one school year';
+        }
+        const sameSlot = [winter, spring].every((p) =>
+          p.program_location_id === fall.program_location_id && p.day_of_week === fall.day_of_week);
+        if (!sameSlot) return 'terms are not the same school and weekday';
+        if ([fall, winter, spring].some((p) => isCampProgram(p))) return 'a leg is a camp';
+        if (vipExcluded.includes(String(fall.program_location_id))) return 'school is excluded from bundles';
+        return null;
+      })();
+      if (problem) {
+        console.warn('[create-registration] BLOCKED year bundle:', problem,
+          legs.map((l) => l.program_id));
+        return json({
+          error: "The full-year option isn't available for this class. Please refresh and choose a term, or contact the provider.",
+        }, 400);
+      }
     }
 
     // THE GRADE GATE, server side. Jessica made this a gate rather than a warning
@@ -491,7 +588,10 @@ serve(async (req) => {
     // fee all agree, and a tampered client total can never underpay. A promo that
     // went invalid between display and submit fails the whole registration — we
     // never silently charge full price.
-    const VIP_PER_TERM_CENTS = 24000;
+    // Year-bundle legs are priced from THIS business's vip_offering.price_cents,
+    // split by vipLegPriceCents(). It used to be a hardcoded 24000 for every
+    // business - J2S's $720 / 3 - which the bundle check above now makes
+    // impossible to reach for a business that never set a bundle price.
 
     // The cart was flattened and validated at the top of this handler, before
     // any write — see the block above the parent upsert. `flat` is in scope
@@ -518,14 +618,17 @@ serve(async (req) => {
       }
     }
 
-    const toLineInputs = () => flat.map((f) => ({
-      program: f.is_vip
-        ? { id: f.program_id, price_cents: VIP_PER_TERM_CENTS, early_bird_price_cents: null, early_bird_deadline: null }
-        : priceById.get(f.program_id)!,
-      child_index: f.child_index,
-      is_vip: f.is_vip,
-      vip_price_cents: f.is_vip ? VIP_PER_TERM_CENTS : undefined,
-    }));
+    const toLineInputs = () => flat.map((f) => {
+      const vipLeg = f.is_vip ? vipLegPriceCents(vipPriceCents, f.vip_leg ?? 0) : undefined;
+      return {
+        program: f.is_vip
+          ? { id: f.program_id, price_cents: vipLeg!, early_bird_price_cents: null, early_bird_deadline: null }
+          : priceById.get(f.program_id)!,
+        child_index: f.child_index,
+        is_vip: f.is_vip,
+        vip_price_cents: vipLeg,
+      };
+    });
 
     // Org sibling-discount config (null = off).
     const { data: orgCfg } = await admin
@@ -778,7 +881,9 @@ serve(async (req) => {
               amount_cents: pl.amount_cents,       // NET, server-computed
               // discount_type CHECK allows: sibling|legacy|vip_returning|vip_new|promo|null.
               // 'vip' is NOT valid (would throw) — VIP carts use 'vip_new'.
-              discount_type: item.isVip
+              // Same "is this really a bundle" test as the pricing pass, so a
+              // line is never labelled vip_new while priced as a single class.
+              discount_type: item.isVip && item.vipBundle
                 ? 'vip_new'
                 : (validatedPromo && pl.promo_discount_cents > 0)
                 ? 'promo'
