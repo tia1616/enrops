@@ -3260,8 +3260,15 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         {savedFlash && <span style={{ color: OK_GREEN, fontWeight: 600, fontSize: 12 }}>✓ Saved</span>}
 
         {/* Same rule as the page-level share: no link handed out until the
-            operator can be paid for it. */}
-        {isLean && panelOrg?.stripe_charges_enabled === false ? (
+            operator can be paid for it.
+            ONE STRIPE BUTTON PER PANEL. On a draft whose publish is blocked by
+            Stripe, "Save draft & connect Stripe" below already does exactly
+            this (save, then Payments), and a draft has no public link to share
+            yet - so this one steps aside instead of being a second button for
+            the same action (Jessica, 2026-10-12: "those two buttons
+            redundant?"). It still shows on a published class, where it is the
+            only route to Stripe. */}
+        {isLean && panelOrg?.stripe_charges_enabled === false ? (isDraft && publishBlocked ? null : (
           // A BUTTON that saves first, not a link - see saveThenConnectStripe.
           // The label says "Save" because it saves.
           <button
@@ -3278,7 +3285,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
           >
             {saving ? "Saving…" : "Save & connect Stripe to share this →"}
           </button>
-        ) : (
+        )) : (
         <ShareProgram
           slug={orgSlug}
           activeTerm={orgActiveTerm}
