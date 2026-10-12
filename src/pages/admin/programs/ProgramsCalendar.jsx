@@ -2266,6 +2266,19 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
     setSaving(true);
     setSaveError(null);
     try {
+      // THE TWO CHECKS THAT USED TO LIVE ONLY ON THE SAVE BUTTON. "Save changes"
+      // is disabled when the class has no location or its grade range reads
+      // backwards, but a disabled button is not a guard: saveThenConnectStripe
+      // also calls this function, and without these it would write a class with
+      // no location (program_location_id NULL in count mode) or a backwards
+      // range. Same wording as the button's tooltip, so the operator reads one
+      // reason whichever button they pressed.
+      if (!draft.program_location_id) {
+        throw new Error("Pick a location first — every class needs one.");
+      }
+      if (audienceBackwardsInPanel) {
+        throw new Error(rangeBackwardsMessage(panelMode));
+      }
       const isRange = draft.schedule_mode === "range";
       // Range mode: the count is DERIVED, not typed. Require a real window that
       // actually contains class days -- refuse to save a range program that would
