@@ -148,9 +148,7 @@ export default function ClassPhotosSection({ programId, organizationId, instruct
   const blocked = childrenWithoutPhotoPermission(rosterRows || []);
   const working = uploads.some((u) => u.state === "working");
   const openPhoto = open && photos ? photos.find((p) => p.id === open) : null;
-  // A reported photo is evidence for the admin who must decide, so the database
-  // does not let the instructor who took it delete it; do not offer the button.
-  const mine = (p) => instructorId && p.uploaded_by_instructor_id === instructorId && !p.flagged_at;
+  const mine = (p) => instructorId && p.uploaded_by_instructor_id === instructorId;
 
   return (
     <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 10, padding: 14, marginTop: 16 }}>
@@ -219,7 +217,7 @@ export default function ClassPhotosSection({ programId, organizationId, instruct
       ) : (
         <div style={{ marginTop: 12 }}>
           <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>{photos.length} photo{photos.length === 1 ? "" : "s"} for {prettyDay(day)}</div>
-          <PhotoGrid photos={photos} urls={urls} onOpen={(p) => setOpen(p.id)} badge={(p) => (p.flagged_at ? "Reported" : null)} />
+          <PhotoGrid photos={photos} urls={urls} onOpen={(p) => setOpen(p.id)} />
         </div>
       )}
 

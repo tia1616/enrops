@@ -14,16 +14,17 @@
 -- camps; a parent has no read path to camp_sessions that was verified, and the
 -- season is over, so v1 does not reach them. A camp-as-program works.
 --
--- DEFAULT OFF. organizations.class_photos_enabled is false for every tenant.
--- Turning on a new family-facing surface for providers who did not ask for it
--- is the mistake the mandatory photo-release gate made twice. J2S is switched
--- on by hand per environment in the same pass; this file stays tenant-neutral.
+-- DEFAULT ON. organizations.class_photos_enabled defaults to true, for existing
+-- providers and new ones: Jessica's call, 2026-10-12. A provider can switch it
+-- off in Settings.
 --
 -- CONSENT. Only a recorded YES (registrations.photo_release_consent = true) is
 -- permission. There is no per-child tagging, so the portal warns the instructor
--- about every child in the class WITHOUT a yes before they shoot, and any family
--- can flag a photo, which hides it from every family at once until an admin
--- restores or deletes it (flag_class_photo below).
+-- about every child in the class WITHOUT a yes before they shoot. A family that
+-- does not want their child in a photo emails the provider (the Photos tab says
+-- so), and the provider's admins can delete any photo. There is deliberately no
+-- in-app report button: it was built and removed as more machinery than the
+-- problem needs.
 --
 -- PRIVATE BUCKET, NO PUBLIC URLS. Files are read through short-lived signed
 -- URLs, and the storage SELECT policy is "a class_photos row exists for this
@@ -33,8 +34,8 @@
 -- the upload-class-photo edge function (it stamps the watermark first, so an
 -- unmarked original can never be stored by a client).
 --
--- Applied to staging and prod in the same pass. Additive and inert until a
--- provider switches the flag on.
+-- Applied to staging and prod in the same pass. Additive; nothing is visible
+-- until an instructor uploads a photo.
 
 begin;
 
@@ -42,7 +43,7 @@ begin;
 --    the existing organizations RLS (it is not a money column and is not in the
 --    guard_organizations_locked_columns trigger).
 alter table public.organizations
-  add column if not exists class_photos_enabled boolean not null default false;
+  add column if not exists class_photos_enabled boolean not null default true;
 
 -- 2. The photo rows.
 create table if not exists public.class_photos (
@@ -53,9 +54,6 @@ create table if not exists public.class_photos (
   storage_path             text not null unique,
   uploaded_by_instructor_id uuid references public.instructors(id) on delete set null,
   created_at               timestamptz not null default now(),
-  -- A family reported this photo. Non-null hides it from every family.
-  flagged_at               timestamptz,
-  flagged_by_parent_id     uuid references public.parents(id) on delete set null,
   -- A row may only point at an object inside ITS OWN class's folder. Without
   -- this an instructor could POST a row straight to the table carrying another
   -- class's (or another provider's) object path: RLS on the row would pass, and
@@ -69,8 +67,8 @@ create table if not exists public.class_photos (
 
 create index if not exists class_photos_program_date_idx
   on public.class_photos (program_id, session_date);
-create index if not exists class_photos_org_flagged_idx
-  on public.class_photos (organization_id) where flagged_at is not null;
+create index if not exists class_photos_org_created_idx
+  on public.class_photos (organization_id, created_at desc);
 
 alter table public.class_photos enable row level security;
 
@@ -170,13 +168,13 @@ create policy class_photos_instructor_select on public.class_photos
     and private.instructor_attendance_access(program_id, null, session_date)
   );
 
--- Families read only photos nobody has flagged, for a class they are enrolled in.
+-- Families read the photos of a class they are enrolled in.
 drop policy if exists class_photos_parent_select on public.class_photos;
 create policy class_photos_parent_select on public.class_photos
   for select to authenticated
-  using (flagged_at is null and private.parent_enrolled_in_program(program_id));
+  using (private.parent_enrolled_in_program(program_id));
 
--- The provider's own team reads everything, flagged included.
+-- The provider's own team reads every photo of their own classes.
 drop policy if exists class_photos_admin_select on public.class_photos;
 create policy class_photos_admin_select on public.class_photos
   for select to authenticated
@@ -217,64 +215,26 @@ create policy class_photos_instructor_insert on public.class_photos
     and private.class_photos_enabled_for_program(program_id)
   );
 
--- Delete: the instructor who took it, or the provider's admins. The instructor
--- can NOT delete a photo a family has reported: that photo is evidence for the
--- admin who has to decide, and the person who took it should not be able to
--- make it disappear first.
+-- Delete: the instructor who took it, or the provider's admins (a family that
+-- does not want their child in a photo asks the provider, and the provider
+-- deletes it from Settings).
 drop policy if exists class_photos_delete on public.class_photos;
 create policy class_photos_delete on public.class_photos
   for delete to authenticated
   using (
-    (uploaded_by_instructor_id = private.current_active_instructor_id() and flagged_at is null)
+    uploaded_by_instructor_id = private.current_active_instructor_id()
     or public.can_edit_org(organization_id)
     or public.is_platform_admin()
   );
 
--- Update: only the provider's admins (restore a flagged photo). Families flag
--- through flag_class_photo(), never by writing the row.
-drop policy if exists class_photos_admin_update on public.class_photos;
-create policy class_photos_admin_update on public.class_photos
-  for update to authenticated
-  using (public.can_edit_org(organization_id) or public.is_platform_admin())
-  with check (public.can_edit_org(organization_id) or public.is_platform_admin());
+-- No UPDATE policy and no UPDATE grant: a photo is filed once and deleted, never edited.
 
 -- Table privileges: RLS decides rows, but the grants must exist or every
 -- authenticated read is a 42501. No anon access of any kind.
 revoke all on public.class_photos from public, anon, authenticated;
-grant select, insert, update, delete on public.class_photos to authenticated;
+grant select, insert, delete on public.class_photos to authenticated;
 
--- 6. A family reports a photo. Hides it from every family immediately; the
---    provider's admins still see it and decide. Checks enrollment in the class
---    the photo belongs to, so a parent cannot hide another class's photos.
-create or replace function public.flag_class_photo(p_photo_id uuid)
-returns void
-language plpgsql
-security definer
-set search_path to 'public','pg_temp'
-as $function$
-declare
-  v_program uuid;
-begin
-  select cp.program_id into v_program from public.class_photos cp where cp.id = p_photo_id;
-  if v_program is null then
-    raise exception 'photo not found' using errcode = 'P0002';
-  end if;
-  if not private.parent_enrolled_in_program(v_program) then
-    raise exception 'not enrolled in this class' using errcode = '42501';
-  end if;
-  update public.class_photos
-     set flagged_at = coalesce(flagged_at, now()),
-         flagged_by_parent_id = coalesce(flagged_by_parent_id, public.current_parent_id())
-   where id = p_photo_id;
-end;
-$function$;
-
--- revoke from public does NOT remove anon's own EXECUTE grant (see the 20 Aug
--- parent-email leak); name anon explicitly, then read proacl back.
-revoke all on function public.flag_class_photo(uuid) from public, anon;
-grant execute on function public.flag_class_photo(uuid) to authenticated;
-
--- 7. The private bucket. 5 MB cap and JPEG only: the upload function always
+-- 6. The private bucket. 5 MB cap and JPEG only: the upload function always
 --    writes a watermarked JPEG.
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values ('class-photos', 'class-photos', false, 5242880, array['image/jpeg'])
@@ -297,14 +257,14 @@ create policy class_photos_storage_delete on storage.objects
       select 1 from public.class_photos cp
       where cp.storage_path = name
         and (
-          (cp.uploaded_by_instructor_id = private.current_active_instructor_id() and cp.flagged_at is null)
+          cp.uploaded_by_instructor_id = private.current_active_instructor_id()
           or public.can_edit_org(cp.organization_id)
           or public.is_platform_admin()
         )
     )
   );
 
--- 8. Publish the switch to both portals. public_org_directory is the single
+-- 7. Publish the switch to both portals. public_org_directory is the single
 --    choke point both read; this appends ONE column and changes nothing else.
 --    The select list is a verbatim copy of 20260914a, columns bare on purpose:
 --    src/lib/instructorDocuments.test.mjs regex-matches the newest redefinition

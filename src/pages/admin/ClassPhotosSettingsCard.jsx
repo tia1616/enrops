@@ -1,13 +1,12 @@
 // Settings card for class photos: the on/off switch, and the review list.
 //
-// The switch is organizations.class_photos_enabled, default OFF for every
+// The switch is organizations.class_photos_enabled, ON by default for every
 // provider. Off hides the instructor "Class photos" section and the family Photos
 // tab; it does not delete anything already taken.
 //
-// The review list is the safety valve behind "no per-child tagging": any family
-// can report a photo, which hides it from every family at once, and it lands
-// here first, marked Reported, where an admin can put it back or delete it. Any
-// other recent photo can be deleted from the same list.
+// The photo list is how a provider honours "please take my child out of that
+// photo": families are told to email the provider, and the provider deletes the
+// photo here without having to find the instructor who took it.
 
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase.js";
@@ -50,12 +49,11 @@ export default function ClassPhotosSettingsCard({ org }) {
   const loadPhotos = useCallback(async () => {
     if (!orgId) return;
     try {
-      // Reported photos first, then the newest. 60 is plenty for a review list.
+      // Newest first. 60 covers "the photo from class last Tuesday".
       const { data, error } = await supabase
         .from("class_photos")
-        .select("id, program_id, session_date, storage_path, created_at, flagged_at")
+        .select("id, program_id, session_date, storage_path, created_at")
         .eq("organization_id", orgId)
-        .order("flagged_at", { ascending: false, nullsFirst: false })
         .order("created_at", { ascending: false })
         .limit(60);
       if (error) throw error;
@@ -98,7 +96,15 @@ export default function ClassPhotosSettingsCard({ org }) {
   }
 
   const openPhoto = open ? (photos || []).find((p) => p.id === open) : null;
-  const reported = (photos || []).filter((p) => p.flagged_at);
+  // Grouped under "class · day" so a provider can find the photo a parent wrote
+  // about ("the one from Tuesday") without opening every thumbnail.
+  const groups = [];
+  for (const p of photos || []) {
+    const key = `${p.program_id}|${p.session_date}`;
+    let g = groups.find((x) => x.key === key);
+    if (!g) { g = { key, programId: p.program_id, date: p.session_date, photos: [] }; groups.push(g); }
+    g.photos.push(p);
+  }
 
   return (
     <section style={{ marginTop: 24 }}>
@@ -127,17 +133,21 @@ export default function ClassPhotosSettingsCard({ org }) {
 
         {enabled && photos !== null && (
           <div style={{ marginTop: 16, borderTop: `1px solid ${RULE}`, paddingTop: 14 }}>
-            {reported.length > 0 && (
-              <div style={{ background: "#fbeae9", border: "1px solid #e6b3b1", borderRadius: 8, padding: 10, fontSize: 13, color: "#7a2523", marginBottom: 12 }}>
-                {reported.length} photo{reported.length === 1 ? " has" : "s have"} been reported by a family and {reported.length === 1 ? "is" : "are"} hidden from everyone. Open {reported.length === 1 ? "it" : "each"} to restore or delete.
-              </div>
-            )}
             {photos.length === 0 ? (
               !err && <div style={{ fontSize: 13, color: MUTED }}>No photos yet.</div>
             ) : (
               <>
-                <div style={{ fontSize: 12, color: MUTED, marginBottom: 6 }}>Recent photos, reported first</div>
-                <PhotoGrid photos={photos} urls={urls} onOpen={(p) => setOpen(p.id)} badge={(p) => (p.flagged_at ? "Reported" : null)} />
+                <div style={{ fontSize: 12, color: MUTED, marginBottom: 10 }}>
+                  Recent photos. Open one to delete it, for example if a family asks for their child to be left out.
+                </div>
+                {groups.map((g) => (
+                  <div key={g.key} style={{ marginBottom: 14 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: INK, marginBottom: 6 }}>
+                      {classNames[g.programId] || "Class"} · {prettyDay(g.date)}
+                    </div>
+                    <PhotoGrid photos={g.photos} urls={urls} onOpen={(p) => setOpen(p.id)} />
+                  </div>
+                ))}
               </>
             )}
           </div>
@@ -150,15 +160,6 @@ export default function ClassPhotosSettingsCard({ org }) {
           url={urls[openPhoto.storage_path]}
           onClose={() => setOpen(null)}
           actions={[
-            ...(openPhoto.flagged_at ? [{
-              label: "Restore photo",
-              onClick: async (p) => {
-                const { error } = await supabase.from("class_photos").update({ flagged_at: null, flagged_by_parent_id: null }).eq("id", p.id);
-                if (error) throw error;
-                setOpen(null);
-                await loadPhotos();
-              },
-            }] : []),
             {
               label: "Delete photo",
               danger: true,
