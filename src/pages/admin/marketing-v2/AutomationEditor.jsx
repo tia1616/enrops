@@ -79,6 +79,10 @@ const TOKENS_BY_TEMPLATE_KEY = {
   // kids in one class). {{no_school_dates}} = the affected class day(s);
   // {{no_school_reason}} = why (falls back to "a no-school day" if blank).
   no_school_day:          ["first_name", "no_school_dates", "no_school_reason", "program_name", "location_name", "org_name", "sender_name"],
+  // class_photos: {{photos_url}} = the family's Photos tab in their portal (the
+  // photos are never in the email); {{photo_count}} = how many were shared that day.
+  // child_first_name joins siblings in the same class ("Ada and Ben").
+  class_photos:           ["first_name", "child_first_name", "program_name", "photos_url", "photo_count", "org_name", "sender_name"],
   // Board sends (operator_initiated): the operator edits the INTRO paragraph
   // ONLY, and the edge fn renders that intro as ESCAPED PLAIN TEXT with no token
   // substitution — the greeting ("Hi <name>,"), assignment details, response
@@ -133,6 +137,9 @@ function sampleTokens(orgName, senderName, primaryColor, orgSlug) {
     abandoned_resume_url: "#",
     no_school_dates: "Monday, September 7",
     no_school_reason: "Labor Day",
+    // The same portal link the cron builds, so a preview's button goes somewhere real.
+    photos_url: orgSlug ? `${PUBLIC_SITE}/${orgSlug}/dashboard?tab=photos` : "#",
+    photo_count: "6",
     register_url: registerUrl,
     final_showcase_block:
       `<div style="background:#f5f4ee;border-left:3px solid ${color};padding:12px 16px;margin:16px 0;border-radius:0 6px 6px 0;"><strong>On the final day:</strong> Campers host a Playtest Arcade where every kid loads their finished platformer onto a Chromebook and the whole group rotates through playing each other's games.</div>`,
