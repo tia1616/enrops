@@ -16,7 +16,7 @@ import StepReview from './register-steps/StepReview.jsx';
 import StepPay from './register-steps/StepPay.jsx';
 import { parseRegFields, pickupDnrConflicts } from './register-steps/RegExtraFields.jsx';
 import { renderWaiverText } from '../../lib/waiverText.js';
-import { vipBundleAllowed } from '../../lib/vipOffering.js';
+import { vipBundleAllowed, fetchVipOfferingPublic } from '../../lib/vipOffering.js';
 
 // Tenant resolution: `org` (id, slug, name, ...) is provided by PublicLayout
 // via Outlet context — see src/layouts/PublicLayout.jsx. No more hardcoded
@@ -377,17 +377,10 @@ export default function Register() {
       // (vipOffering.js). Otherwise it falls back to the single-term path, the
       // same as a link whose legs cannot be found, rather than building a cart
       // the server will refuse at submit.
-      const { data: vipRow, error: vipErr } = await supabase
-        .from('public_org_directory')
-        .select('vip_offering_public')
-        .eq('id', org.id)
-        .maybeSingle();
-      if (vipErr) console.warn('[registration] year-bundle setting unavailable; using single term. Cause: %o', vipErr);
-      if (!vipBundleAllowed(vipRow?.vip_offering_public ?? null, program.program_location_id)) {
-        setActiveChildItem({ program, isVip: false });
-        return;
-      }
-      const { data: matches } = await supabase
+      // Both reads in parallel - neither needs the other.
+      const [vipPublic, { data: matches }] = await Promise.all([
+        fetchVipOfferingPublic(supabase, org.id),
+        supabase
         .from('programs')
         // Location name via program_locations_public, not the base table - see
         // the load() query below for why. Still aliased to `program_locations`
@@ -415,7 +408,12 @@ export default function Register() {
         // family would be charged for a week of camp instead of the winter
         // class they were buying. class_days IS NULL is what "weekly" means.
         .is('class_days', null)
-        .in('term', [bundleTerms.winter, bundleTerms.spring]);
+        .in('term', [bundleTerms.winter, bundleTerms.spring]),
+      ]);
+      if (!vipBundleAllowed(vipPublic, program.program_location_id)) {
+        setActiveChildItem({ program, isVip: false });
+        return;
+      }
       const winter = matches?.find((p) => p.term === bundleTerms.winter);
       const spring = matches?.find((p) => p.term === bundleTerms.spring);
       if (winter && spring) {
