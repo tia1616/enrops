@@ -21,7 +21,7 @@ import CancellationPolicyInline from "../../../components/CancellationPolicyInli
 import FamiliesPayNote, { useOrgFeeConfig } from "../../../components/FamiliesPayNote.jsx";
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 import { PROGRAM_DESCRIPTION_MAX, describeDescriptionLength } from "../../../lib/programText.js";
-import { isUnset, rangeBackwards, rangeBackwardsMessage } from "../../../lib/grades.js";
+import { GRADE_OPTIONS, isUnset, rangeBackwards, rangeBackwardsMessage } from "../../../lib/grades.js";
 import { formatTermLabel } from "../../../lib/terms.js";
 import EarlyBirdRow, { useEarlyBirdPreview, earlyBirdPatch } from "../../../components/EarlyBirdRow.jsx";
 import PriceTierField from "../../../components/PriceTierField.jsx";
@@ -1343,22 +1343,34 @@ function Step2WhenAndHowMany({
                 the database from inventing. "" now means not stated, all the way
                 through: rangeBackwards treats it as unset via isUnset, and the
                 insert coerces it to NULL. Same rule as the other two builders. */}
-            <input
-              type="number" min={0} max={12}
-              value={formData.grade_min ?? ""}
+            {/* SELECTS, from GRADE_OPTIONS - the same list and the same "—"
+                first option as QuickProgramBuilder. A number box cannot carry a
+                label, so kindergarten showed as the digit 0. The stored value
+                is unchanged: still the integer (0 = K), and "" still means
+                not stated, so nothing that reads grade_min/grade_max moves. */}
+            <select
+              value={isUnset(formData.grade_min) ? "" : String(formData.grade_min)}
               onChange={(e) => onField("grade_min", e.target.value === "" ? "" : Number(e.target.value))}
-              style={{ ...inputStyle, width: 80 }}
+              style={{ ...inputStyle, width: 96 }}
               aria-label="Grade min"
-            />
+            >
+              <option value="">—</option>
+              {GRADE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
             <span style={{ color: MUTED }}>to</span>
-            <input
-              type="number" min={0} max={12}
-              value={formData.grade_max ?? ""}
+            <select
+              value={isUnset(formData.grade_max) ? "" : String(formData.grade_max)}
               onChange={(e) => onField("grade_max", e.target.value === "" ? "" : Number(e.target.value))}
-              style={{ ...inputStyle, width: 80 }}
+              style={{ ...inputStyle, width: 96 }}
               aria-label="Grade max"
-            />
-            <span style={{ color: MUTED, fontSize: 13, marginLeft: 8 }}>(K = 0)</span>
+            >
+              <option value="">—</option>
+              {GRADE_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+              ))}
+            </select>
           </div>
         ) : (
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
