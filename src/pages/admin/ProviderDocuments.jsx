@@ -240,12 +240,17 @@ export default function ProviderDocuments() {
 
   function flash(msg) { setToast(msg); setTimeout(() => setToast(""), 3500); }
 
-  async function load() {
+  // Partners are loaded once: nothing on this screen changes them. Documents
+  // reload after every add, edit and delete.
+  async function load({ withPartners = false } = {}) {
     if (!org?.id) return;
     try {
-      const [d, p] = await Promise.all([listProviderDocuments(org.id), listPartners(org.id)]);
+      const [d, p] = await Promise.all([
+        listProviderDocuments(org.id),
+        withPartners ? listPartners(org.id) : Promise.resolve(null),
+      ]);
       setDocs(d);
-      setPartners(p);
+      if (p) setPartners(p);
       setError("");
     } catch (err) {
       setError(`Couldn't load your documents: ${err?.message ?? "unknown error"}`);
@@ -253,34 +258,43 @@ export default function ProviderDocuments() {
     }
   }
 
-  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [org?.id]);
+  useEffect(() => { load({ withPartners: true }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [org?.id]);
 
   const groups = useMemo(() => groupByAudience(docs ?? [], partners), [docs, partners]);
 
   async function open(row) {
-    // Open the tab synchronously so the browser doesn't treat it as a popup.
+    // Open the tab synchronously so the browser doesn't treat it as a popup,
+    // and cut its link back to this page before it loads anything.
     const tab = window.open("", "_blank");
+    if (!tab) {
+      setError("Your browser blocked the new tab. Allow pop-ups for this site, then click Open again.");
+      return;
+    }
+    tab.opener = null;
     try {
       const url = await signedDocumentUrl(row.storage_path);
       if (!url) throw new Error("no link");
-      if (tab) tab.location.href = url; else window.location.href = url;
+      tab.location.href = url;
     } catch (err) {
-      if (tab) tab.close();
+      tab.close();
       setError(`Couldn't open that file: ${err?.message ?? "unknown error"}`);
     }
   }
 
   async function save(draft, file) {
-    const editing = form?.editing ?? null;
+    const thisForm = form;
+    const editing = thisForm?.editing ?? null;
     if (editing) await updateProviderDocument(editing, draft, file);
     else await createProviderDocument(org.id, draft, file);
-    setForm(null);
+    // Close only the form this save came from. If it was dismissed while saving
+    // and another one opened, leave the new one alone.
+    setForm((current) => (current === thisForm ? null : current));
     flash(editing ? "Document updated." : "Document added.");
     await load();
   }
 
   async function remove(row) {
-    if (!window.confirm(`Delete "${row.title}"? Partners will no longer see it. This can't be undone.`)) return;
+    if (!window.confirm(`Delete "${row.title}"? This can't be undone.`)) return;
     setBusyId(row.id); setError("");
     try {
       await deleteProviderDocument(row);
@@ -305,8 +319,8 @@ export default function ProviderDocuments() {
           <h1 style={{ margin: "8px 0 4px", color: PURPLE, fontSize: 24, fontWeight: 700 }}>Documents for partners</h1>
           <p style={{ color: MUTED, fontSize: 14, marginTop: 0, lineHeight: 1.5, maxWidth: 580 }}>
             The papers your partners need from you: your insurance certificate, your agreement with them, and anything
-            their agreement asks for. Partners will see these in their portal. Background checks and training come from
-            each instructor's record, so you don't add them here.
+            their agreement asks for. Once a partner has a portal login, they'll see the ones shown to them. Background
+            checks and training come from each instructor's record, so you don't add them here.
           </p>
         </div>
         {canManage && (

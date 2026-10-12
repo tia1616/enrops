@@ -16,10 +16,9 @@ export async function listProviderDocuments(orgId) {
   const { data, error } = await supabase
     .from("provider_documents_with_status")
     .select(LIST_COLUMNS)
-    .eq("organization_id", orgId)
-    .order("expires_on", { ascending: true, nullsFirst: false });
+    .eq("organization_id", orgId);
   if (error) throw error;
-  return data ?? [];
+  return data ?? []; // ordered for display by groupByAudience
 }
 
 /**
@@ -35,6 +34,20 @@ export async function listPartners(orgId) {
     .order("partner_name", { ascending: true });
   if (error) throw error;
   return data ?? [];
+}
+
+/**
+ * Remove one file and say whether it went. Storage's remove() never rejects: a
+ * refusal, or a path it could not find, resolves with an error or an empty list.
+ * Both are logged rather than swallowed, so a leftover file is at least visible
+ * in the console. Only the provider's own owners/admins can read a file no row
+ * points at, so a leftover is never exposed to anyone else.
+ */
+async function removeFile(path) {
+  const { data, error } = await supabase.storage.from(DOCUMENT_BUCKET).remove([path]);
+  const removed = !error && Array.isArray(data) && data.length > 0;
+  if (!removed) console.error("[providerDocuments] file not removed", path, error?.message ?? "nothing matched");
+  return removed;
 }
 
 async function uploadFile(orgId, file) {
@@ -59,7 +72,7 @@ export async function createProviderDocument(orgId, draft, file) {
     original_filename: file.name || null,
   });
   if (error) {
-    await supabase.storage.from(DOCUMENT_BUCKET).remove([path]).catch(() => {});
+    await removeFile(path);
     throw error;
   }
 }
@@ -67,8 +80,7 @@ export async function createProviderDocument(orgId, draft, file) {
 /**
  * Edit a document, optionally replacing its file. A new file is uploaded and the
  * row repointed before the old file is removed, so the row never points at
- * nothing. Removing the old file is best effort: if it fails, the leftover is
- * unreadable anyway (the bucket only signs files a row points at).
+ * nothing. Removing the old file is best effort (see removeFile).
  */
 export async function updateProviderDocument(row, draft, file) {
   const patch = rowFromDraft(draft);
@@ -80,23 +92,21 @@ export async function updateProviderDocument(row, draft, file) {
   }
   const { error } = await supabase.from("provider_documents").update(patch).eq("id", row.id);
   if (error) {
-    if (newPath) await supabase.storage.from(DOCUMENT_BUCKET).remove([newPath]).catch(() => {});
+    if (newPath) await removeFile(newPath);
     throw error;
   }
-  if (newPath && row.storage_path !== newPath) {
-    await supabase.storage.from(DOCUMENT_BUCKET).remove([row.storage_path]).catch(() => {});
-  }
+  if (newPath && row.storage_path !== newPath) await removeFile(row.storage_path);
 }
 
 /**
- * Delete a document. The row goes first: once it is gone no one can open the
- * file (the bucket only signs files a row points at), so a failed file removal
- * leaves nothing readable behind.
+ * Delete a document. The row goes first: once it is gone, partners and the rest
+ * of the team can no longer open the file, so a failed file removal leaves it
+ * readable only to the provider's own owners/admins (see removeFile).
  */
 export async function deleteProviderDocument(row) {
   const { error } = await supabase.from("provider_documents").delete().eq("id", row.id);
   if (error) throw error;
-  await supabase.storage.from(DOCUMENT_BUCKET).remove([row.storage_path]).catch(() => {});
+  await removeFile(row.storage_path);
 }
 
 /** A short-lived link to open the file. */

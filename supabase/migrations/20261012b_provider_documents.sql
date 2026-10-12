@@ -22,9 +22,10 @@
 --
 -- PRIVATE BUCKET. Files are read through short-lived signed URLs. The storage
 -- SELECT policy is "a provider_documents row exists for this path that the
--- caller can read", evaluated under the caller's own RLS, so the table policy
--- is the single read decision (the same shape as class-photos). Uploads happen
--- before the row exists, so INSERT is scoped by the org folder instead.
+-- caller can read" (evaluated under the caller's own RLS, the class-photos
+-- shape), plus the provider's own owners/admins for their own folder, which
+-- Storage needs in order to delete a file once its row is gone. Uploads happen
+-- before the row exists, so INSERT and DELETE are scoped by the org folder.
 --
 -- Additive and inert: no existing table, view or function changes.
 
@@ -33,8 +34,11 @@ begin;
 create table if not exists public.provider_documents (
   id                 uuid primary key default gen_random_uuid(),
   organization_id    uuid not null references public.organizations(id) on delete cascade,
-  -- NULL = shown to every partner of this provider.
-  partner_id         uuid references public.partners(id) on delete cascade,
+  -- NULL = shown to every partner of this provider. RESTRICT, not CASCADE: a
+  -- cascade would drop the row and strand its file in the bucket. Nothing in
+  -- the app hard-deletes a partner (they are archived), so a delete that hits
+  -- this should fail loudly and make whoever adds one handle the documents.
+  partner_id         uuid references public.partners(id) on delete restrict,
   doc_type           text not null,
   title              text not null,
   received_on        date,
