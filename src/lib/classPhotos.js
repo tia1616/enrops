@@ -49,7 +49,7 @@ export async function uploadClassPhoto({ programId, sessionDate, file }) {
 export async function listClassPhotos({ programId, sessionDate = null }) {
   let q = supabase
     .from("class_photos")
-    .select("id, program_id, session_date, storage_path, created_at, flagged_at, uploaded_by_instructor_id")
+    .select("id, program_id, session_date, storage_path, created_at, uploaded_by_instructor_id")
     .eq("program_id", programId)
     .order("session_date", { ascending: false })
     .order("created_at", { ascending: false });
@@ -79,17 +79,11 @@ export async function deleteClassPhoto(row) {
   const { error: rmErr } = await supabase.storage.from(PHOTO_BUCKET).remove([row.storage_path]);
   if (rmErr) throw rmErr;
   // Read the deleted row back: a DELETE the policy refuses affects ZERO rows and
-  // returns no error (the photo may have been reported since the screen loaded),
+  // returns no error (an instructor who was deactivated since the screen loaded),
   // which used to read as success while the photo sat there.
   const { data, error } = await supabase.from("class_photos").delete().eq("id", row.id).select("id");
   if (error) throw error;
   if (!data || data.length === 0) throw new Error("photo was not deleted");
-}
-
-/** A family reports a photo; it disappears for every family at once. */
-export async function flagClassPhoto(photoId) {
-  const { error } = await supabase.rpc("flag_class_photo", { p_photo_id: photoId });
-  if (error) throw error;
 }
 
 /** Save a photo to the device. Fetches the bytes so the browser downloads instead of navigating. */

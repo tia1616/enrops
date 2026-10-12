@@ -1066,7 +1066,7 @@ export default function Dashboard() {
         {tab === 'today' && <TodayTab todayClasses={todayClasses} enrollments={enrollments} notifications={notifications} slug={org.slug} org={org} />}
         {tab === 'schedule' && <ScheduleTab enrollments={enrollments} />}
         {tab === 'classes' && <ClassesTab enrollments={enrollments} expandedCards={expandedCards} toggleCard={toggleCard} slug={org.slug} />}
-        {tab === 'photos' && classPhotosOn && <ClassPhotosTab enrollments={enrollments} />}
+        {tab === 'photos' && classPhotosOn && <ClassPhotosTab enrollments={enrollments} supportEmail={supportEmail} orgName={org?.name} />}
         {tab === 'settings' && <SettingsTab prefs={prefs} savingPrefs={savingPrefs} prefsSaved={prefsSaved} onToggle={(key) => savePrefs({ ...prefs, [key]: !prefs[key] })} supportEmail={supportEmail} />}
       </div>
     </div>

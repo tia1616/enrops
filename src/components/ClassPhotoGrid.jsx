@@ -10,7 +10,7 @@ const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
 const BRIGHT = "#5847C9";
 
-export function PhotoGrid({ photos, urls, onOpen, badge }) {
+export function PhotoGrid({ photos, urls, onOpen }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(104px, 1fr))", gap: 6 }}>
       {photos.map((p) => {
@@ -29,11 +29,6 @@ export function PhotoGrid({ photos, urls, onOpen, badge }) {
               // Rows and URLs arrive together, so a row with no URL is not "still
               // loading": signing it failed, or its file is gone.
               <span style={{ fontSize: 11, color: MUTED }}>Unavailable</span>
-            )}
-            {badge?.(p) && (
-              <span style={{ position: "absolute", left: 4, top: 4, background: "#b0413e", color: "#fff", fontSize: 10, fontWeight: 700, padding: "2px 6px", borderRadius: 4 }}>
-                {badge(p)}
-              </span>
             )}
           </button>
         );
