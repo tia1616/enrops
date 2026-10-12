@@ -18,6 +18,7 @@ import {
   registrationAutomationsCanFire,
   canReachCommsTab,
   REGISTRATION_AUTOMATION_KEYS,
+  ALWAYS_LISTED_AUTOMATION_KEYS,
 } from './entitlements.js';
 
 let pass = 0, fail = 0;
@@ -123,6 +124,17 @@ eq('welcome is never always-on',              isAlwaysOnAutomation(LEAN_STANDARD
 eq('thank_you is opt-out', isOptOutAutomation('thank_you'), true);
 eq('welcome_camp is opt-in', isOptOutAutomation('welcome_camp'), false);
 eq('partner_roster is opt-in', isOptOutAutomation('partner_roster'), false);
+// class_photos is on by default (Jessica, 2026-10-12): no row = sending, and the
+// cron materialises an enabled row for any provider without one.
+eq('class_photos is opt-out', isOptOutAutomation('class_photos'), true);
+eq('no row + class_photos -> sending', automationIsSending(null, 'class_photos'), true);
+eq('stored false beats the class_photos default', automationIsSending({ enabled: false }, 'class_photos'), false);
+// Every provider sees it in Comms, because every provider is sending it.
+eq('class_photos is listed on every tier', ALWAYS_LISTED_AUTOMATION_KEYS.has('class_photos'), true);
+eq('the always-listed set is not a back door for upgrade automations',
+   ['check_in', 'mid_recap', 'final_recap', 'birthday', 'welcome_contact', 'review_request', 'abandoned_registration', 'partner_roster']
+     .some((k) => ALWAYS_LISTED_AUTOMATION_KEYS.has(k)),
+   false);
 
 // --- is it SENDING (tier-independent) vs can it be switched OFF (tier-dependent) ---
 // The two used to be one value, which produced opposite lies on the two tiers.

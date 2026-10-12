@@ -75,6 +75,7 @@ import { rosterStudentIds, rosterChanged, shouldResendRoster } from "./rosterCha
 import { isOnRoster } from "../_shared/rosterOrder.ts";
 import { abandonedResumeUrl } from "./abandonedResumeUrl.ts";
 import { formatChildNameList } from "../_shared/childNameList.ts";
+import { photoDaysToNotify, classPhotoRecipients, PHOTO_LOOKBACK_DAYS, type EnrolledReg } from "./classPhotosAudience.ts";
 import { hmacBase64Url } from "../_shared/hmac.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -255,6 +256,11 @@ interface AudienceEntry {
   review_rate_url_3?: string;
   review_rate_url_4?: string;
   review_rate_url_5?: string;
+  // ── class_photos only ──
+  // drives {{photos_url}}: the family's Photos tab in the parent portal. The
+  // photos themselves are never in the email; the portal visit is the point.
+  photos_url?: string;
+  photo_count?: string;   // drives {{photo_count}}: how many were shared that day
 }
 
 // Tailored instructor copy for no_school_day. Parents get the operator-editable
@@ -299,6 +305,12 @@ serve(async (req) => {
   //                    automation_run_recipients or time_saved_events.
   let eventRegistrationId: string | null = null;
   let sweepWelcome = false;
+  // POST {only_template: "<key>"} runs the daily pass for ONE template and skips
+  // every other automation (and the waitlist sweep). It only ever narrows what a
+  // normal daily run would do. It exists so one automation can be proven on
+  // staging without firing every other lifecycle email at the staging fixtures,
+  // some of which are real inboxes.
+  let onlyTemplateKey: string | null = null;
   let testSendParams: TestSendParams | null = null;
   let previewParams: PreviewParams | null = null;
   if (req.method === "POST") {
@@ -332,6 +344,8 @@ serve(async (req) => {
         eventRegistrationId = body.registration_id;
       } else if (body?.sweep_welcome === true) {
         sweepWelcome = true;
+      } else if (typeof body?.only_template === "string" && body.only_template) {
+        onlyTemplateKey = body.only_template;
       }
     } catch { /* empty body — cron mode */ }
   }
@@ -359,7 +373,7 @@ serve(async (req) => {
   const summary: {
     mode: string; automations: unknown[]; errors: unknown[]; waitlist?: unknown;
   } = {
-    mode: eventRegistrationId ? "event" : sweepWelcome ? "sweep" : "cron",
+    mode: eventRegistrationId ? "event" : sweepWelcome ? "sweep" : onlyTemplateKey ? `only:${onlyTemplateKey}` : "cron",
     automations: [],
     errors: [],
   };
@@ -376,7 +390,7 @@ serve(async (req) => {
   // Deliberately NOT inside the automations loop below: that loop is per-org, driven by
   // rows an operator can switch off. A waiting list that stops moving because someone
   // disabled an automation would strand families holding places forever.
-  if (!eventRegistrationId) {
+  if (!eventRegistrationId && !onlyTemplateKey) {
     try {
       const wl = await runWaitlistSweep(supabase, { baseUrl: PUBLIC_SITE_URL, now: new Date() });
       summary.waitlist = wl;
@@ -385,6 +399,21 @@ serve(async (req) => {
       // A waitlist failure must not stop the automations that follow it.
       summary.errors.push({ waitlist_sweep: (e as Error).message });
       console.error("[lifecycle-automations-cron] waitlist sweep threw:", e);
+    }
+  }
+
+  // OPT-OUT AUTOMATIONS GET THEIR ROW. The loop below only runs rows with
+  // enabled = true, but "New class photos" is on unless a provider switches it off
+  // (20261012a). Give every active provider without a row an enabled one before
+  // loading. A provider who switched it off has enabled = false and is untouched.
+  // Daily run only: the sweep and event mode never run this template anyway.
+  if (!eventRegistrationId && !sweepWelcome) {
+    const { error: ensureErr } = await supabase.rpc("ensure_default_on_automation", { p_template_key: "class_photos" });
+    if (ensureErr) {
+      // Not fatal to the other automations; a provider without a row simply gets
+      // no photo email today and is retried tomorrow.
+      summary.errors.push({ ensure_default_on_automation: ensureErr.message });
+      console.error("[lifecycle-automations-cron] ensure_default_on_automation failed:", ensureErr);
     }
   }
 
@@ -416,6 +445,7 @@ serve(async (req) => {
   for (const a of (automations ?? []) as AutomationRow[]) {
     // In event mode, only run Welcome workflows — other triggers are time-based.
     if (eventRegistrationId && a.template.trigger_type !== "days_before_first_session") continue;
+    if (onlyTemplateKey && a.template.key !== onlyTemplateKey) continue;
     if (sweepWelcome) {
       // Welcome is the only trigger that needs to react within minutes. Every
       // other one is anchored to a date, so the daily run is the right cadence
@@ -491,6 +521,9 @@ async function runAutomation(
       break;
     case "partner_roster":
       return await runPartnerRosterAutomation(supabase, a);
+    case "class_photos_uploaded":
+      audience = await resolveClassPhotosAudience(supabase, a);
+      break;
     case "event_registration_confirmed":
       // Handled by stripe-webhook (registration table → confirmation email).
       // Cron isn't the right trigger here — checkout completion is event-driven.
@@ -1002,6 +1035,9 @@ async function renderLifecycleEmail(supabase: SupabaseClient, input: RenderInput
     // no_school_day sample content so its preview reads naturally.
     no_school_dates_display: "Monday, September 7",
     no_school_reason: "Labor Day",
+    // class_photos sample: the REAL portal link, so a test send's button works.
+    photos_url: `${PUBLIC_SITE_URL}/${org.slug}/dashboard?tab=photos`,
+    photo_count: "6",
   };
 
   // True preview: when the operator picked a real camp/program, overwrite the
@@ -1765,6 +1801,98 @@ async function resolveCheckInAudience(
       register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
       next_term_available: nextTermAvailable,
     }));
+}
+
+// ─── New class photos (classes and camps-as-programs) ───────────────────────
+// One email per family per class per UPLOAD day, the morning after, and only for
+// days photos were actually shared. The day/grouping rules live in
+// classPhotosAudience.ts (tested); this function only loads the rows.
+//
+// Audience = families ENROLLED in the class, the same rule the Photos tab's RLS
+// uses (private.parent_enrolled_in_program): not cancelled, not waitlisted, paid
+// or confirmed. A family the email reaches can always open what it links to.
+async function resolveClassPhotosAudience(
+  supabase: SupabaseClient,
+  a: AutomationRow,
+): Promise<AudienceEntry[]> {
+  // The provider's own switch for the whole feature. Off means the family has no
+  // Photos tab to land on, so there is nothing to email about.
+  const { data: org, error: orgErr } = await supabase
+    .from("organizations").select("class_photos_enabled").eq("id", a.organization_id).maybeSingle();
+  if (orgErr) throw orgErr;
+  if (!org?.class_photos_enabled) return [];
+
+  const today = orgToday(a.org.timezone, new Date());
+  // A UTC window one day wider than the look-back; the exact org-local day
+  // filter happens in photoDaysToNotify.
+  const since = new Date(Date.now() - (PHOTO_LOOKBACK_DAYS + 2) * 86400000).toISOString();
+  const { data: photos, error: phErr } = await supabase
+    .from("class_photos")
+    .select("program_id, created_at")
+    .eq("organization_id", a.organization_id)
+    .gte("created_at", since);
+  if (phErr) throw phErr;
+
+  const days = photoDaysToNotify((photos ?? []) as { program_id: string; created_at: string }[], a.org.timezone, today);
+  if (days.length === 0) return [];
+
+  // Chunked: a long .in() list overflows the request line and dies before
+  // PostgREST, and a discarded error there reads as "nobody enrolled".
+  const programIds = [...new Set(days.map((d) => d.programId))];
+  const regs: EnrolledReg[] = [];
+  for (let i = 0; i < programIds.length; i += 50) {
+    const { data, error } = await supabase
+      .from("registrations")
+      .select(`
+        program_id, parent_id, status, payment_status, cancelled_at,
+        students!inner ( first_name ),
+        parents!inner ( id, first_name, email ),
+        programs!inner ( id, curriculum, runs_own_registration )
+      `)
+      .eq("organization_id", a.organization_id)
+      .in("program_id", programIds.slice(i, i + 50))
+      .is("cancelled_at", null)
+      .not("status", "in", "(cancelled,waitlist)");
+    if (error) throw error;
+    for (const r of (data ?? []) as any[]) {
+      if (!(r.payment_status === "paid" || r.status === "confirmed")) continue;
+      // A partner-run class: the school talks to its own families.
+      if (isPartnerRun(r.programs)) continue;
+      regs.push({
+        program_id: r.program_id,
+        parent_id: r.parents.id,
+        parent_email: r.parents.email ?? null,
+        parent_first_name: r.parents.first_name ?? null,
+        child_first_name: r.students?.first_name ?? null,
+        program_name: r.programs?.curriculum ?? null,
+      });
+    }
+  }
+
+  const photosUrl = `${PUBLIC_SITE_URL}/${a.org.slug}/dashboard?tab=photos`;
+  return classPhotoRecipients(days, regs).map((rec) => ({
+    context_key: rec.context_key,
+    parent_id: rec.parent_id,
+    parent_email: rec.parent_email,
+    parent_first_name: rec.parent_first_name,
+    child_first_name: formatChildNameList(rec.child_first_names) || null,
+    program_name: rec.program_name,
+    program_start_date: "",
+    program_end_date: "",
+    location_name: "",
+    abandoned_resume_url: "",
+    age_turning: "",
+    final_showcase_raw: "",
+    mid_term_skills_raw: [],
+    final_recap_skills_raw: [],
+    arrival_instructions_raw: "",
+    dismissal_instructions_raw: "",
+    session_dates_raw: [],
+    register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
+    next_term_available: false,
+    photos_url: photosUrl,
+    photo_count: String(rec.photo_count),
+  }));
 }
 
 // ─── Mid recap (camps + afterschool) ────────────────────────────────────────
@@ -3410,6 +3538,9 @@ function buildTokens(entry: AudienceEntry, brand: OrgBrand): Record<string, stri
     review_rate_url_3: entry.review_rate_url_3 ?? "",
     review_rate_url_4: entry.review_rate_url_4 ?? "",
     review_rate_url_5: entry.review_rate_url_5 ?? "",
+    // class_photos - "" for every other template.
+    photos_url: entry.photos_url ?? "",
+    photo_count: entry.photo_count ?? "",
   };
 }
 

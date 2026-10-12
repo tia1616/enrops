@@ -32,6 +32,7 @@ import {
   isAlwaysOnAutomation,
   registrationAutomationsCanFire,
   REGISTRATION_AUTOMATION_KEYS,
+  ALWAYS_LISTED_AUTOMATION_KEYS,
 } from "../../../lib/entitlements.js";
 import { useCommsAudience } from "../../../lib/useCommsAudience.js";
 
@@ -422,7 +423,7 @@ export default function AutomationsTab() {
   const visibleTemplates = templates.filter((t) => {
     const auds = Array.isArray(t.audiences) && t.audiences.length ? t.audiences : ["families"];
     if (!auds.includes(audience)) return false;
-    if (commsLevel === "registration_only" && !REGISTRATION_AUTOMATION_KEYS.has(t.key)) return false;
+    if (commsLevel === "registration_only" && !REGISTRATION_AUTOMATION_KEYS.has(t.key) && !ALWAYS_LISTED_AUTOMATION_KEYS.has(t.key)) return false;
     return true;
   });
 

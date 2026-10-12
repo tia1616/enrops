@@ -178,9 +178,13 @@ export const REGISTRATION_AUTOMATION_KEYS = new Set([
 
 /**
  * Automations that fire UNLESS explicitly disabled, i.e. a missing `automations`
- * row means ON, not off. thank_you is the only one: stripe-webhook sends the
- * confirmation whenever the row is absent and skips it only on an explicit
- * enabled === false (see the thank_you branch in stripe-webhook/index.ts).
+ * row means ON, not off. Two of them:
+ *   - thank_you: stripe-webhook sends the confirmation whenever the row is absent
+ *     and skips it only on an explicit enabled === false (see the thank_you branch
+ *     in stripe-webhook/index.ts).
+ *   - class_photos: on by default like class photos themselves (Jessica,
+ *     2026-10-12). The cron gives any provider without a row an enabled one
+ *     (ensure_default_on_automation, 20261012a) before it runs.
  *
  * Every other automation is opt-IN — the cron collects rows where enabled is
  * true, so no row means nothing fires.
@@ -190,8 +194,17 @@ export const REGISTRATION_AUTOMATION_KEYS = new Set([
  * opt-out automation doesn't leave it as it was, it turns it OFF.
  */
 export function isOptOutAutomation(templateKey) {
-  return templateKey === "thank_you";
+  return templateKey === "thank_you" || templateKey === "class_photos";
 }
+
+/**
+ * Automations every provider sees in Comms whatever their tier, because they
+ * belong to a feature that is free for everyone rather than to the Comms upgrade.
+ * class_photos sends for every provider by default, so every provider must be
+ * able to see it, edit its wording and switch it off - hiding it on a reduced
+ * tier would leave an email going out that its sender cannot find.
+ */
+export const ALWAYS_LISTED_AUTOMATION_KEYS = new Set(["class_photos"]);
 
 /**
  * The confirmation email is not optional on the registration_only tier. It IS
