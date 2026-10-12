@@ -49,5 +49,16 @@ eq('a small photo is never enlarged', fitWithin(800, 600), { width: 800, height:
 ok('a known code gets its own sentence', uploadErrorMessage('class_photos_off').includes('switched off'));
 ok('an unknown code still says something useful', uploadErrorMessage('who_knows').includes('try again'));
 
+// --- the photo email's link survives sign-in --------------------------------
+// The email links to /<slug>/dashboard?tab=photos and most parents open it with
+// no portal session. The dashboard's signed-out redirect must carry where they
+// were going, or they sign in and land on Today. Pinned on the source because
+// the redirect lives inside a component effect.
+import { readFileSync } from 'node:fs';
+const dash = readFileSync(new URL('../pages/portal/Dashboard.jsx', import.meta.url), 'utf8');
+ok('the signed-out redirect carries ?next= with the path and query',
+  /navigate\(`\/\$\{slug\}\/login\?next=\$\{encodeURIComponent\(next\)\}`/.test(dash)
+  && /const next = `\$\{window\.location\.pathname\}\$\{window\.location\.search\}`/.test(dash));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
