@@ -75,6 +75,22 @@ function statusOf(c, now = new Date()) {
   return { label: "Active", bg: GREEN_BG, ink: GREEN_INK };
 }
 
+// How a class is named in a list: the SITE, then the class.
+//
+// A class name on its own is not an identity. Winter 2027 runs five classes
+// called "LEGO Brickopolis Architects: Engineering & Design" at five different
+// sites, so the price preview showed three identical-looking rows and the skipped
+// list named the same class twice, once Free and once Preschool. Both were
+// correct and neither was usable. Every other operator surface leads with the
+// site; this one now does too.
+//
+// Falls back to the class alone when a program has no site, which is rare but
+// real (a class created before its venue was added). Dropping the row instead
+// would make a count disagree with its own list.
+function programLabel(r) {
+  return r?.site_name ? `${r.site_name} — ${r.curriculum}` : r?.curriculum ?? "";
+}
+
 // Early-bird term badge. Honest about four things, in order: that it doesn't
 // know yet, that the deadline has passed, that the term's programs disagree about
 // the discount, and only then that it is simply on. "Off" is a claim, so it is
@@ -144,7 +160,11 @@ export default function Discounts() {
       setError("");
       const [{ data: codeRows, error: cErr }, { data: progRows }, { data: orgRow }] = await Promise.all([
         supabase.from("promo_codes").select("*").eq("organization_id", org.id).order("created_at", { ascending: false }),
-        supabase.from("programs").select("id, curriculum, term, price_cents, early_bird_price_cents, early_bird_deadline").eq("organization_id", org.id).order("term"),
+        // program_locations(name) so the price list names a SITE even before the
+        // dry run answers -- otherwise the fallback rows and the real rows label
+        // the same class two different ways half a second apart. The relation is
+        // already read this way on the Programs calendar; no new grant.
+        supabase.from("programs").select("id, curriculum, term, price_cents, early_bird_price_cents, early_bird_deadline, program_locations(name)").eq("organization_id", org.id).order("term"),
         supabase.from("organizations").select("sibling_discount_pct").eq("id", org.id).single(),
       ]);
       if (cancelled) return;
@@ -810,11 +830,16 @@ function EarlyBirdTermCard({ term, progs, offer, onRun }) {
       {skipped && skipped.length > 0 && (
         <div style={{ marginTop: 10, fontSize: 12, color: MUTED }}>
           <div style={{ fontWeight: 700, color: INK, marginBottom: 4 }}>
-            {skipped.length} {skipped.length === 1 ? "program isn't" : "programs aren't"} offered this early bird:
+            {skipped.length} {skipped.length === 1 ? "program won't" : "programs won't"} get this early bird:
           </div>
           {skipped.map((r) => (
             <div key={r.program_id} style={{ display: "flex", gap: 6, flexWrap: "wrap", lineHeight: 1.7 }}>
-              <span style={{ color: INK }}>{r.curriculum}</span>
+              {/* SITE FIRST, because a class name is not an identity. Winter 2027
+                  has five "LEGO Brickopolis Architects: Engineering & Design" at
+                  five sites; without the venue this list named the same class
+                  twice, once as Free and once as Preschool, and the operator had
+                  no way to tell which was which. */}
+              <span style={{ color: INK }}>{programLabel(r)}</span>
               <span>— {skipReasonLabel(r.skip_reason)}</span>
               {r.cleared && (
                 <span style={{ color: "#92400e", fontWeight: 600 }}>
@@ -841,13 +866,15 @@ function EarlyBirdTermCard({ term, progs, offer, onRun }) {
               it falls back to the stored prices with no arrow, which is the
               honest "nothing proposed yet" state. */}
           {(preview ?? progs.map((p) => ({
-            program_id: p.id, curriculum: p.curriculum, price_cents: p.price_cents,
+            program_id: p.id, curriculum: p.curriculum,
+            site_name: p.program_locations?.name ?? null,
+            price_cents: p.price_cents,
             early_bird_cents: p.early_bird_price_cents, skip_reason: null,
           }))).map((r, i) => {
             const newPrice = r.early_bird_cents;
             return (
               <div key={r.program_id} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 8, padding: "7px 12px", borderTop: i ? `1px solid ${RULE}` : "none", fontSize: 13 }}>
-                <span style={{ color: INK }}>{r.curriculum}</span>
+                <span style={{ color: INK }}>{programLabel(r)}</span>
                 <span style={{ color: MUTED }}>
                   ${centsToDollars(r.price_cents)}
                   {r.skip_reason
