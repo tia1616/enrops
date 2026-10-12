@@ -340,6 +340,21 @@ export default function AdminSettings() {
       </section>
       )}
 
+      {/* Not behind canManageInstructors: insurance and partner agreements are
+          the provider's own papers, needed by any provider with a partner. */}
+      <section style={{ marginTop: 24 }}>
+        <h2 style={sectionTitle}>Documents for partners</h2>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>Insurance and agreements</div>
+            <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
+              Keep your certificate of insurance, partner agreements and anything else a partner asks for in one place, with expiry dates.
+            </div>
+          </div>
+          <Link to="/admin/partner-documents" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
+        </div>
+      </section>
+
       <ClassPhotosSettingsCard org={org} />
 
       {/* Google Drive is for importing curriculum documents — a J2S workflow

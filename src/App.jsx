@@ -84,6 +84,7 @@ const RegistrationQuestions = lazy(() => import('./pages/admin/RegistrationQuest
 const WaiverManager = lazy(() => import('./pages/admin/WaiverManager.jsx'));
 const EmailSenderSettings = lazy(() => import('./pages/admin/EmailSenderSettings.jsx'));
 const BackgroundCheckSettings = lazy(() => import('./pages/admin/BackgroundCheckSettings.jsx'));
+const ProviderDocuments = lazy(() => import('./pages/admin/ProviderDocuments.jsx'));
 const InstructorDocuments = lazy(() => import('./pages/admin/InstructorDocuments.jsx'));
 const TrainingSettings = lazy(() => import('./pages/admin/TrainingSettings.jsx'));
 const BrandLogoSettings = lazy(() => import('./pages/admin/BrandLogoSettings.jsx'));
@@ -402,6 +403,7 @@ export default function App() {
         <Route path="email-sender" element={<EmailSenderSettings />} />
         <Route path="pay-rates" element={<InstructorRoute><PayRatesSettings /></InstructorRoute>} />
         <Route path="background-checks" element={<BackgroundCheckSettings />} />
+        <Route path="partner-documents" element={<ProviderDocuments />} />
         {/* Authoring the documents instructors read and sign.
             TWO independent gates, and an earlier version of this comment wrongly
             claimed one covered both. The Settings `match` entry gates ROLE
