@@ -18,5 +18,11 @@ export function renderWaiverText(content: string | null | undefined, orgName: st
   const name = typeof orgName === 'string' ? orgName.trim() : '';
   // A legal document must never show a raw placeholder to a parent, and must
   // never show some other tenant's name — so the fallback is generic wording.
-  return content.replace(ORG_TOKEN, name || 'the program provider');
+  //
+  // A FUNCTION, NOT A STRING. As a string the replacement is a PATTERN: `$&`,
+  // `$'`, "$`" and `$$` are substitution directives, so a business name
+  // containing any of them silently rewrites the sentence around itself inside a
+  // signed waiver. The function form is passed through verbatim. Mirrors
+  // src/lib/waiverText.js — change one, change the other.
+  return content.replace(ORG_TOKEN, () => name || 'the program provider');
 }
