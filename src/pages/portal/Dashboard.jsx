@@ -342,7 +342,12 @@ export default function Dashboard() {
   useEffect(() => {
     if (!slug) return; // unresolved tenant — rendered as an error below, never redirected into J2S
     if (!authLoading && !user) {
-      navigate(`/${slug}/login`, { replace: true });
+      // Carry where they were going. The class-photos email links to
+      // ?tab=photos and most parents open it on a phone with no portal session;
+      // without `next` they signed in and landed on Today, and the photos the
+      // email promised were nowhere. Login runs `next` through safeReturnPath.
+      const next = `${window.location.pathname}${window.location.search}`;
+      navigate(`/${slug}/login?next=${encodeURIComponent(next)}`, { replace: true });
       return;
     }
     if (user) fetchData();

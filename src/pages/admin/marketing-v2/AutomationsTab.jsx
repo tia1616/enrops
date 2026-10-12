@@ -465,8 +465,9 @@ export default function AutomationsTab() {
               the mismatch. */}
           {commsLevel === "registration_only" && audience === "families"
             ? <>These are the emails that make a registration feel finished: a confirmation
-              the moment a family pays, a heads-up before the first class, and a note when
-              there&apos;s no school. Enrops sends them for you.</>
+              the moment a family pays, a heads-up before the first class, a note when
+              there&apos;s no school, and a nudge when your instructor shares class photos.
+              Enrops sends them for you.</>
             : audienceCfg.intro}
         </p>
         <p style={{ color: MUTED, fontSize: 13, lineHeight: 1.55, margin: 0, fontStyle: "italic" }}>

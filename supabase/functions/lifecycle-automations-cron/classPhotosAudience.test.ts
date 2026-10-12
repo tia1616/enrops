@@ -41,6 +41,26 @@ Deno.test("the look-back catches a missed run, and stops", () => {
   assertEquals(photoDaysToNotify(photos, LA, "2026-10-15").map((d) => d.day), ["2026-10-12"]);
 });
 
+Deno.test("days before the email was switched on are never emailed about", () => {
+  const photos = [
+    photo("p1", "2026-10-12T20:00:00Z"), // inside the look-back, but before it was switched on
+    photo("p1", "2026-10-14T20:00:00Z"), // after
+  ];
+  assertEquals(photoDaysToNotify(photos, LA, "2026-10-15", 3, "2026-10-14").map((d) => d.day), ["2026-10-14"]);
+  // switched on long ago: the look-back still bounds it
+  assertEquals(photoDaysToNotify(photos, LA, "2026-10-15", 3, "2026-01-01").map((d) => d.day), ["2026-10-12", "2026-10-14"]);
+  // switched on today: nothing yet
+  assertEquals(photoDaysToNotify(photos, LA, "2026-10-15", 3, "2026-10-15"), []);
+});
+
+Deno.test("an imported placeholder address is never mailed", () => {
+  const out = classPhotoRecipients(
+    [{ programId: "p1", day: "2026-10-14", count: 1 }],
+    [reg("p1", "par1", "Ada", "ada.smith.1.0@import.local"), reg("p1", "par2", "Ben", " X@IMPORT.LOCAL ")],
+  );
+  assertEquals(out, []);
+});
+
 Deno.test("no photos means no days means nobody", () => {
   assertEquals(photoDaysToNotify([], LA, "2026-10-15"), []);
   assertEquals(classPhotoRecipients([], [reg("p1", "par1", "Ada")]), []);

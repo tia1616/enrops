@@ -1808,9 +1808,14 @@ async function resolveCheckInAudience(
 // days photos were actually shared. The day/grouping rules live in
 // classPhotosAudience.ts (tested); this function only loads the rows.
 //
-// Audience = families ENROLLED in the class, the same rule the Photos tab's RLS
-// uses (private.parent_enrolled_in_program): not cancelled, not waitlisted, paid
-// or confirmed. A family the email reaches can always open what it links to.
+// Audience = families with a CONFIRMED, uncancelled registration in the class.
+// Deliberately the narrower of two rules: the Photos tab's RLS
+// (private.parent_enrolled_in_program) also admits paid-but-not-confirmed, but
+// the portal only builds a family's classes from status = 'confirmed', so a
+// paid-pending family would be emailed a link to a tab they cannot see.
+// Every family this reaches can open what it links to.
+const PAGE_SIZE = 1000;
+
 async function resolveClassPhotosAudience(
   supabase: SupabaseClient,
   a: AutomationRow,
@@ -1826,36 +1831,58 @@ async function resolveClassPhotosAudience(
   // A UTC window one day wider than the look-back; the exact org-local day
   // filter happens in photoDaysToNotify.
   const since = new Date(Date.now() - (PHOTO_LOOKBACK_DAYS + 2) * 86400000).toISOString();
-  const { data: photos, error: phErr } = await supabase
-    .from("class_photos")
-    .select("program_id, created_at")
-    .eq("organization_id", a.organization_id)
-    .gte("created_at", since);
-  if (phErr) throw phErr;
+  // PAGED. PostgREST caps a response (1000 rows by default) WITHOUT an error, so
+  // an unpaged read of a busy week would silently drop class-days and the
+  // families in them would simply never hear. Ordered so the pages are stable.
+  const photos: { program_id: string; created_at: string }[] = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from("class_photos")
+      .select("id, program_id, created_at")
+      .eq("organization_id", a.organization_id)
+      .gte("created_at", since)
+      .order("created_at", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, from + PAGE_SIZE - 1);
+    if (error) throw error;
+    photos.push(...((data ?? []) as { program_id: string; created_at: string }[]));
+    if (!data || data.length < PAGE_SIZE) break;
+  }
 
-  const days = photoDaysToNotify((photos ?? []) as { program_id: string; created_at: string }[], a.org.timezone, today);
+  // Days before the email was switched on (for this provider, most recently) are
+  // never emailed about. enabled_at is stamped by the Comms toggle and by
+  // ensure_default_on_automation.
+  const enabledDay = a.enabled_at ? orgToday(a.org.timezone, new Date(a.enabled_at)) : null;
+  const days = photoDaysToNotify(photos, a.org.timezone, today, PHOTO_LOOKBACK_DAYS, enabledDay);
   if (days.length === 0) return [];
 
   // Chunked: a long .in() list overflows the request line and dies before
-  // PostgREST, and a discarded error there reads as "nobody enrolled".
+  // PostgREST, and a discarded error there reads as "nobody enrolled". And paged
+  // within each chunk, for the same silent row cap as above.
   const programIds = [...new Set(days.map((d) => d.programId))];
   const regs: EnrolledReg[] = [];
   for (let i = 0; i < programIds.length; i += 50) {
-    const { data, error } = await supabase
-      .from("registrations")
-      .select(`
-        program_id, parent_id, status, payment_status, cancelled_at,
-        students!inner ( first_name ),
-        parents!inner ( id, first_name, email ),
-        programs!inner ( id, curriculum, runs_own_registration )
-      `)
-      .eq("organization_id", a.organization_id)
-      .in("program_id", programIds.slice(i, i + 50))
-      .is("cancelled_at", null)
-      .not("status", "in", "(cancelled,waitlist)");
-    if (error) throw error;
-    for (const r of (data ?? []) as any[]) {
-      if (!(r.payment_status === "paid" || r.status === "confirmed")) continue;
+    const rows: any[] = [];
+    for (let from = 0; ; from += PAGE_SIZE) {
+      const { data, error } = await supabase
+        .from("registrations")
+        .select(`
+          id, program_id, parent_id, status, cancelled_at,
+          students!inner ( first_name ),
+          parents!inner ( id, first_name, email ),
+          programs!inner ( id, curriculum, runs_own_registration )
+        `)
+        .eq("organization_id", a.organization_id)
+        .in("program_id", programIds.slice(i, i + 50))
+        .is("cancelled_at", null)
+        .eq("status", "confirmed")
+        .order("id", { ascending: true })
+        .range(from, from + PAGE_SIZE - 1);
+      if (error) throw error;
+      rows.push(...(data ?? []));
+      if (!data || data.length < PAGE_SIZE) break;
+    }
+    for (const r of rows) {
       // A partner-run class: the school talks to its own families.
       if (isPartnerRun(r.programs)) continue;
       regs.push({
