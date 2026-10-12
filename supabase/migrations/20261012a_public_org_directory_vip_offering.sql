@@ -25,16 +25,12 @@
 -- on in public. Same posture as 20260914a: no security_invoker (reloptions null),
 -- table-level SELECT to anon and authenticated, so no new GRANT is needed.
 --
--- ENVIRONMENTS DIFFER, READ BEFORE APPLYING TO PROD. Staging's view already ends
--- with class_photos_enabled (20261009b_class_photos.sql), which prod does NOT
--- have yet. CREATE OR REPLACE VIEW can only append columns, never reorder, so:
---   - staging: ... support_email, class_photos_enabled, vip_offering_public
---   - prod:    ... support_email, vip_offering_public   (until class photos ships)
--- When class photos ships to prod, its view must then go AFTER this column there,
--- i.e. class_photos_enabled appended after vip_offering_public on prod. Both
--- environments end up with the same columns in a different order, which no
--- reader depends on (all reads are by name). This file is the STAGING text; the
--- prod statement is the same with the class_photos_enabled line removed.
+-- ONE TEXT FOR BOTH ENVIRONMENTS. CREATE OR REPLACE VIEW can only append
+-- columns, never reorder or drop, so this must follow class_photos_enabled
+-- (20261009b_class_photos.sql). Class photos shipped to prod first (main
+-- 0fd40da3, 2026-10-12) and prod's view was verified live to end
+-- `... support_email, class_photos_enabled`, the same as staging - so this file
+-- applies to prod exactly as written.
 --
 -- DO NOT ALIAS `organizations` - see 20260914a; instructorDocuments.test.mjs
 -- regex-reads the newest redefinition of this view.
