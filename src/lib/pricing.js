@@ -169,8 +169,11 @@ export function calculateProgramPrice(program) {
 export function basePriceForItem({ program, isVip, today = new Date(), timeZone = 'UTC' }) {
   if (isVip) {
     // VIP is per-term anchor. Cart expands a VIP item into 3 lines (Fall +
-    // Winter + Spring), each at $240. create-registration writes $240 to each
-    // of the 3 registration rows directly.
+    // Winter + Spring), each at $240 FOR DISPLAY. What is charged is decided by
+    // create-registration from the business's own organizations.vip_offering
+    // price_cents (split three ways), not from this constant. They agree today
+    // only because J2S, the one business with bundles on, is set to $720.
+    // Wiring this display to vip_offering is the open "VIP unwired" backlog.
     return {
       base_cents: VIP_PRICE_PER_TERM_CENTS,
       label: 'All 3 Terms',
