@@ -67,7 +67,10 @@ export default function PartnerLoginsSection({ org, partners, canManage, onMessa
     setBusy("grant"); setError("");
     try {
       await grantPortalAccess(org.id, contactId);
+      // Reset both pickers: the partner may have no ungranted contacts left,
+      // and a value missing from its options shows a wrong partner's name.
       setContactId("");
+      setPartnerId("");
       onMessage("Access given. Send them a sign-in link when you're ready.");
       await load();
     } catch (err) {
