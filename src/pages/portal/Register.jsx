@@ -16,6 +16,7 @@ import StepReview from './register-steps/StepReview.jsx';
 import StepPay from './register-steps/StepPay.jsx';
 import { parseRegFields, pickupDnrConflicts } from './register-steps/RegExtraFields.jsx';
 import { renderWaiverText } from '../../lib/waiverText.js';
+import { vipBundleAllowed } from '../../lib/vipOffering.js';
 
 // Tenant resolution: `org` (id, slug, name, ...) is provided by PublicLayout
 // via Outlet context — see src/layouts/PublicLayout.jsx. No more hardcoded
@@ -371,6 +372,21 @@ export default function Register() {
       return;
     }
     (async () => {
+      // A ?vip=1 link is only honoured where this business sells bundles at
+      // this school - the same rule as the catalog and create-registration
+      // (vipOffering.js). Otherwise it falls back to the single-term path, the
+      // same as a link whose legs cannot be found, rather than building a cart
+      // the server will refuse at submit.
+      const { data: vipRow, error: vipErr } = await supabase
+        .from('public_org_directory')
+        .select('vip_offering_public')
+        .eq('id', org.id)
+        .maybeSingle();
+      if (vipErr) console.warn('[registration] year-bundle setting unavailable; using single term. Cause: %o', vipErr);
+      if (!vipBundleAllowed(vipRow?.vip_offering_public ?? null, program.program_location_id)) {
+        setActiveChildItem({ program, isVip: false });
+        return;
+      }
       const { data: matches } = await supabase
         .from('programs')
         // Location name via program_locations_public, not the base table - see
