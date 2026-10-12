@@ -200,14 +200,23 @@ export function calculateCart(cart) {
       ? 0
       : Number(cart.sibling_discount_pct);
 
-  cart.children.forEach((child) => {
+  // The sibling discount is for each ADDITIONAL child actually registering:
+  // the first child with at least one class pays full price, whatever slot
+  // they sit in. Keying it on child_index > 0 gave a one-child order the
+  // discount once the first slot's classes were removed. TWIN of the same
+  // rule in supabase/functions/create-registration (siblingRank), which is
+  // what actually charges - keep the two identical.
+  const firstRegisteringIndex = cart.children.findIndex((c) => c.items.length > 0);
+
+  cart.children.forEach((child, childPos) => {
+    const isSibling = firstRegisteringIndex !== -1 && childPos > firstRegisteringIndex;
     child.items.forEach((item) => {
       const { base_cents, label, is_legacy, is_vip } = basePriceForItem({
         program: item.program,
         isVip: item.isVip,
       });
       const sibling_cents =
-        child.child_index > 0
+        isSibling
           ? Math.round(base_cents * (sibPct / 100))
           : 0;
       const subtotal = base_cents - sibling_cents;

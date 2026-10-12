@@ -181,6 +181,18 @@ serve(async (req) => {
     }
     if (!flat.length) return json({ error: 'No programs to register' }, 400);
 
+    // WHO IS A SIBLING. The sibling discount is for each ADDITIONAL child
+    // actually registering, so it is decided by order among the children who
+    // have at least one class in this cart - never by the browser's
+    // child_index, which is just a slot number. Trusting it gave a one-child
+    // order the discount whenever that child was not in slot 0: a crafted
+    // request, or a family whose first child's classes were all removed.
+    // TWIN of the same rule in src/lib/pricing.js calculateCart.
+    const siblingRank = new Map<number, number>();
+    for (const f of flat) {
+      if (!siblingRank.has(f.child_index)) siblingRank.set(f.child_index, siblingRank.size);
+    }
+
     // EVERY program in the cart must belong to THIS org, be PUBLISHED, and be one
     // we actually sell. The screens filter all three, but a screen is not a gate -
     // the Comms gate shipped UI-only and was bypassed from a browser console the
@@ -624,7 +636,9 @@ serve(async (req) => {
         program: f.is_vip
           ? { id: f.program_id, price_cents: vipLeg!, early_bird_price_cents: null, early_bird_deadline: null }
           : priceById.get(f.program_id)!,
-        child_index: f.child_index,
+        // priceCart gives the sibling discount to child_index > 0, so it is
+        // handed the RANK among registering children, not the browser's slot.
+        child_index: siblingRank.get(f.child_index) ?? 0,
         is_vip: f.is_vip,
         vip_price_cents: vipLeg,
       };
@@ -880,7 +894,7 @@ serve(async (req) => {
                 ? 'vip_new'
                 : (validatedPromo && pl.promo_discount_cents > 0)
                 ? 'promo'
-                : child.child_index > 0
+                : (siblingRank.get(child.child_index) ?? 0) > 0
                 ? 'sibling'
                 : null,
               discount_cents: pl.discount_cents,   // sibling + promo on this line
