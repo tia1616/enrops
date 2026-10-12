@@ -42,8 +42,14 @@ export function photoDaysToNotify(
   timezone: string | null | undefined,
   today: string,
   lookbackDays = PHOTO_LOOKBACK_DAYS,
+  // The local day the provider's email was (last) switched on. Days before it
+  // are never emailed about: a provider who switches it back on after a week off
+  // must not mail families about photos from while it was off, and the very
+  // first run does not reach back over days before the email existed.
+  enabledDay: string | null = null,
 ): PhotoDay[] {
-  const earliest = addDays(today, -lookbackDays);
+  const lookbackStart = addDays(today, -lookbackDays);
+  const earliest = enabledDay && enabledDay > lookbackStart ? enabledDay : lookbackStart;
   const byKey = new Map<string, PhotoDay>();
   for (const p of photos) {
     if (!p?.program_id || !p?.created_at) continue;
@@ -93,6 +99,10 @@ export function classPhotoRecipients(days: PhotoDay[], regs: EnrolledReg[]): Cla
   const regsByProgram = new Map<string, EnrolledReg[]>();
   for (const r of regs) {
     if (!r?.parent_id || !r.parent_email?.includes("@")) continue;
+    // A roster import with no real address stores a placeholder ending in
+    // @import.local - the same rule program_message_recipients flags as
+    // 'placeholder_email'. Never mail it; this email goes out by default.
+    if (r.parent_email.trim().toLowerCase().endsWith("@import.local")) continue;
     const list = regsByProgram.get(r.program_id) ?? [];
     list.push(r);
     regsByProgram.set(r.program_id, list);
@@ -113,7 +123,8 @@ export function classPhotoRecipients(days: PhotoDay[], regs: EnrolledReg[]): Cla
           parent_email: r.parent_email!,
           parent_first_name: r.parent_first_name,
           child_first_names: [],
-          program_name: r.program_name || "class",
+          // "their class" reads naturally in "shared new photos from {{program_name}}".
+          program_name: r.program_name || "their class",
         };
         byParent.set(key, rec);
       }

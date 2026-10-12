@@ -43,7 +43,9 @@ values (
   'class_photos', 'New class photos',
   'Lets families know when their child''s instructor has shared new class photos, with a link to see them in their family portal. Sends the morning after photos are added, at most once per class per day, and never on a day without photos.',
   'class_photos_uploaded', 'both', 'informational',
-  'New photos from {{child_first_name}}''s {{program_name}} class',
+  -- Not "{{program_name}} class": 14 of 152 prod programs already end in Camp or
+  -- Club, which would read "LEGO Game Makers Camp class".
+  'New class photos for {{child_first_name}}',
   '<p style="margin:0 0 16px;">Hi {{first_name}},</p>' ||
   '<p style="margin:0 0 16px;">{{child_first_name}}''s instructor shared new photos from {{program_name}}. Take a look in your family portal.</p>' ||
   -- No sign-off line: the email shell already appends the sender's signature,
