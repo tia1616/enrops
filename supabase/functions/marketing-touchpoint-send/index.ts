@@ -42,6 +42,7 @@ import {
 } from "../_shared/attachments.ts";
 import { isCampProgram, programScheduleLabel } from "../_shared/campProgram.ts";
 import { isDeadlineReminderLabel, splitByThrottle, throttleGapHours } from "../_shared/marketingThrottle.ts";
+import { withEmailAttribution } from "../_shared/emailAttribution.ts";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -872,6 +873,7 @@ serve(async (req: Request) => {
         pickedCamps,
         draftInputs,
         safeRegistrationUrl,
+        attributionTags: { campaignId: campaign.id, touchpointId: touchpoint.id },
         campaignTopics: extractTopics(what),
         locationNameMap,
         isTestSend,
@@ -1268,6 +1270,10 @@ type TokensInput = {
   pickedCamps?: CampRow[];
   draftInputs: Record<string, unknown>;
   safeRegistrationUrl: string | null;
+  // Ids stamped on the register link as utm_campaign / utm_content so a
+  // registration can be traced back to the email that brought the family. Only
+  // links to our own site are tagged (see _shared/emailAttribution.ts).
+  attributionTags?: { campaignId: string; touchpointId: string };
   campaignTopics: string[];
   // Resolved tenant email identity (shared loadOrgBrand cascade) — drives the
   // {{sender_name}}, {{sender_email}}, {{reply_to}} body tokens.
@@ -1415,7 +1421,10 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
   const inCatalogTerm = !!org.active_registration_term && program?.term === org.active_registration_term;
   const programDeepLink = program?.id && inCatalogTerm ? `${PUBLIC_SITE_URL}/${org.slug}?program=${program.id}` : "";
   const defaultRegisterUrl = `${PUBLIC_SITE_URL}/${org.slug}`;
-  const registerUrlValue = safeRegistrationUrl || programDeepLink || defaultRegisterUrl;
+  const untaggedRegisterUrl = safeRegistrationUrl || programDeepLink || defaultRegisterUrl;
+  const registerUrlValue = input.attributionTags
+    ? withEmailAttribution(untaggedRegisterUrl, PUBLIC_SITE_URL, input.attributionTags)
+    : untaggedRegisterUrl;
   tokens.set("register_url", registerUrlValue);
   // Branded button version of the registration CTA. Ennie places {{register_button}}
   // on its own line for the primary "register" call-to-action so it renders as a
@@ -2283,6 +2292,7 @@ async function renderPreview(
     pickedCamps,
     draftInputs,
     safeRegistrationUrl,
+    attributionTags: { campaignId: campaign.id, touchpointId: touchpoint.id },
     campaignTopics: extractTopics(what),
     locationNameMap,
   });

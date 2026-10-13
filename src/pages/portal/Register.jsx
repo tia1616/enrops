@@ -17,6 +17,7 @@ import StepPay from './register-steps/StepPay.jsx';
 import { parseRegFields, pickupDnrConflicts } from './register-steps/RegExtraFields.jsx';
 import { renderWaiverText } from '../../lib/waiverText.js';
 import { vipBundleAllowed, fetchVipOfferingPublic } from '../../lib/vipOffering.js';
+import { readAttribution } from '../../lib/attribution.js';
 
 // Tenant resolution: `org` (id, slug, name, ...) is provided by PublicLayout
 // via Outlet context — see src/layouts/PublicLayout.jsx. No more hardcoded
@@ -740,6 +741,9 @@ export default function Register() {
           // invited to take. A missing, stale or other-org token is simply ignored
           // server-side, and they get the ordinary "that class is full".
           waitlist_token: searchParams.get('waitlist') || null,
+          // The campaign email they last clicked (utm tags remembered on this
+          // device by AnalyticsBridge). Server sanitises it; null when none.
+          attribution: readAttribution(),
         }),
       });
       const regData = await regResp.json();
