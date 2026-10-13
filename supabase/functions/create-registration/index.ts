@@ -25,6 +25,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { priceCart, validatePromo } from '../_shared/promoPricing.ts';
 import { renderWaiverText } from '../_shared/waiverText.ts';
 import { isCampProgram } from '../_shared/campProgram.ts';
+import { sanitizeAttribution } from '../_shared/emailAttribution.ts';
 
 // The winter and spring terms that complete a fall term's school year:
 // FA26 -> WI27 + SP27. TWIN of schoolYearTermsForFall() in src/lib/terms.js,
@@ -86,6 +87,12 @@ serve(async (req) => {
       payment_plan,
       pricing_snapshot,
     } = body;
+
+    // Which campaign email brought this family (utm tags the browser remembered
+    // from the link they clicked). The browser is not trusted: only known tag
+    // names with short plain values survive, else null. Stored on each
+    // registration row; it never affects pricing, capacity or who is charged.
+    const attribution = sanitizeAttribution(body?.attribution);
 
     // --- Validate inputs ---
     if (!organization_slug || !parent?.email || !children?.length) {
@@ -907,6 +914,7 @@ serve(async (req) => {
               discount_cents: pl.discount_cents,   // sibling + promo on this line
               promo_code_used: validatedPromo ? validatedPromo.code : null,
               how_heard: student.how_heard || null,
+              attribution,
               referred_by:
                 student.how_heard === 'Other' ? student.how_heard_other : null,
               // customizable-registration: answers to the org's custom questions

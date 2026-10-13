@@ -41,6 +41,8 @@ import {
   type CommsAttachment,
 } from "../_shared/attachments.ts";
 import { isCampProgram, programScheduleLabel } from "../_shared/campProgram.ts";
+import { isDeadlineReminderLabel, splitByThrottle, throttleGapHours } from "../_shared/marketingThrottle.ts";
+import { withEmailAttribution } from "../_shared/emailAttribution.ts";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -242,6 +244,10 @@ type Org = {
   // Drives {{registration_close_date}}. NOT NULL DEFAULT 7 in the schema, but
   // typed nullable so an older cached row can't render a NaN date.
   registration_close_days_before: number | null;
+  // Minimum days between marketing emails to one family, across all campaigns.
+  // NOT NULL in the schema; typed nullable so an odd row falls back to the
+  // default in throttleGapHours() instead of switching the throttle off.
+  email_throttle_days: number | null;
   // Nested one-to-one from org_branding (PostgREST returns object or 1-elem array).
   org_branding: { primary_color: string | null } | { primary_color: string | null }[] | null;
 };
@@ -414,7 +420,7 @@ serve(async (req: Request) => {
     // platform_fee_override_until is here because the rates are only correct
     // once resolveFeeConfig has applied it; reading the raw columns would
     // advertise a rate that may have lapsed.
-    .select("id, name, slug, brand_voice, logo_url, vip_offering, active_registration_term, mailing_address, registration_close_days_before, fee_pass_through, platform_fee_card_pct, platform_fee_ach_pct, platform_fee_cap_cents, platform_fee_ach_cap_cents, platform_fee_floor_cents, platform_fee_override_until, org_branding(primary_color)")
+    .select("id, name, slug, brand_voice, logo_url, vip_offering, active_registration_term, mailing_address, registration_close_days_before, email_throttle_days, fee_pass_through, platform_fee_card_pct, platform_fee_ach_pct, platform_fee_cap_cents, platform_fee_ach_cap_cents, platform_fee_floor_cents, platform_fee_override_until, org_branding(primary_color)")
     .eq("id", campaign.organization_id)
     .single<Org>();
   if (oErr || !org) return json({ error: `organization not found: ${oErr?.message ?? "unknown"}` }, 404);
@@ -651,6 +657,7 @@ serve(async (req: Request) => {
     skipped_suppressed: 0,
     skipped_deduped: 0,
     skipped_email_deduped: 0,
+    skipped_throttled: 0,
     skipped_no_school_program: 0,
     skipped_no_email: 0,
     failed: 0,
@@ -682,13 +689,13 @@ serve(async (req: Request) => {
   // A test has one recipient, the caller's own address, so neither applies.
   if (!isTestSend) {
     for (const r of recipientRows) {
-      if (alreadyDelivered.has(r.id) && r.email) seenEmails.add(r.email.toLowerCase());
+      if (alreadyDelivered.has(r.id) && r.email) seenEmails.add(r.email.trim().toLowerCase());
     }
   }
   for (const r of recipientRows) {
     results.attempted++;
     if (!r.email) { results.skipped_no_email++; continue; }
-    const emailLc = r.email.toLowerCase();
+    const emailLc = r.email.trim().toLowerCase();
     if (suppressedEmails.has(emailLc)) { results.skipped_suppressed++; continue; }
     // Dedup is a REAL-SEND protection: it stops a family receiving the same
     // touchpoint twice. A test goes to the operator's own inbox and is the
@@ -744,6 +751,83 @@ serve(async (req: Request) => {
     ready.push({ r, program, recipientPrograms, recipientCamps });
   }
 
+  // ---- Throttle: one family is not mailed again inside the org's minimum gap ----
+  // organizations.email_throttle_days, across EVERY campaign for the org (the
+  // standing rule). Real sends only: a test goes to the operator's own inbox and
+  // must never be held back by what a family received yesterday.
+  //
+  // Fails CLOSED: if the check cannot be read, NOTHING is sent. Be honest about
+  // what happens next, because the older suppression/dedup comments above claim a
+  // 5-minute retry that does not exist: this returns 500, the cron marks the
+  // touchpoint 'failed' (it only claims 'queued'), and the operator re-queues it.
+  // Safe, not self-healing. Deploy order is a contract for the same reason: the
+  // migration that creates marketing_throttled_emails MUST be on the database
+  // before this function is, or every touchpoint fails. A held-back family is logged as status 'throttled' (a value the CHECK
+  // already allowed), so the operator can see who was skipped and why; the rows
+  // are not in DELIVERED_STATUSES, so they never count as sent anywhere.
+  //
+  // Deadline reminders (48h / 24h / final-call) are EXEMPT: the drafter plans them
+  // a day apart on purpose, and the gap would otherwise delete the "last chance".
+  const exemptFromThrottle = isDeadlineReminderLabel(touchpoint.payload?.label);
+  if (!isTestSend && !exemptFromThrottle && ready.length > 0) {
+    const gapHours = throttleGapHours(org.email_throttle_days);
+    if (gapHours > 0) {
+      const THROTTLE_QUERY_CHUNK = 500; // an RPC body, not a URL: no .in() ceiling
+      const held = new Set<string>();
+      const addresses = ready.map(({ r }) => r.email.trim().toLowerCase());
+      for (let i = 0; i < addresses.length; i += THROTTLE_QUERY_CHUNK) {
+        const { data: hit, error: thErr } = await supabase.rpc("marketing_throttled_emails", {
+          p_organization_id: campaign.organization_id,
+          p_emails: addresses.slice(i, i + THROTTLE_QUERY_CHUNK),
+          p_touchpoint_id: touchpoint.id,
+          p_gap_hours: gapHours,
+        });
+        if (thErr) return json({ error: `throttle check failed: ${thErr.message}` }, 500);
+        for (const h of (hit ?? []) as Array<{ email: string }>) held.add(h.email);
+      }
+      if (held.size > 0) {
+        const split = splitByThrottle(ready.map((x) => ({ x, email: x.r.email })), held);
+        ready.splice(0, ready.length, ...split.send.map((s) => s.x));
+        results.skipped_throttled += split.hold.length;
+        // A re-run (the cron re-queues a partly-sent touchpoint) holds the same
+        // families back again; log each family once per touchpoint.
+        // Paged (PostgREST caps a read at 1000 rows) and error-checked: if the
+        // read fails we log NOTHING rather than risk duplicate audit rows. The
+        // log is only an audit trail; the family is already correctly not mailed.
+        const loggedIds = new Set<string>();
+        let loggedReadOk = true;
+        for (let from = 0; ; from += 1000) {
+          const { data: page, error: lrErr } = await supabase
+            .from("marketing_sends")
+            .select("recipient_id")
+            .eq("touchpoint_id", touchpoint.id)
+            .eq("status", "throttled")
+            .eq("is_test", false)
+            .range(from, from + 999);
+          if (lrErr) { loggedReadOk = false; results.errors.push(`throttled-row read failed: ${lrErr.message}`); break; }
+          for (const l of (page ?? []) as Array<{ recipient_id: string }>) loggedIds.add(l.recipient_id);
+          if (!page || page.length < 1000) break;
+        }
+        const heldRows = !loggedReadOk ? [] : split.hold.filter(({ x }) => !loggedIds.has(x.r.id)).map(({ x }) => ({
+          organization_id: campaign.organization_id,
+          campaign_id: campaign.id,
+          touchpoint_id: touchpoint.id,
+          recipient_id: x.r.id,
+          email: x.r.email,
+          status: "throttled",
+          school_name: x.r.school_name ?? null,
+          suppressed_by_throttle: true,
+          is_test: false,
+        }));
+        for (let i = 0; i < heldRows.length; i += THROTTLE_QUERY_CHUNK) {
+          const { error: hrErr } = await supabase.from("marketing_sends").insert(heldRows.slice(i, i + THROTTLE_QUERY_CHUNK));
+          // Logging only: the family is already correctly NOT being mailed.
+          if (hrErr) results.errors.push(`throttled-row log failed: ${hrErr.message}`);
+        }
+      }
+    }
+  }
+
   // Second pass: send via Resend's BATCH endpoint (POST /emails/batch, up to
   // 100 per request). Each batch counts as ONE call toward Resend's 5/sec
   // rate limit but ships up to 100 emails. For 900 recipients that's ~9
@@ -789,6 +873,7 @@ serve(async (req: Request) => {
         pickedCamps,
         draftInputs,
         safeRegistrationUrl,
+        attributionTags: { campaignId: campaign.id, touchpointId: touchpoint.id },
         campaignTopics: extractTopics(what),
         locationNameMap,
         isTestSend,
@@ -1185,6 +1270,10 @@ type TokensInput = {
   pickedCamps?: CampRow[];
   draftInputs: Record<string, unknown>;
   safeRegistrationUrl: string | null;
+  // Ids stamped on the register link as utm_campaign / utm_content so a
+  // registration can be traced back to the email that brought the family. Only
+  // links to our own site are tagged (see _shared/emailAttribution.ts).
+  attributionTags?: { campaignId: string; touchpointId: string };
   campaignTopics: string[];
   // Resolved tenant email identity (shared loadOrgBrand cascade) — drives the
   // {{sender_name}}, {{sender_email}}, {{reply_to}} body tokens.
@@ -1332,7 +1421,10 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
   const inCatalogTerm = !!org.active_registration_term && program?.term === org.active_registration_term;
   const programDeepLink = program?.id && inCatalogTerm ? `${PUBLIC_SITE_URL}/${org.slug}?program=${program.id}` : "";
   const defaultRegisterUrl = `${PUBLIC_SITE_URL}/${org.slug}`;
-  const registerUrlValue = safeRegistrationUrl || programDeepLink || defaultRegisterUrl;
+  const untaggedRegisterUrl = safeRegistrationUrl || programDeepLink || defaultRegisterUrl;
+  const registerUrlValue = input.attributionTags
+    ? withEmailAttribution(untaggedRegisterUrl, PUBLIC_SITE_URL, input.attributionTags)
+    : untaggedRegisterUrl;
   tokens.set("register_url", registerUrlValue);
   // Branded button version of the registration CTA. Ennie places {{register_button}}
   // on its own line for the primary "register" call-to-action so it renders as a
@@ -2200,6 +2292,7 @@ async function renderPreview(
     pickedCamps,
     draftInputs,
     safeRegistrationUrl,
+    attributionTags: { campaignId: campaign.id, touchpointId: touchpoint.id },
     campaignTopics: extractTopics(what),
     locationNameMap,
   });

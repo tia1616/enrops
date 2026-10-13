@@ -86,6 +86,7 @@ async function fetchFamily(contact, orgId) {
     let detail, tone;
     if (s.clicked_at) { detail = "Clicked"; tone = "positive"; }
     else if (s.opened_at) { detail = "Opened"; tone = "positive"; }
+    else if (s.status === "throttled") { detail = "Not sent: emailed too recently"; tone = "neutral"; }
     else if (["bounced", "failed"].includes(s.status)) { detail = cap(s.status); tone = "negative"; }
     else { detail = cap(s.status ?? "Sent"); tone = "sent"; }
     events.push({ id: "ms" + s.id, at: s.sent_at ?? s.created_at, icon: "📣", title: s.rendered_subject || "Campaign email", detail, tone });

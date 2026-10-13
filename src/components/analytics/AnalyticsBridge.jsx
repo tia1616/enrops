@@ -20,6 +20,7 @@ import {
   capturePageview,
 } from "../../lib/analytics.js";
 import { pixelPageview } from "../../lib/metaPixel.js";
+import { captureAttribution } from "../../lib/attribution.js";
 
 export default function AnalyticsBridge() {
   const location = useLocation();
@@ -42,6 +43,15 @@ export default function AnalyticsBridge() {
     capturePageview(location.pathname);
     pixelPageview();
   }, [location.pathname]);
+
+  // Remember which campaign email a visitor arrived from (utm_* on the link), so
+  // checkout can hand it to create-registration. Not analytics and not tracking of
+  // a person: it stores our own campaign/touchpoint ids on this device and nothing
+  // else. Runs on landing AND on every later URL change, because the tagged link
+  // can open any route. A URL with no tags leaves what is stored alone.
+  useEffect(() => {
+    captureAttribution(location.search);
+  }, [location.search]);
 
   return null;
 }

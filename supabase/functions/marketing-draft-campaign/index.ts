@@ -45,6 +45,7 @@ import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supa
 import Anthropic from "npm:@anthropic-ai/sdk@0.96.0";
 import { loadOrgBrand } from "../_shared/orgBrand.ts";
 import { assertCommsFull } from "../_shared/entitlements.ts";
+import { throttleDays } from "../_shared/marketingThrottle.ts";
 import { APPROVED_MARKETING_TOKENS } from "../_shared/approvedMarketingTokens.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -166,6 +167,8 @@ type OrgConfig = {
   brand_voice: Record<string, unknown> | null;
   timezone: string | null;
   vip_offering: VipOffering | null;
+  // Minimum days between marketing emails to one parent; see _shared/marketingThrottle.ts.
+  email_throttle_days: number | null;
 };
 
 type ResolvedRecipients = {
@@ -1329,7 +1332,7 @@ ${buildIntentBlock(inputs)}
 
 SCHEDULE-PLANNING RULES (you plan a multi-touchpoint sequence, not a single send)
 - DEFAULT SEND TIMES (org timezone ${orgTimezone}): Tuesday/Thursday 10am for regular sends. Deadline-day reminders at 7am. Welcome notes Monday 9am. NEVER Friday afternoons or weekends.
-- THROTTLE: this org caps at 1 email per parent per 10 days. Space consecutive emails at least 6 days apart (deadline reminders are exempt — see below).
+- THROTTLE: at send time this org does not mail a parent again inside ${throttleDays(org.email_throttle_days)} days of their last marketing email (an email inside that gap is DROPPED, not delayed). Space your kickoff / mid-window / thanks emails at least ${throttleDays(org.email_throttle_days)} days apart. Deadline reminders (labels 48h-promo, 24h-promo, 48h-reg-close, 24h-reg-close, final-call) are EXEMPT from the gap — see below.
 
 - DEADLINE PROXIMITY (this rule beats the duration-based cadence below):
   - If a deadline falls within the FIRST 7 DAYS of the campaign window, the campaign IS the deadline push. Plan **2 emails total**: an announce/kickoff that leads with the deadline, and a final reminder 24 hours before the deadline. Skip "mid-window" and "final-call" touchpoints — there is no room, and you would burn the list with content the operator did not ask for.
@@ -2181,7 +2184,7 @@ Deno.serve(async (req: Request) => {
   // ---- Load org config ----
   const { data: orgRow, error: oErr } = await supabase
     .from("organizations")
-    .select("id, brand_voice, timezone, vip_offering")
+    .select("id, brand_voice, timezone, vip_offering, email_throttle_days")
     .eq("id", organization_id)
     .single<OrgConfig>();
   if (oErr || !orgRow) return jsonError(`organization not found: ${oErr?.message ?? "unknown"}`, 404);

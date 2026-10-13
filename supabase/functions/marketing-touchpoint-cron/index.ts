@@ -157,7 +157,8 @@ serve(async (req: Request) => {
     //   touchpoint so the next cron tick picks up where we left off (dedup
     //   in the send fn guarantees no duplicates).
     // - Actual sends succeeded (sent > 0, no failures) → 'sent'
-    // - Everyone skipped (suppressed / deduped / no-match), zero sent → 'skipped'
+    // - Everyone skipped (suppressed / deduped / throttled / no-match) and nothing
+    //   was ever delivered for this touchpoint → 'skipped'
     // - Any per-recipient failures → 'failed' (operator can investigate)
     const sentCount = sendResult.sent ?? 0;
     const failedCount = sendResult.failed ?? 0;
@@ -166,7 +167,21 @@ serve(async (req: Request) => {
     else if (sendResult.partial) newStatus = "queued"; // re-queue for next tick
     else if (failedCount > 0) newStatus = "failed";
     else if (sentCount > 0) newStatus = "sent";
-    else newStatus = "skipped";
+    else {
+      // sentCount is THIS tick only. A touchpoint that went out in several ticks
+      // can end on one where every remaining family is held back (throttled) or
+      // already de-duplicated, so this tick sent 0 although earlier ticks mailed
+      // real families. Calling that 'skipped' skips the MARKETING_SENT analytics
+      // event and leaves the campaign badge on "Scheduled". Ask the log.
+      const { count: deliveredEarlier } = await supabase
+        .from("marketing_sends")
+        .select("id", { count: "exact", head: true })
+        .eq("campaign_id", tp.campaign_id)
+        .eq("touchpoint_id", tp.id)
+        .eq("is_test", false)
+        .in("status", ["sent", "delivered", "opened", "clicked"]);
+      newStatus = (deliveredEarlier ?? 0) > 0 ? "sent" : "skipped";
+    }
 
     // Persist error_message on failure so future debugging doesn't require
     // diving into edge function logs. Capture either the send fn's error
