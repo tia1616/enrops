@@ -41,7 +41,7 @@ import {
   type CommsAttachment,
 } from "../_shared/attachments.ts";
 import { isCampProgram, programScheduleLabel } from "../_shared/campProgram.ts";
-import { splitByThrottle, throttleGapHours } from "../_shared/marketingThrottle.ts";
+import { isDeadlineReminderLabel, splitByThrottle, throttleGapHours } from "../_shared/marketingThrottle.ts";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -688,13 +688,13 @@ serve(async (req: Request) => {
   // A test has one recipient, the caller's own address, so neither applies.
   if (!isTestSend) {
     for (const r of recipientRows) {
-      if (alreadyDelivered.has(r.id) && r.email) seenEmails.add(r.email.toLowerCase());
+      if (alreadyDelivered.has(r.id) && r.email) seenEmails.add(r.email.trim().toLowerCase());
     }
   }
   for (const r of recipientRows) {
     results.attempted++;
     if (!r.email) { results.skipped_no_email++; continue; }
-    const emailLc = r.email.toLowerCase();
+    const emailLc = r.email.trim().toLowerCase();
     if (suppressedEmails.has(emailLc)) { results.skipped_suppressed++; continue; }
     // Dedup is a REAL-SEND protection: it stops a family receiving the same
     // touchpoint twice. A test goes to the operator's own inbox and is the
@@ -755,12 +755,20 @@ serve(async (req: Request) => {
   // standing rule). Real sends only: a test goes to the operator's own inbox and
   // must never be held back by what a family received yesterday.
   //
-  // Fails CLOSED. If the check cannot be read, nothing is sent this tick and the
-  // cron retries in ~5 min - the same contract as the suppression and dedup reads
-  // above. A held-back family is logged as status 'throttled' (a value the CHECK
+  // Fails CLOSED: if the check cannot be read, NOTHING is sent. Be honest about
+  // what happens next, because the older suppression/dedup comments above claim a
+  // 5-minute retry that does not exist: this returns 500, the cron marks the
+  // touchpoint 'failed' (it only claims 'queued'), and the operator re-queues it.
+  // Safe, not self-healing. Deploy order is a contract for the same reason: the
+  // migration that creates marketing_throttled_emails MUST be on the database
+  // before this function is, or every touchpoint fails. A held-back family is logged as status 'throttled' (a value the CHECK
   // already allowed), so the operator can see who was skipped and why; the rows
   // are not in DELIVERED_STATUSES, so they never count as sent anywhere.
-  if (!isTestSend && ready.length > 0) {
+  //
+  // Deadline reminders (48h / 24h / final-call) are EXEMPT: the drafter plans them
+  // a day apart on purpose, and the gap would otherwise delete the "last chance".
+  const exemptFromThrottle = isDeadlineReminderLabel(touchpoint.payload?.label);
+  if (!isTestSend && !exemptFromThrottle && ready.length > 0) {
     const gapHours = throttleGapHours(org.email_throttle_days);
     if (gapHours > 0) {
       const THROTTLE_QUERY_CHUNK = 500; // an RPC body, not a URL: no .in() ceiling
@@ -782,14 +790,24 @@ serve(async (req: Request) => {
         results.skipped_throttled += split.hold.length;
         // A re-run (the cron re-queues a partly-sent touchpoint) holds the same
         // families back again; log each family once per touchpoint.
-        const { data: alreadyLogged } = await supabase
-          .from("marketing_sends")
-          .select("recipient_id")
-          .eq("touchpoint_id", touchpoint.id)
-          .eq("status", "throttled")
-          .eq("is_test", false);
-        const loggedIds = new Set(((alreadyLogged ?? []) as Array<{ recipient_id: string }>).map((l) => l.recipient_id));
-        const heldRows = split.hold.filter(({ x }) => !loggedIds.has(x.r.id)).map(({ x }) => ({
+        // Paged (PostgREST caps a read at 1000 rows) and error-checked: if the
+        // read fails we log NOTHING rather than risk duplicate audit rows. The
+        // log is only an audit trail; the family is already correctly not mailed.
+        const loggedIds = new Set<string>();
+        let loggedReadOk = true;
+        for (let from = 0; ; from += 1000) {
+          const { data: page, error: lrErr } = await supabase
+            .from("marketing_sends")
+            .select("recipient_id")
+            .eq("touchpoint_id", touchpoint.id)
+            .eq("status", "throttled")
+            .eq("is_test", false)
+            .range(from, from + 999);
+          if (lrErr) { loggedReadOk = false; results.errors.push(`throttled-row read failed: ${lrErr.message}`); break; }
+          for (const l of (page ?? []) as Array<{ recipient_id: string }>) loggedIds.add(l.recipient_id);
+          if (!page || page.length < 1000) break;
+        }
+        const heldRows = !loggedReadOk ? [] : split.hold.filter(({ x }) => !loggedIds.has(x.r.id)).map(({ x }) => ({
           organization_id: campaign.organization_id,
           campaign_id: campaign.id,
           touchpoint_id: touchpoint.id,

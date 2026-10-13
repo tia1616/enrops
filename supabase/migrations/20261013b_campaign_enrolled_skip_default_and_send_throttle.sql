@@ -61,14 +61,28 @@ as $function$
     cross join registrations rg
     join parents pa on pa.id = rg.parent_id
     where rg.organization_id = p_organization_id
-      and coalesce(rg.status, '') <> 'cancelled'
-      -- An UNFINISHED registration (pending) only counts while the abandoned-
-      -- registration automation is still chasing it (its 7-day window,
-      -- resolveAbandonedAudience in lifecycle-automations-cron). After that the
-      -- family is a prospect again: dropping them from every campaign forever, on
-      -- the strength of a cart they never paid for, is the family a deadline
-      -- reminder exists for. Waitlisted counts as enrolled (see 20260819v).
-      and (rg.status is distinct from 'pending' or rg.registered_at > now() - interval '7 days')
+      -- WHICH registrations count (a whitelist, not "anything but cancelled": the
+      -- CHECK also allows 'refunded' and 'waitlist', and a refunded family is a
+      -- prospect, not an enrollee):
+      --   confirmed                -> counts
+      --   pending, under 7 days    -> counts while the abandoned-registration
+      --                               automation is still chasing it (its window,
+      --                               resolveAbandonedAudience in lifecycle-
+      --                               automations-cron). After that the family is a
+      --                               prospect again; dropping them for good on the
+      --                               strength of a cart they never paid for is the
+      --                               family a deadline reminder exists for.
+      --   waitlist                 -> counts ONLY for the exact class/camp they are
+      --                               waiting on (see 20260819v: do not say "register
+      --                               now" about a class they are queued for). It does
+      --                               NOT widen to the whole site, where open seats in
+      --                               another class are exactly what they want.
+      and (
+        rg.status = 'confirmed'
+        or (rg.status = 'pending' and rg.registered_at > now() - interval '7 days')
+        or (rg.status = 'waitlist'
+            and (rg.program_id = any (ids.program_ids) or rg.camp_session_id = any (ids.camp_ids)))
+      )
       and lower(btrim(pa.email)) = lower(btrim(p_email))
       and (
         rg.program_id = any (ids.program_ids)

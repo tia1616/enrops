@@ -20,12 +20,33 @@
 export const DEFAULT_THROTTLE_DAYS = 3;
 export const THROTTLE_SLACK_HOURS = 6;
 
+/** The throttle's gap in DAYS, with the same fallback rule as throttleGapHours.
+ *  The campaign drafter reads this too, so the number it tells the model and the
+ *  number the send enforces cannot drift. */
+export function throttleDays(days: unknown): number {
+  const n = typeof days === "number" && Number.isFinite(days) ? Math.floor(days) : DEFAULT_THROTTLE_DAYS;
+  return Math.max(0, n);
+}
+
+/** Deadline reminders are EXEMPT from the gap. The standing rule is that every
+ *  deadline-driven campaign carries a 48-hour and a 24-hour reminder, one day
+ *  apart, and the drafter plans exactly that. A 3-day gap would drop the 24-hour
+ *  one for everybody who got the 48-hour one - the "last chance" email, lost for
+ *  the families it exists for. They go only to a campaign's own audience, which
+ *  already excludes anyone who has registered.
+ *
+ *  Matched on the drafter's label vocabulary (marketing-draft-campaign:
+ *  48h-promo | 24h-promo | 48h-reg-close | 24h-reg-close | final-call). */
+export function isDeadlineReminderLabel(label: unknown): boolean {
+  return typeof label === "string" && /^(48h|24h)-|^final-call$/i.test(label.trim());
+}
+
 /** Hours a family must have gone without a marketing email. 0 = throttle off
  *  (an operator who sets the days to 0 has chosen that). An unreadable value
  *  falls back to the default rather than to "off": a missing setting must never
  *  turn the protection off. */
 export function throttleGapHours(days: unknown): number {
-  const n = typeof days === "number" && Number.isFinite(days) ? Math.floor(days) : DEFAULT_THROTTLE_DAYS;
+  const n = throttleDays(days);
   if (n <= 0) return 0;
   return Math.max(1, n * 24 - THROTTLE_SLACK_HOURS);
 }

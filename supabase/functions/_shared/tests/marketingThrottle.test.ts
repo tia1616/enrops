@@ -1,8 +1,10 @@
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
   DEFAULT_THROTTLE_DAYS,
+  isDeadlineReminderLabel,
   splitByThrottle,
   THROTTLE_SLACK_HOURS,
+  throttleDays,
   throttleGapHours,
 } from "../marketingThrottle.ts";
 
@@ -39,4 +41,23 @@ Deno.test("nothing held means everyone sends", () => {
   const { send, hold } = splitByThrottle(rows, new Set());
   assertEquals(send.length, 1);
   assertEquals(hold.length, 0);
+});
+
+Deno.test("throttleDays and throttleGapHours agree on the fallback", () => {
+  assertEquals(throttleDays(null), DEFAULT_THROTTLE_DAYS);
+  assertEquals(throttleDays(7), 7);
+  assertEquals(throttleDays(0), 0);
+  assertEquals(throttleDays(-1), 0);
+});
+
+Deno.test("every deadline-reminder label the drafter can emit is exempt", () => {
+  for (const l of ["48h-promo", "24h-promo", "48h-reg-close", "24h-reg-close", "final-call"]) {
+    assertEquals(isDeadlineReminderLabel(l), true, l);
+  }
+});
+
+Deno.test("kickoff, mid-window, thanks and a missing label are NOT exempt", () => {
+  for (const l of ["kickoff", "mid-window", "thanks", "", null, undefined, 5, "reminder-48h"]) {
+    assertEquals(isDeadlineReminderLabel(l), false, String(l));
+  }
 });
