@@ -26,7 +26,10 @@ import EditableField from "./EditableField.jsx";
 import EmailPreviewDrawer from "./EmailPreviewDrawer.jsx";
 
 // Sends that count as "left the building" — anything past 'pending'.
-const NON_PENDING = new Set(["sent", "delivered", "opened", "clicked", "bounced", "failed", "throttled"]);
+// 'throttled' is deliberately NOT here: a family held back for having been mailed
+// inside the org's minimum gap received nothing, so it is not a send. Counting it
+// would report mail that never left as reach.
+const NON_PENDING = new Set(["sent", "delivered", "opened", "clicked", "bounced", "failed"]);
 // Sends that reached the inbox (delivered or better — opened/clicked imply it).
 const DELIVERED = new Set(["delivered", "opened", "clicked"]);
 

@@ -41,6 +41,7 @@ import {
   type CommsAttachment,
 } from "../_shared/attachments.ts";
 import { isCampProgram, programScheduleLabel } from "../_shared/campProgram.ts";
+import { splitByThrottle, throttleGapHours } from "../_shared/marketingThrottle.ts";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -242,6 +243,10 @@ type Org = {
   // Drives {{registration_close_date}}. NOT NULL DEFAULT 7 in the schema, but
   // typed nullable so an older cached row can't render a NaN date.
   registration_close_days_before: number | null;
+  // Minimum days between marketing emails to one family, across all campaigns.
+  // NOT NULL in the schema; typed nullable so an odd row falls back to the
+  // default in throttleGapHours() instead of switching the throttle off.
+  email_throttle_days: number | null;
   // Nested one-to-one from org_branding (PostgREST returns object or 1-elem array).
   org_branding: { primary_color: string | null } | { primary_color: string | null }[] | null;
 };
@@ -414,7 +419,7 @@ serve(async (req: Request) => {
     // platform_fee_override_until is here because the rates are only correct
     // once resolveFeeConfig has applied it; reading the raw columns would
     // advertise a rate that may have lapsed.
-    .select("id, name, slug, brand_voice, logo_url, vip_offering, active_registration_term, mailing_address, registration_close_days_before, fee_pass_through, platform_fee_card_pct, platform_fee_ach_pct, platform_fee_cap_cents, platform_fee_ach_cap_cents, platform_fee_floor_cents, platform_fee_override_until, org_branding(primary_color)")
+    .select("id, name, slug, brand_voice, logo_url, vip_offering, active_registration_term, mailing_address, registration_close_days_before, email_throttle_days, fee_pass_through, platform_fee_card_pct, platform_fee_ach_pct, platform_fee_cap_cents, platform_fee_ach_cap_cents, platform_fee_floor_cents, platform_fee_override_until, org_branding(primary_color)")
     .eq("id", campaign.organization_id)
     .single<Org>();
   if (oErr || !org) return json({ error: `organization not found: ${oErr?.message ?? "unknown"}` }, 404);
@@ -651,6 +656,7 @@ serve(async (req: Request) => {
     skipped_suppressed: 0,
     skipped_deduped: 0,
     skipped_email_deduped: 0,
+    skipped_throttled: 0,
     skipped_no_school_program: 0,
     skipped_no_email: 0,
     failed: 0,
@@ -742,6 +748,65 @@ serve(async (req: Request) => {
       }
     }
     ready.push({ r, program, recipientPrograms, recipientCamps });
+  }
+
+  // ---- Throttle: one family is not mailed again inside the org's minimum gap ----
+  // organizations.email_throttle_days, across EVERY campaign for the org (the
+  // standing rule). Real sends only: a test goes to the operator's own inbox and
+  // must never be held back by what a family received yesterday.
+  //
+  // Fails CLOSED. If the check cannot be read, nothing is sent this tick and the
+  // cron retries in ~5 min - the same contract as the suppression and dedup reads
+  // above. A held-back family is logged as status 'throttled' (a value the CHECK
+  // already allowed), so the operator can see who was skipped and why; the rows
+  // are not in DELIVERED_STATUSES, so they never count as sent anywhere.
+  if (!isTestSend && ready.length > 0) {
+    const gapHours = throttleGapHours(org.email_throttle_days);
+    if (gapHours > 0) {
+      const THROTTLE_QUERY_CHUNK = 500; // an RPC body, not a URL: no .in() ceiling
+      const held = new Set<string>();
+      const addresses = ready.map(({ r }) => r.email.trim().toLowerCase());
+      for (let i = 0; i < addresses.length; i += THROTTLE_QUERY_CHUNK) {
+        const { data: hit, error: thErr } = await supabase.rpc("marketing_throttled_emails", {
+          p_organization_id: campaign.organization_id,
+          p_emails: addresses.slice(i, i + THROTTLE_QUERY_CHUNK),
+          p_touchpoint_id: touchpoint.id,
+          p_gap_hours: gapHours,
+        });
+        if (thErr) return json({ error: `throttle check failed: ${thErr.message}` }, 500);
+        for (const h of (hit ?? []) as Array<{ email: string }>) held.add(h.email);
+      }
+      if (held.size > 0) {
+        const split = splitByThrottle(ready.map((x) => ({ x, email: x.r.email })), held);
+        ready.splice(0, ready.length, ...split.send.map((s) => s.x));
+        results.skipped_throttled += split.hold.length;
+        // A re-run (the cron re-queues a partly-sent touchpoint) holds the same
+        // families back again; log each family once per touchpoint.
+        const { data: alreadyLogged } = await supabase
+          .from("marketing_sends")
+          .select("recipient_id")
+          .eq("touchpoint_id", touchpoint.id)
+          .eq("status", "throttled")
+          .eq("is_test", false);
+        const loggedIds = new Set(((alreadyLogged ?? []) as Array<{ recipient_id: string }>).map((l) => l.recipient_id));
+        const heldRows = split.hold.filter(({ x }) => !loggedIds.has(x.r.id)).map(({ x }) => ({
+          organization_id: campaign.organization_id,
+          campaign_id: campaign.id,
+          touchpoint_id: touchpoint.id,
+          recipient_id: x.r.id,
+          email: x.r.email,
+          status: "throttled",
+          school_name: x.r.school_name ?? null,
+          suppressed_by_throttle: true,
+          is_test: false,
+        }));
+        for (let i = 0; i < heldRows.length; i += THROTTLE_QUERY_CHUNK) {
+          const { error: hrErr } = await supabase.from("marketing_sends").insert(heldRows.slice(i, i + THROTTLE_QUERY_CHUNK));
+          // Logging only: the family is already correctly NOT being mailed.
+          if (hrErr) results.errors.push(`throttled-row log failed: ${hrErr.message}`);
+        }
+      }
+    }
   }
 
   // Second pass: send via Resend's BATCH endpoint (POST /emails/batch, up to
