@@ -62,6 +62,13 @@ as $function$
     join parents pa on pa.id = rg.parent_id
     where rg.organization_id = p_organization_id
       and coalesce(rg.status, '') <> 'cancelled'
+      -- An UNFINISHED registration (pending) only counts while the abandoned-
+      -- registration automation is still chasing it (its 7-day window,
+      -- resolveAbandonedAudience in lifecycle-automations-cron). After that the
+      -- family is a prospect again: dropping them from every campaign forever, on
+      -- the strength of a cart they never paid for, is the family a deadline
+      -- reminder exists for. Waitlisted counts as enrolled (see 20260819v).
+      and (rg.status is distinct from 'pending' or rg.registered_at > now() - interval '7 days')
       and lower(btrim(pa.email)) = lower(btrim(p_email))
       and (
         rg.program_id = any (ids.program_ids)
