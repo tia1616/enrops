@@ -108,6 +108,45 @@ $function$;
 revoke all on function public.marketing_recipient_already_enrolled(uuid, text, jsonb) from public, anon, authenticated;
 grant execute on function public.marketing_recipient_already_enrolled(uuid, text, jsonb) to service_role;
 
+-- ── Families whose registration a PARTNER runs ────────────────────────────────
+-- A school or library that runs its own registration (programs / camp_sessions
+-- .runs_own_registration = true) hands us a roster. Those parents land on the
+-- marketing list automatically, but they cannot register with us, so a "register
+-- now" email from us is a dead end that makes the partner look bad. Measured on
+-- prod 13 Oct 2026: 48 roster-imported parents at OES, Grass Valley and Zellerbach,
+-- all on the list.
+--
+-- "Partner-run ONLY": excluded when they hold at least one live registration with a
+-- partner-run offering and NONE with an offering we run. A family that also has a
+-- class we run keeps getting our mail. Applies to every campaign, camps included
+-- (Jessica, 13 Oct 2026: camps are area-based and would otherwise reach them).
+create or replace function public.marketing_recipient_partner_run_only(
+  p_organization_id uuid,
+  p_email text
+) returns boolean
+language sql
+stable
+security definer
+set search_path to 'public', 'pg_temp'
+as $function$
+  with mine as (
+    select
+      coalesce(p.runs_own_registration, cs.runs_own_registration, false) as partner_run
+    from registrations rg
+    join parents pa on pa.id = rg.parent_id
+    left join programs p on p.id = rg.program_id
+    left join camp_sessions cs on cs.id = rg.camp_session_id
+    where rg.organization_id = p_organization_id
+      and rg.status in ('confirmed', 'pending', 'waitlist')
+      and lower(btrim(pa.email)) = lower(btrim(p_email))
+  )
+  select exists (select 1 from mine where partner_run)
+     and not exists (select 1 from mine where not partner_run);
+$function$;
+
+revoke all on function public.marketing_recipient_partner_run_only(uuid, text) from public, anon, authenticated;
+grant execute on function public.marketing_recipient_partner_run_only(uuid, text) to service_role;
+
 -- ── get_campaign_recipients: same columns, shared predicate, skip on by default ─
 create or replace function public.get_campaign_recipients(p_campaign_id uuid)
  returns table(id uuid, email text, parent_name text, child_first_name text, child_last_name text, school_name text, program_name text, city text, zip text, geo_segment text, segments text[], resolved_child_first_names text[])
@@ -133,7 +172,8 @@ as $function$
     and (
       coalesce(mc.draft_inputs -> 'skip_enrolled', 'true'::jsonb) = 'false'::jsonb
       or not marketing_recipient_already_enrolled(mc.organization_id, mr.email, mc.draft_inputs)
-    );
+    )
+    and not marketing_recipient_partner_run_only(mc.organization_id, mr.email);
 $function$;
 
 -- ── the two previews: same predicate, so the count matches what is sent ───────
@@ -167,6 +207,7 @@ begin
       coalesce(mc.draft_inputs -> 'skip_enrolled', 'true'::jsonb) = 'false'::jsonb
       or not marketing_recipient_already_enrolled(mc.organization_id, mr.email, mc.draft_inputs)
     )
+    and not marketing_recipient_partner_run_only(mc.organization_id, mr.email)
     and coalesce(array_length(
           resolve_registration_child_names(
             mc.organization_id,
@@ -227,6 +268,7 @@ begin
       coalesce(mc.draft_inputs -> 'skip_enrolled', 'true'::jsonb) = 'false'::jsonb
       or not marketing_recipient_already_enrolled(mc.organization_id, mr.email, mc.draft_inputs)
     )
+    and not marketing_recipient_partner_run_only(mc.organization_id, mr.email)
     and (mr.program_name is null or btrim(mr.program_name) = '');
 end;
 $function$;
