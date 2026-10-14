@@ -1980,7 +1980,14 @@ function buildProgramDetails(
       if (p.first_session_date) bits.push(`starting ${escapeHtml(formatHumanDate(p.first_session_date))}`);
     }
     const close = registrationCloseDate(p.first_session_date, daysBefore);
-    const closeSentence = close ? ` Sign-ups close ${escapeHtml(close)}.` : "";
+    // "Register by", NOT "Sign-ups close". The platform never closes registration:
+    // nothing in create-registration, create-checkout or the registration page
+    // reads registration_close_days_before, so a family can still register after
+    // this date (16% of fall registrations did). The date is the operator's own
+    // decision day - the day she checks minimum enrollment and runs or holds the
+    // class - so it is asked of the family, not promised as a wall. Saying
+    // "close" taught families to ignore the date the first time it did not.
+    const closeSentence = close ? ` Register by ${escapeHtml(close)}.` : "";
     // Name on its own line, not "Name: Mondays, ...". Curriculum names carry
     // their own colon ("Pokemon Game Makers: LEGO Game Design"), so a colon
     // separator here produces two in one breath and the eye stops reading.

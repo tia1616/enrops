@@ -410,7 +410,7 @@ const MERGE_TOKENS = [
     { key: "first_session_date", label: "Start date", tip: "First session date" },
     { key: "session_count", label: "Sessions", tip: "Number of sessions" },
     { key: "day_of_week", label: "Day", tip: "Day(s) the program meets" },
-    { key: "registration_close_date", label: "Sign-up deadline", tip: "Last day to register for this parent's program. Counts back from their start date, so each school sees its own deadline." },
+    { key: "registration_close_date", label: "Register-by date", tip: "The date we ask this parent to register by for their program. Counts back from their start date, so each school sees its own date. Registration stays open after it, so write \"register by\", not \"closes\"." },
   ]},
   { group: "Pricing & promos", tokens: [
     { key: "savings", label: "Savings", tip: "Dollar amount saved" },
