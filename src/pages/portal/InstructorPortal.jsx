@@ -1498,10 +1498,23 @@ export default function InstructorPortal() {
     (a) => a.status === "published" || a.status === "change_requested"
   );
   const accepted = currentAssignments.filter((a) => a.status === "confirmed" && a.instructor_response_at);
-  // After-school offers. A class whose term isn't the org's active term is "past"
-  // (after-school has no explicit cycle-archive like camps). Guard on both terms
-  // being present so a missing term never wrongly hides a live class.
-  const isPastProgram = (a) => !!activeTerm && !!a.programs?.term && a.programs.term !== activeTerm;
+  // After-school offers. "Past" = the class is outside the org's active term AND
+  // its last session has gone by. The org's active term is the term OPEN FOR
+  // REGISTRATION, which runs ahead of the term being TAUGHT: on 2026-10-14 WI27
+  // was open while FA26 was mid-session, and a term-only test filed every fall
+  // class - confirmed ones, and a freshly published offer with no Accept button -
+  // under read-only "Past" for every instructor. So an unanswered offer is never
+  // past, and a class with no session dates yet is never past (never wrongly hide
+  // a live class). After-school has no explicit cycle-archive like camps.
+  const isPastProgram = (a) => {
+    if (a.status === "published" || a.status === "change_requested") return false;
+    if (!activeTerm || !a.programs?.term || a.programs.term === activeTerm) return false;
+    const dates = (scheduleByProgram[a.program_id] || [])
+      .filter((x) => x?.kind === "session" && x.date)
+      .map((x) => x.date);
+    if (dates.length === 0) return false;
+    return dates.reduce((max, d) => (d > max ? d : max)) < todayLocalISO();
+  };
   const currentPrograms = programAssignments.filter((a) => !isPastProgram(a));
   const pastPrograms = programAssignments.filter(isPastProgram);
   const needsResponseAS = currentPrograms.filter(
