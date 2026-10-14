@@ -3,7 +3,9 @@
 // separate component so camp logic stays untouched. After-school is term-keyed
 // and structurally simpler than camps:
 //   - Mon–Fri columns (each program recurs the same weekday all term)
-//   - one instructor per program (the lead)
+//   - one lead per program by default; program_staffing.instructors_needed can ask
+//     for more (each extra slot is another lead), and the card then draws one
+//     slot per instructor and reads "Understaffed" until all of them accept
 //   - NO weeks, NO am/pm/full_day, NO curriculum matching, NO enrollment gates
 // Reads programs + program_assignments + instructor_term_availability for one term.
 // Hosts the "open availability survey" and "match instructors" triggers.
@@ -269,9 +271,22 @@ function locationColorMap(programs, locName) {
   return map;
 }
 
-function deriveStatus(programId, assignments) {
+// The order a MULTI-SLOT program surfaces its rows in: the slot that most needs
+// the operator wins. An empty slot outranks every filled one except a change
+// request or a dead offer, so "1 of 2 accepted" can never read as "Accepted".
+const MULTI_SLOT_URGENCY = ["change_requested", "flagged", "needs_hire", "draft", "ready_to_send", "awaiting", "accepted"];
+
+// needed = program_staffing.instructors_needed. At 1 this is byte-for-byte the
+// old single-lead rule (best row wins), so every one-instructor program reads
+// exactly as it did; only a program that needs more than one takes the branch.
+function deriveStatus(programId, assignments, needed = 1) {
   const own = assignments.filter((a) => a.program_id === programId && a.status !== "withdrawn" && a.status !== "declined");
   if (own.length === 0) return "needs_hire";
+  if (needed > 1) {
+    const states = own.map((a) => deriveStatus(programId, [a], 1));
+    if (own.length < needed) states.push("needs_hire");
+    return MULTI_SLOT_URGENCY.find((s) => states.includes(s)) ?? states[0];
+  }
   let best = null;
   for (const a of own) {
     const rank = STATUS_RANK[a.status] ?? -1;
@@ -560,7 +575,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       // They used to be four separate awaits spread across the function, three
       // of them separated only by the code that reshapes the previous answer -
       // which does not need the network at all.
-      const [assignRes, enrollRes, declineRes, datesRes] = programIds.length
+      const [assignRes, enrollRes, declineRes, datesRes, staffingRes] = programIds.length
         ? await Promise.all([
             supabase
               .from("program_assignments")
@@ -597,9 +612,21 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
             supabase
               .rpc("derive_program_session_dates_bulk", { p_program_ids: programIds })
               .then((r) => r, () => ({ data: [], error: null })),
+            // How many instructors each class needs right now. program_staffing is
+            // the one place that rule lives (base count + the enrollment trigger);
+            // the matcher and the home page read the same view.
+            supabase
+              .from("program_staffing")
+              .select("program_id, instructors_needed")
+              .in("program_id", programIds),
           ])
-        : [{ data: [], error: null }, { data: [], error: null }, { data: [], error: null }, { data: [], error: null }];
+        : [{ data: [], error: null }, { data: [], error: null }, { data: [], error: null }, { data: [], error: null }, { data: [], error: null }];
       if (assignRes.error) throw assignRes.error;
+      // FAILS CLOSED. Falling back to "1 each" would draw a two-instructor class
+      // as fully staffed - the one wrong answer this read exists to prevent.
+      if (staffingRes.error) throw staffingRes.error;
+      const needed = {};
+      for (const r of staffingRes.data ?? []) needed[r.program_id] = Math.max(1, Number(r.instructors_needed ?? 1));
 
       // seats_taken AS WELL AS enrolled, because since 20260819j they are two different
       // numbers and this screen was showing only one of them.
@@ -721,6 +748,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         survey: surveyRes.data ?? null,
         areaPrefs: areaPrefRes.data ?? [],
         enrollment,
+        needed,
         cycle: cycleRes.data ?? null,
       });
     } catch (err) {
@@ -803,19 +831,33 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     return locationColorMap(state.programs, locName);
   }, [state, locName]);
 
-  // program_id -> { status, lead assignment }
+  // program_id -> { status, lead assignment, slots }
+  //
+  // `lead` stays the FIRST row, exactly as before, so every reader that only
+  // knows about one instructor (subs, filters, the change-request tip) keeps
+  // working unchanged. `rows` is every active row and `needed` the slot count;
+  // the card draws one slot per needed instructor from those two.
   const enriched = useMemo(() => {
     const m = new Map();
     if (state.status !== "ready") return m;
     for (const p of state.programs) {
-      const status = deriveStatus(p.id, state.assignments);
+      const needed = state.needed?.[p.id] ?? 1;
+      const status = deriveStatus(p.id, state.assignments, needed);
       const own = state.assignments.filter((a) => a.program_id === p.id && a.status !== "withdrawn" && a.status !== "declined");
       const lead = own.find((a) => a.role === "lead") ?? own[0] ?? null;
       // Dates the assigned lead flagged as unavailable that land on this class's
       // sessions — surfaced on the card so the conflict is visible without opening it.
       const subNeeded = lead?.instructor_id ? unavailableConflicts(lead.instructor_id, p) : [];
+      // Lead first, then by id - a key that never changes, so a slot does not
+      // jump around between loads when an offer is sent or answered.
+      const rows = [...own].sort((a, b) => (a.id === lead?.id ? -1 : b.id === lead?.id ? 1 : String(a.id).localeCompare(String(b.id))));
+      const openSlots = Math.max(0, needed - own.length);
+      // "Accepted" here is the same test deriveStatus uses for one row.
+      const acceptedCount = own.filter((a) => deriveStatus(p.id, [a], 1) === "accepted").length;
+      // Understaffed = needs more than one and not all of them have said yes.
+      const understaffed = needed > 1 && acceptedCount < needed;
       // `flags` rides alongside `status` rather than overwriting it - see deriveStatus.
-      m.set(p.id, { status, flags: lead?.flags ?? [], lead, subNeeded });
+      m.set(p.id, { status, flags: lead?.flags ?? [], lead, subNeeded, rows, needed, openSlots, acceptedCount, understaffed });
     }
     return m;
   }, [state, availByInstr]);
@@ -947,7 +989,8 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       const spanWeeks = weeks.filter((w) => w.start >= firstW && w.start <= lastW).length;
       const isWeekly = spanWeeks > 0 && metWeeks.size / spanWeeks >= 0.75;
       const e = enriched.get(p.id);
-      const needsHire = !e?.lead;
+      // An empty second slot is a gap in that week too, not only an empty class.
+      const needsHire = !e?.lead || (e?.openSlots ?? 0) > 0;
       const schoolName = locName.get(p.program_location_id) ?? p.curriculum ?? "A class";
       for (const w of weeks) {
         const sig = m.get(w.start);
@@ -1161,11 +1204,22 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   }
 
   // Eligibility for a target program: returns { ok, reason, pref, warnings }.
-  function evaluate(instructorId, program) {
+  // editingAssignmentId: the row the picker is replacing, so the person already in
+  // THAT slot is not blocked from it (the picker marks them "current" instead).
+  function evaluate(instructorId, program, editingAssignmentId = null) {
     const av = availByInstr.get(instructorId);
     const inst = state.status === "ready" ? state.instructors.find((i) => i.id === instructorId) : null;
     const first = inst?.preferred_name || inst?.first_name || "This instructor";
     const warnings = [];
+    // Already in the OTHER slot of this class. Not overridable: one person cannot
+    // be both of a class's instructors, and the database refuses it anyway
+    // (program_assignments_one_active_per_pair) - better said here than as a raw error.
+    const inOtherSlot = state.status === "ready" && state.assignments.some((a) =>
+      a.program_id === program.id && a.instructor_id === instructorId && a.id !== editingAssignmentId &&
+      a.status !== "withdrawn" && a.status !== "declined");
+    if (inOtherSlot) {
+      return { ok: false, overridable: false, blockKind: "same_class", reason: `${first} is already the other instructor on this class.`, warnings };
+    }
     const wd = av?.weekday_availability || {};
     // EVERY day this program occupies. A weekly class yields exactly one, so
     // every check below behaves precisely as it always has - that is the safety
@@ -1456,7 +1510,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     }
     const subInfo = subInfoByProgram.get(p.id);
     if (selectedInstructors.size) {
-      let hit = !!(e?.lead?.instructor_id && selectedInstructors.has(e.lead.instructor_id));
+      let hit = (e?.rows ?? []).some((r) => r.instructor_id && selectedInstructors.has(r.instructor_id));
       if (!hit && subInfo) {
         for (const id of subInfo.ids) { if (selectedInstructors.has(id)) { hit = true; break; } }
       }
@@ -1464,7 +1518,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     }
     const q = searchText.trim().toLowerCase();
     if (q) {
-      const hay = [p.curriculum, loc, e?.lead?.instructor_first, e?.lead?.instructor_last, ...(subInfo?.names ?? [])].filter(Boolean).join(" ").toLowerCase();
+      const hay = [p.curriculum, loc, ...(e?.rows ?? []).flatMap((r) => [r.instructor_first, r.instructor_last]), ...(subInfo?.names ?? [])].filter(Boolean).join(" ").toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -1703,9 +1757,16 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     }
   }
 
-  async function handleAssign(program, instructorId, opts = {}) {
-    const e = enriched.get(program.id);
-    const current = e?.lead ?? null;
+  // Which row a picker is editing. `slot` is set by openRow: a row to reassign,
+  // or null for an EMPTY slot (insert). Left undefined it means the lead, which
+  // is every one-instructor program and the only case that existed before.
+  function slotRowFor(program, slot) {
+    if (slot !== undefined) return slot;
+    return enriched.get(program.id)?.lead ?? null;
+  }
+
+  async function handleAssign(program, instructorId, opts = {}, slot) {
+    const current = slotRowFor(program, slot);
     if (current && current.instructor_id === instructorId) { setPicker(null); return; }
     // Reassigning away from an already-emailed instructor → warm heads-up first.
     if (current && current.instructor_id && current.email_sent_at) {
@@ -1733,9 +1794,8 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     await performAssign(program, instructorId, current, opts);
   }
 
-  async function handleRemove(program) {
-    const e = enriched.get(program.id);
-    const current = e?.lead ?? null;
+  async function handleRemove(program, slot) {
+    const current = slotRowFor(program, slot);
     if (!current) { setPicker(null); return; }
     setPicker(null);
     await handleReviewRemove(program, current);
@@ -2411,16 +2471,27 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     setState((s) => (s.status === "ready" ? { ...s, availability: availRes.data ?? s.availability, areaPrefs: areaPrefRes.data ?? s.areaPrefs } : s));
   }
 
-  function openRow(program) {
+  // slot: a row (that instructor's slot), null (an empty slot), or undefined
+  // (the whole card was clicked). A one-instructor class always arrives as
+  // undefined and resolves to its lead, exactly as before.
+  function openRow(program, slot) {
     refreshAvailabilityQuiet(); // fire-and-forget; picker updates live when it lands
     const e = enriched.get(program.id);
-    const lead = e?.lead ?? null;
+    let target = slot;
+    if (target === undefined && (e?.needed ?? 1) > 1) {
+      // Whole card on a multi-slot class: go to the slot that needs the operator -
+      // an empty one first, otherwise the row whose state the card is showing.
+      target = (e?.openSlots ?? 0) > 0
+        ? null
+        : ((e?.rows ?? []).find((r) => deriveStatus(program.id, [r], 1) === e?.status) ?? e?.lead ?? null);
+    }
+    const row = target === undefined ? (e?.lead ?? null) : target;
     // Offer in flight (emailed, responded, or change requested) → review modal.
     // Otherwise the picker for free (re)assignment before anything is sent.
-    if (lead && (lead.email_sent_at || lead.status === "change_requested" || lead.instructor_response_at)) {
-      setReviewFor({ program, assignment: lead });
+    if (row && (row.email_sent_at || row.status === "change_requested" || row.instructor_response_at)) {
+      setReviewFor({ program, assignment: row });
     } else {
-      setPicker({ program });
+      setPicker({ program, slot: target });
     }
   }
 
@@ -2438,7 +2509,10 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   // Change-request notification (mirrors camp's Hat tip): surface a prompt to
   // review when instructors ask to change their schedule.
   const changeReqProgram = state.programs.find((p) => enriched.get(p.id)?.status === "change_requested");
-  const changeReqLead = changeReqProgram ? enriched.get(changeReqProgram.id)?.lead : null;
+  // The row that ASKED - on a two-instructor class that need not be the lead.
+  const changeReqLead = changeReqProgram
+    ? ((enriched.get(changeReqProgram.id)?.rows ?? []).find((r) => r.status === "change_requested") ?? enriched.get(changeReqProgram.id)?.lead)
+    : null;
 
   // Cockpit step map — status per step from live state. Non-linear: several steps
   // can be active at once (a new hire back at Survey while the rest are mid-Offers).
@@ -2740,6 +2814,8 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
                         weekDate={null}
                         weekSub={null}
                         onClick={() => openRow(p)}
+                        staffing={e}
+                        onSlotClick={(slot) => openRow(p, slot)}
                         onSubClick={(dd) => openAssignSub(p, dd)}
                       />
                       <div style={{ fontSize: 11, color: MUTED }}>{programScheduleSummary(p) || "dates not set"}</div>
@@ -2845,6 +2921,8 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
                         weekDate={weekDate}
                         weekSub={weekSub}
                         onClick={() => openRow(p)}
+                        staffing={e}
+                        onSlotClick={(slot) => openRow(p, slot)}
                         onSubClick={(dd) => openAssignSub(p, dd)}
                       />
                     );
@@ -2861,11 +2939,11 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         <PickerModal
           program={picker.program}
           loc={locName.get(picker.program.program_location_id) ?? "—"}
-          current={enriched.get(picker.program.id)?.lead ?? null}
+          current={slotRowFor(picker.program, picker.slot)}
           instructors={state.instructors}
-          evaluate={(id) => evaluate(id, picker.program)}
-          onAssign={(id, opts) => handleAssign(picker.program, id, opts)}
-          onRemove={() => handleRemove(picker.program)}
+          evaluate={(id) => evaluate(id, picker.program, slotRowFor(picker.program, picker.slot)?.id ?? null)}
+          onAssign={(id, opts) => handleAssign(picker.program, id, opts, picker.slot)}
+          onRemove={() => handleRemove(picker.program, picker.slot)}
           declinedInstructorIds={declinedByProgram.get(picker.program.id) ?? new Set()}
           onUndecline={(id) => handleUndecline(picker.program.id, id)}
           onClose={() => setPicker(null)}
@@ -2948,8 +3026,11 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
             // Remember we came from a change request so the picker can advance the
             // walk once the new instructor is chosen.
             if (reviewFor.assignment.status === "change_requested") setReassigningChangeRequestId(reviewFor.assignment.id);
+            // Reassign THIS row. On a one-instructor class it is the lead, as it
+            // always was; on a two-instructor class it must not be the other slot.
+            const slot = reviewFor.assignment;
             setReviewFor(null);
-            setPicker({ program: p });
+            setPicker({ program: p, slot });
           }}
           onRemove={() => handleReviewRemove(reviewFor.program, reviewFor.assignment)}
           onResendOffer={() => handleResendOffer(reviewFor.assignment)}
@@ -3562,7 +3643,19 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
                         )}
                       </> : <span style={{ color: MUTED }}>—</span>}</td>
                       <td style={td}>
-                        {who ? <span style={{ fontWeight: 600, color: INK }}>{who}</span> : <span style={{ color: PURPLE, fontWeight: 600 }}>+ Assign</span>}
+                        {(e?.needed ?? 1) > 1 ? (
+                          // Every instructor on the class, then what is still missing.
+                          // Clicking the row lands on the empty slot first (openRow).
+                          <>
+                            {(e.rows ?? []).map((r) => (
+                              <div key={r.id} style={{ fontWeight: 600, color: INK }}>
+                                {(r.instructor_preferred || r.instructor_first || "Instructor") + (r.instructor_last ? ` ${r.instructor_last}` : "")}
+                              </div>
+                            ))}
+                            {e.openSlots > 0 && <div style={{ color: PURPLE, fontWeight: 600 }}>+ Assign {slotNoun(e.rows?.length ?? 0)}</div>}
+                            {e.understaffed && <div style={{ fontSize: 11, color: CORAL, fontWeight: 600 }}>Understaffed · {e.acceptedCount} of {e.needed} accepted</div>}
+                          </>
+                        ) : (who ? <span style={{ fontWeight: 600, color: INK }}>{who}</span> : <span style={{ color: PURPLE, fontWeight: 600 }}>+ Assign</span>)}
                         {e?.subNeeded?.length > 0 && (
                           <div style={{ fontSize: 11, color: CORAL, fontWeight: 600 }}>⚠ out {listDates(e.subNeeded)} — needs a sub</div>
                         )}
@@ -3622,8 +3715,11 @@ function WeekRail({ weeks, signals, effective, onSelect }) {
   );
 }
 
-function ProgramCard({ program, loc, tint, status, flags, lead, sub, subNeeded, weekDate, weekSub, onClick, onSubClick }) {
+function ProgramCard({ program, loc, tint, status, flags, lead, sub, subNeeded, weekDate, weekSub, onClick, onSubClick, staffing, onSlotClick }) {
   const sc = statusColor(status);
+  // Only a class that NEEDS more than one instructor draws slots; every other
+  // class keeps the single chip below, unchanged.
+  const multi = (staffing?.needed ?? 1) > 1;
   const who = lead ? (lead.instructor_preferred || lead.instructor_first || "Instructor") + (lead.instructor_last ? ` ${lead.instructor_last}` : "") : null;
   // In week mode, only flag if THIS week's session is one the lead can't make.
   const conflictDates = weekDate ? (subNeeded ?? []).filter((d) => d === weekDate) : (subNeeded ?? []);
@@ -3652,10 +3748,12 @@ function ProgramCard({ program, loc, tint, status, flags, lead, sub, subNeeded, 
           <div style={{ fontSize: 11, color: MUTED }}>{fmtTimeRange(program.start_time, program.end_time)}</div>
         )}
         <div style={{ marginTop: 2, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
+          {!multi && (
           <span style={{ display: "inline-block", fontSize: 12, fontWeight: 600, padding: "3px 9px", borderRadius: 999, background: who ? `${PURPLE}10` : `${CORAL}14`, color: who ? PURPLE : CORAL, border: `1px solid ${who ? `${PURPLE}33` : `${CORAL}55`}` }}>
             {who || "+ Assign"}
           </span>
-          {lead?.distance_bonus_cents > 0 && (
+          )}
+          {!multi && lead?.distance_bonus_cents > 0 && (
             <span style={{ display: "inline-block", fontSize: 11, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: `${OK_GREEN}18`, color: OK_GREEN, border: `1px solid ${OK_GREEN}55` }}>
               + ${fmtBonus(lead.distance_bonus_cents)} gas
             </span>
@@ -3670,6 +3768,11 @@ function ProgramCard({ program, loc, tint, status, flags, lead, sub, subNeeded, 
           {visibleFlagLabels(flags, status).length > 0 && (
             <span title={visibleFlagLabels(flags, status).join("; ")} style={{ color: VIOLET }}>&#9873; Flagged</span>
           )}
+          {/* Understaffed until EVERY needed instructor has accepted. Counted, not
+              just asserted, so "1 of 2" says how far off it is. */}
+          {multi && staffing.understaffed && (
+            <span style={{ color: CORAL }}>· Understaffed · {staffing.acceptedCount} of {staffing.needed} accepted</span>
+          )}
         </div>
         {conflictDates.length > 0 && (
           <div style={{ fontSize: 11, color: CORAL, fontWeight: 600, lineHeight: 1.3 }}>
@@ -3677,7 +3780,49 @@ function ProgramCard({ program, loc, tint, status, flags, lead, sub, subNeeded, 
           </div>
         )}
       </button>
+      {multi && <SlotLineAS staffing={staffing} onSlotClick={onSlotClick} />}
       {lead && <SubLineAS subs={subsForLine} onClick={() => onSubClick && onSubClick(weekDate ?? null)} />}
+    </div>
+  );
+}
+
+// One button per instructor slot on a class that needs more than one. A sibling
+// of the card's main button (like SubLineAS), never nested in it, so each slot
+// is its own valid, independently clickable control. A filled slot opens that
+// instructor's row; an empty one opens the picker to add a lead to that slot.
+// The empty slot's name by its position: the first is just "instructor" (the
+// class has nobody), the rest say which one is missing. instructors_needed is
+// capped at 4 by its CHECK, so these four are every case.
+function slotNoun(index) {
+  return ["instructor", "2nd instructor", "3rd instructor", "4th instructor"][index] ?? "instructor";
+}
+
+function SlotLineAS({ staffing, onSlotClick }) {
+  const rows = staffing?.rows ?? [];
+  const empties = Array.from({ length: staffing?.openSlots ?? 0 });
+  const chip = { fontSize: 12, fontWeight: 600, padding: "3px 9px", borderRadius: 999, cursor: "pointer", fontFamily: "inherit" };
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "0 12px 10px" }}>
+      {rows.map((r) => {
+        const name = (r.instructor_preferred || r.instructor_first || "Instructor") + (r.instructor_last ? ` ${r.instructor_last}` : "");
+        const st = deriveStatus(r.program_id, [r], 1);
+        const c = statusColor(st);
+        return (
+          <button key={r.id} type="button" onClick={() => onSlotClick && onSlotClick(r)}
+            title={statusLabel(st)}
+            style={{ ...chip, background: `${PURPLE}10`, color: PURPLE, border: `1px solid ${c}` }}>
+            {name}
+            <span style={{ fontSize: 10, fontWeight: 700, color: c, marginLeft: 6, textTransform: "uppercase" }}>{statusLabel(st)}</span>
+            {r.distance_bonus_cents > 0 && <span style={{ fontSize: 10, color: OK_GREEN, marginLeft: 6 }}>+ ${fmtBonus(r.distance_bonus_cents)} gas</span>}
+          </button>
+        );
+      })}
+      {empties.map((_, i) => (
+        <button key={`open-${i}`} type="button" onClick={() => onSlotClick && onSlotClick(null)}
+          style={{ ...chip, background: `${CORAL}14`, color: CORAL, border: `1px solid ${CORAL}55` }}>
+          + Assign {slotNoun(rows.length + i)}
+        </button>
+      ))}
     </div>
   );
 }

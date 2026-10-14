@@ -293,6 +293,21 @@ serve(async (req) => {
     const existing = existingRaw ?? [];
     const progById = new Map(programs.map((p: any) => [p.id, p]));
 
+    // ----- How many instructors each class needs -----
+    // program_staffing is the one place that rule lives (programs.instructors_needed,
+    // raised to 2 once enrollment passes second_instructor_after_registrations); the
+    // board and the home page read the same view. Every extra slot is another lead.
+    // Read by org, not by an .in() of every program id. FAILS CLOSED: matching a
+    // two-instructor class as if it needed one would leave it quietly understaffed.
+    const { data: staffingRaw, error: staffingErr } = await admin
+      .from('program_staffing')
+      .select('program_id, instructors_needed')
+      .eq('organization_id', organizationId);
+    if (staffingErr) return json({ error: `Load instructors needed: ${staffingErr.message}` }, 500);
+    const neededById = new Map<string, number>();
+    for (const s of staffingRaw ?? []) neededById.set(s.program_id, Math.max(1, Number(s.instructors_needed ?? 1)));
+    const neededFor = (programId: string) => neededById.get(programId) ?? 1;
+
     // ----- Recorded declines (per-program) -----
     // An instructor who turned THIS class down (a change request the admin then
     // reassigned/removed). Excluded from that program's candidates only — still
@@ -478,7 +493,17 @@ serve(async (req) => {
     }
     const loadCount = new Map<string, number>();
     const assignedCurricula = new Map<string, Set<string>>();
-    const lockedProgram = new Map<string, { instructor_id: string }>();
+    // Locked rows per program, and who is already on each program (locked or
+    // won this run). A class is closed to the matcher once its locked rows fill
+    // every slot it needs; at 1 needed that is exactly the old "any locked row
+    // locks the class". takenBy keeps one person out of two slots of one class.
+    const lockedCount = new Map<string, number>();
+    const takenBy = new Map<string, Set<string>>();
+    const take = (programId: string, instructorId: string) => {
+      if (!takenBy.has(programId)) takenBy.set(programId, new Set());
+      takenBy.get(programId)!.add(instructorId);
+    };
+    const isFullyLocked = (programId: string) => (lockedCount.get(programId) ?? 0) >= neededFor(programId);
     // What the matcher is allowed to redo: ONLY its own untouched drafts (status
     // 'proposed' with assigned_by NULL — it stamps that on every row it writes).
     // Everything else is somebody's decision and gets locked:
@@ -495,7 +520,8 @@ serve(async (req) => {
       const isOwnDraft = e.status === 'proposed' && e.assigned_by == null;
       if (isOwnDraft) continue;
       const p = progById.get(e.program_id);
-      lockedProgram.set(e.program_id, { instructor_id: e.instructor_id });
+      lockedCount.set(e.program_id, (lockedCount.get(e.program_id) ?? 0) + 1);
+      take(e.program_id, e.instructor_id);
       if (p) addSlot(e.instructor_id, p);
       const ck = p ? currKey(p) : null;
       if (ck) {
@@ -554,6 +580,8 @@ serve(async (req) => {
     }
     // Auto-match eligibility also excludes areas the instructor marked 'unavailable'.
     function eligible(inst: PoolInstr, prog: any): boolean {
+      // Already one of this class's instructors: they cannot also be the other.
+      if (takenBy.get(prog.id)?.has(inst.id)) return false;
       return eligibleCore(inst, prog) && areaPrefFor(inst, prog) !== 'unavailable';
     }
 
@@ -580,7 +608,7 @@ serve(async (req) => {
       let n = 0;
       for (const q of openPrograms) {
         if (q.id === prog.id) continue;
-        if (assignedProgramIds.has(q.id) || lockedProgram.has(q.id) || !hasUsableTime(q)) continue;
+        if (!hasOpenSlot(q.id) || !hasUsableTime(q)) continue;
         if (currKey(q) !== ck) continue;
         if (dayCode(q.day_of_week) === pdc) continue;
         if (eligible(inst, q)) n++;
@@ -600,7 +628,11 @@ serve(async (req) => {
     }
 
     const decisions: Array<any> = [];
-    const assignedProgramIds = new Set<string>();
+    // Slots this run has filled per program. filled = locked + won; a class is
+    // done when filled reaches neededFor(). One per class at 1 needed, as before.
+    const wonCount = new Map<string, number>();
+    const filledFor = (programId: string) => (lockedCount.get(programId) ?? 0) + (wonCount.get(programId) ?? 0);
+    const hasOpenSlot = (programId: string) => filledFor(programId) < neededFor(programId);
 
     // Is there an eligible instructor who ALREADY teaches this program's curriculum
     // (and didn't mark its area unavailable)? If so this class can EXTEND a chain.
@@ -679,7 +711,8 @@ serve(async (req) => {
         if (!assignedCurricula.has(winner.id)) assignedCurricula.set(winner.id, new Set());
         assignedCurricula.get(winner.id)!.add(ck);
       }
-      assignedProgramIds.add(prog.id);
+      wonCount.set(prog.id, (wonCount.get(prog.id) ?? 0) + 1);
+      take(prog.id, winner.id);
 
       decisions.push({
         program_id: prog.id,
@@ -696,7 +729,10 @@ serve(async (req) => {
       });
     }
 
-    const openPrograms = programs.filter((p: any) => !lockedProgram.has(p.id));
+    // Every class with a slot locked rows do not already fill. A two-instructor
+    // class with one confirmed lead is open here for its second slot; its own
+    // drafts are cleared and redone below, the confirmed lead is never touched.
+    const openPrograms = programs.filter((p: any) => !isFullyLocked(p.id));
 
     // Greedy, curriculum-continuity first. Each round we prefer to EXTEND a curriculum
     // someone already teaches (so chains consolidate onto one instructor) before
@@ -704,7 +740,7 @@ serve(async (req) => {
     // (fewest eligible instructors) so scarce instructors aren't wasted.
     while (true) {
       const remaining = openPrograms.filter((p: any) =>
-        !assignedProgramIds.has(p.id) && !lockedProgram.has(p.id) && hasUsableTime(p) &&
+        hasOpenSlot(p.id) && hasUsableTime(p) &&
         pool.some((inst) => eligible(inst, p)));
       if (remaining.length === 0) break;
       const chain = remaining.filter(someHolderEligible);
@@ -719,12 +755,15 @@ serve(async (req) => {
 
     // Unassigned -> needs_hire, or flagged as a data problem if the time is missing.
     for (const prog of openPrograms) {
-      if (assignedProgramIds.has(prog.id)) continue;
+      if (!hasOpenSlot(prog.id)) continue;
+      // ONE decision per class, carrying how many slots are still open, so the
+      // board's "N still need an instructor" keeps counting classes.
       const base = {
         program_id: prog.id,
         location_name: locName.get(prog.program_location_id) ?? null,
         area: areaFor(prog),
         day_of_week: prog.day_of_week,
+        slots_open: neededFor(prog.id) - filledFor(prog.id),
       };
       if (!hasUsableTime(prog)) {
         decisions.push({ ...base, status: 'needs_hire', reason: 'This class has no start/end time set — add its time before matching.' });
@@ -732,7 +771,9 @@ serve(async (req) => {
       }
       // Anyone who could take this class but kept it off-limits by marking the area
       // 'unavailable'? Surface them so the admin can place by hand if they want.
-      const blockedByArea = pool.filter((inst) => eligibleCore(inst, prog) && areaPrefFor(inst, prog) === 'unavailable');
+      // Not someone already on this class - naming them here would suggest they
+      // could also take its other slot, which they cannot.
+      const blockedByArea = pool.filter((inst) => !takenBy.get(prog.id)?.has(inst.id) && eligibleCore(inst, prog) && areaPrefFor(inst, prog) === 'unavailable');
       let reason: string;
       if (blockedByArea.length > 0) {
         const names = blockedByArea.map((i) => i.name).join(', ');
@@ -743,14 +784,20 @@ serve(async (req) => {
         // would send the operator to look at a weekday answer that had nothing
         // to do with the refusal. The real question is whether anyone said yes
         // to THIS camp, and whether the ones who did are already busy across it.
-        const saidYes = pool.filter((inst) => inst.campYes.has(prog.id));
+        // Not counting whoever already holds a slot on it: on a second slot the
+        // one yes may BE the first instructor, and "everyone who said yes is
+        // booked" would hide that nobody else has said yes at all.
+        const saidYes = pool.filter((inst) => inst.campYes.has(prog.id) && !takenBy.get(prog.id)?.has(inst.id));
         reason = saidYes.length === 0
-          ? 'Nobody has said they can work this camp yet. Ask on the availability survey, or assign by hand.'
+          ? (filledFor(prog.id) > 0
+              ? 'Nobody else has said they can work this camp. Ask on the availability survey, or assign the next instructor by hand.'
+              : 'Nobody has said they can work this camp yet. Ask on the availability survey, or assign by hand.')
           : 'Everyone who said they can work this camp is already booked across its dates.';
       } else {
         const dc = dayCode(prog.day_of_week);
         const s = parse12h(prog.start_time)!, e = parse12h(prog.end_time)!;
         const anyDayTime = pool.some((inst) => {
+          if (takenBy.get(prog.id)?.has(inst.id)) return false; // already on this class
           const a = inst.days[dc ?? ''];
           if (!a || !a.from) return false;
           const from = parseHHMM(a.from), until = a.until ? parseHHMM(a.until) : null;
@@ -760,6 +807,10 @@ serve(async (req) => {
           ? 'Everyone who fits this day and time is already booked elsewhere.'
           : 'No instructor is available for this day and time window.';
       }
+      // A class that is partly staffed says so first, so "needs instructor" on a
+      // two-instructor class is never read as "nobody is on it".
+      const filled = filledFor(prog.id);
+      if (filled > 0) reason = `Has ${filled} of ${neededFor(prog.id)} instructors. ${reason}`;
       decisions.push({ ...base, status: 'needs_hire', reason });
     }
 
@@ -848,7 +899,9 @@ serve(async (req) => {
         // separately. It goes when the board stops asking.
         camps_in_term: campsInTerm,
         camps_skipped: 0,
-        locked_confirmed: lockedProgram.size,
+        // Classes with at least one locked row - the same number this always was
+        // for one-instructor classes.
+        locked_confirmed: lockedCount.size,
         assigned: assignedDecisions.length,
         needs_hire: decisions.filter((d) => d.status === 'needs_hire').length,
         instructors_in_pool: pool.length,
