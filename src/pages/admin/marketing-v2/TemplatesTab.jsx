@@ -423,7 +423,7 @@ function TemplateEditor({ org, audience, cfg, value, onDirtyChange, onCancel, on
       name: name.trim(),
       subject: subject.trim() || null,
       body_html: bodyHtml || null,
-      body_text: stripHtml(bodyHtml) || null,
+      body_text: null,
       email_attachments: emailAttachments ?? [],
     };
     let error;

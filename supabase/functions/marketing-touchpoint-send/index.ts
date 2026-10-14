@@ -43,6 +43,7 @@ import {
 import { isCampProgram, programScheduleLabel } from "../_shared/campProgram.ts";
 import { isDeadlineReminderLabel, splitByThrottle, throttleGapHours } from "../_shared/marketingThrottle.ts";
 import { withEmailAttribution } from "../_shared/emailAttribution.ts";
+import { chooseBodyText } from "../_shared/plainTextHalf.ts";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -935,9 +936,11 @@ serve(async (req: Request) => {
       const testBannerText = usedSampleChild
         ? `This is a test. Your own contact record has no child on it, so ${SAMPLE_CHILD_FIRST} is shown as a sample. Each family receives their own child's name here.\n\n`
         : "";
-      const bodyText = testBannerText + (touchpoint.payload!.body_text
-        ? postCleanCopy(replaceTokens(touchpoint.payload!.body_text, tokens, { html: false, multiline: true }))
-        : stripHtmlToText(renderedInner)) + downloadButtonsText;
+      const bodyText = testBannerText + chooseBodyText(
+        touchpoint.payload!.body_text,
+        renderedInner,
+        (t) => postCleanCopy(replaceTokens(t, tokens, { html: false, multiline: true })),
+      ) + downloadButtonsText;
 
       // Read the unsubscribe URL back out of the SAME token map the footer link
       // is rendered from (wrapInEmailShell reads tokens.unsubscribe_url). One
@@ -1834,32 +1837,6 @@ ${unsubBlock ? `<br>${unsubBlock}` : ""}${addressBlock}
 </html>`;
 }
 
-// Quick plain-text fallback from HTML — strips tags, collapses whitespace.
-// Used when the touchpoint has no body_text. Far better than no plain-text
-// alt at all (spam filters penalize HTML-only emails).
-function stripHtmlToText(html: string): string {
-  return html
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/p>/gi, "\n\n")
-    // </li> has to break the line too. Without it a rendered {{program_details}}
-    // or {{camp_details}} list arrives as one run-on paragraph in the plaintext
-    // alternative, each row welded to the next.
-    .replace(/<\/li>/gi, "\n")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&#039;/g, "'")
-    // register_button emits "Register now &rarr;", which shipped as that
-    // literal text to every plaintext reader until 2026-08-10.
-    .replace(/&rarr;/g, "->")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
 function escapeHtml(s: string): string {
   return s
     .replace(/&/g, "&amp;")
@@ -2308,9 +2285,11 @@ async function renderPreview(
   const renderedInner = postCleanCopy(replaceTokens(touchpoint.payload!.body_html!, tokens, { html: true }));
   const innerHtml = renderedInner + downloadButtonsHtml;
   const bodyHtml = wrapInEmailShell(innerHtml, tokens);
-  const bodyText = (touchpoint.payload!.body_text
-    ? postCleanCopy(replaceTokens(touchpoint.payload!.body_text, tokens, { html: false, multiline: true }))
-    : stripHtmlToText(renderedInner)) + downloadButtonsText;
+  const bodyText = chooseBodyText(
+    touchpoint.payload!.body_text,
+    renderedInner,
+    (t) => postCleanCopy(replaceTokens(t, tokens, { html: false, multiline: true })),
+  ) + downloadButtonsText;
 
   // Tell the operator whether the VIP block fired for this school so the
   // dropdown UI can show a chip. Three states:

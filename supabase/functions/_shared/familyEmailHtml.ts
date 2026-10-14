@@ -54,6 +54,7 @@ export function htmlToPlainText(html: string): string {
     .replace(/<li\b[^>]*>/gi, '- ')
     .replace(/<[^>]+>/g, '')
     .replace(/&nbsp;/g, ' ')
+    .replace(/&rarr;/g, '->')
     .replace(/&quot;/g, '"')
     .replace(/&#0?39;/g, "'")
     .replace(/&lt;/g, '<')
