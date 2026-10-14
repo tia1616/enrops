@@ -1529,6 +1529,10 @@ function AdjustDialog({ target, onCancel, onConfirm, busy }) {
       <input
         value={amount}
         onChange={(e) => setAmount(e.target.value)}
+        // Select on focus so typing REPLACES the prefilled total. Without it,
+        // typing 45 into "60.00" gives "60.0045", which saves $60 under a note
+        // that says $45.
+        onFocus={(e) => e.target.select()}
         inputMode="decimal"
         placeholder={isBonus ? '$50.00' : '$0.00'}
         style={{ width: '100%', padding: 8, border: `1px solid ${RULE}`, borderRadius: 5, fontFamily: 'inherit', fontSize: 14 }}
