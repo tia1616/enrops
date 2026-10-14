@@ -615,10 +615,12 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
             // How many instructors each class needs right now. program_staffing is
             // the one place that rule lives (base count + the enrollment trigger);
             // the matcher and the home page read the same view.
+            // By org, not .in(programIds): this read fails the board CLOSED, so it
+            // must not be the one that trips the ~100-id URL ceiling on a big term.
             supabase
               .from("program_staffing")
               .select("program_id, instructors_needed")
-              .in("program_id", programIds),
+              .eq("organization_id", org.id),
           ])
         : [{ data: [], error: null }, { data: [], error: null }, { data: [], error: null }, { data: [], error: null }, { data: [], error: null }];
       if (assignRes.error) throw assignRes.error;
@@ -833,10 +835,11 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
 
   // program_id -> { status, lead assignment, slots }
   //
-  // `lead` stays the FIRST row, exactly as before, so every reader that only
-  // knows about one instructor (subs, filters, the change-request tip) keeps
-  // working unchanged. `rows` is every active row and `needed` the slot count;
-  // the card draws one slot per needed instructor from those two.
+  // `lead` is chosen exactly as before, and the readers that still mean "the
+  // lead" (subs, the sub-conflict warning) keep reading it. `rows` is every
+  // active row and `needed` the slot count: the card's slots, the filter, the
+  // search and the change-request tip read those, since on a two-instructor
+  // class the person they are looking for need not be the lead.
   const enriched = useMemo(() => {
     const m = new Map();
     if (state.status !== "ready") return m;
@@ -1760,9 +1763,16 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   // Which row a picker is editing. `slot` is set by openRow: a row to reassign,
   // or null for an EMPTY slot (insert). Left undefined it means the lead, which
   // is every one-instructor program and the only case that existed before.
+  //
+  // A row is re-read LIVE by id: the picker holds the row from when it opened,
+  // and realtime may have changed it since (an instructor answering). The old
+  // lead-only code always read the live lead, so a snapshot would regress that.
+  // A row that has since gone (removed elsewhere) resolves to null = empty slot.
   function slotRowFor(program, slot) {
-    if (slot !== undefined) return slot;
-    return enriched.get(program.id)?.lead ?? null;
+    const e = enriched.get(program.id);
+    if (slot === undefined) return e?.lead ?? null;
+    if (slot === null) return null;
+    return (e?.rows ?? []).find((r) => r.id === slot.id) ?? null;
   }
 
   async function handleAssign(program, instructorId, opts = {}, slot) {
@@ -3786,10 +3796,6 @@ function ProgramCard({ program, loc, tint, status, flags, lead, sub, subNeeded, 
   );
 }
 
-// One button per instructor slot on a class that needs more than one. A sibling
-// of the card's main button (like SubLineAS), never nested in it, so each slot
-// is its own valid, independently clickable control. A filled slot opens that
-// instructor's row; an empty one opens the picker to add a lead to that slot.
 // The empty slot's name by its position: the first is just "instructor" (the
 // class has nobody), the rest say which one is missing. instructors_needed is
 // capped at 4 by its CHECK, so these four are every case.
@@ -3797,6 +3803,10 @@ function slotNoun(index) {
   return ["instructor", "2nd instructor", "3rd instructor", "4th instructor"][index] ?? "instructor";
 }
 
+// One button per instructor slot on a class that needs more than one. A sibling
+// of the card's main button (like SubLineAS), never nested in it, so each slot
+// is its own valid, independently clickable control. A filled slot opens that
+// instructor's row; an empty one opens the picker to add a lead to that slot.
 function SlotLineAS({ staffing, onSlotClick }) {
   const rows = staffing?.rows ?? [];
   const empties = Array.from({ length: staffing?.openSlots ?? 0 });
