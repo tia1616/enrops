@@ -181,9 +181,32 @@ serve(async (req: Request) => {
       tier = (assignment?.role as Role) ?? null;
     }
 
-    // No assignment → we can't determine the pay tier. Don't guess; the admin
-    // should fix the assignment or withhold the day instead.
-    if (!assignmentId || (tier !== 'lead' && tier !== 'developing')) {
+    // NO ASSIGNMENT ROW LEFT FOR THIS INSTRUCTOR. Reassigning a class does not
+    // delete the old assignment - it REWRITES that row's instructor_id to the new
+    // person (AfterschoolSchedule.jsx assign), and "unassign" deletes it. Either
+    // way every day the outgoing instructor already taught lost its assignment,
+    // and this function refused them all with no_assignment_for_session: on
+    // 2026-10-14 Quin's 10/13 Westridge day could not be confirmed or paid after
+    // the class moved to Catie, and it took a hand-written DB row to pay her.
+    //
+    // Safe to settle: the row is confirmed_by='pending' (checked above), and the
+    // only writer of pending rows is session-confirmation-cron, which seeds them
+    // ONLY from assignments in 'accepted'/'confirmed'. So the instructor HAD
+    // committed to this day when it was seeded. The program-running and
+    // class-day guards above still apply.
+    //
+    // NO PRICE IS GUESSED. Pay is per-ENGAGEMENT role (lead/developing on THIS
+    // class), and that role lived on the assignment row that is gone. The
+    // instructor's profile contractor_tier is NOT a stand-in: confirm-session-
+    // delivery refuses that fallback on purpose, and on prod 12 of 53 live
+    // assignments had a role different from the person's profile tier. So the
+    // day is confirmed with pay_amount_cents NULL and the admin sets the amount
+    // on Payroll - the same graceful-null path as a tenant with no rate set.
+    //
+    // An assignment that still EXISTS is unchanged: a bad role still refuses,
+    // and the committed-status guard below still applies to it.
+    const orphaned = !assignmentId;
+    if (!orphaned && tier !== 'lead' && tier !== 'developing') {
       return json({ error: 'no_assignment_for_session' }, 400);
     }
 
@@ -194,19 +217,22 @@ serve(async (req: Request) => {
     // which used to mean an admin could not confirm or pay the day at all. The
     // question here is "who is the payee's tier?", and one row answers it.
     // 20260923d makes two settled rows impossible; this no longer depends on it.
-    const { data: subs, error: subErr } = await supabase
-      .from('assignment_substitutions')
-      .select('sub_tier')
-      .eq('parent_assignment_id', assignmentId)
-      .eq('parent_assignment_type', kind)
-      .eq('date', row.session_date)
-      .in('status', ['confirmed', 'taught'])
-      .limit(1);
-    if (subErr) {
-      console.error('[admin-confirm-session] substitution lookup failed:', subErr);
-      return json({ error: 'lookup_failed' }, 500);
+    let sub: { sub_tier: string } | null = null;
+    if (!orphaned) {
+      const { data: subs, error: subErr } = await supabase
+        .from('assignment_substitutions')
+        .select('sub_tier')
+        .eq('parent_assignment_id', assignmentId)
+        .eq('parent_assignment_type', kind)
+        .eq('date', row.session_date)
+        .in('status', ['confirmed', 'taught'])
+        .limit(1);
+      if (subErr) {
+        console.error('[admin-confirm-session] substitution lookup failed:', subErr);
+        return json({ error: 'lookup_failed' }, 500);
+      }
+      sub = subs?.[0] ?? null;
     }
-    const sub = subs?.[0] ?? null;
     if (sub && (sub.sub_tier === 'lead' || sub.sub_tier === 'developing')) {
       tier = sub.sub_tier as Role;
     }
@@ -225,15 +251,18 @@ serve(async (req: Request) => {
     // taught this" is acceptance-by-performance; the risk is the ADMIN approving
     // pay for work never accepted or taught.)
     const COMMITTED_STATUSES = new Set(['confirmed', 'accepted']);
-    if (!sub && !COMMITTED_STATUSES.has(assignmentStatus ?? '')) {
+    if (!orphaned && !sub && !COMMITTED_STATUSES.has(assignmentStatus ?? '')) {
       return json({ error: 'assignment_not_confirmed', status: assignmentStatus }, 409);
     }
 
     // ── per-tenant pay ────────────────────────────────────────────────────
     // null when the tenant hasn't configured this (role, session_type) cell —
     // we still confirm the day and the admin sets the amount on Payroll (same
-    // graceful-null behavior as the self-confirm path).
-    const payCents = await resolvePayAmount(supabase, row.organization_id, tier, row.session_type);
+    // graceful-null behavior as the self-confirm path). Always null for an
+    // orphaned day - see above; there is no role to price it at.
+    const payCents = orphaned
+      ? null
+      : await resolvePayAmount(supabase, row.organization_id, tier, row.session_type);
 
     // ── write (race-guarded) ──────────────────────────────────────────────
     // .eq('confirmed_by','pending') so a self-confirm that lands between our

@@ -1504,7 +1504,12 @@ function WithholdDialog({ payload, onCancel, onConfirm, busy }) {
 // stored non-destructively as a tracked adjustment; reason is required.
 function AdjustDialog({ target, onCancel, onConfirm, busy }) {
   const isBonus = target.mode === 'bonus';
-  const initial = isBonus ? '' : (((target.baseCents ?? 0) + (target.adjCents ?? 0)) / 100).toFixed(2);
+  // A day with NO amount yet opens EMPTY, never "0.00": clicking into "0.00" and
+  // typing 60 gives "0.0060", which saves as ONE CENT (caught on staging
+  // 2026-10-14 setting the pay on a reassigned class's orphaned day).
+  const initial = isBonus || target.baseNull
+    ? ''
+    : (((target.baseCents ?? 0) + (target.adjCents ?? 0)) / 100).toFixed(2);
   const [amount, setAmount] = useState(initial);
   const [reason, setReason] = useState('');
   const parsed = parseFloat(String(amount).replace(/[^0-9.\-]/g, ''));
