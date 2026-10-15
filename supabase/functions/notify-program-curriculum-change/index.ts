@@ -281,10 +281,12 @@ serve(async (req: Request) => {
     // Per the prompt: program_assignments with status in confirmed|published
     // AND email_sent_at IS NOT NULL — i.e. instructor was already told
     // about this program, so they need to hear about the change too.
-    // Multi-lead case (rare): we notify the first match and log the others;
-    // the audit row's instructor_recipient is singleton by schema choice.
-    let instructorRecipient: { instructor_id: string; first_name: string; name: string; email: string } | null = null;
-    let extraInstructorCount = 0;
+    // EVERY such instructor. A class can have more than one (programs.
+    // instructors_needed, 2026-10-14), and this used to tell only the first
+    // match - so the second instructor walked in expecting the old class.
+    // Ordered by assignment id so the list (and the audit row) is stable, and
+    // deduped by instructor and by address so nobody gets the note twice.
+    const instructorRecipients: Array<{ instructor_id: string; first_name: string; name: string; email: string }> = [];
     if (instructor.send) {
       const { data: asgs, error: asgErr } = await supabase
         .from('program_assignments')
@@ -295,25 +297,27 @@ serve(async (req: Request) => {
         .eq('program_id', programId)
         .eq('organization_id', orgId)
         .in('status', ['confirmed', 'published'])
-        .not('email_sent_at', 'is', null);
+        .not('email_sent_at', 'is', null)
+        .order('id', { ascending: true });
       if (asgErr) {
         console.error('program_assignments lookup failed:', asgErr);
         return json({ error: 'lookup_failed' }, 500);
       }
-      const matches = (asgs ?? []).filter((a: any) => a.instructor?.email);
-      if (matches.length > 1) {
-        extraInstructorCount = matches.length - 1;
-        console.warn(`program ${programId} has ${matches.length} eligible instructors; notifying only the first.`);
-      }
-      const first: any = matches[0];
-      if (first) {
-        const i = first.instructor;
-        instructorRecipient = {
+      const seenIds = new Set<string>();
+      const seenEmails = new Set<string>();
+      for (const a of (asgs ?? []) as any[]) {
+        const i = a.instructor;
+        if (!i?.email) continue;
+        const email = String(i.email).trim().toLowerCase();
+        if (seenIds.has(i.id) || seenEmails.has(email)) continue;
+        seenIds.add(i.id);
+        seenEmails.add(email);
+        instructorRecipients.push({
           instructor_id: i.id,
           first_name: i.preferred_name || i.first_name || 'there',
           name: `${i.first_name ?? ''} ${i.last_name ?? ''}`.trim() || '(no name)',
-          email: String(i.email).trim().toLowerCase(),
-        };
+          email,
+        });
       }
     }
 
@@ -332,8 +336,8 @@ serve(async (req: Request) => {
       isFirstMatch
         ? 'skipped'
         : !instructor.send
-          ? (instructorRecipient ? 'skipped' : 'no_recipient')
-          : (instructorRecipient ? 'sent' : 'no_recipient');
+          ? (instructorRecipients.length > 0 ? 'skipped' : 'no_recipient')
+          : (instructorRecipients.length > 0 ? 'sent' : 'no_recipient');
 
     // ── Commit the DB write FIRST. Emails go out only against a real
     //    updated record so families/instructors reading at the same time
@@ -429,17 +433,21 @@ serve(async (req: Request) => {
       }
     }
 
-    // ── Send instructor email. ───────────────────────────────────────────
-    let instructorResult: {
+    // ── Send instructor emails - one each, personalized, never one email
+    //    with several addresses on it (no instructor sees another's address),
+    //    the same rule as the family loop above. ─────────────────────────
+    type InstructorResult = {
       instructor_id: string;
       name: string;
       email: string;
       resend_message_id: string | null;
       status: 'sent' | 'failed';
       failure_reason: string | null;
-    } | null = null;
+    };
+    const instructorResults: InstructorResult[] = [];
 
-    if (instructorChoice === 'sent' && instructorRecipient) {
+    for (const instructorRecipient of (instructorChoice === 'sent' ? instructorRecipients : [])) {
+      let instructorResult: InstructorResult;
       const vars: Record<string, string> = {
         instructor_first_name: instructorRecipient.first_name,
         program_day: programDay,
@@ -502,7 +510,10 @@ serve(async (req: Request) => {
           failure_reason: (err as Error).message,
         };
       }
+      instructorResults.push(instructorResult);
     }
+    const instructorSentCount = instructorResults.filter((r) => r.status === 'sent').length;
+    const instructorFailures = instructorResults.filter((r) => r.status === 'failed');
 
     // ── Insert audit row. Failures here are logged but don't fail the
     //    user-facing request — losing the audit row is worse than telling
@@ -525,7 +536,11 @@ serve(async (req: Request) => {
         family_recipients: familyResults,
         family_sent_count: familySentCount,
         family_failed_count: familyFailedCount,
-        instructor_recipient: instructorResult,
+        // Every instructor told, in instructor_recipients (20261015b). The old
+        // singular column keeps the first result so a row reads the same to
+        // anything that only knows it; nothing in the app reads either yet.
+        instructor_recipients: instructorResults,
+        instructor_recipient: instructorResults[0] ?? null,
       });
     if (auditErr) {
       console.error('audit insert failed:', auditErr);
@@ -542,9 +557,16 @@ serve(async (req: Request) => {
       },
       instructor: {
         choice: instructorChoice,
-        sent: instructorResult?.status === 'sent',
-        failure_reason: instructorResult?.failure_reason ?? null,
-        extra_eligible_not_notified: extraInstructorCount,
+        sent_count: instructorSentCount,
+        failed_count: instructorFailures.length,
+        failures: instructorFailures,
+        recipients: instructorResults.map((r) => ({ name: r.name, email: r.email, status: r.status })),
+        // Kept for the editor deployed before this change, which reads these
+        // three. `sent` = at least one got it; nobody is left out any more, so
+        // the "others were not notified" count is always 0.
+        sent: instructorSentCount > 0,
+        failure_reason: instructorFailures[0]?.failure_reason ?? null,
+        extra_eligible_not_notified: 0,
       },
     });
   } catch (err) {

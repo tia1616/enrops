@@ -144,7 +144,10 @@ export default function EditProgramCurriculumModal({
   const [recipientsError, setRecipientsError] = useState("");
   const [familyRecipientPreview, setFamilyRecipientPreview] = useState(null);
   // { count: int, first: { parent_first_name, student_first_name } | null }
-  const [eligibleInstructor, setEligibleInstructor] = useState(null);
+  // Everyone the instructor note goes to (a class can have more than one), and
+  // the first of them, whom the preview is rendered as.
+  const [eligibleInstructors, setEligibleInstructors] = useState([]);
+  const eligibleInstructor = eligibleInstructors[0] ?? null;
   // { id, first_name, name, email } | null
 
   const [familyNotify, setFamilyNotify] = useState(!isMatch);
@@ -309,19 +312,26 @@ export default function EditProgramCurriculumModal({
           first: familyList[0] ?? null,
         });
 
-        const asgMatches = (asgsRes.data ?? []).filter((a) => a.instructor?.email);
-        const first = asgMatches[0];
-        setEligibleInstructor(
-          first
-            ? {
-                id: first.instructor.id,
-                first_name:
-                  first.instructor.preferred_name || first.instructor.first_name || "there",
-                name: `${first.instructor.first_name ?? ""} ${first.instructor.last_name ?? ""}`.trim() || "(no name)",
-                email: first.instructor.email,
-              }
-            : null,
-        );
+        // Same set the send uses: every confirmed/published instructor already
+        // emailed about this class, one per person and per address, in
+        // assignment order - so the preview names exactly who will get it.
+        const seen = new Set();
+        const list = [];
+        for (const a of [...(asgsRes.data ?? [])].sort((x, y) => String(x.id).localeCompare(String(y.id)))) {
+          const i = a.instructor;
+          if (!i?.email) continue;
+          const email = String(i.email).trim().toLowerCase();
+          if (seen.has(i.id) || seen.has(email)) continue;
+          seen.add(i.id); seen.add(email);
+          list.push({
+            id: i.id,
+            first_name: i.preferred_name || i.first_name || "there",
+            name: `${i.first_name ?? ""} ${i.last_name ?? ""}`.trim() || "(no name)",
+            email: i.email,
+          });
+        }
+        setEligibleInstructors(list);
+        const first = list[0];
 
         const reply = brandRes.data?.email ?? brandRes.data?.alert_email ?? "";
         setReplyToEmail(reply);
@@ -552,6 +562,7 @@ export default function EditProgramCurriculumModal({
             recipientsError={recipientsError}
             familyRecipientPreview={familyRecipientPreview}
             eligibleInstructor={eligibleInstructor}
+            eligibleInstructors={eligibleInstructors}
             familyNotify={familyNotify}
             setFamilyNotify={setFamilyNotify}
             familySubject={familySubject}
@@ -755,7 +766,9 @@ function Step1({
             </li>
             <li>
               <strong>{impact.assignments}</strong> instructor confirmation{impact.assignments === 1 ? "" : "s"}
-              {impact.assignments > 0 && " — the instructor's schedule will show the new class name."}
+              {impact.assignments > 0 && (impact.assignments === 1
+                ? " — the instructor's schedule will show the new class name."
+                : " — their schedules will show the new class name.")}
             </li>
             {impact.deliveries > 0 && (
               <li>
@@ -814,7 +827,7 @@ function Step1({
 
 function Step2({
   recipientsLoading, recipientsError,
-  familyRecipientPreview, eligibleInstructor,
+  familyRecipientPreview, eligibleInstructor, eligibleInstructors = [],
   familyNotify, setFamilyNotify, familySubject, setFamilySubject,
   familyBody, setFamilyBody, familyPreviewVars,
   instructorNotify, setInstructorNotify, instructorSubject, setInstructorSubject,
@@ -853,8 +866,11 @@ function Step2({
         ) : (
           <>
             <strong>{familyCount}</strong> famil{familyCount === 1 ? "y" : "ies"} will get a note
-            {eligibleInstructor && (
+            {eligibleInstructors.length === 1 && (
               <> · <strong>{eligibleInstructor.name}</strong> (instructor) will get a note</>
+            )}
+            {eligibleInstructors.length > 1 && (
+              <> · <strong>{eligibleInstructors.map((i) => i.name).join(" and ")}</strong> (instructors) will each get a note</>
             )}
             .
           </>
@@ -884,7 +900,7 @@ function Step2({
 
       {/* Instructor channel */}
       <ChannelBlock
-        title="Note to instructor"
+        title={eligibleInstructors.length > 1 ? "Note to instructors" : "Note to instructor"}
         disabled={noInstructor}
         disabledReason={
           noInstructor
@@ -899,11 +915,13 @@ function Step2({
         setBody={setInstructorBody}
         previewVars={instructorPreviewVars}
         previewLabel={
-          eligibleInstructor
-            ? `Previewing as ${eligibleInstructor.name}`
-            : "Preview"
+          eligibleInstructors.length > 1
+            ? `Previewing as ${eligibleInstructor.name} (each instructor gets their own, with their name)`
+            : eligibleInstructor
+              ? `Previewing as ${eligibleInstructor.name}`
+              : "Preview"
         }
-        meta={eligibleInstructor?.email ? `Sent to ${eligibleInstructor.email}.` : null}
+        meta={eligibleInstructors.length > 0 ? `Sent to ${eligibleInstructors.map((i) => i.email).join(", ")}.` : null}
         busy={busy}
       />
     </>
@@ -1057,10 +1075,20 @@ function Step3({ isMatch, result, toCurriculumName, eligibleInstructor }) {
     return "—";
   }
 
+  // Reads the SERVER's answer (who it actually reached), not the preview list -
+  // a send can fail for one instructor and land for the other.
   function instructorLine() {
     if (ins.choice === "sent") {
-      const who = eligibleInstructor?.name ?? "the assigned instructor";
-      return `Note sent to ${who}.`;
+      const recips = Array.isArray(ins.recipients) ? ins.recipients : null;
+      if (!recips) {
+        // An older function build answers with `sent` only.
+        const who = eligibleInstructor?.name ?? "the assigned instructor";
+        return ins.sent === false ? `The note to ${who} failed: ${ins.failure_reason ?? "unknown error"}.` : `Note sent to ${who}.`;
+      }
+      const sentTo = recips.filter((r) => r.status === "sent").map((r) => r.name);
+      const failed = recips.filter((r) => r.status === "failed").map((r) => r.name);
+      const sentPart = sentTo.length > 0 ? `Note sent to ${sentTo.join(" and ")}.` : "No note went out.";
+      return failed.length > 0 ? `${sentPart} Failed for ${failed.join(" and ")} — check your audit log.` : sentPart;
     }
     if (ins.choice === "skipped") return "No note sent to the instructor (you skipped it).";
     if (ins.choice === "no_recipient") return "No confirmed instructor on this program yet — nothing to send.";
@@ -1096,7 +1124,7 @@ function Step3({ isMatch, result, toCurriculumName, eligibleInstructor }) {
             <strong>Parent portal.</strong> Families already registered for this program see <strong>{toCurriculumName}</strong> in their account right now — no action on their side.
           </li>
           <li>
-            <strong>Instructor portal.</strong> The assigned instructor's schedule shows <strong>{toCurriculumName}</strong> right now.
+            <strong>Instructor portal.</strong> Every instructor on this class sees <strong>{toCurriculumName}</strong> on their schedule right now.
           </li>
           <li>
             <strong>Registration page.</strong> Anyone signing up from this point sees <strong>{toCurriculumName}</strong>.
@@ -1121,11 +1149,6 @@ function Step3({ isMatch, result, toCurriculumName, eligibleInstructor }) {
             <>
               <li><strong>Families:</strong> {familyLine()}</li>
               <li><strong>Instructor:</strong> {instructorLine()}</li>
-              {ins.extra_eligible_not_notified > 0 && (
-                <li style={{ color: SOFT_AMBER_INK }}>
-                  <strong>Heads up:</strong> {ins.extra_eligible_not_notified} other eligible instructor{ins.extra_eligible_not_notified === 1 ? " was" : "s were"} not notified.
-                </li>
-              )}
             </>
           )}
           {/* Says "logged", not "visible in your change history" — the audit
