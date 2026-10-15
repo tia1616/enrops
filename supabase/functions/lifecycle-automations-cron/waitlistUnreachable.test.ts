@@ -3,11 +3,12 @@
 // every family on the platform; too narrow and a dead address loops forever, as it did
 // 78 times on prod. These pin both edges.
 //
-// Run: deno test supabase/functions/lifecycle-automations-cron/waitlistUnreachable.test.ts
+// Run: deno test --allow-net --no-check supabase/functions/lifecycle-automations-cron/waitlistUnreachable.test.ts
+// (CI's own flags; no --allow-env, which is why the matcher lives in its own file.)
 import { assertEquals } from 'https://deno.land/std@0.177.0/testing/asserts.ts';
-import { isUnreachableAddress } from './waitlistSweep.ts';
+import { isUnreachableAddress } from './unreachableAddress.ts';
 
-// Verbatim from prod automation_run_recipients, 2026-10-13, "christine.wynne@yahoo".
+// Verbatim from prod automation_run_recipients, 2026-10-13, for a "<name>@yahoo" address.
 const PROD_BODY = '{"statusCode":422,"message":"Invalid `to` field. The email address needs to follow the `email@example.com` or `Name <email@example.com>` format.","name":"validation_error"}';
 
 Deno.test('the refused-recipient 422 prod recorded is unreachable', () => {

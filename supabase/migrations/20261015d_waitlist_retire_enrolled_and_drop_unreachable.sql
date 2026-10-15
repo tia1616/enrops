@@ -5,9 +5,9 @@
 -- lifecycle-automations-cron/waitlistSweep.ts. Nothing existing is redefined.
 --
 -- 1. waitlist_retire_enrolled()
---    Jenny Lin was on the list for Jodie, got an offer, and then registered and paid
+--    A parent was on the list for their child, got an offer, and then registered and paid
 --    through the ordinary class page rather than the invite link. That minted a SECOND
---    students row for Jodie, so nothing tied the paid registration to the waitlist row.
+--    students row for the child, so nothing tied the paid registration to the waitlist row.
 --    The waitlist row stayed open, its offer ran out, and the sweep emailed her "that
 --    place has been passed on" about a class her child was already in.
 --
@@ -23,10 +23,15 @@
 --    student_id alone is precisely the key that failed here. Normalisation is copied,
 --    not rewritten: trim, lower, collapse internal whitespace.
 --
---    ENROLLED = not cancelled, and paid or confirmed. The same predicate as
+--    ENROLLED = status 'confirmed' and cancelled_at null. Deliberately NARROWER than
 --    registration_is_enrolled() in the staffing2 work (20261015a there, not yet on
---    either database). Inlined because that function does not exist yet; when it lands
---    this should call it rather than keep a second spelling.
+--    either database), which also counts payment_status 'paid'. A wrong match here
+--    silently removes a family from a list, so this takes the strict reading: prod
+--    holds rows with status 'cancelled', payment_status 'paid' and cancelled_at null
+--    (apps-script-roster-sync cancels without stamping cancelled_at), and the wider
+--    predicate would count those children as still in the class. Every live paid
+--    class registration on prod is 'confirmed', so the narrower test loses no real case.
+--    Do NOT "unify" this with registration_is_enrolled without fixing that half-state.
 --
 --    SILENT: no email. The family is in the class; there is nothing to tell them.
 --    CLAIMED rows are skipped: a claim means a checkout is in flight and
@@ -36,7 +41,7 @@
 --    this catches the row on the next tick.
 --
 -- 2. waitlist_drop_unreachable(p_registration_id, p_invite_token)
---    Christine Wynne joined with "christine.wynne@yahoo", no ".com". Every 15 minutes
+--    A parent joined with a "<name>@yahoo" address, no ".com". Every 15 minutes
 --    the sweep offered her the place, Resend refused the address (422), the sweep
 --    rolled the offer back so it could "retry", and the next tick did it all again:
 --    78 failed sends over two days. Worse, rolling back left her at the head of the
@@ -81,7 +86,7 @@ begin
         and c.parent_id  = w.parent_id
         and c.id <> w.id
         and c.cancelled_at is null
-        and (c.payment_status = 'paid' or c.status = 'confirmed')
+        and c.status = 'confirmed'
         and (
           c.student_id = w.student_id
           or nullif(regexp_replace(btrim(lower(cs.first_name)), '\s+', ' ', 'g'), '')
@@ -114,7 +119,7 @@ begin
            and c.parent_id  = w.parent_id
            and c.id <> w.id
            and c.cancelled_at is null
-           and (c.payment_status = 'paid' or c.status = 'confirmed')
+           and c.status = 'confirmed'
            and (
              c.student_id = w.student_id
              or nullif(regexp_replace(btrim(lower(cs.first_name)), '\s+', ' ', 'g'), '')
@@ -140,7 +145,7 @@ $function$;
 
 comment on function public.waitlist_retire_enrolled() is
   'Silently take a family off a waiting list once that same child is enrolled in the class '
-  '(not cancelled; paid or confirmed) by any route, not only the invite link. Same child = '
+  '(status confirmed, cancelled_at null) by any route, not only the invite link. Same child = '
   'same parent and program, and the same students row OR the same normalised first name - '
   'the waitlist_join key (20260909c). Skips claimed rows (mid-checkout). Renumbers each '
   'affected queue. Called by waitlistSweep.ts before expiry, so a family who registered '

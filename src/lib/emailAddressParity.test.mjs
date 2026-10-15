@@ -23,8 +23,8 @@ const body = /export function emailIsValid[\s\S]*?\n\}/.exec(src)?.[0] ?? '';
 check('validation.js emailIsValid uses the identical pattern', !!m && body.includes(`${m[1]}.test(`));
 
 // The case that happened on prod, and its fixed form.
-check('rejects "christine.wynne@yahoo" (no dot after @)', emailIsValid('christine.wynne@yahoo') === false);
-check('accepts "christine.wynne@yahoo.com"', emailIsValid('christine.wynne@yahoo.com') === true);
+check('rejects "parent@yahoo" (no dot after @)', emailIsValid('parent@yahoo') === false);
+check('accepts "parent@yahoo.com"', emailIsValid('parent@yahoo.com') === true);
 check('accepts surrounding spaces', emailIsValid('  a@b.co  ') === true);
 check('rejects a space inside', emailIsValid('a b@c.com') === false);
 check('rejects empty', emailIsValid('') === false);

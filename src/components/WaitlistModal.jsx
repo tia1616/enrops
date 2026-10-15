@@ -77,7 +77,7 @@ export default function WaitlistModal({ program, orgSlug, onClose, onJoined }) {
     // ".com", and every email to that address then fails. Same rule and same words as
     // join-waitlist, which refuses it regardless; this just says so before the round trip.
     if (!emailIsValid(email)) {
-      setError('That email address does not look complete. Please check it, for example name@gmail.com.');
+      setError('That email address does not look right. Please check it, for example name@gmail.com.');
       return;
     }
     setSubmitting(true);

@@ -104,7 +104,7 @@ serve(async (req) => {
     // "@yahoo" with no ".com" failed this join's own confirmation and then 78 offer
     // sends. The form checks the same rule first; this is the gate, the form is the hint.
     if (!emailIsValid(parentEmail)) {
-      return json({ error: 'That email address does not look complete. Please check it, for example name@gmail.com.' }, 400);
+      return json({ error: 'That email address does not look right. Please check it, for example name@gmail.com.' }, 400);
     }
     // Grade is optional on the light form. Accept 0 (Kindergarten) - `|| null` would
     // turn K into null, which is the classic falsy-zero bug and K is a real grade here.

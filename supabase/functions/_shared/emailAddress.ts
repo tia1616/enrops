@@ -5,7 +5,7 @@
 // src/lib/emailAddressParity.test.mjs fails if the two patterns ever differ.
 //
 // Not RFC 5322. It exists to catch the typos that cost families a place: on prod a
-// parent joined a waiting list as "christine.wynne@yahoo" (no ".com"). The browser's
+// parent joined a waiting list as "<name>@yahoo" (no ".com"). The browser's
 // own type="email" check accepts that, Resend refuses it, and every email we then
 // tried to send her failed.
 
