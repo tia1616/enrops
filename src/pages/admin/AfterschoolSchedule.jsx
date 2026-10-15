@@ -26,6 +26,7 @@ import { classifyOther } from "../../lib/scheduleConflicts.js";
 import { pickFocusedStep } from "../../lib/scheduleSteps.js";
 import { programScheduleSummary, formatDayLabel, isCampProgram, programWeekdays } from "../../lib/programSchedule.js";
 import { parseBonusDollars } from "../../lib/bonusAmount.js";
+import { displayFullName } from "../../lib/instructorName.js";
 import { aggregateSubOffers, subSlotLabel, slotNeedsCover, subDisplayName, SUB_ACTIVE_STATUSES } from "../../lib/subCoverage.js";
 // Replaces a local gradeLabel() that has been deleted with its last caller. It
 // rendered "?" for a missing grade - printing a question mark where the answer is
@@ -329,6 +330,15 @@ function statusColor(status) {
   if (status === "ready_to_send") return BRIGHT;
   if (status === "draft") return MUTED; // a draft is not a commitment — don't shout it
   return PURPLE;
+}
+
+// Full name for an assignment row (card chip, slot chip, staffing list, offer
+// review). The board flattens the instructor onto the row as instructor_*;
+// this maps it onto the shared displayFullName rule so every surface names a
+// person the same way (preferred name if set, then last name).
+function assignmentFullName(a, fallback = "Instructor") {
+  if (!a) return fallback;
+  return displayFullName({ preferred_name: a.instructor_preferred, first_name: a.instructor_first, last_name: a.instructor_last }) || fallback;
 }
 
 // Display name for an assignment row in nudge/tip copy.
@@ -866,7 +876,11 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       // Understaffed = needs more than one and not all of them have said yes.
       const understaffed = needed > 1 && acceptedCount < needed;
       // `flags` rides alongside `status` rather than overwriting it - see deriveStatus.
-      m.set(p.id, { status, flags: lead?.flags ?? [], lead, subNeeded, rows, needed, slots, openSlots, acceptedCount, understaffed });
+      // Dates EACH instructor marked unavailable on this class - the multi-slot
+      // card warns per person. `subNeeded` above stays the lead's, which is all
+      // a one-instructor card reads.
+      const subNeededByRow = new Map(rows.map((r) => [r.id, r.instructor_id ? unavailableConflicts(r.instructor_id, p) : []]));
+      m.set(p.id, { status, flags: lead?.flags ?? [], lead, subNeeded, subNeededByRow, rows, needed, slots, openSlots, acceptedCount, understaffed });
     }
     return m;
   }, [state, availByInstr]);
@@ -893,6 +907,17 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   // tell the operator three different people are subbing the same class.
   // `ids`/`names` stay per PERSON, so the filter still finds everyone who was
   // asked, including each candidate still deciding.
+  // Whose days the "needs cover" banner is talking about - only for classes
+  // with more than one instructor, where the class name alone is ambiguous.
+  const coverParentNames = useMemo(() => {
+    const m = new Map();
+    for (const e of enriched.values()) {
+      if ((e.slots ?? 1) <= 1) continue;
+      for (const r of e.rows ?? []) m.set(r.id, assignmentFullName(r));
+    }
+    return m;
+  }, [enriched]);
+
   const subInfoByProgram = useMemo(() => {
     const m = new Map();
     if (state.status !== "ready") return m;
@@ -928,7 +953,10 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           if (nm && nm !== "Sub" && !entry.names.includes(nm)) entry.names.push(nm);
         }
       }
-      entry.subs.push({ date: first.date, slot, label, needsCover });
+      // assignmentId = WHOSE day this is. A two-instructor class has a sub line
+      // per instructor, so each one filters on its own row; a one-instructor
+      // class ignores it and reads the whole list exactly as before.
+      entry.subs.push({ date: first.date, slot, label, needsCover, assignmentId: first.parent_assignment_id });
     }
     for (const entry of m.values()) entry.subs.sort((a, b) => a.date.localeCompare(b.date));
     return m;
@@ -2468,9 +2496,14 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
 
   // Open the day-of sub assignment modal for a program. Fetches the program's real
   // class dates via the canonical RPC (never roll our own date math) for the picker.
-  async function openAssignSub(program, defaultDate = null) {
-    const lead = enriched.get(program.id)?.lead ?? null;
-    if (!lead) return; // nothing to sub for until a lead is assigned
+  // `assignment` = whose day is being covered. Omitted, it is the lead - the
+  // only case a one-instructor class has. A two-instructor class passes the row
+  // whose sub line was clicked, so a sub for the second instructor is filed
+  // against THEIR assignment (every sub table, RPC and email is already keyed
+  // on parent_assignment_id; only this board folded it onto the lead).
+  async function openAssignSub(program, defaultDate = null, assignment = undefined) {
+    const lead = assignment ?? enriched.get(program.id)?.lead ?? null;
+    if (!lead) return; // nothing to sub for until an instructor is assigned
     // Reuse the session dates already loaded; fall back to the RPC if they weren't.
     let dates = state.status === "ready" ? (state.programDates?.[program.id] ?? []) : [];
     if (dates.length === 0) {
@@ -2749,7 +2782,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
         </div>
       )}
 
-      <NeedsCoverBanner org={org} parentType="program" />
+      <NeedsCoverBanner org={org} parentType="program" parentNames={coverParentNames} />
 
       {state.programs.length > 0 && (
         <AfterschoolReminders
@@ -2839,7 +2872,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
                         onClick={() => openRow(p)}
                         staffing={e}
                         onSlotClick={(slot) => openRow(p, slot)}
-                        onSubClick={(dd) => openAssignSub(p, dd)}
+                        onSubClick={(dd, row) => openAssignSub(p, dd, row)}
                       />
                       <div style={{ fontSize: 11, color: MUTED }}>{programScheduleSummary(p) || "dates not set"}</div>
                     </div>
@@ -2946,7 +2979,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
                         onClick={() => openRow(p)}
                         staffing={e}
                         onSlotClick={(slot) => openRow(p, slot)}
-                        onSubClick={(dd) => openAssignSub(p, dd)}
+                        onSubClick={(dd, row) => openAssignSub(p, dd, row)}
                       />
                     );
                   })
@@ -2981,9 +3014,16 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
             curriculum: assignSubFor.program.curriculum,
             school_name: locName.get(assignSubFor.program.program_location_id) ?? "",
             first_session_date: assignSubFor.dates[0] ?? null,
+            // Only on a class with more than one instructor, where "this class"
+            // no longer says whose days these are. One-instructor classes and
+            // the camp board pass nothing and the dialog reads as it always has.
+            covering_for: (enriched.get(assignSubFor.program.id)?.slots ?? 1) > 1 ? assignmentFullName(assignSubFor.lead) : null,
           }}
           availableDates={assignSubFor.dates}
           defaultDate={assignSubFor.defaultDate ?? null}
+          coInstructorIds={(enriched.get(assignSubFor.program.id)?.rows ?? [])
+            .filter((r) => r.id !== assignSubFor.lead?.id && r.instructor_id)
+            .map((r) => r.instructor_id)}
           organizationId={org?.id}
           instructors={state.instructors}
           onClose={() => setAssignSubFor(null)}
@@ -3592,7 +3632,7 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
                   const loc = locName.get(p.program_location_id) ?? "—";
                   const area = locArea.get(p.program_location_id);
                   const lead = e?.lead;
-                  const who = lead ? ((lead.instructor_preferred || lead.instructor_first || "Instructor") + (lead.instructor_last ? ` ${lead.instructor_last}` : "")) : null;
+                  const who = lead ? assignmentFullName(lead) : null;
                   const enr = enrollment?.[p.id];
                   return (
                     <tr
@@ -3672,16 +3712,22 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
                           <>
                             {(e.rows ?? []).map((r) => (
                               <div key={r.id} style={{ fontWeight: 600, color: INK }}>
-                                {(r.instructor_preferred || r.instructor_first || "Instructor") + (r.instructor_last ? ` ${r.instructor_last}` : "")}
+                                {assignmentFullName(r)}
                               </div>
                             ))}
                             {e.openSlots > 0 && <div style={{ color: PURPLE, fontWeight: 600 }}>+ Assign {slotNoun(e.rows?.length ?? 0)}</div>}
                             {e.understaffed && <div style={{ fontSize: 11, color: CORAL, fontWeight: 600 }}>Understaffed · {e.acceptedCount} of {e.needed} accepted</div>}
                           </>
                         ) : (who ? <span style={{ fontWeight: 600, color: INK }}>{who}</span> : <span style={{ color: PURPLE, fontWeight: 600 }}>+ Assign</span>)}
-                        {e?.subNeeded?.length > 0 && (
+                        {(e?.slots ?? 1) <= 1 && e?.subNeeded?.length > 0 && (
                           <div style={{ fontSize: 11, color: CORAL, fontWeight: 600 }}>⚠ out {listDates(e.subNeeded)} — needs a sub</div>
                         )}
+                        {(e?.slots ?? 1) > 1 && (e.rows ?? []).map((r) => {
+                          const out = e.subNeededByRow?.get(r.id) ?? [];
+                          return out.length > 0 ? (
+                            <div key={r.id} style={{ fontSize: 11, color: CORAL, fontWeight: 600 }}>⚠ {assignmentFullName(r).split(" ")[0]} out {listDates(out)} — needs a sub</div>
+                          ) : null;
+                        })}
                       </td>
                       <td style={td}><Pill status={e?.status} flags={e?.flags} /></td>
                     </tr>
@@ -3743,11 +3789,31 @@ function ProgramCard({ program, loc, tint, status, flags, lead, sub, subNeeded, 
   // A class that needs, OR already has, more than one instructor draws slots;
   // every other class keeps the single chip below, unchanged.
   const multi = (staffing?.slots ?? 1) > 1;
-  const who = lead ? (lead.instructor_preferred || lead.instructor_first || "Instructor") + (lead.instructor_last ? ` ${lead.instructor_last}` : "") : null;
+  const who = lead ? assignmentFullName(lead) : null;
   // In week mode, only flag if THIS week's session is one the lead can't make.
   const conflictDates = weekDate ? (subNeeded ?? []).filter((d) => d === weekDate) : (subNeeded ?? []);
   // Week mode shows only THIS week's coverage; recurring mode summarizes all sub days.
   const subsForLine = weekDate ? (weekSub ? [weekSub] : []) : (sub?.subs ?? []);
+  // Multi-slot: the same two things, PER INSTRUCTOR. Each row's sub days are the
+  // ones filed against its own assignment, and each row's warning names who is
+  // out - one line folded onto the lead would file a second instructor's day
+  // against the wrong person and say the wrong name.
+  // Sub days filed against an assignment no longer on the class (a replaced
+  // instructor's booked cover) stay on the LEAD's line - where a one-instructor
+  // card has always shown every sub day - so a live, paid cover never drops
+  // off the card.
+  const activeIds = new Set((staffing?.rows ?? []).map((r) => r.id));
+  const leadId = lead?.id ?? staffing?.rows?.[0]?.id;
+  const perRow = multi ? (staffing.rows ?? []).map((r) => {
+    const own = (sub?.subs ?? []).filter((s) => s.assignmentId === r.id || (r.id === leadId && !activeIds.has(s.assignmentId)));
+    const out = staffing.subNeededByRow?.get(r.id) ?? [];
+    return {
+      r,
+      first: assignmentFullName(r).split(" ")[0],
+      subs: weekDate ? own.filter((s) => s.date === weekDate) : own,
+      conflicts: weekDate ? out.filter((d) => d === weekDate) : out,
+    };
+  }) : [];
   return (
     <div style={{
       background: tint || "#fff", border: `1px solid ${RULE}`, borderLeft: `4px solid ${sc}`,
@@ -3797,14 +3863,22 @@ function ProgramCard({ program, loc, tint, status, flags, lead, sub, subNeeded, 
             <span style={{ color: CORAL }}>· Understaffed · {staffing.acceptedCount} of {staffing.needed} accepted</span>
           )}
         </div>
-        {conflictDates.length > 0 && (
+        {!multi && conflictDates.length > 0 && (
           <div style={{ fontSize: 11, color: CORAL, fontWeight: 600, lineHeight: 1.3 }}>
             ⚠ {who?.split(" ")[0] || "Lead"} out {listDates(conflictDates)} — needs a sub
           </div>
         )}
+        {perRow.filter((x) => x.conflicts.length > 0).map((x) => (
+          <div key={x.r.id} style={{ fontSize: 11, color: CORAL, fontWeight: 600, lineHeight: 1.3 }}>
+            ⚠ {x.first} out {listDates(x.conflicts)} — needs a sub
+          </div>
+        ))}
       </button>
       {multi && <SlotLineAS staffing={staffing} onSlotClick={onSlotClick} />}
-      {lead && <SubLineAS subs={subsForLine} onClick={() => onSubClick && onSubClick(weekDate ?? null)} />}
+      {!multi && lead && <SubLineAS subs={subsForLine} onClick={() => onSubClick && onSubClick(weekDate ?? null)} />}
+      {perRow.map((x) => (
+        <SubLineAS key={x.r.id} prefix={x.first} subs={x.subs} onClick={() => onSubClick && onSubClick(weekDate ?? null, x.r)} />
+      ))}
     </div>
   );
 }
@@ -3827,7 +3901,7 @@ function SlotLineAS({ staffing, onSlotClick }) {
   return (
     <div style={{ display: "flex", flexWrap: "wrap", gap: 6, padding: "0 12px 10px" }}>
       {rows.map((r) => {
-        const name = (r.instructor_preferred || r.instructor_first || "Instructor") + (r.instructor_last ? ` ${r.instructor_last}` : "");
+        const name = assignmentFullName(r);
         const st = deriveStatus(r.program_id, [r], 1);
         const c = statusColor(st);
         return (
@@ -3853,7 +3927,9 @@ function SlotLineAS({ staffing, onSlotClick }) {
 // Sub coverage control on an after-school program card. Shows existing sub coverage
 // (or "+ Sub day" when none) and opens the assign-sub modal. Sibling of the main
 // card button (not nested) so it stays independently clickable and valid HTML.
-function SubLineAS({ subs, onClick }) {
+// prefix: the instructor's first name, on a class with more than one - each of
+// them gets their own line, and an unlabelled "+ Sub day" twice says nothing.
+function SubLineAS({ subs, onClick, prefix = null }) {
   const list = subs ?? [];
   // Days that still need somebody are counted separately from days that have a
   // sub on them, because the two must never be summarised as one number.
@@ -3902,6 +3978,7 @@ function SubLineAS({ subs, onClick }) {
         gap: 4,
       }}
     >
+      {prefix && <span style={{ flexShrink: 0, color: MUTED }}>{prefix} ·</span>}
       <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{label}</span>
       {marker && <span style={{ flexShrink: 0 }}>{marker}</span>}
     </button>
@@ -4570,7 +4647,7 @@ function OfferReviewModal({ program, assignment, loc, subNeeded, onReply, onReas
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assignment.id]);
 
-  const who = (assignment.instructor_preferred || assignment.instructor_first || "Instructor") + (assignment.instructor_last ? ` ${assignment.instructor_last}` : "");
+  const who = assignmentFullName(assignment);
   const isChange = assignment.status === "change_requested";
   // Same rule as deriveStatus: never say "awaiting response" for someone who was
   // never emailed.
