@@ -529,6 +529,11 @@ export default function AssignSubModal({
             Assign a sub
           </div>
           <div style={{ fontSize: 16, fontWeight: 700, color: INK }}>{sessionTitle}</div>
+          {/* Only sent for a class with more than one instructor: there, the
+              class name alone does not say whose days are being covered. */}
+          {sessionInfo?.covering_for && (
+            <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>Covering for {sessionInfo.covering_for}</div>
+          )}
         </div>
 
         <div style={{ padding: '14px 20px' }}>
@@ -541,7 +546,9 @@ export default function AssignSubModal({
                   because a day can show several people who were asked and have
                   not answered. It says what it is instead. */}
               <div style={{ fontSize: 12, color: MUTED, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 6 }}>
-                Subs asked for this class
+                {/* This list is per instructor (parent_assignment_id), so on a
+                    two-instructor class "this class" would overclaim. */}
+                {sessionInfo?.covering_for ? `Subs asked for ${sessionInfo.covering_for}'s days` : 'Subs asked for this class'}
               </div>
               {existingSubs.map((s) => {
                 const subInst = (instructors ?? []).find((i) => i.id === s.sub_instructor_id);

@@ -95,7 +95,11 @@ function whoDeclined(it) {
   return said ? ` · ${said}, ${now}` : ` · ${now}`;
 }
 
-export default function NeedsCoverBanner({ org, parentType }) {
+// parentNames: optional Map(parent_assignment_id -> instructor name), passed
+// only for classes with more than one instructor. There, "Tue 3/4 - Tiny Coders
+// at HLC" twice is two different people's days, and the label alone cannot say
+// whose. Read at render time, so it never re-runs the fetch.
+export default function NeedsCoverBanner({ org, parentType, parentNames = null }) {
   const [items, setItems] = useState([]);
   // Days with offers out and no refusal. Its own state so it can never be
   // counted into the coral headline.
@@ -186,7 +190,7 @@ export default function NeedsCoverBanner({ org, parentType }) {
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             {items.map((it) => (
               <div key={`${it.parent}|${it.date}`} style={{ fontSize: 13, color: INK, lineHeight: 1.45 }}>
-                <strong>{fmtDate(it.date)}</strong>{" — "}{it.label}
+                <strong>{fmtDate(it.date)}</strong>{" — "}{it.label}{parentNames?.get(it.parent) ? ` · for ${parentNames.get(it.parent)}` : ""}
                 <span style={{ color: MUTED }}>{whoDeclined(it)}</span>
               </div>
             ))}
@@ -213,7 +217,7 @@ export default function NeedsCoverBanner({ org, parentType }) {
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
             {waiting.map((it) => (
               <div key={`${it.parent}|${it.date}`} style={{ fontSize: 13, color: INK, lineHeight: 1.45 }}>
-                <strong>{fmtDate(it.date)}</strong>{" — "}{it.label}
+                <strong>{fmtDate(it.date)}</strong>{" — "}{it.label}{parentNames?.get(it.parent) ? ` · for ${parentNames.get(it.parent)}` : ""}
                 <span style={{ color: MUTED }}>
                   {it.offersOut === 1 ? " · 1 person asked, no reply yet" : ` · ${it.offersOut} people asked, no reply yet`}
                 </span>
