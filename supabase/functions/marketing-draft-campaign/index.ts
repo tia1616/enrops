@@ -2482,9 +2482,9 @@ Deno.serve(async (req: Request) => {
   for (const tp of schedule.touchpoints) {
     tp.subject = stripAiDashes(tp.subject);
     tp.body_html = stripAiDashes(tp.body_html);
-    // Plain-text is derived server-side from the cleaned HTML — the model no
-    // longer writes body_text (halves generation time / avoids timeouts).
-    tp.body_text = stripHtml(tp.body_html ?? "");
+    // Plain-text is derived at SEND time from the rendered HTML (keeps line
+    // breaks and link URLs); stripHtml here flattened it to one paragraph.
+    tp.body_text = "";
   }
 
   // ---- Server-computed cadence enforcement ----

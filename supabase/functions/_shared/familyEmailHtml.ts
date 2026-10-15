@@ -51,9 +51,13 @@ export function htmlToPlainText(html: string): string {
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<\/p>/gi, '\n\n')
     .replace(/<\/li>/gi, '\n')
+    // {{register_button}} renders as a bare <div> between paragraphs; without a
+    // break here its link welds onto the next line ("...(url)- Jess").
+    .replace(/<\/(div|h[1-6]|tr)>/gi, '\n')
     .replace(/<li\b[^>]*>/gi, '- ')
     .replace(/<[^>]+>/g, '')
     .replace(/&nbsp;/g, ' ')
+    .replace(/&rarr;/g, '->')
     .replace(/&quot;/g, '"')
     .replace(/&#0?39;/g, "'")
     .replace(/&lt;/g, '<')

@@ -13,7 +13,7 @@ import { INK, MUTED, PURPLE, BRIGHT, RULE, OK, INFO } from "../marketing/tokens.
 // <-> editable-text conversion + token highlighting + plain-text extraction.
 // Previously duplicated inline here (and in CampaignDetail.jsx); consolidated
 // so the HTML-escaping fix lives in exactly one place.
-import { htmlToEditable, editableToHtml, highlightTokens, stripHtml } from "./bodyEditorUtils.js";
+import { htmlToEditable, editableToHtml, highlightTokens } from "./bodyEditorUtils.js";
 
 function fmtScheduled(iso, timezone) {
   if (!iso) return "—";
@@ -316,8 +316,8 @@ export default function TouchpointCard({
               for a picked school renders in EmailPreviewDrawer (right side). */}
           <BodyEditor
             value={tp.body_html ?? ""}
-            onChange={(v) => onUpdate(tp.id, { body_html: v, body_text: stripHtml(v) })}
-            onCommit={(v) => onCommit?.(tp.id, { body_html: v, body_text: stripHtml(v) })}
+            onChange={(v) => onUpdate(tp.id, { body_html: v, body_text: null })}
+            onCommit={(v) => onCommit?.(tp.id, { body_html: v, body_text: null })}
           />
 
           {organizationId && (
@@ -615,7 +615,7 @@ function TemplateControls({ organizationId, subject, bodyHtml, emailAttachments,
       name: nm,
       subject: subject && subject.trim() ? subject : null,
       body_html: bodyHtml || null,
-      body_text: stripHtml(bodyHtml) || null,
+      body_text: null,
       // Persist the touchpoint's current attachments with the template, matching
       // the Templates page (codex #7 — campaign-saved templates dropped these).
       email_attachments: Array.isArray(emailAttachments) ? emailAttachments : [],
@@ -661,7 +661,7 @@ function TemplateControls({ organizationId, subject, bodyHtml, emailAttachments,
     const patch = {};
     if (t.body_html && t.body_html.trim()) {
       patch.body_html = t.body_html;
-      patch.body_text = stripHtml(t.body_html);
+      patch.body_text = null;
     }
     if (t.subject && t.subject.trim()) patch.subject = t.subject;
     // Same "only overwrite what the template HAS" rule as subject/body: a template

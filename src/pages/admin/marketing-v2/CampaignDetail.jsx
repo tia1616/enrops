@@ -21,7 +21,7 @@ import { PURPLE, BRIGHT, INK, MUTED, RULE, OK, INFO, WARN } from "../marketing/t
 // Shared editor round-trip helpers — single source of truth. Was duplicated
 // inline here as editableFromHtml/htmlFromEditable/stripHtml; consolidated onto
 // bodyEditorUtils.js so the HTML-escaping fix lives in one place.
-import { htmlToEditable, editableToHtml, stripHtml } from "./bodyEditorUtils.js";
+import { htmlToEditable, editableToHtml } from "./bodyEditorUtils.js";
 import EditableField from "./EditableField.jsx";
 import EmailPreviewDrawer from "./EmailPreviewDrawer.jsx";
 
@@ -503,7 +503,7 @@ function TouchpointEditor({ tp, onUpdate }) {
         </div>
         <EditableField
           value={htmlToEditable(bodyHtml)}
-          onChange={(v) => onUpdate({ payload: { body_html: editableToHtml(v), body_text: stripHtml(v) } })}
+          onChange={(v) => onUpdate({ payload: { body_html: editableToHtml(v), body_text: null } })}
           multiline
           rows={10}
           placeholder="Click to write the email body"
