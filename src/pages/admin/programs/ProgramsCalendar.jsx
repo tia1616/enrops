@@ -780,6 +780,7 @@ export default function ProgramsCalendar() {
             class_days, session_type,
             facility_requested_at, facility_approved_at, facility_notes,
             program_location_id,
+            instructors_needed, second_instructor_after_registrations,
             program_locations (id, name, district)
           `)
           .eq("organization_id", org.id)
@@ -1927,6 +1928,11 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
     class_days: Array.isArray(program.class_days) ? [...program.class_days] : null,
     session_type: program.session_type ?? "",
     max_capacity: program.max_capacity ?? "",
+    // Staffing (20261014b). Both are SELECTED above - without that the draft
+    // seeds blank, the delta below reads every save as a change, and
+    // instructors_needed (NOT NULL) would be written empty.
+    instructors_needed: program.instructors_needed ?? 1,
+    second_instructor_after_registrations: program.second_instructor_after_registrations ?? "",
     // Families-facing blurb on the registration page. Editable here so a program
     // that already exists can get one - the lean builder only just started
     // collecting it, so every program created before now has none.
@@ -2081,7 +2087,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
       // adopt an outside change AND wrote its stale value back on the next save -
       // exactly the clobber this effect exists to prevent.
       const same = (a, b) => String(a ?? "") === String(b ?? "");
-      for (const k of ["curriculum", "room", "short_description", "price_cents", "price_tier", "max_capacity", "program_location_id", "grade_min", "grade_max", "age_min", "age_max"]) {
+      for (const k of ["curriculum", "room", "short_description", "price_cents", "price_tier", "max_capacity", "program_location_id", "grade_min", "grade_max", "age_min", "age_max", "instructors_needed", "second_instructor_after_registrations"]) {
         const was = prev?.[k] ?? "";
         const now = program?.[k] ?? "";
         if (!same(was, now) && same(d[k], was)) next[k] = now;
@@ -2279,6 +2285,17 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
       if (audienceBackwardsInPanel) {
         throw new Error(rangeBackwardsMessage(panelMode));
       }
+      // Staffing. The database CHECKs refuse these too (1-4, and a trigger of 1
+      // or more); saying it here gives the operator a sentence, not a raw error.
+      const neededNum = Number(draft.instructors_needed);
+      if (!Number.isInteger(neededNum) || neededNum < 1 || neededNum > 4) {
+        throw new Error("Instructors needed must be a whole number from 1 to 4.");
+      }
+      const triggerRaw = draft.second_instructor_after_registrations;
+      const triggerNum = triggerRaw === "" || triggerRaw === null || triggerRaw === undefined ? null : Number(triggerRaw);
+      if (triggerNum !== null && (!Number.isInteger(triggerNum) || triggerNum < 1)) {
+        throw new Error("“Add a second instructor after” must be a whole number of registrations, 1 or more — or left blank for never.");
+      }
       const isRange = draft.schedule_mode === "range";
       // Range mode: the count is DERIVED, not typed. Require a real window that
       // actually contains class days -- refuse to save a range program that would
@@ -2422,6 +2439,9 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
           ? derivedCount
           : (draft.session_count === "" || draft.session_count === null ? null : Number(draft.session_count)),
         max_capacity: draft.max_capacity === "" || draft.max_capacity === null ? null : Number(draft.max_capacity),
+        // Validated above; blank trigger = NULL = never.
+        instructors_needed: neededNum,
+        second_instructor_after_registrations: triggerNum,
         // NULL rather than "" when cleared, so the catalog's `short_description &&`
         // guard reads it as absent instead of rendering an empty paragraph. Safe to
         // write because short_description is now SELECTED above -- without that the
@@ -2951,6 +2971,27 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
         <ExpandField label="Capacity">
           <input type="number" min="0" max="999" value={draft.max_capacity ?? ""} onChange={(e) => set("max_capacity", e.target.value)} style={expandInputStyle} />
         </ExpandField>
+        {/* Staffing: how many instructors the schedule board asks for. Hidden
+            for lean providers, who do not schedule instructors here; their
+            stored values ride through the save unchanged. */}
+        {!isLean && (
+          <ExpandField label="Instructors needed">
+            <select value={String(draft.instructors_needed ?? 1)} onChange={(e) => set("instructors_needed", e.target.value)} style={expandInputStyle}>
+              {[1, 2, 3, 4].map((n) => <option key={n} value={String(n)}>{n}</option>)}
+            </select>
+          </ExpandField>
+        )}
+        {!isLean && (
+          <ExpandField label="Add a 2nd instructor after">
+            <input
+              type="number" min="1" max="999" placeholder="Never"
+              value={draft.second_instructor_after_registrations ?? ""}
+              onChange={(e) => set("second_instructor_after_registrations", e.target.value)}
+              title="Once paid registrations go past this number, the schedule board asks for a second instructor. Blank = never."
+              style={expandInputStyle}
+            />
+          </ExpandField>
+        )}
         <ExpandField label="Price ($)">
           <input
             type="number" min="0" step="1"
