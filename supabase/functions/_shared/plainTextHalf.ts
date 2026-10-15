@@ -15,6 +15,9 @@ import { htmlToPlainText } from "./familyEmailHtml.ts";
 /** True when the HTML has structure (2+ paragraph or line breaks) that a
  *  stored text with no newline at all has necessarily flattened. */
 function htmlHasStructure(html: string): boolean {
+  // A link counts too: the flattened copy never carries a URL, so a one-line
+  // email with a link is still the old bug in its smallest form.
+  if (/<a\b[^>]*href=/i.test(html)) return true;
   return (html.match(/<\/p>|<br\s*\/?>|<\/li>/gi) ?? []).length >= 2;
 }
 
