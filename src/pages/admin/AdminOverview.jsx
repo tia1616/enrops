@@ -222,10 +222,24 @@ export default function AdminOverview() {
             const p = progById.get(a.program_id);
             if (p) termsInStaffing.add(p.term);
           }
+          // How many leads each class needs (program_staffing, the one place that
+          // rule lives - base count plus the enrollment trigger). Filtered by org,
+          // not by an .in() of every program id, which dies past ~100 ids.
+          // A failed read falls back to "1 each" - the old count - and says so in
+          // the console. NOT a throw: the catch below zeroes the whole tile, which
+          // under-reports far more than missing the extra slots does.
+          const { data: staffing, error: staffingErr } = await supabase
+            .from("program_staffing")
+            .select("program_id, instructors_needed")
+            .eq("organization_id", org.id);
+          if (staffingErr) console.error("[admin/overview] program_staffing read failed - counting one lead per class", staffingErr.message);
+          const neededById = new Map((staffing ?? []).map((s) => [s.program_id, Math.max(1, Number(s.instructors_needed ?? 1))]));
           for (const p of programs ?? []) {
             if (!termsInStaffing.has(p.term)) continue; // skip terms not yet being staffed
-            const hasLead = active.some((a) => a.program_id === p.id && a.role === "lead");
-            if (!hasLead) afterschoolOpen++;
+            // One open hire per unfilled slot, as the camp count does. At 1 needed
+            // this is exactly the old "no lead = one open hire".
+            const leads = active.filter((a) => a.program_id === p.id && a.role === "lead").length;
+            afterschoolOpen += Math.max(0, (neededById.get(p.id) ?? 1) - leads);
           }
         }
 
