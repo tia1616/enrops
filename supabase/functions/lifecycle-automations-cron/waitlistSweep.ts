@@ -534,18 +534,19 @@ export async function runWaitlistSweep(
           // Logged on the failure path too. The row is the only surviving trace that we
           // tried and could not reach this family about a place that was open for them.
           // "Resend 422: ..." is what makes the Didn't-send panel read it as "the email
-          // address on file looks invalid"; the label says the place is gone too, since
-          // fixing the address will NOT bring the offer back.
+          // address on file looks invalid". On a drop the SUBJECT says the place is gone
+          // too, since fixing the address will NOT bring the offer back. It has to be the
+          // subject, not just the label: DeliveryIssuesPanel titles a row
+          // `rendered_subject || label`, so a label behind the invite subject never shows.
+          const DROPPED = 'Address refused: taken off the waiting list';
           await logTransactionalSend(supabase, {
             organizationId: orgId,
             source: 'waitlist_invite',
             contextKey: `registration:${row.registration_id}:invite:${row.invite_token}`,
             email: row.parent_email,
             parentId,
-            label: droppedUnreachable
-              ? 'Address refused: taken off the waiting list'
-              : undefined,
-            subject: built.subject,
+            label: droppedUnreachable ? DROPPED : undefined,
+            subject: droppedUnreachable ? `${DROPPED}. ${built.subject}` : built.subject,
             send: { ok: false, error: formatSendError(resp.status, body) },
           });
         } else {
