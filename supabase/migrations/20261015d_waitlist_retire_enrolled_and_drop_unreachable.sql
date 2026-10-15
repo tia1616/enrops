@@ -24,8 +24,7 @@
 --    not rewritten: trim, lower, collapse internal whitespace.
 --
 --    ENROLLED = status 'confirmed' and cancelled_at null. Deliberately NARROWER than
---    registration_is_enrolled() in the staffing2 work (20261015a there, not yet on
---    either database), which also counts payment_status 'paid'. A wrong match here
+--    registration_is_enrolled() (20261015a), which also counts payment_status 'paid'. A wrong match here
 --    silently removes a family from a list, so this takes the strict reading: prod
 --    holds rows with status 'cancelled', payment_status 'paid' and cancelled_at null
 --    (apps-script-roster-sync cancels without stamping cancelled_at), and the wider
