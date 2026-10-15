@@ -3021,6 +3021,9 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           }}
           availableDates={assignSubFor.dates}
           defaultDate={assignSubFor.defaultDate ?? null}
+          coInstructorIds={(enriched.get(assignSubFor.program.id)?.rows ?? [])
+            .filter((r) => r.id !== assignSubFor.lead?.id && r.instructor_id)
+            .map((r) => r.instructor_id)}
           organizationId={org?.id}
           instructors={state.instructors}
           onClose={() => setAssignSubFor(null)}
@@ -3795,8 +3798,14 @@ function ProgramCard({ program, loc, tint, status, flags, lead, sub, subNeeded, 
   // ones filed against its own assignment, and each row's warning names who is
   // out - one line folded onto the lead would file a second instructor's day
   // against the wrong person and say the wrong name.
+  // Sub days filed against an assignment no longer on the class (a replaced
+  // instructor's booked cover) stay on the LEAD's line - where a one-instructor
+  // card has always shown every sub day - so a live, paid cover never drops
+  // off the card.
+  const activeIds = new Set((staffing?.rows ?? []).map((r) => r.id));
+  const leadId = lead?.id ?? staffing?.rows?.[0]?.id;
   const perRow = multi ? (staffing.rows ?? []).map((r) => {
-    const own = (sub?.subs ?? []).filter((s) => s.assignmentId === r.id);
+    const own = (sub?.subs ?? []).filter((s) => s.assignmentId === r.id || (r.id === leadId && !activeIds.has(s.assignmentId)));
     const out = staffing.subNeededByRow?.get(r.id) ?? [];
     return {
       r,

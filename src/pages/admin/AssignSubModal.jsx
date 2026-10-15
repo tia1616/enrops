@@ -150,6 +150,7 @@ export default function AssignSubModal({
   availableDates,             // optional string[] of valid class dates — renders a date picker (afterschool, which has no day-tiles)
   organizationId,
   instructors,                // full instructor list for the org
+  coInstructorIds = [],       // the class's OTHER instructors - already in the room, never its sub
   onClose,
   onSubmitted,                // (substitutionId) => void — a send landed
   onChanged,                  // () => void — the day changed but the modal stays open (a release)
@@ -183,12 +184,17 @@ export default function AssignSubModal({
   const minDate = parentType === 'camp' ? sessionInfo?.starts_on : sessionInfo?.first_session_date;
   const maxDate = parentType === 'camp' ? sessionInfo?.ends_on   : null;
 
-  // Eligible subs = everyone in the org except the parent's regular instructor.
+  // Eligible subs = everyone in the org except the parent's regular instructor
+  // and, on a class with more than one, its other instructors: covering one
+  // instructor's day with the other one leaves the class an adult short.
+  const coKey = (coInstructorIds ?? []).join(",");
   const eligible = useMemo(() => {
+    const co = new Set(coInstructorIds ?? []);
     return (instructors ?? [])
-      .filter((i) => i.id !== parentAssignment?.instructor_id)
+      .filter((i) => i.id !== parentAssignment?.instructor_id && !co.has(i.id))
       .sort((a, b) => shortName(a).localeCompare(shortName(b)));
-  }, [instructors, parentAssignment?.instructor_id]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [instructors, parentAssignment?.instructor_id, coKey]);
 
   // Rank by availability match: exact day+time matches first, then other free
   // instructors, then marked-off / already-working; alpha within each rank.

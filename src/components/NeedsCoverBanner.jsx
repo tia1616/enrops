@@ -196,7 +196,7 @@ export default function NeedsCoverBanner({ org, parentType, parentNames = null }
             ))}
           </div>
           <div style={{ fontSize: 12, color: MUTED, marginTop: 8 }}>
-            Line up another sub on the day below, or the lead can take it back.
+            Line up another sub on the day below, or the instructor can take it back.
           </div>
         </div>
       )}

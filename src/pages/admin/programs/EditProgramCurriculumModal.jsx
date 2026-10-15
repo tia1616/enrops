@@ -267,7 +267,11 @@ export default function EditProgramCurriculumModal({
             .eq("program_id", program.id)
             .eq("organization_id", org.id)
             .in("status", ["confirmed", "published"])
-            .not("email_sent_at", "is", null),
+            .not("email_sent_at", "is", null)
+            // The SAME order notify-program-curriculum-change uses, done by the
+            // database: a browser sort of uuid strings need not match Postgres's
+            // uuid order, and the first one is who the preview is rendered as.
+            .order("id", { ascending: true }),
           // Reply-to is informational here (so the admin can see what email
           // address families will be told to write to). The edge fn re-loads
           // it server-side at send time — never trust the client copy.
@@ -317,7 +321,7 @@ export default function EditProgramCurriculumModal({
         // assignment order - so the preview names exactly who will get it.
         const seen = new Set();
         const list = [];
-        for (const a of [...(asgsRes.data ?? [])].sort((x, y) => String(x.id).localeCompare(String(y.id)))) {
+        for (const a of asgsRes.data ?? []) {
           const i = a.instructor;
           if (!i?.email) continue;
           const email = String(i.email).trim().toLowerCase();
