@@ -1514,12 +1514,19 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
     // one's price. Same prices (the usual case) are unchanged.
     const distinctRegular = new Set(allPrograms.map((p) => p.price_cents).filter((c) => c > 0));
     const distinctEarly = new Set(allPrograms.map((p) => p.early_bird_price_cents).filter((c): c is number => c != null && c > 0));
-    tokens.set("regular_price", distinctRegular.size > 1 ? advertisedPriceRangeLabel(allPrograms.map((p) => p.price_cents), feeOrg) : advertisedPriceLabel(program.price_cents, feeOrg));
-    tokens.set("early_bird_price", distinctEarly.size > 1 ? advertisedPriceRangeLabel(allPrograms.map((p) => p.early_bird_price_cents), feeOrg) : advertisedPriceLabel(program.early_bird_price_cents, feeOrg));
+    // Mixed = different regular OR early-bird prices across this school's programs.
+    // Then the early bird is quoted only if EVERY program has one (a range that
+    // skips a class would promise it a discount it does not have), and the saving
+    // only if it is the same for all (else "" and the copy omits it).
+    const mixedPrices = distinctRegular.size > 1 || distinctEarly.size > 1;
+    const everyEarly = allPrograms.every((p) => (p.early_bird_price_cents ?? 0) > 0);
+    const savingLabels = new Set(allPrograms.map((p) => advertisedSavingLabel(p.price_cents, p.early_bird_price_cents, feeOrg)));
+    tokens.set("regular_price", mixedPrices ? advertisedPriceRangeLabel(allPrograms.map((p) => p.price_cents), feeOrg) : advertisedPriceLabel(program.price_cents, feeOrg));
+    tokens.set("early_bird_price", mixedPrices ? (everyEarly ? advertisedPriceRangeLabel(allPrograms.map((p) => p.early_bird_price_cents), feeOrg) : "") : advertisedPriceLabel(program.early_bird_price_cents, feeOrg));
     tokens.set("early_bird_deadline", program.early_bird_deadline ? formatHumanDate(program.early_bird_deadline) : "");
     // Like for like: both sides all-in, or the advertised saving moves by the
     // difference between two fees and states a discount nobody gets.
-    tokens.set("savings", advertisedSavingLabel(program.price_cents, program.early_bird_price_cents, feeOrg));
+    tokens.set("savings", mixedPrices ? (savingLabels.size === 1 ? [...savingLabels][0] : "") : advertisedSavingLabel(program.price_cents, program.early_bird_price_cents, feeOrg));
     // vip_price is left BARE on purpose. A VIP bundle is three registrations
     // and therefore three fees, and this column holds only the full-year
     // total - the per-term figure it would have to be split into is not here,
