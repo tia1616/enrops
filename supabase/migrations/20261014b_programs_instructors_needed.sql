@@ -27,6 +27,12 @@ alter table public.programs
   add column if not exists instructors_needed integer not null default 1,
   add column if not exists second_instructor_after_registrations integer;
 
+-- Drop-then-add so the whole file is safe to run twice (a parity sweep, or a
+-- prod apply after a partial run). A bare ADD CONSTRAINT raised 42710 on the
+-- second run and aborted before the view below was ever created.
+alter table public.programs
+  drop constraint if exists programs_instructors_needed_check,
+  drop constraint if exists programs_second_instructor_after_registrations_check;
 alter table public.programs
   add constraint programs_instructors_needed_check
     check (instructors_needed between 1 and 4),

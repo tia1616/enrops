@@ -845,8 +845,14 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     if (state.status !== "ready") return m;
     for (const p of state.programs) {
       const needed = state.needed?.[p.id] ?? 1;
-      const status = deriveStatus(p.id, state.assignments, needed);
       const own = state.assignments.filter((a) => a.program_id === p.id && a.status !== "withdrawn" && a.status !== "declined");
+      // Slots DRAWN = the larger of what the class needs and who is on it. A
+      // camp whose enrollment drops back under its trigger still has two
+      // instructors assigned and paid; drawing it by `needed` alone hid the
+      // second one with no way to reach their row. Prod had zero classes with
+      // more active rows than one on 2026-10-15, so this changes nothing live.
+      const slots = Math.max(needed, own.length);
+      const status = deriveStatus(p.id, state.assignments, slots);
       const lead = own.find((a) => a.role === "lead") ?? own[0] ?? null;
       // Dates the assigned lead flagged as unavailable that land on this class's
       // sessions — surfaced on the card so the conflict is visible without opening it.
@@ -860,7 +866,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       // Understaffed = needs more than one and not all of them have said yes.
       const understaffed = needed > 1 && acceptedCount < needed;
       // `flags` rides alongside `status` rather than overwriting it - see deriveStatus.
-      m.set(p.id, { status, flags: lead?.flags ?? [], lead, subNeeded, rows, needed, openSlots, acceptedCount, understaffed });
+      m.set(p.id, { status, flags: lead?.flags ?? [], lead, subNeeded, rows, needed, slots, openSlots, acceptedCount, understaffed });
     }
     return m;
   }, [state, availByInstr]);
@@ -1083,8 +1089,15 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     const c = { assigned: 0, accepted: 0, flagged: 0, changeRequested: 0, needsHire: 0, instructors: 0, proposed: 0, sendable: 0, draft: 0 };
     if (state.status !== "ready") return c;
     for (const e of enriched.values()) {
-      if (e.status === "needs_hire") c.needsHire++;
-      else if (e.status === "change_requested") c.changeRequested++;
+      // An open slot is counted ON ITS OWN, not only when it is the headline
+      // status. On a two-instructor class a change request or a flag outranks
+      // the empty slot on the card, and counting by status alone dropped that
+      // class from "need an instructor" - so the Draft step could read "built"
+      // and Match look like it had nothing to do. On a one-instructor class an
+      // open slot IS status needs_hire, so that count is unchanged.
+      if (e.status === "needs_hire" || (e.openSlots ?? 0) > 0) c.needsHire++;
+      if (e.status === "needs_hire") continue;
+      if (e.status === "change_requested") c.changeRequested++;
       else if (e.status === "flagged") c.flagged++;
       else if (e.status === "accepted") c.accepted++;
       // A draft is a suggestion nobody has approved. Counting it as "assigned"
@@ -2488,7 +2501,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     refreshAvailabilityQuiet(); // fire-and-forget; picker updates live when it lands
     const e = enriched.get(program.id);
     let target = slot;
-    if (target === undefined && (e?.needed ?? 1) > 1) {
+    if (target === undefined && (e?.slots ?? 1) > 1) {
       // Whole card on a multi-slot class: go to the slot that needs the operator -
       // an empty one first, otherwise the row whose state the card is showing.
       target = (e?.openSlots ?? 0) > 0
@@ -3653,7 +3666,7 @@ function StaffingList({ programs, enriched, enrollment, locName, locArea, onRowC
                         )}
                       </> : <span style={{ color: MUTED }}>—</span>}</td>
                       <td style={td}>
-                        {(e?.needed ?? 1) > 1 ? (
+                        {(e?.slots ?? 1) > 1 ? (
                           // Every instructor on the class, then what is still missing.
                           // Clicking the row lands on the empty slot first (openRow).
                           <>
@@ -3727,9 +3740,9 @@ function WeekRail({ weeks, signals, effective, onSelect }) {
 
 function ProgramCard({ program, loc, tint, status, flags, lead, sub, subNeeded, weekDate, weekSub, onClick, onSubClick, staffing, onSlotClick }) {
   const sc = statusColor(status);
-  // Only a class that NEEDS more than one instructor draws slots; every other
-  // class keeps the single chip below, unchanged.
-  const multi = (staffing?.needed ?? 1) > 1;
+  // A class that needs, OR already has, more than one instructor draws slots;
+  // every other class keeps the single chip below, unchanged.
+  const multi = (staffing?.slots ?? 1) > 1;
   const who = lead ? (lead.instructor_preferred || lead.instructor_first || "Instructor") + (lead.instructor_last ? ` ${lead.instructor_last}` : "") : null;
   // In week mode, only flag if THIS week's session is one the lead can't make.
   const conflictDates = weekDate ? (subNeeded ?? []).filter((d) => d === weekDate) : (subNeeded ?? []);

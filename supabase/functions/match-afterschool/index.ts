@@ -902,7 +902,11 @@ serve(async (req) => {
         // Classes with at least one locked row - the same number this always was
         // for one-instructor classes.
         locked_confirmed: lockedCount.size,
-        assigned: assignedDecisions.length,
+        // CLASSES matched this run, not slots: the board prints this as
+        // "Matched {assigned} of {programs_total} classes", and a two-instructor
+        // class yields two decisions. Counting decisions read "11 of 10".
+        assigned: new Set(assignedDecisions.map((d) => d.program_id)).size,
+        slots_assigned: assignedDecisions.length,
         needs_hire: decisions.filter((d) => d.status === 'needs_hire').length,
         instructors_in_pool: pool.length,
         missing_surveys: missingSurveys,
