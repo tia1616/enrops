@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { API_BASE } from '../lib/supabase.js';
+import { emailIsValid } from '../lib/validation.js';
 
 // The light waitlist join form.
 //
@@ -72,6 +73,13 @@ export default function WaitlistModal({ program, orgSlug, onClose, onJoined }) {
   async function submit(e) {
     e?.preventDefault?.();
     if (!canSubmit) return;
+    // The input's type="email" is not enough: the browser accepts "name@yahoo" with no
+    // ".com", and every email to that address then fails. Same rule and same words as
+    // join-waitlist, which refuses it regardless; this just says so before the round trip.
+    if (!emailIsValid(email)) {
+      setError('That email address does not look complete. Please check it, for example name@gmail.com.');
+      return;
+    }
     setSubmitting(true);
     setError('');
     try {

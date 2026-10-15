@@ -82,7 +82,33 @@ export interface WaitlistSweepResult {
   unsent_rolled_back: number;
   /** "Your hold ran out and the place has gone" notes actually delivered to Resend. */
   lapse_notices_sent: number;
+  /**
+   * Waiting-list rows closed silently because that child is already enrolled in the
+   * class by some other route (registered on the class page, added by the business).
+   */
+  retired_enrolled: number;
+  /**
+   * Families taken off the list because Resend refused their address outright. The
+   * seat moves on to the next family in the same tick instead of retrying forever.
+   */
+  dropped_unreachable: number;
   errors: Array<{ program_id?: string; error: string }>;
+}
+
+/**
+ * Did Resend refuse the RECIPIENT, as opposed to anything else about the send?
+ *
+ * Deliberately narrow. A 422 alone is not enough: Resend also returns 422 for a bad
+ * From address or a malformed payload, which are OUR faults and would take every
+ * family on the platform off their lists if treated as theirs. Likewise 401/403 (our
+ * key). Only a 422 whose body names the `to` field is the family's address. This is
+ * the exact message prod recorded 78 times for "christine.wynne@yahoo":
+ *   Resend 422: {"message":"Invalid `to` field. The email address needs to follow ...
+ * If Resend ever rewords it, this returns false and the sweep falls back to the old
+ * roll-back-and-retry: noisy, but it never drops a family who could be reached.
+ */
+export function isUnreachableAddress(status: number, body: string): boolean {
+  return status === 422 && /invalid\s+`to`\s+field/i.test(body ?? '');
 }
 
 /**
@@ -103,6 +129,7 @@ export async function runWaitlistSweep(
     skipped_no_seat: 0, skipped_quiet_hours: 0, skipped_nobody_offerable: 0,
     skipped_lapsed_awaiting_expiry: 0, skipped_release_failed: 0, hit_offer_cap: 0,
     unsent_rolled_back: 0, lapse_notices_sent: 0,
+    retired_enrolled: 0, dropped_unreachable: 0,
     errors: [],
   };
 
@@ -193,6 +220,33 @@ export async function runWaitlistSweep(
         program_id: programId, released,
       });
     }
+  }
+
+  // ── 0c. Close the rows of families who are already in the class ──────────
+  //
+  // BEFORE EXPIRE, because expire is what emails "that place has been passed on". On
+  // 10/14 that note went to a family who had paid for the class the evening before:
+  // they registered through the class page instead of the invite link, which minted a
+  // second students row, so nothing tied their seat to their waiting-list row. Only the
+  // invite link ever spent a waitlist row. waitlist_retire_enrolled asks "is this child
+  // already enrolled?" for every route at once, and closes the row without an email.
+  //
+  // A FAILURE HERE ENDS THE TICK, and that is deliberately unlike the expire failure
+  // below, which carries on. Both steps after this one email families on the premise
+  // that they are still waiting: expire says "the place has been passed on", offer says
+  // "a place opened up". Without this step either can land on a child already in the
+  // class, and neither can be unsent. Stopping costs one tick (the release step above
+  // has already run, so no checkout is left blind); the error is recorded in the run
+  // summary, so a persistent failure reads as an error, not as a quiet platform.
+  const { data: retired, error: retireErr } = await supabase.rpc('waitlist_retire_enrolled');
+  if (retireErr) {
+    console.error('[waitlist-sweep] retire-enrolled failed; skipping expiry and offers this tick', retireErr.message);
+    out.errors.push({ error: `retire enrolled: ${retireErr.message}` });
+    return out;
+  }
+  out.retired_enrolled = ((retired ?? []) as unknown[]).length;
+  if (out.retired_enrolled) {
+    console.log('[waitlist-sweep] closed waiting-list rows for children already enrolled', retired);
   }
 
   // ── 1. Expire ────────────────────────────────────────────────────────────
@@ -352,7 +406,7 @@ export async function runWaitlistSweep(
   // already holding a live invite and anyone mid-checkout.
 
   /** Why one attempt at offering a seat stopped. Anything but 'offered' ends the program. */
-  type OfferOutcome = 'offered' | 'no_seat' | 'nobody_offerable' | 'lapsed_awaiting_expiry' | 'failed';
+  type OfferOutcome = 'offered' | 'unreachable' | 'no_seat' | 'nobody_offerable' | 'lapsed_awaiting_expiry' | 'failed';
 
   /**
    * Offer ONE seat in one program: mint the hold, email the family, and undo the hold if
@@ -413,6 +467,9 @@ export async function runWaitlistSweep(
       // hold a link that now reads "no longer valid" and get a fresh one minutes later.
       // Two emails and one dead link is a far smaller harm than a lost place.
       let sent = false;
+      // Resend refused the To address itself, so no retry can ever deliver this. See
+      // isUnreachableAddress and the !sent branch below.
+      let unreachable = false;
       try {
         const prog = await getProgram(programId);
         const brand = await loadOrgBrand(supabase, orgId);
@@ -448,6 +505,7 @@ export async function runWaitlistSweep(
           const body = await resp.text();
           console.error('[waitlist-sweep] invite send failed', resp.status, body);
           out.errors.push({ program_id: programId, error: `send ${resp.status}` });
+          unreachable = isUnreachableAddress(resp.status, body);
           // Logged on the failure path too. This send is rolled back below, so
           // the row is the only surviving trace that we tried and could not
           // reach this family about a place that was actually open for them.
@@ -497,6 +555,36 @@ export async function runWaitlistSweep(
       } catch (mailErr) {
         console.error('[waitlist-sweep] invite send threw', (mailErr as Error).message);
         out.errors.push({ program_id: programId, error: `send: ${(mailErr as Error).message}` });
+      }
+
+      if (!sent && unreachable) {
+        // AN ADDRESS THAT CAN NEVER WORK IS NOT A RETRY. Rolling this back, as the branch
+        // below does, put the family straight back at the head of the queue, and the next
+        // tick refused the same address again: 78 failed sends in two days on prod, while
+        // the family behind them and a second free seat were never offered at all.
+        // So the family comes off the list, as if their offer had lapsed, and the seat
+        // goes to the next family in this same tick. The failed send was logged above as
+        // "Resend 422: ...", which the business sees in Didn't send as "the email address
+        // on file looks invalid", so they can reach the family another way.
+        const { data: dropped, error: dropErr } = await supabase
+          .rpc('waitlist_drop_unreachable', {
+            p_registration_id: row.registration_id,
+            p_invite_token: row.invite_token,
+          });
+        if (!dropErr && dropped === true) {
+          out.offered -= 1; // it did not really happen
+          out.dropped_unreachable += 1;
+          console.warn('[waitlist-sweep] took a family off the list: their address was refused', {
+            program_id: programId, registration_id: row.registration_id,
+          });
+          return 'unreachable';
+        }
+        // The drop did not happen (it errored, or the row moved under us). Fall through
+        // to the ordinary undo, which is the old, safe behaviour: retried next tick.
+        if (dropErr) {
+          console.error('[waitlist-sweep] could not drop an unreachable family; rolling back instead', dropErr.message);
+          out.errors.push({ program_id: programId, error: `drop unreachable: ${dropErr.message}` });
+        }
       }
 
       if (!sent) {
@@ -571,6 +659,9 @@ export async function runWaitlistSweep(
       for (let i = 0; i < MAX_OFFERS_PER_PROGRAM_PER_TICK; i += 1) {
         const outcome = await offerOneSeat(programId, orgId, org);
         if (outcome === 'offered') { offeredHere += 1; continue; }
+        // The seat is free again and the family is off the list, so ask for the next one.
+        // Still inside the cap, so a queue full of dead addresses cannot loop unbounded.
+        if (outcome === 'unreachable') continue;
 
         // Counted only when NOTHING was offered here. After a successful offer these are
         // the ordinary way the loop ends - the seats ran out because we just filled them -
