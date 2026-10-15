@@ -88,3 +88,27 @@ export function advertisedSavingLabel(
     ? `$${(saving / 100).toFixed(0)}`
     : `$${(saving / 100).toFixed(2)}`;
 }
+
+/**
+ * One price label for SEVERAL programs at the same school.
+ *
+ * The inline price tokens used to describe ONE program, so a school running a
+ * $285 and a $299 class told every family "$293.55" - wrong for the dearer
+ * class. Same prices (the common case) render exactly as before; different
+ * prices render "low to high", and the program rows carry each class's own.
+ * Programs with no price are ignored; no priced program renders ''.
+ */
+export function advertisedPriceRangeLabel(
+  baseCentsList: Array<number | null | undefined>,
+  org: AdvertisedFeeConfig | null | undefined,
+): string {
+  const cents = baseCentsList
+    .filter((c): c is number => c != null && Number.isFinite(Number(c)) && Number(c) > 0)
+    .map((c) => advertisedPriceCents(Number(c), org))
+    .sort((a, b) => a - b);
+  if (cents.length === 0) return '';
+  const fmt = (n: number) => (n % 100 === 0 ? `$${(n / 100).toFixed(0)}` : `$${(n / 100).toFixed(2)}`);
+  const lo = cents[0];
+  const hi = cents[cents.length - 1];
+  return lo === hi ? fmt(lo) : `${fmt(lo)} to ${fmt(hi)}`;
+}

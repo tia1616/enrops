@@ -25,7 +25,7 @@
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
-import { advertisedPriceLabel, advertisedSavingLabel, type AdvertisedFeeConfig } from "../_shared/advertisedPrice.ts";
+import { advertisedPriceLabel, advertisedPriceRangeLabel, advertisedSavingLabel, type AdvertisedFeeConfig } from "../_shared/advertisedPrice.ts";
 import { resolveFeeConfig, loadPlatformFeeDefaults } from "../_shared/feeConfig.ts";
 import { loadOrgBrand, formatFromAddress, renderSignatureBlock, type OrgBrand } from "../_shared/orgBrand.ts";
 import { listUnsubscribeHeaders } from "../_shared/listUnsubscribe.ts";
@@ -1502,14 +1502,20 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
     // and the soonest deadline, is read first.
     tokens.set(
       "program_details",
-      buildProgramDetails(allPrograms, org.registration_close_days_before),
+      buildProgramDetails(allPrograms, org.registration_close_days_before, feeOrg),
     );
     tokens.set("session_count", program.session_count != null ? String(program.session_count) : "");
     // ALL-IN. These tokens are the only way a price reaches a marketing email -
     // the copywriter is forbidden from writing dollar amounts inline - so this
     // is the one place that decides what a family is quoted.
-    tokens.set("regular_price", advertisedPriceLabel(program.price_cents, feeOrg));
-    tokens.set("early_bird_price", advertisedPriceLabel(program.early_bird_price_cents, feeOrg));
+    //
+    // ONE PRICE FOR ONE PROGRAM, A RANGE FOR SEVERAL AT DIFFERENT PRICES. A
+    // school running a $285 and a $299 class used to quote every family the first
+    // one's price. Same prices (the usual case) are unchanged.
+    const distinctRegular = new Set(allPrograms.map((p) => p.price_cents).filter((c) => c > 0));
+    const distinctEarly = new Set(allPrograms.map((p) => p.early_bird_price_cents).filter((c): c is number => c != null && c > 0));
+    tokens.set("regular_price", distinctRegular.size > 1 ? advertisedPriceRangeLabel(allPrograms.map((p) => p.price_cents), feeOrg) : advertisedPriceLabel(program.price_cents, feeOrg));
+    tokens.set("early_bird_price", distinctEarly.size > 1 ? advertisedPriceRangeLabel(allPrograms.map((p) => p.early_bird_price_cents), feeOrg) : advertisedPriceLabel(program.early_bird_price_cents, feeOrg));
     tokens.set("early_bird_deadline", program.early_bird_deadline ? formatHumanDate(program.early_bird_deadline) : "");
     // Like for like: both sides all-in, or the advertised saving moves by the
     // difference between two fees and states a discount nobody gets.
@@ -1924,7 +1930,12 @@ function registrationCloseDate(
 function buildProgramDetails(
   programs: ProgramRow[],
   daysBefore: number | null,
+  feeOrg?: AdvertisedFeeConfig | null,
 ): string {
+  // Each row names its OWN price, but only when the programs here are priced
+  // differently - the inline {{regular_price}} then reads "low to high" and a
+  // family needs to see which class costs what. Same price everywhere: unchanged.
+  const showPrices = new Set(programs.map((p) => p.price_cents).filter((c) => c > 0)).size > 1;
   const sorted = [...programs].sort((a, b) =>
     (a.first_session_date ?? "9999").localeCompare(b.first_session_date ?? "9999")
   );
@@ -1981,7 +1992,9 @@ function buildProgramDetails(
     // the schedule being present. Today a deadline implies a start date implies
     // a schedule, so the coupling would hold - but it would hold by accident,
     // and the next person to add a field here should not have to notice that.
-    const detail = (schedule || closeSentence) ? `<br>${schedule}${closeSentence}` : "";
+    const priceLabel = showPrices ? advertisedPriceLabel(p.price_cents, feeOrg) : "";
+    const priceSentence = priceLabel ? ` ${escapeHtml(priceLabel)}.` : "";
+    const detail = (schedule || closeSentence || priceSentence) ? `<br>${schedule}${priceSentence}${closeSentence}` : "";
     return `<li><strong>${name}</strong>${detail}</li>`;
   }).filter((s) => s.length > 0);
   return items.length > 0 ? `<ul>${items.join("")}</ul>` : "";
