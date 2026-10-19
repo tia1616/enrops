@@ -1,7 +1,7 @@
 // Pins how the registration page says where a camp is.
 // Repo convention: plain node script with a pass/fail counter, run by
 // scripts/run-src-tests.mjs.
-import { groupCampsByArea, campWhereLabel, NO_AREA_HEADING } from './campAreas.js';
+import { groupCampsByArea, campWhereLabel, campAreaOf, NO_AREA_HEADING } from './campAreas.js';
 
 let pass = 0, fail = 0;
 function eq(name, actual, expected) {
@@ -41,6 +41,14 @@ eq('a camp with no location row at all is not lost',
 eq('keys are unique and stable',
   groupCampsByArea([camp('a', 'Camas'), camp('b', null)]).map((g) => g.key),
   ['area:Camas', 'area:none']);
+
+// The filter buttons read areas through campAreaOf too, so a stray space must
+// land in the same heading AND the same button.
+eq('a stray space does not split a city',
+  shape(groupCampsByArea([camp('a', 'Vancouver'), camp('b', 'Vancouver ')])),
+  [['Vancouver', ['a', 'b']]]);
+eq('campAreaOf trims', campAreaOf(camp('a', ' Camas ')), 'Camas');
+eq('campAreaOf: no location row is empty, not a crash', campAreaOf({ id: 'z' }), '');
 
 // --- where line ---------------------------------------------------------------
 eq('venue and address',
