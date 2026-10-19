@@ -13,7 +13,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext.jsx";
 import DocumentStatusBadge from "../../components/DocumentStatusBadge.jsx";
-import { sendPartnerSignInLink, myPartnerMemberships } from "../../lib/partnerPortal.js";
+import { sendPartnerSignInLink, myPartnerMemberships, listPartnerInstructors } from "../../lib/partnerPortal.js";
+import { instructorChecklist } from "../../lib/partnerPortalLogic.js";
 import { listProviderDocuments, openDocumentInNewTab } from "../../lib/providerDocuments.js";
 import { DOC_TYPES, formatDate, compareByExpiry } from "../../lib/providerDocumentLogic.js";
 
@@ -79,6 +80,9 @@ export default function PartnerPortal() {
 
   const [memberships, setMemberships] = useState(null);
   const [docs, setDocs] = useState(null);
+  // { [partner_id]: rows } once loaded; one list per partner this login holds.
+  const [instructors, setInstructors] = useState(null);
+  const [instructorError, setInstructorError] = useState("");
   const [error, setError] = useState("");
 
   // Keyed on the user ID, not the user object: Supabase hands back a new user
@@ -88,6 +92,8 @@ export default function PartnerPortal() {
     // own load is in flight.
     setMemberships(null);
     setDocs(null);
+    setInstructors(null);
+    setInstructorError("");
     setError("");
     if (!userId || !org?.id) return;
     let cancelled = false;
@@ -98,6 +104,13 @@ export default function PartnerPortal() {
         if (cancelled) return;
         setMemberships(mine);
         if (mine.length) {
+          // Separate failure from the documents: a failed instructor list must
+          // not hide the insurance and agreements, and vice versa.
+          Promise.all(mine.map((m) => listPartnerInstructors(m.partner_id).then((rows) => [m.partner_id, rows])))
+            .then((pairs) => { if (!cancelled) setInstructors(Object.fromEntries(pairs)); })
+            .catch((err) => {
+              if (!cancelled) setInstructorError(`Couldn't load instructors: ${err?.message ?? "unknown error"}`);
+            });
           const d = await listProviderDocuments(org.id);
           if (!cancelled) setDocs(d);
         }
@@ -198,6 +211,81 @@ export default function PartnerPortal() {
           </div>
         </section>
       ))}
+
+      {memberships.map((m) => (
+        <InstructorsSection
+          key={m.partner_id}
+          orgName={org.name}
+          partnerName={memberships.length > 1 ? m.partner_name : null}
+          rows={instructors ? instructors[m.partner_id] ?? [] : null}
+          error={instructorError}
+        />
+      ))}
+    </div>
+  );
+}
+
+// Instructors at this partner's sites. Status only: the report stays with the
+// provider. An instructor who has not given permission shows by name and site
+// with every detail withheld (the database returns them blank).
+function InstructorsSection({ orgName, partnerName, rows, error }) {
+  return (
+    <section className="mt-8 rounded-2xl bg-white p-6 shadow-card">
+      <h2 className="text-lg font-bold text-j2s-ink">
+        Instructors at your sites{partnerName ? ` (${partnerName})` : ""}
+      </h2>
+      {error ? (
+        <p className="error-text mt-3">{error}</p>
+      ) : rows === null ? (
+        <p className="mt-3 text-j2s-ink/60">Loading instructors…</p>
+      ) : rows.length === 0 ? (
+        <p className="mt-3 text-j2s-ink/70">{orgName} hasn't assigned any instructors at your sites yet.</p>
+      ) : (
+        <div className="mt-2 divide-y divide-j2s-ink/10">
+          {rows.map((r) => (
+            <InstructorRow key={r.instructor_id} row={r} />
+          ))}
+        </div>
+      )}
+      <p className="mt-4 text-xs text-j2s-ink/50">
+        Status only. {orgName} keeps each background check report. enrops displays verification status and does not
+        issue background reports.
+      </p>
+    </section>
+  );
+}
+
+function InstructorRow({ row }) {
+  const lines = instructorChecklist(row);
+  const name = [row.first_name, row.last_name].filter(Boolean).join(" ");
+  return (
+    <div className="py-4">
+      <div className="font-semibold text-j2s-ink">{name}</div>
+      <div className="text-sm text-j2s-ink/60">{(row.sites || []).join(", ")}</div>
+      {!row.shared ? (
+        <p className="mt-2 text-sm text-j2s-ink/70">
+          Waiting for {row.first_name || "this instructor"}'s permission to share their details.
+        </p>
+      ) : (
+        <>
+          {(row.email || row.phone) && (
+            <div className="mt-1 text-sm text-j2s-ink/70">
+              {row.email && <a className="text-j2s-purple hover:underline" href={`mailto:${row.email}`}>{row.email}</a>}
+              {row.email && row.phone ? " · " : ""}
+              {row.phone && <a className="text-j2s-purple hover:underline" href={`tel:${row.phone}`}>{row.phone}</a>}
+            </div>
+          )}
+          <ul className="mt-3 space-y-2">
+            {lines.map((l) => (
+              <li key={l.key} className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+                <span className="w-44 shrink-0 font-medium text-j2s-ink">{l.title}</span>
+                <DocumentStatusBadge badge={l.badge} />
+                {l.detail && <span className="text-j2s-ink/70">{l.detail}</span>}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </div>
   );
 }

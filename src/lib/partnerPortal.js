@@ -75,3 +75,15 @@ export async function myPartnerMemberships() {
   if (error) throw error;
   return data ?? [];
 }
+
+/**
+ * The provider's instructors at one partner's sites, with checklist dates.
+ * The database decides who may call it (that partner's logins, or the
+ * provider's owner/admin) and blanks every detail an instructor has not given
+ * permission to share. Never includes the background check report.
+ */
+export async function listPartnerInstructors(partnerId) {
+  const { data, error } = await supabase.rpc("partner_portal_instructors", { p_partner_id: partnerId });
+  if (error) throw error;
+  return data ?? [];
+}

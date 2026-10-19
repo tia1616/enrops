@@ -41,7 +41,13 @@ export default function BackgroundCheckSettings() {
   const [providerName, setProviderName] = useState("");
   const [providerUrl, setProviderUrl] = useState("");
   const [instructions, setInstructions] = useState("");
-  const [saved, setSaved] = useState({ enabled: true, providerName: "", providerUrl: "", instructions: "" });
+  // Months a check stays valid, shown to partners as the renewal date. The
+  // database reads the same key (private.background_check_valid_months):
+  // absent = 12, 0 = never expires.
+  const [validMonths, setValidMonths] = useState("12");
+  // Every key already stored, so a save never drops one this page doesn't edit.
+  const [storedCfg, setStoredCfg] = useState({});
+  const [saved, setSaved] = useState({ enabled: true, providerName: "", providerUrl: "", instructions: "", validMonths: "12" });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -68,7 +74,10 @@ export default function BackgroundCheckSettings() {
         providerName: cfg.provider_name ?? "",
         providerUrl: cfg.provider_url ?? "",
         instructions: cfg.instructions ?? "",
+        validMonths: /^\d{1,3}$/.test(String(cfg.valid_months ?? "")) ? String(cfg.valid_months) : "12",
       };
+      setStoredCfg(cfg);
+      setValidMonths(next.validMonths);
       setEnabled(next.enabled);
       setProviderName(next.providerName);
       setProviderUrl(next.providerUrl);
@@ -82,7 +91,10 @@ export default function BackgroundCheckSettings() {
   async function save() {
     setSaving(true); setError("");
     try {
+      const months = /^\d{1,3}$/.test(validMonths.trim()) ? Number(validMonths.trim()) : 12;
       const config = {
+        ...storedCfg,
+        valid_months: months,
         enabled,
         provider_name: providerName.trim() || null,
         provider_url: normalizeUrl(providerUrl) || null,
@@ -120,7 +132,10 @@ export default function BackgroundCheckSettings() {
         providerName: providerName.trim(),
         providerUrl: normalizeUrl(providerUrl),
         instructions: instructions.trim(),
+        validMonths: String(months),
       });
+      setStoredCfg(config);
+      setValidMonths(String(months));
       setProviderUrl(normalizeUrl(providerUrl));
       flash("Background check settings saved.");
     } catch (e) {
@@ -134,7 +149,8 @@ export default function BackgroundCheckSettings() {
     enabled !== saved.enabled ||
     providerName.trim() !== saved.providerName ||
     normalizeUrl(providerUrl) !== saved.providerUrl ||
-    instructions.trim() !== saved.instructions;
+    instructions.trim() !== saved.instructions ||
+    validMonths.trim() !== saved.validMonths;
 
   if (loading) {
     return <div style={{ padding: 40, color: MUTED, textAlign: "center" }}>Loading…</div>;
@@ -185,6 +201,13 @@ export default function BackgroundCheckSettings() {
             <label style={{ ...lbl, marginTop: 18 }}>Instructions for instructors</label>
             <textarea value={instructions} onChange={(e) => setInstructions(e.target.value)} rows={4} placeholder="e.g. Click the link above and complete your check. It takes about 10 minutes and the results come to us automatically." style={{ ...input, resize: "vertical", lineHeight: 1.5 }} />
             <div style={hint}>A short note telling instructors what to do. Optional.</div>
+
+            <label style={{ ...lbl, marginTop: 18 }}>A check stays valid for</label>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input type="number" min="0" max="120" value={validMonths} onChange={(e) => setValidMonths(e.target.value)} style={{ ...input, width: 90 }} />
+              <span style={{ fontSize: 14, color: INK }}>months</span>
+            </div>
+            <div style={hint}>Partners see each check's renewal date from this. 12 is standard. Enter 0 if your checks don't expire.</div>
           </div>
         )}
 
