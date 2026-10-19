@@ -19,9 +19,10 @@ import { DOC_TYPES, formatDate, compareByExpiry } from "../../lib/providerDocume
 
 const SECTION_TITLES = { insurance: "Insurance", agreement: "Agreements", other: "Other documents" };
 
-// Null when there is no expiry date: the badge already says "No expiry date".
+// The badge says "Current" for a document that never expires, so this line is
+// the one place that says why.
 function goodThrough(row) {
-  if (!row.expires_on) return null;
+  if (!row.expires_on) return "No expiry date";
   return row.expiry_status === "expired" ? `Expired ${formatDate(row.expires_on)}` : `Good through ${formatDate(row.expires_on)}`;
 }
 

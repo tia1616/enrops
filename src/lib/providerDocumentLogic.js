@@ -20,11 +20,18 @@ export function docTypeLabel(key) {
 
 // Words for the status the database returns. Keyed by the exact values
 // private.document_expiry_status() can produce.
+//
+// ARIELLE'S STATUS WORDS (build brief, Oct 16): Current / Expiring in 30 days /
+// Expired or Missing. "Missing" belongs to checklist items with nothing on file,
+// not to a document row. A document that never expires is on file and valid, so
+// it is Current; the "No expiry date" fact is shown beside it, not as the badge.
+// "Expiring in 30 days" is true only while expiring_soon means within 30 days
+// (20261012b), so change both together.
 export const EXPIRY_STATUS = {
   current: { label: "Current", tone: "good" },
-  expiring_soon: { label: "Expires soon", tone: "warn" },
+  expiring_soon: { label: "Expiring in 30 days", tone: "warn" },
   expired: { label: "Expired", tone: "bad" },
-  no_expiry: { label: "No expiry date", tone: "neutral" },
+  no_expiry: { label: "Current", tone: "good" },
 };
 
 export const MAX_FILE_BYTES = 10 * 1024 * 1024; // matches the bucket's file_size_limit

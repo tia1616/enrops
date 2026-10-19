@@ -15,7 +15,8 @@ const TONE = {
 };
 
 export default function DocumentStatusBadge({ status }) {
-  const s = EXPIRY_STATUS[status] ?? EXPIRY_STATUS.no_expiry;
+  // An unknown status must never borrow a green "Current" chip.
+  const s = EXPIRY_STATUS[status] ?? { label: "In review", tone: "neutral" };
   const t = TONE[s.tone];
   return (
     <span style={{ display: "inline-block", padding: "2px 9px", borderRadius: 999, fontSize: 12, fontWeight: 600, background: t.bg, color: t.ink, border: `1px solid ${t.border}`, whiteSpace: "nowrap" }}>
