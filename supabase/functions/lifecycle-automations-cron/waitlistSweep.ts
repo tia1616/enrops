@@ -27,6 +27,7 @@ import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 import { buildWaitlistInvite, buildWaitlistLapsed } from '../_shared/waitlistEmail.ts';
 import { logTransactionalSend, formatSendError } from '../_shared/sendLog.ts';
 import { orgHour, withinSendingHours } from './welcomeWindow.ts';
+import { isUnreachableAddress } from './unreachableAddress.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 
@@ -82,6 +83,16 @@ export interface WaitlistSweepResult {
   unsent_rolled_back: number;
   /** "Your hold ran out and the place has gone" notes actually delivered to Resend. */
   lapse_notices_sent: number;
+  /**
+   * Waiting-list rows closed silently because that child is already enrolled in the
+   * class by some other route (registered on the class page, added by the business).
+   */
+  retired_enrolled: number;
+  /**
+   * Families taken off the list because Resend refused their address outright. The
+   * seat moves on to the next family in the same tick instead of retrying forever.
+   */
+  dropped_unreachable: number;
   errors: Array<{ program_id?: string; error: string }>;
 }
 
@@ -103,6 +114,7 @@ export async function runWaitlistSweep(
     skipped_no_seat: 0, skipped_quiet_hours: 0, skipped_nobody_offerable: 0,
     skipped_lapsed_awaiting_expiry: 0, skipped_release_failed: 0, hit_offer_cap: 0,
     unsent_rolled_back: 0, lapse_notices_sent: 0,
+    retired_enrolled: 0, dropped_unreachable: 0,
     errors: [],
   };
 
@@ -193,6 +205,33 @@ export async function runWaitlistSweep(
         program_id: programId, released,
       });
     }
+  }
+
+  // ── 0c. Close the rows of families who are already in the class ──────────
+  //
+  // BEFORE EXPIRE, because expire is what emails "that place has been passed on". On
+  // 10/14 that note went to a family who had paid for the class the evening before:
+  // they registered through the class page instead of the invite link, which minted a
+  // second students row, so nothing tied their seat to their waiting-list row. Only the
+  // invite link ever spent a waitlist row. waitlist_retire_enrolled asks "is this child
+  // already enrolled?" for every route at once, and closes the row without an email.
+  //
+  // A FAILURE HERE ENDS THE TICK, and that is deliberately unlike the expire failure
+  // below, which carries on. Both steps after this one email families on the premise
+  // that they are still waiting: expire says "the place has been passed on", offer says
+  // "a place opened up". Without this step either can land on a child already in the
+  // class, and neither can be unsent. Stopping costs one tick (the release step above
+  // has already run, so no checkout is left blind); the error is recorded in the run
+  // summary, so a persistent failure reads as an error, not as a quiet platform.
+  const { data: retired, error: retireErr } = await supabase.rpc('waitlist_retire_enrolled');
+  if (retireErr) {
+    console.error('[waitlist-sweep] retire-enrolled failed; skipping expiry and offers this tick', retireErr.message);
+    out.errors.push({ error: `retire enrolled: ${retireErr.message}` });
+    return out;
+  }
+  out.retired_enrolled = ((retired ?? []) as unknown[]).length;
+  if (out.retired_enrolled) {
+    console.log('[waitlist-sweep] closed waiting-list rows for children already enrolled', retired);
   }
 
   // ── 1. Expire ────────────────────────────────────────────────────────────
@@ -351,8 +390,12 @@ export async function runWaitlistSweep(
   // is FREE TO BE OFFERED rather than simply the top of the queue - skipping anyone
   // already holding a live invite and anyone mid-checkout.
 
-  /** Why one attempt at offering a seat stopped. Anything but 'offered' ends the program. */
-  type OfferOutcome = 'offered' | 'no_seat' | 'nobody_offerable' | 'lapsed_awaiting_expiry' | 'failed';
+  /**
+   * Why one attempt at offering a seat stopped. 'offered' and 'unreachable' (the family
+   * was taken off the list, so the seat is free again) ask for the next family; anything
+   * else ends the program for this tick.
+   */
+  type OfferOutcome = 'offered' | 'unreachable' | 'no_seat' | 'nobody_offerable' | 'lapsed_awaiting_expiry' | 'failed';
 
   /**
    * Offer ONE seat in one program: mint the hold, email the family, and undo the hold if
@@ -413,6 +456,9 @@ export async function runWaitlistSweep(
       // hold a link that now reads "no longer valid" and get a fresh one minutes later.
       // Two emails and one dead link is a far smaller harm than a lost place.
       let sent = false;
+      // Resend refused the To address itself and the family is now off the list. Set
+      // only by a drop that actually happened; see the !resp.ok branch below.
+      let droppedUnreachable = false;
       try {
         const prog = await getProgram(programId);
         const brand = await loadOrgBrand(supabase, orgId);
@@ -447,16 +493,60 @@ export async function runWaitlistSweep(
         if (!resp.ok) {
           const body = await resp.text();
           console.error('[waitlist-sweep] invite send failed', resp.status, body);
-          out.errors.push({ program_id: programId, error: `send ${resp.status}` });
-          // Logged on the failure path too. This send is rolled back below, so
-          // the row is the only surviving trace that we tried and could not
-          // reach this family about a place that was actually open for them.
+
+          // AN ADDRESS THAT CAN NEVER WORK IS NOT A RETRY. Rolling this back, as the
+          // !sent branch below does, put the family straight back at the head of the
+          // queue, and the next tick refused the same address again: 78 failed sends in
+          // two days on prod, while the family behind them and a second free seat were
+          // never offered at all. So the family comes off the list, as if their offer
+          // had lapsed, and the seat goes to the next family in this same tick.
+          //
+          // Dropped BEFORE the send is logged, so the one log row can say what actually
+          // happened. If the drop errors or finds the row already moved, this stays false
+          // and the ordinary roll-back-and-retry below runs, as it always did.
+          if (isUnreachableAddress(resp.status, body)) {
+            const { data: dropped, error: dropErr } = await supabase
+              .rpc('waitlist_drop_unreachable', {
+                p_registration_id: row.registration_id,
+                p_invite_token: row.invite_token,
+              });
+            if (dropErr) {
+              console.error('[waitlist-sweep] could not drop an unreachable family; rolling back instead', dropErr.message);
+              out.errors.push({ program_id: programId, error: `drop unreachable: ${dropErr.message}` });
+            }
+            droppedUnreachable = !dropErr && dropped === true;
+          }
+          // A handled drop is not a sweep error: the queue moved on as designed. Anything
+          // else is, as before.
+          if (!droppedUnreachable) out.errors.push({ program_id: programId, error: `send ${resp.status}` });
+
+          // Which family, so the business's Didn't-send list names them rather than
+          // showing a bare address. Only read on the drop path, which is the one the
+          // business has to act on. A failed read leaves it null: the row still logs,
+          // under the email, exactly as it did before this.
+          let parentId: string | null = null;
+          if (droppedUnreachable) {
+            const { data: reg } = await supabase
+              .from('registrations').select('parent_id').eq('id', row.registration_id).maybeSingle();
+            parentId = (reg as { parent_id?: string } | null)?.parent_id ?? null;
+          }
+
+          // Logged on the failure path too. The row is the only surviving trace that we
+          // tried and could not reach this family about a place that was open for them.
+          // "Resend 422: ..." is what makes the Didn't-send panel read it as "the email
+          // address on file looks invalid". On a drop the SUBJECT says the place is gone
+          // too, since fixing the address will NOT bring the offer back. It has to be the
+          // subject, not just the label: DeliveryIssuesPanel titles a row
+          // `rendered_subject || label`, so a label behind the invite subject never shows.
+          const DROPPED = 'Address refused: taken off the waiting list';
           await logTransactionalSend(supabase, {
             organizationId: orgId,
             source: 'waitlist_invite',
             contextKey: `registration:${row.registration_id}:invite:${row.invite_token}`,
             email: row.parent_email,
-            subject: built.subject,
+            parentId,
+            label: droppedUnreachable ? DROPPED : undefined,
+            subject: droppedUnreachable ? `${DROPPED}. ${built.subject}` : built.subject,
             send: { ok: false, error: formatSendError(resp.status, body) },
           });
         } else {
@@ -497,6 +587,17 @@ export async function runWaitlistSweep(
       } catch (mailErr) {
         console.error('[waitlist-sweep] invite send threw', (mailErr as Error).message);
         out.errors.push({ program_id: programId, error: `send: ${(mailErr as Error).message}` });
+      }
+
+      if (droppedUnreachable) {
+        // Off the list, seat free again, nothing to roll back. The caller asks for the
+        // next family.
+        out.offered -= 1; // it did not really happen
+        out.dropped_unreachable += 1;
+        console.warn('[waitlist-sweep] took a family off the list: their address was refused', {
+          program_id: programId, registration_id: row.registration_id,
+        });
+        return 'unreachable';
       }
 
       if (!sent) {
@@ -567,10 +668,14 @@ export async function runWaitlistSweep(
       // offer, so each pass reaches a DIFFERENT family. Bounded, because this loop sends
       // email; see MAX_OFFERS_PER_PROGRAM_PER_TICK.
       let offeredHere = 0;
+      let droppedHere = 0;
       let stopped = false;
       for (let i = 0; i < MAX_OFFERS_PER_PROGRAM_PER_TICK; i += 1) {
         const outcome = await offerOneSeat(programId, orgId, org);
         if (outcome === 'offered') { offeredHere += 1; continue; }
+        // The seat is free again and the family is off the list, so ask for the next one.
+        // Still inside the cap, so a queue full of dead addresses cannot loop unbounded.
+        if (outcome === 'unreachable') { droppedHere += 1; continue; }
 
         // Counted only when NOTHING was offered here. After a successful offer these are
         // the ordinary way the loop ends - the seats ran out because we just filled them -
@@ -583,11 +688,13 @@ export async function runWaitlistSweep(
         break;
       }
       if (!stopped) {
-        // Ran the cap out with every pass succeeding, so there may be more to give. NOT
-        // silent: a quiet cap reads as "everyone who could be offered was".
+        // Ran the cap out with every pass either offering a place or dropping a family
+        // whose address was refused, so there may be more to give. NOT silent: a quiet
+        // cap reads as "everyone who could be offered was". `dropped` is logged beside
+        // `offered` so a run of dead addresses does not read as ten successful offers.
         out.hit_offer_cap += 1;
         console.warn('[waitlist-sweep] hit the per-tick offer cap; the rest of this queue waits for the next tick', {
-          program_id: programId, offered: offeredHere, cap: MAX_OFFERS_PER_PROGRAM_PER_TICK,
+          program_id: programId, offered: offeredHere, dropped: droppedHere, cap: MAX_OFFERS_PER_PROGRAM_PER_TICK,
         });
       }
     } catch (e) {
