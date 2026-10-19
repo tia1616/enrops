@@ -86,6 +86,22 @@ begin
   end if;
 
   begin
+    -- The waitlist row itself was promoted (roster import): it is the registration now,
+    -- so it gives up its place in the queue and its invite. See the header. FIRST, and
+    -- outside the advisory lock: it writes only the row this statement already holds,
+    -- and nothing else ever revisits a confirmed row, so skipping it on a busy queue
+    -- would leave the position and token on it for good. The queue's gap closes on the
+    -- renumber below, or on the next renumber any waitlist exit performs.
+    if TG_OP = 'UPDATE' and OLD.status = 'waitlist' then
+      update registrations
+         set waitlist_position = null, waitlist_invited_at = null,
+             waitlist_invite_expires_at = null, waitlist_invite_token = null
+       where id = NEW.id
+         and (waitlist_position is not null or waitlist_invite_token is not null
+              or waitlist_invited_at is not null or waitlist_invite_expires_at is not null);
+      v_promoted := true;
+    end if;
+
     -- Non-blocking: see the header. A busy queue is the sweep's to finish.
     if not pg_try_advisory_xact_lock(hashtext('waitlist:' || NEW.program_id::text)) then
       return NEW;
@@ -116,18 +132,6 @@ begin
              and nullif(regexp_replace(btrim(lower(ws.first_name)), '\s+', ' ', 'g'), '') = v_child)
        );
     get diagnostics v_n = row_count;
-
-    -- The waitlist row itself was promoted (roster import): it is the registration now,
-    -- so it gives up its place in the queue and its invite. See the header.
-    if TG_OP = 'UPDATE' and OLD.status = 'waitlist' then
-      update registrations
-         set waitlist_position = null, waitlist_invited_at = null,
-             waitlist_invite_expires_at = null, waitlist_invite_token = null
-       where id = NEW.id
-         and (waitlist_position is not null or waitlist_invite_token is not null
-              or waitlist_invited_at is not null or waitlist_invite_expires_at is not null);
-      v_promoted := true;
-    end if;
 
     if v_n > 0 or v_promoted then
       -- Close the gap. The same expression as every other waitlist writer.
