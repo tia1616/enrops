@@ -107,7 +107,8 @@ export default function InstructorsTab({ org }) {
              contractor_tier, date_of_birth, shirt_size, photo_url,
              site_preferences, availability,
              first_aid_cpr_url, first_aid_cpr_expires_at,
-             photo_release_consent, photo_release_consent_at`
+             photo_release_consent, photo_release_consent_at,
+             partner_sharing_agreed_at`
           )
           .eq('organization_id', org.id)
           .order('last_name', { ascending: true, nullsFirst: false });
@@ -895,6 +896,19 @@ function InstructorDetail({ row, age, onUploadBg, onRemove, onReactivate, isEdit
         )}
       </DetailItem>
 
+      {/* Only the instructor can give this, from their portal (see
+          PartnerSharingCard). Read-only here on purpose. */}
+      <DetailItem label="Share with partners">
+        {row.partner_sharing_agreed_at ? (
+          <>
+            Agreed
+            {fmtTimestamp(row.partner_sharing_agreed_at) ? ` · ${fmtTimestamp(row.partner_sharing_agreed_at)}` : ''}
+          </>
+        ) : (
+          <Em>Not yet. They&apos;ll be asked when they open their portal.</Em>
+        )}
+      </DetailItem>
+
       <DetailItem label="Onboarding step">
         {row.status?.current_step ? `Step ${row.status.current_step}` : <Em>not started</Em>}
       </DetailItem>
@@ -1542,7 +1556,7 @@ function AddInstructorModal({ org, onClose, onAdded, onSendInvite }) {
         // pushed straight into `rows`, so any column missing here is undefined on
         // that row only — the detail panel would render differently for someone
         // added this session than for everyone else, until a refresh hid it.
-        .select('id, first_name, last_name, preferred_name, email, phone, is_active, contractor_tier, date_of_birth, shirt_size, photo_url, site_preferences, availability, first_aid_cpr_url, first_aid_cpr_expires_at, photo_release_consent, photo_release_consent_at')
+        .select('id, first_name, last_name, preferred_name, email, phone, is_active, contractor_tier, date_of_birth, shirt_size, photo_url, site_preferences, availability, first_aid_cpr_url, first_aid_cpr_expires_at, photo_release_consent, photo_release_consent_at, partner_sharing_agreed_at')
         .single();
 
       if (insErr) {
