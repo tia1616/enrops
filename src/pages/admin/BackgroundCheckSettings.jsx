@@ -91,7 +91,13 @@ export default function BackgroundCheckSettings() {
   async function save() {
     setSaving(true); setError("");
     try {
-      const months = /^\d{1,3}$/.test(validMonths.trim()) ? Number(validMonths.trim()) : 12;
+      // Refuse a value we can't store rather than quietly saving 12.
+      if (!/^\d{1,3}$/.test(validMonths.trim()) || Number(validMonths.trim()) > 120) {
+        setError("Enter how many months a check stays valid, a whole number from 0 to 120.");
+        setSaving(false);
+        return;
+      }
+      const months = Number(validMonths.trim());
       const config = {
         ...storedCfg,
         valid_months: months,

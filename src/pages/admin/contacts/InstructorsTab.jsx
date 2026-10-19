@@ -931,11 +931,15 @@ function InstructorDetail({ row, age, onUploadBg, onRemove, onReactivate, isEdit
             display={row.training_completed_on ? fmtDate(row.training_completed_on) : ''}
             emptyText="not recorded"
             onSave={async (v) => {
-              const { error } = await supabase
+              // .select() so a write RLS filtered out (a non-admin member) comes
+              // back as zero rows instead of looking like a success.
+              const { data, error } = await supabase
                 .from('instructors')
                 .update({ training_completed_on: v || null })
-                .eq('id', row.id);
+                .eq('id', row.id)
+                .select('id');
               if (error) return "Couldn't save. Try again.";
+              if (!data?.length) return 'Only an owner or admin can change this.';
               onPatchRow(() => ({ training_completed_on: v || null }));
               return null;
             }}
