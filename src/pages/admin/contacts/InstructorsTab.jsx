@@ -904,8 +904,10 @@ function InstructorDetail({ row, age, onUploadBg, onRemove, onReactivate, isEdit
             Agreed
             {fmtTimestamp(row.partner_sharing_agreed_at) ? ` · ${fmtTimestamp(row.partner_sharing_agreed_at)}` : ''}
           </>
+        ) : row.is_active ? (
+          <Em>Not yet. Their instructor portal asks them once onboarding is done.</Em>
         ) : (
-          <Em>Not yet. They&apos;ll be asked when they open their portal.</Em>
+          <Em>Not agreed</Em>
         )}
       </DetailItem>
 

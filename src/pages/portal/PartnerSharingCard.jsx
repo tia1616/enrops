@@ -67,8 +67,14 @@ export default function PartnerSharingCard({ instructorId, organizationId, orgNa
       p_version: PARTNER_SHARING_VERSION,
     });
     setSaving(false);
-    if (rpcErr || data !== true) {
+    if (rpcErr) {
       setError("That didn't save. Please try again, or contact your Program Manager if it keeps happening.");
+      return;
+    }
+    // false = no active instructor record for this sign-in at this business.
+    // Retrying cannot fix that, so don't invite it.
+    if (data !== true) {
+      setError("We couldn't find an active instructor record for you here. Please contact your Program Manager.");
       return;
     }
     setState("agreed");
