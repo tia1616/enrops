@@ -15,6 +15,13 @@
 // the last city's heading and read as being in that city.
 export const NO_AREA_HEADING = 'Other locations';
 
+// The city a camp is in, as the headings AND the "Where" filter buttons read
+// it - one spelling, so a stray space can never make a heading and a button
+// disagree. '' when unset.
+export function campAreaOf(program) {
+  return (program?.program_locations?.area ?? '').trim();
+}
+
 // camps: programs carrying program_locations.area. Order WITHIN a city is kept
 // exactly as given (the caller has already sorted by start date). Cities are
 // alphabetical, the no-city group last. When no camp has a city at all, there
@@ -25,7 +32,7 @@ export function groupCampsByArea(camps) {
   const byArea = new Map();
   const noArea = [];
   for (const p of list) {
-    const area = (p?.program_locations?.area ?? '').trim();
+    const area = campAreaOf(p);
     if (!area) { noArea.push(p); continue; }
     if (!byArea.has(area)) byArea.set(area, []);
     byArea.get(area).push(p);

@@ -16,7 +16,7 @@ import {
 } from '../../lib/pricing.js';
 import { formatTermLabel, termSeasonName, schoolYearTermsForFall } from '../../lib/terms.js';
 import { programScheduleSummary, formatDayLabel, isCampProgram } from '../../lib/programSchedule.js';
-import { groupCampsByArea, campWhereLabel } from '../../lib/campAreas.js';
+import { groupCampsByArea, campWhereLabel, campAreaOf } from '../../lib/campAreas.js';
 import { audienceLabel } from '../../lib/grades.js';
 import { feeOnCents, totalWithFee } from '../../lib/platformFee.js';
 import { buildCatalogPicker, OTHER_DISTRICT } from '../../lib/regCatalogPicker.js';
@@ -681,7 +681,7 @@ export default function Home() {
     // has no area is NOT dropped silently - it has no button to be reached by,
     // so it stays visible under "All areas", which is the default.
     const inArea = campArea
-      ? campPrograms.filter((p) => (p.program_locations?.area ?? '') === campArea)
+      ? campPrograms.filter((p) => campAreaOf(p) === campArea)
       : campPrograms;
     return [...inArea].sort((a, b) =>
       String(a.first_session_date || '').localeCompare(String(b.first_session_date || '')),
@@ -699,7 +699,7 @@ export default function Home() {
   const campAreas = useMemo(() => {
     const counts = new Map();
     for (const p of campPrograms) {
-      const a = p.program_locations?.area;
+      const a = campAreaOf(p);
       if (!a) continue;
       counts.set(a, (counts.get(a) ?? 0) + 1);
     }
@@ -1169,8 +1169,10 @@ export default function Home() {
                     // A camp's venue moves to its own "where" line (whereStr),
                     // with the address; a class keeps it here, its school having
                     // been picked above.
-                    const whereStr = showingCamps ? campWhereLabel(p) : null;
-                    const meta = [dayStr, timeStr, showingCamps ? null : p.program_locations?.name, ageStr].filter(Boolean).join(' · ');
+                    // Per card, the same test the J2S layout uses below.
+                    const isCamp = isCampProgram(p);
+                    const whereStr = isCamp ? campWhereLabel(p) : null;
+                    const meta = [dayStr, timeStr, isCamp ? null : p.program_locations?.name, ageStr].filter(Boolean).join(' · ');
                     // "When does it start, and how many weeks am I buying?" - the
                     // two questions that previously could only be answered by
                     // starting a registration, which is where families dropped out.
@@ -1564,10 +1566,8 @@ export default function Home() {
                     // repeating it says nothing. A CAMP is reached without that
                     // picker at all - camps are deliberately not school-bound -
                     // so nothing else on the page says where it is, and a family
-                    // could book a camp an hour from the one they meant. J2S
-                    // currently sells winter camps at Firstenburg in Vancouver
-                    // and at Bricks and Mini Figs in Beaverton from the same
-                    // four-card list.
+                    // could book a camp an hour from the one they meant (J2S's
+                    // winter camps span Vancouver to Beaverton, an hour apart).
                     //
                     // It has its own line now, venue AND street address
                     // (campWhereLabel, shared with the lean card), under a city
