@@ -16,6 +16,7 @@ import {
 } from '../../lib/pricing.js';
 import { formatTermLabel, termSeasonName, schoolYearTermsForFall } from '../../lib/terms.js';
 import { programScheduleSummary, formatDayLabel, isCampProgram } from '../../lib/programSchedule.js';
+import { groupCampsByArea, campWhereLabel } from '../../lib/campAreas.js';
 import { audienceLabel } from '../../lib/grades.js';
 import { feeOnCents, totalWithFee } from '../../lib/platformFee.js';
 import { buildCatalogPicker, OTHER_DISTRICT } from '../../lib/regCatalogPicker.js';
@@ -424,7 +425,9 @@ export default function Home() {
         // is what the camps tab groups by: a camp family never picks a district
         // or a school, so area is the only thing that answers "is this one near
         // me". Already on the public view, so this asks for nothing new.
-        .select('*, program_locations:program_locations_public(name, district_id, area)')
+        // `address` is the street address on a camp card's "where" line
+        // (campWhereLabel) - also already public, read by the venue list above.
+        .select('*, program_locations:program_locations_public(name, district_id, area, address)')
         .eq('organization_id', org.id)
         // A CLASS BELONGS TO A TERM. A CAMP BELONGS TO ITS DATES.
         //
@@ -1098,7 +1101,18 @@ export default function Home() {
                   </div>
                 )}
                 <div style={{ display: 'grid', gap: 12 }}>
-                  {listedPrograms.map((p) => {
+                  {/* Camps sit under one heading per city (groupCampsByArea,
+                      shared with the J2S layout below); classes are one
+                      unheaded group, exactly as before. */}
+                  {(showingCamps
+                    ? groupCampsByArea(listedPrograms)
+                    : [{ key: 'all', heading: null, items: listedPrograms }]
+                  ).map((g) => (
+                  <React.Fragment key={g.key}>
+                  {g.heading && (
+                    <h3 style={{ fontSize: 17, fontWeight: 700, color: '#1a1a1a', margin: '12px 0 0' }}>{g.heading}</h3>
+                  )}
+                  {g.items.map((p) => {
                     const timeStr = [p.start_time, p.end_time].filter(Boolean).join(' – ');
                     // "Is my child old enough?" is the first thing a parent asks
                     // and the most common reason they message the provider
@@ -1116,7 +1130,11 @@ export default function Home() {
                     // (never the literal "nulls"). Shared helper so this label and
                     // the schedule line below use the same one-session coercion.
                     const dayStr = formatDayLabel(p);
-                    const meta = [dayStr, timeStr, p.program_locations?.name, ageStr].filter(Boolean).join(' · ');
+                    // A camp's venue moves to its own "where" line (whereStr),
+                    // with the address; a class keeps it here, its school having
+                    // been picked above.
+                    const whereStr = showingCamps ? campWhereLabel(p) : null;
+                    const meta = [dayStr, timeStr, showingCamps ? null : p.program_locations?.name, ageStr].filter(Boolean).join(' · ');
                     // "When does it start, and how many weeks am I buying?" - the
                     // two questions that previously could only be answered by
                     // starting a registration, which is where families dropped out.
@@ -1145,6 +1163,9 @@ export default function Home() {
                                   with the card below so a change here cannot miss
                                   its twin. */}
                               <LeanDescription text={p.short_description} />
+                              {whereStr && (
+                                <div style={{ fontSize: 13, fontWeight: 600, color: '#1a1a1a', marginTop: 2 }}>{whereStr}</div>
+                              )}
                               <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>{meta}</div>
                               {scheduleStr && (
                                 <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>{scheduleStr}</div>
@@ -1164,6 +1185,9 @@ export default function Home() {
                             {/* Same shared component as the external-registration
                                 card above. This is the one Jeff's families see. */}
                             <LeanDescription text={p.short_description} />
+                            {whereStr && (
+                              <div style={{ fontSize: 13, fontWeight: 600, color: '#1a1a1a', marginTop: 2 }}>{whereStr}</div>
+                            )}
                             <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>
                               {meta}
                             </div>
@@ -1198,6 +1222,8 @@ export default function Home() {
                       </div>
                     );
                   })}
+                  </React.Fragment>
+                  ))}
                 </div>
               </>
             )}
@@ -1459,7 +1485,18 @@ export default function Home() {
                   </h3>
                 </div>
                 <div className="space-y-4">
-                  {finderListed.map((p) => {
+                  {/* Camps sit under one heading per city (groupCampsByArea,
+                      shared with the lean layout above); classes are one
+                      unheaded group, exactly as before. */}
+                  {(finderShowingCamps
+                    ? groupCampsByArea(finderListed)
+                    : [{ key: 'all', heading: null, items: finderListed }]
+                  ).map((g) => (
+                  <React.Fragment key={g.key}>
+                  {g.heading && (
+                    <h4 className="pt-2 font-titan text-base text-j2s-purple">{g.heading}</h4>
+                  )}
+                  {g.items.map((p) => {
                     // "When does it start, and how many weeks am I buying?" - the
                     // two questions that previously could only be answered by
                     // starting a registration, which is where families dropped out.
@@ -1496,13 +1533,15 @@ export default function Home() {
                     // and at Bricks and Mini Figs in Beaverton from the same
                     // four-card list.
                     //
-                    // The name is already loaded (the catalog query joins
-                    // program_locations_public) and sits in the same slot the
-                    // lean card puts it in, so the two layouts read alike.
+                    // It has its own line now, venue AND street address
+                    // (campWhereLabel, shared with the lean card), under a city
+                    // heading. Buried mid-line as a bare venue name it went
+                    // unread: Jessica, 2026-10-19, "it doesn't say where the
+                    // camps are".
+                    const whereStr = isCampProgram(p) ? campWhereLabel(p) : null;
                     const metaStr = [
                       dayLabel,
                       timeStr,
-                      isCampProgram(p) ? p.program_locations?.name : null,
                       gradeStr,
                     ].filter(Boolean).join(' · ');
                     // Partner-run, listed program: families register on the partner's
@@ -1519,6 +1558,7 @@ export default function Home() {
                             {p.short_description && (
                               <p className="mt-1 mb-2.5 whitespace-pre-line text-sm text-j2s-ink/65 leading-snug">{p.short_description}</p>
                             )}
+                            {whereStr && <p className="mt-1 text-sm font-semibold text-j2s-ink">{whereStr}</p>}
                             {metaStr && <p className="mt-1 text-sm text-j2s-ink/70">{metaStr}</p>}
                             {scheduleStr && (
                               <p className="mt-1 text-sm font-semibold text-j2s-ink/70">
@@ -1591,6 +1631,7 @@ export default function Home() {
                               {p.short_description}
                             </p>
                           )}
+                          {whereStr && <p className="mt-1 text-sm font-semibold text-j2s-ink">{whereStr}</p>}
                           {metaStr && <p className="mt-1 text-sm text-j2s-ink/70">{metaStr}</p>}
                           {/* Session count used to live on the line above, but only
                               when it wasn't 8 - so the most common class silently
@@ -1767,6 +1808,8 @@ export default function Home() {
                       </div>
                     );
                   })}
+                  </React.Fragment>
+                  ))}
                 </div>
               </div>
             )}
