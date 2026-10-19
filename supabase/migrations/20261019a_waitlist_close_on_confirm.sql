@@ -28,14 +28,29 @@
 -- A row claimed by a DIFFERENT, still-pending checkout is left alone: that family is
 -- mid-payment elsewhere and the claim shape forbids cancelling it.
 --
--- IT MUST NEVER BREAK A PAYMENT. This runs inside the write that confirms a family's
--- money. Two guards make it impossible for it to fail or stall that write:
---   * pg_try_advisory_xact_lock, not pg_advisory_xact_lock. Every waitlist writer takes
+-- IT MUST NOT BREAK A PAYMENT. This runs inside the write that confirms a family's
+-- money. Three guards keep it from failing or stalling that write:
+--   * pg_try_advisory_xact_lock, not pg_advisory_xact_lock. The waitlist RPCs take
 --     'waitlist:'||program_id first; if one holds it right now this SKIPS rather than
 --     waits, so it cannot block a webhook or deadlock against the sweep. A skip is
 --     caught by the sweep's waitlist_retire_enrolled within one tick.
---   * The work sits in its own BEGIN ... EXCEPTION block. Any error rolls back only that
---     block, raises a WARNING into the Postgres log, and the confirm proceeds untouched.
+--   * SET lock_timeout = 500ms on the function. Not every writer of a waitlist row takes
+--     the advisory lock (waitlistSweep.ts stamps waitlist_last_offered_at and undoes an
+--     unsent offer over plain PostgREST), so the row UPDATEs below can still meet a row
+--     lock. Without a short limit, that wait runs into PostgREST's 8s statement_timeout,
+--     and a statement timeout (57014, query_canceled) is the ONE error `when others`
+--     does not catch: it would cancel the family's confirm. A lock_timeout raises 55P03,
+--     which the block below does catch. Proven on staging 10/19: OTHERS let 57014 escape.
+--   * The work sits in its own BEGIN ... EXCEPTION block. Any other error rolls back only
+--     that block, raises a WARNING into the Postgres log, and the confirm proceeds.
+--
+-- THE ROW BEING CONFIRMED MAY ITSELF BE THE WAITLIST ROW. admin-import-program-roster
+-- looks a child up by (program, student) with no status filter, finds their waitlist row
+-- and turns IT into the confirmed registration. That row then still carries its queue
+-- position and invite token, and the queue keeps a gap where it was. So when OLD.status
+-- was 'waitlist', the confirmed row's waitlist fields are cleared and the queue
+-- renumbered. (Clearing only those columns does not re-fire this trigger, which is
+-- scoped to status and cancelled_at.)
 --
 -- 2. waitlist_retire_enrolled() - the sweep backstop - is widened by one term: a
 --    claimed row whose claim points at a CONFIRMED registration is now retirable too
@@ -50,10 +65,13 @@ returns trigger
 language plpgsql
 security definer
 set search_path to 'public', 'pg_temp'
+-- Bounded row-lock waits: see the header. Scoped to this function's execution only.
+set lock_timeout to '500ms'
 as $function$
 declare
-  v_child text;
-  v_n     integer;
+  v_child    text;
+  v_n        integer;
+  v_promoted boolean := false;
 begin
   -- Only a class registration that is now live and confirmed.
   if NEW.status is distinct from 'confirmed' or NEW.cancelled_at is not null
@@ -99,7 +117,19 @@ begin
        );
     get diagnostics v_n = row_count;
 
-    if v_n > 0 then
+    -- The waitlist row itself was promoted (roster import): it is the registration now,
+    -- so it gives up its place in the queue and its invite. See the header.
+    if TG_OP = 'UPDATE' and OLD.status = 'waitlist' then
+      update registrations
+         set waitlist_position = null, waitlist_invited_at = null,
+             waitlist_invite_expires_at = null, waitlist_invite_token = null
+       where id = NEW.id
+         and (waitlist_position is not null or waitlist_invite_token is not null
+              or waitlist_invited_at is not null or waitlist_invite_expires_at is not null);
+      v_promoted := true;
+    end if;
+
+    if v_n > 0 or v_promoted then
       -- Close the gap. The same expression as every other waitlist writer.
       with ordered as (
         select r.id, row_number() over (order by r.waitlist_position, r.registered_at) as pos
