@@ -71,6 +71,8 @@ function DocumentRow({ row, canManage, onOpen, onEdit, onDelete, busy }) {
             {[row.insurer, row.policy_number ? `Policy ${row.policy_number}` : null, row.coverage_notes].filter(Boolean).join(" · ")}
             {(row.insurer || row.policy_number || row.coverage_notes) ? " · " : ""}
             {row.abuse_coverage ? "Includes abuse and molestation coverage" : "Abuse and molestation coverage not marked"}
+            {" · "}
+            {row.additional_insured ? "Names the partner as additional insured" : "Additional insured not marked"}
           </div>
         )}
       </div>
@@ -184,6 +186,12 @@ function DocumentForm({ editing, partners, onCancel, onSave }) {
             Includes abuse and molestation coverage
           </label>
           <div style={hint}>Partners working with children usually ask for this. It's listed on the certificate if you have it.</div>
+
+          <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13.5, color: INK, cursor: "pointer", fontWeight: 600, marginTop: 14 }}>
+            <input type="checkbox" checked={draft.additional_insured} onChange={(e) => set("additional_insured", e.target.checked)} />
+            Names the partner as additional insured
+          </label>
+          <div style={hint}>Tick this when the certificate lists the partner under "Additional insured".</div>
 
           <label style={{ ...lbl, marginTop: 16 }}>Insurance company</label>
           <input type="text" value={draft.insurer} onChange={(e) => set("insurer", e.target.value)} style={input} />

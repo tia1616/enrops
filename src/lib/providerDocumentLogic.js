@@ -11,6 +11,7 @@
 export const DOC_TYPES = [
   { key: "insurance", label: "Insurance certificate", defaultTitle: "Certificate of liability insurance" },
   { key: "agreement", label: "Partner agreement", defaultTitle: "Partner agreement" },
+  { key: "business_license", label: "Business license", defaultTitle: "Business license" },
   { key: "other", label: "Other document", defaultTitle: "" },
 ];
 
@@ -21,16 +22,18 @@ export function docTypeLabel(key) {
 // Words for the status the database returns. Keyed by the exact values
 // private.document_expiry_status() can produce.
 //
-// ARIELLE'S STATUS WORDS (build brief, Oct 16): Current / Expiring in 30 days /
-// Expired or Missing. "Missing" belongs to checklist items with nothing on file,
-// not to a document row. A document that never expires is on file and valid, so
-// it is Current; the "No expiry date" fact is shown beside it, not as the badge.
+// ARIELLE'S SIX CHIP WORDS (spec v3, Oct 19, used exactly): Current / Expiring
+// in 30 days / Expired or Missing / In review / Host-run / Not required.
+// "Expired or Missing" is ONE label on purpose, so a failed check can never be
+// told apart from a lapsed one. A document that never expires is on file and
+// valid, so it is Current; "No expiry date" is shown beside it, not as the chip.
 // "Expiring in 30 days" is true only while expiring_soon means within 30 days
 // (20261012b), so change both together.
+export const EXPIRED_OR_MISSING = { label: "Expired or Missing", tone: "bad" };
 export const EXPIRY_STATUS = {
   current: { label: "Current", tone: "good" },
   expiring_soon: { label: "Expiring in 30 days", tone: "warn" },
-  expired: { label: "Expired", tone: "bad" },
+  expired: EXPIRED_OR_MISSING,
   no_expiry: { label: "Current", tone: "good" },
 };
 
@@ -89,6 +92,7 @@ export function blankDraft(type = "insurance") {
     insurer: "",
     policy_number: "",
     abuse_coverage: false,
+    additional_insured: false,
     coverage_notes: "",
   };
 }
@@ -106,6 +110,7 @@ export function draftFromRow(row) {
     insurer: row.insurer ?? "",
     policy_number: row.policy_number ?? "",
     abuse_coverage: row.abuse_coverage === true,
+    additional_insured: row.additional_insured === true,
     coverage_notes: row.coverage_notes ?? "",
   };
 }
@@ -140,6 +145,7 @@ export function rowFromDraft(draft) {
     insurer: isInsurance ? (draft.insurer.trim() || null) : null,
     policy_number: isInsurance ? (draft.policy_number.trim() || null) : null,
     abuse_coverage: isInsurance ? draft.abuse_coverage === true : null,
+    additional_insured: isInsurance ? draft.additional_insured === true : null,
     coverage_notes: isInsurance ? (draft.coverage_notes.trim() || null) : null,
   };
 }

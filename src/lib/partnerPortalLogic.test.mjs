@@ -25,7 +25,11 @@ eq('already-granted contacts are not offered again', contactsWithoutAccess(conta
   const { instructorChecklist, CHECK_STATUS } = await import('./partnerPortalLogic.js');
   const { readFileSync } = await import('node:fs');
 
-  eq('no permission = no lines', instructorChecklist({ shared: false, background_check_status: null }), []);
+  const ORG = 'Acme Kids';
+  const TODAY = '2026-10-20';
+
+  const pending = instructorChecklist({ shared: false, background_check_status: 'in_review' }, ORG, TODAY);
+  eq('no permission = one In review line with the reason', pending.map((l) => [l.badge.label, l.detail]), [['In review', "Waiting on this instructor's consent"]]);
 
   const full = instructorChecklist({
     shared: true,
@@ -33,33 +37,47 @@ eq('already-granted contacts are not offered again', contactsWithoutAccess(conta
     background_check_completed_on: '2026-10-10',
     background_check_expires_on: '2027-10-10',
     background_check_vendor: 'Yardstik',
+    background_check_as_of: '2026-10-12',
     training_completed_on: '2026-08-25',
+    training_as_of: '2026-10-20',
     code_of_conduct_on: '2026-08-20',
     mandatory_reporter_on: '2026-08-20',
     agreement_signed_on: '2026-08-20',
-  });
-  eq('check line', [full[0].badge.label, full[0].detail], ['Current', 'Completed Oct 10, 2026 · Renews Oct 10, 2027 · Yardstik-verified']);
+  }, ORG, TODAY);
+  eq('check line', [full[0].badge.label, full[0].detail], ['Current', 'Completed Oct 10, 2026 · Renews Oct 10, 2027']);
+  eq('check as of + source', full[0].meta, 'as of Oct 12, 2026 · Source: entered by Acme Kids · Screening company: Yardstik');
+  eq('training as of + source', full[1].meta, 'as of Oct 20, 2026 · Source: entered by Acme Kids');
+  eq('signed item as of + source', full[2].meta, 'as of Aug 20, 2026 · Source: signed by the instructor in enrops');
   eq('five lines in order', full.map((l) => l.key), ['background_check', 'training', 'code_of_conduct', 'mandatory_reporter', 'agreement']);
+  ok('every chip carries an as-of', full.every((l) => l.meta.startsWith('as of ')));
 
-  const gaps = instructorChecklist({ shared: true, background_check_status: 'missing' });
-  eq('missing check', [gaps[0].badge.label, gaps[0].detail], ['Missing', '']);
-  eq('missing training', gaps[1].badge.label, 'Missing');
+  const gaps = instructorChecklist({ shared: true, background_check_status: 'missing' }, ORG, TODAY);
+  eq('missing check', [gaps[0].badge.label, gaps[0].detail, gaps[0].meta], ['Expired or Missing', '', 'as of Oct 20, 2026']);
+  eq('missing training', gaps[1].badge.label, 'Expired or Missing');
+  ok('missing chips still carry an as-of', gaps.every((l) => l.meta.startsWith('as of ')));
 
-  const exp = instructorChecklist({ shared: true, background_check_status: 'expired', background_check_completed_on: '2025-01-02', background_check_expires_on: '2026-01-02' });
-  eq('expired says Expired, not Renews', exp[0].detail, 'Completed Jan 2, 2025 · Expired Jan 2, 2026');
+  const exp = instructorChecklist({ shared: true, background_check_status: 'expired', background_check_completed_on: '2025-01-02', background_check_expires_on: '2026-01-02' }, ORG, TODAY);
+  eq('expired: one word, and the detail says Expired, not Renews', [exp[0].badge.label, exp[0].detail], ['Expired or Missing', 'Completed Jan 2, 2025 · Expired Jan 2, 2026']);
 
-  const vendorNoDate = instructorChecklist({ shared: true, background_check_status: 'in_review', background_check_vendor: 'Yardstik' });
-  eq('no "verified" claim without a completed check', [vendorNoDate[0].badge.label, vendorNoDate[0].detail], ['In review', '']);
+  const noDate = instructorChecklist({ shared: true, background_check_status: 'in_review', background_check_vendor: 'Yardstik' }, ORG, TODAY);
+  eq('no screening company named without a completed check', [noDate[0].badge.label, noDate[0].detail, noDate[0].meta], ['In review', 'Completed date not on file yet', 'Source: entered by Acme Kids']);
 
-  eq('unknown status never shows green', instructorChecklist({ shared: true, background_check_status: 'weird' })[0].badge.tone, 'neutral');
+  eq('unknown status never shows green', instructorChecklist({ shared: true, background_check_status: 'weird' }, ORG, TODAY)[0].badge.tone, 'review');
+
+  // Spec v3: exactly these words, nothing else, can appear on a chip.
+  const SIX = ['Current', 'Expiring in 30 days', 'Expired or Missing', 'In review', 'Host-run', 'Not required'];
+  ok('only spec v3 chip words', Object.values(CHECK_STATUS).every((s) => SIX.includes(s.label)));
 
   // Every status the database function can return has words here.
-  const sql = readFileSync(new URL('../../supabase/migrations/20261019b_partner_portal_instructors.sql', import.meta.url), 'utf8');
-  for (const s of ['missing', 'in_review', 'date_missing']) ok(`sql status ${s} has a label`, sql.includes(`'${s}'`) && !!CHECK_STATUS[s]);
+  const sql = readFileSync(new URL('../../supabase/migrations/20261020a_partner_portal_oct30_finish.sql', import.meta.url), 'utf8');
+  const fnBody = sql.slice(sql.indexOf('create function public.partner_portal_instructors'));
+  const returned = [...fnBody.matchAll(/then '([a-z_]+)'/g)].map((m) => m[1]);
+  ok('sql returns some statuses', returned.length >= 2);
+  for (const s of returned) ok(`sql status ${s} has a label`, !!CHECK_STATUS[s]);
 
-  // Copy rules (Arielle, Oct 16): never cleared / safe / enrops verifies.
-  const words = JSON.stringify([CHECK_STATUS, full, gaps]).toLowerCase();
-  ok('no banned words', !/cleared|\bsafe\b|enrops verif|certif/.test(words));
+  // Copy rules (Arielle): never cleared / safe / enrops verifies or certifies.
+  const words = JSON.stringify([CHECK_STATUS, full, gaps, pending, noDate]).toLowerCase();
+  ok('no banned words', !/cleared|\bsafe\b|enrops verif|certif|verified/.test(words));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

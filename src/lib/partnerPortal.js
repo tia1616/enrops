@@ -10,7 +10,7 @@ import { supabase } from "./supabase";
 export async function listPortalAccess(orgId) {
   const { data, error } = await supabase
     .from("partner_portal_access")
-    .select("id, partner_id, contact_id, auth_user_id, last_link_sent_at, last_signed_in_at, created_at, contact:partner_contacts(contact_name, contact_email), partner:partners(partner_name, inactive)")
+    .select("id, partner_id, contact_id, role, auth_user_id, last_link_sent_at, last_signed_in_at, created_at, contact:partner_contacts(contact_name, contact_email), partner:partners(partner_name, inactive)")
     .eq("organization_id", orgId)
     .order("created_at", { ascending: true });
   if (error) throw error;
@@ -31,12 +31,12 @@ export async function listGrantableContacts(orgId) {
 }
 
 /** Give one partner contact access. The database fills in the provider and partner from the contact. */
-export async function grantPortalAccess(orgId, contactId) {
+export async function grantPortalAccess(orgId, contactId, role = "host_admin") {
   const { error } = await supabase
     .from("partner_portal_access")
     // organization_id is sent for readability only: the insert trigger overwrites
     // it (and partner_id) from the contact before the RLS check runs.
-    .insert({ contact_id: contactId, organization_id: orgId });
+    .insert({ contact_id: contactId, organization_id: orgId, role });
   if (error) throw error;
 }
 
@@ -86,4 +86,15 @@ export async function listPartnerInstructors(partnerId) {
   const { data, error } = await supabase.rpc("partner_portal_instructors", { p_partner_id: partnerId });
   if (error) throw error;
   return data ?? [];
+}
+
+/**
+ * The partner view log (audit_events). Best-effort and silent: the database
+ * refuses anything this partner may not log, and a failed write must never get
+ * in the way of the records. Errors go to the console only, by design.
+ */
+export function logPartnerPortalEvent(partnerId, action, documentId = null) {
+  supabase
+    .rpc("log_partner_portal_event", { p_partner_id: partnerId, p_action: action, p_document_id: documentId })
+    .then(({ error }) => { if (error) console.warn("[partner log]", error.message); });
 }

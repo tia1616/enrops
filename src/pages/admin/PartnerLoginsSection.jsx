@@ -13,7 +13,10 @@ import {
   sendPartnerSignInLink, partnerPortalUrl,
 } from "../../lib/partnerPortal.js";
 import { accessStatus, contactsWithoutAccess } from "../../lib/partnerPortalLogic.js";
+import { supabase } from "../../lib/supabase";
+import { listProviderDocuments } from "../../lib/providerDocuments.js";
 
+const ROLE_LABEL = { host_admin: "Admin", host_viewer: "Viewer" };
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
@@ -38,6 +41,8 @@ export default function PartnerLoginsSection({ org, partners, canManage, onMessa
   const [contacts, setContacts] = useState([]);
   const [partnerId, setPartnerId] = useState("");
   const [contactId, setContactId] = useState("");
+  // Spec v3 roles. Same view on Oct 30; only an admin will record decisions.
+  const [role, setRole] = useState("host_admin");
   const [busy, setBusy] = useState(null); // grant id, or "grant"
   const [error, setError] = useState("");
 
@@ -66,11 +71,12 @@ export default function PartnerLoginsSection({ org, partners, canManage, onMessa
     if (!contactId || busy) return;
     setBusy("grant"); setError("");
     try {
-      await grantPortalAccess(org.id, contactId);
+      await grantPortalAccess(org.id, contactId, role);
       // Reset both pickers: the partner may have no ungranted contacts left,
       // and a value missing from its options shows a wrong partner's name.
       setContactId("");
       setPartnerId("");
+      setRole("host_admin");
       onMessage("Access given. Send them a sign-in link when you're ready.");
       await load();
     } catch (err) {
@@ -122,7 +128,7 @@ export default function PartnerLoginsSection({ org, partners, canManage, onMessa
       <h2 style={{ margin: "0 0 4px", fontSize: 18, fontWeight: 700, color: INK }}>Partner logins</h2>
       <p style={{ margin: "0 0 12px", fontSize: 13.5, color: MUTED, lineHeight: 1.5, maxWidth: 600 }}>
         People at a partner who can sign in at <span style={{ color: INK, fontWeight: 600 }}>{org?.slug ? partnerPortalUrl(org).replace(/^https?:\/\//, "") : "your partner page"}</span> and
-        see the documents shown to their partner. They can't see anything else.
+        see the documents shown to their partner and your instructors at that partner's sites. They can't see anything else.
       </p>
 
       {error && <div style={{ marginBottom: 12, padding: "10px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, color: "#991b1b", fontSize: 13 }}>{error}</div>}
@@ -144,7 +150,7 @@ export default function PartnerLoginsSection({ org, partners, canManage, onMessa
                 <div style={{ minWidth: 0, flex: "1 1 260px" }}>
                   <div style={{ fontSize: 14.5, fontWeight: 600, color: INK }}>{g.contact?.contact_name || g.contact?.contact_email}</div>
                   <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>
-                    {g.partner?.partner_name ?? "A partner"} · {g.contact?.contact_email}
+                    {g.partner?.partner_name ?? "A partner"} · {g.contact?.contact_email} · {ROLE_LABEL[g.role] ?? "Admin"}
                   </div>
                   <span style={{ display: "inline-block", marginTop: 6, padding: "2px 9px", borderRadius: 999, fontSize: 12, fontWeight: 600, background: t.bg, color: t.ink, border: `1px solid ${t.border}` }}>{st.label}</span>
                   {archived && <div style={{ fontSize: 12.5, color: "#92400e", marginTop: 6 }}>This partner is archived, so this person can't see anything until it's active again.</div>}
@@ -179,6 +185,12 @@ export default function PartnerLoginsSection({ org, partners, canManage, onMessa
                 {contactsForPartner.map((c) => <option key={c.id} value={c.id}>{c.contact_name ? `${c.contact_name} (${c.contact_email})` : c.contact_email}</option>)}
               </select>
             </div>
+            <div style={{ flex: "0 1 170px" }}>
+              <select value={role} onChange={(e) => setRole(e.target.value)} style={input} aria-label="Access level">
+                <option value="host_admin">{ROLE_LABEL.host_admin}</option>
+                <option value="host_viewer">{ROLE_LABEL.host_viewer}</option>
+              </select>
+            </div>
             <button type="button" onClick={grant} disabled={!contactId || !!busy} style={primaryBtn(!contactId || !!busy)}>
               {busy === "grant" ? "Saving…" : "Give access"}
             </button>
@@ -186,10 +198,71 @@ export default function PartnerLoginsSection({ org, partners, canManage, onMessa
           <div style={{ fontSize: 12.5, color: MUTED, marginTop: 8, lineHeight: 1.5 }}>
             Don't see the person? Add them as a contact on that partner in <Link to="/admin/schools" style={{ color: BRIGHT }}>Locations</Link>, with their email, then come back.
             Giving access doesn't email anyone; use Send sign-in link when you're ready. If someone's email or partner is
-            changed later, their access is removed and you give it again here.
+            changed later, their access is removed and you give it again here. Choose Admin for the person who signs off on
+            providers at that partner, and Viewer for everyone else.
           </div>
         </div>
       )}
+
+      {grants && grants.length > 0 && <PartnerActivity org={org} grants={grants} />}
     </section>
+  );
+}
+
+// The view log: who at a partner opened the portal or a document, newest first.
+// Read straight from audit_events (append-only; owner/admin may read their own).
+function PartnerActivity({ org, grants }) {
+  const [rows, setRows] = useState(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const [{ data: events, error: e1 }, docs] = await Promise.all([
+        supabase
+          .from("audit_events")
+          .select("id, occurred_at, actor_user_id, partner_id, action, subject_id")
+          .eq("organization_id", org.id)
+          .in("action", ["portal_viewed", "document_opened"])
+          .order("occurred_at", { ascending: false })
+          .limit(25),
+        listProviderDocuments(org.id).catch(() => []),
+      ]);
+      if (cancelled) return;
+      if (e1) { setFailed(true); return; }
+      const titles = new Map(docs.map((d) => [d.id, d.title]));
+      setRows((events ?? []).map((ev) => ({ ...ev, docTitle: titles.get(ev.subject_id) })));
+    })();
+    return () => { cancelled = true; };
+  }, [org.id, grants.length]);
+
+  const who = (ev) => {
+    const g = grants.find((x) => x.auth_user_id === ev.actor_user_id && x.partner_id === ev.partner_id)
+      ?? grants.find((x) => x.auth_user_id === ev.actor_user_id);
+    return g ? (g.contact?.contact_name || g.contact?.contact_email) : "Someone who no longer has access";
+  };
+  const partnerName = (ev) => grants.find((x) => x.partner_id === ev.partner_id)?.partner?.partner_name ?? "a partner";
+
+  return (
+    <div style={{ marginTop: 18 }}>
+      <div style={{ fontSize: 14, fontWeight: 600, color: INK, marginBottom: 6 }}>Partner activity</div>
+      <div style={{ background: PANEL, border: `1px solid ${RULE}`, borderRadius: 12, padding: "6px 20px" }}>
+        {failed ? (
+          <div style={{ padding: "12px 0", color: "#991b1b", fontSize: 13 }}>Couldn't load partner activity.</div>
+        ) : rows === null ? (
+          <div style={{ padding: "12px 0", color: MUTED, fontSize: 13 }}>Loading…</div>
+        ) : rows.length === 0 ? (
+          <div style={{ padding: "12px 0", color: MUTED, fontSize: 13 }}>No partner has opened your records yet.</div>
+        ) : (
+          rows.map((ev, i) => (
+            <div key={ev.id} style={{ padding: "10px 0", borderTop: i === 0 ? "none" : `1px solid ${RULE}`, fontSize: 13, color: INK }}>
+              <span style={{ fontWeight: 600 }}>{who(ev)}</span> ({partnerName(ev)}){" "}
+              {ev.action === "document_opened" ? <>opened {ev.docTitle ? `"${ev.docTitle}"` : "a document that has since been removed"}</> : "viewed your records"}
+              <span style={{ color: MUTED }}> · {new Date(ev.occurred_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
   );
 }

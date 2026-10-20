@@ -12,7 +12,7 @@ function eq(name, actual, expected) {
 
 import {
   blankDraft, draftFromRow, draftProblem, rowFromDraft, fileProblem,
-  storagePathFor, storedExtension, groupByAudience, formatDate, EXPIRY_STATUS,
+  storagePathFor, storedExtension, groupByAudience, formatDate, EXPIRY_STATUS, DOC_TYPES,
 } from './providerDocumentLogic.js';
 
 // --- files ------------------------------------------------------------------
@@ -69,6 +69,21 @@ eq('no rows, no groups', groupByAudience([], partners), []);
 
 // --- words for every status the database can return ---------------------------
 eq('status keys match private.document_expiry_status()', Object.keys(EXPIRY_STATUS).sort(), ['current', 'expired', 'expiring_soon', 'no_expiry']);
+eq('expired reads as spec v3 says', EXPIRY_STATUS.expired.label, 'Expired or Missing');
+
+// --- business license + additional insured (20261020a) ----------------------
+eq('business license is a type', blankDraft('business_license').title, 'Business license');
+eq('license with an expiry is valid', draftProblem({ ...blankDraft('business_license'), expires_on: '2027-08-07' }, { hasFile: true }), null);
+eq('additional insured round trip', draftFromRow({ doc_type: 'insurance', title: 'C', expires_on: '2027-01-17', additional_insured: true }).additional_insured, true);
+eq('additional insured saved for insurance', rowFromDraft({ ...blankDraft('insurance'), expires_on: '2027-01-17', additional_insured: true }).additional_insured, true);
+eq('additional insured cleared for other types', rowFromDraft({ ...blankDraft('agreement'), no_expiry: true, additional_insured: true }).additional_insured, null);
+{
+  const { readFileSync } = await import('node:fs');
+  const sql = readFileSync(new URL('../../supabase/migrations/20261020a_partner_portal_oct30_finish.sql', import.meta.url), 'utf8');
+  const check = sql.match(/provider_documents_doc_type_check\s+check \(doc_type = any \(array\[([^\]]+)\]/);
+  const dbTypes = check ? [...check[1].matchAll(/'([a-z_]+)'/g)].map((m) => m[1]).sort() : [];
+  eq('every document type the form offers is allowed by the table', DOC_TYPES.map((t) => t.key).sort(), dbTypes);
+}
 eq('date has no timezone shift', formatDate('2027-01-17'), 'Jan 17, 2027');
 
 console.log(`\n${pass} passed, ${fail} failed`);
