@@ -44,6 +44,7 @@ import { isCampProgram, programScheduleLabel } from "../_shared/campProgram.ts";
 import { isDeadlineReminderLabel, splitByThrottle, throttleGapHours } from "../_shared/marketingThrottle.ts";
 import { withEmailAttribution } from "../_shared/emailAttribution.ts";
 import { chooseBodyText } from "../_shared/plainTextHalf.ts";
+import { sendableEmail } from "../_shared/sendableEmail.ts";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -661,6 +662,7 @@ serve(async (req: Request) => {
     skipped_throttled: 0,
     skipped_no_school_program: 0,
     skipped_no_email: 0,
+    skipped_invalid_email: 0,
     failed: 0,
     errors: [] as string[],
   };
@@ -678,6 +680,7 @@ serve(async (req: Request) => {
     recipientCamps: CampRow[]; // empty when not a camps campaign
   };
   const ready: ReadyRecipient[] = [];
+  const invalidEmail: Recipient[] = [];
   const seenEmails = new Set<string>();
   // THE OTHER HALF OF THE SAME DEDUP, and it has to be bypassed for a test too.
   // This pre-seeds the email-level set from the SAME alreadyDelivered rows, so
@@ -710,6 +713,14 @@ serve(async (req: Request) => {
     // _internal_admin, whose email is the caller's own (mode='test' requires an
     // authenticated user and uses auth.userEmail). It cannot re-send to a family.
     if (!isTestSend && alreadyDelivered.has(r.id)) { results.skipped_deduped++; continue; }
+    // One malformed `to` makes Resend reject its whole batch of 100 (see
+    // _shared/sendableEmail.ts), so a field that is not exactly one address is
+    // left out HERE, before batching, and logged once below as a record of who
+    // was not mailed. After suppression and dedup on purpose: an unsubscribed or
+    // already-mailed family keeps that truer label. Not counted in `failed`:
+    // re-queueing cannot fix it, so it must not mark a touchpoint that mailed
+    // everyone else failed.
+    if (!sendableEmail(r.email)) { results.skipped_invalid_email++; invalidEmail.push(r); continue; }
     if (seenEmails.has(emailLc)) { results.skipped_email_deduped++; continue; }
     seenEmails.add(emailLc);
 
@@ -750,6 +761,50 @@ serve(async (req: Request) => {
       }
     }
     ready.push({ r, program, recipientPrograms, recipientCamps });
+  }
+
+  // Log each unsendable address once per touchpoint, as a 'failed' row with the
+  // reason in error_message. No screen shows that reason yet: the contact's
+  // timeline says "Failed", and CampaignDetail counts 'failed' rows as sent
+  // (an existing overcount Resend-rejected rows already cause). A re-queue
+  // meets the same contact again, so read what is already logged first, paged
+  // like the throttle log; if that read fails, log nothing rather than
+  // duplicate (the family is already correctly not being sent to). A test has
+  // one recipient, the operator's own address, and is not logged.
+  if (!isTestSend && invalidEmail.length > 0) {
+    const INVALID_EMAIL_REASON = "skipped: the contact's email is not a single valid address; fix it in Contacts";
+    const loggedIds = new Set<string>();
+    let loggedReadOk = true;
+    for (let from = 0; ; from += 1000) {
+      const { data: page, error: ilErr } = await supabase
+        .from("marketing_sends")
+        .select("recipient_id")
+        .eq("touchpoint_id", touchpoint.id)
+        .eq("status", "failed")
+        .eq("error_message", INVALID_EMAIL_REASON)
+        .range(from, from + 999);
+      if (ilErr) { loggedReadOk = false; results.errors.push(`invalid-email row read failed: ${ilErr.message}`); break; }
+      for (const l of (page ?? []) as Array<{ recipient_id: string }>) loggedIds.add(l.recipient_id);
+      if (!page || page.length < 1000) break;
+    }
+    if (loggedReadOk) {
+      const rows = invalidEmail.filter((r) => !loggedIds.has(r.id)).map((r) => ({
+        organization_id: campaign.organization_id,
+        campaign_id: campaign.id,
+        touchpoint_id: touchpoint.id,
+        recipient_id: r.id,
+        email: r.email,
+        status: "failed",
+        school_name: r.school_name ?? null,
+        error_message: INVALID_EMAIL_REASON,
+        suppressed_by_throttle: false,
+        is_test: false,
+      }));
+      if (rows.length > 0) {
+        const { error: iwErr } = await supabase.from("marketing_sends").insert(rows);
+        if (iwErr) results.errors.push(`invalid-email row log failed: ${iwErr.message}`);
+      }
+    }
   }
 
   // ---- Throttle: one family is not mailed again inside the org's minimum gap ----
@@ -841,9 +896,12 @@ serve(async (req: Request) => {
   // 903 sent, 863 failed with "rate_limit_exceeded". Batch API fixes it.
   //
   // Tradeoff: if a batch call itself fails (auth, rate, malformed), ALL
-  // emails in that batch get the same error. Per-email validation still
-  // happens server-side on Resend's end. The slice of 100 keeps blast
-  // radius bounded if a batch dies.
+  // emails in that batch get the same error. That includes ONE malformed
+  // address: Resend validates the whole request first and 422s all of it
+  // (2026-10-20), which is why the first pass drops addresses sendableEmail
+  // refuses before they reach a batch. That check is deliberately loose and
+  // catches the malformed shapes seen so far, not every string Resend could
+  // refuse, so the slice of 100 still bounds the blast radius when one gets by.
   // Soft time budget for the send loop. If we run out, bail with partial
   // progress reported in the response so the cron + operator can decide
   // whether to re-queue. The dedup logic guarantees no recipient receives
@@ -961,7 +1019,7 @@ serve(async (req: Request) => {
       return {
         from: formatFromAddress(brand),
         reply_to: brand.reply_to,
-        to: [r.email],
+        to: [r.email.trim()],
         subject,
         html: bodyHtml,
         text: bodyText,
