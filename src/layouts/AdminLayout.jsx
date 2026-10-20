@@ -140,6 +140,12 @@ const NAV = [
     // across all four sub-routes.
     match: ["/admin/family-comms"],
   },
+  // Its own menu item, not a Settings card (Jessica 2026-10-20): it is somewhere
+  // a provider comes back to - documents going out of date, who has a partner
+  // login, who looked - not a thing configured once. Owner/admin only, the same
+  // role it had while it sat in Settings' `match` list; writes are can_admin_org
+  // in the provider_documents RLS and bucket policies either way.
+  { to: "/admin/partner-documents", label: "Partner portal", gate: "settings" },
   { to: "/admin/community", label: "Community", soon: true },
   // Settings owns Waivers as a sub-page (/admin/waivers) — keep this item lit there.
   // /admin/email-sender is in `match` so the route GUARD covers it, not just the
@@ -160,7 +166,7 @@ const NAV = [
   // /admin/branding by URL — previously they could view it read-only via
   // members_read_branding while their save would fail at RLS, i.e. a page they could
   // reach but not use. One viewer exists on prod. Same posture as /admin/email-sender.
-  { to: "/admin/settings", label: "Settings", gate: "settings", match: ["/admin/settings", "/admin/waivers", "/admin/survey-settings", "/admin/pay-rates", "/admin/email-sender", "/admin/branding", "/admin/instructor-documents", "/admin/partner-documents"] }, // owner/admin only
+  { to: "/admin/settings", label: "Settings", gate: "settings", match: ["/admin/settings", "/admin/waivers", "/admin/survey-settings", "/admin/pay-rates", "/admin/email-sender", "/admin/branding", "/admin/instructor-documents"] }, // owner/admin only
   { to: "/admin/team", label: "Team", gate: "team" },             // owner/admin only
 ];
 

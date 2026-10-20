@@ -86,8 +86,9 @@ const BARE_ROUTES = new Set([
   'registration-questions', 'waivers', 'email-sender',
   'background-checks', 'training', 'branding',
   // partner-documents (2026-10-12): every provider with a partner needs it, so
-  // no entitlement wrapper. Role IS gated: it is in Settings' `match` list in
-  // AdminLayout (owner/admin), and writes are can_admin_org in the
+  // no entitlement wrapper. Role IS gated: it is its own nav item with
+  // gate "settings" in AdminLayout (owner/admin; moved out of Settings'
+  // `match` list 2026-10-20), and writes are can_admin_org in the
   // provider_documents RLS and the provider-documents bucket policies.
   'partner-documents',
   // Dev + platform consoles. No nav entry by design; gated by platform_admins in

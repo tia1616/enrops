@@ -13,7 +13,7 @@
 // here, so this screen and the partner view always agree.
 
 import { useEffect, useMemo, useState } from "react";
-import { Link, useOutletContext } from "react-router-dom";
+import { useOutletContext } from "react-router-dom";
 import ModalShell from "../../components/ModalShell.jsx";
 import PartnerLoginsSection from "./PartnerLoginsSection.jsx";
 import { usePermissions } from "../../lib/permissions.js";
@@ -292,14 +292,13 @@ export default function ProviderDocuments() {
 
   return (
     <div style={{ maxWidth: 760, margin: "0 auto", padding: "8px 0 40px" }}>
-      <Link to="/admin/settings" style={{ fontSize: 13, color: MUTED, textDecoration: "none" }}>← Settings</Link>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 12, flexWrap: "wrap" }}>
         <div>
-          <h1 style={{ margin: "8px 0 4px", color: PURPLE, fontSize: 24, fontWeight: 700 }}>Documents for partners</h1>
+          <h1 style={{ margin: "8px 0 4px", color: PURPLE, fontSize: 24, fontWeight: 700 }}>Partner portal</h1>
           <p style={{ color: MUTED, fontSize: 14, marginTop: 0, lineHeight: 1.5, maxWidth: 580 }}>
-            The papers your partners need from you: your insurance certificate, your agreement with them, and anything
-            their agreement asks for. Once a partner has a portal login, they'll see the ones shown to them. Background
-            checks and training come from each instructor's record, so you don't add them here.
+            What your partners see when they log in: your insurance certificate, your agreement with them, and anything
+            else their agreement asks for, plus your instructors at their sites. Background checks and training come
+            from each instructor's record, so you don't add them here.
           </p>
         </div>
         {canManage && (
