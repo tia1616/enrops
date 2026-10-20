@@ -44,6 +44,7 @@ import { isCampProgram, programScheduleLabel } from "../_shared/campProgram.ts";
 import { isDeadlineReminderLabel, splitByThrottle, throttleGapHours } from "../_shared/marketingThrottle.ts";
 import { withEmailAttribution } from "../_shared/emailAttribution.ts";
 import { chooseBodyText } from "../_shared/plainTextHalf.ts";
+import { sendableEmail } from "../_shared/sendableEmail.ts";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -661,6 +662,7 @@ serve(async (req: Request) => {
     skipped_throttled: 0,
     skipped_no_school_program: 0,
     skipped_no_email: 0,
+    skipped_invalid_email: 0,
     failed: 0,
     errors: [] as string[],
   };
@@ -678,6 +680,7 @@ serve(async (req: Request) => {
     recipientCamps: CampRow[]; // empty when not a camps campaign
   };
   const ready: ReadyRecipient[] = [];
+  const invalidEmail: Recipient[] = [];
   const seenEmails = new Set<string>();
   // THE OTHER HALF OF THE SAME DEDUP, and it has to be bypassed for a test too.
   // This pre-seeds the email-level set from the SAME alreadyDelivered rows, so
@@ -696,6 +699,12 @@ serve(async (req: Request) => {
   for (const r of recipientRows) {
     results.attempted++;
     if (!r.email) { results.skipped_no_email++; continue; }
+    // One malformed `to` makes Resend reject its whole batch of 100 (see
+    // _shared/sendableEmail.ts), so a field that is not exactly one address is
+    // left out HERE, before batching, and logged once below so the operator can
+    // see who and fix the contact. Not counted in `failed`: re-queueing cannot
+    // fix it, so it must not mark a touchpoint that mailed everyone else failed.
+    if (!sendableEmail(r.email)) { results.skipped_invalid_email++; invalidEmail.push(r); continue; }
     const emailLc = r.email.trim().toLowerCase();
     if (suppressedEmails.has(emailLc)) { results.skipped_suppressed++; continue; }
     // Dedup is a REAL-SEND protection: it stops a family receiving the same
@@ -750,6 +759,42 @@ serve(async (req: Request) => {
       }
     }
     ready.push({ r, program, recipientPrograms, recipientCamps });
+  }
+
+  // Log each unsendable address once per touchpoint, as a 'failed' row with a
+  // reason the operator can act on. A re-queue meets the same contact again,
+  // so read what is already logged first; if that read fails, log nothing
+  // rather than duplicate (the family is already correctly not being sent to).
+  // A test has one recipient, the operator's own address, and is not logged.
+  if (!isTestSend && invalidEmail.length > 0) {
+    const INVALID_EMAIL_REASON = "skipped: the contact's email is not a single valid address; fix it in Contacts";
+    const { data: logged, error: ilErr } = await supabase
+      .from("marketing_sends")
+      .select("recipient_id")
+      .eq("touchpoint_id", touchpoint.id)
+      .eq("status", "failed")
+      .eq("error_message", INVALID_EMAIL_REASON);
+    if (ilErr) {
+      results.errors.push(`invalid-email row read failed: ${ilErr.message}`);
+    } else {
+      const loggedIds = new Set(((logged ?? []) as Array<{ recipient_id: string }>).map((l) => l.recipient_id));
+      const rows = invalidEmail.filter((r) => !loggedIds.has(r.id)).map((r) => ({
+        organization_id: campaign.organization_id,
+        campaign_id: campaign.id,
+        touchpoint_id: touchpoint.id,
+        recipient_id: r.id,
+        email: r.email,
+        status: "failed",
+        school_name: r.school_name ?? null,
+        error_message: INVALID_EMAIL_REASON,
+        suppressed_by_throttle: false,
+        is_test: false,
+      }));
+      if (rows.length > 0) {
+        const { error: iwErr } = await supabase.from("marketing_sends").insert(rows);
+        if (iwErr) results.errors.push(`invalid-email row log failed: ${iwErr.message}`);
+      }
+    }
   }
 
   // ---- Throttle: one family is not mailed again inside the org's minimum gap ----
@@ -961,7 +1006,7 @@ serve(async (req: Request) => {
       return {
         from: formatFromAddress(brand),
         reply_to: brand.reply_to,
-        to: [r.email],
+        to: [r.email.trim()],
         subject,
         html: bodyHtml,
         text: bodyText,
