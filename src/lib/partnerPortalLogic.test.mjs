@@ -82,5 +82,36 @@ eq('already-granted contacts are not offered again', contactsWithoutAccess(conta
   ok('no banned words', !/cleared|\bsafe\b|enrops verif|certif|verified/.test(words));
 }
 
+// --- partner home summary (spec v3 H1) ---------------------------------------
+{
+  const { providerSummary, worstBadge } = await import('./partnerPortalLogic.js');
+  const P = 'p-hv';
+  const current = (extra = {}) => ({
+    shared: true, background_check_status: 'current', background_check_completed_on: '2026-10-10',
+    background_check_expires_on: '2027-10-10', background_check_as_of: '2026-10-12', training_completed_on: '2026-08-25',
+    training_as_of: '2026-10-20', code_of_conduct_on: '2026-08-20', mandatory_reporter_on: '2026-08-20', agreement_signed_on: '2026-08-20',
+    sites: ['Happy Valley Library'], ...extra,
+  });
+  const docs = [
+    { doc_type: 'insurance', partner_id: P, expiry_status: 'current', updated_at: '2026-10-12T00:00:00Z' },
+    { doc_type: 'insurance', partner_id: null, expiry_status: 'expiring_soon', updated_at: '2026-10-01T00:00:00Z' },
+    { doc_type: 'insurance', partner_id: 'p-vancouver', expiry_status: 'expired', updated_at: '2026-10-21T00:00:00Z' },
+    { doc_type: 'agreement', partner_id: null, expiry_status: 'no_expiry', updated_at: '2026-10-12T00:00:00Z' },
+  ];
+  const s = providerSummary({ docs, instructors: [current(), current({ shared: false })], partnerId: P, orgName: 'Acme', today: '2026-10-20' });
+  eq('insurance takes the worst of THIS partner\'s certificates (not another partner\'s)', s.insurance.label, 'Expiring in 30 days');
+  eq('agreement on file', s.agreement.label, 'Current');
+  eq('no license on file reads Expired or Missing', s.license.label, 'Expired or Missing');
+  eq('instructors: 1 of 2 current (one has not consented)', [s.instructors.current, s.instructors.total], [1, 2]);
+  eq('instructor chip is the worst line', s.instructors.badge.label, 'In review');
+  eq('last change ignores another partner\'s document', s.lastChange, '2026-10-20');
+  eq('sites collected', s.sites, ['Happy Valley Library']);
+
+  const empty = providerSummary({ docs: [], instructors: [], partnerId: P, orgName: 'Acme', today: '2026-10-20' });
+  eq('nothing on file: insurance missing, no instructor chip', [empty.insurance.label, empty.instructors.badge, empty.training], ['Expired or Missing', null, null]);
+  ok('a missing item ranks a row first', empty.rank < s.rank || empty.rank === 0);
+  eq('worst of none', worstBadge([]), null);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

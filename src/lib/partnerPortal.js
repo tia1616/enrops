@@ -45,9 +45,14 @@ export async function removePortalAccess(id) {
   if (error) throw error;
 }
 
-/** Where a partner lands after signing in: the provider's own branded partner page. */
-export function partnerPortalUrl(org) {
-  return `${window.location.origin}/${org.slug}/partner`;
+/**
+ * Where a partner lands after signing in: the neutral partner home, which lists
+ * every provider sharing with them (spec v3 H1). Not provider-branded, because
+ * a partner works with many providers. /:slug/partner still works and forwards
+ * here.
+ */
+export function partnerPortalUrl() {
+  return `${window.location.origin}/partner`;
 }
 
 /**
@@ -60,10 +65,13 @@ export function partnerPortalUrl(org) {
  * caller is one of the provider's owners/admins, and null for anyone else - the
  * public form is never told whether an address has access.
  */
+//
+// `org` null = the neutral partner home's sign-in: any provider's grant counts,
+// and the email speaks as that provider (or as enrops when several share).
 export async function sendPartnerSignInLink(org, email) {
-  const { data, error } = await supabase.functions.invoke("auth-send-magic-link", {
-    body: { email, redirect_to: partnerPortalUrl(org), context: "partner", org_id: org.id },
-  });
+  const body = { email, redirect_to: partnerPortalUrl(), context: "partner" };
+  if (org?.id) body.org_id = org.id;
+  const { data, error } = await supabase.functions.invoke("auth-send-magic-link", { body });
   if (error) throw error;
   if (data?.error) throw new Error(data.error);
   return data?.partner_link ?? null;

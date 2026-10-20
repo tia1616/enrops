@@ -120,3 +120,72 @@ export function documentProvenance(doc, orgName) {
   const by = `entered by ${(orgName || "").trim() || "the provider"}`;
   return provenance(doc?.updated_at ? String(doc.updated_at).slice(0, 10) : null, by);
 }
+
+// --- Partner home (spec v3 H1): one row per provider ------------------------
+
+// Worst first. A row or a cell takes its worst chip, so a partner reads red
+// before anything else (spec v3: "Lapsed rows sort first").
+const TONE_RANK = { bad: 0, review: 1, warn: 2, good: 3, neutral: 4 };
+
+/** The worst of a list of chips, or null when there are none. */
+export function worstBadge(badges) {
+  const list = (badges || []).filter(Boolean);
+  if (!list.length) return null;
+  return list.reduce((a, b) => ((TONE_RANK[b.tone] ?? 4) < (TONE_RANK[a.tone] ?? 4) ? b : a));
+}
+
+function docsFor(docs, partnerId, type) {
+  return (docs || []).filter((d) => d.doc_type === type && (!d.partner_id || d.partner_id === partnerId));
+}
+
+/**
+ * One provider's row on the partner home: insurance, instructors ("6 of 7
+ * Current"), training, agreement, business license, last change, and the
+ * row's overall rank for sorting. Pure: built from the same document rows and
+ * instructor checklist the provider detail page shows, so the two can never
+ * disagree.
+ */
+export function providerSummary({ docs, instructors, partnerId, orgName, today }) {
+  const insuranceDocs = docsFor(docs, partnerId, "insurance");
+  const agreementDocs = docsFor(docs, partnerId, "agreement");
+  const licenseDocs = docsFor(docs, partnerId, "business_license");
+  const chipOf = (d) => EXPIRY_STATUS[d.expiry_status] ?? CHECK_STATUS.in_review;
+
+  // Every insurance certificate must be current (a lapsed umbrella is a gap
+  // even when the general liability is fine), so insurance takes the WORST.
+  // One valid agreement or license is enough, so those take the BEST.
+  const bestBadge = (list) => {
+    const b = list.map(chipOf);
+    if (!b.length) return null;
+    return b.reduce((a, c) => ((TONE_RANK[c.tone] ?? 4) > (TONE_RANK[a.tone] ?? 4) ? c : a));
+  };
+  const insurance = insuranceDocs.length ? worstBadge(insuranceDocs.map(chipOf)) : EXPIRED_OR_MISSING;
+  const agreement = bestBadge(agreementDocs) ?? EXPIRED_OR_MISSING;
+  const license = bestBadge(licenseDocs) ?? EXPIRED_OR_MISSING;
+
+  const people = (instructors || []).map((row) => instructorChecklist(row, orgName, today));
+  const isCurrent = (lines) => lines.every((l) => l.badge.tone === "good" || l.badge.tone === "warn");
+  const currentCount = people.filter(isCurrent).length;
+  const instructorBadge = people.length ? worstBadge(people.flat().map((l) => l.badge)) : null;
+  const training = people.length
+    ? worstBadge(people.map((lines) => (lines.find((l) => l.key === "training") ?? lines[0]).badge))
+    : null;
+
+  const dates = [
+    ...(docs || []).filter((d) => !d.partner_id || d.partner_id === partnerId).map((d) => d.updated_at && String(d.updated_at).slice(0, 10)),
+    ...(instructors || []).flatMap((r) => [r.background_check_as_of, r.training_as_of, r.code_of_conduct_on, r.mandatory_reporter_on, r.agreement_signed_on]),
+  ].filter(Boolean).sort();
+  const lastChange = dates.length ? dates[dates.length - 1] : null;
+
+  const overall = worstBadge([insurance, agreement, instructorBadge, training]);
+  return {
+    insurance,
+    agreement,
+    license,
+    training,
+    instructors: { total: people.length, current: currentCount, badge: instructorBadge },
+    lastChange,
+    rank: TONE_RANK[overall?.tone] ?? 4,
+    sites: [...new Set((instructors || []).flatMap((r) => r.sites || []))].sort(),
+  };
+}

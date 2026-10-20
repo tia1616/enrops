@@ -86,6 +86,8 @@ const EmailSenderSettings = lazy(() => import('./pages/admin/EmailSenderSettings
 const BackgroundCheckSettings = lazy(() => import('./pages/admin/BackgroundCheckSettings.jsx'));
 const ProviderDocuments = lazy(() => import('./pages/admin/ProviderDocuments.jsx'));
 const PartnerPortal = lazy(() => import('./pages/portal/PartnerPortal.jsx'));
+const PartnerHome = lazy(() => import('./pages/partner/PartnerHome.jsx'));
+const PartnerProviderDetail = lazy(() => import('./pages/partner/PartnerProviderDetail.jsx'));
 const InstructorDocuments = lazy(() => import('./pages/admin/InstructorDocuments.jsx'));
 const TrainingSettings = lazy(() => import('./pages/admin/TrainingSettings.jsx'));
 const BrandLogoSettings = lazy(() => import('./pages/admin/BrandLogoSettings.jsx'));
@@ -219,6 +221,12 @@ export default function App() {
           behave the same now. */}
       <Route path="/" element={<EnropsLanding />} />
       <Route path="/signup" element={<OperatorSignup />} />
+      {/* The neutral partner home (spec v3 H1/H2): every provider sharing with
+          this partner, not one provider's branded page. Static segments outrank
+          /:slug, so "partner" is never read as a provider slug. Authorization is
+          the database (partner_portal_memberships + RLS), never the URL. */}
+      <Route path="/partner" element={<PartnerHome />} />
+      <Route path="/partner/:partnerId" element={<PartnerProviderDetail />} />
       <Route path="/privacy" element={<PolicyPage policyType="privacy" orgSlug="enrops" />} />
       <Route path="/terms" element={<PolicyPage policyType="terms" orgSlug="enrops" />} />
       <Route path="/acceptable-use" element={<PolicyPage policyType="acceptable-use" orgSlug="enrops" />} />

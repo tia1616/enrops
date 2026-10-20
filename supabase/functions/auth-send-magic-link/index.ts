@@ -67,18 +67,27 @@ async function findUserByEmail(supabase: any, email: string) {
 // Reads the provider's grants (a handful of rows) and compares the normalized
 // email in code, the same lower(btrim()) the database's claim uses. Filtering in
 // SQL with ilike missed a contact stored with surrounding spaces.
-async function findPartnerGrant(supabase: any, email: string, orgId: string) {
-  const { data: grants, error } = await supabase
+//
+// orgId null = the neutral partner home (/partner), where a partner signs in
+// without naming a provider: any provider's grant counts. `provider_count` then
+// says whether the email can speak as that one provider or must speak for
+// several (the partner home lists every provider sharing with them).
+async function findPartnerGrant(supabase: any, email: string, orgId: string | null) {
+  let query = supabase
     .from('partner_portal_access')
-    .select('contact_id, contact:partner_contacts(contact_name, contact_email), partner:partners(partner_name, inactive)')
-    .eq('organization_id', orgId);
+    .select('contact_id, organization_id, contact:partner_contacts(contact_name, contact_email), partner:partners(partner_name, inactive)');
+  if (orgId) query = query.eq('organization_id', orgId);
+  const { data: grants, error } = await query;
   if (error) throw new Error(`partner access lookup failed: ${error.message}`);
-  const grant = (grants ?? []).find(
+  const mine = (grants ?? []).filter(
     (g: any) => normalizeEmail(g.contact?.contact_email) === email && g.partner && !g.partner.inactive,
   );
+  const grant = mine[0];
   if (!grant) return null;
   return {
     contact_id: grant.contact_id as string,
+    organization_id: grant.organization_id as string,
+    provider_count: new Set(mine.map((g: any) => g.organization_id)).size,
     first_name: String(grant.contact?.contact_name ?? '').trim().split(/\s+/)[0] || null,
     partner_name: (grant.partner?.partner_name as string) ?? null,
   };
@@ -140,7 +149,7 @@ serve(async (req: Request) => {
       adminCaller = org_id ? await callerAdministers(supabase, req, org_id) : false;
       // `partner_link` is returned ONLY to the provider's own admins.
       const quiet = (outcome: string) => json(adminCaller ? { sent: true, partner_link: outcome } : { sent: true });
-      partnerGrant = org_id ? await findPartnerGrant(supabase, email, org_id) : null;
+      partnerGrant = await findPartnerGrant(supabase, email, org_id ?? null);
       if (!partnerGrant) return quiet('no_access');
       if (!isEmailAllowed(email)) {
         console.log('partner magic link suppressed by staging email allowlist');
@@ -304,16 +313,26 @@ serve(async (req: Request) => {
     // Partner: the grant's own provider, which is org_id (findPartnerGrant is
     // scoped to it), so the email always speaks as the provider whose records
     // the partner is about to see.
-    const tenantBrand = (template === 'parent' || template === 'instructor' || template === 'onboarding' || template === 'partner')
-      ? await loadOrgBrand(supabase, org_id ?? instructorRow?.organization_id ?? null)
+    // From the neutral partner home (no org_id): speak as the grant's provider
+    // when there is exactly one, and as enrops when several providers share
+    // with this person.
+    const partnerBrandOrg = template === 'partner' && !org_id
+      ? (partnerGrant?.provider_count === 1 ? partnerGrant.organization_id : null)
       : null;
+    const tenantBrand = (template === 'parent' || template === 'instructor' || template === 'onboarding' || template === 'partner')
+      ? await loadOrgBrand(supabase, org_id ?? partnerBrandOrg ?? instructorRow?.organization_id ?? null)
+      : null;
+    const partnerSeveralProviders = template === 'partner' && !org_id && (partnerGrant?.provider_count ?? 0) > 1;
 
     const subject =
       template === 'signup' ? 'Finish setting up your enrops page'
       : template === 'admin' ? 'Sign in to Enrops Admin'
       : template === 'onboarding' ? `Continue your ${tenantBrand?.org_name ?? 'enrops'} onboarding`
       : template === 'instructor' ? 'Sign in to view your schedule'
-      : template === 'partner' ? `Your ${tenantBrand?.org_name ?? 'enrops'} vendor records`
+      // Spec v3 wording: "safety record", never "vendor compliance".
+      : template === 'partner' ? (partnerSeveralProviders
+          ? "Your providers' safety record"
+          : `${tenantBrand?.org_name ?? 'Your provider'}'s safety record`)
       : `Sign in to ${tenantBrand?.org_name ?? 'enrops'}`;
 
     const html =
@@ -321,7 +340,7 @@ serve(async (req: Request) => {
       : template === 'admin' ? buildAdminEmail(firstName, signInUrl)
       : template === 'onboarding' ? buildOnboardingEmail(firstName, signInUrl, tenantBrand)
       : template === 'instructor' ? buildInstructorEmail(firstName, signInUrl, tenantBrand)
-      : template === 'partner' ? buildPartnerEmail(firstName, signInUrl, tenantBrand, partnerGrant?.partner_name ?? null)
+      : template === 'partner' ? buildPartnerEmail(firstName, signInUrl, tenantBrand, partnerGrant?.partner_name ?? null, partnerSeveralProviders)
       : buildParentEmail(firstName, signInUrl, tenantBrand);
 
     // Operator-facing auth emails (signup + admin) send AS enrops from the
@@ -598,7 +617,7 @@ function readableOn(bg: string): { fg: string; muted: string } {
 // A partner (a parks department, a school) being let in to see a provider's
 // vendor records. Speaks as the provider. No support address is invented when
 // the provider has none on file.
-function buildPartnerEmail(firstName: string, signInUrl: string, brand: any, partnerName: string | null): string {
+function buildPartnerEmail(firstName: string, signInUrl: string, brand: any, partnerName: string | null, severalProviders = false): string {
   const orgName = brand?.org_name || 'enrops';
   const support = brand?.reply_to || null;
   const accent = brand?.primary_color || '#5847C9';
@@ -618,11 +637,13 @@ function buildPartnerEmail(firstName: string, signInUrl: string, brand: any, par
   <div style="padding:28px;">
     <p style="margin:0 0 16px;font-size:15px;color:#1A1530;">Hi ${escapeHtml(firstName)},</p>
     <p style="margin:0 0 24px;font-size:15px;color:#1A1530;line-height:1.6;">
-      ${escapeHtml(orgName)} keeps its insurance, agreements and other records in one place${forWhom}. Tap below to see them, with the date each one is good through.
+      ${severalProviders
+        ? `The providers you work with share their safety record with you${forWhom}: insurance, agreements and the status of their instructors. Tap below to see them, with the date each item is good through.`
+        : `${escapeHtml(orgName)} shares its safety record with you${forWhom}: insurance, agreements and the status of its instructors. Tap below to see it, with the date each item is good through.`}
     </p>
     <div style="text-align:center;margin:28px 0;">
       <a href="${escapeAttr(signInUrl)}" style="display:inline-block;background:${escapeAttr(accent)};color:#fff;text-decoration:none;padding:14px 36px;border-radius:8px;font-size:15px;font-weight:700;">
-        See the records
+        See the safety record
       </a>
     </div>
     <p style="margin:0;font-size:13px;color:#6b6880;">This link expires in 24 hours. You can ask for a new one any time from the same page.${helpLine}</p>
