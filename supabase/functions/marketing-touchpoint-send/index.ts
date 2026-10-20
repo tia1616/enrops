@@ -765,23 +765,29 @@ serve(async (req: Request) => {
 
   // Log each unsendable address once per touchpoint, as a 'failed' row with the
   // reason in error_message. No screen shows that reason yet: the contact's
-  // timeline says "Failed", and CampaignDetail counts 'failed' rows as sent (an
-  // existing overcount Resend-rejected rows already cause). A re-queue meets the same contact again,
-  // so read what is already logged first; if that read fails, log nothing
-  // rather than duplicate (the family is already correctly not being sent to).
-  // A test has one recipient, the operator's own address, and is not logged.
+  // timeline says "Failed", and CampaignDetail counts 'failed' rows as sent
+  // (an existing overcount Resend-rejected rows already cause). A re-queue
+  // meets the same contact again, so read what is already logged first, paged
+  // like the throttle log; if that read fails, log nothing rather than
+  // duplicate (the family is already correctly not being sent to). A test has
+  // one recipient, the operator's own address, and is not logged.
   if (!isTestSend && invalidEmail.length > 0) {
     const INVALID_EMAIL_REASON = "skipped: the contact's email is not a single valid address; fix it in Contacts";
-    const { data: logged, error: ilErr } = await supabase
-      .from("marketing_sends")
-      .select("recipient_id")
-      .eq("touchpoint_id", touchpoint.id)
-      .eq("status", "failed")
-      .eq("error_message", INVALID_EMAIL_REASON);
-    if (ilErr) {
-      results.errors.push(`invalid-email row read failed: ${ilErr.message}`);
-    } else {
-      const loggedIds = new Set(((logged ?? []) as Array<{ recipient_id: string }>).map((l) => l.recipient_id));
+    const loggedIds = new Set<string>();
+    let loggedReadOk = true;
+    for (let from = 0; ; from += 1000) {
+      const { data: page, error: ilErr } = await supabase
+        .from("marketing_sends")
+        .select("recipient_id")
+        .eq("touchpoint_id", touchpoint.id)
+        .eq("status", "failed")
+        .eq("error_message", INVALID_EMAIL_REASON)
+        .range(from, from + 999);
+      if (ilErr) { loggedReadOk = false; results.errors.push(`invalid-email row read failed: ${ilErr.message}`); break; }
+      for (const l of (page ?? []) as Array<{ recipient_id: string }>) loggedIds.add(l.recipient_id);
+      if (!page || page.length < 1000) break;
+    }
+    if (loggedReadOk) {
       const rows = invalidEmail.filter((r) => !loggedIds.has(r.id)).map((r) => ({
         organization_id: campaign.organization_id,
         campaign_id: campaign.id,
