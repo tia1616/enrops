@@ -10,7 +10,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   listPortalAccess, listGrantableContacts, grantPortalAccess, removePortalAccess,
-  sendPartnerSignInLink, partnerPortalUrl,
+  sendPartnerSignInLink,
 } from "../../lib/partnerPortal.js";
 import { accessStatus, contactsWithoutAccess } from "../../lib/partnerPortalLogic.js";
 import { supabase } from "../../lib/supabase";
@@ -127,8 +127,7 @@ export default function PartnerLoginsSection({ org, partners, canManage, onMessa
     <section style={{ marginTop: 28 }}>
       <h2 style={{ margin: "0 0 4px", fontSize: 18, fontWeight: 700, color: INK }}>Partner logins</h2>
       <p style={{ margin: "0 0 12px", fontSize: 13.5, color: MUTED, lineHeight: 1.5, maxWidth: 600 }}>
-        People at a partner who can sign in at <span style={{ color: INK, fontWeight: 600 }}>{org?.slug ? partnerPortalUrl(org).replace(/^https?:\/\//, "") : "your partner page"}</span> and
-        see the documents shown to their partner and your instructors at that partner's sites. They can't see anything else.
+        Who at each partner can log in. They only see what's shared with their partner.
       </p>
 
       {error && <div style={{ marginBottom: 12, padding: "10px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, color: "#991b1b", fontSize: 13 }}>{error}</div>}
@@ -196,10 +195,8 @@ export default function PartnerLoginsSection({ org, partners, canManage, onMessa
             </button>
           </div>
           <div style={{ fontSize: 12.5, color: MUTED, marginTop: 8, lineHeight: 1.5 }}>
-            Don't see the person? Add them as a contact on that partner in <Link to="/admin/schools" style={{ color: BRIGHT }}>Locations</Link>, with their email, then come back.
-            Giving access doesn't email anyone; use Send sign-in link when you're ready. If someone's email or partner is
-            changed later, their access is removed and you give it again here. Choose Admin for the person who signs off on
-            providers at that partner, and Viewer for everyone else.
+            Not listed? Add them as a contact in <Link to="/admin/schools" style={{ color: BRIGHT }}>Locations</Link> first.
+            Nothing is emailed until you click Send sign-in link.
           </div>
         </div>
       )}
