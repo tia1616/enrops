@@ -40,6 +40,8 @@ export const CHECK_STATUS = {
   ...EXPIRY_STATUS,
   missing: EXPIRED_OR_MISSING,
   in_review: { label: "In review", tone: "review" },
+  // Cleared, but the completed date is not entered yet: same chip, own reason.
+  awaiting_date: { label: "In review", tone: "review" },
 };
 
 const CURRENT = EXPIRY_STATUS.current;
@@ -78,9 +80,8 @@ export function instructorChecklist(row, orgName, today) {
       `${row.background_check_status === "expired" ? "Expired" : "Renews"} ${formatDate(row.background_check_expires_on)}`,
     );
   }
-  if (row.background_check_status === "in_review" && !row.background_check_completed_on) {
-    checkDetail.push("Completed date not on file yet");
-  }
+  if (row.background_check_status === "awaiting_date") checkDetail.push("Completed date not on file yet");
+  else if (row.background_check_status === "in_review") checkDetail.push("Check in progress");
   const vendor = (row.background_check_vendor || "").trim();
   const checkSource = vendor && row.background_check_completed_on ? `${byProvider} · Screening company: ${vendor}` : byProvider;
   const nothingOnFile = row.background_check_status === "missing";

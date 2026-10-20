@@ -59,8 +59,10 @@ eq('already-granted contacts are not offered again', contactsWithoutAccess(conta
   const exp = instructorChecklist({ shared: true, background_check_status: 'expired', background_check_completed_on: '2025-01-02', background_check_expires_on: '2026-01-02' }, ORG, TODAY);
   eq('expired: one word, and the detail says Expired, not Renews', [exp[0].badge.label, exp[0].detail], ['Expired or Missing', 'Completed Jan 2, 2025 · Expired Jan 2, 2026']);
 
-  const noDate = instructorChecklist({ shared: true, background_check_status: 'in_review', background_check_vendor: 'Yardstik' }, ORG, TODAY);
-  eq('no screening company named without a completed check', [noDate[0].badge.label, noDate[0].detail, noDate[0].meta], ['In review', 'Completed date not on file yet', 'Source: entered by Acme Kids']);
+  const noDate = instructorChecklist({ shared: true, background_check_status: 'awaiting_date', background_check_vendor: 'Yardstik' }, ORG, TODAY);
+  eq('cleared without a date: In review, says why, names no company', [noDate[0].badge.label, noDate[0].detail, noDate[0].meta], ['In review', 'Completed date not on file yet', 'Source: entered by Acme Kids']);
+  const pendingCheck = instructorChecklist({ shared: true, background_check_status: 'in_review' }, ORG, TODAY);
+  eq('a pending check is never told its date is missing', pendingCheck[0].detail, 'Check in progress');
 
   eq('unknown status never shows green', instructorChecklist({ shared: true, background_check_status: 'weird' }, ORG, TODAY)[0].badge.tone, 'review');
 

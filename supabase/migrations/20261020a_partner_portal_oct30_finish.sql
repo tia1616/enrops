@@ -316,11 +316,12 @@ begin
     -- not finished: in_review. Anything else that is not clear (never started,
     -- or a result that is not clear): missing, shown as "Expired or Missing" so
     -- a failed check never gets its own word. Cleared with no completed date
-    -- cannot have a renewal date: in_review until the date is entered.
+    -- cannot have a renewal date: awaiting_date (shown as In review, with its
+    -- own reason, so a genuinely pending check is never told "date missing").
     case when i.partner_sharing_agreed_at is null then 'in_review'
          when s.checkr_status in ('pending', 'invited', 'processing') then 'in_review'
          when s.checkr_status is distinct from 'clear' then 'missing'
-         when s.background_check_completed_on is null then 'in_review'
+         when s.background_check_completed_on is null then 'awaiting_date'
          when v_months = 0 then private.document_expiry_status(null, v_org)
          else private.document_expiry_status(
            (s.background_check_completed_on + make_interval(months => v_months))::date, v_org)
