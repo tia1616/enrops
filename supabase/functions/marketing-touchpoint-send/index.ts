@@ -699,12 +699,6 @@ serve(async (req: Request) => {
   for (const r of recipientRows) {
     results.attempted++;
     if (!r.email) { results.skipped_no_email++; continue; }
-    // One malformed `to` makes Resend reject its whole batch of 100 (see
-    // _shared/sendableEmail.ts), so a field that is not exactly one address is
-    // left out HERE, before batching, and logged once below so the operator can
-    // see who and fix the contact. Not counted in `failed`: re-queueing cannot
-    // fix it, so it must not mark a touchpoint that mailed everyone else failed.
-    if (!sendableEmail(r.email)) { results.skipped_invalid_email++; invalidEmail.push(r); continue; }
     const emailLc = r.email.trim().toLowerCase();
     if (suppressedEmails.has(emailLc)) { results.skipped_suppressed++; continue; }
     // Dedup is a REAL-SEND protection: it stops a family receiving the same
@@ -719,6 +713,14 @@ serve(async (req: Request) => {
     // _internal_admin, whose email is the caller's own (mode='test' requires an
     // authenticated user and uses auth.userEmail). It cannot re-send to a family.
     if (!isTestSend && alreadyDelivered.has(r.id)) { results.skipped_deduped++; continue; }
+    // One malformed `to` makes Resend reject its whole batch of 100 (see
+    // _shared/sendableEmail.ts), so a field that is not exactly one address is
+    // left out HERE, before batching, and logged once below as a record of who
+    // was not mailed. After suppression and dedup on purpose: an unsubscribed or
+    // already-mailed family keeps that truer label. Not counted in `failed`:
+    // re-queueing cannot fix it, so it must not mark a touchpoint that mailed
+    // everyone else failed.
+    if (!sendableEmail(r.email)) { results.skipped_invalid_email++; invalidEmail.push(r); continue; }
     if (seenEmails.has(emailLc)) { results.skipped_email_deduped++; continue; }
     seenEmails.add(emailLc);
 
@@ -761,8 +763,10 @@ serve(async (req: Request) => {
     ready.push({ r, program, recipientPrograms, recipientCamps });
   }
 
-  // Log each unsendable address once per touchpoint, as a 'failed' row with a
-  // reason the operator can act on. A re-queue meets the same contact again,
+  // Log each unsendable address once per touchpoint, as a 'failed' row with the
+  // reason in error_message. No screen shows that reason yet: the contact's
+  // timeline says "Failed", and CampaignDetail counts 'failed' rows as sent (an
+  // existing overcount Resend-rejected rows already cause). A re-queue meets the same contact again,
   // so read what is already logged first; if that read fails, log nothing
   // rather than duplicate (the family is already correctly not being sent to).
   // A test has one recipient, the operator's own address, and is not logged.
@@ -889,8 +893,9 @@ serve(async (req: Request) => {
   // emails in that batch get the same error. That includes ONE malformed
   // address: Resend validates the whole request first and 422s all of it
   // (2026-10-20), which is why the first pass drops addresses sendableEmail
-  // refuses before they reach a batch. The slice of 100 keeps blast radius
-  // bounded if a batch dies for any other reason.
+  // refuses before they reach a batch. That check is deliberately loose and
+  // catches the malformed shapes seen so far, not every string Resend could
+  // refuse, so the slice of 100 still bounds the blast radius when one gets by.
   // Soft time budget for the send loop. If we run out, bail with partial
   // progress reported in the response so the cron + operator can decide
   // whether to re-queue. The dedup logic guarantees no recipient receives
