@@ -886,9 +886,11 @@ serve(async (req: Request) => {
   // 903 sent, 863 failed with "rate_limit_exceeded". Batch API fixes it.
   //
   // Tradeoff: if a batch call itself fails (auth, rate, malformed), ALL
-  // emails in that batch get the same error. Per-email validation still
-  // happens server-side on Resend's end. The slice of 100 keeps blast
-  // radius bounded if a batch dies.
+  // emails in that batch get the same error. That includes ONE malformed
+  // address: Resend validates the whole request first and 422s all of it
+  // (2026-10-20), which is why the first pass drops addresses sendableEmail
+  // refuses before they reach a batch. The slice of 100 keeps blast radius
+  // bounded if a batch dies for any other reason.
   // Soft time budget for the send loop. If we run out, bail with partial
   // progress reported in the response so the cron + operator can decide
   // whether to re-queue. The dedup logic guarantees no recipient receives
