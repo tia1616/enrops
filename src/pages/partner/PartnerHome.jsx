@@ -41,12 +41,20 @@ export default function PartnerHome() {
     for (const m of memberships) {
       if (!docsByOrg.has(m.organization_id)) docsByOrg.set(m.organization_id, listProviderDocuments(m.organization_id));
     }
-    Promise.all(memberships.map(async (m) => {
+    // allSettled, not all: one provider's failed read must not hide the others.
+    // The providers that failed are named in the error line above the table.
+    Promise.allSettled(memberships.map(async (m) => {
       const [docs, instructors] = await Promise.all([docsByOrg.get(m.organization_id), listPartnerInstructors(m.partner_id)]);
       return { m, summary: providerSummary({ docs, instructors, partnerId: m.partner_id, orgName: m.organization_name, today }) };
     }))
-      .then((r) => { if (!cancelled) setRows(r); })
-      .catch((err) => { if (!cancelled) setLoadError(`Couldn't load your providers: ${err?.message ?? "unknown error"}`); });
+      .then((results) => {
+        if (cancelled) return;
+        setRows(results.filter((r) => r.status === "fulfilled").map((r) => r.value));
+        const failed = results
+          .map((r, i) => (r.status === "rejected" ? memberships[i].organization_name : null))
+          .filter(Boolean);
+        if (failed.length) setLoadError(`Couldn't load ${failed.join(", ")} right now. Try refreshing.`);
+      });
     return () => { cancelled = true; };
   }, [memberships]);
 

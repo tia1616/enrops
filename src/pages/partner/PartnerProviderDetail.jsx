@@ -98,7 +98,7 @@ export default function PartnerProviderDetail() {
             <div className="flex flex-wrap items-center gap-2 text-sm">
               <span className="w-40 shrink-0 font-medium">Business license</span>
               <DocumentStatusBadge badge={summary.license} />
-              {byType("business_license")[0] && <span className="text-j2s-ink/70">{goodThrough(byType("business_license")[0])}</span>}
+              {summary.licenseDoc && <span className="text-j2s-ink/70">{goodThrough(summary.licenseDoc)}</span>}
             </div>
           </Section>
 

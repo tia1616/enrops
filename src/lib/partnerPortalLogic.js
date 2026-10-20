@@ -162,14 +162,19 @@ export function providerSummary({ docs, instructors, partnerId, orgName, today }
   const insurance = insuranceDocs.length ? worstBadge(insuranceDocs.map(chipOf)) : EXPIRED_OR_MISSING;
   const agreement = bestBadge(agreementDocs) ?? EXPIRED_OR_MISSING;
   const license = bestBadge(licenseDocs) ?? EXPIRED_OR_MISSING;
+  // The license document the chip came from, so a date shown beside the chip
+  // describes the same document (never an older expired one).
+  const licenseDoc = licenseDocs.find((d) => chipOf(d) === license) ?? null;
 
   const people = (instructors || []).map((row) => instructorChecklist(row, orgName, today));
   const isCurrent = (lines) => lines.every((l) => l.badge.tone === "good" || l.badge.tone === "warn");
   const currentCount = people.filter(isCurrent).length;
   const instructorBadge = people.length ? worstBadge(people.flat().map((l) => l.badge)) : null;
-  const training = people.length
-    ? worstBadge(people.map((lines) => (lines.find((l) => l.key === "training") ?? lines[0]).badge))
-    : null;
+  // Training reads only instructors who have shared their record: one who has
+  // not given permission is already In review in the Instructors column, and
+  // must not make Training look unfinished for everyone else.
+  const trainingLines = people.map((lines) => lines.find((l) => l.key === "training")).filter(Boolean);
+  const training = trainingLines.length ? worstBadge(trainingLines.map((l) => l.badge)) : null;
 
   const dates = [
     ...(docs || []).filter((d) => !d.partner_id || d.partner_id === partnerId).map((d) => d.updated_at && String(d.updated_at).slice(0, 10)),
@@ -182,6 +187,7 @@ export function providerSummary({ docs, instructors, partnerId, orgName, today }
     insurance,
     agreement,
     license,
+    licenseDoc,
     training,
     instructors: { total: people.length, current: currentCount, badge: instructorBadge },
     lastChange,

@@ -104,6 +104,15 @@ eq('already-granted contacts are not offered again', contactsWithoutAccess(conta
   eq('no license on file reads Expired or Missing', s.license.label, 'Expired or Missing');
   eq('instructors: 1 of 2 current (one has not consented)', [s.instructors.current, s.instructors.total], [1, 2]);
   eq('instructor chip is the worst line', s.instructors.badge.label, 'In review');
+  eq('training ignores an instructor who has not consented', s.training.label, 'Current');
+  const lic = providerSummary({
+    docs: [
+      { doc_type: 'business_license', partner_id: null, expiry_status: 'expired', expires_on: '2026-08-07' },
+      { doc_type: 'business_license', partner_id: null, expiry_status: 'current', expires_on: '2027-08-07' },
+    ],
+    instructors: [], partnerId: P, orgName: 'Acme', today: '2026-10-20',
+  });
+  eq('license chip and the document behind it agree', [lic.license.label, lic.licenseDoc.expires_on], ['Current', '2027-08-07']);
   eq('last change ignores another partner\'s document', s.lastChange, '2026-10-20');
   eq('sites collected', s.sites, ['Happy Valley Library']);
 
