@@ -61,12 +61,15 @@ alter table public.instructors
 comment on column public.instructors.training_entered_at is
   'When training_completed_on last changed. Set by trigger. Shown to partners as "as of".';
 
--- Existing results have no recorded entry time. updated_at is the closest
--- honest proxy: the row last changed then, so the fact was on file by then.
+-- Existing results have no recorded entry time. NOT updated_at: any later
+-- unrelated change (a Stripe status, a step) moves it, which would make an old
+-- check look more recently confirmed than it is - the dangerous direction. The
+-- completed date is a floor that never overstates; updated_at only when there
+-- is no completed date.
 -- Runs BEFORE the stamping trigger exists: with the trigger in place this
 -- UPDATE changes no result column, so the trigger would put the old NULL back.
 update public.contractor_onboarding_status
-   set background_check_entered_at = updated_at
+   set background_check_entered_at = coalesce(background_check_completed_on::timestamptz, updated_at)
  where background_check_entered_at is null
    and (background_check_completed_on is not null or checkr_status = 'clear');
 
@@ -97,8 +100,11 @@ create trigger stamp_background_check_entered
   before insert or update on public.contractor_onboarding_status
   for each row execute function private.stamp_background_check_entered();
 
+-- NOT updated_at here: nothing keeps instructors.updated_at current, so it can
+-- predate the training date itself (seen on staging: as of Aug 27 for a date
+-- entered Oct 19). The fact was certainly on file by now.
 update public.instructors
-   set training_entered_at = coalesce(updated_at, now())
+   set training_entered_at = now()
  where training_entered_at is null
    and training_completed_on is not null;
 
