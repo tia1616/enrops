@@ -11,7 +11,9 @@
 // distinct from the one-time AnnouncementBanner. Page/user/org context is
 // attached automatically; the user only types a message.
 //
-// Enrops admin chrome only — mounted in AdminLayout. Tokens match the shell.
+// Mounted in AdminLayout's sidebar, and (variant "inline") on the partner
+// portal page, where the signed-in person is a partner of the provider rather
+// than a member; the feedback insert policy admits both. Tokens match the shell.
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";

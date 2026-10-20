@@ -172,9 +172,10 @@ export default function PartnerPortal() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="text-sm font-semibold uppercase tracking-wide text-j2s-ink/50">{partnerNames}</div>
-          <h1 className="mt-1 font-titan text-3xl text-j2s-ink">{org.name}'s records</h1>
+          {/* Spec v3 header, word for word. Never "vendor compliance". */}
+          <h1 className="mt-1 font-titan text-3xl text-j2s-ink">Your providers' safety record</h1>
           <p className="mt-2 max-w-xl text-j2s-ink/70">
-            Everything {org.name} keeps on file for you, and the date each one is good through.
+            {org.name}: everything they keep on file for you, and the date each one is good through.
           </p>
         </div>
         <button type="button" onClick={() => signOut()} className="text-sm font-semibold text-j2s-purple hover:underline">
@@ -208,7 +209,14 @@ export default function PartnerPortal() {
                       {(d.insurer || d.coverage_notes) ? " · " : ""}
                       {d.abuse_coverage ? "Includes abuse and molestation coverage" : "Abuse and molestation coverage not listed"}
                       {" · "}
-                      {d.additional_insured ? "Names you as additional insured" : "Additional insured not listed"}
+                      {/* "Names you" is only true of a certificate made out to
+                          THIS partner. One shown to every partner may name only
+                          some of them, so it points at the certificate instead. */}
+                      {!d.additional_insured
+                        ? "Additional insured not listed"
+                        : d.partner_id
+                          ? "Names you as additional insured"
+                          : "Lists additional insureds (see the certificate)"}
                     </div>
                   )}
                   <div className="mt-1 text-xs text-j2s-ink/50">{documentProvenance(d, org.name)}</div>
