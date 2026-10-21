@@ -34,7 +34,9 @@
 // PI walk:
 //   1. Collect all paid PaymentIntents for this registration:
 //      - installments rows where status='paid', oldest -> newest by installment_number
-//      - if none, fall back to registrations.stripe_payment_intent_id
+//      - if the registration has NO installment rows at all (single-pay),
+//        fall back to registrations.stripe_payment_intent_id. A plan leg with
+//        only pending rows has paid nothing (see _shared/refundPaidSlots.ts).
 //   2. For each PI, compute refundable = pi_amount_for_this_reg - already_refunded_against_pi_for_this_reg.
 //   3. Walk newest-first, refunding from each until amount_cents is consumed.
 //   4. If we run out before consuming amount_cents, return 400 'amount_exceeds_eligible'.
@@ -108,6 +110,7 @@ import { feeReturnOutcome } from '../_shared/feeReturnOutcome.ts';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 import { isEmailAllowed } from '../_shared/emailGuard.ts';
 import { sendRefundReceipt } from '../_shared/refundReceipt.ts';
+import { paidPaymentSlots } from '../_shared/refundPaidSlots.ts';
 import { logTransactionalSend, formatSendError } from '../_shared/sendLog.ts';
 import { maybeAlertOperatorFlagged } from '../_shared/operatorFlagAlert.ts';
 import { alertMarginShortfall } from '../_shared/marginShortfallAlert.ts';
@@ -1042,27 +1045,11 @@ serve(async (req: Request) => {
       chargeAccountId: string | null;
       hasTransfer: boolean | null;
     };
-    const piSlots: PiSlot[] = [];
-
-    if (paidInstallments.length > 0) {
-      for (const inst of paidInstallments) {
-        piSlots.push({
-          pi: inst.stripe_payment_intent_id!,
-          amount: inst.amount_cents,
-          sortKey: inst.installment_number, // newest installment first
-          chargeAccountId: inst.stripe_charge_account_id ?? null,
-          hasTransfer: null,
-        });
-      }
-    } else if (reg.payment_status === 'paid' && reg.stripe_payment_intent_id) {
-      piSlots.push({
-        pi: reg.stripe_payment_intent_id,
-        amount: reg.amount_cents ?? 0,
-        sortKey: 1,
-        chargeAccountId: reg.stripe_charge_account_id ?? null,
-        hasTransfer: null,
-      });
-    }
+    // The registration-level PI is a fallback for single-pay ONLY - a plan leg
+    // with nothing collected must not borrow its sibling's charge. See
+    // refundPaidSlots.ts for the 2026-10-21 incident.
+    const piSlots: PiSlot[] = paidPaymentSlots(installments, reg)
+      .map((s) => ({ ...s, hasTransfer: null }));
 
     // NOTHING PAID IS A FACT, NOT AN ERROR - FOR A PREVIEW.
     //
