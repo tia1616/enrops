@@ -2349,6 +2349,8 @@ function SubOfferCard({ sub, busy, busyAction, onAccept, onDecline, readOnly, on
 
   const curriculumName = isCamp ? (sess?.curriculum_name ?? "this camp") : (prog?.curriculum ?? "this program");
   const venueName = loc?.name ?? (isCamp ? sess?.location_name : null) ?? "";
+  // A program's start/end here are the class's times ON sub.date, early release
+  // included - get_my_sub_details resolves them from the schedule.
   const startTime = isCamp ? sess?.start_time : prog?.start_time;
   const endTime = isCamp ? sess?.end_time : prog?.end_time;
   const timeRange = startTime && endTime ? `${fmtTimePretty(startTime)}–${fmtTimePretty(endTime)}` : (startTime ? fmtTimePretty(startTime) : "");
@@ -2366,6 +2368,11 @@ function SubOfferCard({ sub, busy, busyAction, onAccept, onDecline, readOnly, on
       <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>
         {friendlyDate}{timeRange ? ` · ${timeRange}` : ""}{venueName ? ` · ${venueName}` : ""}
       </div>
+      {!isCamp && prog?.early_release && (
+        <div style={{ fontSize: 13, color: INK, fontWeight: 600, marginTop: 4 }}>
+          {earlyReleaseLine(startTime, endTime)}
+        </div>
+      )}
       {coInstructors.length > 0 && (
         <div style={{ marginTop: 8 }}>
           <SubInstructorLines coInstructors={coInstructors} coveredInstructorId={coveredInstructorId} />
@@ -3564,6 +3571,11 @@ function SubDetailView({ sub, instructor, onBack, onMarkTaught, markBusy, error,
         <div style={{ fontSize: 13, color: MUTED, marginTop: 6, lineHeight: 1.5 }}>
           {friendlyDate}{timeRange ? ` · ${timeRange}` : ""}{venueName ? ` · ${venueName}` : ""}
         </div>
+        {!isCamp && prog?.early_release && (
+          <div style={{ fontSize: 13, color: INK, fontWeight: 600, marginTop: 4 }}>
+            {earlyReleaseLine(startTime, endTime)}
+          </div>
+        )}
         <div style={{ marginTop: 8, fontSize: 12, color: sub.status === "taught" ? OK_GREEN : MUTED, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>
           {sub.status === "taught" ? "✓ Taught" : "✓ Accepted"}
         </div>
