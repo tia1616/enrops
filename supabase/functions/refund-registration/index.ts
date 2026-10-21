@@ -34,8 +34,8 @@
 // PI walk:
 //   1. Collect all paid PaymentIntents for this registration:
 //      - installments rows where status='paid', oldest -> newest by installment_number
-//      - if the registration has NO installment rows at all (single-pay),
-//        fall back to registrations.stripe_payment_intent_id. A plan leg with
+//      - if the registration has NO installment rows at all (usually
+//        single-pay), fall back to registrations.stripe_payment_intent_id. A plan leg with
 //        only pending rows has paid nothing (see _shared/refundPaidSlots.ts).
 //   2. For each PI, compute refundable = pi_amount_for_this_reg - already_refunded_against_pi_for_this_reg.
 //   3. Walk newest-first, refunding from each until amount_cents is consumed.

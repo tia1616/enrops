@@ -2,7 +2,12 @@
 //
 // The installments table is the record of what was collected. The
 // registration's own stripe_payment_intent_id is only consulted when the
-// registration has NO installment rows at all (a single-pay registration).
+// registration has NO installment rows at all. That is usually single-pay, but
+// NOT always: a plan leg whose charge never got rows (legacy multi-child plans,
+// where the money sits on regIds[0]'s row, or a bundle leg written without one)
+// also lands here, and its PI IS its own charge. Do not tighten this to
+// payment_method !== 'stripe_installments' - prod had 12 such paid legs on
+// 2026-10-21, and that guard would refuse them a refund they are owed.
 //
 // A plan leg whose rows are all still pending has paid NOTHING. Its
 // registrations.stripe_payment_intent_id is the CHECKOUT's charge, which on a
