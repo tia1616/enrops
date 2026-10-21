@@ -2354,6 +2354,7 @@ function SubOfferCard({ sub, busy, busyAction, onAccept, onDecline, readOnly, on
   const startTime = isCamp ? sess?.start_time : prog?.start_time;
   const endTime = isCamp ? sess?.end_time : prog?.end_time;
   const timeRange = startTime && endTime ? `${fmtTimePretty(startTime)}–${fmtTimePretty(endTime)}` : (startTime ? fmtTimePretty(startTime) : "");
+  const earlyReleaseDay = !isCamp && prog?.early_release === true;
 
   const friendlyDate = sub.date
     ? new Date(`${sub.date}T00:00:00`).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })
@@ -2365,10 +2366,12 @@ function SubOfferCard({ sub, busy, busyAction, onAccept, onDecline, readOnly, on
         Sub · {sub.sub_tier === "lead" ? "Lead" : "Developing"}
       </div>
       <div style={{ fontSize: 15, fontWeight: 700, color: INK }}>{curriculumName}</div>
+      {/* On an early-release day the time lives in the early-release sentence
+          below, once - not also here in a second format. */}
       <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>
-        {friendlyDate}{timeRange ? ` · ${timeRange}` : ""}{venueName ? ` · ${venueName}` : ""}
+        {friendlyDate}{timeRange && !earlyReleaseDay ? ` · ${timeRange}` : ""}{venueName ? ` · ${venueName}` : ""}
       </div>
-      {!isCamp && prog?.early_release && (
+      {earlyReleaseDay && (
         <div style={{ fontSize: 13, color: INK, fontWeight: 600, marginTop: 4 }}>
           {earlyReleaseLine(startTime, endTime)}
         </div>
@@ -3522,6 +3525,7 @@ function SubDetailView({ sub, instructor, onBack, onMarkTaught, markBusy, error,
   const startTime = isCamp ? sess?.start_time : prog?.start_time;
   const endTime = isCamp ? sess?.end_time : prog?.end_time;
   const timeRange = startTime && endTime ? `${fmtTimePretty(startTime)}–${fmtTimePretty(endTime)}` : (startTime ? fmtTimePretty(startTime) : "");
+  const earlyReleaseDay = !isCamp && prog?.early_release === true;
   const curriculumId = isCamp ? sess?.curriculum_id : prog?.curriculum_id;
 
   const friendlyDate = sub.date
@@ -3568,10 +3572,12 @@ function SubDetailView({ sub, instructor, onBack, onMarkTaught, markBusy, error,
         <h1 style={{ margin: "4px 0 0", fontSize: 22, fontWeight: 700, color: INK, letterSpacing: -0.3, lineHeight: 1.25 }}>
           {curriculumName}
         </h1>
+        {/* On an early-release day the time lives in the early-release
+            sentence below, once - not also here in a second format. */}
         <div style={{ fontSize: 13, color: MUTED, marginTop: 6, lineHeight: 1.5 }}>
-          {friendlyDate}{timeRange ? ` · ${timeRange}` : ""}{venueName ? ` · ${venueName}` : ""}
+          {friendlyDate}{timeRange && !earlyReleaseDay ? ` · ${timeRange}` : ""}{venueName ? ` · ${venueName}` : ""}
         </div>
-        {!isCamp && prog?.early_release && (
+        {earlyReleaseDay && (
           <div style={{ fontSize: 13, color: INK, fontWeight: 600, marginTop: 4 }}>
             {earlyReleaseLine(startTime, endTime)}
           </div>
