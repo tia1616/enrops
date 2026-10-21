@@ -1119,11 +1119,14 @@ export default function InstructorPortal() {
           return;
         }
         if (code === "time_conflict") {
-          // They are already covering another class that overlaps this one.
-          // Nothing is broken and nothing they can fix by retrying, so this is
-          // an explanation, not a failure they should read as their fault.
+          // Something else on their schedule that day overlaps this one: their
+          // own class, a camp, or another day they are covering. Nothing is
+          // broken and nothing they can fix by retrying, so this is an
+          // explanation, not a failure they should read as their fault.
+          // Same sentence as respond-to-sub-offer's detail (Jessica's wording,
+          // 2026-10-21); subTimeConflictCopy.test.mjs keeps the two identical.
           setNotice(body?.detail
-            || "You're already covering another class that overlaps this one, so we couldn't add it. Contact the office if that's wrong.");
+            || "This overlaps with another class on your schedule that day. Contact the office if that's wrong.");
           await loadSubAssignments(instructor.instructor_id);
           return;
         }
