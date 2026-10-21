@@ -154,14 +154,19 @@ serve(async (req: Request) => {
         }>;
       };
       if (result.outcome === 'time_conflict') {
-        // They are already covering another class that overlaps this one. The
-        // pickers could not see it: sub_availability_on_date counts only
-        // confirmed and taught as busy, so two live offers left this person
-        // looking free in both. Refusing here is what stops one of the two
-        // rooms being empty.
+        // Something already on their schedule that day overlaps this slot: a
+        // class or camp of their own, or another day they are covering. The
+        // sub case is the one the pickers cannot see: sub_availability_on_date
+        // counts only confirmed and taught as busy, so two live offers left
+        // this person looking free in both. Refusing here is what stops one of
+        // the two rooms being empty.
         return json({
           error: 'time_conflict',
-          detail: 'You are already covering another class that overlaps this one. Contact the office if that is wrong.',
+          // Jessica's wording, 2026-10-21. accept_sub_offer refuses for their
+          // OWN class or camp too, not only another sub day, so the sentence
+          // must not say "covering". The portal's fallback is the same string;
+          // src/pages/portal/subTimeConflictCopy.test.mjs keeps them identical.
+          detail: "This overlaps with another class on your schedule that day. Contact the office if that's wrong.",
         }, 409);
       }
       if (result.outcome === 'lost') {

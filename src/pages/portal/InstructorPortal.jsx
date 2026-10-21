@@ -1118,11 +1118,14 @@ export default function InstructorPortal() {
           return;
         }
         if (code === "time_conflict") {
-          // They are already covering another class that overlaps this one.
-          // Nothing is broken and nothing they can fix by retrying, so this is
-          // an explanation, not a failure they should read as their fault.
+          // Something else on their schedule that day overlaps this one: their
+          // own class, a camp, or another day they are covering. Nothing is
+          // broken and nothing they can fix by retrying, so this is an
+          // explanation, not a failure they should read as their fault.
+          // Same sentence as respond-to-sub-offer's detail (Jessica's wording,
+          // 2026-10-21); subTimeConflictCopy.test.mjs keeps the two identical.
           setNotice(body?.detail
-            || "You're already covering another class that overlaps this one, so we couldn't add it. Contact the office if that's wrong.");
+            || "This overlaps with another class on your schedule that day. Contact the office if that's wrong.");
           await loadSubAssignments(instructor.instructor_id);
           return;
         }
@@ -2342,9 +2345,12 @@ function SubOfferCard({ sub, busy, busyAction, onAccept, onDecline, readOnly, on
 
   const curriculumName = isCamp ? (sess?.curriculum_name ?? "this camp") : (prog?.curriculum ?? "this program");
   const venueName = loc?.name ?? (isCamp ? sess?.location_name : null) ?? "";
+  // A program's start/end here are the class's times ON sub.date, early release
+  // included - get_my_sub_details resolves them from the schedule.
   const startTime = isCamp ? sess?.start_time : prog?.start_time;
   const endTime = isCamp ? sess?.end_time : prog?.end_time;
   const timeRange = startTime && endTime ? `${fmtTimePretty(startTime)}–${fmtTimePretty(endTime)}` : (startTime ? fmtTimePretty(startTime) : "");
+  const earlyReleaseDay = !isCamp && prog?.early_release === true;
 
   const friendlyDate = sub.date
     ? new Date(`${sub.date}T00:00:00`).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })
@@ -2356,9 +2362,16 @@ function SubOfferCard({ sub, busy, busyAction, onAccept, onDecline, readOnly, on
         Sub · {sub.sub_tier === "lead" ? "Lead" : "Developing"}
       </div>
       <div style={{ fontSize: 15, fontWeight: 700, color: INK }}>{curriculumName}</div>
+      {/* On an early-release day the time lives in the early-release sentence
+          below, once - not also here in a second format. */}
       <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>
-        {friendlyDate}{timeRange ? ` · ${timeRange}` : ""}{venueName ? ` · ${venueName}` : ""}
+        {friendlyDate}{timeRange && !earlyReleaseDay ? ` · ${timeRange}` : ""}{venueName ? ` · ${venueName}` : ""}
       </div>
+      {earlyReleaseDay && (
+        <div style={{ fontSize: 13, color: INK, fontWeight: 600, marginTop: 4 }}>
+          {earlyReleaseLine(startTime, endTime)}
+        </div>
+      )}
       {coInstructors.length > 0 && (
         <div style={{ marginTop: 8 }}>
           <SubInstructorLines coInstructors={coInstructors} coveredInstructorId={coveredInstructorId} />
@@ -3508,6 +3521,7 @@ function SubDetailView({ sub, instructor, onBack, onMarkTaught, markBusy, error,
   const startTime = isCamp ? sess?.start_time : prog?.start_time;
   const endTime = isCamp ? sess?.end_time : prog?.end_time;
   const timeRange = startTime && endTime ? `${fmtTimePretty(startTime)}–${fmtTimePretty(endTime)}` : (startTime ? fmtTimePretty(startTime) : "");
+  const earlyReleaseDay = !isCamp && prog?.early_release === true;
   const curriculumId = isCamp ? sess?.curriculum_id : prog?.curriculum_id;
 
   const friendlyDate = sub.date
@@ -3554,9 +3568,16 @@ function SubDetailView({ sub, instructor, onBack, onMarkTaught, markBusy, error,
         <h1 style={{ margin: "4px 0 0", fontSize: 22, fontWeight: 700, color: INK, letterSpacing: -0.3, lineHeight: 1.25 }}>
           {curriculumName}
         </h1>
+        {/* On an early-release day the time lives in the early-release
+            sentence below, once - not also here in a second format. */}
         <div style={{ fontSize: 13, color: MUTED, marginTop: 6, lineHeight: 1.5 }}>
-          {friendlyDate}{timeRange ? ` · ${timeRange}` : ""}{venueName ? ` · ${venueName}` : ""}
+          {friendlyDate}{timeRange && !earlyReleaseDay ? ` · ${timeRange}` : ""}{venueName ? ` · ${venueName}` : ""}
         </div>
+        {earlyReleaseDay && (
+          <div style={{ fontSize: 13, color: INK, fontWeight: 600, marginTop: 4 }}>
+            {earlyReleaseLine(startTime, endTime)}
+          </div>
+        )}
         <div style={{ marginTop: 8, fontSize: 12, color: sub.status === "taught" ? OK_GREEN : MUTED, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 }}>
           {sub.status === "taught" ? "✓ Taught" : "✓ Accepted"}
         </div>

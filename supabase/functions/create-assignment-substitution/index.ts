@@ -184,6 +184,10 @@ serve(async (req: Request) => {
     // The class's own room, for a PROGRAM sub. Camps have no room of their own,
     // so it stays null there and the site room is used - unchanged behaviour.
     let classRoom: string | null = null;
+    // True when the sub date is a kept early-release day for a PROGRAM.
+    let earlyRelease = false;
+    // Set for a PROGRAM sub only; camps keep their session times.
+    let programId: string | null = null;
 
     if (parentType === 'camp') {
       const { data: parent } = await supabase
@@ -229,6 +233,7 @@ serve(async (req: Request) => {
         endTime = prog.end_time;
         locationId = prog.program_location_id;
         classRoom = prog.room ?? null;
+        programId = parent.program_id;
       }
     }
 
@@ -242,6 +247,24 @@ serve(async (req: Request) => {
       .not('accepted_at', 'is', null)
       .maybeSingle();
     if (!cm) return json({ error: 'forbidden' }, 403);
+
+    // The class's times ON THE SUB DATE, not its usual week: an early-release
+    // day runs at its own times (2026-10-21, a sub was told 2:35 for an
+    // 11:55 class). Same function the accept check and the sub's portal card
+    // read. Read only after the caller is proven to run this org. On a failed
+    // read keep the usual times, which is what this email always said, and log
+    // it - never drop the time line.
+    if (programId) {
+      const { data: dayTimes, error: dayErr } = await supabase
+        .rpc('program_session_times_on', { p_program_id: programId, p_date: date });
+      if (dayErr) {
+        console.error('[create-assignment-substitution] program_session_times_on failed:', dayErr.message);
+      } else if (Array.isArray(dayTimes) && dayTimes[0]) {
+        startTime = dayTimes[0].start_time ?? null;
+        endTime = dayTimes[0].end_time ?? null;
+        earlyRelease = dayTimes[0].early_release === true;
+      }
+    }
 
     // ── Every candidate belongs to this org and can be emailed ────────────
     // Validated as a BATCH before anybody is contacted. Asking two of three and
@@ -414,7 +437,9 @@ serve(async (req: Request) => {
     // Everything that does not depend on WHO is being asked is built once; the
     // greeting and the recipient are the only per-person parts.
     const friendlyDate = fmtDate(date);
-    const timeRange = startTime && endTime ? `${fmtTime(startTime)}–${fmtTime(endTime)}` : (startTime ? fmtTime(startTime) : '');
+    const clockRange = startTime && endTime ? `${fmtTime(startTime)}–${fmtTime(endTime)}` : (startTime ? fmtTime(startTime) : '');
+    // Said out loud, so an earlier-than-usual time does not read as a typo.
+    const timeRange = clockRange && earlyRelease ? `${clockRange} (early release)` : clockRange;
     // Through the shared rule: the class's room beats the site's, and the label
     // arrives already worded (no "Room Makerspace", no "Room Room 111").
     const venueDisplay = [locationName, roomDisplay(classRoom, roomNumber)].filter(Boolean).join(' · ');
