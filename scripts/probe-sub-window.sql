@@ -204,6 +204,33 @@ begin
                   where c.source = 'subbing' and c.ts = '11:55' and c.te = '12:40') then
     raise exception 'PROBE_FAIL a confirmed sub day is not held at the early-release window'; end if;
   ok := ok + 1;
+  update assignment_substitutions set status = 'pending' where id = s1;
+
+  -- F1 (20261021b): an early-release start with NO end must not open the gate.
+  -- The slot keeps the class's usual 45 minutes, so the noon class still clashes.
+  update programs set early_release_end_time = '' where id = p_x;
+  select w.ts, w.te into v_ts, v_te from sub_slot_window('program', a_x, d) w;
+  if v_ts <> '11:55' or v_te is distinct from '12:40'::time then
+    raise exception 'PROBE_FAIL F1: ER day with no end gives slot % - %, want 11:55 - 12:40', v_ts, v_te; end if;
+  begin
+    v_res := accept_sub_offer(s2, i_s2);
+    raise exception using errcode = 'QA001', message = v_res::text;
+  exception when sqlstate 'QA001' then v_txt := sqlerrm; end;
+  if (v_txt::jsonb ->> 'outcome') <> 'time_conflict' then
+    raise exception 'PROBE_FAIL F1: ER day with no end let a clashing sub through: %', v_txt; end if;
+  update programs set early_release_end_time = '12:40 PM' where id = p_x;
+  ok := ok + 2;
+
+  -- F2 (20261021b): a class whose schedule cannot be derived is still a
+  -- commitment on its weekday - unknown reads as busy, not free. session_count
+  -- is NOT NULL, but 0 is allowed and empties the schedule just the same.
+  -- Checked on the first session date: the old range test treats a zero-count
+  -- class as one session long, exactly as it did before.
+  update programs set session_count = 0 where id = p_y;
+  if not exists (select 1 from instructor_commitments_on_date(i_s1, '2026-10-07') c where c.source = 'teaching') then
+    raise exception 'PROBE_FAIL F2: a class with no session count stopped being a commitment'; end if;
+  update programs set session_count = 8 where id = p_y;
+  ok := ok + 1;
 
   raise exception 'PROBE_OK % checks passed', ok;
 end;
