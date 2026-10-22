@@ -192,12 +192,13 @@ export function PartnerSharingStatus({ instructorId, organizationId, previewOnly
     const { data, error: rpcErr } = await supabase.rpc("stop_partner_sharing", {
       p_organization_id: organizationId,
     });
-    setSaving(false);
     if (rpcErr) {
+      setSaving(false);
       setError("That didn't save, so you are still sharing. Please try again, or contact your Program Manager.");
       return;
     }
     if (data !== true) {
+      setSaving(false);
       setError("We couldn't find your instructor record here, so nothing changed. Please contact your Program Manager.");
       return;
     }
@@ -209,6 +210,8 @@ export function PartnerSharingStatus({ instructorId, organizationId, previewOnly
       .select("partner_sharing_stopped_at")
       .eq("id", instructorId)
       .maybeSingle();
+    // Saving stays on through the re-read so the buttons cannot be tapped again.
+    setSaving(false);
     setConfirming(false);
     setAgreedAt(null);
     setStoppedAt(row?.partner_sharing_stopped_at ?? new Date().toISOString());
