@@ -4695,7 +4695,7 @@ function CamperRow({ registration, contacts = [], canRecord = false, orgAsksDism
           doNotRelease={doNotRelease}
           dismissalMethod={s.dismissal_method}
           // The destination, not just the category. The roster line above already
-          // reads "Aftercare — Champions", but this is the control the instructor
+          // reads "Aftercare: Champions", but this is the control the instructor
           // actually operates, and on a phone the two are rarely on screen together.
           aftercareProvider={s.aftercare_provider}
           parent={p}
