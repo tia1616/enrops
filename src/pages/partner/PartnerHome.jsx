@@ -9,7 +9,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import DocumentStatusBadge from "../../components/DocumentStatusBadge.jsx";
-import { listPartnerInstructors } from "../../lib/partnerPortal.js";
+import { listPartnerInstructors, logPartnerPortalEvent } from "../../lib/partnerPortal.js";
 import { listProviderDocuments } from "../../lib/providerDocuments.js";
 import { providerSummary } from "../../lib/partnerPortalLogic.js";
 import { formatDate } from "../../lib/providerDocumentLogic.js";
@@ -29,6 +29,16 @@ export default function PartnerHome() {
   const [rows, setRows] = useState(null); // [{ m, summary }] | null
   const [loadError, setLoadError] = useState("");
   const [site, setSite] = useState("");
+
+  // The visit log + usage capture (20261022b). Signing in lands here, so a host
+  // who reads this table and leaves is still counted. Keyed on the partner ids,
+  // not the array, so a re-fetch of the same memberships does not log again;
+  // the database also folds repeats within 30 minutes into one visit.
+  const partnerIdsKey = (memberships ?? []).map((m) => m.partner_id).join(",");
+  useEffect(() => {
+    if (!partnerIdsKey) return;
+    for (const id of new Set(partnerIdsKey.split(","))) logPartnerPortalEvent(id, "portal_viewed");
+  }, [partnerIdsKey]);
 
   useEffect(() => {
     setRows(null);
