@@ -16,7 +16,7 @@
 // AN ADMIN PREVIEW NEVER AGREES. The database function binds to the signed-in
 // user, so an admin previewing someone's portal could not record it anyway;
 // the card says so instead of offering a button that would do nothing.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import { PARTNER_SHARING_VERSION, partnerSharingText } from "../../lib/partnerSharing.js";
 
@@ -155,6 +155,13 @@ export function PartnerSharingStatus({ instructorId, organizationId, previewOnly
   const [confirming, setConfirming] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const confirmRef = useRef(null);
+
+  // This section is the last thing on Profile, so the confirm opens below the
+  // fold; bring its buttons into view (seen on staging 2026-10-22).
+  useEffect(() => {
+    if (confirming) confirmRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [confirming]);
 
   useEffect(() => {
     if (!instructorId) return;
@@ -220,9 +227,11 @@ export function PartnerSharingStatus({ instructorId, organizationId, previewOnly
       )}
       {state === "not_sharing" && (
         <p style={para}>
-          {stoppedAt ? `You stopped sharing on ${fmtDay(stoppedAt)}. ` : "You haven't given permission yet. "}
-          Until you do, any school or program where you teach sees your screening as In review. To share, use
-          the permission card at the top of your schedule.
+          {stoppedAt
+            ? `You stopped sharing on ${fmtDay(stoppedAt)}. Until you agree again, `
+            : "You haven't given permission yet. Until you do, "}
+          any school or program where you teach sees your screening as In review. To share, use the permission
+          card at the top of your schedule.
         </p>
       )}
       {state === "sharing" && (
@@ -240,7 +249,7 @@ export function PartnerSharingStatus({ instructorId, organizationId, previewOnly
               Stop sharing
             </button>
           ) : (
-            <div role="alert" style={{ marginTop: 8, padding: "10px 12px", border: `1px solid ${CORAL}`, borderRadius: 8, background: `${CORAL}0F` }}>
+            <div ref={confirmRef} role="alert" style={{ marginTop: 8, padding: "10px 12px", border: `1px solid ${CORAL}`, borderRadius: 8, background: `${CORAL}0F` }}>
               <p style={para}>
                 Stop sharing? Any school or program where you teach will see your screening as In review, and
                 no longer see your contact details, until you agree again.
