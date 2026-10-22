@@ -68,6 +68,9 @@ async function call(path, { token, method = 'GET', body, key = ANON } = {}) {
       apikey: key,
       Authorization: `Bearer ${token ?? key}`,
       'Content-Type': 'application/json',
+      // Without this a write that DID succeed answers 204 with no body, which
+      // reads exactly like "0 rows changed". Ask for the changed rows back.
+      Prefer: 'return=representation',
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
@@ -127,7 +130,7 @@ function scanFields(label, list, allowed) {
 
 // ---------------------------------------------------------------- ground truth (service role)
 const grantsRes = await asService(
-  '/rest/v1/partner_portal_access?select=id,partner_id,organization_id,role,contact:partner_contacts(contact_email)',
+  '/rest/v1/partner_portal_access?select=id,partner_id,organization_id,role,contact_id,contact:partner_contacts(contact_email)',
 );
 const allGrants = rows(grantsRes);
 const docsRes = await asService(`/rest/v1/provider_documents?select=id,organization_id,partner_id,storage_path`);
@@ -236,6 +239,28 @@ for (const h of hosts) {
     'parents', 'registrations', 'audit_events', 'partner_contacts', 'org_members', 'program_assignments']) {
     const r = await call(`/rest/v1/${t}?select=*&limit=5`, { token: h.token });
     ok(`${who} reads nothing from ${t}`, gotNothing(r), `${rows(r).length} row(s), status ${r.status}`);
+  }
+
+  // Criterion 3: a host (admin or viewer) cannot change the team or the record.
+  // Each attempt is harmless if the rules were wrong: the PATCH writes back the
+  // value already there, and the DELETE targets only this host's own grant.
+  const ownGrant = h.grants[0];
+  const addTeam = await call('/rest/v1/partner_portal_access', {
+    token: h.token, method: 'POST', body: { contact_id: ownGrant.contact_id, role: 'host_admin' },
+  });
+  ok(`${who} cannot add anyone to the team`, addTeam.status >= 400, `status ${addTeam.status}`);
+  const promote = await call(`/rest/v1/partner_portal_access?id=eq.${ownGrant.id}`, {
+    token: h.token, method: 'PATCH', body: { role: ownGrant.role },
+  });
+  ok(`${who} cannot change a team role`, promote.status >= 400 || rows(promote).length === 0, `status ${promote.status}`);
+  const removeSelf = await call(`/rest/v1/partner_portal_access?id=eq.${ownGrant.id}`, { token: h.token, method: 'DELETE' });
+  ok(`${who} cannot remove a team member`, removeSelf.status >= 400 || rows(removeSelf).length === 0, `status ${removeSelf.status}`);
+  const ownDoc = allDocs.find((d) => h.orgs.has(d.organization_id) && (!d.partner_id || h.partners.has(d.partner_id)));
+  if (ownDoc) {
+    const edit = await call(`/rest/v1/provider_documents?id=eq.${ownDoc.id}`, {
+      token: h.token, method: 'PATCH', body: { partner_id: ownDoc.partner_id },
+    });
+    ok(`${who} cannot edit a document`, edit.status >= 400 || rows(edit).length === 0, `status ${edit.status}`);
   }
 
   // Cannot write a visit into another partner's log.
