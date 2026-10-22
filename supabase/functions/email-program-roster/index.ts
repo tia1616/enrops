@@ -597,12 +597,12 @@ async function buildRosterPdf(params: {
       const homeroom = (s.homeroom_teacher ?? '').trim() || '—';
 
       page.drawLine({ start: { x: MARGIN_X, y: y - 0.5 }, end: { x: MARGIN_X + TABLE_W, y: y - 0.5 }, thickness: 0.5, color: rgb(border.r, border.g, border.b) });
-      // pdfSafe: the aftercare provider is free text a family typed, and the
-      // standard font throws on anything outside WinAnsi.
-      const values: Record<string, string> = { name, grade, homeroom, dismissal: pdfSafe(dismissalCell(s), font) };
+      const values: Record<string, string> = { name, grade, homeroom, dismissal: dismissalCell(s) };
       let xc = MARGIN_X;
       for (const col of COLS) {
-        page.drawText(truncate(values[col.key] ?? '', col.width, font, 9), { x: xc + 4, y: y - 13, size: 9, font, color: rgb(ink.r, ink.g, ink.b) });
+        // Every cell through pdfSafe: names and homerooms are free text too, and
+        // one character the font cannot encode would fail the whole send.
+        page.drawText(truncate(pdfSafe(values[col.key] ?? '', font), col.width, font, 9), { x: xc + 4, y: y - 13, size: 9, font, color: rgb(ink.r, ink.g, ink.b) });
         xc += col.width;
       }
       y -= ROW_H;

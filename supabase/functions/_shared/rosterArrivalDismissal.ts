@@ -113,7 +113,15 @@ export function pdfSafe(text: string, font: any): string {
       font.encodeText(ch);
       out += ch;
     } catch {
-      // not drawable in this font: leave it out
+      // Not drawable as-is. An accented letter falls back to its base letter
+      // ("Nguyễn" prints "Nguyen", not "Nguyn") - this is often a child's name.
+      // Anything with no drawable base (an emoji, an arrow) is left out.
+      const base = ch.normalize('NFD').replace(/[̀-ͯ]/g, '');
+      try {
+        if (base && base !== ch) { font.encodeText(base); out += base; }
+      } catch {
+        // no drawable base either
+      }
     }
   }
   return out.replace(/ {2,}/g, ' ').trim();

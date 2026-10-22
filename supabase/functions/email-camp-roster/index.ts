@@ -640,12 +640,13 @@ async function buildRosterPdf(params: {
         parent_phone: p2.phone ?? '',
         parent_email: p2.email ?? '',
         ec,
-        // pdfSafe: the aftercare provider is free text a family typed.
-        dismissal: pdfSafe(dismissalCell(s), font),
+        dismissal: dismissalCell(s),
       };
       let xc = MARGIN_X;
       for (const col of COLS) {
-        const text = truncate(values[col.key] ?? '', col.width, font, 9);
+        // Every cell through pdfSafe: names, contacts and emails are free text,
+        // and one character the font cannot encode would fail the whole send.
+        const text = truncate(pdfSafe(values[col.key] ?? '', font), col.width, font, 9);
         page.drawText(text, { x: xc + 4, y: y - 14, size: 9, font, color: rgb(ink.r, ink.g, ink.b) });
         if (col.key === 'name' && dobLine) {
           page.drawText(dobLine, { x: xc + 4, y: y - 24, size: 7, font, color: rgb(muted.r, muted.g, muted.b) });
