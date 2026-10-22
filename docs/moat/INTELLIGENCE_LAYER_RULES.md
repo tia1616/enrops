@@ -74,6 +74,7 @@ Jessica's intelligence ask is broader than enrollment: *what do operators USE ac
 - **Doorway** `public.log_platform_event(...)` — SECURITY DEFINER, service_role only, fail-safe (never throws).
 - **Taxonomy** (single source): `_shared/logPlatformEvent.ts` (`FEATURE`/`ACTION`/`OUTCOME` constants). Use constants, never string literals.
 - **Two capture paths:** (a) edge functions call `logPlatformEvent()` at their success/fail path (e.g. `send-offers` → `offer_sent`); (b) pure client-side table writes are captured by **SECURITY DEFINER DB triggers** that call the doorway (e.g. `programs` create/publish). Both are backend — the front-end is never touched.
+- **SQL-side callers write the constants' VALUES as literals** (plpgsql cannot import TS); the constant must exist in `_shared/logPlatformEvent.ts` and the SQL comment must name it. Example: `partner_portal` / `host_portal_viewed` (`20261022b`), written by `log_partner_portal_event()` once per host user per partner per UTC day, metadata `{partner_id, role}`: the spec v3 "host logins recorded in usage capture" count.
 - **"What they don't use"** = a feature in the instrumented set with zero events; it needs no event.
 - **Readout** = the WEEKLY platform-owner digest (`platform-intelligence-digest` edge fn, mirrors `replay-digest`): reads `platform_usage_summary()` + `platform_funnel_summary()` (both cross-tenant, service_role-only, Rule 5) and emails Jessica. Not a per-tenant UI.
 
