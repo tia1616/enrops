@@ -1,6 +1,8 @@
-// One-time permission card at the top of the instructor portal. Shown until the
-// instructor agrees that their provider may share their record with partner
-// organizations (see 20261019a_instructor_partner_sharing.sql).
+// Permission card at the top of the instructor portal. Shown whenever the
+// instructor is not currently agreeing that their provider may share their
+// record with partner organizations: before they first agree, and again after
+// they stop (20261019a, 20261022a). PartnerSharingStatus below, on Profile, is
+// where they stop.
 //
 // THE PORTAL, NOT THE WIZARD. Everyone who onboarded before 2026-10-19 has
 // finished the wizard and will never see it again, and every new instructor
@@ -192,9 +194,17 @@ export function PartnerSharingStatus({ instructorId, organizationId, previewOnly
       setError("We couldn't find your instructor record here, so nothing changed. Please contact your Program Manager.");
       return;
     }
+    // The date shown is the server's stamp, the same one the admin record reads.
+    // If that re-read fails the stop still happened, so fall back to this
+    // device's date: a null here would read "You haven't given permission yet".
+    const { data: row } = await supabase
+      .from("instructors")
+      .select("partner_sharing_stopped_at")
+      .eq("id", instructorId)
+      .maybeSingle();
     setConfirming(false);
     setAgreedAt(null);
-    setStoppedAt(new Date().toISOString());
+    setStoppedAt(row?.partner_sharing_stopped_at ?? new Date().toISOString());
     setState("not_sharing");
   }
 
@@ -211,8 +221,8 @@ export function PartnerSharingStatus({ instructorId, organizationId, previewOnly
       {state === "not_sharing" && (
         <p style={para}>
           {stoppedAt ? `You stopped sharing on ${fmtDay(stoppedAt)}. ` : "You haven't given permission yet. "}
-          The schools and programs where you teach see your screening as In review. To share again, use the
-          permission card at the top of your schedule.
+          Until you do, any school or program where you teach sees your screening as In review. To share, use
+          the permission card at the top of your schedule.
         </p>
       )}
       {state === "sharing" && (
@@ -232,7 +242,7 @@ export function PartnerSharingStatus({ instructorId, organizationId, previewOnly
           ) : (
             <div role="alert" style={{ marginTop: 8, padding: "10px 12px", border: `1px solid ${CORAL}`, borderRadius: 8, background: `${CORAL}0F` }}>
               <p style={para}>
-                Stop sharing? The schools and programs where you teach will see your screening as In review, and
+                Stop sharing? Any school or program where you teach will see your screening as In review, and
                 no longer see your contact details, until you agree again.
               </p>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>

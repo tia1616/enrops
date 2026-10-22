@@ -29,7 +29,7 @@ alter table public.instructors
 comment on column public.instructors.partner_sharing_stopped_at is
   'When this instructor last stopped sharing with partners. NULL while they are sharing or have never agreed. Written only by stop_partner_sharing() / agree_partner_sharing(); history is in audit_events.';
 comment on column public.instructors.partner_sharing_agreed_at is
-  'When this instructor agreed the provider may share their name, contact info, screening status/date/expiry/company and training/acknowledgment dates with partner organizations where they teach (never the report). NULL = not agreed, or stopped (see partner_sharing_stopped_at). Written only by agree_partner_sharing() / stop_partner_sharing().';
+  'When this instructor agreed the provider may share their name, contact info, screening status/date/expiry/company and training/acknowledgment dates with the partners (schools, programs) where they teach (never the report). NULL = not agreed, or stopped (see partner_sharing_stopped_at). Written only by agree_partner_sharing() / stop_partner_sharing().';
 comment on column public.instructors.partner_sharing_version is
   'Which wording they agreed to (PARTNER_SHARING_VERSION in src/lib/partnerSharing.js). NULL whenever partner_sharing_agreed_at is NULL. Written only by agree_partner_sharing() / stop_partner_sharing().';
 
