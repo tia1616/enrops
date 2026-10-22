@@ -111,7 +111,7 @@ eq('aftercare does not need a pickup list', needsAuthorizedPickup(AFTERCARE), fa
 eq('summary is the plain label when no provider applies',
   dismissalSummary({ dismissal_method: RELEASED_TO_ADULT }), 'Released to an authorized adult');
 eq('summary carries the aftercare provider',
-  dismissalSummary({ dismissal_method: AFTERCARE, aftercare_provider: 'Champions' }), 'Aftercare — Champions');
+  dismissalSummary({ dismissal_method: AFTERCARE, aftercare_provider: 'Champions' }), 'Aftercare: Champions');
 // "Aftercare" alone tells an instructor nothing about where the child goes, and
 // silence reads as "we know" rather than "nobody said".
 eq('missing provider is stated, not silent',
@@ -119,7 +119,7 @@ eq('missing provider is stated, not silent',
 eq('blank provider is stated, not silent',
   dismissalSummary({ dismissal_method: AFTERCARE, aftercare_provider: '   ' }), 'Aftercare (provider not stated)');
 eq('provider name is trimmed',
-  dismissalSummary({ dismissal_method: AFTERCARE, aftercare_provider: '  Champions  ' }), 'Aftercare — Champions');
+  dismissalSummary({ dismissal_method: AFTERCARE, aftercare_provider: '  Champions  ' }), 'Aftercare: Champions');
 // A provider name left over from a previous answer must not leak onto a line
 // that is no longer about aftercare.
 eq('provider is ignored when the answer is not aftercare',

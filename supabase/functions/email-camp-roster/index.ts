@@ -20,6 +20,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { PDFDocument, StandardFonts, rgb } from 'https://esm.sh/pdf-lib@1.17.1';
 import { loadOrgBrand, renderSignatureBlock, formatFromAddress } from '../_shared/orgBrand.ts';
 import { sortRosterRows } from '../_shared/rosterOrder.ts';
+import { dismissalCell, drawSiteInstructions, orgAsksDismissal, pdfSafe } from '../_shared/rosterArrivalDismissal.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -109,7 +110,9 @@ serve(async (req: Request) => {
     if (camp.location_id) {
       const { data: locRow } = await supabase
         .from('program_locations')
-        .select('id, name, district, address, room_number, contact_name, contact_email, contact_phone, partner_id, organization_id')
+        // parent_* only: the instructor pair can hold a building badge code
+        // (see _shared/rosterArrivalDismissal.ts), so it is not fetched at all.
+        .select('id, name, district, address, room_number, contact_name, contact_email, contact_phone, partner_id, organization_id, parent_arrival_instructions, parent_dismissal_instructions')
         .eq('id', camp.location_id)
         .maybeSingle();
       location = locRow ?? null;
@@ -188,7 +191,8 @@ serve(async (req: Request) => {
       .select(`
         id, status, authorized_pickup_contacts, registered_at,
         student:students ( id, first_name, last_name, grade, birthdate, pronouns,
-                           emergency_contact_name, emergency_contact_phone ),
+                           emergency_contact_name, emergency_contact_phone,
+                           dismissal_method, aftercare_provider ),
         parent:parents ( id, first_name, last_name, email, phone )
       `)
       .eq('camp_session_id', camp.id)
@@ -231,7 +235,11 @@ serve(async (req: Request) => {
     }
 
     // ── Build the PDF ──────────────────────────────────────────────────────
+    // Dismissal column only for a business that asks the question (camp-scoped
+    // or org-wide); see _shared/rosterArrivalDismissal.ts.
+    const asksDismissal = await orgAsksDismissal(supabase, camp.organization_id, { programId: null, kind: 'camp' });
     const pdfBytes = await buildRosterPdf({
+      asksDismissal,
       orgName: org.name,
       primaryColor,
       // Canonical logo: the email-safe PNG (works in pdf-lib) first, then the
@@ -415,8 +423,9 @@ async function buildRosterPdf(params: {
   partner: any;
   instructors: Array<{ name: string; phone: string; email: string; role: string }>;
   campers: any[];
+  asksDismissal: boolean;
 }): Promise<Uint8Array> {
-  const { orgName, primaryColor, logoUrl, camp, location, partner, instructors, campers } = params;
+  const { orgName, primaryColor, logoUrl, camp, location, partner, instructors, campers, asksDismissal } = params;
   const doc = await PDFDocument.create();
   const font = await doc.embedFont(StandardFonts.Helvetica);
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
@@ -460,14 +469,28 @@ async function buildRosterPdf(params: {
   }
 
   // Columns
-  const COLS = [
-    { key: 'name', label: 'Camper', width: 130 },
-    { key: 'grade', label: 'Grade', width: 40 },
-    { key: 'parent', label: 'Parent', width: 110 },
-    { key: 'parent_phone', label: 'Parent phone', width: 90 },
-    { key: 'parent_email', label: 'Parent email', width: 130 },
-    { key: 'ec', label: 'Emergency contact', width: 122 },
-  ];
+  // With the Dismissal column the others are narrowed to fit the 712pt between
+  // the margins (792 - 2 x 40). The parent and emergency-contact columns are a
+  // known gap against the program roster's privacy rule, on the backlog
+  // 2026-10-22 ("CAMP rosters: bring in line"), not changed here.
+  const COLS = asksDismissal
+    ? [
+        { key: 'name', label: 'Camper', width: 112 },
+        { key: 'grade', label: 'Grade', width: 34 },
+        { key: 'parent', label: 'Parent', width: 96 },
+        { key: 'parent_phone', label: 'Parent phone', width: 80 },
+        { key: 'parent_email', label: 'Parent email', width: 118 },
+        { key: 'ec', label: 'Emergency contact', width: 110 },
+        { key: 'dismissal', label: 'Dismissal', width: 162 },
+      ]
+    : [
+        { key: 'name', label: 'Camper', width: 130 },
+        { key: 'grade', label: 'Grade', width: 40 },
+        { key: 'parent', label: 'Parent', width: 110 },
+        { key: 'parent_phone', label: 'Parent phone', width: 90 },
+        { key: 'parent_email', label: 'Parent email', width: 130 },
+        { key: 'ec', label: 'Emergency contact', width: 122 },
+      ];
   const TABLE_W = COLS.reduce((s, c) => s + c.width, 0);
   const ROW_H = 28;
 
@@ -533,7 +556,12 @@ async function buildRosterPdf(params: {
       p.drawText(line, { x: rightX, y: yRight, size: 10, font, color: rgb(ink.r, ink.g, ink.b) });
       yRight -= 13;
     }
-    const blockBottom = Math.min(yLeft, yRight);
+    // The site's arrival and dismissal instructions (parent-facing text only).
+    const yInstr = drawSiteInstructions(p, {
+      location, x: MARGIN_X, y: Math.min(yLeft, yRight) - 6, width: TABLE_W,
+      font, bold, color: rgb(ink.r, ink.g, ink.b),
+    });
+    const blockBottom = Math.min(yLeft, yRight, yInstr + 6);
 
     // Roster count line
     let yCount = blockBottom - 4;
@@ -610,6 +638,8 @@ async function buildRosterPdf(params: {
         parent_phone: p2.phone ?? '',
         parent_email: p2.email ?? '',
         ec,
+        // pdfSafe: the aftercare provider is free text a family typed.
+        dismissal: pdfSafe(dismissalCell(s), font),
       };
       let xc = MARGIN_X;
       for (const col of COLS) {

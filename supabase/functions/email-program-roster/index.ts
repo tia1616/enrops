@@ -22,7 +22,8 @@ import { PDFDocument, StandardFonts, rgb } from 'https://esm.sh/pdf-lib@1.17.1';
 import { loadOrgBrand, renderSignatureBlock, formatFromAddress } from '../_shared/orgBrand.ts';
 import { roomDisplay } from '../_shared/roomLabel.ts';
 import { sortRosterRows, isOnRoster } from '../_shared/rosterOrder.ts';
-import { ROSTER_COLUMNS, ROSTER_PAGE_WIDTH, ROSTER_MARGIN_X } from './rosterColumns.ts';
+import { rosterColumns, ROSTER_PAGE_WIDTH, ROSTER_MARGIN_X } from './rosterColumns.ts';
+import { dismissalCell, drawSiteInstructions, orgAsksDismissal, pdfSafe } from '../_shared/rosterArrivalDismissal.ts';
 import { isCampProgram, programScheduleLabel } from '../_shared/campProgram.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
@@ -132,7 +133,9 @@ serve(async (req: Request) => {
     if (program.program_location_id) {
       const { data: locRow } = await supabase
         .from('program_locations')
-        .select('id, name, district, address, room_number, contact_name, contact_email, contact_phone, partner_id, organization_id')
+        // parent_* only: the instructor pair can hold a building badge code
+        // (see _shared/rosterArrivalDismissal.ts), so it is not fetched at all.
+        .select('id, name, district, address, room_number, contact_name, contact_email, contact_phone, partner_id, organization_id, parent_arrival_instructions, parent_dismissal_instructions')
         .eq('id', program.program_location_id)
         .maybeSingle();
       location = locRow ?? null;
@@ -206,8 +209,11 @@ serve(async (req: Request) => {
     //   parent (name/email/phone), emergency_contact_*  -> printed on this PDF
     //     until today; see COLS below. Read nowhere else in this file.
     //   birthdate, pronouns  -> selected but never rendered, ever.
-    //   authorized_pickup_contacts  -> selected but never read; pickup
-    //     arrangements are an instructor-side fact, not a partner-side one.
+    //   authorized_pickup_contacts  -> selected but never read; WHO may collect
+    //     a child is an instructor-side fact, not a partner-side one.
+    // ADDED 2026-10-22 (Jessica: arrival/dismissal on every roster we send):
+    //   dismissal_method, aftercare_provider -> HOW the child leaves, printed in
+    //     the Dismissal column. Still no names of the adults who collect them.
     // EVERYTHING THAT REMAINS IS LOAD-BEARING - do not trim further without
     // reading compareRosterRows(). It needs student.first_name and
     // student.last_name, and then falls back to `registered_at` and the
@@ -220,7 +226,7 @@ serve(async (req: Request) => {
       .from('registrations')
       .select(`
         id, status, payment_status, ach_payment_state, registered_at,
-        student:students ( id, first_name, last_name, grade, homeroom_teacher )
+        student:students ( id, first_name, last_name, grade, homeroom_teacher, dismissal_method, aftercare_provider )
       `)
       .eq('program_id', program.id)
       .is('cancelled_at', null)
@@ -272,11 +278,17 @@ serve(async (req: Request) => {
     }
 
     // ── Build the PDF ──────────────────────────────────────────────────────
+    // The Dismissal column only for a business that asks the question; one that
+    // never asks would print a whole column of "Not stated".
+    const asksDismissal = await orgAsksDismissal(supabase, program.organization_id, {
+      programId: program.id,
+      kind: isCampProgram(program) ? 'camp' : 'afterschool',
+    });
     const pdfBytes = await buildRosterPdf({
       orgName: org.name, primaryColor,
       // Canonical logo: email-safe PNG first, then source, then legacy field.
       logoUrl: org.logo_email_url ?? org.logo_url ?? branding?.logo_url ?? null,
-      program, location, partner, instructors, students,
+      program, location, partner, instructors, students, asksDismissal,
     });
     const pdfBase64 = bytesToBase64(pdfBytes);
     const pdfFilename = makePdfFilename({ name: program.curriculum, locationName: location?.name ?? '', term: program.term });
@@ -456,8 +468,9 @@ async function buildRosterPdf(params: {
   program: any; location: any; partner: any;
   instructors: Array<{ name: string; phone: string; email: string; role: string }>;
   students: any[];
+  asksDismissal: boolean;
 }): Promise<Uint8Array> {
-  const { orgName, primaryColor, logoUrl, program, location, partner, instructors, students } = params;
+  const { orgName, primaryColor, logoUrl, program, location, partner, instructors, students, asksDismissal } = params;
   const doc = await PDFDocument.create();
   const font = await doc.embedFont(StandardFonts.Helvetica);
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
@@ -490,7 +503,7 @@ async function buildRosterPdf(params: {
   // rosterColumns.ts with a test that fails if a family contact or medical field
   // is ever added back. See that file for why the recipients could not be
   // narrowed instead.
-  const COLS = ROSTER_COLUMNS;
+  const COLS = rosterColumns(asksDismissal);
   const TABLE_W = COLS.reduce((s, c) => s + c.width, 0);
   const ROW_H = 26;
 
@@ -542,7 +555,13 @@ async function buildRosterPdf(params: {
     for (const line of leftLines) { p.drawText(line, { x: MARGIN_X, y: yLeft, size: 10, font, color: rgb(ink.r, ink.g, ink.b) }); yLeft -= 13; }
     let yRight = blockTop;
     for (const line of rightLines) { p.drawText(line, { x: MARGIN_X + 280, y: yRight, size: 10, font, color: rgb(ink.r, ink.g, ink.b) }); yRight -= 13; }
-    let yCount = Math.min(yLeft, yRight) - 4;
+    // The site's arrival and dismissal instructions (parent-facing text only),
+    // across the full table width. Draws nothing when the site has neither.
+    const yInstr = drawSiteInstructions(p, {
+      location, x: MARGIN_X, y: Math.min(yLeft, yRight) - 6, width: TABLE_W,
+      font, bold, color: rgb(ink.r, ink.g, ink.b),
+    });
+    let yCount = Math.min(yLeft, yRight, yInstr + 6) - 4;
     p.drawText(`${students.length} student${students.length === 1 ? '' : 's'} on this roster`, { x: MARGIN_X, y: yCount, size: 10, font: bold, color: rgb(primary.r, primary.g, primary.b) });
     yCount -= 14;
 
@@ -576,7 +595,9 @@ async function buildRosterPdf(params: {
       const homeroom = (s.homeroom_teacher ?? '').trim() || '—';
 
       page.drawLine({ start: { x: MARGIN_X, y: y - 0.5 }, end: { x: MARGIN_X + TABLE_W, y: y - 0.5 }, thickness: 0.5, color: rgb(border.r, border.g, border.b) });
-      const values: Record<string, string> = { name, grade, homeroom };
+      // pdfSafe: the aftercare provider is free text a family typed, and the
+      // standard font throws on anything outside WinAnsi.
+      const values: Record<string, string> = { name, grade, homeroom, dismissal: pdfSafe(dismissalCell(s), font) };
       let xc = MARGIN_X;
       for (const col of COLS) {
         page.drawText(truncate(values[col.key] ?? '', col.width, font, 9), { x: xc + 4, y: y - 13, size: 9, font, color: rgb(ink.r, ink.g, ink.b) });
