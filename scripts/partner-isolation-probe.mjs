@@ -142,6 +142,17 @@ for (const l of rows(locRes)) {
   sitesByPartner.get(l.partner_id).add(l.name);
 }
 const partnerIdsInPlay = [...new Set(allGrants.map((g) => g.partner_id))];
+// The ground truth must load, or every CONTROL below passes against nothing.
+ok('ground truth: grants loaded', grantsRes.status === 200 && allGrants.length > 0, `status ${grantsRes.status}`);
+ok('ground truth: documents loaded (some stored file to try)', docsRes.status === 200 && allDocs.some((d) => d.storage_path),
+  `status ${docsRes.status}, ${allDocs.length} document(s)`);
+ok('ground truth: sites loaded', locRes.status === 200 && sitesByPartner.size > 0, `status ${locRes.status}`);
+// The instructor RPC returns site NAMES, not ids, so the own-sites check is by
+// name. A name used at two partners in play would make it unprovable.
+const nameOwners = new Map();
+for (const p of partnerIdsInPlay) for (const n of sitesByPartner.get(p) ?? []) nameOwners.set(n, (nameOwners.get(n) ?? 0) + 1);
+const shared = [...nameOwners].filter(([, c]) => c > 1).map(([n]) => n);
+ok('site names are unique across partners in play (own-sites check is by name)', shared.length === 0, shared.join(', '));
 
 // Sign in every grant whose contact ALREADY has an account. A contact without
 // one (e.g. the allowlist-blocked fixture) is skipped, by name: asking the auth
@@ -193,7 +204,8 @@ for (const h of hosts) {
       const list = rows(r);
       ownInstructorRows.push(...list);
       const sites = sitesByPartner.get(p) ?? new Set();
-      const offSite = list.filter((x) => !(x.sites ?? []).every((s) => sites.has(s)));
+      // An empty or missing sites list is a failure too: every() is true for [].
+      const offSite = list.filter((x) => !(x.sites?.length > 0 && x.sites.every((s) => sites.has(s))));
       ok(`${who} instructors are only at its own sites`, offSite.length === 0,
         offSite.map((x) => `${x.first_name} @ ${(x.sites ?? []).join('/')}`).join('; '));
     } else {
@@ -218,7 +230,10 @@ for (const h of hosts) {
   // Files: try to open EVERY stored document. Only its own may sign.
   for (const d of allDocs.filter((x) => x.storage_path)) {
     const mine = h.orgs.has(d.organization_id) && (!d.partner_id || h.partners.has(d.partner_id));
-    const r = await call(`/storage/v1/object/sign/${BUCKET}/${d.storage_path}`, { token: h.token, method: 'POST', body: { expiresIn: 60 } });
+    // Encoded per segment: a raw '#', '?' or space would break the request, and a
+    // broken request would read as "refused".
+    const path = d.storage_path.split('/').map(encodeURIComponent).join('/');
+    const r = await call(`/storage/v1/object/sign/${BUCKET}/${path}`, { token: h.token, method: 'POST', body: { expiresIn: 60 } });
     const signed = r.status === 200 && !!(r.json?.signedURL ?? r.json?.signedUrl);
     if (mine) ok(`${who} CONTROL: can open its own file ${d.id.slice(0, 8)}`, signed, `status ${r.status}`);
     else ok(`${who} cannot open another partner's file ${d.id.slice(0, 8)}`, !signed, `status ${r.status}`);
@@ -238,7 +253,10 @@ for (const h of hosts) {
   for (const t of ['instructors', 'contractor_onboarding_status', 'contractor_acknowledgments', 'students',
     'parents', 'registrations', 'audit_events', 'partner_contacts', 'org_members', 'program_assignments']) {
     const r = await call(`/rest/v1/${t}?select=*&limit=5`, { token: h.token });
-    ok(`${who} reads nothing from ${t}`, gotNothing(r), `${rows(r).length} row(s), status ${r.status}`);
+    // A missing table (404 / PGRST205) tests nothing; it must not read as a pass.
+    const missing = r.status === 404 || r.json?.code === 'PGRST205';
+    ok(`${who} reads nothing from ${t}`, !missing && gotNothing(r),
+      missing ? 'table not found - update the list' : `${rows(r).length} row(s), status ${r.status}`);
   }
 
   // Criterion 3: a host (admin or viewer) cannot change the team or the record.
@@ -248,7 +266,10 @@ for (const h of hosts) {
   const addTeam = await call('/rest/v1/partner_portal_access', {
     token: h.token, method: 'POST', body: { contact_id: ownGrant.contact_id, role: 'host_admin' },
   });
-  ok(`${who} cannot add anyone to the team`, addTeam.status >= 400, `status ${addTeam.status}`);
+  // Must be refused by the RULES (42501). Any other error proves nothing: this
+  // contact already has a grant, so a permitted insert would still fail 409.
+  ok(`${who} cannot add anyone to the team (refused by RLS)`, addTeam.json?.code === '42501',
+    `status ${addTeam.status} ${addTeam.json?.code ?? ''}`);
   const promote = await call(`/rest/v1/partner_portal_access?id=eq.${ownGrant.id}`, {
     token: h.token, method: 'PATCH', body: { role: ownGrant.role },
   });
