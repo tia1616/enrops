@@ -115,7 +115,7 @@ export default function InstructorsTab({ org }) {
              site_preferences, availability,
              first_aid_cpr_url, first_aid_cpr_expires_at,
              photo_release_consent, photo_release_consent_at,
-             partner_sharing_agreed_at, training_completed_on`
+             partner_sharing_agreed_at, partner_sharing_stopped_at, training_completed_on`
           )
           .eq('organization_id', org.id)
           .order('last_name', { ascending: true, nullsFirst: false });
@@ -955,6 +955,12 @@ function InstructorDetail({ row, age, onUploadBg, onRemove, onReactivate, isEdit
             Agreed
             {fmtTimestamp(row.partner_sharing_agreed_at) ? ` · ${fmtTimestamp(row.partner_sharing_agreed_at)}` : ''}
           </>
+        ) : row.partner_sharing_stopped_at ? (
+          <Em>
+            Stopped sharing
+            {fmtTimestamp(row.partner_sharing_stopped_at) ? ` · ${fmtTimestamp(row.partner_sharing_stopped_at)}` : ''}
+            . Partners see In review until they agree again.
+          </Em>
         ) : row.is_active ? (
           <Em>Not yet. Their instructor portal asks them once onboarding is done.</Em>
         ) : (
@@ -1661,7 +1667,7 @@ function AddInstructorModal({ org, onClose, onAdded, onSendInvite }) {
         // pushed straight into `rows`, so any column missing here is undefined on
         // that row only — the detail panel would render differently for someone
         // added this session than for everyone else, until a refresh hid it.
-        .select('id, first_name, last_name, preferred_name, email, phone, is_active, contractor_tier, date_of_birth, shirt_size, photo_url, site_preferences, availability, first_aid_cpr_url, first_aid_cpr_expires_at, photo_release_consent, photo_release_consent_at, partner_sharing_agreed_at, training_completed_on')
+        .select('id, first_name, last_name, preferred_name, email, phone, is_active, contractor_tier, date_of_birth, shirt_size, photo_url, site_preferences, availability, first_aid_cpr_url, first_aid_cpr_expires_at, photo_release_consent, photo_release_consent_at, partner_sharing_agreed_at, partner_sharing_stopped_at, training_completed_on')
         .single();
 
       if (insErr) {

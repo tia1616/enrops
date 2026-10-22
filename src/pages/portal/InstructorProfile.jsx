@@ -13,6 +13,7 @@ import { supabase } from '../../lib/supabase';
 import { AVATARS, DEFAULT_AVATAR, avatarUrl } from '../../lib/avatars';
 import { ensureBrowserSafeImage, extensionFor } from '../../lib/heicConvert';
 import { normalizePreferredName } from '../../lib/instructorName';
+import { PartnerSharingStatus } from './PartnerSharingCard.jsx';
 
 const PURPLE = '#1C004F';
 const BRIGHT = '#5847C9';   // indigo - primary actions (Enrops default)
@@ -36,7 +37,7 @@ const MAX_CERT_BYTES = 5 * 1024 * 1024;
 // org_members, and the RLS policy on `organizations` is is_org_member(id), so an
 // instructor selecting that table gets zero rows and no error. Passing the name
 // the portal already holds is the only read that works.
-export default function InstructorProfile({ instructor, orgName = '', onBack, onSaved }) {
+export default function InstructorProfile({ instructor, orgName = '', onBack, onSaved, previewOnly = false }) {
   // Initial values come from the instructor prop (already loaded by parent).
   const [firstName] = useState(instructor.first_name || '');
   const [lastName] = useState(instructor.last_name || '');
@@ -568,6 +569,13 @@ export default function InstructorProfile({ instructor, orgName = '', onBack, on
           </button>
         </div>
       </form>
+
+      {/* Outside the form: it saves on its own click, not on "Save changes". */}
+      <PartnerSharingStatus
+        instructorId={instructor.id}
+        organizationId={instructor.organization_id}
+        previewOnly={previewOnly}
+      />
     </div>
   );
 }

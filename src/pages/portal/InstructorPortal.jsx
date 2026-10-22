@@ -1637,6 +1637,7 @@ export default function InstructorPortal() {
           orgName={orgName}
           onBack={() => setView("schedule")}
           onSaved={refetchInstructor}
+          previewOnly={!!impersonating}
         />
       </Shell>
     );
