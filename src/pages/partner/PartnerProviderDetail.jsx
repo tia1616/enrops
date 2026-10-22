@@ -213,7 +213,7 @@ function InstructorGrid({ rows, orgName, today }) {
                 <td className="py-3 pr-4">
                   <div className="font-semibold text-j2s-ink">{[r.first_name, r.last_name].filter(Boolean).join(" ")}</div>
                   <div className="text-xs text-j2s-ink/50">{(r.sites || []).join(", ")}</div>
-                  {r.shared && r.email && <a className="block text-xs text-j2s-purple hover:underline" href={`mailto:${r.email}`}>{r.email}</a>}
+                  {r.shared && r.email && <a className="block text-xs text-j2s-purple hover:underline [overflow-wrap:anywhere]" href={`mailto:${r.email}`}>{r.email}</a>}
                   {r.shared && r.phone && <a className="block text-xs text-j2s-purple hover:underline" href={`tel:${r.phone}`}>{r.phone}</a>}
                 </td>
                 {!r.shared ? (
@@ -245,7 +245,7 @@ function InstructorGrid({ rows, orgName, today }) {
             <div className="font-semibold text-j2s-ink">{[r.first_name, r.last_name].filter(Boolean).join(" ")}</div>
             <div className="text-xs text-j2s-ink/50">{(r.sites || []).join(", ")}</div>
             {r.shared && (r.email || r.phone) && (
-              <div className="mt-1 text-xs">
+              <div className="mt-1 text-xs [overflow-wrap:anywhere]">
                 {r.email && <a className="text-j2s-purple" href={`mailto:${r.email}`}>{r.email}</a>}
                 {r.email && r.phone ? " · " : ""}
                 {r.phone && <a className="text-j2s-purple" href={`tel:${r.phone}`}>{r.phone}</a>}

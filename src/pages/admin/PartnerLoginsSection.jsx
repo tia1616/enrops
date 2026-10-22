@@ -147,8 +147,10 @@ export default function PartnerLoginsSection({ org, partners, canManage, onMessa
             return (
               <div key={g.id} style={{ display: "flex", gap: 12, justifyContent: "space-between", alignItems: "flex-start", padding: "14px 0", borderTop: i === 0 ? "none" : `1px solid ${RULE}`, flexWrap: "wrap" }}>
                 <div style={{ minWidth: 0, flex: "1 1 260px" }}>
-                  <div style={{ fontSize: 14.5, fontWeight: 600, color: INK }}>{g.contact?.contact_name || g.contact?.contact_email}</div>
-                  <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>
+                  {/* overflowWrap: an email has no spaces, so on a phone a long one ran
+                      past the card edge (seen on staging 2026-10-22). */}
+                  <div style={{ fontSize: 14.5, fontWeight: 600, color: INK, overflowWrap: "anywhere" }}>{g.contact?.contact_name || g.contact?.contact_email}</div>
+                  <div style={{ fontSize: 13, color: MUTED, marginTop: 2, overflowWrap: "anywhere" }}>
                     {g.partner?.partner_name ?? "A partner"} · {g.contact?.contact_email} · {ROLE_LABEL[g.role] ?? "Admin"}
                   </div>
                   <span style={{ display: "inline-block", marginTop: 6, padding: "2px 9px", borderRadius: 999, fontSize: 12, fontWeight: 600, background: t.bg, color: t.ink, border: `1px solid ${t.border}` }}>{st.label}</span>
