@@ -557,11 +557,13 @@ async function buildRosterPdf(params: {
       yRight -= 13;
     }
     // The site's arrival and dismissal instructions (parent-facing text only).
+    const yInfo = Math.min(yLeft, yRight);
     const yInstr = drawSiteInstructions(p, {
-      location, x: MARGIN_X, y: Math.min(yLeft, yRight) - 6, width: TABLE_W,
+      location, x: MARGIN_X, y: yInfo - 6, width: TABLE_W,
       font, bold, color: rgb(ink.r, ink.g, ink.b),
     });
-    const blockBottom = Math.min(yLeft, yRight, yInstr + 6);
+    // drawSiteInstructions returns the y it was given when it drew nothing.
+    const blockBottom = yInstr < yInfo - 6 ? yInstr - 4 : yInfo;
 
     // Roster count line
     let yCount = blockBottom - 4;

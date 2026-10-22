@@ -557,11 +557,13 @@ async function buildRosterPdf(params: {
     for (const line of rightLines) { p.drawText(line, { x: MARGIN_X + 280, y: yRight, size: 10, font, color: rgb(ink.r, ink.g, ink.b) }); yRight -= 13; }
     // The site's arrival and dismissal instructions (parent-facing text only),
     // across the full table width. Draws nothing when the site has neither.
+    const yInfo = Math.min(yLeft, yRight);
     const yInstr = drawSiteInstructions(p, {
-      location, x: MARGIN_X, y: Math.min(yLeft, yRight) - 6, width: TABLE_W,
+      location, x: MARGIN_X, y: yInfo - 6, width: TABLE_W,
       font, bold, color: rgb(ink.r, ink.g, ink.b),
     });
-    let yCount = Math.min(yLeft, yRight, yInstr + 6) - 4;
+    // drawSiteInstructions returns the y it was given when it drew nothing.
+    let yCount = yInstr < yInfo - 6 ? yInstr - 8 : yInfo - 4;
     p.drawText(`${students.length} student${students.length === 1 ? '' : 's'} on this roster`, { x: MARGIN_X, y: yCount, size: 10, font: bold, color: rgb(primary.r, primary.g, primary.b) });
     yCount -= 14;
 
