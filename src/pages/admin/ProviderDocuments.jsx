@@ -20,7 +20,7 @@ import PartnerRequirementsSection from "./PartnerRequirementsSection.jsx";
 import { usePermissions } from "../../lib/permissions.js";
 import {
   DOC_TYPES, docTypeLabel, blankDraft, draftFromRow, draftProblem,
-  fileProblem, groupByAudience, formatDate, limitLines,
+  fileProblem, groupByAudience, formatDate, limitLines, hasAbuseAmount,
 } from "../../lib/providerDocumentLogic.js";
 import {
   listProviderDocuments, listPartners, createProviderDocument, updateProviderDocument,
@@ -71,8 +71,8 @@ function DocumentRow({ row, canManage, onOpen, onEdit, onDelete, busy }) {
           <div style={{ fontSize: 13, color: MUTED, marginTop: 2, lineHeight: 1.5 }}>
             {[row.insurer, row.policy_number ? `Policy ${row.policy_number}` : null, row.coverage_notes].filter(Boolean).join(" · ")}
             {(row.insurer || row.policy_number || row.coverage_notes) ? " · " : ""}
-            {row.abuse_coverage ? "Includes abuse and molestation coverage" : "Abuse and molestation coverage not marked"}
-            {" · "}
+            {/* With amounts entered, the limits line below says it (same rule as the partner view). */}
+            {hasAbuseAmount(row) ? "" : `${row.abuse_coverage ? "Includes abuse and molestation coverage" : "Abuse and molestation coverage not marked"} · `}
             {row.additional_insured ? "Names the partner as additional insured" : "Additional insured not marked"}
             {limitLines(row).map((l) => <div key={l}>{l}</div>)}
           </div>
@@ -184,10 +184,22 @@ function DocumentForm({ editing, partners, onCancel, onSave }) {
         <div style={{ borderTop: `1px solid ${RULE}`, marginTop: 20, paddingTop: 16 }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: PURPLE, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 12 }}>From the certificate</div>
           <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13.5, color: INK, cursor: "pointer", fontWeight: 600 }}>
-            <input type="checkbox" checked={draft.abuse_coverage} onChange={(e) => set("abuse_coverage", e.target.checked)} />
+            {/* An abuse amount below IS the coverage (rowFromDraft saves it as
+                true), so the box shows ticked and locked rather than letting an
+                untick be silently overridden on save. */}
+            <input
+              type="checkbox"
+              checked={draft.abuse_coverage || hasAbuseAmount(draft)}
+              disabled={hasAbuseAmount(draft)}
+              onChange={(e) => set("abuse_coverage", e.target.checked)}
+            />
             Includes abuse and molestation coverage
           </label>
-          <div style={hint}>Partners working with children usually ask for this. It's listed on the certificate if you have it.</div>
+          <div style={hint}>
+            {hasAbuseAmount(draft)
+              ? "Ticked because abuse and molestation amounts are entered below. Clear those to untick it."
+              : "Partners working with children usually ask for this. It's listed on the certificate if you have it."}
+          </div>
 
           <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13.5, color: INK, cursor: "pointer", fontWeight: 600, marginTop: 14 }}>
             <input type="checkbox" checked={draft.additional_insured} onChange={(e) => set("additional_insured", e.target.checked)} />

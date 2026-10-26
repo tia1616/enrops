@@ -115,6 +115,13 @@ export function parseLimit(text) {
   return /^\d+$/.test(digits) ? Number(digits) : NaN;
 }
 
+/** Is any abuse and molestation amount entered (draft text or saved number)? */
+export function hasAbuseAmount(rowOrDraft) {
+  const v = (k) => rowOrDraft?.[k];
+  const entered = (x) => x != null && String(x).trim() !== "";
+  return entered(v("abuse_occurrence_limit")) || entered(v("abuse_aggregate_limit"));
+}
+
 /** "$1,000,000", or "" when not entered. */
 export function formatLimit(n) {
   return n == null || Number.isNaN(n) ? "" : `$${Number(n).toLocaleString("en-US")}`;
@@ -200,9 +207,7 @@ export function rowFromDraft(draft) {
     insurer: isInsurance ? (draft.insurer.trim() || null) : null,
     policy_number: isInsurance ? (draft.policy_number.trim() || null) : null,
     // Entering an abuse amount IS saying the coverage is there.
-    abuse_coverage: isInsurance
-      ? draft.abuse_coverage === true || parseLimit(draft.abuse_occurrence_limit) != null || parseLimit(draft.abuse_aggregate_limit) != null
-      : null,
+    abuse_coverage: isInsurance ? draft.abuse_coverage === true || hasAbuseAmount(draft) : null,
     additional_insured: isInsurance ? draft.additional_insured === true : null,
     coverage_notes: isInsurance ? (draft.coverage_notes.trim() || null) : null,
     ...Object.fromEntries(LIMIT_FIELDS.map((k) => [k, isInsurance ? parseLimit(draft[k]) : null])),

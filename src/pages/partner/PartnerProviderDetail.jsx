@@ -21,7 +21,7 @@ import {
   instructorChecklist, documentProvenance, providerSummary, requiredKeys, worstBadge, REQUIREMENTS,
   GRID_DATE, gridCellText, instructorCellDate, businessCellDate,
 } from "../../lib/partnerPortalLogic.js";
-import { formatDate, compareByExpiry, EXPIRY_STATUS, limitLines } from "../../lib/providerDocumentLogic.js";
+import { formatDate, compareByExpiry, EXPIRY_STATUS, limitLines, hasAbuseAmount } from "../../lib/providerDocumentLogic.js";
 import { PartnerShell, PartnerSignIn, NoAccess, useMemberships, todayIso } from "./partnerShared.jsx";
 
 // Short column headers; the full names live in REQUIREMENTS for the admin screen.
@@ -54,11 +54,12 @@ function goodThrough(row) {
 
 /** The facts a host checks on a certificate, in one short line. */
 function insuranceFacts(d) {
-  const hasAbuseAmount = d.abuse_occurrence_limit != null || d.abuse_aggregate_limit != null;
   return [
     d.insurer,
-    // With an amount entered, the limits line below already says it.
-    hasAbuseAmount ? null : d.abuse_coverage ? "Abuse and molestation coverage (amounts not entered)" : "Abuse and molestation coverage not listed",
+    // With an amount entered, the limits line already says it.
+    hasAbuseAmount(d) ? null : d.abuse_coverage ? "Abuse and molestation coverage (amounts not entered)" : "Abuse and molestation coverage not listed",
+    // "Other coverage notes" from the form, e.g. an umbrella policy.
+    d.coverage_notes ? `Also: ${d.coverage_notes}` : null,
     // "Names you" is only true of a certificate made out to THIS partner; one
     // shown to every partner may name only some.
     !d.additional_insured ? "Additional insured not listed" : d.partner_id ? "Names you as additional insured" : "Lists additional insureds",
