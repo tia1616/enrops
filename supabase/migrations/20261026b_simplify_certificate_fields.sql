@@ -44,4 +44,7 @@ with (security_invoker = on) as
   from public.provider_documents d;
 
 revoke all on public.provider_documents_with_status from public, anon;
+-- Read-only for signed-in users. Prod's default privileges auto-grant writes on
+-- a new view to authenticated (staging's did not); this makes both the same.
+revoke insert, update, delete, truncate on public.provider_documents_with_status from authenticated;
 grant select on public.provider_documents_with_status to authenticated, service_role;
