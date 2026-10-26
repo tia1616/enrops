@@ -151,14 +151,11 @@ export function documentProvenance(doc, orgName) {
   return provenance(doc?.updated_at ? String(doc.updated_at).slice(0, 10) : null, by);
 }
 
-// --- The record grid (Jessica 2026-10-26: "a spreadsheet") -----------------
+// --- The instructor grid (Jessica 2026-10-26: "a table") --------------------
 
-// The date each grid column shows, and the word under its header saying what
-// that date means, so one column never mixes "renews" with "completed".
+// The date each instructor column shows, and the word under its header saying
+// what that date means, so one column never mixes "renews" with "completed".
 export const GRID_DATE = {
-  insurance: "good through",
-  partner_agreement: "expires",
-  business_license: "expires",
   background_check: "renews",
   training: "completed",
   code_of_conduct: "signed",

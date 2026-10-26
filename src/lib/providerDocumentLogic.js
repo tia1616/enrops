@@ -122,7 +122,8 @@ export function draftProblem(draft, { hasFile }) {
   if (!hasFile) return "Attach the document file.";
   if (draft.doc_type === "insurance" && !draft.expires_on) return "Insurance needs an expiry date. It's on the certificate, usually under \"Policy exp\".";
   if (draft.doc_type !== "insurance" && !draft.no_expiry && !draft.expires_on) return "Add the expiry date, or tick \"This document doesn't expire\".";
-  if (draft.effective_on && draft.expires_on && draft.expires_on < draft.effective_on) return "The expiry date is before the start date.";
+  // No start-date check: the form no longer shows a start date, so it cannot
+  // ask the person to fix one. rowFromDraft drops a stale start date instead.
   return null;
 }
 
@@ -134,7 +135,12 @@ export function rowFromDraft(draft) {
     title: draft.title.trim(),
     partner_id: draft.partner_id || null,
     received_on: draft.received_on || null,
-    effective_on: draft.effective_on || null,
+    // A start date saved before the form stopped asking for it is kept, unless
+    // the new expiry is earlier: then it no longer describes this document,
+    // and the table's CHECK (expires_on >= effective_on) would refuse the save.
+    effective_on: draft.effective_on && !(keepExpiry && draft.expires_on && draft.expires_on < draft.effective_on)
+      ? draft.effective_on
+      : null,
     expires_on: keepExpiry ? (draft.expires_on || null) : null,
   };
 }

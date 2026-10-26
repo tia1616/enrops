@@ -195,13 +195,13 @@ function DocumentsTable({ s, orgName, today, onOpen }) {
                     {d && <div className="text-xs text-j2s-ink/50">{d.title}</div>}
                   </td>
                   <td className={TD}>
-                    {extra
-                      ? <span className="text-xs text-j2s-ink/50">Not required</span>
-                      : d ? <DocumentStatusBadge status={d.expiry_status} /> : <DocumentStatusBadge badge={badge} />}
+                    {d ? <DocumentStatusBadge status={d.expiry_status} /> : <DocumentStatusBadge badge={badge} />}
+                    {extra && <div className="mt-1 text-xs text-j2s-ink/50">Not required</div>}
                   </td>
                   <td className={`${TD} whitespace-nowrap text-j2s-ink/75`}>{d ? expiresText(d) : "Not on file yet"}</td>
-                  <td className={`${TD} whitespace-nowrap text-xs text-j2s-ink/50`} title={d ? documentProvenance(d, orgName) : undefined}>
-                    {d ? documentProvenance(d, orgName).split(" · ")[0] : `as of ${formatDate(today)}`}
+                  {/* The source is in the row itself, not a hover tooltip, so it reads on a phone. */}
+                  <td className={`${TD} min-w-[11rem] text-xs text-j2s-ink/50`}>
+                    {d ? documentProvenance(d, orgName) : `as of ${formatDate(today)}`}
                   </td>
                   <td className={`${TD} text-right`}>
                     {d && <button type="button" onClick={() => onOpen(d)} className="font-semibold text-j2s-purple hover:underline">Open</button>}

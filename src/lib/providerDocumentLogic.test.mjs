@@ -38,7 +38,11 @@ ok('blank title refused', draftProblem({ ...ins, title: '   ' }, { hasFile: true
 const agr = blankDraft('agreement');
 ok('agreement needs expiry OR the no-expiry tick', draftProblem(agr, { hasFile: true }) !== null);
 eq('agreement with no-expiry tick is valid', draftProblem({ ...agr, no_expiry: true }, { hasFile: true }), null);
-ok('expiry before start refused', draftProblem({ ...agr, effective_on: '2026-05-01', expires_on: '2026-04-01' }, { hasFile: true }) !== null);
+// The form shows no start date, so a stale one never blocks a save; it is
+// dropped when the new expiry is earlier (the table's CHECK would refuse it).
+eq('a hidden start date never blocks saving', draftProblem({ ...agr, effective_on: '2026-05-01', expires_on: '2026-04-01' }, { hasFile: true }), null);
+eq('a start date after the new expiry is dropped', rowFromDraft({ ...agr, title: 'A', effective_on: '2026-05-01', expires_on: '2026-04-01' }).effective_on, null);
+eq('a start date before the expiry is kept', rowFromDraft({ ...agr, title: 'A', effective_on: '2026-03-01', expires_on: '2026-04-01' }).effective_on, '2026-03-01');
 
 // --- what gets written --------------------------------------------------------
 const insRow = rowFromDraft({ ...ins, partner_id: 'p1' });
