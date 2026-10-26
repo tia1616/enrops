@@ -21,7 +21,7 @@ import {
   instructorChecklist, documentProvenance, providerSummary, requiredKeys, worstBadge, REQUIREMENTS,
   GRID_DATE, gridCellText, instructorCellDate, businessCellDate,
 } from "../../lib/partnerPortalLogic.js";
-import { formatDate, compareByExpiry } from "../../lib/providerDocumentLogic.js";
+import { formatDate, compareByExpiry, EXPIRY_STATUS } from "../../lib/providerDocumentLogic.js";
 import { PartnerShell, PartnerSignIn, NoAccess, useMemberships, todayIso } from "./partnerShared.jsx";
 
 // Short column headers; the full names live in REQUIREMENTS for the admin screen.
@@ -190,21 +190,38 @@ function RecordGrid({ s, instructors, orgName, today, onOpen }) {
   const people = instructors.map((r) => ({ r, lines: instructorChecklist(r, orgName, today) }));
   const name = (r) => [r.first_name, r.last_name].filter(Boolean).join(" ");
   const isPicked = (id) => picked?.id === id;
+  // The document a business cell's chip came from, so its "as of" describes
+  // that document (not an older or another one).
+  const chipDoc = (b) => {
+    const dated = businessCellDate(b);
+    return b.docs.find((d) => dated && d.expires_on === dated && EXPIRY_STATUS[d.expiry_status] === b.badge)
+      ?? b.docs.find((d) => EXPIRY_STATUS[d.expiry_status] === b.badge)
+      ?? null;
+  };
   // Plain render helpers, NOT components: a component declared inside this
   // function would be a new type on every render, so React would remount every
   // cell on each click and drop the keyboard focus.
-  const Cell = ({ id, badge, text, onPick, colSpan }) => (
-    <td key={id} colSpan={colSpan} className="border-b border-l border-j2s-ink/10 p-0">
-      <button
-        type="button"
-        onClick={onPick}
-        aria-label={badge ? `${badge.label}: ${text}` : text}
-        className={`block w-full px-2.5 py-2 text-left text-xs font-medium leading-snug ${badge ? CELL_TONE[badge.tone] ?? "" : "text-j2s-ink/30"} ${isPicked(id) ? "ring-2 ring-inset ring-j2s-purple" : ""} hover:brightness-95`}
-      >
-        {text}
-      </button>
-    </td>
-  );
+  // Oct 30 criterion 8: every chip shows "as of" and its source. The "as of"
+  // is the cell's second line; the source shows on hover and in the details.
+  // `meta` is the provenance line ("as of {date} · Source: ..."); with none,
+  // the status is as of today.
+  const Cell = ({ id, badge, text, meta, onPick, colSpan }) => {
+    const full = meta || `as of ${formatDate(today)}`;
+    return (
+      <td key={id} colSpan={colSpan} className="border-b border-l border-j2s-ink/10 p-0">
+        <button
+          type="button"
+          onClick={onPick}
+          title={full}
+          aria-label={badge ? `${badge.label}: ${text}, ${full}` : text}
+          className={`block w-full px-2.5 py-1.5 text-left text-xs font-medium leading-snug ${badge ? CELL_TONE[badge.tone] ?? "" : "text-j2s-ink/30"} ${isPicked(id) ? "ring-2 ring-inset ring-j2s-purple" : ""} hover:brightness-95`}
+        >
+          {text}
+          <span className="block text-[10px] font-normal opacity-60">{full.split(" · ")[0]}</span>
+        </button>
+      </td>
+    );
+  };
   const Blank = (key) => <td key={key} className="border-b border-l border-j2s-ink/10 bg-white px-2.5 py-2 text-center text-xs text-j2s-ink/25">—</td>;
   const Name = ({ id, children, onPick }) => (
     <th scope="row" className="sticky left-0 z-10 border-b border-j2s-ink/10 bg-white p-0 text-left font-normal">
@@ -245,6 +262,7 @@ function RecordGrid({ s, instructors, orgName, today, onOpen }) {
               {s.business.map((b) => Cell({
                 id: `b:${b.key}`, badge: b.badge,
                 text: b.docs.length ? gridCellText(b.badge, businessCellDate(b)) : b.badge.label,
+                meta: chipDoc(b) ? documentProvenance(chipDoc(b), orgName) : null,
                 onPick: () => setPicked({ id: `b:${b.key}`, kind: "doc", item: b }),
               }))}
               {instructorCols.map((k) => Blank(k))}
@@ -282,6 +300,7 @@ function RecordGrid({ s, instructors, orgName, today, onOpen }) {
                     return l ? Cell({
                       id: `l:${r.instructor_id}:${k}`, badge: l.badge,
                       text: gridCellText(l.badge, instructorCellDate(r, k)),
+                      meta: l.meta,
                       onPick: () => setPicked({ id: `l:${r.instructor_id}:${k}`, kind: "line", r, line: l }),
                     }) : Blank(k);
                   })}
