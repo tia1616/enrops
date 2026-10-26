@@ -97,6 +97,28 @@ export async function listPartnerInstructors(partnerId) {
 }
 
 /**
+ * What one partner requires: every requirement key with `required`, defaults
+ * applied by the database (partner_requirements_for, 20261026a). Readable by
+ * the provider's members and that partner's own logins; empty for anyone else.
+ */
+export async function listPartnerRequirements(partnerId) {
+  const { data, error } = await supabase.rpc("partner_requirements_for", { p_partner_id: partnerId });
+  if (error) throw error;
+  return data ?? [];
+}
+
+/** Turn one requirement on or off for a partner. Owner/admin only; false = refused. */
+export async function setPartnerRequirement(partnerId, key, required) {
+  const { data, error } = await supabase.rpc("set_partner_requirement", {
+    p_partner_id: partnerId,
+    p_requirement_key: key,
+    p_required: required,
+  });
+  if (error) throw error;
+  if (data !== true) throw new Error("Only an owner or admin can change what a partner requires.");
+}
+
+/**
  * The partner view log (audit_events). Best-effort and silent: the database
  * refuses anything this partner may not log, and a failed write must never get
  * in the way of the records. Errors go to the console only, by design.

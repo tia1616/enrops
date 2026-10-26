@@ -16,6 +16,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 import ModalShell from "../../components/ModalShell.jsx";
 import PartnerLoginsSection from "./PartnerLoginsSection.jsx";
+import PartnerRequirementsSection from "./PartnerRequirementsSection.jsx";
 import { usePermissions } from "../../lib/permissions.js";
 import {
   DOC_TYPES, docTypeLabel, blankDraft, draftFromRow, draftProblem,
@@ -336,6 +337,8 @@ export default function ProviderDocuments() {
           </section>
         ))
       )}
+
+      <PartnerRequirementsSection partners={partners} canManage={canManage} />
 
       <PartnerLoginsSection org={org} partners={partners} canManage={canManage} onMessage={flash} />
 

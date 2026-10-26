@@ -239,6 +239,22 @@ for (const h of hosts) {
     else ok(`${who} cannot open another partner's file ${d.id.slice(0, 8)}`, !signed, `status ${r.status}`);
   }
 
+  // What each partner requires (20261026a): its own list, nobody else's, and
+  // it cannot change any list.
+  for (const p of partnerIdsInPlay) {
+    const r = await call('/rest/v1/rpc/partner_requirements_for', { token: h.token, method: 'POST', body: { p_partner_id: p } });
+    if (h.partners.has(p)) {
+      ok(`${who} CONTROL: reads its own requirements`, rows(r).length > 0, `status ${r.status}`);
+      scanFields(`${who} requirements`, rows(r), new Set(['requirement_key', 'required']));
+    } else {
+      ok(`${who} reads no requirements of another partner (${p.slice(0, 8)})`, gotNothing(r), `${rows(r).length} row(s)`);
+    }
+    const set = await call('/rest/v1/rpc/set_partner_requirement', {
+      token: h.token, method: 'POST', body: { p_partner_id: p, p_requirement_key: 'business_license', p_required: true },
+    });
+    ok(`${who} cannot change requirements (${p.slice(0, 8)})`, set.json !== true, `got ${set.text.slice(0, 40)}`);
+  }
+
   // Grants: only its own.
   const acc = await call('/rest/v1/partner_portal_access?select=id,partner_id', { token: h.token });
   ok(`${who} partner_portal_access: only its own grant`, rows(acc).every((a) => h.partners.has(a.partner_id)),
@@ -251,7 +267,8 @@ for (const h of hosts) {
 
   // Tables a host must never read at all.
   for (const t of ['instructors', 'contractor_onboarding_status', 'contractor_acknowledgments', 'students',
-    'parents', 'registrations', 'audit_events', 'partner_contacts', 'org_members', 'program_assignments']) {
+    'parents', 'registrations', 'audit_events', 'partner_contacts', 'org_members', 'program_assignments',
+    'partner_requirements']) {
     const r = await call(`/rest/v1/${t}?select=*&limit=5`, { token: h.token });
     // A missing table (404 / PGRST205) tests nothing; it must not read as a pass.
     const missing = r.status === 404 || r.json?.code === 'PGRST205';

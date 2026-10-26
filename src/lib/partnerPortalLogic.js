@@ -111,8 +111,35 @@ export function instructorChecklist(row, orgName, today) {
     },
     signed("code_of_conduct", "Code of conduct", row.code_of_conduct_on, "Signed"),
     signed("mandatory_reporter", "Mandatory reporter", row.mandatory_reporter_on, "Acknowledged"),
-    signed("agreement", "Contractor agreement", row.agreement_signed_on, "Signed"),
+    signed("contractor_agreement", "Contractor agreement", row.agreement_signed_on, "Signed"),
   ];
+}
+
+// --- What a partner requires (partner_requirements_for, 20261026a) ---------
+
+// Every requirement, in display order. `doc` is the provider_documents type
+// that satisfies a business-level requirement; instructor requirements match a
+// checklist line key above. The DEFAULTS are not here: they live in the
+// database function, the one place that decides them.
+export const REQUIREMENTS = [
+  { key: "insurance", label: "Insurance certificate", kind: "business", doc: "insurance" },
+  { key: "partner_agreement", label: "Partner agreement", kind: "business", doc: "agreement" },
+  { key: "business_license", label: "Business license", kind: "business", doc: "business_license" },
+  { key: "background_check", label: "Background check", kind: "instructor" },
+  { key: "training", label: "Training", kind: "instructor" },
+  { key: "code_of_conduct", label: "Code of conduct", kind: "instructor" },
+  { key: "mandatory_reporter", label: "Mandatory reporter", kind: "instructor" },
+  { key: "contractor_agreement", label: "Contractor agreement", kind: "instructor" },
+];
+
+/**
+ * The set of required keys from partner_requirements_for() rows. When the
+ * list could not be loaded (null), EVERY item counts as required: a host is
+ * shown too much rather than having a real gap hidden from it.
+ */
+export function requiredKeys(rows) {
+  if (!Array.isArray(rows)) return new Set(REQUIREMENTS.map((r) => r.key));
+  return new Set(rows.filter((r) => r.required).map((r) => r.requirement_key));
 }
 
 /** "as of" and source for a provider document (spec v3 display rules). */
@@ -139,18 +166,21 @@ function docsFor(docs, partnerId, type) {
 }
 
 /**
- * One provider's row on the partner home: insurance, instructors ("6 of 7
- * Current"), training, agreement, business license, last change, and the
- * row's overall rank for sorting. Pure: built from the same document rows and
- * instructor checklist the provider detail page shows, so the two can never
- * disagree.
+ * One provider as one partner sees it, measured ONLY against what that partner
+ * requires (`required`, a Set from requiredKeys()). Used by the partner home
+ * row and the provider detail page, so the two can never disagree.
+ *
+ *   business:    one entry per REQUIRED business item: { key, label, badge, docs }
+ *   alsoOnFile:  documents shown to this partner that no requirement asks for
+ *                (listed quietly, never counted, never red)
+ *   met / total: required business items that are Current or expiring
+ *   instructors: { total, current, badge, columns } - columns are the required
+ *                instructor items, in order; "current" means every one of them
+ *   overall, rank, lastChange, sites
  */
-export function providerSummary({ docs, instructors, partnerId, orgName, today }) {
-  const insuranceDocs = docsFor(docs, partnerId, "insurance");
-  const agreementDocs = docsFor(docs, partnerId, "agreement");
-  const licenseDocs = docsFor(docs, partnerId, "business_license");
+export function providerSummary({ docs, instructors, partnerId, orgName, today, required }) {
+  const need = required instanceof Set ? required : requiredKeys(null);
   const chipOf = (d) => EXPIRY_STATUS[d.expiry_status] ?? CHECK_STATUS.in_review;
-
   // Every insurance certificate must be current (a lapsed umbrella is a gap
   // even when the general liability is fine), so insurance takes the WORST.
   // One valid agreement or license is enough, so those take the BEST.
@@ -159,22 +189,31 @@ export function providerSummary({ docs, instructors, partnerId, orgName, today }
     if (!b.length) return null;
     return b.reduce((a, c) => ((TONE_RANK[c.tone] ?? 4) > (TONE_RANK[a.tone] ?? 4) ? c : a));
   };
-  const insurance = insuranceDocs.length ? worstBadge(insuranceDocs.map(chipOf)) : EXPIRED_OR_MISSING;
-  const agreement = bestBadge(agreementDocs) ?? EXPIRED_OR_MISSING;
-  const license = bestBadge(licenseDocs) ?? EXPIRED_OR_MISSING;
-  // The license document the chip came from, so a date shown beside the chip
-  // describes the same document (never an older expired one).
-  const licenseDoc = licenseDocs.find((d) => chipOf(d) === license) ?? null;
 
-  const people = (instructors || []).map((row) => instructorChecklist(row, orgName, today));
-  const isCurrent = (lines) => lines.every((l) => l.badge.tone === "good" || l.badge.tone === "warn");
+  const business = REQUIREMENTS.filter((r) => r.kind === "business" && need.has(r.key)).map((r) => {
+    const list = docsFor(docs, partnerId, r.doc);
+    const badge = !list.length
+      ? EXPIRED_OR_MISSING
+      : r.key === "insurance" ? worstBadge(list.map(chipOf)) : bestBadge(list);
+    return { key: r.key, label: r.label, badge, docs: list };
+  });
+  const countedTypes = new Set(business.map((b) => REQUIREMENTS.find((r) => r.key === b.key).doc));
+  const alsoOnFile = (docs || []).filter(
+    (d) => (!d.partner_id || d.partner_id === partnerId) && !countedTypes.has(d.doc_type),
+  );
+  const isOk = (badge) => badge?.tone === "good" || badge?.tone === "warn";
+  const met = business.filter((b) => isOk(b.badge)).length;
+
+  const columns = REQUIREMENTS.filter((r) => r.kind === "instructor" && need.has(r.key)).map((r) => r.key);
+  const people = (instructors || []).map((row) => {
+    const lines = instructorChecklist(row, orgName, today);
+    // An instructor who has not given permission has one line (consent); it
+    // stands for every column.
+    return row.shared ? lines.filter((l) => columns.includes(l.key)) : lines;
+  });
+  const isCurrent = (lines) => lines.every((l) => isOk(l.badge));
   const currentCount = people.filter(isCurrent).length;
   const instructorBadge = people.length ? worstBadge(people.flat().map((l) => l.badge)) : null;
-  // Training reads only instructors who have shared their record: one who has
-  // not given permission is already In review in the Instructors column, and
-  // must not make Training look unfinished for everyone else.
-  const trainingLines = people.map((lines) => lines.find((l) => l.key === "training")).filter(Boolean);
-  const training = trainingLines.length ? worstBadge(trainingLines.map((l) => l.badge)) : null;
 
   const dates = [
     ...(docs || []).filter((d) => !d.partner_id || d.partner_id === partnerId).map((d) => d.updated_at && String(d.updated_at).slice(0, 10)),
@@ -182,14 +221,14 @@ export function providerSummary({ docs, instructors, partnerId, orgName, today }
   ].filter(Boolean).sort();
   const lastChange = dates.length ? dates[dates.length - 1] : null;
 
-  const overall = worstBadge([insurance, agreement, instructorBadge, training]);
+  const overall = worstBadge([...business.map((b) => b.badge), instructorBadge]);
   return {
-    insurance,
-    agreement,
-    license,
-    licenseDoc,
-    training,
-    instructors: { total: people.length, current: currentCount, badge: instructorBadge },
+    business,
+    alsoOnFile,
+    met,
+    total: business.length,
+    instructors: { total: people.length, current: currentCount, badge: instructorBadge, columns },
+    overall,
     lastChange,
     rank: TONE_RANK[overall?.tone] ?? 4,
     sites: [...new Set((instructors || []).flatMap((r) => r.sites || []))].sort(),

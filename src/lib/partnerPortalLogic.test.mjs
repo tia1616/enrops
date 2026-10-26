@@ -48,7 +48,7 @@ eq('already-granted contacts are not offered again', contactsWithoutAccess(conta
   eq('check as of + source', full[0].meta, 'as of Oct 12, 2026 · Source: entered by Acme Kids · Screening company: Yardstik');
   eq('training as of + source', full[1].meta, 'as of Oct 20, 2026 · Source: entered by Acme Kids');
   eq('signed item as of + source', full[2].meta, 'as of Aug 20, 2026 · Source: signed by the instructor in enrops');
-  eq('five lines in order', full.map((l) => l.key), ['background_check', 'training', 'code_of_conduct', 'mandatory_reporter', 'agreement']);
+  eq('five lines in order', full.map((l) => l.key), ['background_check', 'training', 'code_of_conduct', 'mandatory_reporter', 'contractor_agreement']);
   ok('every chip carries an as-of', full.every((l) => l.meta.startsWith('as of ')));
 
   const gaps = instructorChecklist({ shared: true, background_check_status: 'missing' }, ORG, TODAY);
@@ -98,26 +98,58 @@ eq('already-granted contacts are not offered again', contactsWithoutAccess(conta
     { doc_type: 'insurance', partner_id: 'p-vancouver', expiry_status: 'expired', updated_at: '2026-10-21T00:00:00Z' },
     { doc_type: 'agreement', partner_id: null, expiry_status: 'no_expiry', updated_at: '2026-10-12T00:00:00Z' },
   ];
-  const s = providerSummary({ docs, instructors: [current(), current({ shared: false })], partnerId: P, orgName: 'Acme', today: '2026-10-20' });
-  eq('insurance takes the worst of THIS partner\'s certificates (not another partner\'s)', s.insurance.label, 'Expiring in 30 days');
-  eq('agreement on file', s.agreement.label, 'Current');
-  eq('no license on file reads Expired or Missing', s.license.label, 'Expired or Missing');
+  const { requiredKeys, REQUIREMENTS } = await import('./partnerPortalLogic.js');
+  // Happy Valley's packet: the defaults, i.e. everything except a business license.
+  const HV = requiredKeys(REQUIREMENTS.map((r) => ({ requirement_key: r.key, required: r.key !== 'business_license' })));
+  const s = providerSummary({ docs, instructors: [current(), current({ shared: false })], partnerId: P, orgName: 'Acme', today: '2026-10-20', required: HV });
+  const item = (sum, key) => sum.business.find((b) => b.key === key);
+  eq('insurance takes the worst of THIS partner\'s certificates (not another partner\'s)', item(s, 'insurance').badge.label, 'Expiring in 30 days');
+  eq('agreement on file', item(s, 'partner_agreement').badge.label, 'Current');
+  // Jessica 2026-10-26: a requirement the partner does not have is not shown missing.
+  eq('a license Happy Valley does not require is not a requirement at all', item(s, 'business_license'), undefined);
+  eq('met 2 of 2', [s.met, s.total], [2, 2]);
   eq('instructors: 1 of 2 current (one has not consented)', [s.instructors.current, s.instructors.total], [1, 2]);
   eq('instructor chip is the worst line', s.instructors.badge.label, 'In review');
-  eq('training ignores an instructor who has not consented', s.training.label, 'Current');
+  eq('instructor columns are the required ones, in order', s.instructors.columns, ['background_check', 'training', 'code_of_conduct', 'mandatory_reporter', 'contractor_agreement']);
+
+  // West Linn: the license IS required.
+  const WL = requiredKeys(REQUIREMENTS.map((r) => ({ requirement_key: r.key, required: true })));
+  const wl = providerSummary({ docs, instructors: [], partnerId: P, orgName: 'Acme', today: '2026-10-20', required: WL });
+  eq('a required license with none on file reads Expired or Missing', item(wl, 'business_license').badge.label, 'Expired or Missing');
+  eq('met 2 of 3', [wl.met, wl.total], [2, 3]);
   const lic = providerSummary({
     docs: [
       { doc_type: 'business_license', partner_id: null, expiry_status: 'expired', expires_on: '2026-08-07' },
       { doc_type: 'business_license', partner_id: null, expiry_status: 'current', expires_on: '2027-08-07' },
     ],
-    instructors: [], partnerId: P, orgName: 'Acme', today: '2026-10-20',
+    instructors: [], partnerId: P, orgName: 'Acme', today: '2026-10-20', required: WL,
   });
-  eq('license chip and the document behind it agree', [lic.license.label, lic.licenseDoc.expires_on], ['Current', '2027-08-07']);
+  eq('one current license is enough', item(lic, 'business_license').badge.label, 'Current');
+
+  // Not required but on file: listed quietly, never counted.
+  const onFile = providerSummary({
+    docs: [...docs, { doc_type: 'business_license', partner_id: null, expiry_status: 'expired' }, { doc_type: 'other', partner_id: P, expiry_status: 'no_expiry' }],
+    instructors: [], partnerId: P, orgName: 'Acme', today: '2026-10-20', required: HV,
+  });
+  eq('unrequired license and other docs are "also on file"', onFile.alsoOnFile.map((d) => d.doc_type).sort(), ['business_license', 'other']);
+  eq('an expired document nobody requires does not make the row red', onFile.overall.label, 'Expiring in 30 days');
+
+  // A partner that does not require training: an instructor without it is current.
+  const noTraining = requiredKeys(REQUIREMENTS.map((r) => ({ requirement_key: r.key, required: r.key !== 'training' })));
+  const nt = providerSummary({ docs, instructors: [current({ training_completed_on: null })], partnerId: P, orgName: 'Acme', today: '2026-10-20', required: noTraining });
+  eq('unrequired training does not stop an instructor being current', nt.instructors.current, 1);
+  ok('and training is not a column', !nt.instructors.columns.includes('training'));
+
+  // If the list could not be loaded, nothing is hidden.
+  eq('unknown list = everything required', requiredKeys(null).size, REQUIREMENTS.length);
+  const unknown = providerSummary({ docs, instructors: [], partnerId: P, orgName: 'Acme', today: '2026-10-20' });
+  eq('no list passed = everything counted', unknown.total, 3);
+
   eq('last change ignores another partner\'s document', s.lastChange, '2026-10-20');
   eq('sites collected', s.sites, ['Happy Valley Library']);
 
-  const empty = providerSummary({ docs: [], instructors: [], partnerId: P, orgName: 'Acme', today: '2026-10-20' });
-  eq('nothing on file: insurance missing, no instructor chip', [empty.insurance.label, empty.instructors.badge, empty.training], ['Expired or Missing', null, null]);
+  const empty = providerSummary({ docs: [], instructors: [], partnerId: P, orgName: 'Acme', today: '2026-10-20', required: HV });
+  eq('nothing on file: insurance missing, no instructor chip', [item(empty, 'insurance').badge.label, empty.instructors.badge], ['Expired or Missing', null]);
   ok('a missing item ranks a row first', empty.rank < s.rank || empty.rank === 0);
   eq('worst of none', worstBadge([]), null);
 }

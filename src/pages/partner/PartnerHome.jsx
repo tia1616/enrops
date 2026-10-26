@@ -9,9 +9,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import DocumentStatusBadge from "../../components/DocumentStatusBadge.jsx";
-import { listPartnerInstructors, logPartnerPortalEvent } from "../../lib/partnerPortal.js";
+import { listPartnerInstructors, listPartnerRequirements, logPartnerPortalEvent } from "../../lib/partnerPortal.js";
 import { listProviderDocuments } from "../../lib/providerDocuments.js";
-import { providerSummary } from "../../lib/partnerPortalLogic.js";
+import { providerSummary, requiredKeys, worstBadge } from "../../lib/partnerPortalLogic.js";
 import { formatDate } from "../../lib/providerDocumentLogic.js";
 import { PartnerShell, PartnerSignIn, NoAccess, useMemberships, todayIso } from "./partnerShared.jsx";
 
@@ -24,6 +24,27 @@ function Chip({ badge }) {
   return badge ? <DocumentStatusBadge badge={badge} /> : <span className="text-sm text-j2s-ink/40">None yet</span>;
 }
 
+// "2 of 2" with the worst chip among the partner's REQUIRED business items.
+function RequirementsCell({ s }) {
+  if (!s.total) return <span className="text-sm text-j2s-ink/40">None on your list</span>;
+  const worst = worstBadge(s.business.map((b) => b.badge));
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-j2s-ink/80">{s.met} of {s.total} met</span>
+      <Chip badge={worst} />
+    </div>
+  );
+}
+
+function InstructorsCell({ s }) {
+  if (!s.instructors.total) return <span className="text-sm text-j2s-ink/40">None assigned yet</span>;
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-j2s-ink/80">{s.instructors.current} of {s.instructors.total} current</span>
+      <Chip badge={s.instructors.badge} />
+    </div>
+  );
+}
 export default function PartnerHome() {
   const { user, authLoading, signOut, memberships, error } = useMemberships();
   const [rows, setRows] = useState(null); // [{ m, summary }] | null
@@ -54,8 +75,19 @@ export default function PartnerHome() {
     // allSettled, not all: one provider's failed read must not hide the others.
     // The providers that failed are named in the error line above the table.
     Promise.allSettled(memberships.map(async (m) => {
-      const [docs, instructors] = await Promise.all([docsByOrg.get(m.organization_id), listPartnerInstructors(m.partner_id)]);
-      return { m, summary: providerSummary({ docs, instructors, partnerId: m.partner_id, orgName: m.organization_name, today }) };
+      const [docs, instructors, requirements] = await Promise.all([
+        docsByOrg.get(m.organization_id),
+        listPartnerInstructors(m.partner_id),
+        // A list that fails to load counts everything (requiredKeys(null)):
+        // the row shows too much rather than hiding a gap.
+        listPartnerRequirements(m.partner_id).catch(() => null),
+      ]);
+      return {
+        m,
+        summary: providerSummary({
+          docs, instructors, partnerId: m.partner_id, orgName: m.organization_name, today, required: requiredKeys(requirements),
+        }),
+      };
     }))
       .then((results) => {
         if (cancelled) return;
@@ -120,10 +152,8 @@ export default function PartnerHome() {
               <thead className="border-b border-j2s-ink/10 text-xs uppercase tracking-wide text-j2s-ink/50">
                 <tr>
                   <th className="px-4 py-3 font-semibold">Provider</th>
-                  <th className="px-4 py-3 font-semibold">Insurance</th>
+                  <th className="px-4 py-3 font-semibold">Requirements</th>
                   <th className="px-4 py-3 font-semibold">Instructors</th>
-                  <th className="px-4 py-3 font-semibold">Training</th>
-                  <th className="px-4 py-3 font-semibold">Agreement</th>
                   <th className="px-4 py-3 font-semibold">Last change</th>
                 </tr>
               </thead>
@@ -134,17 +164,8 @@ export default function PartnerHome() {
                       <Link to={`/partner/${m.partner_id}`} className="font-semibold text-j2s-purple hover:underline">{m.organization_name}</Link>
                       {s.sites.length > 0 && <div className="text-xs text-j2s-ink/50">{s.sites.join(", ")}</div>}
                     </td>
-                    <td className="px-4 py-3"><Chip badge={s.insurance} /></td>
-                    <td className="px-4 py-3">
-                      {s.instructors.total > 0 ? (
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-j2s-ink/80">{s.instructors.current} of {s.instructors.total} Current</span>
-                          <Chip badge={s.instructors.badge} />
-                        </div>
-                      ) : <span className="text-sm text-j2s-ink/40">None assigned yet</span>}
-                    </td>
-                    <td className="px-4 py-3"><Chip badge={s.training} /></td>
-                    <td className="px-4 py-3"><Chip badge={s.agreement} /></td>
+                    <td className="px-4 py-3"><RequirementsCell s={s} /></td>
+                    <td className="px-4 py-3"><InstructorsCell s={s} /></td>
                     <td className="px-4 py-3 text-j2s-ink/60">{s.lastChange ? formatDate(s.lastChange) : "—"}</td>
                   </tr>
                 ))}
@@ -158,12 +179,9 @@ export default function PartnerHome() {
               <Link key={m.partner_id} to={`/partner/${m.partner_id}`} className="block rounded-2xl bg-white p-4 shadow-card">
                 <div className="font-semibold text-j2s-purple">{m.organization_name}</div>
                 {s.sites.length > 0 && <div className="text-xs text-j2s-ink/50">{s.sites.join(", ")}</div>}
-                <dl className="mt-3 grid grid-cols-2 gap-x-3 gap-y-2 text-sm">
-                  <dt className="text-j2s-ink/60">Insurance</dt><dd><Chip badge={s.insurance} /></dd>
-                  <dt className="text-j2s-ink/60">Instructors</dt>
-                  <dd>{s.instructors.total > 0 ? <>{s.instructors.current} of {s.instructors.total} <Chip badge={s.instructors.badge} /></> : <span className="text-j2s-ink/40">None yet</span>}</dd>
-                  <dt className="text-j2s-ink/60">Training</dt><dd><Chip badge={s.training} /></dd>
-                  <dt className="text-j2s-ink/60">Agreement</dt><dd><Chip badge={s.agreement} /></dd>
+                <dl className="mt-3 grid grid-cols-[auto,1fr] gap-x-4 gap-y-2 text-sm">
+                  <dt className="text-j2s-ink/60">Requirements</dt><dd><RequirementsCell s={s} /></dd>
+                  <dt className="text-j2s-ink/60">Instructors</dt><dd><InstructorsCell s={s} /></dd>
                   <dt className="text-j2s-ink/60">Last change</dt><dd className="text-j2s-ink/70">{s.lastChange ? formatDate(s.lastChange) : "—"}</dd>
                 </dl>
               </Link>
