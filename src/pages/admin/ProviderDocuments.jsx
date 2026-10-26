@@ -90,10 +90,10 @@ function DocumentForm({ editing, partners, onCancel, onSave }) {
 
   function changeType(key) {
     setDraft((d) => {
-      const oldDefault = DOC_TYPES.find((t) => t.key === d.doc_type)?.defaultTitle ?? "";
       const nextDefault = DOC_TYPES.find((t) => t.key === key)?.defaultTitle ?? "";
-      // Only replace the name if the person hasn't typed their own.
-      const title = !d.title.trim() || d.title === oldDefault ? nextDefault : d.title;
+      // Only "Other document" shows a Name box, so every other kind takes its
+      // own name; a name typed for "Other" must not ride along hidden.
+      const title = key === "other" ? (d.doc_type === "other" ? d.title : "") : nextDefault;
       return { ...d, doc_type: key, title, no_expiry: key === "insurance" ? false : d.no_expiry };
     });
   }
@@ -124,8 +124,14 @@ function DocumentForm({ editing, partners, onCancel, onSave }) {
         {DOC_TYPES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
       </select>
 
-      <label style={{ ...lbl, marginTop: 16 }}>Name</label>
-      <input type="text" value={draft.title} onChange={(e) => set("title", e.target.value)} placeholder="e.g. Facility use agreement" style={input} />
+      {/* Only "Other document" needs a name; the rest are named by their kind
+          ("Certificate of insurance"), which changeType keeps in step. */}
+      {draft.doc_type === "other" && (
+        <>
+          <label style={{ ...lbl, marginTop: 16 }}>Name</label>
+          <input type="text" value={draft.title} onChange={(e) => set("title", e.target.value)} placeholder="e.g. W-9" style={input} />
+        </>
+      )}
 
       <label style={{ ...lbl, marginTop: 16 }}>Shown to</label>
       <select value={draft.partner_id} onChange={(e) => set("partner_id", e.target.value)} style={input}>
