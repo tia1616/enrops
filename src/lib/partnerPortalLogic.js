@@ -151,6 +151,51 @@ export function documentProvenance(doc, orgName) {
   return provenance(doc?.updated_at ? String(doc.updated_at).slice(0, 10) : null, by);
 }
 
+// --- The record grid (Jessica 2026-10-26: "a spreadsheet") -----------------
+
+// The date each grid column shows, and the word under its header saying what
+// that date means, so one column never mixes "renews" with "completed".
+export const GRID_DATE = {
+  insurance: "good through",
+  partner_agreement: "expires",
+  business_license: "expires",
+  background_check: "renews",
+  training: "completed",
+  code_of_conduct: "signed",
+  mandatory_reporter: "acknowledged",
+  contractor_agreement: "signed",
+};
+
+/** The date behind an instructor cell, by requirement key. */
+export function instructorCellDate(row, key) {
+  return {
+    background_check: row?.background_check_expires_on,
+    training: row?.training_completed_on,
+    code_of_conduct: row?.code_of_conduct_on,
+    mandatory_reporter: row?.mandatory_reporter_on,
+    contractor_agreement: row?.agreement_signed_on,
+  }[key] ?? null;
+}
+
+/**
+ * The text in one grid cell. A current item shows a check and its date (the
+ * header says what the date means); anything needing attention shows the
+ * spec v3 chip word itself, so status is never carried by colour alone.
+ */
+export function gridCellText(badge, date) {
+  if (!badge) return "";
+  if (badge.tone === "good") return date ? `✓ ${formatDate(date)}` : "✓ On file";
+  if (badge.tone === "warn") return date ? `Expiring ${formatDate(date)}` : badge.label;
+  return badge.label;
+}
+
+/** The date a business cell shows: the document its chip came from. */
+export function businessCellDate(item) {
+  const match = (item?.docs || []).filter((d) => (EXPIRY_STATUS[d.expiry_status] ?? null) === item.badge);
+  const dated = match.map((d) => d.expires_on).filter(Boolean).sort();
+  return dated.length ? dated[0] : null;
+}
+
 // --- Partner home (spec v3 H1): one row per provider ------------------------
 
 // Worst first. A row or a cell takes its worst chip, so a partner reads red

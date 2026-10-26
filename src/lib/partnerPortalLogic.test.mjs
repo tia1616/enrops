@@ -155,5 +155,24 @@ eq('already-granted contacts are not offered again', contactsWithoutAccess(conta
   eq('worst of none', worstBadge([]), null);
 }
 
+// --- record grid cells (2026-10-26) ------------------------------------------
+{
+  const { gridCellText, instructorCellDate, businessCellDate, GRID_DATE, REQUIREMENTS, CHECK_STATUS } = await import('./partnerPortalLogic.js');
+  const { EXPIRY_STATUS } = await import('./providerDocumentLogic.js');
+  eq('current: check and the date', gridCellText(EXPIRY_STATUS.current, '2027-01-17'), '✓ Jan 17, 2027');
+  eq('current, no date: on file', gridCellText(EXPIRY_STATUS.no_expiry, null), '✓ On file');
+  eq('expiring: says so with the date', gridCellText(EXPIRY_STATUS.expiring_soon, '2026-11-03'), 'Expiring Nov 3, 2026');
+  eq('missing: the exact chip word', gridCellText(CHECK_STATUS.missing, null), 'Expired or Missing');
+  eq('in review: the exact chip word', gridCellText(CHECK_STATUS.in_review, null), 'In review');
+  eq('instructor dates by column', ['background_check', 'training', 'contractor_agreement'].map((k) => instructorCellDate({ background_check_expires_on: 'A', training_completed_on: 'B', agreement_signed_on: 'C' }, k)), ['A', 'B', 'C']);
+  ok('every requirement has a header date word', REQUIREMENTS.every((r) => GRID_DATE[r.key]));
+  const item = { badge: EXPIRY_STATUS.current, docs: [
+    { expiry_status: 'expired', expires_on: '2026-01-01' },
+    { expiry_status: 'current', expires_on: '2027-03-01' },
+    { expiry_status: 'current', expires_on: '2027-01-17' },
+  ] };
+  eq('business cell dates the soonest document behind its chip, never an expired one', businessCellDate(item), '2027-01-17');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
