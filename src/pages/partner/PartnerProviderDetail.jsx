@@ -17,7 +17,7 @@
 // this login holds that grant (partner_portal_memberships); every read below is
 // also refused by the database for anyone else.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import DocumentStatusBadge from "../../components/DocumentStatusBadge.jsx";
 import { listPartnerInstructors, listPartnerRequirements, logPartnerPortalEvent } from "../../lib/partnerPortal.js";
@@ -69,6 +69,7 @@ export default function PartnerProviderDetail() {
   const [requirements, setRequirements] = useState(undefined);
   const [loadError, setLoadError] = useState("");
   const [openError, setOpenError] = useState("");
+  const opening = useRef(false);
 
   useEffect(() => {
     setDocs(null); setInstructors(null); setRequirements(undefined); setLoadError("");
@@ -110,11 +111,18 @@ export default function PartnerProviderDetail() {
   });
 
   async function open(d) {
+    // A second tap while the file is on its way would sign and log it twice.
+    if (opening.current) return;
+    opening.current = true;
     setOpenError("");
-    const problem = await openDocumentInNewTab(d.storage_path, {
-      onOpened: () => logPartnerPortalEvent(m.partner_id, "document_opened", d.id),
-    });
-    if (problem) setOpenError(problem);
+    try {
+      const problem = await openDocumentInNewTab(d.storage_path, {
+        onOpened: () => logPartnerPortalEvent(m.partner_id, "document_opened", d.id),
+      });
+      if (problem) setOpenError(problem);
+    } finally {
+      opening.current = false;
+    }
   }
 
   return (

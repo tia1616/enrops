@@ -122,8 +122,8 @@ export async function setPartnerRequirement(partnerId, key, required) {
  * The partner view log (audit_events). Best-effort and silent: the database
  * refuses anything this partner may not log, and a failed write must never get
  * in the way of the records. Errors go to the console only, by design.
+ * Never rejects; returned so a caller about to leave the page can wait for it.
  */
-// Never rejects; returned so a caller about to leave the page can wait for it.
 export function logPartnerPortalEvent(partnerId, action, documentId = null) {
   return supabase
     .rpc("log_partner_portal_event", { p_partner_id: partnerId, p_action: action, p_document_id: documentId })

@@ -116,7 +116,8 @@ export async function deleteProviderDocument(row) {
  * pop-up blocker, the in-app browser of an email or social app), the file
  * opens in this tab instead and Back returns: the person is never asked to
  * change a browser setting. `onOpened` runs once the file is on its way, and
- * is awaited before this page is left so it isn't cut off. Resolves null on
+ * is awaited (for at most 1.5 seconds: the file matters more than the log)
+ * before this page is left so it isn't cut off. Resolves null on
  * success, or a sentence for the person when it couldn't open. Shared by the
  * admin screen and the partner portal.
  */
@@ -130,7 +131,7 @@ export async function openDocumentInNewTab(storagePath, { onOpened } = {}) {
       tab.location.href = url;
       onOpened?.();
     } else {
-      await onOpened?.();
+      await Promise.race([onOpened?.(), new Promise((r) => setTimeout(r, 1500))]);
       window.location.assign(url);
     }
     return null;
