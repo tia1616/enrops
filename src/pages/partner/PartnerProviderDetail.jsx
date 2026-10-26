@@ -129,7 +129,7 @@ export default function PartnerProviderDetail() {
               </span>
             )}
           </div>
-          {requirements === null && (
+          {(requirements === null || requirements?.length === 0) && (
             <p className="mt-2 text-xs text-j2s-ink/50">Showing every standard requirement: your list couldn't be loaded just now.</p>
           )}
 

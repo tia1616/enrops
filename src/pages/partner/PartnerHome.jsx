@@ -28,10 +28,15 @@ function Chip({ badge }) {
 function RequirementsCell({ s }) {
   if (!s.total) return <span className="text-sm text-j2s-ink/40">None on your list</span>;
   const worst = worstBadge(s.business.map((b) => b.badge));
+  // Name the gap, so a coordinator knows which one without opening the record.
+  const gaps = s.business.filter((b) => b.badge.tone !== "good" && b.badge.tone !== "warn").map((b) => b.label);
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <span className="text-j2s-ink/80">{s.met} of {s.total} met</span>
-      <Chip badge={worst} />
+    <div>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-j2s-ink/80">{s.met} of {s.total} met</span>
+        <Chip badge={worst} />
+      </div>
+      {gaps.length > 0 && <div className="mt-0.5 text-xs text-j2s-ink/55">Needs: {gaps.join(", ")}</div>}
     </div>
   );
 }
@@ -84,6 +89,7 @@ export default function PartnerHome() {
       ]);
       return {
         m,
+        listUnknown: !Array.isArray(requirements) || requirements.length === 0,
         summary: providerSummary({
           docs, instructors, partnerId: m.partner_id, orgName: m.organization_name, today, required: requiredKeys(requirements),
         }),
@@ -141,6 +147,9 @@ export default function PartnerHome() {
       )}
 
       {(error || loadError) && <p className="error-text mt-4">{error || loadError}</p>}
+      {(rows ?? []).some((r) => r.listUnknown) && (
+        <p className="mt-3 text-xs text-j2s-ink/50">Showing every standard requirement: your list couldn't be loaded just now.</p>
+      )}
 
       {rows === null && !loadError ? (
         <p className="mt-8 text-j2s-ink/60">Loading your providers…</p>

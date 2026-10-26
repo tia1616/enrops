@@ -142,6 +142,7 @@ eq('already-granted contacts are not offered again', contactsWithoutAccess(conta
 
   // If the list could not be loaded, nothing is hidden.
   eq('unknown list = everything required', requiredKeys(null).size, REQUIREMENTS.length);
+  eq('an EMPTY list = everything required (never "requires nothing")', requiredKeys([]).size, REQUIREMENTS.length);
   const unknown = providerSummary({ docs, instructors: [], partnerId: P, orgName: 'Acme', today: '2026-10-20' });
   eq('no list passed = everything counted', unknown.total, 3);
 

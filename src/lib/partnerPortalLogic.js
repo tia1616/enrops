@@ -135,10 +135,13 @@ export const REQUIREMENTS = [
 /**
  * The set of required keys from partner_requirements_for() rows. When the
  * list could not be loaded (null), EVERY item counts as required: a host is
- * shown too much rather than having a real gap hidden from it.
+ * shown too much rather than having a real gap hidden from it. An EMPTY list
+ * means the same: the function always returns every key to anyone allowed to
+ * read it, and returns nothing (not an error) to anyone who isn't, so empty is
+ * "could not tell", never "requires nothing".
  */
 export function requiredKeys(rows) {
-  if (!Array.isArray(rows)) return new Set(REQUIREMENTS.map((r) => r.key));
+  if (!Array.isArray(rows) || rows.length === 0) return new Set(REQUIREMENTS.map((r) => r.key));
   return new Set(rows.filter((r) => r.required).map((r) => r.requirement_key));
 }
 

@@ -107,6 +107,10 @@ begin
     raise exception 'required must be true or false' using errcode = 'PR001';
   end if;
 
+  -- Two admins changing the same item at once queue here, so each audit row's
+  -- "before" is the value the other one left (the repo's advisory-lock shape).
+  perform pg_advisory_xact_lock(hashtext('partner_requirement:' || p_partner_id::text || ':' || coalesce(p_requirement_key, '')));
+
   select f.required into v_before
   from public.partner_requirements_for(p_partner_id) f
   where f.requirement_key = p_requirement_key;
