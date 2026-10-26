@@ -26,6 +26,13 @@ const OK = '#3a7c3a';
 const RED = '#b53737';
 const AMBER = '#b67e00';
 
+// ONE column list for every read of contractor_onboarding_status on this page.
+// A refresh replaces row.status wholesale, so a shorter list on a refresh used
+// to wipe fields the detail panel shows (the upload modal dropped
+// stripe_payouts_enabled and invited_at until the next page load).
+const STATUS_COLS =
+  'instructor_id, overall_status, current_step, checkr_status, stripe_payouts_enabled, background_check_source, invited_at, background_check_completed_on, background_check_vendor';
+
 const STATUS_COLOR = {
   complete: OK,
   in_progress: PURPLE,
@@ -107,7 +114,8 @@ export default function InstructorsTab({ org }) {
              contractor_tier, date_of_birth, shirt_size, photo_url,
              site_preferences, availability,
              first_aid_cpr_url, first_aid_cpr_expires_at,
-             photo_release_consent, photo_release_consent_at`
+             photo_release_consent, photo_release_consent_at,
+             partner_sharing_agreed_at, partner_sharing_stopped_at, training_completed_on`
           )
           .eq('organization_id', org.id)
           .order('last_name', { ascending: true, nullsFirst: false });
@@ -126,9 +134,7 @@ export default function InstructorsTab({ org }) {
           const [{ data: statusRows }, { data: contactRows }, { data: reqVids }, { data: comps }, { data: orgCfg }] = await Promise.all([
             supabase
               .from('contractor_onboarding_status')
-              .select(
-                'instructor_id, overall_status, current_step, checkr_status, stripe_payouts_enabled, background_check_source, invited_at'
-              )
+              .select(STATUS_COLS)
               .in('instructor_id', ids),
             supabase
               .from('contractor_emergency_contacts')
@@ -282,7 +288,7 @@ export default function InstructorsTab({ org }) {
       // from "Send invite" to "Resend" — contractor-invite stamps invited_at.
       const { data: fresh } = await supabase
         .from('contractor_onboarding_status')
-        .select('instructor_id, overall_status, current_step, checkr_status, stripe_payouts_enabled, background_check_source, invited_at')
+        .select(STATUS_COLS)
         .eq('instructor_id', instructorId)
         .maybeSingle();
       const nowIso = new Date().toISOString();
@@ -420,6 +426,7 @@ export default function InstructorsTab({ org }) {
             onStartEditName={() => { setExpanded((s) => new Set(s).add(r.id)); setEditingNameId(r.id); }}
             onCancelEditName={() => setEditingNameId(null)}
             onSaveName={(vals) => saveName(r.id, vals)}
+            onPatchRow={(patch) => setRows((rs) => (rs ?? []).map((x) => (x.id === r.id ? { ...x, ...patch(x) } : x)))}
           />
         ))}
       </div>
@@ -476,7 +483,7 @@ export default function InstructorsTab({ org }) {
   );
 }
 
-function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, inviteResult, onUploadBg, onRemove, onReactivate, isEditingName, onStartEditName, onCancelEditName, onSaveName }) {
+function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, inviteResult, onUploadBg, onRemove, onReactivate, isEditingName, onStartEditName, onCancelEditName, onSaveName, onPatchRow }) {
   const displayName =
     row.preferred_name?.trim() ||
     `${row.first_name ?? ''} ${row.last_name ?? ''}`.trim() ||
@@ -648,6 +655,7 @@ function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, invi
           onStartEditName={onStartEditName}
           onCancelEditName={onCancelEditName}
           onSaveName={onSaveName}
+          onPatchRow={onPatchRow}
         />
       )}
     </div>
@@ -705,7 +713,7 @@ function useInstructorRecord(instructorId) {
   return { record, failed };
 }
 
-function InstructorDetail({ row, age, onUploadBg, onRemove, onReactivate, isEditingName, onStartEditName, onCancelEditName, onSaveName }) {
+function InstructorDetail({ row, age, onUploadBg, onRemove, onReactivate, isEditingName, onStartEditName, onCancelEditName, onSaveName, onPatchRow }) {
   const { record, failed: recordFailed } = useInstructorRecord(row.id);
   const sitePrefs = row.site_preferences?.districts ?? [];
   const dayDefaults = row.availability?.day_defaults ?? {};
@@ -784,6 +792,24 @@ function InstructorDetail({ row, age, onUploadBg, onRemove, onReactivate, isEdit
           </>
         ) : (
           <Em>not started</Em>
+        )}
+        {row.status?.background_check_completed_on && (
+          <div style={{ color: MUTED, fontSize: 12 }}>Completed {fmtDate(row.status.background_check_completed_on)}</div>
+        )}
+        {row.status && onPatchRow && (
+          <InlineField
+            label="Run by"
+            type="text"
+            value={row.status.background_check_vendor ?? ''}
+            placeholder="e.g. Yardstik"
+            emptyText="company not recorded"
+            onSave={async (v) => {
+              const { data, error } = await supabase.rpc('set_background_check_vendor', { p_instructor_id: row.id, p_vendor: v });
+              if (error || data !== true) return "Couldn't save. Try again.";
+              onPatchRow((x) => ({ status: { ...x.status, background_check_vendor: v.trim() || null } }));
+              return null;
+            }}
+          />
         )}
         {onUploadBg && (
           <button
@@ -892,6 +918,53 @@ function InstructorDetail({ row, age, onUploadBg, onRemove, onReactivate, isEdit
           </>
         ) : (
           <Em>Not asked</Em>
+        )}
+      </DetailItem>
+
+      {/* The date YOU trained them. Shown to partners on the instructor
+          checklist. Not the video course below, which tracks its own completions. */}
+      <DetailItem label="Training date">
+        {onPatchRow ? (
+          <InlineField
+            type="date"
+            value={row.training_completed_on ?? ''}
+            display={row.training_completed_on ? fmtDate(row.training_completed_on) : ''}
+            emptyText="not recorded"
+            onSave={async (v) => {
+              // .select() so a write RLS filtered out (a non-admin member) comes
+              // back as zero rows instead of looking like a success.
+              const { data, error } = await supabase
+                .from('instructors')
+                .update({ training_completed_on: v || null })
+                .eq('id', row.id)
+                .select('id');
+              if (error) return "Couldn't save. Try again.";
+              if (!data?.length) return 'Only an owner or admin can change this.';
+              onPatchRow(() => ({ training_completed_on: v || null }));
+              return null;
+            }}
+          />
+        ) : row.training_completed_on ? fmtDate(row.training_completed_on) : <Em>not recorded</Em>}
+      </DetailItem>
+
+      {/* Only the instructor can give this, from their portal (see
+          PartnerSharingCard). Read-only here on purpose. */}
+      <DetailItem label="Share with partners">
+        {row.partner_sharing_agreed_at ? (
+          <>
+            Agreed
+            {fmtTimestamp(row.partner_sharing_agreed_at) ? ` · ${fmtTimestamp(row.partner_sharing_agreed_at)}` : ''}
+          </>
+        ) : row.partner_sharing_stopped_at ? (
+          <Em>
+            Stopped sharing
+            {fmtTimestamp(row.partner_sharing_stopped_at) ? ` · ${fmtTimestamp(row.partner_sharing_stopped_at)}` : ''}
+            . Partners see In review until they agree again.
+          </Em>
+        ) : row.is_active ? (
+          <Em>Not yet. Their instructor portal asks them once onboarding is done.</Em>
+        ) : (
+          <Em>Not agreed</Em>
         )}
       </DetailItem>
 
@@ -1200,6 +1273,58 @@ function Em({ children }) {
   return <span style={{ color: MUTED, fontStyle: 'italic' }}>{children}</span>;
 }
 
+// A value with a small Edit link that turns into an input + Save. onSave
+// resolves null on success or an error string, shown right under the input
+// (where the person is looking).
+function InlineField({ label, type, value, display, placeholder, emptyText, onSave }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const linkBtn = { background: 'transparent', border: 'none', color: PURPLE, fontSize: 11, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', padding: 0, textDecoration: 'underline', marginLeft: 6 };
+
+  if (!editing) {
+    const shown = display ?? value;
+    return (
+      <div style={{ fontSize: 12 }}>
+        {label && <span style={{ color: MUTED }}>{label}: </span>}
+        {shown ? <span>{shown}</span> : <Em>{emptyText}</Em>}
+        <button type="button" style={linkBtn} onClick={() => { setDraft(value); setErr(''); setEditing(true); }}>Edit</button>
+      </div>
+    );
+  }
+  return (
+    <div style={{ fontSize: 12, marginTop: 2 }}>
+      {label && <div style={{ color: MUTED }}>{label}</div>}
+      <input
+        type={type}
+        value={draft}
+        placeholder={placeholder}
+        maxLength={type === 'text' ? 80 : undefined}
+        onChange={(e) => setDraft(e.target.value)}
+        style={{ fontSize: 13, padding: '3px 6px', border: `1px solid ${RULE}`, borderRadius: 6, fontFamily: 'inherit' }}
+      />
+      <button
+        type="button"
+        disabled={busy}
+        style={linkBtn}
+        onClick={async () => {
+          setBusy(true);
+          setErr('');
+          const problem = await onSave(draft);
+          setBusy(false);
+          if (problem) setErr(problem);
+          else setEditing(false);
+        }}
+      >
+        {busy ? 'Saving…' : 'Save'}
+      </button>
+      <button type="button" disabled={busy} style={{ ...linkBtn, color: MUTED }} onClick={() => setEditing(false)}>Cancel</button>
+      {err && <div style={{ color: RED, marginTop: 2 }}>{err}</div>}
+    </div>
+  );
+}
+
 // Modal for the admin BG-check upload flow. Replaces the standalone
 // /admin/contractors/background-check-upload page so the affordance lives
 // inside the Instructors tab where it belongs IA-wise.
@@ -1268,7 +1393,7 @@ function BackgroundCheckUploadModal({ instructors, initialInstructorId, onClose,
       // Refresh this row's status so the badge flips immediately.
       const { data: fresh } = await supabase
         .from('contractor_onboarding_status')
-        .select('instructor_id, checkr_status, overall_status, background_check_source')
+        .select(STATUS_COLS)
         .eq('instructor_id', selected.id)
         .single();
       if (fresh && onUploaded) onUploaded(fresh);
@@ -1542,7 +1667,7 @@ function AddInstructorModal({ org, onClose, onAdded, onSendInvite }) {
         // pushed straight into `rows`, so any column missing here is undefined on
         // that row only — the detail panel would render differently for someone
         // added this session than for everyone else, until a refresh hid it.
-        .select('id, first_name, last_name, preferred_name, email, phone, is_active, contractor_tier, date_of_birth, shirt_size, photo_url, site_preferences, availability, first_aid_cpr_url, first_aid_cpr_expires_at, photo_release_consent, photo_release_consent_at')
+        .select('id, first_name, last_name, preferred_name, email, phone, is_active, contractor_tier, date_of_birth, shirt_size, photo_url, site_preferences, availability, first_aid_cpr_url, first_aid_cpr_expires_at, photo_release_consent, photo_release_consent_at, partner_sharing_agreed_at, partner_sharing_stopped_at, training_completed_on')
         .single();
 
       if (insErr) {

@@ -11,7 +11,9 @@
 // distinct from the one-time AnnouncementBanner. Page/user/org context is
 // attached automatically; the user only types a message.
 //
-// Enrops admin chrome only — mounted in AdminLayout. Tokens match the shell.
+// Mounted in AdminLayout's sidebar, and (variant "inline") on the partner
+// portal page, where the signed-in person is a partner of the provider rather
+// than a member; the feedback insert policy admits both. Tokens match the shell.
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -24,7 +26,10 @@ const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
 
-export default function FeedbackWidget({ org }) {
+// variant "inline": the same button sized to its text, for the partner portal
+// page (partners send feedback too; the feedback insert policy admits a partner
+// of that provider, 20261020a).
+export default function FeedbackWidget({ org, variant = "sidebar" }) {
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState("");
   const [status, setStatus] = useState("idle"); // idle | sending | done | error
@@ -106,7 +111,7 @@ export default function FeedbackWidget({ org }) {
   return (
     <>
       {/* Sidebar button — always visible in the admin nav, never over page content */}
-      <div style={{ padding: "0 12px", marginBottom: 8 }}>
+      <div style={variant === "inline" ? { marginTop: 16 } : { padding: "0 12px", marginBottom: 8 }}>
         <button
           type="button"
           onClick={() => setOpen(true)}
@@ -116,7 +121,7 @@ export default function FeedbackWidget({ org }) {
             alignItems: "center",
             justifyContent: "center",
             gap: 8,
-            width: "100%",
+            width: variant === "inline" ? "auto" : "100%",
             boxSizing: "border-box",
             padding: "10px 14px",
             background: BRIGHT,

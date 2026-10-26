@@ -140,6 +140,12 @@ const NAV = [
     // across all four sub-routes.
     match: ["/admin/family-comms"],
   },
+  // Its own menu item, not a Settings card (Jessica 2026-10-20): it is somewhere
+  // a provider comes back to - documents going out of date, who has a partner
+  // login, who looked - not a thing configured once. Owner/admin only, the same
+  // role it had while it sat in Settings' `match` list; writes are can_admin_org
+  // in the provider_documents RLS and bucket policies either way.
+  { to: "/admin/partner-documents", label: "Partner portal", gate: "settings" },
   { to: "/admin/community", label: "Community", soon: true },
   // Settings owns Waivers as a sub-page (/admin/waivers) — keep this item lit there.
   // /admin/email-sender is in `match` so the route GUARD covers it, not just the

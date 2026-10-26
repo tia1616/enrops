@@ -23,6 +23,7 @@ import InstructorAvailabilityForm from "./InstructorAvailabilityForm.jsx";
 import AfterschoolAvailabilityForm from "./AfterschoolAvailabilityForm.jsx";
 import InstructorProfile from "./InstructorProfile.jsx";
 import ClassPhotosSection from "./ClassPhotosSection.jsx";
+import PartnerSharingCard from "./PartnerSharingCard.jsx";
 import Chevron from "../../components/Chevron.jsx";
 import WizardHost from "../onboarding/WizardHost.jsx";
 import { fetchLegalDocument } from "../../lib/legalDoc.js";
@@ -1636,6 +1637,7 @@ export default function InstructorPortal() {
           orgName={orgName}
           onBack={() => setView("schedule")}
           onSaved={refetchInstructor}
+          previewOnly={!!impersonating}
         />
       </Shell>
     );
@@ -1740,6 +1742,12 @@ export default function InstructorPortal() {
           <strong>Admin preview</strong> — you're signed in as <em>{impersonating.signedInEmail}</em> and viewing <em>{impersonating.asEmail}</em>'s portal. Accept and Request change actions will fire on this instructor's behalf.
         </div>
       )}
+      <PartnerSharingCard
+        instructorId={instructor.id ?? instructor.instructor_id}
+        organizationId={instructor.organization_id}
+        orgName={orgName}
+        previewOnly={!!impersonating}
+      />
       {/* flexWrap IS THE FIX, not a tidy-up. This row had no wrap and the button
           block below is flexShrink: 0, so on a phone the four buttons claimed the
           width and the name block — which carries minWidth: 0 — was crushed to
@@ -4687,7 +4695,7 @@ function CamperRow({ registration, contacts = [], canRecord = false, orgAsksDism
           doNotRelease={doNotRelease}
           dismissalMethod={s.dismissal_method}
           // The destination, not just the category. The roster line above already
-          // reads "Aftercare — Champions", but this is the control the instructor
+          // reads "Aftercare: Champions", but this is the control the instructor
           // actually operates, and on a phone the two are rarely on screen together.
           aftercareProvider={s.aftercare_provider}
           parent={p}

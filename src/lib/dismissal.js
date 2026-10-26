@@ -227,5 +227,9 @@ export function dismissalSummary({ dismissal_method, aftercare_provider } = {}) 
   // "Aftercare (not stated)" rather than a bare "Aftercare": on a dismissal list
   // the difference between "we know where they go" and "we don't" is the whole
   // safety question, and silence reads as the former.
-  return who ? `${label} — ${who}` : `${label} (provider not stated)`;
+  //
+  // A colon, not an em dash (2026-10-22): this line is now printed on the
+  // rosters emailed to schools, and enrops copy carries no em dashes. The Deno
+  // twin in _shared/rosterArrivalDismissal.ts must match.
+  return who ? `${label}: ${who}` : `${label} (provider not stated)`;
 }

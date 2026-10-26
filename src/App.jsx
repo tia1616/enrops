@@ -83,6 +83,10 @@ const RegistrationQuestions = lazy(() => import('./pages/admin/RegistrationQuest
 const WaiverManager = lazy(() => import('./pages/admin/WaiverManager.jsx'));
 const EmailSenderSettings = lazy(() => import('./pages/admin/EmailSenderSettings.jsx'));
 const BackgroundCheckSettings = lazy(() => import('./pages/admin/BackgroundCheckSettings.jsx'));
+const ProviderDocuments = lazy(() => import('./pages/admin/ProviderDocuments.jsx'));
+const PartnerPortal = lazy(() => import('./pages/portal/PartnerPortal.jsx'));
+const PartnerHome = lazy(() => import('./pages/partner/PartnerHome.jsx'));
+const PartnerProviderDetail = lazy(() => import('./pages/partner/PartnerProviderDetail.jsx'));
 const InstructorDocuments = lazy(() => import('./pages/admin/InstructorDocuments.jsx'));
 const TrainingSettings = lazy(() => import('./pages/admin/TrainingSettings.jsx'));
 const BrandLogoSettings = lazy(() => import('./pages/admin/BrandLogoSettings.jsx'));
@@ -216,6 +220,12 @@ export default function App() {
           behave the same now. */}
       <Route path="/" element={<EnropsLanding />} />
       <Route path="/signup" element={<OperatorSignup />} />
+      {/* The neutral partner home (spec v3 H1/H2): every provider sharing with
+          this partner, not one provider's branded page. Static segments outrank
+          /:slug, so "partner" is never read as a provider slug. Authorization is
+          the database (partner_portal_memberships + RLS), never the URL. */}
+      <Route path="/partner" element={<PartnerHome />} />
+      <Route path="/partner/:partnerId" element={<PartnerProviderDetail />} />
       <Route path="/privacy" element={<PolicyPage policyType="privacy" orgSlug="enrops" />} />
       <Route path="/terms" element={<PolicyPage policyType="terms" orgSlug="enrops" />} />
       <Route path="/acceptable-use" element={<PolicyPage policyType="acceptable-use" orgSlug="enrops" />} />
@@ -258,6 +268,12 @@ export default function App() {
             family has no account, and the token in the URL is the credential. */}
         <Route path="waitlist/:token" element={<WaitlistAccept />} />
         <Route path="login" element={<Login />} />
+        {/* The partner portal: someone at a partner signs in and sees this
+            provider's documents shown to their partner. Authorization is the
+            database (partner_portal_memberships + provider_documents RLS), not
+            the URL: a signed-in person with no grant from this provider is told
+            so and sees nothing. */}
+        <Route path="partner" element={<PartnerPortal />} />
         <Route path="dashboard" element={<Dashboard />} />
         {/* One child's pickup, dismissal and homeroom, editable any time. Its own
             route rather than a modal so the "please update your info" email can
@@ -401,6 +417,7 @@ export default function App() {
         <Route path="email-sender" element={<EmailSenderSettings />} />
         <Route path="pay-rates" element={<InstructorRoute><PayRatesSettings /></InstructorRoute>} />
         <Route path="background-checks" element={<BackgroundCheckSettings />} />
+        <Route path="partner-documents" element={<ProviderDocuments />} />
         {/* Authoring the documents instructors read and sign.
             TWO independent gates, and an earlier version of this comment wrongly
             claimed one covered both. The Settings `match` entry gates ROLE

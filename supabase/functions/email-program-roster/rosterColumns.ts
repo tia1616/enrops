@@ -65,6 +65,25 @@ export const ROSTER_COLUMNS: readonly RosterColumn[] = Object.freeze([
 ]);
 
 /**
+ * The same three plus how each child leaves (Jessica, 2026-10-22: "i need
+ * arrival/dismissal info on all the rosters we send to schools and partners").
+ * The METHOD only - aftercare and which one, released to an authorized adult,
+ * walks or bikes home - never the names of who may collect a child, which stay
+ * forbidden below. Used when the business asks the dismissal question; see
+ * _shared/rosterArrivalDismissal.ts.
+ */
+export const ROSTER_COLUMNS_WITH_DISMISSAL: readonly RosterColumn[] = Object.freeze([
+  { key: 'name', label: 'Student', width: 220 },
+  { key: 'grade', label: 'Grade', width: 52 },
+  { key: 'homeroom', label: 'Homeroom', width: 190 },
+  { key: 'dismissal', label: 'Dismissal', width: 230 },
+]);
+
+export function rosterColumns(asksDismissal: boolean): readonly RosterColumn[] {
+  return asksDismissal ? ROSTER_COLUMNS_WITH_DISMISSAL : ROSTER_COLUMNS;
+}
+
+/**
  * Column keys that must never appear on a partner roster again, with the field
  * each one came from. Named explicitly so the test fails loudly with the reason
  * rather than a bare inequality, and so anyone adding a column sees the list.

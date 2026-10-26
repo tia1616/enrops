@@ -35,6 +35,9 @@ export const FEATURE = {
   // These are the steps a COLD operator drops out of, so they are the ones the
   // activation funnel is measured on.
   ONBOARDING: 'onboarding',
+  // A host (partner contact) using the partner portal. Written in SQL by
+  // public.log_partner_portal_event() (20261022b), which uses these literals.
+  PARTNER_PORTAL: 'partner_portal',
 } as const;
 
 export const ACTION = {
@@ -61,6 +64,8 @@ export const ACTION = {
   PARTNERS_IMPORTED: 'partners_imported',
   // ennie
   ENNIE_USED: 'ennie_used',
+  // partner portal: one per host user per partner per UTC day ("host login used")
+  HOST_PORTAL_VIEWED: 'host_portal_viewed',
   // onboarding funnel — the ABANDONMENT points, which leave no row behind and so
   // cannot be reconstructed after the fact. (The completed steps are already
   // derivable: org -> organizations.onboarded_at, program -> the programs
