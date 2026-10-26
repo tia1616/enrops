@@ -89,59 +89,13 @@ export function blankDraft(type = "insurance") {
     effective_on: "",
     expires_on: "",
     no_expiry: false,
-    insurer: "",
-    policy_number: "",
-    abuse_coverage: false,
-    additional_insured: false,
-    coverage_notes: "",
-    ...blankLimits(),
   };
 }
 
-// --- Insurance limits (20261026b) -------------------------------------------
-// Four whole-dollar amounts from the certificate. The form holds them as the
-// text the person typed; parseLimit reads "1,000,000", "$1000000" or "1000000".
-export const LIMIT_FIELDS = ["gl_occurrence_limit", "gl_aggregate_limit", "abuse_occurrence_limit", "abuse_aggregate_limit"];
-
-function blankLimits() {
-  return Object.fromEntries(LIMIT_FIELDS.map((k) => [k, ""]));
-}
-
-/** Whole dollars from what was typed; null when blank; NaN when it isn't a number. */
-export function parseLimit(text) {
-  const t = String(text ?? "").trim();
-  if (!t) return null;
-  const digits = t.replace(/[$,\s]/g, "");
-  return /^\d+$/.test(digits) ? Number(digits) : NaN;
-}
-
-/** Is any abuse and molestation amount entered (draft text or saved number)? */
-export function hasAbuseAmount(rowOrDraft) {
-  const v = (k) => rowOrDraft?.[k];
-  const entered = (x) => x != null && String(x).trim() !== "";
-  return entered(v("abuse_occurrence_limit")) || entered(v("abuse_aggregate_limit"));
-}
-
-/** "$1,000,000", or "" when not entered. */
-export function formatLimit(n) {
-  return n == null || Number.isNaN(n) ? "" : `$${Number(n).toLocaleString("en-US")}`;
-}
-
-/**
- * The limits as a host reads them: "General liability: $1,000,000 per
- * occurrence, $3,000,000 aggregate". One line per coverage that has anything
- * entered; nothing when neither does.
- */
-export function limitLines(row) {
-  const line = (name, occ, agg) => {
-    const parts = [occ != null ? `${formatLimit(occ)} per occurrence` : null, agg != null ? `${formatLimit(agg)} aggregate` : null].filter(Boolean);
-    return parts.length ? `${name}: ${parts.join(", ")}` : null;
-  };
-  return [
-    line("General liability", row?.gl_occurrence_limit, row?.gl_aggregate_limit),
-    line("Abuse and molestation", row?.abuse_occurrence_limit, row?.abuse_aggregate_limit),
-  ].filter(Boolean);
-}
+// A document is the file, who it's for, and when it expires (Jessica
+// 2026-10-26, 20261026b). Nothing is typed off it: the partner reads the
+// certificate itself. received_on / effective_on stay in the table but the
+// form no longer asks for them.
 
 /** A form pre-filled from a saved row, for editing. */
 export function draftFromRow(row) {
@@ -153,12 +107,6 @@ export function draftFromRow(row) {
     effective_on: row.effective_on ?? "",
     expires_on: row.expires_on ?? "",
     no_expiry: row.doc_type !== "insurance" && !row.expires_on,
-    insurer: row.insurer ?? "",
-    policy_number: row.policy_number ?? "",
-    abuse_coverage: row.abuse_coverage === true,
-    additional_insured: row.additional_insured === true,
-    coverage_notes: row.coverage_notes ?? "",
-    ...Object.fromEntries(LIMIT_FIELDS.map((k) => [k, row[k] == null ? "" : Number(row[k]).toLocaleString("en-US")])),
   };
 }
 
@@ -175,28 +123,12 @@ export function draftProblem(draft, { hasFile }) {
   if (draft.doc_type === "insurance" && !draft.expires_on) return "Insurance needs an expiry date. It's on the certificate, usually under \"Policy exp\".";
   if (draft.doc_type !== "insurance" && !draft.no_expiry && !draft.expires_on) return "Add the expiry date, or tick \"This document doesn't expire\".";
   if (draft.effective_on && draft.expires_on && draft.expires_on < draft.effective_on) return "The expiry date is before the start date.";
-  if (draft.doc_type === "insurance") {
-    for (const k of LIMIT_FIELDS) {
-      const n = parseLimit(draft[k]);
-      if (Number.isNaN(n)) return "Coverage amounts are whole dollars, like 1,000,000.";
-      // The column is an integer; past this the database would refuse it.
-      if (n != null && n > 2147483647) return "That coverage amount is too large. Check the number of zeros.";
-    }
-    const pair = (occ, agg, name) => {
-      const o = parseLimit(draft[occ]);
-      const a = parseLimit(draft[agg]);
-      return o != null && a != null && a < o ? `The ${name} aggregate is less than the per-occurrence amount. On a certificate it's the same or higher.` : null;
-    };
-    const p = pair("gl_occurrence_limit", "gl_aggregate_limit", "general liability") ?? pair("abuse_occurrence_limit", "abuse_aggregate_limit", "abuse and molestation");
-    if (p) return p;
-  }
   return null;
 }
 
-/** The columns to write. Insurance-only fields are cleared for other types. */
+/** The columns to write. */
 export function rowFromDraft(draft) {
-  const isInsurance = draft.doc_type === "insurance";
-  const keepExpiry = isInsurance || !draft.no_expiry;
+  const keepExpiry = draft.doc_type === "insurance" || !draft.no_expiry;
   return {
     doc_type: draft.doc_type,
     title: draft.title.trim(),
@@ -204,13 +136,6 @@ export function rowFromDraft(draft) {
     received_on: draft.received_on || null,
     effective_on: draft.effective_on || null,
     expires_on: keepExpiry ? (draft.expires_on || null) : null,
-    insurer: isInsurance ? (draft.insurer.trim() || null) : null,
-    policy_number: isInsurance ? (draft.policy_number.trim() || null) : null,
-    // Entering an abuse amount IS saying the coverage is there.
-    abuse_coverage: isInsurance ? draft.abuse_coverage === true || hasAbuseAmount(draft) : null,
-    additional_insured: isInsurance ? draft.additional_insured === true : null,
-    coverage_notes: isInsurance ? (draft.coverage_notes.trim() || null) : null,
-    ...Object.fromEntries(LIMIT_FIELDS.map((k) => [k, isInsurance ? parseLimit(draft[k]) : null])),
   };
 }
 

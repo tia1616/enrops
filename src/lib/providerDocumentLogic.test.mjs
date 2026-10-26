@@ -41,15 +41,18 @@ eq('agreement with no-expiry tick is valid', draftProblem({ ...agr, no_expiry: t
 ok('expiry before start refused', draftProblem({ ...agr, effective_on: '2026-05-01', expires_on: '2026-04-01' }, { hasFile: true }) !== null);
 
 // --- what gets written --------------------------------------------------------
-const insRow = rowFromDraft({ ...ins, insurer: ' Western National ', abuse_coverage: true, partner_id: 'p1' });
-eq('insurance row keeps details', [insRow.insurer, insRow.abuse_coverage, insRow.partner_id], ['Western National', true, 'p1']);
+const insRow = rowFromDraft({ ...ins, partner_id: 'p1' });
+eq('insurance row keeps its partner', insRow.partner_id, 'p1');
 eq('every-partner is null', rowFromDraft(ins).partner_id, null);
 
-const agrRow = rowFromDraft({ ...agr, no_expiry: true, expires_on: '2027-01-01', insurer: 'stale', abuse_coverage: true });
+const agrRow = rowFromDraft({ ...agr, no_expiry: true, expires_on: '2027-01-01' });
 eq('no-expiry tick wins over a leftover date', agrRow.expires_on, null);
-eq('insurance fields cleared on other types', [agrRow.insurer, agrRow.abuse_coverage], [null, null]);
 
-// switching insurance -> agreement in the form must not keep the abuse flag
+// Jessica 2026-10-26 (20261026b): nothing is typed off a document. A saved row
+// carries only these columns, so a removed field can never creep back in.
+eq('a row is the file details, partner and dates only', Object.keys(rowFromDraft(ins)).sort(),
+  ['doc_type', 'effective_on', 'expires_on', 'partner_id', 'received_on', 'title']);
+
 eq('round trip from a saved agreement', draftFromRow({ doc_type: 'agreement', title: 'A', expires_on: null }).no_expiry, true);
 eq('a saved insurance row is never "no expiry"', draftFromRow({ doc_type: 'insurance', title: 'C', expires_on: '2027-01-17' }).no_expiry, false);
 
@@ -71,12 +74,9 @@ eq('no rows, no groups', groupByAudience([], partners), []);
 eq('status keys match private.document_expiry_status()', Object.keys(EXPIRY_STATUS).sort(), ['current', 'expired', 'expiring_soon', 'no_expiry']);
 eq('expired reads as spec v3 says', EXPIRY_STATUS.expired.label, 'Expired or Missing');
 
-// --- business license + additional insured (20261020a) ----------------------
+// --- business license (20261020a) -------------------------------------------
 eq('business license is a type', blankDraft('business_license').title, 'Business license');
 eq('license with an expiry is valid', draftProblem({ ...blankDraft('business_license'), expires_on: '2027-08-07' }, { hasFile: true }), null);
-eq('additional insured round trip', draftFromRow({ doc_type: 'insurance', title: 'C', expires_on: '2027-01-17', additional_insured: true }).additional_insured, true);
-eq('additional insured saved for insurance', rowFromDraft({ ...blankDraft('insurance'), expires_on: '2027-01-17', additional_insured: true }).additional_insured, true);
-eq('additional insured cleared for other types', rowFromDraft({ ...blankDraft('agreement'), no_expiry: true, additional_insured: true }).additional_insured, null);
 {
   const { readFileSync } = await import('node:fs');
   const sql = readFileSync(new URL('../../supabase/migrations/20261020a_partner_portal_oct30_finish.sql', import.meta.url), 'utf8');
@@ -85,33 +85,6 @@ eq('additional insured cleared for other types', rowFromDraft({ ...blankDraft('a
   eq('every document type the form offers is allowed by the table', DOC_TYPES.map((t) => t.key).sort(), dbTypes);
 }
 eq('date has no timezone shift', formatDate('2027-01-17'), 'Jan 17, 2027');
-
-// --- insurance limits (20261026b) -------------------------------------------
-{
-  const { parseLimit, formatLimit, limitLines, LIMIT_FIELDS } = await import('./providerDocumentLogic.js');
-  eq('reads 1,000,000', parseLimit('1,000,000'), 1000000);
-  eq('reads $3,000,000', parseLimit('$3,000,000'), 3000000);
-  eq('blank is not entered', parseLimit('  '), null);
-  ok('words are not a number', Number.isNaN(parseLimit('1M')));
-  eq('formats with commas', formatLimit(1000000), '$1,000,000');
-
-  const ins2 = { ...blankDraft('insurance'), expires_on: '2027-01-17', title: 'COI' };
-  eq('limits are optional', draftProblem(ins2, { hasFile: true }), null);
-  ok('a non-number limit is refused', draftProblem({ ...ins2, gl_occurrence_limit: '1M' }, { hasFile: true }) !== null);
-  ok('aggregate below per-occurrence is refused', draftProblem({ ...ins2, gl_occurrence_limit: '3,000,000', gl_aggregate_limit: '1,000,000' }, { hasFile: true }) !== null);
-  ok('a limit past the column size is refused', draftProblem({ ...ins2, abuse_aggregate_limit: '30,000,000,000' }, { hasFile: true }) !== null);
-
-  const row = rowFromDraft({ ...ins2, gl_occurrence_limit: '1,000,000', gl_aggregate_limit: '3,000,000', abuse_occurrence_limit: '1,000,000' });
-  eq('limits saved as whole dollars', [row.gl_occurrence_limit, row.gl_aggregate_limit, row.abuse_occurrence_limit, row.abuse_aggregate_limit], [1000000, 3000000, 1000000, null]);
-  eq('an abuse amount means abuse coverage', row.abuse_coverage, true);
-  const agr2 = rowFromDraft({ ...blankDraft('agreement'), title: 'A', no_expiry: true, gl_occurrence_limit: '5' });
-  ok('limits are cleared on a non-insurance document', LIMIT_FIELDS.every((k) => agr2[k] === null));
-
-  eq('round trip: a saved row edits back as typed', draftFromRow({ doc_type: 'insurance', gl_aggregate_limit: 3000000 }).gl_aggregate_limit, '3,000,000');
-  eq('host-facing lines', limitLines({ gl_occurrence_limit: 1000000, gl_aggregate_limit: 3000000, abuse_occurrence_limit: 1000000 }),
-    ['General liability: $1,000,000 per occurrence, $3,000,000 aggregate', 'Abuse and molestation: $1,000,000 per occurrence']);
-  eq('nothing entered, nothing said', limitLines({}), []);
-}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

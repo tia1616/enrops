@@ -20,7 +20,7 @@ import PartnerRequirementsSection from "./PartnerRequirementsSection.jsx";
 import { usePermissions } from "../../lib/permissions.js";
 import {
   DOC_TYPES, docTypeLabel, blankDraft, draftFromRow, draftProblem,
-  fileProblem, groupByAudience, formatDate, limitLines, hasAbuseAmount,
+  fileProblem, groupByAudience, formatDate,
 } from "../../lib/providerDocumentLogic.js";
 import {
   listProviderDocuments, listPartners, createProviderDocument, updateProviderDocument,
@@ -49,41 +49,29 @@ function secondaryBtn() {
   return { padding: "9px 16px", background: "#fff", color: INK, border: `1.5px solid ${RULE}`, borderRadius: 8, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" };
 }
 
-function expiryLine(row) {
-  if (!row.expires_on) return "Doesn't expire";
-  return row.expiry_status === "expired" ? `Expired ${formatDate(row.expires_on)}` : `Expires ${formatDate(row.expires_on)}`;
-}
+const th = { padding: "10px 14px", borderBottom: `1px solid ${RULE}`, fontWeight: 700, whiteSpace: "nowrap" };
+const td = { padding: "10px 14px", borderBottom: `1px solid ${RULE}`, verticalAlign: "middle" };
 
-function DocumentRow({ row, canManage, onOpen, onEdit, onDelete, busy }) {
-  const isInsurance = row.doc_type === "insurance";
+// One document as a table row: partner (on the group's first row only), the
+// document and its kind, status, expiry, and the actions.
+function DocumentRow({ row, partnerLabel, canManage, onOpen, onEdit, onDelete, busy }) {
   return (
-    <div style={{ display: "flex", gap: 14, alignItems: "flex-start", justifyContent: "space-between", padding: "14px 0", borderTop: `1px solid ${RULE}`, flexWrap: "wrap" }}>
-      <div style={{ minWidth: 0, flex: "1 1 260px" }}>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <span style={{ fontSize: 14.5, fontWeight: 600, color: INK }}>{row.title}</span>
-          <DocumentStatusBadge status={row.expiry_status} />
-        </div>
-        <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5 }}>
-          {docTypeLabel(row.doc_type)} · {expiryLine(row)}
-          {row.received_on ? ` · Received ${formatDate(row.received_on)}` : ""}
-        </div>
-        {isInsurance && (
-          <div style={{ fontSize: 13, color: MUTED, marginTop: 2, lineHeight: 1.5 }}>
-            {[row.insurer, row.policy_number ? `Policy ${row.policy_number}` : null, row.coverage_notes].filter(Boolean).join(" · ")}
-            {(row.insurer || row.policy_number || row.coverage_notes) ? " · " : ""}
-            {/* With amounts entered, the limits line below says it (same rule as the partner view). */}
-            {hasAbuseAmount(row) ? "" : `${row.abuse_coverage ? "Includes abuse and molestation coverage" : "Abuse and molestation coverage not marked"} · `}
-            {row.additional_insured ? "Names the partner as additional insured" : "Additional insured not marked"}
-            {limitLines(row).map((l) => <div key={l}>{l}</div>)}
-          </div>
-        )}
-      </div>
-      <div style={{ display: "flex", gap: 14, alignItems: "center", flexShrink: 0, paddingTop: 2 }}>
-        <button type="button" style={linkBtn} onClick={() => onOpen(row)} disabled={busy}>Open</button>
-        {canManage && <button type="button" style={linkBtn} onClick={() => onEdit(row)} disabled={busy}>Edit</button>}
-        {canManage && <button type="button" style={{ ...linkBtn, color: "#a13a3a" }} onClick={() => onDelete(row)} disabled={busy}>Delete</button>}
-      </div>
-    </div>
+    <tr>
+      <td style={{ ...td, fontWeight: 600, color: INK }}>{partnerLabel}</td>
+      <td style={td}>
+        <div style={{ fontWeight: 600, color: INK }}>{row.title}</div>
+        <div style={{ fontSize: 12, color: MUTED }}>{docTypeLabel(row.doc_type)}</div>
+      </td>
+      <td style={td}><DocumentStatusBadge status={row.expiry_status} /></td>
+      <td style={{ ...td, color: MUTED, whiteSpace: "nowrap" }}>{row.expires_on ? formatDate(row.expires_on) : "Doesn't expire"}</td>
+      <td style={{ ...td, whiteSpace: "nowrap", textAlign: "right" }}>
+        <span style={{ display: "inline-flex", gap: 14 }}>
+          <button type="button" style={linkBtn} onClick={() => onOpen(row)} disabled={busy}>Open</button>
+          {canManage && <button type="button" style={linkBtn} onClick={() => onEdit(row)} disabled={busy}>Edit</button>}
+          {canManage && <button type="button" style={{ ...linkBtn, color: "#a13a3a" }} onClick={() => onDelete(row)} disabled={busy}>Delete</button>}
+        </span>
+      </td>
+    </tr>
   );
 }
 
@@ -159,17 +147,6 @@ function DocumentForm({ editing, partners, onCancel, onSave }) {
       </div>
       {fileError && <div style={{ ...hint, color: "#991b1b" }}>{fileError}</div>}
 
-      <div style={{ display: "flex", gap: 12, marginTop: 16, flexWrap: "wrap" }}>
-        <div style={{ flex: "1 1 180px" }}>
-          <label style={lbl}>Received</label>
-          <input type="date" value={draft.received_on} onChange={(e) => set("received_on", e.target.value)} style={input} />
-        </div>
-        <div style={{ flex: "1 1 180px" }}>
-          <label style={lbl}>Starts</label>
-          <input type="date" value={draft.effective_on} onChange={(e) => set("effective_on", e.target.value)} style={input} />
-        </div>
-      </div>
-
       <label style={{ ...lbl, marginTop: 16 }}>Expires</label>
       <input type="date" value={draft.no_expiry ? "" : draft.expires_on} disabled={draft.no_expiry} onChange={(e) => set("expires_on", e.target.value)} style={{ ...input, opacity: draft.no_expiry ? 0.5 : 1 }} />
       {!isInsurance && (
@@ -179,69 +156,6 @@ function DocumentForm({ editing, partners, onCancel, onSave }) {
         </label>
       )}
       <div style={hint}>It's on the document. This is how partners know it's still current.</div>
-
-      {isInsurance && (
-        <div style={{ borderTop: `1px solid ${RULE}`, marginTop: 20, paddingTop: 16 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: PURPLE, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 12 }}>From the certificate</div>
-          <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13.5, color: INK, cursor: "pointer", fontWeight: 600 }}>
-            {/* An abuse amount below IS the coverage (rowFromDraft saves it as
-                true), so the box shows ticked and locked rather than letting an
-                untick be silently overridden on save. */}
-            <input
-              type="checkbox"
-              checked={draft.abuse_coverage || hasAbuseAmount(draft)}
-              disabled={hasAbuseAmount(draft)}
-              onChange={(e) => set("abuse_coverage", e.target.checked)}
-            />
-            Includes abuse and molestation coverage
-          </label>
-          <div style={hint}>
-            {hasAbuseAmount(draft)
-              ? "Ticked because abuse and molestation amounts are entered below. Clear those to untick it."
-              : "Partners working with children usually ask for this. It's listed on the certificate if you have it."}
-          </div>
-
-          <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13.5, color: INK, cursor: "pointer", fontWeight: 600, marginTop: 14 }}>
-            <input type="checkbox" checked={draft.additional_insured} onChange={(e) => set("additional_insured", e.target.checked)} />
-            Names the partner as additional insured
-          </label>
-          <div style={hint}>Tick this when the certificate lists the partner under "Additional insured".</div>
-
-          <label style={{ ...lbl, marginTop: 16 }}>Insurance company</label>
-          <input type="text" value={draft.insurer} onChange={(e) => set("insurer", e.target.value)} style={input} />
-
-          <label style={{ ...lbl, marginTop: 16 }}>Policy number</label>
-          <input type="text" value={draft.policy_number} onChange={(e) => set("policy_number", e.target.value)} style={input} />
-
-          {/* The four amounts partners see (20261026b). They replace the old
-              free-text "Coverage amounts" box: one field per fact. */}
-          <div style={{ ...lbl, marginTop: 18 }}>Coverage amounts</div>
-          <div style={hint}>As printed on the certificate. Partners see these.</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 8 }}>
-            {[
-              ["gl_occurrence_limit", "General liability, each occurrence"],
-              ["gl_aggregate_limit", "General liability, aggregate"],
-              ["abuse_occurrence_limit", "Abuse and molestation, each occurrence"],
-              ["abuse_aggregate_limit", "Abuse and molestation, aggregate"],
-            ].map(([key, label]) => (
-              <label key={key} style={{ display: "block", fontSize: 12, color: MUTED }}>
-                {label}
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={draft[key]}
-                  onChange={(e) => set(key, e.target.value)}
-                  placeholder="1,000,000"
-                  style={{ ...input, marginTop: 4 }}
-                />
-              </label>
-            ))}
-          </div>
-
-          <label style={{ ...lbl, marginTop: 16 }}>Other coverage notes</label>
-          <input type="text" value={draft.coverage_notes} onChange={(e) => set("coverage_notes", e.target.value)} placeholder="e.g. Umbrella $2,000,000" style={input} />
-        </div>
-      )}
 
       {error && <div style={{ marginTop: 16, padding: "10px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, color: "#991b1b", fontSize: 13 }}>{error}</div>}
 
@@ -358,22 +272,35 @@ export default function ProviderDocuments() {
           </div>
         </div>
       ) : (
-        groups.map((g) => (
-          <section key={g.key} style={{ marginTop: 20, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 12, padding: "16px 20px 6px" }}>
-            <h2 style={{ margin: "0 0 10px", fontSize: 15, fontWeight: 700, color: INK }}>{g.label}</h2>
-            {g.rows.map((row) => (
-              <DocumentRow
-                key={row.id}
-                row={row}
-                canManage={canManage}
-                busy={busyId === row.id}
-                onOpen={open}
-                onEdit={(r) => setForm({ editing: r })}
-                onDelete={remove}
-              />
-            ))}
-          </section>
-        ))
+        // One table (Jessica 2026-10-26: "a table"), grouped by partner: the
+        // partner's name on its first row, its documents soonest-expiring first.
+        <section style={{ marginTop: 20, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 12, overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5, minWidth: 620 }}>
+            <thead>
+              <tr style={{ textAlign: "left", color: MUTED, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.4 }}>
+                <th style={th}>Partner</th>
+                <th style={th}>Document</th>
+                <th style={th}>Status</th>
+                <th style={th}>Expires</th>
+                <th style={th} />
+              </tr>
+            </thead>
+            <tbody>
+              {groups.flatMap((g) => g.rows.map((row, i) => (
+                <DocumentRow
+                  key={row.id}
+                  row={row}
+                  partnerLabel={i === 0 ? g.label : ""}
+                  canManage={canManage}
+                  busy={busyId === row.id}
+                  onOpen={open}
+                  onEdit={(r) => setForm({ editing: r })}
+                  onDelete={remove}
+                />
+              )))}
+            </tbody>
+          </table>
+        </section>
       )}
 
       <PartnerRequirementsSection partners={partners} canManage={canManage} />

@@ -1,11 +1,16 @@
 // /partner/:partnerId - one provider's safety record, as one partner sees it
-// (spec v3 H2). Jessica 2026-10-26: "a spreadsheet". So it is ONE grid: the
-// business on the first row, one row per instructor below, one column per
-// requirement this partner has (partner_requirements_for, 20261026a). Each
-// cell is a check and a date, or the spec v3 chip word when something needs
-// attention; clicking a cell shows its full details (dates, as of, source, and
-// Open for a document) under the grid. Phones keep the same grid, name column
-// frozen, scrolled sideways like a sheet, rather than turning into cards.
+// (spec v3 H2). Two tables, the way compliance tools present it (Jessica
+// 2026-10-26: the business and the instructors in one table "is confusing"):
+//   1. Documents: one row per document this partner requires, with its status,
+//      expiry, "as of" and an Open link. The partner reads the certificate
+//      itself; nothing is typed off it (20261026b).
+//   2. Instructors: one row per instructor at this partner's sites, one column
+//      per required item. Each cell is a check and a date, or the spec v3 chip
+//      word when something needs attention, plus its "as of"; click a cell for
+//      the source and details.
+// Both tables scroll sideways on a phone, first column frozen, rather than
+// turning into cards. Only what this partner requires is shown
+// (partner_requirements_for, 20261026a).
 //
 // :partnerId is the partner row, which belongs to exactly one provider, so it
 // names both "who is looking" and "whose record". The page shows nothing unless
@@ -19,16 +24,13 @@ import { listPartnerInstructors, listPartnerRequirements, logPartnerPortalEvent 
 import { listProviderDocuments, openDocumentInNewTab } from "../../lib/providerDocuments.js";
 import {
   instructorChecklist, documentProvenance, providerSummary, requiredKeys, worstBadge, REQUIREMENTS,
-  GRID_DATE, gridCellText, instructorCellDate, businessCellDate,
+  GRID_DATE, gridCellText, instructorCellDate,
 } from "../../lib/partnerPortalLogic.js";
-import { formatDate, compareByExpiry, EXPIRY_STATUS, limitLines, hasAbuseAmount } from "../../lib/providerDocumentLogic.js";
+import { formatDate, compareByExpiry } from "../../lib/providerDocumentLogic.js";
 import { PartnerShell, PartnerSignIn, NoAccess, useMemberships, todayIso } from "./partnerShared.jsx";
 
 // Short column headers; the full names live in REQUIREMENTS for the admin screen.
 const SHORT = {
-  insurance: "Insurance",
-  partner_agreement: "Agreement",
-  business_license: "Business license",
   background_check: "Background check",
   training: "Training",
   code_of_conduct: "Code of conduct",
@@ -47,23 +49,12 @@ const CELL_TONE = {
   neutral: "bg-slate-50 text-slate-600",
 };
 
-function goodThrough(row) {
-  if (!row.expires_on) return "No expiry date";
-  return row.expiry_status === "expired" ? `Expired ${formatDate(row.expires_on)}` : `Good through ${formatDate(row.expires_on)}`;
-}
+const TH = "border-b border-j2s-ink/10 bg-white px-3 py-2 text-left text-xs font-semibold text-j2s-ink/60";
+const TD = "border-b border-j2s-ink/10 px-3 py-2 align-middle";
 
-/** The facts a host checks on a certificate, in one short line. */
-function insuranceFacts(d) {
-  return [
-    d.insurer,
-    // With an amount entered, the limits line already says it.
-    hasAbuseAmount(d) ? null : d.abuse_coverage ? "Abuse and molestation coverage (amounts not entered)" : "Abuse and molestation coverage not listed",
-    // "Other coverage notes" from the form, e.g. an umbrella policy.
-    d.coverage_notes ? `Also: ${d.coverage_notes}` : null,
-    // "Names you" is only true of a certificate made out to THIS partner; one
-    // shown to every partner may name only some.
-    !d.additional_insured ? "Additional insured not listed" : d.partner_id ? "Names you as additional insured" : "Lists additional insureds",
-  ].filter(Boolean).join(" · ");
+function expiresText(d) {
+  if (!d.expires_on) return "Doesn't expire";
+  return formatDate(d.expires_on);
 }
 
 export default function PartnerProviderDetail() {
@@ -137,8 +128,7 @@ export default function PartnerProviderDetail() {
         <p className="mt-8 text-j2s-ink/60">Loading…</p>
       ) : (
         <>
-          {/* The answer first. Each clause carries its OWN chip: one chip beside
-              "Meets 2 of 2" that came from the instructors read as a contradiction. */}
+          {/* The answer first. Each clause carries its OWN chip. */}
           <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-j2s-ink/80">
             {s.total > 0 && (
               <span className="flex items-center gap-2">
@@ -157,58 +147,86 @@ export default function PartnerProviderDetail() {
             <p className="mt-2 text-xs text-j2s-ink/50">Showing every standard requirement: your list couldn't be loaded just now.</p>
           )}
 
+          <DocumentsTable s={s} orgName={orgName} today={today} onOpen={open} />
+
           {/* Keyed on the partner: a picked cell must never carry over to
               another provider's record. */}
-          <RecordGrid
-            key={m.partner_id}
-            s={s} instructors={instructors} orgName={orgName} today={today} onOpen={open}
-          />
-
-          {s.alsoOnFile.length > 0 && (
-            <div className="mt-4 text-sm text-j2s-ink/70">
-              <span className="font-semibold text-j2s-ink/80">Also on file:</span>{" "}
-              {[...s.alsoOnFile].sort(compareByExpiry).map((d, i) => (
-                <span key={d.id}>
-                  {i > 0 && " · "}
-                  <button type="button" onClick={() => open(d)} className="text-j2s-purple hover:underline">{d.title}</button>
-                  <span className="text-j2s-ink/45"> ({DOC_TYPE_LABEL[d.doc_type] ?? "Document"})</span>
-                </span>
-              ))}
-            </div>
-          )}
+          <InstructorGrid key={m.partner_id} s={s} instructors={instructors} orgName={orgName} today={today} />
         </>
       )}
     </PartnerShell>
   );
 }
 
-// One grid: the business row, then one row per instructor; one column per
-// required item. Clicking a cell (or a name) shows its details underneath.
-function RecordGrid({ s, instructors, orgName, today, onOpen }) {
-  const businessCols = s.business.map((b) => b.key);
-  const instructorCols = s.instructors.columns;
-  const cols = [...businessCols, ...instructorCols];
-  const [picked, setPicked] = useState(null); // { kind, ... } | null
+// One row per document: the required ones (a missing one gets a row saying
+// so), then anything else shared with this partner, marked "Not required".
+function DocumentsTable({ s, orgName, today, onOpen }) {
+  const rows = [
+    ...s.business.flatMap((b) =>
+      b.docs.length
+        ? [...b.docs].sort(compareByExpiry).map((d) => ({ key: d.id, label: FULL[b.key], d, badge: null }))
+        : [{ key: b.key, label: FULL[b.key], d: null, badge: b.badge }],
+    ),
+    ...[...s.alsoOnFile].sort(compareByExpiry).map((d) => ({ key: d.id, label: DOC_TYPE_LABEL[d.doc_type] ?? "Document", d, badge: null, extra: true })),
+  ];
 
+  return (
+    <section className="mt-5 rounded-2xl bg-white shadow-card">
+      <h2 className="px-4 pt-4 text-base font-bold text-j2s-ink">Documents</h2>
+      {rows.length === 0 ? (
+        <p className="px-4 pb-4 pt-2 text-sm text-j2s-ink/70">No documents are on your list.</p>
+      ) : (
+        <div className="mt-2 overflow-x-auto">
+          <table className="min-w-full border-separate border-spacing-0 text-sm">
+            <thead>
+              <tr>
+                <th className={`${TH} sticky left-0 z-10`}>Document</th>
+                <th className={TH}>Status</th>
+                <th className={TH}>Expires</th>
+                <th className={TH}>As of</th>
+                <th className={TH} />
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map(({ key, label, d, badge, extra }) => (
+                <tr key={key}>
+                  <td className={`${TD} sticky left-0 z-10 bg-white`}>
+                    <div className="font-medium text-j2s-ink">{label}</div>
+                    {d && <div className="text-xs text-j2s-ink/50">{d.title}</div>}
+                  </td>
+                  <td className={TD}>
+                    {extra
+                      ? <span className="text-xs text-j2s-ink/50">Not required</span>
+                      : d ? <DocumentStatusBadge status={d.expiry_status} /> : <DocumentStatusBadge badge={badge} />}
+                  </td>
+                  <td className={`${TD} whitespace-nowrap text-j2s-ink/75`}>{d ? expiresText(d) : "Not on file yet"}</td>
+                  <td className={`${TD} whitespace-nowrap text-xs text-j2s-ink/50`} title={d ? documentProvenance(d, orgName) : undefined}>
+                    {d ? documentProvenance(d, orgName).split(" · ")[0] : `as of ${formatDate(today)}`}
+                  </td>
+                  <td className={`${TD} text-right`}>
+                    {d && <button type="button" onClick={() => onOpen(d)} className="font-semibold text-j2s-purple hover:underline">Open</button>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+// One row per instructor, one column per REQUIRED item. Clicking a cell shows
+// its source and details underneath.
+function InstructorGrid({ s, instructors, orgName, today }) {
+  const cols = s.instructors.columns;
+  const [picked, setPicked] = useState(null); // { id, r, line } | null
   const people = instructors.map((r) => ({ r, lines: instructorChecklist(r, orgName, today) }));
   const name = (r) => [r.first_name, r.last_name].filter(Boolean).join(" ");
-  const isPicked = (id) => picked?.id === id;
-  // The document a business cell's chip came from, so its "as of" describes
-  // that document (not an older or another one).
-  const chipDoc = (b) => {
-    const dated = businessCellDate(b);
-    return b.docs.find((d) => dated && d.expires_on === dated && EXPIRY_STATUS[d.expiry_status] === b.badge)
-      ?? b.docs.find((d) => EXPIRY_STATUS[d.expiry_status] === b.badge)
-      ?? null;
-  };
-  // Plain render helpers, NOT components: a component declared inside this
-  // function would be a new type on every render, so React would remount every
-  // cell on each click and drop the keyboard focus.
-  // Oct 30 criterion 8: every chip shows "as of" and its source. The "as of"
-  // is the cell's second line; the source shows on hover and in the details.
-  // `meta` is the provenance line ("as of {date} · Source: ..."); with none,
-  // the status is as of today.
-  const Cell = ({ id, badge, text, meta, onPick, colSpan }) => {
+
+  // A plain render helper, NOT a component: one declared inside this function
+  // would be a new type each render, remounting every cell and dropping focus.
+  const cell = ({ id, badge, text, meta, onPick, colSpan }) => {
     const full = meta || `as of ${formatDate(today)}`;
     return (
       <td key={id} colSpan={colSpan} className="border-b border-l border-j2s-ink/10 p-0">
@@ -216,8 +234,8 @@ function RecordGrid({ s, instructors, orgName, today, onOpen }) {
           type="button"
           onClick={onPick}
           title={full}
-          aria-label={badge ? `${badge.label}: ${text}, ${full}` : text}
-          className={`block w-full px-2.5 py-1.5 text-left text-xs font-medium leading-snug ${badge ? CELL_TONE[badge.tone] ?? "" : "text-j2s-ink/30"} ${isPicked(id) ? "ring-2 ring-inset ring-j2s-purple" : ""} hover:brightness-95`}
+          aria-label={`${badge.label}: ${text}, ${full}`}
+          className={`block w-full px-2.5 py-1.5 text-left text-xs font-medium leading-snug ${CELL_TONE[badge.tone] ?? ""} ${picked?.id === id ? "ring-2 ring-inset ring-j2s-purple" : ""} hover:brightness-95`}
         >
           {text}
           <span className="block text-[10px] font-normal opacity-60">{full.split(" · ")[0]}</span>
@@ -225,179 +243,79 @@ function RecordGrid({ s, instructors, orgName, today, onOpen }) {
       </td>
     );
   };
-  const Blank = (key) => <td key={key} className="border-b border-l border-j2s-ink/10 bg-white px-2.5 py-2 text-center text-xs text-j2s-ink/25">—</td>;
-  const Name = ({ id, children, onPick }) => (
-    <th scope="row" className="sticky left-0 z-10 border-b border-j2s-ink/10 bg-white p-0 text-left font-normal">
-      <button type="button" onClick={onPick} className={`block w-full min-w-[10rem] max-w-[14rem] px-3 py-2 text-left ${isPicked(id) ? "ring-2 ring-inset ring-j2s-purple" : ""}`}>
-        {children}
-      </button>
-    </th>
-  );
 
   return (
     <section className="mt-5 rounded-2xl bg-white shadow-card">
-      <div className="overflow-x-auto rounded-2xl">
-        <table className="min-w-full border-separate border-spacing-0 text-sm">
-          <thead>
-            <tr>
-              <th className="sticky left-0 z-20 border-b border-j2s-ink/10 bg-white px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-j2s-ink/50"> </th>
-              {cols.map((k) => (
-                <th key={k} className="min-w-[8.5rem] border-b border-l border-j2s-ink/10 bg-white px-2.5 py-2 text-left align-bottom">
-                  <div className="text-xs font-semibold text-j2s-ink/80">{SHORT[k]}</div>
-                  <div className="text-[10px] uppercase tracking-wide text-j2s-ink/40">{GRID_DATE[k]}</div>
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {/* The business. */}
-            <tr>
-              {Name({
-                id: "business",
-                onPick: () => setPicked({ id: "business", kind: "business" }),
-                children: (
-                  <>
-                    <div className="font-semibold text-j2s-ink">{orgName}</div>
-                    <div className="text-[11px] text-j2s-ink/50">Business</div>
-                  </>
-                ),
-              })}
-              {s.business.map((b) => Cell({
-                id: `b:${b.key}`, badge: b.badge,
-                text: b.docs.length ? gridCellText(b.badge, businessCellDate(b)) : b.badge.label,
-                meta: chipDoc(b) ? documentProvenance(chipDoc(b), orgName) : null,
-                onPick: () => setPicked({ id: `b:${b.key}`, kind: "doc", item: b }),
-              }))}
-              {instructorCols.map((k) => Blank(k))}
-            </tr>
-
-            {/* Each instructor. */}
-            {people.map(({ r, lines }) => (
-              <tr key={r.instructor_id}>
-                {Name({
-                  id: `p:${r.instructor_id}`,
-                  onPick: () => setPicked({ id: `p:${r.instructor_id}`, kind: "person", r }),
-                  children: (
-                    <>
+      <h2 className="px-4 pt-4 text-base font-bold text-j2s-ink">Instructors at your sites</h2>
+      {instructors.length === 0 ? (
+        <p className="px-4 pb-4 pt-2 text-sm text-j2s-ink/70">{orgName} hasn't assigned any instructors at your sites yet.</p>
+      ) : (
+        <>
+          <div className="mt-2 overflow-x-auto">
+            <table className="min-w-full border-separate border-spacing-0 text-sm">
+              <thead>
+                <tr>
+                  <th className={`${TH} sticky left-0 z-20`}>Instructor</th>
+                  {cols.map((k) => (
+                    <th key={k} className={`${TH} min-w-[8.5rem] border-l align-bottom`}>
+                      <div className="text-j2s-ink/80">{SHORT[k]}</div>
+                      <div className="text-[10px] font-normal uppercase tracking-wide text-j2s-ink/40">{GRID_DATE[k]}</div>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {people.map(({ r, lines }) => (
+                  <tr key={r.instructor_id}>
+                    <th scope="row" className={`${TD} sticky left-0 z-10 min-w-[10rem] max-w-[14rem] bg-white text-left font-normal`}>
                       <div className="font-semibold text-j2s-ink">{name(r)}</div>
                       <div className="text-[11px] text-j2s-ink/50">{(r.sites || []).join(", ")}</div>
-                      {/* Contact in the row itself (Jessica 10/19: partners see
-                          full names AND contact info), not only behind a click. */}
+                      {/* Contact in the row (Jessica 10/19: partners see full names AND contact info). */}
                       {r.shared && (r.email || r.phone) && (
-                        <div className="mt-0.5 text-[11px] text-j2s-purple [overflow-wrap:anywhere]">
-                          {[r.email, r.phone].filter(Boolean).join(" · ")}
-                        </div>
+                        <div className="mt-0.5 text-[11px] text-j2s-purple [overflow-wrap:anywhere]">{[r.email, r.phone].filter(Boolean).join(" · ")}</div>
                       )}
-                    </>
-                  ),
-                })}
-                {businessCols.map((k) => Blank(k))}
-                {!r.shared
-                  ? (instructorCols.length > 0 && Cell({
-                      id: `c:${r.instructor_id}`, badge: lines[0].badge, colSpan: instructorCols.length,
-                      text: lines[0].detail ? `${lines[0].badge.label}: ${lines[0].detail.charAt(0).toLowerCase()}${lines[0].detail.slice(1)}` : lines[0].badge.label,
-                      onPick: () => setPicked({ id: `c:${r.instructor_id}`, kind: "line", r, line: lines[0] }),
-                    }))
-                  : instructorCols.map((k) => {
-                    const l = lines.find((x) => x.key === k);
-                    return l ? Cell({
-                      id: `l:${r.instructor_id}:${k}`, badge: l.badge,
-                      text: gridCellText(l.badge, instructorCellDate(r, k)),
-                      meta: l.meta,
-                      onPick: () => setPicked({ id: `l:${r.instructor_id}:${k}`, kind: "line", r, line: l }),
-                    }) : Blank(k);
-                  })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      {instructors.length === 0 && (
-        <p className="px-4 pt-3 text-sm text-j2s-ink/70">{orgName} hasn't assigned any instructors at your sites yet.</p>
+                    </th>
+                    {!r.shared
+                      ? (cols.length > 0 && cell({
+                          id: `c:${r.instructor_id}`, badge: lines[0].badge, colSpan: cols.length,
+                          text: lines[0].detail ? `${lines[0].badge.label}: ${lines[0].detail.charAt(0).toLowerCase()}${lines[0].detail.slice(1)}` : lines[0].badge.label,
+                          onPick: () => setPicked({ id: `c:${r.instructor_id}`, r, line: lines[0] }),
+                        }))
+                      : cols.map((k) => {
+                        const l = lines.find((x) => x.key === k);
+                        return l ? cell({
+                          id: `l:${r.instructor_id}:${k}`, badge: l.badge,
+                          text: gridCellText(l.badge, instructorCellDate(r, k)),
+                          meta: l.meta,
+                          onPick: () => setPicked({ id: `l:${r.instructor_id}:${k}`, r, line: l }),
+                        }) : <td key={k} className="border-b border-l border-j2s-ink/10" />;
+                      })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="px-4 pb-4 pt-3">
+            {picked ? (
+              <div className="rounded-xl border border-j2s-ink/10 bg-[#FBFBFB] p-3 text-sm">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <span className="font-semibold text-j2s-ink">
+                    {name(picked.r)} · {picked.line.key === "consent" ? "Status" : FULL[picked.line.key] ?? picked.line.title}
+                  </span>
+                  <button type="button" onClick={() => setPicked(null)} className="text-xs font-semibold text-j2s-ink/50 hover:underline">Close</button>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <DocumentStatusBadge badge={picked.line.badge} />
+                  {picked.line.detail && <span className="text-j2s-ink/75">{picked.line.detail}</span>}
+                </div>
+                {picked.line.meta && <div className="mt-1 text-[11px] text-j2s-ink/45">{picked.line.meta}</div>}
+              </div>
+            ) : (
+              <p className="text-xs text-j2s-ink/50">Click any cell for where it came from.</p>
+            )}
+          </div>
+        </>
       )}
-      <div className="px-4 pb-4 pt-3">
-        {picked ? (
-          <CellDetail picked={picked} orgName={orgName} today={today} onOpen={onOpen} onClose={() => setPicked(null)} />
-        ) : (
-          <p className="text-xs text-j2s-ink/50">Click any cell for its dates, where it came from, and the document.</p>
-        )}
-      </div>
     </section>
   );
-}
-
-function CellDetail({ picked, orgName, today, onOpen, onClose }) {
-  const close = <button type="button" onClick={onClose} className="text-xs font-semibold text-j2s-ink/50 hover:underline">Close</button>;
-  const box = (title, body) => (
-    <div className="rounded-xl border border-j2s-ink/10 bg-[#FBFBFB] p-3 text-sm">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <span className="font-semibold text-j2s-ink">{title}</span>
-        {close}
-      </div>
-      {body}
-    </div>
-  );
-
-  if (picked.kind === "doc") {
-    const it = picked.item;
-    return box(FULL[it.key], it.docs.length ? (
-      <ul className="space-y-2">
-        {[...it.docs].sort(compareByExpiry).map((d) => (
-          <li key={d.id}>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="font-medium">{d.title}</span>
-              <DocumentStatusBadge status={d.expiry_status} />
-              <button type="button" onClick={() => onOpen(d)} className="font-semibold text-j2s-purple hover:underline">Open</button>
-            </div>
-            <div className="text-j2s-ink/70">{goodThrough(d)}</div>
-            {d.doc_type === "insurance" && (
-              <>
-                {limitLines(d).map((l) => <div key={l} className="text-j2s-ink/80">{l}</div>)}
-                <div className="text-xs text-j2s-ink/60">{insuranceFacts(d)}</div>
-              </>
-            )}
-            <div className="text-[11px] text-j2s-ink/45">{documentProvenance(d, orgName)}</div>
-          </li>
-        ))}
-      </ul>
-    ) : (
-      <div className="flex flex-wrap items-center gap-2">
-        <DocumentStatusBadge badge={it.badge} />
-        <span className="text-j2s-ink/70">Not on file yet · as of {formatDate(today)}</span>
-      </div>
-    ));
-  }
-
-  if (picked.kind === "line") {
-    const { r, line } = picked;
-    return box(`${[r.first_name, r.last_name].filter(Boolean).join(" ")} · ${line.key === "consent" ? "Status" : FULL[line.key] ?? line.title}`, (
-      <>
-        <div className="flex flex-wrap items-center gap-2">
-          <DocumentStatusBadge badge={line.badge} />
-          {line.detail && <span className="text-j2s-ink/75">{line.detail}</span>}
-        </div>
-        {line.meta && <div className="mt-1 text-[11px] text-j2s-ink/45">{line.meta}</div>}
-      </>
-    ));
-  }
-
-  if (picked.kind === "person") {
-    const { r } = picked;
-    return box([r.first_name, r.last_name].filter(Boolean).join(" "), (
-      <div className="text-j2s-ink/75">
-        <div>{(r.sites || []).join(", ")}</div>
-        {r.shared ? (
-          <div className="mt-1 [overflow-wrap:anywhere]">
-            {r.email && <a className="text-j2s-purple hover:underline" href={`mailto:${r.email}`}>{r.email}</a>}
-            {r.email && r.phone ? " · " : ""}
-            {r.phone && <a className="text-j2s-purple hover:underline" href={`tel:${r.phone}`}>{r.phone}</a>}
-          </div>
-        ) : <div className="mt-1 text-j2s-ink/55">Contact details show once this instructor gives permission.</div>}
-      </div>
-    ));
-  }
-
-  // The business row.
-  return box(orgName, <div className="text-j2s-ink/75">The provider's own documents are in this row. Click a cell to see each one.</div>);
 }

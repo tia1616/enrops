@@ -189,13 +189,6 @@ export function gridCellText(badge, date) {
   return badge.label;
 }
 
-/** The date a business cell shows: the document its chip came from. */
-export function businessCellDate(item) {
-  const match = (item?.docs || []).filter((d) => (EXPIRY_STATUS[d.expiry_status] ?? null) === item.badge);
-  const dated = match.map((d) => d.expires_on).filter(Boolean).sort();
-  return dated.length ? dated[0] : null;
-}
-
 // --- Partner home (spec v3 H1): one row per provider ------------------------
 
 // Worst first. A row or a cell takes its worst chip, so a partner reads red
