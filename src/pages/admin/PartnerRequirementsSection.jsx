@@ -69,7 +69,8 @@ export default function PartnerRequirementsSection({ partners, canManage }) {
         Tick what's in each partner's packet. Their portal shows and counts only these, so they're never told
         something is missing that they don't ask for.
       </p>
-      <select value={partnerId} onChange={(e) => setPartnerId(e.target.value)} style={{ ...input, maxWidth: 360 }} aria-label="Partner">
+      {/* Locked while a tick saves, so its result can't land on another partner's list. */}
+      <select value={partnerId} onChange={(e) => setPartnerId(e.target.value)} disabled={!!savingKey} style={{ ...input, maxWidth: 360 }} aria-label="Partner">
         <option value="">Choose a partner</option>
         {active.map((p) => <option key={p.id} value={p.id}>{p.partner_name}</option>)}
       </select>
