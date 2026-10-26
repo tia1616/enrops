@@ -154,7 +154,10 @@ export default function PartnerProviderDetail() {
             <p className="mt-2 text-xs text-j2s-ink/50">Showing every standard requirement: your list couldn't be loaded just now.</p>
           )}
 
+          {/* Keyed on the partner: a picked cell must never carry over to
+              another provider's record. */}
           <RecordGrid
+            key={m.partner_id}
             s={s} instructors={instructors} orgName={orgName} today={today} onOpen={open}
           />
 
@@ -187,9 +190,11 @@ function RecordGrid({ s, instructors, orgName, today, onOpen }) {
   const people = instructors.map((r) => ({ r, lines: instructorChecklist(r, orgName, today) }));
   const name = (r) => [r.first_name, r.last_name].filter(Boolean).join(" ");
   const isPicked = (id) => picked?.id === id;
-
+  // Plain render helpers, NOT components: a component declared inside this
+  // function would be a new type on every render, so React would remount every
+  // cell on each click and drop the keyboard focus.
   const Cell = ({ id, badge, text, onPick, colSpan }) => (
-    <td colSpan={colSpan} className="border-b border-l border-j2s-ink/10 p-0">
+    <td key={id} colSpan={colSpan} className="border-b border-l border-j2s-ink/10 p-0">
       <button
         type="button"
         onClick={onPick}
@@ -200,10 +205,10 @@ function RecordGrid({ s, instructors, orgName, today, onOpen }) {
       </button>
     </td>
   );
-  const Blank = () => <td className="border-b border-l border-j2s-ink/10 bg-white px-2.5 py-2 text-center text-xs text-j2s-ink/25">—</td>;
+  const Blank = (key) => <td key={key} className="border-b border-l border-j2s-ink/10 bg-white px-2.5 py-2 text-center text-xs text-j2s-ink/25">—</td>;
   const Name = ({ id, children, onPick }) => (
     <th scope="row" className="sticky left-0 z-10 border-b border-j2s-ink/10 bg-white p-0 text-left font-normal">
-      <button type="button" onClick={onPick} className={`block w-full min-w-[9.5rem] px-3 py-2 text-left ${isPicked(id) ? "ring-2 ring-inset ring-j2s-purple" : ""}`}>
+      <button type="button" onClick={onPick} className={`block w-full min-w-[10rem] max-w-[14rem] px-3 py-2 text-left ${isPicked(id) ? "ring-2 ring-inset ring-j2s-purple" : ""}`}>
         {children}
       </button>
     </th>
@@ -227,44 +232,59 @@ function RecordGrid({ s, instructors, orgName, today, onOpen }) {
           <tbody>
             {/* The business. */}
             <tr>
-              <Name id="business" onPick={() => setPicked({ id: "business", kind: "business" })}>
-                <div className="font-semibold text-j2s-ink">{orgName}</div>
-                <div className="text-[11px] text-j2s-ink/50">Business</div>
-              </Name>
-              {s.business.map((b) => (
-                <Cell
-                  key={b.key} id={`b:${b.key}`} badge={b.badge}
-                  text={b.docs.length ? gridCellText(b.badge, businessCellDate(b)) : b.badge.label}
-                  onPick={() => setPicked({ id: `b:${b.key}`, kind: "doc", item: b })}
-                />
-              ))}
-              {instructorCols.map((k) => <Blank key={k} />)}
+              {Name({
+                id: "business",
+                onPick: () => setPicked({ id: "business", kind: "business" }),
+                children: (
+                  <>
+                    <div className="font-semibold text-j2s-ink">{orgName}</div>
+                    <div className="text-[11px] text-j2s-ink/50">Business</div>
+                  </>
+                ),
+              })}
+              {s.business.map((b) => Cell({
+                id: `b:${b.key}`, badge: b.badge,
+                text: b.docs.length ? gridCellText(b.badge, businessCellDate(b)) : b.badge.label,
+                onPick: () => setPicked({ id: `b:${b.key}`, kind: "doc", item: b }),
+              }))}
+              {instructorCols.map((k) => Blank(k))}
             </tr>
 
             {/* Each instructor. */}
             {people.map(({ r, lines }) => (
               <tr key={r.instructor_id}>
-                <Name id={`p:${r.instructor_id}`} onPick={() => setPicked({ id: `p:${r.instructor_id}`, kind: "person", r })}>
-                  <div className="font-semibold text-j2s-ink">{name(r)}</div>
-                  <div className="text-[11px] text-j2s-ink/50">{(r.sites || []).join(", ")}</div>
-                </Name>
-                {businessCols.map((k) => <Blank key={k} />)}
-                {!r.shared ? (
-                  <Cell
-                    id={`c:${r.instructor_id}`} badge={lines[0].badge} colSpan={Math.max(instructorCols.length, 1)}
-                    text={`${lines[0].badge.label}: ${lines[0].detail.charAt(0).toLowerCase()}${lines[0].detail.slice(1)}`}
-                    onPick={() => setPicked({ id: `c:${r.instructor_id}`, kind: "line", r, line: lines[0] })}
-                  />
-                ) : instructorCols.map((k) => {
-                  const l = lines.find((x) => x.key === k);
-                  return l ? (
-                    <Cell
-                      key={k} id={`l:${r.instructor_id}:${k}`} badge={l.badge}
-                      text={gridCellText(l.badge, instructorCellDate(r, k))}
-                      onPick={() => setPicked({ id: `l:${r.instructor_id}:${k}`, kind: "line", r, line: l })}
-                    />
-                  ) : <Blank key={k} />;
+                {Name({
+                  id: `p:${r.instructor_id}`,
+                  onPick: () => setPicked({ id: `p:${r.instructor_id}`, kind: "person", r }),
+                  children: (
+                    <>
+                      <div className="font-semibold text-j2s-ink">{name(r)}</div>
+                      <div className="text-[11px] text-j2s-ink/50">{(r.sites || []).join(", ")}</div>
+                      {/* Contact in the row itself (Jessica 10/19: partners see
+                          full names AND contact info), not only behind a click. */}
+                      {r.shared && (r.email || r.phone) && (
+                        <div className="mt-0.5 text-[11px] text-j2s-purple [overflow-wrap:anywhere]">
+                          {[r.email, r.phone].filter(Boolean).join(" · ")}
+                        </div>
+                      )}
+                    </>
+                  ),
                 })}
+                {businessCols.map((k) => Blank(k))}
+                {!r.shared
+                  ? (instructorCols.length > 0 && Cell({
+                      id: `c:${r.instructor_id}`, badge: lines[0].badge, colSpan: instructorCols.length,
+                      text: lines[0].detail ? `${lines[0].badge.label}: ${lines[0].detail.charAt(0).toLowerCase()}${lines[0].detail.slice(1)}` : lines[0].badge.label,
+                      onPick: () => setPicked({ id: `c:${r.instructor_id}`, kind: "line", r, line: lines[0] }),
+                    }))
+                  : instructorCols.map((k) => {
+                    const l = lines.find((x) => x.key === k);
+                    return l ? Cell({
+                      id: `l:${r.instructor_id}:${k}`, badge: l.badge,
+                      text: gridCellText(l.badge, instructorCellDate(r, k)),
+                      onPick: () => setPicked({ id: `l:${r.instructor_id}:${k}`, kind: "line", r, line: l }),
+                    }) : Blank(k);
+                  })}
               </tr>
             ))}
           </tbody>
