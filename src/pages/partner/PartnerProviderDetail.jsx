@@ -16,7 +16,7 @@ import { Link, useParams } from "react-router-dom";
 import DocumentStatusBadge from "../../components/DocumentStatusBadge.jsx";
 import { listPartnerInstructors, listPartnerRequirements, logPartnerPortalEvent } from "../../lib/partnerPortal.js";
 import { listProviderDocuments, openDocumentInNewTab } from "../../lib/providerDocuments.js";
-import { instructorChecklist, documentProvenance, providerSummary, requiredKeys, REQUIREMENTS } from "../../lib/partnerPortalLogic.js";
+import { instructorChecklist, documentProvenance, providerSummary, requiredKeys, worstBadge, REQUIREMENTS } from "../../lib/partnerPortalLogic.js";
 import { formatDate, compareByExpiry } from "../../lib/providerDocumentLogic.js";
 import { PartnerShell, PartnerSignIn, NoAccess, useMemberships, todayIso } from "./partnerShared.jsx";
 
@@ -113,14 +113,20 @@ export default function PartnerProviderDetail() {
       ) : (
         <>
           {/* The answer first: does this provider meet what we require? */}
-          <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-j2s-ink/80">
-            {s.overall && <DocumentStatusBadge badge={s.overall} />}
-            <span>Meets {s.met} of {s.total} requirement{s.total === 1 ? "" : "s"}</span>
+          {/* Each clause carries its OWN chip: one chip beside "Meets 2 of 2"
+              that came from the instructors read as a contradiction. */}
+          <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-j2s-ink/80">
+            {s.total > 0 && (
+              <span className="flex items-center gap-2">
+                <DocumentStatusBadge badge={worstBadge(s.business.map((b) => b.badge))} />
+                Meets {s.met} of {s.total} requirement{s.total === 1 ? "" : "s"}
+              </span>
+            )}
             {s.instructors.total > 0 && (
-              <>
-                <span className="text-j2s-ink/30">·</span>
-                <span>{s.instructors.current} of {s.instructors.total} instructor{s.instructors.total === 1 ? "" : "s"} current</span>
-              </>
+              <span className="flex items-center gap-2">
+                <DocumentStatusBadge badge={s.instructors.badge} />
+                {s.instructors.current} of {s.instructors.total} instructor{s.instructors.total === 1 ? "" : "s"} current
+              </span>
             )}
           </div>
           {requirements === null && (
