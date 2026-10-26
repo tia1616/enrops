@@ -20,7 +20,7 @@ import PartnerRequirementsSection from "./PartnerRequirementsSection.jsx";
 import { usePermissions } from "../../lib/permissions.js";
 import {
   DOC_TYPES, docTypeLabel, blankDraft, draftFromRow, draftProblem,
-  fileProblem, groupByAudience, formatDate,
+  fileProblem, groupByAudience, formatDate, limitLines,
 } from "../../lib/providerDocumentLogic.js";
 import {
   listProviderDocuments, listPartners, createProviderDocument, updateProviderDocument,
@@ -74,6 +74,7 @@ function DocumentRow({ row, canManage, onOpen, onEdit, onDelete, busy }) {
             {row.abuse_coverage ? "Includes abuse and molestation coverage" : "Abuse and molestation coverage not marked"}
             {" · "}
             {row.additional_insured ? "Names the partner as additional insured" : "Additional insured not marked"}
+            {limitLines(row).map((l) => <div key={l}>{l}</div>)}
           </div>
         )}
       </div>
@@ -200,8 +201,33 @@ function DocumentForm({ editing, partners, onCancel, onSave }) {
           <label style={{ ...lbl, marginTop: 16 }}>Policy number</label>
           <input type="text" value={draft.policy_number} onChange={(e) => set("policy_number", e.target.value)} style={input} />
 
-          <label style={{ ...lbl, marginTop: 16 }}>Coverage amounts</label>
-          <input type="text" value={draft.coverage_notes} onChange={(e) => set("coverage_notes", e.target.value)} placeholder="e.g. $1M per incident, $3M total" style={input} />
+          {/* The four amounts partners see (20261026b). They replace the old
+              free-text "Coverage amounts" box: one field per fact. */}
+          <div style={{ ...lbl, marginTop: 18 }}>Coverage amounts</div>
+          <div style={hint}>As printed on the certificate. Partners see these.</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 8 }}>
+            {[
+              ["gl_occurrence_limit", "General liability, each occurrence"],
+              ["gl_aggregate_limit", "General liability, aggregate"],
+              ["abuse_occurrence_limit", "Abuse and molestation, each occurrence"],
+              ["abuse_aggregate_limit", "Abuse and molestation, aggregate"],
+            ].map(([key, label]) => (
+              <label key={key} style={{ display: "block", fontSize: 12, color: MUTED }}>
+                {label}
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={draft[key]}
+                  onChange={(e) => set(key, e.target.value)}
+                  placeholder="1,000,000"
+                  style={{ ...input, marginTop: 4 }}
+                />
+              </label>
+            ))}
+          </div>
+
+          <label style={{ ...lbl, marginTop: 16 }}>Other coverage notes</label>
+          <input type="text" value={draft.coverage_notes} onChange={(e) => set("coverage_notes", e.target.value)} placeholder="e.g. Umbrella $2,000,000" style={input} />
         </div>
       )}
 

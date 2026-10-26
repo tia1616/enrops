@@ -86,5 +86,32 @@ eq('additional insured cleared for other types', rowFromDraft({ ...blankDraft('a
 }
 eq('date has no timezone shift', formatDate('2027-01-17'), 'Jan 17, 2027');
 
+// --- insurance limits (20261026b) -------------------------------------------
+{
+  const { parseLimit, formatLimit, limitLines, LIMIT_FIELDS } = await import('./providerDocumentLogic.js');
+  eq('reads 1,000,000', parseLimit('1,000,000'), 1000000);
+  eq('reads $3,000,000', parseLimit('$3,000,000'), 3000000);
+  eq('blank is not entered', parseLimit('  '), null);
+  ok('words are not a number', Number.isNaN(parseLimit('1M')));
+  eq('formats with commas', formatLimit(1000000), '$1,000,000');
+
+  const ins2 = { ...blankDraft('insurance'), expires_on: '2027-01-17', title: 'COI' };
+  eq('limits are optional', draftProblem(ins2, { hasFile: true }), null);
+  ok('a non-number limit is refused', draftProblem({ ...ins2, gl_occurrence_limit: '1M' }, { hasFile: true }) !== null);
+  ok('aggregate below per-occurrence is refused', draftProblem({ ...ins2, gl_occurrence_limit: '3,000,000', gl_aggregate_limit: '1,000,000' }, { hasFile: true }) !== null);
+  ok('a limit past the column size is refused', draftProblem({ ...ins2, abuse_aggregate_limit: '30,000,000,000' }, { hasFile: true }) !== null);
+
+  const row = rowFromDraft({ ...ins2, gl_occurrence_limit: '1,000,000', gl_aggregate_limit: '3,000,000', abuse_occurrence_limit: '1,000,000' });
+  eq('limits saved as whole dollars', [row.gl_occurrence_limit, row.gl_aggregate_limit, row.abuse_occurrence_limit, row.abuse_aggregate_limit], [1000000, 3000000, 1000000, null]);
+  eq('an abuse amount means abuse coverage', row.abuse_coverage, true);
+  const agr2 = rowFromDraft({ ...blankDraft('agreement'), title: 'A', no_expiry: true, gl_occurrence_limit: '5' });
+  ok('limits are cleared on a non-insurance document', LIMIT_FIELDS.every((k) => agr2[k] === null));
+
+  eq('round trip: a saved row edits back as typed', draftFromRow({ doc_type: 'insurance', gl_aggregate_limit: 3000000 }).gl_aggregate_limit, '3,000,000');
+  eq('host-facing lines', limitLines({ gl_occurrence_limit: 1000000, gl_aggregate_limit: 3000000, abuse_occurrence_limit: 1000000 }),
+    ['General liability: $1,000,000 per occurrence, $3,000,000 aggregate', 'Abuse and molestation: $1,000,000 per occurrence']);
+  eq('nothing entered, nothing said', limitLines({}), []);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

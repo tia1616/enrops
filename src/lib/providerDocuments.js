@@ -9,7 +9,7 @@ export const DOCUMENT_BUCKET = "provider-documents";
 const SIGNED_URL_TTL = 60 * 10;
 
 const LIST_COLUMNS =
-  "id, organization_id, partner_id, doc_type, title, received_on, effective_on, expires_on, storage_path, original_filename, insurer, policy_number, abuse_coverage, additional_insured, coverage_notes, updated_at, expiry_status";
+  "id, organization_id, partner_id, doc_type, title, received_on, effective_on, expires_on, storage_path, original_filename, insurer, policy_number, abuse_coverage, additional_insured, coverage_notes, updated_at, expiry_status, gl_occurrence_limit, gl_aggregate_limit, abuse_occurrence_limit, abuse_aggregate_limit";
 
 /** Every document this provider has on file, with its expiry status. */
 export async function listProviderDocuments(orgId) {

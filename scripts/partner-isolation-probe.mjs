@@ -105,6 +105,7 @@ const DOCUMENT_FIELDS = new Set([
   'id', 'organization_id', 'partner_id', 'doc_type', 'title', 'received_on', 'effective_on',
   'expires_on', 'storage_path', 'original_filename', 'insurer', 'policy_number', 'abuse_coverage',
   'coverage_notes', 'created_by', 'created_at', 'updated_at', 'expiry_status', 'additional_insured',
+  'gl_occurrence_limit', 'gl_aggregate_limit', 'abuse_occurrence_limit', 'abuse_aggregate_limit',
 ]);
 const MEMBERSHIP_FIELDS = new Set(['partner_id', 'partner_name', 'organization_id', 'organization_name', 'organization_slug']);
 // Belt and braces on top of the allowlists: these names are never acceptable.
