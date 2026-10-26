@@ -112,21 +112,30 @@ export async function deleteProviderDocument(row) {
 /**
  * Open a document in a new tab, from a click handler. The tab is opened
  * synchronously (so the browser doesn't treat it as a popup) and cut off from
- * this page before anything loads. Resolves null on success, or a sentence for
- * the person when it couldn't open. Shared by the admin screen and the partner
- * portal.
+ * this page before anything loads. When a new tab is refused (iPhone Safari's
+ * pop-up blocker, the in-app browser of an email or social app), the file
+ * opens in this tab instead and Back returns: the person is never asked to
+ * change a browser setting. `onOpened` runs once the file is on its way, and
+ * is awaited before this page is left so it isn't cut off. Resolves null on
+ * success, or a sentence for the person when it couldn't open. Shared by the
+ * admin screen and the partner portal.
  */
-export async function openDocumentInNewTab(storagePath) {
+export async function openDocumentInNewTab(storagePath, { onOpened } = {}) {
   const tab = window.open("", "_blank");
-  if (!tab) return "Your browser blocked the new tab. Allow pop-ups for this site, then click Open again.";
-  tab.opener = null;
+  if (tab) tab.opener = null;
   try {
     const url = await signedDocumentUrl(storagePath);
     if (!url) throw new Error("no link");
-    tab.location.href = url;
+    if (tab) {
+      tab.location.href = url;
+      onOpened?.();
+    } else {
+      await onOpened?.();
+      window.location.assign(url);
+    }
     return null;
   } catch (err) {
-    tab.close();
+    tab?.close();
     return `Couldn't open that file: ${err?.message ?? "unknown error"}`;
   }
 }

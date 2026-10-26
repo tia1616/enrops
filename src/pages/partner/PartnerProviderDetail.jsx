@@ -111,9 +111,10 @@ export default function PartnerProviderDetail() {
 
   async function open(d) {
     setOpenError("");
-    const problem = await openDocumentInNewTab(d.storage_path);
-    if (problem) { setOpenError(problem); return; }
-    logPartnerPortalEvent(m.partner_id, "document_opened", d.id);
+    const problem = await openDocumentInNewTab(d.storage_path, {
+      onOpened: () => logPartnerPortalEvent(m.partner_id, "document_opened", d.id),
+    });
+    if (problem) setOpenError(problem);
   }
 
   return (
