@@ -158,7 +158,11 @@ export default function PartnerRecord() {
   };
 
   return (
-    <div style={{ maxWidth: 860, margin: "0 auto", padding: "8px 0 40px" }}>
+    // contain: the instructor grid is wider than a laptop's content column. Without
+    // it the admin layout's grid column grows to fit the table and the whole page
+    // scrolls sideways; with it the tables scroll inside their own boxes, as on
+    // the partner's portal.
+    <div style={{ maxWidth: 860, margin: "0 auto", padding: "8px 0 40px", contain: "inline-size" }}>
       <Link to="/admin/partner-documents" style={{ fontSize: 13, color: MUTED, textDecoration: "none" }}>← All partners</Link>
       <h1 style={{ margin: "8px 0 4px", color: PURPLE, fontSize: 24, fontWeight: 700 }}>{partner.partner_name}</h1>
       <p style={{ color: MUTED, fontSize: 14, marginTop: 0, lineHeight: 1.5, maxWidth: 620 }}>

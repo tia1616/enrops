@@ -101,7 +101,8 @@ export default function ProviderDocuments() {
   }
 
   return (
-    <div style={{ maxWidth: 860, margin: "0 auto", padding: "8px 0 40px" }}>
+    // contain: on a phone the table scrolls inside its box, not the whole page (see PartnerRecord).
+    <div style={{ maxWidth: 860, margin: "0 auto", padding: "8px 0 40px", contain: "inline-size" }}>
       <h1 style={{ margin: "8px 0 4px", color: PURPLE, fontSize: 24, fontWeight: 700 }}>Partner portal</h1>
       <p style={{ color: MUTED, fontSize: 14, marginTop: 0, lineHeight: 1.5, maxWidth: 620 }}>
         Each partner you work with sees your record when they log in: your insurance certificate, your agreement with
