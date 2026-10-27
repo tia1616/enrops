@@ -3,7 +3,7 @@
 // provider_documents RLS and the private provider-documents bucket.
 
 import { supabase } from "./supabase";
-import { storagePathFor, rowFromDraft } from "./providerDocumentLogic.js";
+import { storagePathFor, rowFromDraft, editPatchFromDraft } from "./providerDocumentLogic.js";
 
 export const DOCUMENT_BUCKET = "provider-documents";
 const SIGNED_URL_TTL = 60 * 10;
@@ -18,7 +18,7 @@ export async function listProviderDocuments(orgId) {
     .select(LIST_COLUMNS)
     .eq("organization_id", orgId);
   if (error) throw error;
-  return data ?? []; // ordered for display by groupByAudience
+  return data ?? []; // ordered for display by the page (compareByExpiry)
 }
 
 /**
@@ -81,9 +81,10 @@ export async function createProviderDocument(orgId, draft, file) {
  * Edit a document, optionally replacing its file. A new file is uploaded and the
  * row repointed before the old file is removed, so the row never points at
  * nothing. Removing the old file is best effort (see removeFile).
+ * The kind and the partner are never changed here (editPatchFromDraft).
  */
 export async function updateProviderDocument(row, draft, file) {
-  const patch = rowFromDraft(draft);
+  const patch = editPatchFromDraft(draft);
   let newPath = null;
   if (file) {
     newPath = await uploadFile(row.organization_id, file);

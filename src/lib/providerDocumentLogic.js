@@ -145,36 +145,20 @@ export function rowFromDraft(draft) {
   };
 }
 
+/**
+ * The columns an EDIT may write: rowFromDraft without the kind and the partner.
+ * An edit that changed them once turned two certificates into agreements and
+ * deleted the certificate files (2026-10-27); a different document is added,
+ * never made by editing another.
+ */
+export function editPatchFromDraft(draft) {
+  const { doc_type: _kind, partner_id: _partner, ...patch } = rowFromDraft(draft);
+  return patch;
+}
+
 /** Soonest expiry first; a document with no expiry date sorts last. */
 export function compareByExpiry(a, b) {
   return (a.expires_on || "9999-12-31").localeCompare(b.expires_on || "9999-12-31");
-}
-
-/**
- * Group documents by who sees them: "Every partner" first, then each partner by
- * name. A row whose partner is missing from `partners` (archived, or not loaded)
- * still appears, under a neutral label, so nothing on file is ever hidden.
- */
-export function groupByAudience(rows, partners) {
-  const names = new Map((partners || []).map((p) => [p.id, p.partner_name]));
-  const groups = new Map();
-  for (const r of rows || []) {
-    const key = r.partner_id || "all";
-    if (!groups.has(key)) {
-      groups.set(key, {
-        key,
-        label: key === "all" ? "Every partner" : (names.get(key) ?? "A partner no longer in your list"),
-        rows: [],
-      });
-    }
-    groups.get(key).rows.push(r);
-  }
-  const all = groups.get("all");
-  const rest = [...groups.values()].filter((g) => g.key !== "all").sort((a, b) => a.label.localeCompare(b.label));
-  for (const g of groups.values()) {
-    g.rows.sort(compareByExpiry);
-  }
-  return all ? [all, ...rest] : rest;
 }
 
 /** "Jan 17, 2027" from a YYYY-MM-DD date, without a timezone shift. */

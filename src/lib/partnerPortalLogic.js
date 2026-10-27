@@ -186,6 +186,26 @@ export function gridCellText(badge, date) {
   return badge.label;
 }
 
+// --- The provider's Partner portal screen: one row per partner --------------
+
+/**
+ * The partners the provider has started a portal record for: any partner with
+ * a document filed for it alone, or a login. A document shown to EVERY partner
+ * doesn't count, or all of a provider's partners (J2S has 94, mostly schools)
+ * would be listed. An archived partner stays listed while it still has a
+ * document or a login, so nothing on file is hidden. Sorted by name; the rest are
+ * reached from the "open another partner" picker.
+ */
+export function partnersInUse(partners, docs, grants) {
+  const used = new Set([
+    ...(docs || []).map((d) => d.partner_id).filter(Boolean),
+    ...(grants || []).map((g) => g.partner_id).filter(Boolean),
+  ]);
+  return (partners || [])
+    .filter((p) => used.has(p.id))
+    .sort((a, b) => (a.partner_name || "").localeCompare(b.partner_name || ""));
+}
+
 // --- Partner home (spec v3 H1): one row per provider ------------------------
 
 // Worst first. A row or a cell takes its worst chip, so a partner reads red

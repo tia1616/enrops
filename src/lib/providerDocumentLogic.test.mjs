@@ -12,7 +12,7 @@ function eq(name, actual, expected) {
 
 import {
   blankDraft, draftFromRow, draftProblem, rowFromDraft, fileProblem,
-  storagePathFor, storedExtension, groupByAudience, formatDate, EXPIRY_STATUS, DOC_TYPES,
+  storagePathFor, storedExtension, editPatchFromDraft, compareByExpiry, formatDate, EXPIRY_STATUS, DOC_TYPES,
 } from './providerDocumentLogic.js';
 
 // --- files ------------------------------------------------------------------
@@ -60,19 +60,23 @@ eq('a row is the file details, partner and dates only', Object.keys(rowFromDraft
 eq('round trip from a saved agreement', draftFromRow({ doc_type: 'agreement', title: 'A', expires_on: null }).no_expiry, true);
 eq('a saved insurance row is never "no expiry"', draftFromRow({ doc_type: 'insurance', title: 'C', expires_on: '2027-01-17' }).no_expiry, false);
 
-// --- grouping -------------------------------------------------------------------
-const partners = [{ id: 'hv', partner_name: 'Happy Valley Parks and Rec' }, { id: 'van', partner_name: 'Vancouver Parks and Rec' }];
-const rows = [
-  { id: 1, partner_id: 'van', expires_on: '2027-01-17' },
-  { id: 2, partner_id: null, expires_on: null },
-  { id: 3, partner_id: 'hv', expires_on: '2026-11-14' },
-  { id: 4, partner_id: 'hv', expires_on: '2026-10-01' },
-  { id: 5, partner_id: 'gone', expires_on: '2026-12-01' },
-];
-const g = groupByAudience(rows, partners);
-eq('every partner first, then by name, orphan kept', g.map((x) => x.label), ['Every partner', 'A partner no longer in your list', 'Happy Valley Parks and Rec', 'Vancouver Parks and Rec']);
-eq('soonest expiry first within a group', g.find((x) => x.key === 'hv').rows.map((r) => r.id), [4, 3]);
-eq('no rows, no groups', groupByAudience([], partners), []);
+// --- an edit never changes the kind or the partner (2026-10-27) -----------------
+// Editing Happy Valley's certificate with the kind switched to agreement turned
+// it into the agreement and deleted the certificate file. Even a draft that
+// says otherwise cannot move a document to another kind or partner.
+{
+  const switched = { ...blankDraft('agreement'), title: 'Partner agreement', partner_id: 'other-park', no_expiry: true };
+  const patch = editPatchFromDraft(switched);
+  ok('an edit writes no kind', !('doc_type' in patch));
+  ok('an edit writes no partner', !('partner_id' in patch));
+  eq('an edit writes the dates and name only', Object.keys(patch).sort(), ['effective_on', 'expires_on', 'received_on', 'title']);
+  eq('an edit still clears expiry on a no-expiry tick', patch.expires_on, null);
+}
+
+// --- order ----------------------------------------------------------------------
+eq('soonest expiry first, no expiry last',
+  [{ id: 1, expires_on: null }, { id: 2, expires_on: '2026-11-14' }, { id: 3, expires_on: '2026-10-01' }].sort(compareByExpiry).map((r) => r.id),
+  [3, 2, 1]);
 
 // --- words for every status the database can return ---------------------------
 eq('status keys match private.document_expiry_status()', Object.keys(EXPIRY_STATUS).sort(), ['current', 'expired', 'expiring_soon', 'no_expiry']);
