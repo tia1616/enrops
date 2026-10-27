@@ -195,10 +195,12 @@ export default function PartnerRecord() {
       )}
 
       {requirements !== undefined && (
-        <PartnerRequirementsSection key={partnerId} partner={partner} rows={requirements} canManage={canManage} onChange={setRequirements} />
+        // Keys are unique among siblings: two equal keys here once made React
+        // render this section twice.
+        <PartnerRequirementsSection key={`requirements:${partnerId}`} partner={partner} rows={requirements} canManage={canManage} onChange={setRequirements} />
       )}
 
-      <PartnerLoginsSection key={partnerId} org={org} partner={partner} canManage={canManage} onMessage={flash} />
+      <PartnerLoginsSection key={`logins:${partnerId}`} org={org} partner={partner} canManage={canManage} onMessage={flash} />
 
       {form && (
         <ModalShell title={form.editing ? "Manage document" : `Add a document for ${partner.partner_name}`} onClose={() => setForm(null)} maxWidth={560}>
