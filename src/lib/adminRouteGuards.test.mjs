@@ -90,7 +90,11 @@ const BARE_ROUTES = new Set([
   // gate "settings" in AdminLayout (owner/admin; moved out of Settings'
   // `match` list 2026-10-20), and writes are can_admin_org in the
   // provider_documents RLS and the provider-documents bucket policies.
-  'partner-documents',
+  // partner-documents/:partnerId (2026-10-27) is one partner's page under it:
+  // the same nav item's gate covers it (navItemActive matches by prefix), and
+  // its reads are the partner's own (partner_portal_instructors and
+  // partner_requirements_for allow the provider's owner/admin or members).
+  'partner-documents', 'partner-documents/:partnerId',
   // Dev + platform consoles. No nav entry by design; gated by platform_admins in
   // the UI and again in the database.
   'dev/extraction-test', 'dev/refund-watch', 'platform/operators',

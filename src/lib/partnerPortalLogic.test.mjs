@@ -168,5 +168,28 @@ eq('already-granted contacts are not offered again', contactsWithoutAccess(conta
   ok('every instructor requirement has a header date word', REQUIREMENTS.filter((r) => r.kind === 'instructor').every((r) => GRID_DATE[r.key]));
 }
 
+// --- the provider's partner list (2026-10-27) ---------------------------------
+{
+  const { partnersInUse } = await import('./partnerPortalLogic.js');
+  const partners = [
+    { id: 'wl', partner_name: 'West Linn Parks and Rec' },
+    { id: 'hv', partner_name: 'Happy Valley Parks and Rec' },
+    { id: 'school', partner_name: 'Atfalati Elementary' },
+    { id: 'old', partner_name: 'Closed Park', inactive: true },
+    { id: 'login', partner_name: 'Beaverton Parks' },
+  ];
+  const docs = [
+    { id: 1, partner_id: 'wl' }, { id: 2, partner_id: 'hv' }, { id: 3, partner_id: 'hv' },
+    { id: 4, partner_id: null }, // shown to every partner: does not list them all
+    { id: 5, partner_id: 'old' },
+  ];
+  const grants = [{ partner_id: 'login' }];
+  eq('a partner is listed for its own document or a login, by name',
+    partnersInUse(partners, docs, grants).map((p) => p.id), ['login', 'old', 'hv', 'wl']);
+  ok('an every-partner document lists no one by itself', partnersInUse(partners, [{ id: 9, partner_id: null }], []).length === 0);
+  ok('an archived partner with something on file stays listed', partnersInUse(partners, docs, []).some((p) => p.id === 'old'));
+  eq('nothing loaded, nothing listed', partnersInUse(null, null, null), []);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

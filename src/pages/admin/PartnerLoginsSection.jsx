@@ -1,5 +1,7 @@
-// "Partner logins" on /admin/partner-documents: who at each partner can sign in
-// to the partner portal and see the documents shown to that partner.
+// "Who at <partner> can log in", on that partner's page in the Partner portal
+// admin (/admin/partner-documents/:partnerId, one page per partner since
+// 2026-10-27): who at this partner can sign in to the partner portal and see
+// what's shown to them, and what they have opened.
 //
 // Access is granted to an existing partner CONTACT, so a person's name and
 // email live only on the contact (Locations). Owners and admins grant and
@@ -36,10 +38,9 @@ function primaryBtn(disabled) {
   return { padding: "9px 16px", background: BRIGHT, color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1, whiteSpace: "nowrap" };
 }
 
-export default function PartnerLoginsSection({ org, partners, canManage, onMessage }) {
+export default function PartnerLoginsSection({ org, partner, canManage, onMessage }) {
   const [grants, setGrants] = useState(null);
   const [contacts, setContacts] = useState([]);
-  const [partnerId, setPartnerId] = useState("");
   const [contactId, setContactId] = useState("");
   // Spec v3 roles. Same view on Oct 30; only an admin will record decisions.
   const [role, setRole] = useState("host_admin");
@@ -49,8 +50,8 @@ export default function PartnerLoginsSection({ org, partners, canManage, onMessa
   async function load() {
     try {
       const [g, c] = await Promise.all([listPortalAccess(org.id), listGrantableContacts(org.id)]);
-      setGrants(g);
-      setContacts(c);
+      setGrants(g.filter((x) => x.partner_id === partner.id));
+      setContacts(c.filter((x) => x.partner_id === partner.id));
       setError("");
     } catch (err) {
       setError(`Couldn't load partner logins: ${err?.message ?? "unknown error"}`);
@@ -58,24 +59,17 @@ export default function PartnerLoginsSection({ org, partners, canManage, onMessa
     }
   }
 
-  useEffect(() => { if (org?.id) load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [org?.id]);
+  useEffect(() => { if (org?.id) load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [org?.id, partner.id]);
 
   const available = useMemo(() => contactsWithoutAccess(contacts, grants), [contacts, grants]);
-  const partnersWithContacts = useMemo(() => {
-    const ids = new Set(available.map((c) => c.partner_id));
-    return partners.filter((p) => !p.inactive && ids.has(p.id));
-  }, [partners, available]);
-  const contactsForPartner = available.filter((c) => c.partner_id === partnerId);
 
   async function grant() {
     if (!contactId || busy) return;
     setBusy("grant"); setError("");
     try {
       await grantPortalAccess(org.id, contactId, role);
-      // Reset both pickers: the partner may have no ungranted contacts left,
-      // and a value missing from its options shows a wrong partner's name.
+      // Reset the picker: the person just given access leaves its options.
       setContactId("");
-      setPartnerId("");
       setRole("host_admin");
       onMessage("Access given. Send them a sign-in link when you're ready.");
       await load();
@@ -92,7 +86,7 @@ export default function PartnerLoginsSection({ org, partners, canManage, onMessa
       setError(`${row.contact?.contact_name || "This contact"} has no email address. Add one in Locations, then give them access again.`);
       return;
     }
-    if (!window.confirm(`Email a sign-in link to ${row.contact?.contact_name || email} (${email})? They'll see the documents shown to ${row.partner?.partner_name || "their partner"}.`)) return;
+    if (!window.confirm(`Email a sign-in link to ${row.contact?.contact_name || email} (${email})? They'll see what's shown to ${partner.partner_name}.`)) return;
     setBusy(row.id); setError("");
     try {
       // The function tells an owner/admin what really happened; say exactly that.
@@ -125,9 +119,9 @@ export default function PartnerLoginsSection({ org, partners, canManage, onMessa
 
   return (
     <section style={{ marginTop: 28 }}>
-      <h2 style={{ margin: "0 0 4px", fontSize: 18, fontWeight: 700, color: INK }}>Partner logins</h2>
+      <h2 style={{ margin: "0 0 4px", fontSize: 18, fontWeight: 700, color: INK }}>Who at {partner.partner_name} can log in</h2>
       <p style={{ margin: "0 0 12px", fontSize: 13.5, color: MUTED, lineHeight: 1.5, maxWidth: 600 }}>
-        Who at each partner can log in. They only see what's shared with their partner.
+        They see what's above, and nothing shown only to your other partners.
       </p>
 
       {error && <div style={{ marginBottom: 12, padding: "10px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, color: "#991b1b", fontSize: 13 }}>{error}</div>}
@@ -136,7 +130,7 @@ export default function PartnerLoginsSection({ org, partners, canManage, onMessa
         {grants === null ? (
           <div style={{ padding: "14px 0", color: MUTED, fontSize: 13 }}>Loading…</div>
         ) : grants.length === 0 ? (
-          <div style={{ padding: "14px 0", color: MUTED, fontSize: 13 }}>No one has partner access yet.</div>
+          <div style={{ padding: "14px 0", color: MUTED, fontSize: 13 }}>No one at {partner.partner_name} can log in yet.</div>
         ) : (
           grants.map((g, i) => {
             const st = accessStatus(g);
@@ -151,7 +145,7 @@ export default function PartnerLoginsSection({ org, partners, canManage, onMessa
                       past the card edge (seen on staging 2026-10-22). */}
                   <div style={{ fontSize: 14.5, fontWeight: 600, color: INK, overflowWrap: "anywhere" }}>{g.contact?.contact_name || g.contact?.contact_email}</div>
                   <div style={{ fontSize: 13, color: MUTED, marginTop: 2, overflowWrap: "anywhere" }}>
-                    {g.partner?.partner_name ?? "A partner"} · {g.contact?.contact_email} · {ROLE_LABEL[g.role] ?? "Admin"}
+                    {g.contact?.contact_email} · {ROLE_LABEL[g.role] ?? "Admin"}
                   </div>
                   <span style={{ display: "inline-block", marginTop: 6, padding: "2px 9px", borderRadius: 999, fontSize: 12, fontWeight: 600, background: t.bg, color: t.ink, border: `1px solid ${t.border}` }}>{st.label}</span>
                   {archived && <div style={{ fontSize: 12.5, color: "#92400e", marginTop: 6 }}>This partner is archived, so this person can't see anything until it's active again.</div>}
@@ -174,16 +168,10 @@ export default function PartnerLoginsSection({ org, partners, canManage, onMessa
         <div style={{ marginTop: 14, background: "#faf9ff", border: `1px solid ${RULE}`, borderRadius: 12, padding: "16px 20px" }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: INK, marginBottom: 10 }}>Give someone access</div>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
-            <div style={{ flex: "1 1 200px" }}>
-              <select value={partnerId} onChange={(e) => { setPartnerId(e.target.value); setContactId(""); }} style={input}>
-                <option value="">Choose a partner</option>
-                {partnersWithContacts.map((p) => <option key={p.id} value={p.id}>{p.partner_name}</option>)}
-              </select>
-            </div>
-            <div style={{ flex: "1 1 200px" }}>
-              <select value={contactId} onChange={(e) => setContactId(e.target.value)} style={input} disabled={!partnerId}>
-                <option value="">Choose a person</option>
-                {contactsForPartner.map((c) => <option key={c.id} value={c.id}>{c.contact_name ? `${c.contact_name} (${c.contact_email})` : c.contact_email}</option>)}
+            <div style={{ flex: "2 1 260px" }}>
+              <select value={contactId} onChange={(e) => setContactId(e.target.value)} style={input} disabled={available.length === 0} aria-label="Person">
+                <option value="">{available.length ? "Choose a person" : `No one else at ${partner.partner_name} has an email on file`}</option>
+                {available.map((c) => <option key={c.id} value={c.id}>{c.contact_name ? `${c.contact_name} (${c.contact_email})` : c.contact_email}</option>)}
               </select>
             </div>
             <div style={{ flex: "0 1 170px" }}>
@@ -203,14 +191,14 @@ export default function PartnerLoginsSection({ org, partners, canManage, onMessa
         </div>
       )}
 
-      {grants && grants.length > 0 && <PartnerActivity org={org} grants={grants} />}
+      {grants && grants.length > 0 && <PartnerActivity org={org} partner={partner} grants={grants} />}
     </section>
   );
 }
 
-// The view log: who at a partner opened the portal or a document, newest first.
-// Read straight from audit_events (append-only; owner/admin may read their own).
-function PartnerActivity({ org, grants }) {
+// The view log: who at this partner opened the portal or a document, newest
+// first. Read straight from audit_events (append-only; owner/admin may read their own).
+function PartnerActivity({ org, partner, grants }) {
   const [rows, setRows] = useState(null);
   const [failed, setFailed] = useState(false);
 
@@ -222,6 +210,7 @@ function PartnerActivity({ org, grants }) {
           .from("audit_events")
           .select("id, occurred_at, actor_user_id, partner_id, action, subject_id")
           .eq("organization_id", org.id)
+          .eq("partner_id", partner.id)
           .in("action", ["portal_viewed", "document_opened"])
           .order("occurred_at", { ascending: false })
           .limit(25),
@@ -233,29 +222,28 @@ function PartnerActivity({ org, grants }) {
       setRows((events ?? []).map((ev) => ({ ...ev, docTitle: titles.get(ev.subject_id) })));
     })();
     return () => { cancelled = true; };
-  }, [org.id, grants.length]);
+  }, [org.id, partner.id, grants.length]);
 
+  // `grants` are this partner's only, so a match is someone at this partner.
   const who = (ev) => {
-    const g = grants.find((x) => x.auth_user_id === ev.actor_user_id && x.partner_id === ev.partner_id)
-      ?? grants.find((x) => x.auth_user_id === ev.actor_user_id);
+    const g = grants.find((x) => x.auth_user_id === ev.actor_user_id);
     return g ? (g.contact?.contact_name || g.contact?.contact_email) : "Someone who no longer has access";
   };
-  const partnerName = (ev) => grants.find((x) => x.partner_id === ev.partner_id)?.partner?.partner_name ?? "a partner";
 
   return (
     <div style={{ marginTop: 18 }}>
-      <div style={{ fontSize: 14, fontWeight: 600, color: INK, marginBottom: 6 }}>Partner activity</div>
+      <div style={{ fontSize: 14, fontWeight: 600, color: INK, marginBottom: 6 }}>What they've opened</div>
       <div style={{ background: PANEL, border: `1px solid ${RULE}`, borderRadius: 12, padding: "6px 20px" }}>
         {failed ? (
           <div style={{ padding: "12px 0", color: "#991b1b", fontSize: 13 }}>Couldn't load partner activity.</div>
         ) : rows === null ? (
           <div style={{ padding: "12px 0", color: MUTED, fontSize: 13 }}>Loading…</div>
         ) : rows.length === 0 ? (
-          <div style={{ padding: "12px 0", color: MUTED, fontSize: 13 }}>No partner has opened your records yet.</div>
+          <div style={{ padding: "12px 0", color: MUTED, fontSize: 13 }}>No one at {partner.partner_name} has opened your records yet.</div>
         ) : (
           rows.map((ev, i) => (
             <div key={ev.id} style={{ padding: "10px 0", borderTop: i === 0 ? "none" : `1px solid ${RULE}`, fontSize: 13, color: INK }}>
-              <span style={{ fontWeight: 600 }}>{who(ev)}</span> ({partnerName(ev)}){" "}
+              <span style={{ fontWeight: 600 }}>{who(ev)}</span>{" "}
               {ev.action === "document_opened" ? <>opened {ev.docTitle ? `"${ev.docTitle}"` : "a document that has since been removed"}</> : "viewed your records"}
               <span style={{ color: MUTED }}> · {new Date(ev.occurred_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
             </div>

@@ -8,48 +8,18 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import DocumentStatusBadge from "../../components/DocumentStatusBadge.jsx";
 import { listPartnerInstructors, listPartnerRequirements, logPartnerPortalEvent } from "../../lib/partnerPortal.js";
 import { listProviderDocuments } from "../../lib/providerDocuments.js";
-import { providerSummary, requiredKeys, worstBadge } from "../../lib/partnerPortalLogic.js";
+import { providerSummary, requiredKeys } from "../../lib/partnerPortalLogic.js";
 import { formatDate } from "../../lib/providerDocumentLogic.js";
 import { PartnerShell, PartnerSignIn, NoAccess, useMemberships, todayIso } from "./partnerShared.jsx";
+import { RequirementsCell, InstructorsCell } from "./ProviderRecord.jsx";
 
 // Spec v3 H1 states. Accepted / Lapsed / Invited / Unknown arrive with
 // invitations and decisions (Nov 6); until then every provider sharing with a
 // partner is Pending by definition ("shared its record; no decision").
 const STATES = ["Unknown", "Invited", "Pending", "Accepted", "Lapsed"];
 
-function Chip({ badge }) {
-  return badge ? <DocumentStatusBadge badge={badge} /> : <span className="text-sm text-j2s-ink/40">None yet</span>;
-}
-
-// "2 of 2" with the worst chip among the partner's REQUIRED business items.
-function RequirementsCell({ s }) {
-  if (!s.total) return <span className="text-sm text-j2s-ink/40">None on your list</span>;
-  const worst = worstBadge(s.business.map((b) => b.badge));
-  // Name the gap, so a coordinator knows which one without opening the record.
-  const gaps = s.business.filter((b) => b.badge.tone !== "good" && b.badge.tone !== "warn").map((b) => b.label);
-  return (
-    <div>
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-j2s-ink/80">{s.met} of {s.total} met</span>
-        <Chip badge={worst} />
-      </div>
-      {gaps.length > 0 && <div className="mt-0.5 text-xs text-j2s-ink/55">Needs: {gaps.join(", ")}</div>}
-    </div>
-  );
-}
-
-function InstructorsCell({ s }) {
-  if (!s.instructors.total) return <span className="text-sm text-j2s-ink/40">None assigned yet</span>;
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      <span className="text-j2s-ink/80">{s.instructors.current} of {s.instructors.total} current</span>
-      <Chip badge={s.instructors.badge} />
-    </div>
-  );
-}
 export default function PartnerHome() {
   const { user, authLoading, signOut, memberships, error } = useMemberships();
   const [rows, setRows] = useState(null); // [{ m, summary }] | null
