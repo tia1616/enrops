@@ -204,6 +204,61 @@ const ARRIVAL_BUFFER_MIN = 15;
 // commuting, might not be possible unless they're close together."
 const TRAVEL_GAP_WARN_MIN = 60;
 
+// One column list for both availability reads (the full load and the quiet
+// refresh when the picker opens), so a column added to one cannot go missing
+// from the other. camp_availability is { [program_id]: true | false } - the
+// survey's "can you work this camp" answers, the same field the matcher reads.
+const AVAILABILITY_COLUMNS = "instructor_id, weekday_availability, max_days, needs_confirmation, notes, submitted_at, unavailable_dates, camp_availability";
+
+// Every live assignment the org's instructors hold in OTHER terms, with those
+// classes' session dates. The database refuses a double-booking across terms
+// when the two classes share a date (check_program_assignment_conflict,
+// 20261027a); without this the picker offered that instructor and the save
+// failed with a raw error. Only a DATED pair can clash across terms, so a class
+// with no dates is loaded but never blocks (coincidence() says "no").
+//
+// Paged, because years of assignments pass PostgREST's 1000-row cap without an
+// error. FAILS SOFT: a failed read leaves the board as it was before this
+// existed - the trigger is still the guard, it just speaks in a banner.
+// derive_program_session_dates_bulk is a POST body, so no URL ceiling on ids.
+async function loadOtherTermCommitments(orgId, currentTerm) {
+  const empty = { programs: [], assignments: [], dates: {} };
+  const rows = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabase
+      .from("program_assignments")
+      .select("id, program_id, instructor_id, status, programs!inner(id, term, status, curriculum, day_of_week, class_days, start_time, end_time, program_location_id, first_session_date, end_date)")
+      .eq("organization_id", orgId)
+      .not("status", "in", '("withdrawn","declined")')
+      .neq("programs.term", currentTerm)
+      .neq("programs.status", "cancelled")
+      .order("id")
+      .range(from, from + 999);
+    if (error) {
+      console.warn("[AfterschoolSchedule] other-term commitments failed:", error.message);
+      return empty;
+    }
+    rows.push(...(data ?? []));
+    if ((data ?? []).length < 1000) break;
+  }
+  const progs = new Map();
+  for (const r of rows) if (r.programs) progs.set(r.programs.id, { ...r.programs, _otherTerm: true });
+  const dates = {};
+  if (progs.size) {
+    const { data: dRows, error: dErr } = await supabase
+      .rpc("derive_program_session_dates_bulk", { p_program_ids: [...progs.keys()] });
+    if (dErr) console.warn("[AfterschoolSchedule] other-term dates failed:", dErr.message);
+    for (const row of dRows ?? []) {
+      if (row?.program_id && Array.isArray(row.session_dates)) dates[row.program_id] = row.session_dates;
+    }
+  }
+  return {
+    programs: [...progs.values()],
+    assignments: rows.map((r) => ({ program_id: r.program_id, instructor_id: r.instructor_id, status: r.status })),
+    dates,
+  };
+}
+
 // Upper bound on a per-class gas bonus. Generous for a drive; mainly it stops a
 // fat-fingered figure overflowing distance_bonus_cents, which is a 4-byte integer.
 const MAX_BONUS_DOLLARS = 10000;
@@ -474,6 +529,13 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       // was re-planned once per class. Waving the queue down was a real but
       // secondary win; the actual fix is in
       // supabase/migrations/20260907d_derive_program_session_dates_bulk.sql.
+      // Started now, awaited after wave 2: it needs only org + term.
+      // .catch here, not at the await: if wave 1 throws first, a rejection would
+      // otherwise go unhandled. A failure is the same as an empty answer.
+      const otherTermPromise = loadOtherTermCommitments(org.id, term).catch((e) => {
+        console.warn("[AfterschoolSchedule] other-term commitments failed:", e?.message);
+        return { programs: [], assignments: [], dates: {} };
+      });
       const [progRes, locRes, instRes, availRes, surveyRes, areaPrefRes, cycleRes, cfgRes,
              savedSurveyIntro, savedOfferIntro] = await Promise.all([
         supabase
@@ -516,7 +578,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           .order("first_name", { ascending: true }),
         supabase
           .from("instructor_term_availability")
-          .select("instructor_id, weekday_availability, max_days, needs_confirmation, notes, submitted_at, unavailable_dates")
+          .select(AVAILABILITY_COLUMNS)
           .eq("organization_id", org.id)
           .eq("term", term),
         supabase
@@ -739,11 +801,17 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
           programDates[row.program_id] = row.session_dates;
         }
       }
+      // Kept OUT of programDates: the week rail counts every key in that map, so
+      // merging another term's dates would draw its weeks on this term's rail.
+      const otherTerm = await otherTermPromise;
 
       setState({
         status: "ready",
         programs,
         assignments,
+        otherTermPrograms: otherTerm.programs,
+        otherTermAssignments: otherTerm.assignments,
+        otherTermDates: otherTerm.dates,
         substitutions,
         declines,
         programDates,
@@ -1048,11 +1116,13 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   // overwrote the rest, which made the double-book check (and the max-days count)
   // arbitrary for anyone with two same-day classes. Status is kept so the UI can tell a
   // real commitment from a matcher draft ('proposed') instead of claiming "already teaches".
+  // Includes OTHER terms' assignments too: coincidence() lets one block only when
+  // the two provably share a session date, which is the database's rule.
   const committedDays = useMemo(() => {
     const m = new Map();
     if (state.status !== "ready") return m;
-    const progById = new Map(state.programs.map((p) => [p.id, p]));
-    for (const a of state.assignments) {
+    const progById = new Map([...state.programs, ...(state.otherTermPrograms ?? [])].map((p) => [p.id, p]));
+    for (const a of [...state.assignments, ...(state.otherTermAssignments ?? [])]) {
       if (a.status === "withdrawn" || a.status === "declined" || !a.instructor_id) continue;
       const p = progById.get(a.program_id);
       if (!p) continue;
@@ -1071,12 +1141,24 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     return m;
   }, [state]);
 
+  // instructor_id -> { classes, camps, days }. Camps are counted APART: they do
+  // not spend max_days (see evaluate), so folding them into the "n / max days"
+  // chip read "4 / 2 (full)" for someone with two classes and two break camps -
+  // a cap the picker itself no longer enforces. "full" is judged on distinct
+  // after-school weekdays, the unit max_days is in.
   const loadCount = useMemo(() => {
     const m = new Map();
     if (state.status !== "ready") return m;
+    const progById = new Map(state.programs.map((p) => [p.id, p]));
     for (const a of state.assignments) {
       if (a.status === "withdrawn" || a.status === "declined" || !a.instructor_id) continue;
-      m.set(a.instructor_id, (m.get(a.instructor_id) ?? 0) + 1);
+      if (!m.has(a.instructor_id)) m.set(a.instructor_id, { classes: 0, camps: 0, days: new Set() });
+      const row = m.get(a.instructor_id);
+      const p = progById.get(a.program_id);
+      if (p && isCampProgram(p)) { row.camps += 1; continue; }
+      row.classes += 1;
+      const code = p ? DAY_TO_CODE[dayKey(p.day_of_week)] : null;
+      if (code) row.days.add(code);
     }
     return m;
   }, [state]);
@@ -1094,20 +1176,17 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       if (a.status === "withdrawn" || a.status === "declined" || !a.instructor_id) continue;
       const p = progById.get(a.program_id);
       if (!p) continue;
-      // A four-day camp costs FOUR of an instructor's days, not one. Counting it
-      // as a single Monday let someone blow through their stated max_days while
-      // the board reported them well inside it.
-      //
       // Each day is kept WITH the program it came from, because max_days is a
-      // per-week cap and a camp occupies one week. Summing a December camp into
-      // the same total as a February class would refuse an assignment on the
-      // strength of days the instructor is not working that week; evaluate()
-      // narrows to the weeks that actually overlap the target.
+      // per-week cap; evaluate() narrows to the weeks that actually overlap the
+      // target. isCamp rides along because camp days do not count towards the
+      // cap at all (see the max_days block in evaluate) - every reader filters
+      // on it rather than this map silently dropping them.
+      const isCamp = isCampProgram(p);
       for (const day of programWeekdays(p)) {
         const code = DAY_TO_CODE[day];
         if (!code) continue;
         if (!m.has(a.instructor_id)) m.set(a.instructor_id, []);
-        m.get(a.instructor_id).push({ code, program_id: a.program_id });
+        m.get(a.instructor_id).push({ code, program_id: a.program_id, isCamp });
       }
     }
     return m;
@@ -1205,9 +1284,9 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   // direction here. Do not read this as fail-closed: the guard that keeps the
   // old weekday-only behaviour is the two-weekly-classes short-circuit, not the
   // unknown case.
-  const datesOf = (id) => state.programDates?.[id] ?? null;
+  const datesOf = (id) => state.programDates?.[id] ?? state.otherTermDates?.[id] ?? null;
   const progByIdAll = useMemo(
-    () => new Map((state.status === "ready" ? state.programs : []).map((p) => [p.id, p])),
+    () => new Map((state.status === "ready" ? [...state.programs, ...(state.otherTermPrograms ?? [])] : []).map((p) => [p.id, p])),
     [state],
   );
 
@@ -1226,10 +1305,27 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   // and the operator gets told, instead of being refused with no override.
   function coincidence(program, otherId, granularity) {
     const other = progByIdAll.get(otherId);
+    // BOTH DATED: THE DATES DECIDE, for the double-booking check. This is what
+    // check_program_assignment_conflict() does since 20261027a, camps and weekly
+    // classes alike - two break camps months apart both say "Monday 9-3" and
+    // never meet. Without it this board refused a pairing the database and the
+    // matcher both allow. The "week" granularity (the max_days cap) keeps its
+    // own rules below.
+    if (granularity === "date") {
+      const da = datesOf(program.id), db = datesOf(otherId);
+      if (da?.length && db?.length) {
+        const set = new Set(da);
+        return db.some((d) => set.has(d)) ? "yes" : "no";
+      }
+    }
+    // Another term's class, not provably on a shared date: never a clash. Only
+    // a dated pair (above) can collide across terms - the database's rule 4.
+    if (other?._otherTerm) return "no";
     if (!isCampProgram(program) && !(other && isCampProgram(other))) return "yes";
-    // THE DATABASE IS STILL DAY_OF_WEEK ONLY. check_program_assignment_conflict()
-    // compares lower(btrim(day_of_week)) and never reads class_days or dates, so
-    // when the two rows carry the SAME day_of_week string and their times overlap
+    // NOT BOTH DATED: THE DATABASE FALLS BACK TO DAY_OF_WEEK. With either side
+    // undated, check_program_assignment_conflict() compares
+    // lower(btrim(day_of_week)) for two classes in the same term (and this board
+    // never loads another term), so when the two rows carry the SAME day_of_week string and their times overlap
     // the insert is refused whatever this board thinks. Treat that as a clash, or
     // the board offers an assignment the save then rejects with a raw error -
     // exactly what the note above the double-booking block warns against.
@@ -1311,7 +1407,35 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     // anyway". The physics blocks — a class with no time, a real time overlap, the
     // max-days cap the instructor set — do NOT, and stay hard. (Jessica, 2026-08-18:
     // override day/time mismatch and missing-survey; keep double-booking and max-days.)
-    if (!av || !Object.values(wd).some((w) => w && w.from)) {
+    // A CAMP IS ASKED BY NAME, NOT BY WEEKDAY. The survey asks "can you work
+    // this camp?" (camp_availability), and that answer is what the matcher
+    // staffs camps from. The weekday hours below are an after-school answer -
+    // "Mondays from 1:00" says nothing about a 9-3 break camp - so judging a camp
+    // by them told the operator "hours don't cover this" about someone who had
+    // said yes to that exact camp (Jessica, 2026-10-27). For a camp: yes =
+    // available, and the weekday-hours checks are skipped; no or never asked =
+    // overridable, since the operator may know better. Only an explicit true
+    // counts, exactly as in the matcher - a camp added after they answered was
+    // never put to them.
+    const isCamp = isCampProgram(program);
+    if (isCamp) {
+      const ca = av?.camp_availability;
+      const answer = ca && typeof ca === "object" && !Array.isArray(ca) ? ca[program.id] : undefined;
+      if (answer === false) {
+        return { ok: false, overridable: true, blockKind: "camp_no", reason: `${first} said they can't work this camp.`, warnings };
+      }
+      if (answer !== true) {
+        return {
+          ok: false,
+          overridable: true,
+          blockKind: "camp_not_asked",
+          reason: av?.submitted_at
+            ? `${first} hasn't said whether they can work this camp.`
+            : `${first} hasn't submitted availability for this term.`,
+          warnings,
+        };
+      }
+    } else if (!av || !Object.values(wd).some((w) => w && w.from)) {
       return { ok: false, overridable: true, blockKind: "no_survey", reason: `${first} hasn't submitted availability for this term.`, warnings };
     }
     // FAIL CLOSED when this board cannot tell which day the program meets - a
@@ -1332,7 +1456,8 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     // A camp needs them free on EVERY day it runs, so the first day they cannot
     // do blocks it and is the day named. One unavailable day in the middle of a
     // run is still a camp they cannot take.
-    const offCode = dayCodes.find((c) => !wd[c] || !wd[c].from);
+    // Not for a camp: they said yes to it by name, above.
+    const offCode = isCamp ? null : dayCodes.find((c) => !wd[c] || !wd[c].from);
     if (offCode) {
       // A weekend day is only asked when the term has a program on it, so an
       // instructor who answered before a Saturday class was added was never
@@ -1351,7 +1476,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     // Same shape for hours: a camp runs the same clock time every day, so each of
     // its days has to be covered. A camp is usually 9-3, which is exactly the kind
     // of span an after-school instructor's stated hours will not cover on some days.
-    const badHoursCode = dayCodes.find((c) => {
+    const badHoursCode = isCamp ? null : dayCodes.find((c) => {
       const a = wd[c];
       const f = parseHHMM(a.from), u = a.until ? parseHHMM(a.until) : null;
       return f == null || start - ARRIVAL_BUFFER_MIN < f || (u != null && end > u);
@@ -1395,9 +1520,17 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     );
     if (sameDayOthers.length) {
       const describe = (c) => {
-        const op = state.programs.find((p) => p.id === c.program_id);
+        const op = progByIdAll.get(c.program_id);
         const nm = op?.curriculum || "another class";
         const where = op?.program_location_id ? locName.get(op.program_location_id) : null;
+        // Another term's class is named with its term and the first date the two
+        // share, so the operator can find it - it is not on this board.
+        if (op?._otherTerm) {
+          const mine = new Set(datesOf(program.id) ?? []);
+          const shared = (datesOf(op.id) ?? []).find((d) => mine.has(d));
+          const when = shared ? ` on ${shortDate(shared)}` : "";
+          return `${where ? `${nm} at ${where}` : nm} (${termDisplayName(op.term)}${when})`;
+        }
         return where ? `${nm} at ${where}` : nm;
       };
       // One entry per clashing PROGRAM, however many of its days clash. A Mon-Thu
@@ -1425,7 +1558,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       // kept in step with the DB trigger. An unseeable program passes null times,
       // which classifyOther reads as unknown -> fail-closed conflict.
       const others = sameDayOthers.map((c) => {
-        const op = state.programs.find((p) => p.id === c.program_id) || null;
+        const op = progByIdAll.get(c.program_id) || null;
         const cls = classifyOther(
           { start, end, loc: program.program_location_id ?? null },
           {
@@ -1508,19 +1641,22 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     // Max-days cap. Counts DISTINCT WEEKDAYS including the day this class would add —
     // not assignments. A second class on a day they already work costs no extra day,
     // which is the whole point of allowing back-to-back at one school.
-    if (av.max_days != null) {
+    // CAMP DAYS DO NOT COUNT TOWARDS max_days (Jessica, 2026-10-01, and again
+    // 2026-10-27: "don't count"). max_days is the cap on a normal after-school
+    // teaching week; a break camp runs when those classes do not, and the
+    // instructor said yes to it by name. The matcher has applied this since
+    // 10/01; the board still charged a Mon-Thu camp four days, so the two
+    // disagreed about who was "full". So: a camp is never refused on the cap,
+    // and a camp someone already holds never fills it for a class.
+    if (av.max_days != null && !isCamp) {
       // max_days is a per-WEEK cap, so only days the instructor works in a week
-      // this program actually runs count towards it. A camp week and a term week
-      // are different weeks; summing them would refuse an assignment on days they
-      // are not working alongside it.
+      // this program actually runs count towards it.
       const days = new Set(
         (daysUsed.get(instructorId) ?? [])
+          .filter((u) => !u.isCamp)
           .filter((u) => u.program_id === program.id || coincidence(program, u.program_id, "week") !== "no")
           .map((u) => u.code),
       );
-      // Every day the program would add. A Mon-Thu camp costs four days against
-      // the cap; counting it as one let an instructor be booked past a limit they
-      // set themselves while the board said they were inside it.
       for (const c of dayCodes) days.add(c);
       if (days.size > av.max_days) {
         // A workload cap the instructor set — asking them to work more days than they
@@ -1533,7 +1669,10 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     // function now, so every early return carries them too. See the block comment
     // there before adding anything here.
     if (av.needs_confirmation) warnings.push(`${first}'s availability is unconfirmed.`);
-    return { ok: true, reason: null, pref, warnings, areaWarningText };
+    // campYes: an eligible camp row is eligible BECAUSE they said yes to it by
+    // name (anyone else returned above), and the picker labels it so the
+    // operator does not have to check the Availability tab.
+    return { ok: true, reason: null, pref, warnings, areaWarningText, campYes: isCamp };
   }
 
   function matchesFilters(p) {
@@ -2521,7 +2660,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   async function refreshAvailabilityQuiet() {
     if (!org?.id || !term) return;
     const [availRes, areaPrefRes] = await Promise.all([
-      supabase.from("instructor_term_availability").select("instructor_id, weekday_availability, max_days, needs_confirmation, notes, submitted_at, unavailable_dates").eq("organization_id", org.id).eq("term", term),
+      supabase.from("instructor_term_availability").select(AVAILABILITY_COLUMNS).eq("organization_id", org.id).eq("term", term),
       supabase.from("instructor_term_area_preferences").select("instructor_id, area, preference").eq("organization_id", org.id).eq("term", term),
     ]);
     setState((s) => (s.status === "ready" ? { ...s, availability: availRes.data ?? s.availability, areaPrefs: areaPrefRes.data ?? s.areaPrefs } : s));
@@ -3507,20 +3646,23 @@ function InstructorLoadStrip({ instructors, loadCount, availByInstr, selectedIns
   const rows = instructors.map((i) => {
     const av = availByInstr.get(i.id);
     const submitted = av && Object.values(av.weekday_availability || {}).some((w) => w && w.from);
+    const load = loadCount.get(i.id);
     return {
       id: i.id,
       name: (i.preferred_name || i.first_name) + (i.last_name ? ` ${i.last_name}` : ""),
-      n: loadCount.get(i.id) ?? 0,
+      n: load?.classes ?? 0,
+      camps: load?.camps ?? 0,
+      days: load?.days.size ?? 0,
       cap: av?.max_days ?? null,
       submitted,
     };
-  }).sort((a, b) => b.n - a.n || a.name.localeCompare(b.name));
+  }).sort((a, b) => (b.n + b.camps) - (a.n + a.camps) || a.name.localeCompare(b.name));
   if (rows.length === 0) return null;
   return (
     <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: "10px 14px", display: "flex", gap: 7, flexWrap: "wrap", alignItems: "center" }}>
       <span style={{ fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, color: MUTED, fontWeight: 700, marginRight: 4 }}>Instructor load <span style={{ fontWeight: 500, textTransform: "none", letterSpacing: 0 }}>· tap to filter</span></span>
       {rows.map((r) => {
-        const full = r.cap != null && r.n >= r.cap;
+        const full = r.cap != null && r.days >= r.cap;
         const active = selectedInstructors?.has(r.id);
         return (
           <button
@@ -3537,7 +3679,9 @@ function InstructorLoadStrip({ instructors, loadCount, availByInstr, selectedIns
             {r.name}
             <span style={{ color: MUTED, fontWeight: 500 }}>
               {" · "}
-              {r.submitted ? `${r.n}${r.cap != null ? ` / ${r.cap}${full ? " (full)" : ""}` : ""}` : "no availability yet"}
+              {r.submitted
+                ? `${r.n}${r.cap != null ? ` / ${r.cap}${full ? " (full)" : ""}` : ""}${r.camps ? ` + ${r.camps} ${r.camps === 1 ? "camp" : "camps"}` : ""}`
+                : "no availability yet"}
             </span>
           </button>
         );
@@ -4132,9 +4276,10 @@ function PickerModal({ program, loc, current, instructors, evaluate, onAssign, o
               <span style={{ fontSize: 14, color: INK, fontWeight: 600 }}>{inst.preferred_name || inst.first_name} {inst.last_name}</span>
               <ReasonLines warnings={ev.warnings} />
             </span>
-            {(ev.pref === "preferred" || ev.pref === "highly_preferred") && (
+            {(ev.campYes || ev.pref === "preferred" || ev.pref === "highly_preferred") && (
               <span style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
-                <Tag color={OK_GREEN}>Prefers this area</Tag>
+                {ev.campYes && <Tag color={OK_GREEN}>Said yes to this camp</Tag>}
+                {(ev.pref === "preferred" || ev.pref === "highly_preferred") && <Tag color={OK_GREEN}>Prefers this area</Tag>}
               </span>
             )}
           </button>
