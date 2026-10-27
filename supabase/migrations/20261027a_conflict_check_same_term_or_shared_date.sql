@@ -1,5 +1,6 @@
--- A class in another term only blocks its instructor if the two actually meet
--- on the same date.
+-- An instructor is double-booked only when two classes provably meet on the
+-- same date at overlapping times. Weekday + time is the fallback for when the
+-- dates are not known yet.
 --
 -- Found on PROD 2026-10-27, reported by Jessica as "why won't enrops match
 -- instructors for me". Match remaining on Winter 2027 failed outright with
@@ -10,42 +11,51 @@
 -- only, and because the matcher inserts every proposed row in ONE statement,
 -- one rejected row failed all 52.
 --
--- The check never looked at term or dates, so every live fall class reserved
--- its instructor's weekday slot in EVERY later term, forever. On prod that was
--- 32 fall classes across 8 instructors at the time of the fix. Neither the
--- matcher nor the board could see it: both load ONE term's programs and
--- assignments, so they offered the assignment and the save refused it.
+-- The same weekday-only test was wrong INSIDE a term too, found on staging the
+-- same day while proving the fix: every camp carries day_of_week = its first
+-- day, so a Dec 21-23 winter break camp and a Feb 15-19 mid-winter break camp
+-- are both "Monday 9-3" and the trigger refused one instructor for both. J2S
+-- runs three break-camp weeks a year (winter, mid-winter, spring); anyone
+-- staffing two of them in one term was refused.
 --
 -- THE RULE NOW:
---   - SAME TERM: unchanged. Weekday + time overlap is a conflict, dates or no
---     dates. Staffing happens before a term's dates are set (most WI27 classes
---     had none on staging), so demanding a date match here would drop the
---     double-booking guard the board has always relied on.
---   - DIFFERENT TERM: a conflict only when derive_program_session_dates() for
---     both classes returns dates and they share at least one. This is the
---     same "provably meet" test the board's coincidence() uses for camps.
+--   1. The two must share a weekday (a camp occupies every day in class_days)
+--      and overlap in time, with the untrusted-time fail-closed branch as before.
+--   2. BOTH DATED: derive_program_session_dates() decides - a conflict only if
+--      they share a session date. Same term or not. Closures are already in
+--      those dates, so a class that skips break week does not clash with the
+--      break camp, and one that still meets that week does.
+--   3. NOT BOTH DATED, SAME TERM: the old rule, day_of_week + time. Staffing
+--      happens before a term's dates are set, so this keeps the double-booking
+--      guard the board has always relied on.
+--   4. NOT BOTH DATED, DIFFERENT TERM: not a conflict (Jessica: "only compare
+--      same-term classes"). The board and the matcher never loaded another
+--      term anyway.
 --
 -- BEFORE / AFTER / LOST (this narrows a guard):
---   LOST: a cross-term pair where either side has no dates yet. Those no longer
---   block. That is deliberate and is what Jessica approved ("only compare
---   same-term classes"); it also matches what the board and the matcher have
---   always done, since neither ever loaded another term.
---   KEPT, beyond the bare same-term rule: terms DO overlap at the edges (a WI27
---   Tuesday class starting 2/2 for 8 weeks runs into late March; SP27 classes
---   start 3/3). A pure term filter would silently allow that real double
---   booking, which this trigger blocks today. The shared-date test keeps it.
+--   LOST: (a) cross-term pairs where either side is undated; (b) same-term dated
+--   pairs on the same weekday+time that never meet on a date - two break camps,
+--   or a short class and a late-starting one. Both are the fix.
+--   GAINED: a dated camp is now checked on EVERY day it runs, not only the day
+--   its day_of_week names - a Mon-Fri break camp against a Wednesday class that
+--   still meets that week used to pass here.
+--   KEPT: terms overlap at the edges (a WI27 class starting 2/2 for 8 weeks runs
+--   into late March; SP27 starts 3/3) - a shared date still blocks across terms.
+--
+-- UPDATES THAT DO NOT MOVE THE ASSIGNMENT ARE NOT RE-CHECKED. The trigger fires
+-- on every UPDATE, including reminder_sent_at, flagged_reason and pay writes. A
+-- row is checked when it is created and whenever its instructor, class or
+-- status changes; re-judging it because a reminder went out could only ever
+-- fail a reminder or a payout, never protect anyone. It also keeps the date
+-- walk off those hot paths.
 --
 -- derive_program_session_dates is SECURITY INVOKER and STABLE, as is this
--- trigger, so it reads with the same rights the trigger already reads programs
--- with. If it cannot see a row it returns '{}', and an empty array never
--- overlaps, so a cross-term pair it cannot date is allowed - the LOST case above,
--- not a new one. It is only called for rows already on the same weekday with an
--- overlapping (or unreadable) time, and in a different term.
+-- trigger. If it cannot see or date a class it returns '{}', which falls to
+-- rule 3 or 4 - the pre-existing behaviour, never a new block.
 --
--- Everything else is carried over unchanged from 20260908a, including the
--- cancelled/archived exclusion and the untrusted-time fail-closed branch. The
--- KNOWN HOLE noted there (reopening a cancelled class is not re-checked) still
--- stands and is still Jessica's call.
+-- Carried over unchanged from 20260908a: the cancelled/archived exclusion and
+-- the untrusted-time fail-closed branch. The KNOWN HOLE noted there (reopening a
+-- cancelled class is not re-checked) still stands and is still Jessica's call.
 
 create or replace function public.check_program_assignment_conflict()
 returns trigger
@@ -58,12 +68,21 @@ declare
   t_start      time;
   t_end        time;
   t_untrusted  boolean;
+  t_days       text[];
+  t_dates      date[];
 begin
   if new.status in ('withdrawn', 'declined') or new.instructor_id is null then
     return new;
   end if;
 
-  select p.day_of_week, p.start_time, p.end_time, p.program_location_id, p.curriculum, p.term
+  if tg_op = 'UPDATE'
+     and new.instructor_id is not distinct from old.instructor_id
+     and new.program_id    is not distinct from old.program_id
+     and new.status        is not distinct from old.status then
+    return new;
+  end if;
+
+  select p.day_of_week, p.class_days, p.start_time, p.end_time, p.program_location_id, p.curriculum, p.term
     into target
     from programs p
     where p.id = new.program_id;
@@ -79,6 +98,15 @@ begin
     or (target.end_time   !~* '(am|pm)' and t_end   < time '08:00'),
     true);
 
+  -- Every weekday the class occupies: all of class_days for a camp, the one
+  -- day_of_week for a weekly class.
+  t_days := case
+    when coalesce(cardinality(target.class_days), 0) > 0
+      then (select array_agg(lower(btrim(x))) from unnest(target.class_days) x)
+    else array[lower(btrim(target.day_of_week))]
+  end;
+  t_dates := coalesce(derive_program_session_dates(new.program_id), '{}');
+
   select pa.id, p2.curriculum, coalesce(pl.name, 'another school') as loc
     into conflict_row
     from program_assignments pa
@@ -91,7 +119,6 @@ begin
       -- anybody (20260908a).
       and coalesce(p2.status, '') not in ('cancelled', 'archived')
       and p2.id <> new.program_id
-      and lower(btrim(p2.day_of_week)) = lower(btrim(target.day_of_week))
       and (
         t_start is null
         or t_end is null
@@ -105,16 +132,25 @@ begin
           and parse_program_time(p2.start_time) < t_end
         )
       )
-      -- THE FIX. Same term: weekday + time is enough, as before. Another term:
-      -- only if the two provably meet on a date. CASE, not OR, so the date walk
-      -- runs only for cross-term rows - never for a timestamp-only UPDATE or an
-      -- instructor with nothing on that weekday. An undated class derives '{}',
-      -- which overlaps nothing.
+      -- THE FIX. CASE, not AND/OR, so the order is guaranteed: the cheap
+      -- weekday test runs first and the date walk only for what survives it.
       and case
-        when p2.term is not distinct from target.term then true
-        else coalesce(
-          derive_program_session_dates(new.program_id) && derive_program_session_dates(p2.id),
-          false)
+        when not (t_days && case
+                    when coalesce(cardinality(p2.class_days), 0) > 0
+                      then (select array_agg(lower(btrim(x))) from unnest(p2.class_days) x)
+                    else array[lower(btrim(p2.day_of_week))]
+                  end)
+          then false
+        else (
+          select case
+            when cardinality(t_dates) > 0 and cardinality(d.dates) > 0
+              then t_dates && d.dates                                   -- rule 2
+            when p2.term is not distinct from target.term
+              then lower(btrim(p2.day_of_week)) = lower(btrim(target.day_of_week)) -- rule 3
+            else false                                                  -- rule 4
+          end
+          from (select coalesce(derive_program_session_dates(p2.id), '{}') as dates) d
+        )
       end
     limit 1;
 

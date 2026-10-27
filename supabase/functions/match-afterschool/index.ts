@@ -190,12 +190,12 @@ serve(async (req) => {
     //   nearly everyone from the camp they just said yes to. Jessica's call,
     //   2026-10-01.
     //
-    // WHAT IS DELIBERATELY CONSERVATIVE: a camp is treated as occupying all its
-    // weekdays for overlap, without checking whether a weekly class actually
-    // MEETS inside the camp's dates. During a school break it does not, so some
-    // refusals here are stricter than reality. That direction is chosen: a
-    // refusal costs the operator one manual assignment, and the other direction
-    // double-books a real instructor on a real day.
+    // WHEN BOTH SIDES HAVE SESSION DATES, THE DATES DECIDE (2026-10-27, same
+    // rule as the trigger): a weekly class that skips break week does not clash
+    // with the break camp; one that still meets that week does. Only when a
+    // class has no dates yet does a camp fall back to occupying all its weekdays
+    // for overlap - stricter than reality, chosen because a refusal costs one
+    // manual assignment and the other direction double-books a real instructor.
     //
     // WHAT THE REFUSAL USED TO SAY, kept because it names every trap this had to
     // clear rather than being deleted as though they were never real: every rule
@@ -398,22 +398,28 @@ serve(async (req) => {
     // from/to are the program's DATE RANGE, and only a camp has one. A weekly
     // class runs the whole term, so it has no range to compare and keeps the
     // original weekday+time rule.
-    type Slot = { dc: string; start: number | null; end: number | null; locationId: string | null; from: string | null; to: string | null; isCamp: boolean };
+    // external: a commitment OUTSIDE this run's set of open classes - another
+    // term, or a closed/draft class in this term. It occupies the instructor (the
+    // trigger counts it) but is not part of this term's teaching week, so it
+    // never spends max_days and never counts as "already at this school today".
+    // term + programId let wouldConflict apply the trigger's cross-term rule.
+    type Slot = { dc: string; start: number | null; end: number | null; locationId: string | null; from: string | null; to: string | null; isCamp: boolean; external: boolean; term: string; programId: string };
     const committedSlots = new Map<string, Slot[]>();
 
     // ONE SLOT PER WEEKDAY THE PROGRAM OCCUPIES. A weekly class contributes one;
     // a Mon-Thu camp contributes four. Reading day_of_week here - which is what
     // this did - books a camp as a Monday and leaves the instructor looking free
     // on the Tuesday, Wednesday and Thursday they are actually teaching.
-    function addSlot(instructorId: string, prog: any) {
+    function addSlot(instructorId: string, prog: any, external = false) {
       const start = parse12h(prog.start_time);
       const end = parse12h(prog.end_time);
       const locationId = prog.program_location_id ?? null;
       const { from, to } = runRange(prog);
       const isCamp = isCampProgram(prog);
+      const slotTerm = prog.term ?? term;
       for (const dc of programWeekdays(prog)) {
         if (!committedSlots.has(instructorId)) committedSlots.set(instructorId, []);
-        committedSlots.get(instructorId)!.push({ dc, start, end, locationId, from, to, isCamp });
+        committedSlots.get(instructorId)!.push({ dc, start, end, locationId, from, to, isCamp, external, term: slotTerm, programId: prog.id });
       }
     }
 
@@ -431,7 +437,7 @@ serve(async (req) => {
     // ineligible for every after-school class in the term.
     function daysUsed(instructorId: string, extraDay?: string | null): number {
       const days = new Set(
-        (committedSlots.get(instructorId) ?? []).filter((s) => !s.isCamp).map((s) => s.dc),
+        (committedSlots.get(instructorId) ?? []).filter((s) => !s.isCamp && !s.external).map((s) => s.dc),
       );
       if (extraDay) days.add(extraDay);
       return days.size;
@@ -469,10 +475,10 @@ serve(async (req) => {
     // That is precisely the summer shape, where someone works week after week.
     // Caught by dry-running Winter 2027 on staging, not by reading the code.
     //
-    // When only ONE side is a camp the ranges cannot be compared (a weekly class
-    // has none), and it stays conservative: a shared weekday at a clashing time
-    // is a conflict even though a break camp usually runs when classes do not.
-    // A refusal costs one manual assignment; the other way double-books someone.
+    // When a class has session dates those are compared directly (bothDated
+    // below). Without them it stays conservative: a shared weekday at a clashing
+    // time is a conflict even though a break camp usually runs when classes do
+    // not. A refusal costs one manual assignment; the other way double-books someone.
     function wouldConflict(instructorId: string, prog: any): boolean {
       const days = programWeekdays(prog);
       if (days.length === 0) return false;
@@ -484,6 +490,14 @@ serve(async (req) => {
       const dayset = new Set(days);
       return slots.some((s) => {
         if (!dayset.has(s.dc)) return false;
+        // The trigger's rule (20261027a), so the matcher is never looser than the
+        // insert it makes: when BOTH classes have session dates, the dates decide,
+        // same term or not - two break camps months apart share a "Monday" and
+        // never meet. Without both, another term never clashes and this term
+        // falls through to weekday + time below.
+        const dated = bothDated(prog.id, s.programId);
+        if (dated && !sharesSessionDate(prog.id, s.programId)) return false;
+        if (!dated && s.term !== term) return false;
         // Two dated runs that do not overlap cannot clash, whatever the clock says.
         if (from && to && s.from && s.to && (to < s.from || s.to < from)) return false;
         // Unreadable time on either side: can't prove no overlap -> fail safe.
@@ -529,6 +543,61 @@ serve(async (req) => {
         assignedCurricula.get(e.instructor_id)!.add(ck);
       }
       loadCount.set(e.instructor_id, (loadCount.get(e.instructor_id) ?? 0) + 1);
+    }
+
+    // ----- Commitments OUTSIDE this run -----
+    // Everything above loads this term's OPEN classes only. The conflict trigger
+    // sees every live assignment the instructor has - any term, any program
+    // status but cancelled/archived. Found on PROD 2026-10-27: a confirmed Fall
+    // 2026 Monday class was invisible here, the run proposed that instructor for
+    // a Winter 2027 Monday class at the same time, the trigger refused it, and
+    // the whole run failed. A closed or draft class in this term was invisible
+    // the same way. Loaded for the pool only, and every status counts - the
+    // trigger does not care whether the other row is confirmed or a draft.
+    // FAILS CLOSED: without this the run proposes what the insert refuses.
+    const poolIds = pool.map((p) => p.id);
+    if (poolIds.length) {
+      const { data: extRaw, error: extErr } = await admin
+        .from('program_assignments')
+        .select('instructor_id, programs!inner(id, term, status, day_of_week, class_days, first_session_date, end_date, start_time, end_time, program_location_id)')
+        .eq('organization_id', organizationId)
+        .not('status', 'in', '(withdrawn,declined)')
+        .in('instructor_id', poolIds);
+      if (extErr) return json({ error: `Load other commitments: ${extErr.message}` }, 500);
+      for (const r of extRaw ?? []) {
+        const p: any = (r as any).programs;
+        if (!p || progById.has(p.id)) continue;           // this run's own classes: handled above
+        if (p.status === 'cancelled' || p.status === 'archived') continue; // not happening (20260908a)
+        addSlot(r.instructor_id, p, true);
+      }
+    }
+
+    // Session dates, from derive_program_session_dates (closures applied) - the
+    // same source the trigger reads. This term always; another term only when an
+    // instructor in the pool has a class there. programs_with_session_dates, NOT
+    // derive_program_session_dates_bulk: the bulk one checks org membership
+    // against auth.uid() and returns nothing to the service role. FAILS CLOSED:
+    // missing dates would fall back to weekday + time, which is safe, but a
+    // silently empty answer would also hide a real cross-term clash.
+    const sessionDates = new Map<string, Set<string>>();
+    const datesTerms = new Set<string>([term]);
+    for (const slots of committedSlots.values()) for (const s of slots) datesTerms.add(s.term);
+    for (const t of datesTerms) {
+      const { data: dRows, error: dErr } = await admin
+        .rpc('programs_with_session_dates', { p_organization_id: organizationId, p_term: t });
+      if (dErr) return json({ error: `Load session dates (${t}): ${dErr.message}` }, 500);
+      for (const row of dRows ?? []) {
+        sessionDates.set(row.program_id, new Set((row.session_dates ?? []).map((d: string) => String(d).slice(0, 10))));
+      }
+    }
+    function bothDated(a: string, b: string): boolean {
+      return !!sessionDates.get(a)?.size && !!sessionDates.get(b)?.size;
+    }
+    function sharesSessionDate(a: string, b: string): boolean {
+      const da = sessionDates.get(a), db = sessionDates.get(b);
+      if (!da?.size || !db?.size) return false;
+      for (const d of da) if (db.has(d)) return true;
+      return false;
     }
 
     function areaFor(prog: any): string | null {
@@ -661,7 +730,7 @@ serve(async (req) => {
       const locationId = prog.program_location_id ?? null;
       if (!locationId) return false;
       return (committedSlots.get(inst.id) ?? [])
-        .some((s) => !s.isCamp && s.dc === dc && s.locationId === locationId);
+        .some((s) => !s.isCamp && !s.external && s.dc === dc && s.locationId === locationId);
     }
 
     // Assign one program to its best candidate. Winner order:
@@ -860,14 +929,42 @@ serve(async (req) => {
         flags: d.flags,
       }));
       const { error: insErr } = await admin.from('program_assignments').insert(toInsert);
-      if (insErr) return json({ error: `Insert proposed rows: ${insErr.message}` }, 500);
-      writeStats.inserted = toInsert.length;
+      if (!insErr) {
+        writeStats.inserted = toInsert.length;
+      } else if (insErr.code !== '23514') {
+        return json({ error: `Insert proposed rows: ${insErr.message}` }, 500);
+      } else {
+        // ONE REFUSED ROW MUST NOT COST THE WHOLE RUN. The insert is a single
+        // statement, so a conflict-trigger refusal (23514 check_violation) on one
+        // row rolled back all of them - and the delete above had already cleared
+        // the previous drafts, so the board went from a full draft to nothing.
+        // The load above is meant to make this unreachable; if it is reached
+        // anyway, place row by row and turn each refused one into a needs-hire
+        // that names why, instead of failing everything.
+        let inserted = 0;
+        for (let i = 0; i < toInsert.length; i++) {
+          const { error: rowErr } = await admin.from('program_assignments').insert(toInsert[i]);
+          if (!rowErr) { inserted++; continue; }
+          if (rowErr.code !== '23514') return json({ error: `Insert proposed rows: ${rowErr.message}` }, 500);
+          const d = assignedDecisions[i];
+          const refusedName = d.instructor_name;
+          d.status = 'needs_hire';
+          d.reason = `Couldn't place ${refusedName}: ${rowErr.message}`;
+          d.slots_open = 1;
+          delete d.instructor_id;
+          delete d.instructor_name;
+          console.warn(`[match-afterschool] row refused for program ${d.program_id}: ${rowErr.message}`);
+        }
+        writeStats.inserted = inserted;
+      }
     }
+    // Re-read after the writes: a refused row above is now a needs-hire.
+    const placedDecisions = decisions.filter((d) => d.status === 'assigned');
 
     // Materials metric: distinct curricula (= class sets) per instructor across all
     // assignments, including locked/confirmed ones.
     const setsByInstr = new Map<string, Set<string>>();
-    for (const d of assignedDecisions) {
+    for (const d of placedDecisions) {
       const ck = d.curriculum_name ? `name:${String(d.curriculum_name).trim().toLowerCase()}` : null;
       if (!ck) continue;
       if (!setsByInstr.has(d.instructor_id)) setsByInstr.set(d.instructor_id, new Set());
@@ -905,8 +1002,8 @@ serve(async (req) => {
         // CLASSES matched this run, not slots: the board prints this as
         // "Matched {assigned} of {programs_total} classes", and a two-instructor
         // class yields two decisions. Counting decisions read "11 of 10".
-        assigned: new Set(assignedDecisions.map((d) => d.program_id)).size,
-        slots_assigned: assignedDecisions.length,
+        assigned: new Set(placedDecisions.map((d) => d.program_id)).size,
+        slots_assigned: placedDecisions.length,
         needs_hire: decisions.filter((d) => d.status === 'needs_hire').length,
         instructors_in_pool: pool.length,
         missing_surveys: missingSurveys,

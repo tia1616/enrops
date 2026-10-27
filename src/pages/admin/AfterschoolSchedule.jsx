@@ -1226,12 +1226,24 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   // and the operator gets told, instead of being refused with no override.
   function coincidence(program, otherId, granularity) {
     const other = progByIdAll.get(otherId);
+    // BOTH DATED: THE DATES DECIDE, for the double-booking check. This is what
+    // check_program_assignment_conflict() does since 20261027a, camps and weekly
+    // classes alike - two break camps months apart both say "Monday 9-3" and
+    // never meet. Without it this board refused a pairing the database and the
+    // matcher both allow. The "week" granularity (the max_days cap) keeps its
+    // own rules below.
+    if (granularity === "date") {
+      const da = datesOf(program.id), db = datesOf(otherId);
+      if (da?.length && db?.length) {
+        const set = new Set(da);
+        return db.some((d) => set.has(d)) ? "yes" : "no";
+      }
+    }
     if (!isCampProgram(program) && !(other && isCampProgram(other))) return "yes";
-    // WITHIN A TERM THE DATABASE IS STILL DAY_OF_WEEK ONLY. For two classes in the
-    // same term check_program_assignment_conflict() compares
-    // lower(btrim(day_of_week)) and never reads class_days or dates (it reads
-    // dates only across terms, 20261027a, and this board never loads another
-    // term), so when the two rows carry the SAME day_of_week string and their times overlap
+    // NOT BOTH DATED: THE DATABASE FALLS BACK TO DAY_OF_WEEK. With either side
+    // undated, check_program_assignment_conflict() compares
+    // lower(btrim(day_of_week)) for two classes in the same term (and this board
+    // never loads another term), so when the two rows carry the SAME day_of_week string and their times overlap
     // the insert is refused whatever this board thinks. Treat that as a clash, or
     // the board offers an assignment the save then rejects with a raw error -
     // exactly what the note above the double-booking block warns against.
