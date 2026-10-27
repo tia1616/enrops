@@ -555,21 +555,28 @@ serve(async (req) => {
     // the same way. Loaded for the pool only, and every status counts - the
     // trigger does not care whether the other row is confirmed or a draft.
     // FAILS CLOSED: without this the run proposes what the insert refuses.
-    const poolIds = pool.map((p) => p.id);
-    if (poolIds.length) {
+    // Read by org and PAGED, with the pool filtered here: an .in() of every pool
+    // id breaks past ~100 instructors (URL ceiling), and an unpaged read is cut
+    // at PostgREST's 1000 rows without an error - years of assignments pass that.
+    const poolSet = new Set(pool.map((p) => p.id));
+    const PAGE = 1000;
+    for (let from = 0; poolSet.size > 0; from += PAGE) {
       const { data: extRaw, error: extErr } = await admin
         .from('program_assignments')
-        .select('instructor_id, programs!inner(id, term, status, day_of_week, class_days, first_session_date, end_date, start_time, end_time, program_location_id)')
+        .select('id, instructor_id, programs!inner(id, term, status, day_of_week, class_days, first_session_date, end_date, start_time, end_time, program_location_id)')
         .eq('organization_id', organizationId)
         .not('status', 'in', '(withdrawn,declined)')
-        .in('instructor_id', poolIds);
+        .order('id')
+        .range(from, from + PAGE - 1);
       if (extErr) return json({ error: `Load other commitments: ${extErr.message}` }, 500);
       for (const r of extRaw ?? []) {
+        if (!poolSet.has(r.instructor_id)) continue;
         const p: any = (r as any).programs;
         if (!p || progById.has(p.id)) continue;           // this run's own classes: handled above
         if (p.status === 'cancelled' || p.status === 'archived') continue; // not happening (20260908a)
         addSlot(r.instructor_id, p, true);
       }
+      if ((extRaw ?? []).length < PAGE) break;
     }
 
     // Session dates, from derive_program_session_dates (closures applied) - the
@@ -884,7 +891,7 @@ serve(async (req) => {
     }
 
     // ----- Writes -----
-    let writeStats = { deleted: 0, inserted: 0, skipped_dry_run: false };
+    let writeStats = { deleted: 0, inserted: 0, refused: 0, skipped_dry_run: false };
     const assignedDecisions = decisions.filter((d) => d.status === 'assigned');
     if (dryRun) {
       writeStats.skipped_dry_run = true;
@@ -956,6 +963,7 @@ serve(async (req) => {
           console.warn(`[match-afterschool] row refused for program ${d.program_id}: ${rowErr.message}`);
         }
         writeStats.inserted = inserted;
+        writeStats.refused = toInsert.length - inserted;
       }
     }
     // Re-read after the writes: a refused row above is now a needs-hire.
@@ -977,7 +985,9 @@ serve(async (req) => {
       await logPlatformEvent(admin, {
         feature: FEATURE.SCHEDULING, action: ACTION.INSTRUCTORS_MATCHED, outcome: OUTCOME.SUCCESS,
         organizationId: organizationId, actorUserId: userData.user.id,
-        metadata: { term, kind: 'afterschool' },
+        // refused > 0 means the matcher and the conflict trigger disagree - the
+        // run survived it, but the rule has drifted and needs looking at.
+        metadata: { term, kind: 'afterschool', refused_rows: writeStats.refused },
       });
     }
     return json({
