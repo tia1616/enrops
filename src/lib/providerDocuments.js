@@ -36,6 +36,18 @@ export async function listPartners(orgId) {
   return data ?? [];
 }
 
+/** One of the provider's partners, archived or not; null when it isn't theirs. */
+export async function getPartner(orgId, partnerId) {
+  const { data, error } = await supabase
+    .from("partners")
+    .select("id, partner_name, inactive")
+    .eq("organization_id", orgId)
+    .eq("id", partnerId)
+    .maybeSingle();
+  if (error) throw error;
+  return data ?? null;
+}
+
 /**
  * Remove one file and say whether it went. Storage's remove() never rejects: a
  * refusal, or a path it could not find, resolves with an error or an empty list.

@@ -37,7 +37,9 @@ export default function PartnerRequirementsSection({ partner, rows, canManage, o
     setError("");
     try {
       await setPartnerRequirement(partner.id, req.key, next);
-      onChange(rows.map((r) => (r.requirement_key === req.key ? { ...r, required: next } : r)));
+      // An updater, not the rows captured at click time, so a reload that
+      // landed meanwhile is never overwritten with a stale list.
+      onChange((rs) => (rs || []).map((r) => (r.requirement_key === req.key ? { ...r, required: next } : r)));
       setNote(`Saved. ${req.label} is ${next ? "now required" : "no longer required"} for ${partner.partner_name}.`);
     } catch (err) {
       setError(`That didn't save: ${err?.message ?? "unknown error"}`);

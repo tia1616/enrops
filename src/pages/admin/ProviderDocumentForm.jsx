@@ -129,9 +129,11 @@ export default function ProviderDocumentForm({ partner, editing, kind, onCancel,
             <option value="">Every partner</option>
           </select>
           <div style={hint}>
-            {isInsurance
-              ? `A certificate is usually made out to one partner, so it's shown to ${partner.partner_name} only.`
-              : "Choose every partner only when this same file is meant for all of them."}
+            {!draft.partner_id
+              ? "Every partner you work with will see this same file."
+              : isInsurance
+                ? "A certificate is usually made out to one partner. Choose every partner only for one that names no one."
+                : "Choose every partner only when this same file is meant for all of them."}
           </div>
         </>
       )}

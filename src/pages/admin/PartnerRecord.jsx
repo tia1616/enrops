@@ -27,7 +27,7 @@ import { usePermissions } from "../../lib/permissions.js";
 import { listPartnerInstructors, listPartnerRequirements } from "../../lib/partnerPortal.js";
 import { providerSummary, requiredKeys, REQUIREMENTS } from "../../lib/partnerPortalLogic.js";
 import {
-  listProviderDocuments, listPartners, createProviderDocument, updateProviderDocument,
+  listProviderDocuments, getPartner, createProviderDocument, updateProviderDocument,
   deleteProviderDocument, openDocumentInNewTab,
 } from "../../lib/providerDocuments.js";
 
@@ -75,8 +75,8 @@ export default function PartnerRecord() {
     if (!org?.id) return;
     let cancelled = false;
     setPartner(undefined); setDocs(null); setInstructors(null); setRequirements(undefined); setError(""); setForm(null);
-    listPartners(org.id)
-      .then((ps) => { if (!cancelled) setPartner(ps.find((p) => p.id === partnerId) ?? null); })
+    getPartner(org.id, partnerId)
+      .then((p) => { if (!cancelled) setPartner(p); })
       .catch((err) => { if (!cancelled) { setPartner(null); setError(`Couldn't load this partner: ${err?.message ?? "unknown error"}`); } });
     listProviderDocuments(org.id)
       .then((d) => { if (!cancelled) setDocs(d); })
@@ -195,7 +195,7 @@ export default function PartnerRecord() {
       )}
 
       {requirements !== undefined && (
-        <PartnerRequirementsSection partner={partner} rows={requirements} canManage={canManage} onChange={setRequirements} />
+        <PartnerRequirementsSection key={partnerId} partner={partner} rows={requirements} canManage={canManage} onChange={setRequirements} />
       )}
 
       <PartnerLoginsSection key={partnerId} org={org} partner={partner} canManage={canManage} onMessage={flash} />

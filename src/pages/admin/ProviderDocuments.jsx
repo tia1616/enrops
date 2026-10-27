@@ -57,13 +57,21 @@ export default function ProviderDocuments() {
     let cancelled = false;
     setPartners(null); setSummaries(null); setError("");
     (async () => {
+      // Each read stands alone: a failed logins read must not hide the
+      // partners that have documents on file, and vice versa.
+      const [pr, dr, gr] = await Promise.allSettled([listPartners(org.id), listProviderDocuments(org.id), listPortalAccess(org.id)]);
+      if (cancelled) return;
+      const failed = [pr, dr, gr].filter((r) => r.status === "rejected").map((r) => r.reason?.message ?? "unknown error");
+      if (failed.length) setError(`Some of this page couldn't load: ${failed.join("; ")}. Try refreshing.`);
+      const p = pr.status === "fulfilled" ? pr.value : [];
+      const d = dr.status === "fulfilled" ? dr.value : [];
+      const g = gr.status === "fulfilled" ? gr.value : [];
+      setPartners(p); setDocs(d); setGrants(g);
+      const today = todayIso();
+      const inUse = partnersInUse(p, d, g);
       try {
-        const [p, d, g] = await Promise.all([listPartners(org.id), listProviderDocuments(org.id), listPortalAccess(org.id)]);
-        if (cancelled) return;
-        setPartners(p); setDocs(d); setGrants(g);
-        const today = todayIso();
         // allSettled: one partner's failed read must not hide the others.
-        const results = await Promise.allSettled(partnersInUse(p, d, g).map(async (row) => {
+        const results = await Promise.allSettled(inUse.map(async (row) => {
           const [instructors, requirements] = await Promise.all([
             listPartnerInstructors(row.id),
             // A list that fails to load counts everything, as the partner's own page does.
@@ -73,10 +81,9 @@ export default function ProviderDocuments() {
           return [row.id, providerSummary({ docs: shown, instructors, partnerId: row.id, orgName: org.name, today, required: requiredKeys(requirements) })];
         }));
         if (cancelled) return;
-        const used = partnersInUse(p, d, g);
-        setSummaries(new Map(results.map((r, i) => (r.status === "fulfilled" ? r.value : [used[i].id, "failed"]))));
-      } catch (err) {
-        if (!cancelled) { setError(`Couldn't load your partners: ${err?.message ?? "unknown error"}`); setPartners((prev) => prev ?? []); setSummaries(new Map()); }
+        setSummaries(new Map(results.map((r, i) => (r.status === "fulfilled" ? r.value : [inUse[i].id, "failed"]))));
+      } catch {
+        if (!cancelled) setSummaries(new Map());
       }
     })();
     return () => { cancelled = true; };
@@ -106,9 +113,13 @@ export default function ProviderDocuments() {
 
       {used.length === 0 ? (
         <div style={{ marginTop: 20, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 12, padding: "28px 20px", textAlign: "center" }}>
-          <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>No partner records yet</div>
+          <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>
+            {sharedWithAll.length ? "Nothing filed for one partner yet" : "No partner records yet"}
+          </div>
           <div style={{ fontSize: 13, color: MUTED, maxWidth: 460, margin: "6px auto 0", lineHeight: 1.5 }}>
-            Pick a partner below to start. Their page shows what they'll see, with a place to upload each document they require.
+            {sharedWithAll.length
+              ? "Your shared documents (below) show to every partner. Pick a partner to see their page and add what's theirs alone."
+              : "Pick a partner below to start. Their page shows what they'll see, with a place to upload each document they require."}
           </div>
         </div>
       ) : (
