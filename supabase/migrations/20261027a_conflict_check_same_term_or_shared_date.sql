@@ -58,7 +58,6 @@ declare
   t_start      time;
   t_end        time;
   t_untrusted  boolean;
-  t_dates      date[];
 begin
   if new.status in ('withdrawn', 'declined') or new.instructor_id is null then
     return new;
@@ -79,10 +78,6 @@ begin
        (target.start_time !~* '(am|pm)' and t_start < time '08:00')
     or (target.end_time   !~* '(am|pm)' and t_end   < time '08:00'),
     true);
-
-  -- Only needed for the cross-term test below. '{}' when the class has no dates
-  -- yet, which never overlaps anything.
-  t_dates := coalesce(derive_program_session_dates(new.program_id), '{}');
 
   select pa.id, p2.curriculum, coalesce(pl.name, 'another school') as loc
     into conflict_row
@@ -112,10 +107,14 @@ begin
       )
       -- THE FIX. Same term: weekday + time is enough, as before. Another term:
       -- only if the two provably meet on a date. CASE, not OR, so the date walk
-      -- runs only for cross-term rows.
+      -- runs only for cross-term rows - never for a timestamp-only UPDATE or an
+      -- instructor with nothing on that weekday. An undated class derives '{}',
+      -- which overlaps nothing.
       and case
         when p2.term is not distinct from target.term then true
-        else coalesce(t_dates && derive_program_session_dates(p2.id), false)
+        else coalesce(
+          derive_program_session_dates(new.program_id) && derive_program_session_dates(p2.id),
+          false)
       end
     limit 1;
 

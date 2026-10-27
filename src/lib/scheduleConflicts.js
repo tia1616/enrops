@@ -1,7 +1,9 @@
 // Pure same-day scheduling logic for the after-school board.
 //
 // One instructor, two classes the same weekday. The rule (2026-08-18, and the DB
-// trigger check_program_assignment_conflict mirrors it exactly):
+// trigger check_program_assignment_conflict mirrors it exactly for two classes
+// in the SAME term; across terms the trigger also requires a shared date,
+// 20261027a):
 //   - a real TIME OVERLAP is a hard conflict;
 //   - an unreadable time on EITHER side is a conflict too (fail closed -- we won't
 //     guess whether "2:30" is morning or afternoon; the caller passes null then);

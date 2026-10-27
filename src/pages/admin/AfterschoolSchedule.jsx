@@ -1227,9 +1227,11 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   function coincidence(program, otherId, granularity) {
     const other = progByIdAll.get(otherId);
     if (!isCampProgram(program) && !(other && isCampProgram(other))) return "yes";
-    // THE DATABASE IS STILL DAY_OF_WEEK ONLY. check_program_assignment_conflict()
-    // compares lower(btrim(day_of_week)) and never reads class_days or dates, so
-    // when the two rows carry the SAME day_of_week string and their times overlap
+    // WITHIN A TERM THE DATABASE IS STILL DAY_OF_WEEK ONLY. For two classes in the
+    // same term check_program_assignment_conflict() compares
+    // lower(btrim(day_of_week)) and never reads class_days or dates (it reads
+    // dates only across terms, 20261027a, and this board never loads another
+    // term), so when the two rows carry the SAME day_of_week string and their times overlap
     // the insert is refused whatever this board thinks. Treat that as a clash, or
     // the board offers an assignment the save then rejects with a raw error -
     // exactly what the note above the double-booking block warns against.
