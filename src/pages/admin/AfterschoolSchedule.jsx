@@ -530,7 +530,12 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       // secondary win; the actual fix is in
       // supabase/migrations/20260907d_derive_program_session_dates_bulk.sql.
       // Started now, awaited after wave 2: it needs only org + term.
-      const otherTermPromise = loadOtherTermCommitments(org.id, term);
+      // .catch here, not at the await: if wave 1 throws first, a rejection would
+      // otherwise go unhandled. A failure is the same as an empty answer.
+      const otherTermPromise = loadOtherTermCommitments(org.id, term).catch((e) => {
+        console.warn("[AfterschoolSchedule] other-term commitments failed:", e?.message);
+        return { programs: [], assignments: [], dates: {} };
+      });
       const [progRes, locRes, instRes, availRes, surveyRes, areaPrefRes, cycleRes, cfgRes,
              savedSurveyIntro, savedOfferIntro] = await Promise.all([
         supabase
