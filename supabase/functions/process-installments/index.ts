@@ -1,4 +1,9 @@
-// process-installments v8 — daily cron worker that charges due installments off-session.
+// process-installments v9 — daily cron worker that charges due installments off-session.
+//
+// v9 CHANGE (2026-10-28): the CHECKOUT is part of the grouping key. One parent
+//   with two separate plans (two checkouts, same cus_..., same installment
+//   numbers) had them merged, and a row due today pulled the other plan's row
+//   forward - a January payment charged in October. See _shared/installmentGroup.ts.
 //
 // v8 CHANGE (2026-07-27): organization_id is part of the grouping key.
 //   A Stripe Customer is NOT unique per org — for destination orgs
@@ -79,6 +84,7 @@ import { buildChargeRouting, ConnectOrgConfig, resolvePlanRouting } from '../_sh
 import { runUpliftTrueUp } from '../_shared/upliftTrueUp.ts';
 import { UPLIFT_METADATA_KEY } from '../_shared/chargeFeeFacts.ts';
 import { allocateCartFeeByLine } from '../_shared/cartFee.ts';
+import { INSTALLMENT_GROUP_SELECT, installmentGroupKey as planGroupKey } from '../_shared/installmentGroup.ts';
 import { withResolvedFee, loadPlatformFeeDefaults } from '../_shared/feeConfig.ts';
 import { loadOrgBrand, formatFromAddress, OrgBrand } from '../_shared/orgBrand.ts';
 import {
@@ -136,6 +142,8 @@ interface InstallmentRow {
    * live config, which is the behaviour those rows already had.
    */
   fee_pass_through: boolean | null;
+  /** The checkout this row's plan came from - part of installmentGroupKey. */
+  registrations?: { stripe_checkout_session_id: string | null } | null;
   /** Automatic-retry bookkeeping - see migration 20261007e and
    *  _shared/declineRetry.ts. Defaults 0 / null on every row. */
   card_decline_count: number | null;
@@ -295,7 +303,7 @@ serve(async (req) => {
     // installment_number) groups need processing today.
     const { data: triggerSet, error: queryErr } = await admin
       .from('installments')
-      .select('*')
+      .select(INSTALLMENT_GROUP_SELECT)
       .eq('status', 'pending')
       .lte('due_date', today);
 
@@ -345,9 +353,13 @@ serve(async (req) => {
     //
     // Consequence, and it is the correct one: such a parent sees one charge per
     // destination per installment. The money is going to two different places.
+    //
+    // v9: and the CHECKOUT is part of the key (_shared/installmentGroup.ts). One
+    // customer can hold two separate plans with the same installment numbers;
+    // without it, a row due today pulled the other plan's row forward by months.
     const installmentGroupKey = (r: InstallmentRow) => {
       const route = resolvePlanRouting(r.stripe_charge_account_id, r.stripe_transfer_destination_id);
-      return `${r.organization_id}__${r.stripe_customer_id}__${r.installment_number}`
+      return planGroupKey(r)
         + `__${route.model ?? 'unrecorded'}:${route.accountId ?? 'none'}`;
     };
 
@@ -363,7 +375,7 @@ serve(async (req) => {
 
     const { data: allCandidateRows, error: candidateErr } = await admin
       .from('installments')
-      .select('*')
+      .select(INSTALLMENT_GROUP_SELECT)
       .eq('status', 'pending')
       .in('stripe_customer_id', triggerCustomers)
       .in('installment_number', triggerInstNums);
@@ -833,12 +845,13 @@ async function processGroup(
 
   const groupMargin = activeRows.reduce((s, r) => s + (shareByRow.get(r.id) as number), 0);
 
-  // A GROUP IS NOT A CART. installmentGroupKey is
-  // organization_id__stripe_customer_id__installment_number, and create-checkout
-  // dedupes the Stripe Customer platform-wide by email — so one parent who
-  // registers twice has BOTH plans in the same group, from two separate
-  // checkouts, and their snapshots legitimately differ if the operator flipped
-  // the toggle in between.
+  // Since v9 a group IS one checkout (installmentGroupKey includes it), so two
+  // separate plans no longer share a group. Per-row stays the rule anyway: rows
+  // whose registration has no checkout recorded key on their own registration,
+  // and a fee snapshot is a fact about a row, not about whatever it is charged
+  // beside. History of why group-wide agreement was dropped: one parent who
+  // registered twice used to have BOTH plans in the same group, and their
+  // snapshots legitimately differ if the operator flipped the toggle in between.
   //
   // An earlier version of this demanded group-wide agreement and paused the
   // group when it did not find it. That deadlocked on exactly the action this
