@@ -31,8 +31,12 @@ Deno.test('a row with no recorded checkout never merges with anything', () => {
   assertNotEquals(installmentGroupKey(a), installmentGroupKey(b));
   // nor with a checkout-keyed row of the same registration's customer
   assertNotEquals(installmentGroupKey(a), installmentGroupKey(row()));
-  // a missing embed fails the same safe way
-  assertNotEquals(installmentGroupKey(row({ registrations: null })), installmentGroupKey(row({ registrations: undefined, registration_id: 'reg-9' })));
+  // a missing embed fails the same safe way: it keys on the registration, never
+  // on a shared constant that would merge two registrations' rows
+  const noEmbedA = row({ registration_id: 'reg-1', registrations: null });
+  const noEmbedB = row({ registration_id: 'reg-2', registrations: undefined });
+  assertNotEquals(installmentGroupKey(noEmbedA), installmentGroupKey(noEmbedB));
+  assertEquals(installmentGroupKey(noEmbedA), installmentGroupKey(row({ registration_id: 'reg-1', registrations: null })));
 });
 
 Deno.test('org, customer and installment number still split groups (v8 unchanged)', () => {
