@@ -63,9 +63,10 @@
 // FLOW:
 // 1. Find pending installments with due_date <= today (the "trigger set").
 // 2. For each row in the trigger set, pull ALL pending sibling rows from the
-//    same parent + same installment_number (across all due_dates) — these are
-//    the rows that will be charged TOGETHER.
-// 3. Group by (organization_id, stripe_customer_id, installment_number).
+//    same parent + same installment_number + same CHECKOUT (across all
+//    due_dates) — these are the rows that will be charged TOGETHER.
+// 3. Group by installmentGroupKey (_shared/installmentGroup.ts): org, customer,
+//    installment_number and checkout.
 // 4. For each group:
 //    a. Fetch program statuses for all rows. Pause any rows whose program is cancelled.
 //    b. If the active subset is empty, skip. Otherwise charge the SUM of active rows
@@ -441,11 +442,12 @@ serve(async (req) => {
       });
     }
 
-    // STEP 3: Group by (organization_id, stripe_customer_id, installment_number)
-    // — NOT including due_date. That is the v5 change: rows with different
-    // due_dates can land in the same group. The org component is v8 (see the
-    // installmentGroupKey comment above): every row in a group must belong to ONE org,
-    // because the whole group is charged with that org's Connect routing.
+    // STEP 3: Group by installmentGroupKey (org, customer, installment_number,
+    // checkout) — NOT including due_date. That is the v5 change: rows of ONE
+    // checkout with different due_dates can land in the same group. The org
+    // component is v8: every row in a group must belong to ONE org, because the
+    // whole group is charged with that org's Connect routing. The checkout
+    // component is v9: two separate plans never share a charge.
     const groupMap = new Map<string, InstallmentRow[]>();
     for (const row of dueInstallments) {
       const key = installmentGroupKey(row);
@@ -454,7 +456,7 @@ serve(async (req) => {
     }
 
     summary.groups = groupMap.size;
-    console.log(`Grouped into ${summary.groups} aggregated charges (v5 earliest-date grouping)`);
+    console.log(`Grouped into ${summary.groups} aggregated charges (one per plan per installment)`);
 
     // Pre-load brand for every org touched by this cron pass. Cheap (one
     // pair of queries per org) and lets each group's outgoing emails come
