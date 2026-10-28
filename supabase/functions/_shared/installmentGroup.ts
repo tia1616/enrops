@@ -15,8 +15,9 @@
 // never right ACROSS checkouts, where the family agreed to two separate schedules.
 //
 // The checkout comes from registrations.stripe_checkout_session_id, stamped by
-// stripe-webhook on every line of the cart. A row whose registration has none
-// (manual or legacy rows) keys on its own registration instead: it never merges
+// create-checkout on every line of the cart in one update when the session is
+// created. A row whose registration has none (manual rows, or carts from before
+// the column existed 2026-07-27) keys on its own registration instead: it never merges
 // with anything, so the worst case is two charges where one would have done,
 // each for the right amount on the right day. Never the reverse.
 
