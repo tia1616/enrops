@@ -49,7 +49,8 @@
 // together on the earliest due_date in the group. This means parents always see
 // exactly 3 charges total regardless of how many children or how staggered their
 // program dates are. (v8 narrows this to 3 charges PER OPERATOR: the key now
-// includes organization_id, because two operators are two merchants.)
+// includes organization_id, because two operators are two merchants. v9 narrows
+// it to 3 charges PER CHECKOUT: two separate plans are two schedules.)
 //
 // Trigger logic: when ANY row in a group has due_date <= today, the WHOLE group
 // is charged together. We collect slightly earlier than the latest published
@@ -320,7 +321,8 @@ serve(async (req) => {
       return jsonResp({ ok: true, summary });
     }
 
-    // STEP 2: For each (org, customer_id, installment_number) in the trigger set,
+    // STEP 2: For each group key (org, customer, installment_number, checkout,
+    // routing - see installmentGroupKey) in the trigger set,
     // pull ALL pending sibling rows from that group — even ones with
     // due_date > today. These get charged together. (v5 earliest-date grouping.)
     //
@@ -369,8 +371,8 @@ serve(async (req) => {
       triggerKeys.add(installmentGroupKey(row));
     }
 
-    // Build OR filter to fetch all sibling rows — pull rows whose
-    // (customer_id, installment_number) matches any trigger key.
+    // Fetch a SUPERSET of the sibling rows by (customer_id, installment_number);
+    // the triggerKeys filter below narrows it to the exact group keys.
     const triggerCustomers = [...new Set((triggerSet as InstallmentRow[]).map((r) => r.stripe_customer_id))];
     const triggerInstNums = [...new Set((triggerSet as InstallmentRow[]).map((r) => r.installment_number))];
 
@@ -386,7 +388,7 @@ serve(async (req) => {
       return jsonResp({ error: candidateErr.message }, 500);
     }
 
-    // Filter down to only rows whose (org, customer, instNum) is in triggerKeys
+    // Filter down to only rows whose full group key is in triggerKeys
     // (the .in() above is a Cartesian product across customers and inst-nums).
     // This is also what keeps another org's rows out: the .in() query is not
     // org-scoped, so a shared platform customer id pulls in the sibling org's
