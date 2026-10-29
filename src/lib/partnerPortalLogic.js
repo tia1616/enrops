@@ -82,8 +82,11 @@ export function instructorChecklist(row, orgName, today) {
   }
   if (row.background_check_status === "awaiting_date") checkDetail.push("Completed date not on file yet");
   else if (row.background_check_status === "in_review") checkDetail.push("Check in progress");
+  // Never the screening company's NAME (Arielle 2026-10-29: providers may switch
+  // vendors, so the record only says the result came from a screening partner).
+  // The vendor field still decides WHETHER to say so.
   const vendor = (row.background_check_vendor || "").trim();
-  const checkSource = vendor && row.background_check_completed_on ? `${byProvider} · Screening company: ${vendor}` : byProvider;
+  const checkSource = vendor && row.background_check_completed_on ? `${byProvider} · from the provider's screening partner` : byProvider;
   const nothingOnFile = row.background_check_status === "missing";
 
   const signed = (key, title, date, verb) => ({
