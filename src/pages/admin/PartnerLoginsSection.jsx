@@ -14,7 +14,7 @@
 // partner's own and every login sees them. Changed later with "Change sites"
 // (set_partner_access_sites), the only write path for it.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   listPortalAccess, listGrantableContacts, grantPortalAccess, removePortalAccess,
@@ -47,16 +47,19 @@ function primaryBtn(disabled) {
 // "Every site" or "Only these sites" + a tick per site. Archived sites are
 // offered only when already chosen, so a saved choice can still be unticked.
 function SitePicker({ partnerName, sites, everySite, picked, disabled, onChange }) {
+  // One radio group per picker (the give-access form and a login's editor can
+  // both be open), so arrow keys move between its two choices.
+  const group = useId();
   const offered = sites.filter((s) => !s.archived || picked.includes(s.id));
   const radio = { display: "flex", alignItems: "center", gap: 8, fontSize: 13.5, color: INK, cursor: disabled ? "default" : "pointer" };
   return (
-    <div style={{ display: "grid", gap: 6 }}>
+    <div role="radiogroup" aria-label="Which sites they see" style={{ display: "grid", gap: 6 }}>
       <label style={radio}>
-        <input type="radio" checked={everySite} disabled={disabled} onChange={() => onChange(true, picked)} />
+        <input type="radio" name={group} checked={everySite} disabled={disabled} onChange={() => onChange(true, picked)} />
         Every {partnerName} site, including ones added later
       </label>
       <label style={radio}>
-        <input type="radio" checked={!everySite} disabled={disabled} onChange={() => onChange(false, picked)} />
+        <input type="radio" name={group} checked={!everySite} disabled={disabled} onChange={() => onChange(false, picked)} />
         Only these sites
       </label>
       {!everySite && (
