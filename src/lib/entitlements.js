@@ -185,6 +185,9 @@ export const REGISTRATION_AUTOMATION_KEYS = new Set([
  *   - class_photos: on by default like class photos themselves (Jessica,
  *     2026-10-12). The cron gives any provider without a row an enabled one
  *     (ensure_default_on_automation, 20261012a) before it runs.
+ *   - installment_reminder: on by default (Jessica, 2026-10-30), same mechanism
+ *     (20261030a). Keep this list identical to DEFAULT_ON_TEMPLATE_KEYS in
+ *     lifecycle-automations-cron.
  *
  * Every other automation is opt-IN — the cron collects rows where enabled is
  * true, so no row means nothing fires.
@@ -194,7 +197,7 @@ export const REGISTRATION_AUTOMATION_KEYS = new Set([
  * opt-out automation doesn't leave it as it was, it turns it OFF.
  */
 export function isOptOutAutomation(templateKey) {
-  return templateKey === "thank_you" || templateKey === "class_photos";
+  return templateKey === "thank_you" || templateKey === "class_photos" || templateKey === "installment_reminder";
 }
 
 /**
@@ -204,7 +207,7 @@ export function isOptOutAutomation(templateKey) {
  * able to see it, edit its wording and switch it off - hiding it on a reduced
  * tier would leave an email going out that its sender cannot find.
  */
-export const ALWAYS_LISTED_AUTOMATION_KEYS = new Set(["class_photos"]);
+export const ALWAYS_LISTED_AUTOMATION_KEYS = new Set(["class_photos", "installment_reminder"]);
 
 /**
  * The confirmation email is not optional on the registration_only tier. It IS

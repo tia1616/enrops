@@ -77,6 +77,16 @@ import { abandonedResumeUrl } from "./abandonedResumeUrl.ts";
 import { formatChildNameList } from "../_shared/childNameList.ts";
 import { photoDaysToNotify, classPhotoRecipients, PHOTO_LOOKBACK_DAYS, type EnrolledReg } from "./classPhotosAudience.ts";
 import { hmacBase64Url } from "../_shared/hmac.ts";
+import {
+  installmentReminderRecipients, installmentLabel, REMINDER_DAYS_AHEAD, type ReminderRow,
+} from "./installmentReminderAudience.ts";
+import { addDaysUtc, formatRetryDate } from "../_shared/declineRetry.ts";
+
+// Templates that are ON unless a provider switches them off (see
+// ensure_default_on_automation, 20261012a). src/lib/entitlements.js
+// isOptOutAutomation says the same thing to the Comms screen: keep the two lists
+// identical.
+const DEFAULT_ON_TEMPLATE_KEYS = ["class_photos", "installment_reminder"];
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -261,6 +271,12 @@ interface AudienceEntry {
   // photos themselves are never in the email; the portal visit is the point.
   photos_url?: string;
   photo_count?: string;   // drives {{photo_count}}: how many were shared that day
+  // ── installment_reminder only ──
+  // drives {{charge_date}} ("Friday, November 6") and {{installment_label}}
+  // ("second"). There is deliberately no amount token: see
+  // installmentReminderAudience.ts.
+  charge_date?: string;
+  installment_label?: string;
 }
 
 // Tailored instructor copy for no_school_day. Parents get the operator-editable
@@ -409,13 +425,16 @@ serve(async (req) => {
   // Daily run only: the sweep and event mode never run this template anyway.
   // Not in an only_template run aimed at some OTHER template: that mode promises
   // to narrow a daily run, never to do extra work.
-  if (!eventRegistrationId && !sweepWelcome && (!onlyTemplateKey || onlyTemplateKey === "class_photos")) {
-    const { error: ensureErr } = await supabase.rpc("ensure_default_on_automation", { p_template_key: "class_photos" });
-    if (ensureErr) {
-      // Not fatal to the other automations; a provider without a row simply gets
-      // no photo email today and is retried tomorrow.
-      summary.errors.push({ ensure_default_on_automation: ensureErr.message });
-      console.error("[lifecycle-automations-cron] ensure_default_on_automation failed:", ensureErr);
+  if (!eventRegistrationId && !sweepWelcome) {
+    for (const templateKey of DEFAULT_ON_TEMPLATE_KEYS) {
+      if (onlyTemplateKey && onlyTemplateKey !== templateKey) continue;
+      const { error: ensureErr } = await supabase.rpc("ensure_default_on_automation", { p_template_key: templateKey });
+      if (ensureErr) {
+        // Not fatal to the other automations; a provider without a row simply gets
+        // no email from this template today and is retried tomorrow.
+        summary.errors.push({ ensure_default_on_automation: ensureErr.message, template_key: templateKey });
+        console.error(`[lifecycle-automations-cron] ensure_default_on_automation(${templateKey}) failed:`, ensureErr);
+      }
     }
   }
 
@@ -525,6 +544,9 @@ async function runAutomation(
       return await runPartnerRosterAutomation(supabase, a);
     case "class_photos_uploaded":
       audience = await resolveClassPhotosAudience(supabase, a);
+      break;
+    case "installment_reminder":
+      audience = await resolveInstallmentReminderAudience(supabase, a);
       break;
     case "event_registration_confirmed":
       // Handled by stripe-webhook (registration table → confirmation email).
@@ -1040,6 +1062,9 @@ async function renderLifecycleEmail(supabase: SupabaseClient, input: RenderInput
     // class_photos sample: the REAL portal link, so a test send's button works.
     photos_url: `${PUBLIC_SITE_URL}/${org.slug}/dashboard?tab=photos`,
     photo_count: "6",
+    // installment_reminder sample, so a test send reads like the real thing.
+    charge_date: "Friday, November 6",
+    installment_label: "second",
   };
 
   // True preview: when the operator picked a real camp/program, overwrite the
@@ -1925,6 +1950,96 @@ async function resolveClassPhotosAudience(
     next_term_available: false,
     photos_url: photosUrl,
     photo_count: String(rec.photo_count),
+  }));
+}
+
+// ─── Payment coming up (installment_reminder) ───────────────────────────────
+// Families with a payment-plan charge landing in the next REMINDER_DAYS_AHEAD days.
+// READ-ONLY on installments: process-installments stays the only thing that
+// charges a card. Who is reminded and about which date lives in
+// installmentReminderAudience.ts (tested); this function only loads the rows.
+//
+// THE CALENDAR IS THE CHARGER'S: UTC dates, the same `today` process-installments
+// compares due_date against, so "charged on Friday" names the day it is charged.
+//
+// FAIL DIRECTION: a failed read throws, so the run records the failure and sends
+// nothing today (LESS email, never more); tomorrow's run covers the same window.
+// A discarded error here would read as "no charge is coming" and families would
+// silently never be warned, which is the thing this email exists to prevent.
+async function resolveInstallmentReminderAudience(
+  supabase: SupabaseClient,
+  a: AutomationRow,
+): Promise<AudienceEntry[]> {
+  const today = new Date().toISOString().slice(0, 10);
+  const horizon = addDaysUtc(today, REMINDER_DAYS_AHEAD);
+
+  // PAGED, for the same silent 1000-row cap as the class photos read: a dropped
+  // page would drop whole families without an error. Rows already due are loaded
+  // too (no lower bound): they are what tells a group it is being charged today.
+  const rows: ReminderRow[] = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await supabase
+      .from("installments")
+      .select(`
+        id, organization_id, stripe_customer_id, stripe_payment_method_id,
+        installment_number, due_date, status, registration_id,
+        registrations!inner (
+          status, parent_id, stripe_checkout_session_id,
+          students ( first_name ),
+          programs ( curriculum ),
+          parents ( id, first_name, email )
+        )
+      `)
+      .eq("organization_id", a.organization_id)
+      .eq("status", "pending")
+      .lte("due_date", horizon)
+      .order("id", { ascending: true })
+      .range(from, from + PAGE_SIZE - 1);
+    if (error) throw error;
+    for (const r of (data ?? []) as any[]) {
+      rows.push({
+        id: r.id,
+        organization_id: r.organization_id,
+        stripe_customer_id: r.stripe_customer_id ?? null,
+        stripe_payment_method_id: r.stripe_payment_method_id ?? null,
+        installment_number: r.installment_number,
+        due_date: r.due_date,
+        status: r.status,
+        registration_id: r.registration_id,
+        stripe_checkout_session_id: r.registrations?.stripe_checkout_session_id ?? null,
+        registration_status: r.registrations?.status ?? null,
+        parent_id: r.registrations?.parents?.id ?? r.registrations?.parent_id ?? null,
+        parent_email: r.registrations?.parents?.email ?? null,
+        parent_first_name: r.registrations?.parents?.first_name ?? null,
+        child_first_name: r.registrations?.students?.first_name ?? null,
+        program_name: r.registrations?.programs?.curriculum ?? null,
+      });
+    }
+    if (!data || data.length < PAGE_SIZE) break;
+  }
+
+  return installmentReminderRecipients(rows, today).map((rec) => ({
+    context_key: rec.context_key,
+    parent_id: rec.parent_id,
+    parent_email: rec.parent_email,
+    parent_first_name: rec.parent_first_name,
+    child_first_name: rec.child_first_name,
+    program_name: rec.program_name,
+    program_start_date: "",
+    program_end_date: "",
+    location_name: "",
+    abandoned_resume_url: "",
+    age_turning: "",
+    final_showcase_raw: "",
+    mid_term_skills_raw: [],
+    final_recap_skills_raw: [],
+    arrival_instructions_raw: "",
+    dismissal_instructions_raw: "",
+    session_dates_raw: [],
+    register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
+    next_term_available: false,
+    charge_date: formatRetryDate(rec.charge_date),
+    installment_label: installmentLabel(rec.installment_number),
   }));
 }
 
@@ -3574,6 +3689,9 @@ function buildTokens(entry: AudienceEntry, brand: OrgBrand): Record<string, stri
     // class_photos - "" for every other template.
     photos_url: entry.photos_url ?? "",
     photo_count: entry.photo_count ?? "",
+    // installment_reminder - "" for every other template.
+    charge_date: entry.charge_date ?? "",
+    installment_label: entry.installment_label ?? "",
   };
 }
 
