@@ -83,6 +83,10 @@ const TOKENS_BY_TEMPLATE_KEY = {
   // photos are never in the email); {{photo_count}} = how many were shared that day.
   // child_first_name joins siblings in the same class ("Ada and Ben").
   class_photos:           ["first_name", "child_first_name", "program_name", "photos_url", "photo_count", "org_name", "sender_name"],
+  // installment_reminder: {{charge_date}} = the day the card is charged ("Friday,
+  // November 6"); {{installment_label}} = "first"/"second"/"third". No amount token
+  // on purpose: the charge includes a fee share only the charger can work out.
+  installment_reminder:   ["first_name", "child_first_name", "program_name", "charge_date", "installment_label", "org_name", "sender_name"],
   // Board sends (operator_initiated): the operator edits the INTRO paragraph
   // ONLY, and the edge fn renders that intro as ESCAPED PLAIN TEXT with no token
   // substitution — the greeting ("Hi <name>,"), assignment details, response
@@ -140,6 +144,8 @@ function sampleTokens(orgName, senderName, primaryColor, orgSlug) {
     // The same portal link the cron builds, so a preview's button goes somewhere real.
     photos_url: orgSlug ? `${PUBLIC_SITE}/${orgSlug}/dashboard?tab=photos` : "#",
     photo_count: "6",
+    charge_date: "Friday, November 6",
+    installment_label: "second",
     register_url: registerUrl,
     final_showcase_block:
       `<div style="background:#f5f4ee;border-left:3px solid ${color};padding:12px 16px;margin:16px 0;border-radius:0 6px 6px 0;"><strong>On the final day:</strong> Campers host a Playtest Arcade where every kid loads their finished platformer onto a Chromebook and the whole group rotates through playing each other's games.</div>`,

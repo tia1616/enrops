@@ -131,6 +131,10 @@ eq('no row + class_photos -> sending', automationIsSending(null, 'class_photos')
 eq('stored false beats the class_photos default', automationIsSending({ enabled: false }, 'class_photos'), false);
 // Every provider sees it in Comms, because every provider is sending it.
 eq('class_photos is listed on every tier', ALWAYS_LISTED_AUTOMATION_KEYS.has('class_photos'), true);
+eq('installment_reminder is opt-out', isOptOutAutomation('installment_reminder'), true);
+eq('no row + installment_reminder -> sending', automationIsSending(null, 'installment_reminder'), true);
+eq('stored false beats the installment_reminder default', automationIsSending({ enabled: false }, 'installment_reminder'), false);
+eq('installment_reminder is listed on every tier', ALWAYS_LISTED_AUTOMATION_KEYS.has('installment_reminder'), true);
 eq('the always-listed set is not a back door for upgrade automations',
    ['check_in', 'mid_recap', 'final_recap', 'birthday', 'welcome_contact', 'review_request', 'abandoned_registration', 'partner_roster']
      .some((k) => ALWAYS_LISTED_AUTOMATION_KEYS.has(k)),
