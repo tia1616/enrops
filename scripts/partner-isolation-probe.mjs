@@ -129,16 +129,26 @@ function scanFields(label, list, allowed) {
 
 // ---------------------------------------------------------------- ground truth (service role)
 const grantsRes = await asService(
-  '/rest/v1/partner_portal_access?select=id,partner_id,organization_id,role,contact_id,contact:partner_contacts(contact_email)',
+  '/rest/v1/partner_portal_access?select=id,partner_id,organization_id,role,contact_id,site_ids,contact:partner_contacts(contact_email)',
 );
 const allGrants = rows(grantsRes);
 const docsRes = await asService(`/rest/v1/provider_documents?select=id,organization_id,partner_id,storage_path`);
 const allDocs = rows(docsRes);
-const locRes = await asService('/rest/v1/program_locations?select=name,partner_id&partner_id=not.is.null');
+const locRes = await asService('/rest/v1/program_locations?select=id,name,partner_id&partner_id=not.is.null');
 const sitesByPartner = new Map();
+const siteName = new Map();
 for (const l of rows(locRes)) {
   if (!sitesByPartner.has(l.partner_id)) sitesByPartner.set(l.partner_id, new Set());
   sitesByPartner.get(l.partner_id).add(l.name);
+  siteName.set(l.id, l.name);
+}
+// The site names one host may see at one partner (20261030a): every site when
+// any of its logins there is unrestricted (site_ids null), else only the sites
+// its logins list.
+function allowedSites(h, p) {
+  const mine = h.grants.filter((g) => g.partner_id === p);
+  if (mine.some((g) => !Array.isArray(g.site_ids))) return sitesByPartner.get(p) ?? new Set();
+  return new Set(mine.flatMap((g) => g.site_ids).map((id) => siteName.get(id)).filter(Boolean));
 }
 const partnerIdsInPlay = [...new Set(allGrants.map((g) => g.partner_id))];
 // The ground truth must load, or every CONTROL below passes against nothing.
@@ -202,10 +212,11 @@ for (const h of hosts) {
     if (h.partners.has(p)) {
       const list = rows(r);
       ownInstructorRows.push(...list);
-      const sites = sitesByPartner.get(p) ?? new Set();
+      // Its own sites, or only the sites its login is limited to (20261030a).
+      const sites = allowedSites(h, p);
       // An empty or missing sites list is a failure too: every() is true for [].
       const offSite = list.filter((x) => !(x.sites?.length > 0 && x.sites.every((s) => sites.has(s))));
-      ok(`${who} instructors are only at its own sites`, offSite.length === 0,
+      ok(`${who} instructors are only at the sites its login allows`, offSite.length === 0,
         offSite.map((x) => `${x.first_name} @ ${(x.sites ?? []).join('/')}`).join('; '));
     } else {
       ok(`${who} gets no instructors for another partner (${p.slice(0, 8)})`, gotNothing(r), `${rows(r).length} row(s)`);

@@ -7,14 +7,20 @@
 // email live only on the contact (Locations). Owners and admins grant and
 // remove (partner_portal_access RLS: can_admin_org). "Send sign-in link"
 // EMAILS A REAL PERSON, so it always asks first.
+//
+// Sites (20261030a; Arielle's Oct 28 Impact NW promise, "each person sees only
+// their own sites"): a login sees every site of the partner, or only the sites
+// ticked here. It limits the instructors they see; documents are the
+// partner's own and every login sees them. Changed later with "Change sites"
+// (set_partner_access_sites), the only write path for it.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   listPortalAccess, listGrantableContacts, grantPortalAccess, removePortalAccess,
-  sendPartnerSignInLink,
+  sendPartnerSignInLink, listPartnerSites, setPortalAccessSites,
 } from "../../lib/partnerPortal.js";
-import { accessStatus, contactsWithoutAccess } from "../../lib/partnerPortalLogic.js";
+import { accessStatus, contactsWithoutAccess, siteScopeLabel, siteIdsToSave } from "../../lib/partnerPortalLogic.js";
 import { supabase } from "../../lib/supabase";
 import { listProviderDocuments } from "../../lib/providerDocuments.js";
 
@@ -38,20 +44,62 @@ function primaryBtn(disabled) {
   return { padding: "9px 16px", background: BRIGHT, color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, fontFamily: "inherit", cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.5 : 1, whiteSpace: "nowrap" };
 }
 
+// "Every site" or "Only these sites" + a tick per site. Archived sites are
+// offered only when already chosen, so a saved choice can still be unticked.
+function SitePicker({ partnerName, sites, everySite, picked, disabled, onChange }) {
+  // One radio group per picker (the give-access form and a login's editor can
+  // both be open), so arrow keys move between its two choices.
+  const group = useId();
+  const offered = sites.filter((s) => !s.archived || picked.includes(s.id));
+  const radio = { display: "flex", alignItems: "center", gap: 8, fontSize: 13.5, color: INK, cursor: disabled ? "default" : "pointer" };
+  return (
+    <div role="radiogroup" aria-label="Which sites they see" style={{ display: "grid", gap: 6 }}>
+      <label style={radio}>
+        <input type="radio" name={group} checked={everySite} disabled={disabled} onChange={() => onChange(true, picked)} />
+        Every {partnerName} site, including ones added later
+      </label>
+      <label style={radio}>
+        <input type="radio" name={group} checked={!everySite} disabled={disabled} onChange={() => onChange(false, picked)} />
+        Only these sites
+      </label>
+      {!everySite && (
+        <div style={{ display: "grid", gap: 4, paddingLeft: 26 }}>
+          {offered.map((s) => (
+            <label key={s.id} style={{ ...radio, fontSize: 13 }}>
+              <input
+                type="checkbox"
+                checked={picked.includes(s.id)}
+                disabled={disabled}
+                onChange={(e) => onChange(false, e.target.checked ? [...picked, s.id] : picked.filter((x) => x !== s.id))}
+              />
+              {s.name}{s.archived ? " (archived)" : ""}
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function PartnerLoginsSection({ org, partner, canManage, onMessage }) {
   const [grants, setGrants] = useState(null);
   const [contacts, setContacts] = useState([]);
+  const [sites, setSites] = useState([]);
   const [contactId, setContactId] = useState("");
   // Spec v3 roles. Same view on Oct 30; only an admin will record decisions.
   const [role, setRole] = useState("host_admin");
+  const [everySite, setEverySite] = useState(true);
+  const [picked, setPicked] = useState([]);
+  const [editing, setEditing] = useState(null); // { id, everySite, picked } | null
   const [busy, setBusy] = useState(null); // grant id, or "grant"
   const [error, setError] = useState("");
 
   async function load() {
     try {
-      const [g, c] = await Promise.all([listPortalAccess(org.id), listGrantableContacts(org.id)]);
+      const [g, c, s] = await Promise.all([listPortalAccess(org.id), listGrantableContacts(org.id), listPartnerSites(org.id, partner.id)]);
       setGrants(g.filter((x) => x.partner_id === partner.id));
       setContacts(c.filter((x) => x.partner_id === partner.id));
+      setSites(s);
       setError("");
     } catch (err) {
       setError(`Couldn't load partner logins: ${err?.message ?? "unknown error"}`);
@@ -62,19 +110,42 @@ export default function PartnerLoginsSection({ org, partner, canManage, onMessag
   useEffect(() => { if (org?.id) load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [org?.id, partner.id]);
 
   const available = useMemo(() => contactsWithoutAccess(contacts, grants), [contacts, grants]);
+  // A choice of sites only means something with two or more.
+  const canChooseSites = sites.filter((s) => !s.archived).length > 1;
+  const grantSites = canChooseSites ? siteIdsToSave(everySite, picked) : null;
+  const grantSitesMissing = Array.isArray(grantSites) && grantSites.length === 0;
 
   async function grant() {
-    if (!contactId || busy) return;
+    if (!contactId || busy || grantSitesMissing) return;
     setBusy("grant"); setError("");
     try {
-      await grantPortalAccess(org.id, contactId, role);
+      await grantPortalAccess(org.id, contactId, role, grantSites);
       // Reset the picker: the person just given access leaves its options.
       setContactId("");
       setRole("host_admin");
+      setEverySite(true);
+      setPicked([]);
       onMessage("Access given. Send them a sign-in link when you're ready.");
       await load();
     } catch (err) {
       setError(`Couldn't give access: ${err?.message ?? "unknown error"}`);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function saveSites() {
+    if (!editing || busy) return;
+    const next = siteIdsToSave(editing.everySite, editing.picked);
+    if (Array.isArray(next) && next.length === 0) return;
+    setBusy(editing.id); setError("");
+    try {
+      await setPortalAccessSites(editing.id, next);
+      setEditing(null);
+      onMessage("Sites saved.");
+      await load();
+    } catch (err) {
+      setError(`Couldn't save the sites: ${err?.message ?? "unknown error"}`);
     } finally {
       setBusy(null);
     }
@@ -147,8 +218,42 @@ export default function PartnerLoginsSection({ org, partner, canManage, onMessag
                   <div style={{ fontSize: 13, color: MUTED, marginTop: 2, overflowWrap: "anywhere" }}>
                     {g.contact?.contact_email} · {ROLE_LABEL[g.role] ?? "Admin"}
                   </div>
+                  {(canChooseSites || Array.isArray(g.site_ids)) && (
+                    <div style={{ fontSize: 13, color: MUTED, marginTop: 4, overflowWrap: "anywhere" }}>
+                      Sees: {siteScopeLabel(g.site_ids, sites)}
+                      {canManage && editing?.id !== g.id && (
+                        <button
+                          type="button" style={{ ...linkBtn, marginLeft: 10 }} disabled={!!busy}
+                          // Only sites still under this partner: one since moved to another
+                          // partner can't be shown, unticked or saved (the database refuses it).
+                          onClick={() => setEditing({ id: g.id, everySite: !Array.isArray(g.site_ids), picked: (g.site_ids ?? []).filter((id) => sites.some((s) => s.id === id)) })}
+                        >
+                          Change sites
+                        </button>
+                      )}
+                    </div>
+                  )}
                   <span style={{ display: "inline-block", marginTop: 6, padding: "2px 9px", borderRadius: 999, fontSize: 12, fontWeight: 600, background: t.bg, color: t.ink, border: `1px solid ${t.border}` }}>{st.label}</span>
                   {archived && <div style={{ fontSize: 12.5, color: "#92400e", marginTop: 6 }}>This partner is archived, so this person can't see anything until it's active again.</div>}
+                  {editing?.id === g.id && (
+                    <div style={{ marginTop: 10, padding: "12px 14px", background: "#faf9ff", border: `1px solid ${RULE}`, borderRadius: 10 }}>
+                      <SitePicker
+                        partnerName={partner.partner_name} sites={sites} everySite={editing.everySite} picked={editing.picked}
+                        disabled={!!busy} onChange={(every, ids) => setEditing({ ...editing, everySite: every, picked: ids })}
+                      />
+                      <div style={{ display: "flex", gap: 14, alignItems: "center", marginTop: 10 }}>
+                        <button
+                          type="button" onClick={saveSites}
+                          disabled={!!busy || (!editing.everySite && editing.picked.length === 0)}
+                          style={primaryBtn(!!busy || (!editing.everySite && editing.picked.length === 0))}
+                        >
+                          {busy === g.id ? "Saving…" : "Save sites"}
+                        </button>
+                        <button type="button" style={linkBtn} disabled={!!busy} onClick={() => setEditing(null)}>Cancel</button>
+                        {!editing.everySite && editing.picked.length === 0 && <span style={{ fontSize: 12.5, color: MUTED }}>Choose at least one site.</span>}
+                      </div>
+                    </div>
+                  )}
                 </div>
                 {canManage && (
                   <div style={{ display: "flex", gap: 14, alignItems: "center", paddingTop: 2 }}>
@@ -180,10 +285,23 @@ export default function PartnerLoginsSection({ org, partner, canManage, onMessag
                 <option value="host_viewer">{ROLE_LABEL.host_viewer}</option>
               </select>
             </div>
-            <button type="button" onClick={grant} disabled={!contactId || !!busy} style={primaryBtn(!contactId || !!busy)}>
+            <button type="button" onClick={grant} disabled={!contactId || !!busy || grantSitesMissing} style={primaryBtn(!contactId || !!busy || grantSitesMissing)}>
               {busy === "grant" ? "Saving…" : "Give access"}
             </button>
           </div>
+          {canChooseSites && (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: INK, marginBottom: 6 }}>Which sites they see</div>
+              <SitePicker
+                partnerName={partner.partner_name} sites={sites} everySite={everySite} picked={picked}
+                disabled={!!busy} onChange={(every, ids) => { setEverySite(every); setPicked(ids); }}
+              />
+              {grantSitesMissing && <div style={{ fontSize: 12.5, color: MUTED, marginTop: 6 }}>Choose at least one site.</div>}
+              <div style={{ fontSize: 12.5, color: MUTED, marginTop: 6, lineHeight: 1.5 }}>
+                This limits the instructors they see. Your documents for {partner.partner_name} show to everyone with a login.
+              </div>
+            </div>
+          )}
           <div style={{ fontSize: 12.5, color: MUTED, marginTop: 8, lineHeight: 1.5 }}>
             Not listed? Add them as a contact in <Link to="/admin/schools" style={{ color: BRIGHT }}>Locations</Link> first.
             Nothing is emailed until you click Send sign-in link.

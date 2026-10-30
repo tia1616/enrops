@@ -22,6 +22,28 @@ export function accessStatus(row) {
   return { tone: "neutral", label: "No sign-in link sent yet" };
 }
 
+/**
+ * Which sites a login sees, in words. `siteIds` null = every site
+ * (partner_portal_access.site_ids, 20261030a); `sites` = the partner's sites.
+ * A saved site the list no longer has still counts, under a neutral name.
+ */
+export function siteScopeLabel(siteIds, sites) {
+  if (!Array.isArray(siteIds)) return "All sites";
+  const names = new Map((sites || []).map((s) => [s.id, s.name]));
+  return siteIds.map((id) => names.get(id) ?? "A site no longer listed").join(", ");
+}
+
+/**
+ * The site_ids to save from the picker. "Every site" is an explicit choice
+ * (null, which also covers a site added later), never inferred from ticking
+ * every box: a site manager given both of today's sites must not silently gain
+ * the next one. Otherwise the ticked ids; empty = not savable.
+ */
+export function siteIdsToSave(everySite, picked) {
+  if (everySite) return null;
+  return [...new Set(picked || [])].sort();
+}
+
 /** Contacts that can still be given access: not already granted. */
 export function contactsWithoutAccess(contacts, grants) {
   const granted = new Set((grants || []).map((g) => g.contact_id));
