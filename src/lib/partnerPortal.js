@@ -10,7 +10,7 @@ import { supabase } from "./supabase";
 export async function listPortalAccess(orgId) {
   const { data, error } = await supabase
     .from("partner_portal_access")
-    .select("id, partner_id, contact_id, role, auth_user_id, last_link_sent_at, last_signed_in_at, created_at, contact:partner_contacts(contact_name, contact_email), partner:partners(partner_name, inactive)")
+    .select("id, partner_id, contact_id, role, site_ids, auth_user_id, last_link_sent_at, last_signed_in_at, created_at, contact:partner_contacts(contact_name, contact_email), partner:partners(partner_name, inactive)")
     .eq("organization_id", orgId)
     .order("created_at", { ascending: true });
   if (error) throw error;
@@ -30,14 +30,37 @@ export async function listGrantableContacts(orgId) {
   return (data ?? []).filter((c) => (c.contact_email || "").trim());
 }
 
-/** Give one partner contact access. The database fills in the provider and partner from the contact. */
-export async function grantPortalAccess(orgId, contactId, role = "host_admin") {
+/**
+ * Give one partner contact access. The database fills in the provider and partner from the contact.
+ * `siteIds` null = every site of the partner; otherwise only those sites
+ * (checked against the partner by the insert guard, 20261030a).
+ */
+export async function grantPortalAccess(orgId, contactId, role = "host_admin", siteIds = null) {
   const { error } = await supabase
     .from("partner_portal_access")
     // organization_id is sent for readability only: the insert trigger overwrites
     // it (and partner_id) from the contact before the RLS check runs.
-    .insert({ contact_id: contactId, organization_id: orgId, role });
+    .insert({ contact_id: contactId, organization_id: orgId, role, site_ids: siteIds });
   if (error) throw error;
+}
+
+/** Change which sites an existing login sees (null = every site). Owner/admin only; false = refused. */
+export async function setPortalAccessSites(accessId, siteIds) {
+  const { data, error } = await supabase.rpc("set_partner_access_sites", { p_access_id: accessId, p_site_ids: siteIds });
+  if (error) throw error;
+  if (data !== true) throw new Error("Only an owner or admin can change which sites a login sees.");
+}
+
+/** One partner's sites (program locations), archived ones included so a saved choice still has a name. */
+export async function listPartnerSites(orgId, partnerId) {
+  const { data, error } = await supabase
+    .from("program_locations")
+    .select("id, name, archived")
+    .eq("organization_id", orgId)
+    .eq("partner_id", partnerId)
+    .order("name", { ascending: true });
+  if (error) throw error;
+  return data ?? [];
 }
 
 export async function removePortalAccess(id) {

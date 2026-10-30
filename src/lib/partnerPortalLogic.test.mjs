@@ -170,6 +170,20 @@ eq('already-granted contacts are not offered again', contactsWithoutAccess(conta
   ok('every instructor requirement has a header date word', REQUIREMENTS.filter((r) => r.kind === 'instructor').every((r) => GRID_DATE[r.key]));
 }
 
+// --- logins limited to some sites (20261030a) ---------------------------------
+{
+  const { siteScopeLabel, siteIdsToSave } = await import('./partnerPortalLogic.js');
+  const sites = [{ id: 'b', name: 'Buckman Elementary' }, { id: 'w', name: 'Whitman Elementary School' }, { id: 'x', name: 'Old site', archived: true }];
+  eq('null = every site', siteScopeLabel(null, sites), 'All sites');
+  eq('a chosen site by name', siteScopeLabel(['w'], sites), 'Whitman Elementary School');
+  eq('a site no longer listed keeps a neutral name', siteScopeLabel(['gone'], sites), 'A site no longer listed');
+  eq('"every site" is saved as null', siteIdsToSave(true, ['b']), null);
+  // A site manager given both of today's sites must not silently gain the next one.
+  eq('ticking every box is still "only these"', siteIdsToSave(false, ['w', 'b']), ['b', 'w']);
+  eq('duplicates collapse', siteIdsToSave(false, ['b', 'b']), ['b']);
+  eq('nothing ticked = empty (not savable), never "every site"', siteIdsToSave(false, []), []);
+}
+
 // --- the provider's partner list (2026-10-27) ---------------------------------
 {
   const { partnersInUse } = await import('./partnerPortalLogic.js');
