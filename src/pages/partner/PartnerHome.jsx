@@ -96,9 +96,15 @@ export default function PartnerHome() {
       <div className="text-sm font-semibold uppercase tracking-wide text-j2s-ink/50">{partnerNames}</div>
       {/* Spec v3 header, word for word. Never "vendor compliance". */}
       <h1 className="mt-1 text-3xl font-bold text-j2s-ink">Your providers' safety record</h1>
-      {/* Messaging house v2's short descriptor, word for word; it assigns this
-          line to the partner portal header (Jessica's go, 2026-10-26). */}
-      <p className="mt-1 text-sm text-j2s-ink/60">enrops is the host-ready record for outside youth providers.</p>
+      {/* The site's new language (Arielle 2026-10-29), word for word: the
+          headline, then "what it is". Replaces messaging house v2's "host-ready
+          record" line (Jessica's go, 2026-10-30). The Hosts line ("invite your
+          providers...") stays off: invites are off for partners until end of winter. */}
+      <p className="mt-1 text-base font-semibold text-j2s-ink/80">Every adult in the room, accounted for.</p>
+      <p className="mt-1 text-sm text-j2s-ink/60">
+        One current safety record for every outside youth provider who works in a host's buildings, free for the parks,
+        schools and programs that host them.
+      </p>
 
       <div className="mt-6 grid grid-cols-5 gap-2 sm:max-w-2xl">
         {STATES.map((s) => (
