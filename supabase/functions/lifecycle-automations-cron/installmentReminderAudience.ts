@@ -39,6 +39,9 @@ export interface ReminderRow {
   registration_id: string;
   stripe_checkout_session_id: string | null;
   registration_status: string | null;
+  // The charger pauses a row whose PROGRAM is cancelled instead of charging it
+  // (process-installments, 'paused_program_cancelled'), so it is not coming up.
+  program_status: string | null;
   parent_id: string | null;
   parent_email: string | null;
   parent_first_name: string | null;
@@ -95,6 +98,7 @@ export function installmentReminderRecipients(
     // No saved card = nothing will be charged, and "your card on file" would be a lie.
     if (!r.stripe_payment_method_id) continue;
     if (r.registration_status && NOT_CHARGEABLE_REGISTRATION_STATUSES.includes(r.registration_status)) continue;
+    if (r.program_status === "cancelled") continue;
     const key = installmentGroupKey({
       organization_id: r.organization_id,
       stripe_customer_id: r.stripe_customer_id,

@@ -22,6 +22,7 @@ const row = (over: Partial<ReminderRow> = {}): ReminderRow => ({
   registration_id: "reg1",
   stripe_checkout_session_id: "cs_1",
   registration_status: "confirmed",
+  program_status: "open",
   parent_id: "par1",
   parent_email: "mom@example.com",
   parent_first_name: "Sam",
@@ -88,6 +89,22 @@ Deno.test("two separate checkouts by one parent are two charges, two emails", ()
 Deno.test("a cancelled or refunded registration is never charged, so never reminded", () => {
   assertEquals(installmentReminderRecipients([row({ registration_status: "cancelled" })], TODAY), []);
   assertEquals(installmentReminderRecipients([row({ registration_status: "refunded" })], TODAY), []);
+});
+
+Deno.test("a cancelled PROGRAM is paused by the charger, never charged, so never reminded", () => {
+  assertEquals(installmentReminderRecipients([row({ program_status: "cancelled" })], TODAY), []);
+});
+
+Deno.test("the cron's default-on list and the Comms screen's opt-out list are the same", () => {
+  const cron = Deno.readTextFileSync(new URL("./index.ts", import.meta.url));
+  const ui = Deno.readTextFileSync(new URL("../../../src/lib/entitlements.js", import.meta.url));
+  const listed = /DEFAULT_ON_TEMPLATE_KEYS = \[([^\]]*)\]/.exec(cron)?.[1] ?? "";
+  const keys = [...listed.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]).sort();
+  const optOut = ui.slice(ui.indexOf("export function isOptOutAutomation"), ui.indexOf("ALWAYS_LISTED_AUTOMATION_KEYS"));
+  // thank_you is opt-out too but is sent by stripe-webhook, not this cron's default-on step.
+  const uiKeys = [...optOut.matchAll(/templateKey === "([a-z_]+)"/g)].map((m) => m[1]).filter((k) => k !== "thank_you").sort();
+  assertEquals(keys.length > 0, true);
+  assertEquals(keys, uiKeys);
 });
 
 Deno.test("a cancelled sibling does not drag a live row's date", () => {

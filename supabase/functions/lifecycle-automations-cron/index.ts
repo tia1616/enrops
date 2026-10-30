@@ -1986,7 +1986,7 @@ async function resolveInstallmentReminderAudience(
         registrations!inner (
           status, parent_id, stripe_checkout_session_id,
           students ( first_name ),
-          programs ( curriculum ),
+          programs ( curriculum, status ),
           parents ( id, first_name, email )
         )
       `)
@@ -2008,6 +2008,7 @@ async function resolveInstallmentReminderAudience(
         registration_id: r.registration_id,
         stripe_checkout_session_id: r.registrations?.stripe_checkout_session_id ?? null,
         registration_status: r.registrations?.status ?? null,
+        program_status: r.registrations?.programs?.status ?? null,
         parent_id: r.registrations?.parents?.id ?? r.registrations?.parent_id ?? null,
         parent_email: r.registrations?.parents?.email ?? null,
         parent_first_name: r.registrations?.parents?.first_name ?? null,
