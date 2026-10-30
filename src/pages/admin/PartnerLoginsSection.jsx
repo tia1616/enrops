@@ -221,7 +221,9 @@ export default function PartnerLoginsSection({ org, partner, canManage, onMessag
                       {canManage && editing?.id !== g.id && (
                         <button
                           type="button" style={{ ...linkBtn, marginLeft: 10 }} disabled={!!busy}
-                          onClick={() => setEditing({ id: g.id, everySite: !Array.isArray(g.site_ids), picked: g.site_ids ?? [] })}
+                          // Only sites still under this partner: one since moved to another
+                          // partner can't be shown, unticked or saved (the database refuses it).
+                          onClick={() => setEditing({ id: g.id, everySite: !Array.isArray(g.site_ids), picked: (g.site_ids ?? []).filter((id) => sites.some((s) => s.id === id)) })}
                         >
                           Change sites
                         </button>
