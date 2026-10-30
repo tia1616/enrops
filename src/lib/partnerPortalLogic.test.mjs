@@ -45,7 +45,9 @@ eq('already-granted contacts are not offered again', contactsWithoutAccess(conta
     agreement_signed_on: '2026-08-20',
   }, ORG, TODAY);
   eq('check line', [full[0].badge.label, full[0].detail], ['Current', 'Completed Oct 10, 2026 · Renews Oct 10, 2027']);
-  eq('check as of + source', full[0].meta, 'as of Oct 12, 2026 · Source: entered by Acme Kids · Screening company: Yardstik');
+  eq('check as of + source', full[0].meta, "as of Oct 12, 2026 · Source: entered by Acme Kids · from the provider's screening partner");
+  // Arielle 2026-10-29: the vendor's name never reaches a partner, on any line.
+  ok('no line names the screening company', full.every((l) => !/Yardstik/.test(`${l.detail} ${l.meta} ${l.title}`)));
   eq('training as of + source', full[1].meta, 'as of Oct 20, 2026 · Source: entered by Acme Kids');
   eq('signed item as of + source', full[2].meta, 'as of Aug 20, 2026 · Source: signed by the instructor in enrops');
   eq('five lines in order', full.map((l) => l.key), ['background_check', 'training', 'code_of_conduct', 'mandatory_reporter', 'contractor_agreement']);
