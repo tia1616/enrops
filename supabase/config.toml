@@ -281,6 +281,11 @@ verify_jwt = false
 [functions.delivery-alert-cron]
 verify_jwt = false
 
+# Daily safety-record expiry email (20261102c). Gated by EXPIRY_ALERT_SECRET in
+# x-cron-secret, not by a JWT.
+[functions.record-expiry-cron]
+verify_jwt = false
+
 [functions.marketing-resend-webhook]
 verify_jwt = false
 
