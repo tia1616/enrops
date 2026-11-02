@@ -22,6 +22,7 @@ import ProviderDocumentForm from "./ProviderDocumentForm.jsx";
 import PartnerLoginsSection from "./PartnerLoginsSection.jsx";
 import PartnerRequirementsSection from "./PartnerRequirementsSection.jsx";
 import { DocumentsTable, InstructorGrid, RecordSummary } from "../partner/ProviderRecord.jsx";
+import PartnerDecision from "../partner/PartnerDecision.jsx";
 import { todayIso } from "../partner/partnerShared.jsx";
 import { usePermissions } from "../../lib/permissions.js";
 import { listPartnerInstructors, listPartnerRequirements } from "../../lib/partnerPortal.js";
@@ -195,6 +196,7 @@ export default function PartnerRecord() {
             key={partnerId} s={s} instructors={instructors} orgName={orgName} today={today}
             viewer="provider" partnerName={partner.partner_name}
           />
+          <PartnerDecision key={`decision:${partnerId}`} partnerId={partnerId} partnerName={partner.partner_name} />
         </>
       )}
 

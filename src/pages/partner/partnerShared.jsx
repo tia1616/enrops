@@ -13,12 +13,12 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext.jsx";
 import { myPartnerMemberships, sendPartnerSignInLink } from "../../lib/partnerPortal.js";
+import { localDateOf } from "../../lib/partnerPortalLogic.js";
 import FeedbackWidget from "../../components/feedback/FeedbackWidget.jsx";
 
 /** Today as YYYY-MM-DD in the viewer's time zone (dates a chip with nothing behind it). */
 export function todayIso() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return localDateOf(new Date());
 }
 
 export function PartnerShell({ children, onSignOut, feedbackOrg }) {

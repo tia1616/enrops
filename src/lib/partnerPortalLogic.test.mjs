@@ -207,5 +207,23 @@ eq('already-granted contacts are not offered again', contactsWithoutAccess(conta
   eq('nothing loaded, nothing listed', partnersInUse(null, null, null), []);
 }
 
+
+// --- decisions (20261102b) ---
+import { decisionRecordedLine, decisionProblem, localDateOf, DECISIONS } from './partnerPortalLogic.js';
+{
+  const d = { decided_at: '2026-11-02T20:00:00Z', decided_by_name: 'Kacy Cullen', decided_by_title: 'Recreation Coordinator', requirements_version: 1 };
+  ok('recorded line, partner voice', decisionRecordedLine(d).endsWith('by Kacy Cullen, Recreation Coordinator, against your requirements version 1.'));
+  ok('recorded line, provider voice', decisionRecordedLine(d, 'Happy Valley Parks and Rec').includes("against Happy Valley Parks and Rec's requirements version 1."));
+  ok('no name: no dangling "by"', !decisionRecordedLine({ ...d, decided_by_name: null, decided_by_title: '' }).includes(' by '));
+  eq('bad timestamp', localDateOf('nope'), null);
+  eq('needs a decision', decisionProblem({ decision: '', title: 'x' }), 'Choose a decision.');
+  eq('withdrawn is not offered', decisionProblem({ decision: 'withdrawn', title: 'x' }), 'Choose a decision.');
+  eq('needs a title', decisionProblem({ decision: 'accepted', title: '  ' }), 'Add your title.');
+  eq('not accepted needs a note', decisionProblem({ decision: 'not_accepted', title: 'x', note: ' ' }), 'Tell the provider what is missing.');
+  eq('note over 500', decisionProblem({ decision: 'accepted', title: 'x', note: 'a'.repeat(501) }), 'Keep the note under 500 characters.');
+  eq('accepted without note is fine', decisionProblem({ decision: 'accepted', title: 'x' }), null);
+  ok('spec words for accepted', DECISIONS.accepted.choice === 'Accepted: this record meets our requirements (version {N}) as of today.');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
