@@ -43,7 +43,7 @@ Deno.test("several items: one email, counted", () => {
 
 Deno.test("the button goes where the fix is", () => {
   assertEquals(linkFor([check], "https://x").href, "https://x/admin/instructors");
-  assertEquals(linkFor([check, cert], "https://x").href, "https://x/admin/partner-documents");
+  assertEquals(linkFor([check, cert], "https://x"), { href: "https://x/admin/partner-documents", label: "Update your documents" });
 });
 
 Deno.test("names are escaped in the html and there is no em dash", () => {

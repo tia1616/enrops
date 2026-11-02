@@ -61,7 +61,9 @@ function actionFor(it: DueItem): string {
 /** Where the button goes: Partner portal when any document is due, else Instructors. */
 export function linkFor(items: DueItem[], siteUrl: string): { href: string; label: string } {
   return items.some((it) => it.subject_type === "document")
-    ? { href: `${siteUrl}/admin/partner-documents`, label: "Open Partner portal" }
+    // Not "Partner portal": that is the admin menu's name for this page, but in
+    // an email it reads like the partners' side (Jessica 2026-11-02).
+    ? { href: `${siteUrl}/admin/partner-documents`, label: "Update your documents" }
     : { href: `${siteUrl}/admin/instructors`, label: "Open Instructors" };
 }
 
