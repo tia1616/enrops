@@ -152,3 +152,23 @@ export function logPartnerPortalEvent(partnerId, action, documentId = null) {
     .rpc("log_partner_portal_event", { p_partner_id: partnerId, p_action: action, p_document_id: documentId })
     .then(({ error }) => { if (error) console.warn("[partner log]", error.message); });
 }
+
+/**
+ * The decision panel for one partner (20261102b): { can_decide,
+ * requirements_version, last_title, decisions[] newest first }. null when
+ * this login may not see that partner's decisions.
+ */
+export async function getPartnerDecisions(partnerId) {
+  const { data, error } = await supabase.rpc("partner_decisions", { p_partner_id: partnerId });
+  if (error) throw error;
+  return data ?? null;
+}
+
+/** Record a decision. Host admin of that partner only; the database refuses anyone else. */
+export async function recordPartnerDecision(partnerId, { decision, note, title }) {
+  const { data, error } = await supabase.rpc("record_partner_decision", {
+    p_partner_id: partnerId, p_decision: decision, p_note: note || null, p_title: title,
+  });
+  if (error) throw error;
+  return data;
+}

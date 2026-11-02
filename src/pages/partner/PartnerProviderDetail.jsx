@@ -25,6 +25,7 @@ import { listProviderDocuments, openDocumentInNewTab } from "../../lib/providerD
 import { providerSummary, requiredKeys } from "../../lib/partnerPortalLogic.js";
 import { PartnerShell, PartnerSignIn, NoAccess, useMemberships, todayIso } from "./partnerShared.jsx";
 import { DocumentsTable, InstructorGrid, RecordSummary } from "./ProviderRecord.jsx";
+import PartnerDecision from "./PartnerDecision.jsx";
 
 export default function PartnerProviderDetail() {
   const { partnerId } = useParams();
@@ -116,6 +117,8 @@ export default function PartnerProviderDetail() {
           {/* Keyed on the partner: a picked cell must never carry over to
               another provider's record. */}
           <InstructorGrid key={m.partner_id} s={s} instructors={instructors} orgName={orgName} today={today} />
+
+          <PartnerDecision key={`decision:${m.partner_id}`} partnerId={m.partner_id} />
         </>
       )}
     </PartnerShell>

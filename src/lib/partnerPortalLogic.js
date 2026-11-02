@@ -317,3 +317,44 @@ export function providerSummary({ docs, instructors, partnerId, orgName, today, 
     sites: [...new Set((instructors || []).flatMap((r) => r.sites || []))].sort(),
   };
 }
+
+// --- A partner's decision (partner_acceptances, 20261102b) ------------------
+
+// Spec v3 H2 section 7, words exactly. `choice` is the radio text; {N} is the
+// partner's current requirements version.
+export const DECISIONS = {
+  accepted: { label: "Accepted", tone: "good", choice: "Accepted: this record meets our requirements (version {N}) as of today." },
+  accepted_alongside_own_form: { label: "Accepted alongside our own form", tone: "good", choice: "Accepted alongside our own form: we will review this record with our usual paperwork." },
+  not_accepted: { label: "Not accepted", tone: "bad", choice: "Not accepted: tell the provider what is missing." },
+  withdrawn: { label: "Withdrawn", tone: "neutral" },
+};
+export const DECISION_CHOICES = ["accepted", "accepted_alongside_own_form", "not_accepted"];
+
+/** The YYYY-MM-DD of a timestamp in the viewer's own timezone (not UTC). */
+export function localDateOf(ts) {
+  if (!ts) return null;
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return null;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/**
+ * "Recorded Nov 2, 2026 by Kacy Cullen, Recreation Coordinator, against your
+ * requirements version 1." The partner reads "your requirements"; the provider
+ * reads the partner's name.
+ */
+export function decisionRecordedLine(d, partnerName = null) {
+  const who = [d?.decided_by_name, d?.decided_by_title].map((x) => (x || "").trim()).filter(Boolean).join(", ");
+  const whose = partnerName ? `${partnerName}'s` : "your";
+  return `Recorded ${formatDate(localDateOf(d?.decided_at))}${who ? ` by ${who}` : ""}, against ${whose} requirements version ${d?.requirements_version}.`;
+}
+
+/** What a decision form may send, or the reason it may not. */
+export function decisionProblem({ decision, note, title }) {
+  if (!DECISION_CHOICES.includes(decision)) return "Choose a decision.";
+  if (!(title || "").trim()) return "Add your title.";
+  if ((title || "").trim().length > 100) return "Keep your title under 100 characters.";
+  if (decision === "not_accepted" && !(note || "").trim()) return "Tell the provider what is missing.";
+  if ((note || "").length > 500) return "Keep the note under 500 characters.";
+  return null;
+}

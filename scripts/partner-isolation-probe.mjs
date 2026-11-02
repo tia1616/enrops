@@ -225,6 +225,29 @@ for (const h of hosts) {
   ok(`${who} CONTROL: sees at least one instructor`, ownInstructorRows.length > 0);
   scanFields(`${who} instructors`, ownInstructorRows, INSTRUCTOR_FIELDS);
 
+  // Decisions (20261102b). Reads for every partner; writes only where they
+  // must be REFUSED, because an accepted write is a permanent append-only row.
+  const isAdminAt = (p) => h.grants.some((g) => g.partner_id === p && g.role === 'host_admin');
+  for (const p of partnerIdsInPlay) {
+    const r = await call('/rest/v1/rpc/partner_decisions', { token: h.token, method: 'POST', body: { p_partner_id: p } });
+    if (h.partners.has(p)) {
+      ok(`${who} CONTROL: reads its own partner's decisions`, r.status === 200 && r.json && Array.isArray(r.json.decisions), `status ${r.status}`);
+      ok(`${who} may decide only as host_admin`, r.json?.can_decide === isAdminAt(p), `can_decide ${r.json?.can_decide}`);
+    } else {
+      ok(`${who} reads no decisions for another partner (${p.slice(0, 8)})`, r.status === 200 && r.json === null, `status ${r.status}`);
+    }
+    if (!isAdminAt(p)) {
+      const w = await call('/rest/v1/rpc/record_partner_decision', {
+        token: h.token, method: 'POST',
+        body: { p_partner_id: p, p_decision: 'accepted', p_note: null, p_title: 'Isolation probe' },
+      });
+      ok(`${who} cannot record a decision at ${h.partners.has(p) ? 'its own partner as a viewer' : `another partner (${p.slice(0, 8)})`}`,
+        w.status >= 400, `status ${w.status}`);
+    }
+  }
+  const direct = await call('/rest/v1/partner_acceptances?select=id', { token: h.token });
+  ok(`${who} cannot read partner_acceptances directly`, gotNothing(direct), `status ${direct.status}`);
+
   // Documents: the view the page reads AND the base table, every column.
   for (const rel of ['provider_documents_with_status', 'provider_documents']) {
     const r = await call(`/rest/v1/${rel}?select=*`, { token: h.token });
