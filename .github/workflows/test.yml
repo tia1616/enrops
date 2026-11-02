@@ -57,7 +57,10 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # 22, matching build.yml and Netlify: @supabase/supabase-js 2.118
+          # declares engines.node >=22, and its realtime client no longer ships
+          # ws, which Node 20 (no global WebSocket) would need.
+          node-version: 22
 
       - name: Install node dependencies
         # This step did not exist until 2026-08-26, and its absence was a
