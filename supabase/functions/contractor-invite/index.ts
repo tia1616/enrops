@@ -265,6 +265,10 @@ serve(async (req: Request) => {
       `${org.name} uses enrops for contractor paperwork, scheduling, and payments. Click below to start your onboarding — it takes about 15 minutes.`,
       ``,
       `Start onboarding: ${magicLink}`,
+      ``,
+      // The link is single-use and expires, and an invite often sits unread. Say
+      // where to get a fresh one: the same page the link lands on has the form.
+      `If the link says it has expired, go to ${redirectTo} and enter ${instructorRow.email} to get a new one.`,
       ...bgcTextLines,
       ``,
       `If you have questions, reach out to the admin.`,
@@ -274,6 +278,8 @@ serve(async (req: Request) => {
       firstName,
       orgName: org.name ?? 'enrops',
       magicLink,
+      portalUrl: redirectTo,
+      email: instructorRow.email,
       signatureBlock: renderSignatureBlock(brand),
       backgroundCheck: includeBgc ? { url: bgcUrl, name: bgcName, instructions: bgcInstructions } : null,
     });
@@ -332,10 +338,12 @@ function buildEmailHtml(args: {
   firstName: string;
   orgName: string;
   magicLink: string;
+  portalUrl: string;
+  email: string;
   signatureBlock: string;
   backgroundCheck?: { url: string; name: string; instructions: string } | null;
 }): string {
-  const { firstName, orgName, magicLink, signatureBlock, backgroundCheck } = args;
+  const { firstName, orgName, magicLink, portalUrl, email, signatureBlock, backgroundCheck } = args;
 
   // Optional background-check block — only when the org requires a check and
   // has configured a provider link (see the caller's includeBgc gate).
@@ -362,7 +370,8 @@ function buildEmailHtml(args: {
   <p style="margin:24px 0;">
     <a href="${magicLink}" style="display:inline-block;padding:12px 24px;background:#1a1a1a;color:#ffffff;text-decoration:none;border-radius:6px;font-weight:600;">Start onboarding →</a>
   </p>
-  <p style="color:#666;font-size:14px;">If the button doesn't work, paste this link into your browser:<br/><span style="word-break:break-all;">${magicLink}</span></p>${bgcBlock}
+  <p style="color:#666;font-size:14px;">If the button doesn't work, paste this link into your browser:<br/><span style="word-break:break-all;">${magicLink}</span></p>
+  <p style="color:#666;font-size:14px;">If the link says it has expired, go to <a href="${escapeHtml(portalUrl)}" style="color:#5847C9;">${escapeHtml(portalUrl.replace(/^https?:\/\//, ''))}</a> and enter ${escapeHtml(email)} to get a new one.</p>${bgcBlock}
   ${signatureBlock}
 </div>`.trim();
 }
