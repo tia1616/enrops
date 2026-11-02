@@ -30,6 +30,10 @@ export default function PartnerDecision({ partnerId, partnerName = null }) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [saving, setSaving] = useState(false);
+  // The form is open only when there is nothing decided yet, or the host
+  // chose "Change decision". Recording closes it (Jessica 2026-11-02: an
+  // always-open form looked like nothing happened).
+  const [changing, setChanging] = useState(false);
   const busy = useRef(false);
 
   // The component is keyed on the partner by its parents, so partnerId never
@@ -61,9 +65,12 @@ export default function PartnerDecision({ partnerId, partnerName = null }) {
       await recordPartnerDecision(partnerId, { decision, note: note.trim(), title: title.trim() });
       setDecision("");
       setNote("");
+      setChanging(false);
       // Recorded either way; a failed reload must not read as a failed save
       // (red would invite recording it twice).
-      await load().catch(() => setNotice("Recorded. Refresh the page to see it."));
+      await load()
+        .then(() => setNotice("Decision recorded."))
+        .catch(() => setNotice("Decision recorded. Refresh the page to see it."));
     } catch (err) {
       setError(err?.message || "Couldn't record the decision. Please try again.");
     } finally {
@@ -80,10 +87,21 @@ export default function PartnerDecision({ partnerId, partnerName = null }) {
   const version = panel.requirements_version;
   const decisions = panel.decisions ?? [];
   const latest = decisions[0] ?? null;
+  const formOpen = !provider && panel.can_decide && (!latest || changing);
+
+  function cancel() {
+    setChanging(false);
+    setDecision("");
+    setNote("");
+    setError("");
+  }
 
   return (
     <section className="mt-5 rounded-2xl bg-white p-4 shadow-card">
       <h2 className="text-base font-bold text-j2s-ink">{provider ? `${partnerName}'s decision` : "Your decision"}</h2>
+      {notice && (
+        <p role="status" className="mt-2 rounded-lg bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800">{notice}</p>
+      )}
 
       {latest ? (
         <div className="mt-2">
@@ -100,7 +118,16 @@ export default function PartnerDecision({ partnerId, partnerName = null }) {
         <p className="mt-2 text-sm text-j2s-ink/60">{provider ? `${partnerName} hasn't recorded a decision yet.` : "No decision recorded yet."}</p>
       )}
 
-      {!provider && panel.can_decide && (
+      {!provider && panel.can_decide && latest && !changing && (
+        <button
+          type="button" className="btn-j2s-secondary mt-3"
+          onClick={() => { setChanging(true); setNotice(""); }}
+        >
+          Change decision
+        </button>
+      )}
+
+      {formOpen && (
         <form onSubmit={submit} className="mt-4 space-y-3 border-t border-j2s-ink/10 pt-4">
           <fieldset className="space-y-2">
             <legend className="sr-only">Decision</legend>
@@ -123,8 +150,10 @@ export default function PartnerDecision({ partnerId, partnerName = null }) {
             <input className="input-field mt-1" maxLength={100} value={title} onChange={(e) => setTitle(e.target.value)} />
           </label>
           {error && <p className="error-text">{error}</p>}
-          {notice && <p role="status" className="text-sm text-emerald-800">{notice}</p>}
-          <button type="submit" disabled={saving} className="btn-j2s-primary">{saving ? "Saving…" : "Record decision"}</button>
+          <div className="flex flex-wrap items-center gap-3">
+            <button type="submit" disabled={saving} className="btn-j2s-primary">{saving ? "Saving…" : "Record decision"}</button>
+            {latest && <button type="button" onClick={cancel} disabled={saving} className="text-sm font-semibold text-j2s-ink/60 hover:underline">Cancel</button>}
+          </div>
           <p className="text-xs text-j2s-ink/50">Your decision is saved with today's status. It is not shared with other hosts.</p>
         </form>
       )}
