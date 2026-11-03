@@ -1,7 +1,7 @@
 // Pins the claim -> send -> confirm/release order of the expiry email.
 
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { deliver } from "./deliver.ts";
+import { deliver } from "../claimThenSend.ts";
 
 function steps(opts: { claimed: string[]; send: () => Promise<number> }) {
   const log: string[] = [];

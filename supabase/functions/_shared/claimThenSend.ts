@@ -1,7 +1,8 @@
-// Claim, then send, then confirm or release - the order that keeps an expiry
-// notice from going out twice (two overlapping runs) or never (a run that dies
-// after claiming). Pure orchestration over injected steps so the order is
-// tested without a database or Resend.
+// Claim, then send, then confirm or release - the order that keeps a scheduled
+// email (an expiry notice, a Monday digest) from going out twice (two
+// overlapping runs) or never (a run that dies after claiming). Pure
+// orchestration over injected steps so the order is tested without a database
+// or Resend. Used by record-expiry-cron and partner-digest-cron.
 
 export interface DeliverSteps<T> {
   /** Insert ledger rows; return only the items THIS call inserted. */

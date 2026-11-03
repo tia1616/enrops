@@ -7,7 +7,7 @@
 // expiry-day window, in the provider's own timezone, and has not been emailed
 // for that window. One email per provider per day lists everything due.
 //
-// CLAIM, THEN SEND (deliver.ts). The ledger row (record_expiry_notices, unique
+// CLAIM, THEN SEND (_shared/claimThenSend.ts). The ledger row (record_expiry_notices, unique
 // per item, date and window) is written BEFORE the email, and only rows this
 // run actually inserted are sent, so two overlapping runs never send the same
 // notice twice. If no recipient could be emailed, or sending throws, the
@@ -28,7 +28,7 @@ import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 import { loadOrgBrand, formatFromAddress } from "../_shared/orgBrand.ts";
 import { renderExpiryEmail, type DueItem } from "./expiryEmail.ts";
-import { deliver } from "./deliver.ts";
+import { deliver } from "../_shared/claimThenSend.ts";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
