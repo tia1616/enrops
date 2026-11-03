@@ -74,7 +74,11 @@ serve(async (req) => {
   if (testTo) {
     // A test sends one sample: the first login's digest.
     const first = [...byAccess.values()][0];
-    if (first) summary.push({ partner: first[0].partner_name, items: first.length, sent: await send(brand, first, testTo) ? 1 : 0, ledger: "untouched (test)" });
+    // The sender and Resend id come back so a test that never arrives can be traced.
+    if (first) {
+      const id = await send(brand, first, testTo);
+      summary.push({ partner: first[0].partner_name, items: first.length, sent: id ? 1 : 0, from: formatFromAddress(brand), resend_id: id, ledger: "untouched (test)" });
+    }
     return json({ ok: true, mode: "test", digests: summary }, 200);
   }
 
@@ -120,7 +124,8 @@ async function sendForReal(
   return { items: rows.length, ...result };
 }
 
-async function send(brand: Awaited<ReturnType<typeof loadOrgBrand>>, rows: DigestRow[], to: string): Promise<boolean> {
+/** The Resend message id, or null when the send failed. */
+async function send(brand: Awaited<ReturnType<typeof loadOrgBrand>>, rows: DigestRow[], to: string): Promise<string | null> {
   const { subject, html, text } = renderDigest(brand, rows, PUBLIC_SITE_URL);
   try {
     const resp = await fetch("https://api.resend.com/emails", {
@@ -131,10 +136,10 @@ async function send(brand: Awaited<ReturnType<typeof loadOrgBrand>>, rows: Diges
         tags: [{ name: "type", value: "partner_digest" }],
       }),
     });
-    if (resp.ok) return true;
+    if (resp.ok) return ((await resp.json().catch(() => ({}))) as { id?: string }).id ?? "unknown";
     console.error(`[partner-digest-cron] send failed: ${resp.status} ${(await resp.text()).slice(0, 200)}`);
   } catch (e) {
     console.error(`[partner-digest-cron] send threw:`, e);
   }
-  return false;
+  return null;
 }
