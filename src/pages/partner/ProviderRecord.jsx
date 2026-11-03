@@ -10,12 +10,13 @@
 // put its own buttons on each document row (`renderActions`). What is counted,
 // and how, is providerSummary() in partnerPortalLogic.js, for both.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import DocumentStatusBadge from "../../components/DocumentStatusBadge.jsx";
 import {
   instructorChecklist, documentProvenance, worstBadge, REQUIREMENTS,
-  GRID_DATE, gridCellText, instructorCellDate,
+  GRID_DATE, gridCellText, instructorCellDate, registrationLabel,
 } from "../../lib/partnerPortalLogic.js";
+import { getRecordSettings } from "../../lib/partnerPortal.js";
 import { formatDate, compareByExpiry } from "../../lib/providerDocumentLogic.js";
 
 // Short column headers; the full names live in REQUIREMENTS.
@@ -78,6 +79,22 @@ export function InstructorsCell({ s }) {
 }
 
 /** The answer first: requirements met, instructors current. Each clause carries its OWN chip. */
+/**
+ * "Registration: Jackrabbit" - where this provider registers families (spec v3
+ * H2 business section, plain text; 20261103a). Nothing when not set. Loads on
+ * its own so the record's other reads never wait on it.
+ */
+export function RegistrationLine({ orgId }) {
+  const [settings, setSettings] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (orgId) getRecordSettings(orgId).then((s) => { if (!cancelled) setSettings(s); });
+    return () => { cancelled = true; };
+  }, [orgId]);
+  const label = registrationLabel(settings);
+  return label ? <div className="mt-1 text-sm text-j2s-ink/60">Registration: {label}</div> : null;
+}
+
 export function RecordSummary({ s }) {
   return (
     <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-j2s-ink/80">
@@ -231,6 +248,16 @@ export function InstructorGrid({ s, instructors, orgName, today, viewer = "partn
                       {r.shared && (r.email || r.phone) && (
                         <div className="mt-0.5 text-[11px] text-j2s-purple [overflow-wrap:anywhere]">{[r.email, r.phone].filter(Boolean).join(" · ")}</div>
                       )}
+                      {/* Statuses from another source that no column shows (20261103a). */}
+                      {r.shared && lines.filter((l) => l.key.startsWith("clearance:")).map((l) => (
+                        <button
+                          key={l.key} type="button"
+                          onClick={() => setPicked({ id: `x:${r.instructor_id}:${l.key}`, r, line: l })}
+                          className="mt-0.5 block text-left text-[11px] text-j2s-ink/60 hover:underline"
+                        >
+                          Also: {l.title} ({l.badge.label})
+                        </button>
+                      ))}
                     </th>
                     {!r.shared
                       ? (cols.length > 0 && cell({
@@ -242,7 +269,8 @@ export function InstructorGrid({ s, instructors, orgName, today, viewer = "partn
                         const l = lines.find((x) => x.key === k);
                         return l ? cell({
                           id: `l:${r.instructor_id}:${k}`, badge: l.badge,
-                          text: gridCellText(l.badge, instructorCellDate(r, k)),
+                          // A stand-in from another source carries its own date (20261103a).
+                          text: gridCellText(l.badge, "date" in l ? l.date : instructorCellDate(r, k)),
                           meta: l.meta,
                           onPick: () => setPicked({ id: `l:${r.instructor_id}:${k}`, r, line: l }),
                         }) : <td key={k} className="border-b border-l border-j2s-ink/10" />;

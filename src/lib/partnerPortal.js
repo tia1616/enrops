@@ -5,6 +5,7 @@
 // email). Nothing here decides access; it calls the paths that do.
 
 import { supabase } from "./supabase";
+import { withClearances } from "./partnerPortalLogic.js";
 
 /** Every grant this provider has made, with the contact and partner it belongs to. */
 export async function listPortalAccess(orgId) {
@@ -112,11 +113,68 @@ export async function myPartnerMemberships() {
  * The database decides who may call it (that partner's logins, or the
  * provider's owner/admin) and blanks every detail an instructor has not given
  * permission to share. Never includes the background check report.
+ *
+ * Each row carries `clearances`: its statuses from another source
+ * (partner_portal_clearances, 20261103a), same access rules, shared
+ * instructors only. If that read fails the list still loads with none, so a
+ * missing clearance can never hide the rest of the record.
  */
 export async function listPartnerInstructors(partnerId) {
-  const { data, error } = await supabase.rpc("partner_portal_instructors", { p_partner_id: partnerId });
+  const [inst, clr] = await Promise.all([
+    supabase.rpc("partner_portal_instructors", { p_partner_id: partnerId }),
+    supabase.rpc("partner_portal_clearances", { p_partner_id: partnerId }),
+  ]);
+  if (inst.error) throw inst.error;
+  if (clr.error) console.warn("[partnerPortal] clearances not loaded:", clr.error.message);
+  return withClearances(inst.data ?? [], clr.error ? [] : clr.data);
+}
+
+/** Where a provider registers families (provider_record_settings, 20261103a); null when not set. */
+export async function getRecordSettings(orgId) {
+  const { data, error } = await supabase
+    .from("provider_record_settings")
+    .select("registration_system, registration_system_other")
+    .eq("organization_id", orgId)
+    .maybeSingle();
+  if (error) {
+    console.warn("[partnerPortal] record settings not loaded:", error.message);
+    return null;
+  }
+  return data ?? null;
+}
+
+/** Owner/admin only; false = refused. */
+export async function setRegistrationSystem(orgId, system, other) {
+  const { data, error } = await supabase.rpc("set_registration_system", { p_org: orgId, p_system: system, p_other: other || null });
+  if (error) throw error;
+  if (data !== true) throw new Error("Only an owner or admin can change this.");
+}
+
+/** An instructor's statuses from another source, for the provider's own instructor record. */
+export async function listInstructorClearances(instructorId) {
+  const { data, error } = await supabase
+    .from("instructor_clearances")
+    .select("id, check_type, clearance_body, clearance_body_other, scope, completed_on, expires_on, entered_at")
+    .eq("instructor_id", instructorId)
+    .order("completed_on", { ascending: false });
   if (error) throw error;
   return data ?? [];
+}
+
+export async function addInstructorClearance(instructorId, f) {
+  const { data, error } = await supabase.rpc("add_instructor_clearance", {
+    p_instructor_id: instructorId, p_check_type: f.check_type, p_clearance_body: f.clearance_body,
+    p_clearance_body_other: f.clearance_body === "other" ? f.clearance_body_other : null,
+    p_scope: f.scope || null, p_completed_on: f.completed_on, p_expires_on: f.expires_on || null,
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function removeInstructorClearance(id) {
+  const { data, error } = await supabase.rpc("remove_instructor_clearance", { p_id: id });
+  if (error) throw error;
+  if (data !== true) throw new Error("Only an owner or admin can remove this.");
 }
 
 /**

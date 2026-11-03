@@ -24,6 +24,8 @@ import { todayIso } from "../partner/partnerShared.jsx";
 import { listPartnerInstructors, listPartnerRequirements, listPortalAccess } from "../../lib/partnerPortal.js";
 import { partnersInUse, providerSummary, requiredKeys } from "../../lib/partnerPortalLogic.js";
 import { listProviderDocuments, listPartners } from "../../lib/providerDocuments.js";
+import { usePermissions } from "../../lib/permissions.js";
+import RegistrationSystemField from "./RegistrationSystemField.jsx";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -45,6 +47,7 @@ function loginsText(list) {
 export default function ProviderDocuments() {
   const { org } = useOutletContext();
   const navigate = useNavigate();
+  const perm = usePermissions();
 
   const [partners, setPartners] = useState(null);
   const [docs, setDocs] = useState([]);
@@ -111,6 +114,8 @@ export default function ProviderDocuments() {
       </p>
 
       {error && <div role="alert" style={{ marginTop: 16, padding: "10px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, color: "#991b1b", fontSize: 13 }}>{error}</div>}
+
+      <RegistrationSystemField orgId={org.id} canManage={perm.canManageSettings} />
 
       {used.length === 0 ? (
         <div style={{ marginTop: 20, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 12, padding: "28px 20px", textAlign: "center" }}>

@@ -225,5 +225,45 @@ import { decisionRecordedLine, decisionProblem, localDateOf, DECISIONS } from '.
   ok('spec words for accepted', DECISIONS.accepted.choice === 'Accepted: this record meets our requirements (version {N}) as of today.');
 }
 
+// --- statuses from another source (20261103a) ---
+{
+  const { instructorChecklist, providerSummary, clearanceLabel, registrationLabel, withClearances } = await import('./partnerPortalLogic.js');
+  const ode = { id: 'c1', instructor_id: 'i1', check_type: 'fingerprint_clearance', clearance_body: 'district_fingerprint', clearance_body_other: null, scope: null, completed_on: '2026-09-01', expires_on: '2029-09-01', entered_at: '2026-11-03T18:00:00Z', status: 'current' };
+  const dcyf = { ...ode, id: 'c2', check_type: 'background_check', clearance_body: 'wa_dcyf', expires_on: '2027-09-01' };
+  const company = { ...ode, id: 'c3', check_type: 'background_check', clearance_body: 'screening_company' };
+
+  eq('agency named as the spec labels it', clearanceLabel(ode), 'District clearance (ODE fingerprint)');
+  eq('a screening company is never named', clearanceLabel(company), "Background check from the provider's screening company");
+  eq('another agency shows its typed name', clearanceLabel({ ...ode, clearance_body: 'other', clearance_body_other: ' Portland Public Schools ' }), 'Portland Public Schools');
+
+  const base = { instructor_id: 'i1', first_name: 'Marquix', shared: true, background_check_status: 'missing', training_completed_on: '2026-08-01', code_of_conduct_on: '2026-08-01', mandatory_reporter_on: '2026-08-01', agreement_signed_on: '2026-08-01' };
+  const noOutside = instructorChecklist(base, 'J2S', '2026-11-03');
+  eq('no enrops check, nothing else: Expired or Missing', noOutside[0].badge.label, 'Expired or Missing');
+
+  const withDcyf = instructorChecklist({ ...base, clearances: [dcyf, ode] }, 'J2S', '2026-11-03');
+  eq('a current outside background check stands in', withDcyf[0].badge.label, 'Current');
+  ok('the stand-in names its source', withDcyf[0].detail.startsWith('DCYF portable check'));
+  eq('the stand-in carries its own date for the cell', withDcyf[0].date, '2027-09-01');
+  ok('the other clearance is its own line, the stand-in is not repeated', withDcyf.filter((l) => l.key.startsWith('clearance:')).map((l) => l.key).join() === 'clearance:c1');
+  ok('entered-by provenance on an outside line', withDcyf.find((l) => l.key === 'clearance:c1').meta.includes('entered by J2S'));
+
+  const expiredOutside = instructorChecklist({ ...base, clearances: [{ ...dcyf, status: 'expired' }] }, 'J2S', '2026-11-03');
+  eq('an expired outside check does not stand in', expiredOutside[0].badge.label, 'Expired or Missing');
+
+  const fingerprintOnly = instructorChecklist({ ...base, clearances: [ode] }, 'J2S', '2026-11-03');
+  eq('a fingerprint clearance alone does not fill the background-check column', fingerprintOnly[0].badge.label, 'Expired or Missing');
+
+  const cleared = { ...base, background_check_status: 'current', background_check_expires_on: '2027-08-20', clearances: [dcyf] };
+  eq('a current enrops check wins over an outside one', instructorChecklist(cleared, 'J2S', '2026-11-03')[0].detail.startsWith('DCYF'), false);
+
+  const s = providerSummary({ docs: [], instructors: [{ ...base, clearances: [dcyf] }], partnerId: 'p', orgName: 'J2S', today: '2026-11-03', required: new Set(['background_check', 'training']) });
+  eq('any screening source can reach an all-green instructor', `${s.instructors.current} of ${s.instructors.total}`, '1 of 1');
+
+  eq('rows get their own clearances only', withClearances([{ instructor_id: 'i1' }, { instructor_id: 'i2' }], [ode]).map((r) => r.clearances.length).join(), '1,0');
+  eq('registration label', registrationLabel({ registration_system: 'jackrabbit' }), 'Jackrabbit');
+  eq('registration other uses the typed name', registrationLabel({ registration_system: 'other', registration_system_other: 'Sports Engine' }), 'Sports Engine');
+  eq('registration unset', registrationLabel(null), null);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
