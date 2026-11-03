@@ -202,7 +202,8 @@ export function clearanceLine(c, byProvider) {
     title: clearanceLabel(c),
     badge,
     detail,
-    meta: provenance(c.entered_at ? String(c.entered_at).slice(0, 10) : null, byProvider),
+    // The viewer's own date for when it was entered, not UTC's.
+    meta: provenance(localDateOf(c.entered_at), byProvider),
     checkType: c.check_type,
     expiresOn: c.expires_on ?? null,
   };
@@ -401,6 +402,7 @@ export function providerSummary({ docs, instructors, partnerId, orgName, today, 
   const dates = [
     ...(docs || []).filter((d) => !d.partner_id || d.partner_id === partnerId).map((d) => d.updated_at && String(d.updated_at).slice(0, 10)),
     ...(instructors || []).flatMap((r) => [r.background_check_as_of, r.training_as_of, r.code_of_conduct_on, r.mandatory_reporter_on, r.agreement_signed_on]),
+    ...(instructors || []).flatMap((r) => (r.shared ? (r.clearances || []).map((c) => localDateOf(c.entered_at)) : [])),
   ].filter(Boolean).sort();
   const lastChange = dates.length ? dates[dates.length - 1] : null;
 
