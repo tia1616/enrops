@@ -275,6 +275,11 @@ verify_jwt = false
 [functions.record-expiry-cron]
 verify_jwt = false
 
+# Monday digest to partners' host admins (20261102d). Gated by DIGEST_SECRET in
+# x-cron-secret, not by a JWT.
+[functions.partner-digest-cron]
+verify_jwt = false
+
 [functions.marketing-resend-webhook]
 verify_jwt = false
 
