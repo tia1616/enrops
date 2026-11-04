@@ -63,6 +63,10 @@ begin
       old.received_on, old.effective_on, old.expires_on, auth.uid()
     )
     on conflict (storage_path) do nothing;
+    -- Pointing back at a file already in the history makes it current again,
+    -- so it leaves the history rather than showing twice.
+    delete from public.provider_document_versions v
+    where v.document_id = old.id and v.storage_path = new.storage_path;
   end if;
   return new;
 end;

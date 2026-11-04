@@ -124,7 +124,7 @@ export default function InstructorClearances({ instructorId }) {
               setError("");
             }}
           >
-            <option value="" disabled>Who cleared them?</option>
+            <option value="" disabled>Who cleared them, or gave the training?</option>
             {CLEARANCE_BODIES.map((b) => <option key={b.key} value={b.key}>{b.label}</option>)}
           </select>
           {form.clearance_body === "other" && (
