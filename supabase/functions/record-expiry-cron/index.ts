@@ -27,6 +27,7 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 import { loadOrgBrand, formatFromAddress } from "../_shared/orgBrand.ts";
+import { fetchWithRateLimitRetry, SINGLE_EMAIL_RETRY } from "../_shared/resendRateLimit.ts";
 import { renderExpiryEmail, type DueItem } from "./expiryEmail.ts";
 import { deliver } from "../_shared/claimThenSend.ts";
 
@@ -137,14 +138,15 @@ async function send(supabase: SupabaseClient, orgId: string, items: DueItem[], r
   let sent = 0;
   for (const to of recipients) {
     try {
-      const resp = await fetch("https://api.resend.com/emails", {
+      // A 429 is retried (Resend's limit is per ACCOUNT, shared with campaigns).
+      const { res: resp } = await fetchWithRateLimitRetry(() => fetch("https://api.resend.com/emails", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${RESEND_API_KEY}` },
         body: JSON.stringify({
           from: formatFromAddress(brand), to, reply_to: brand.reply_to, subject, html, text,
           tags: [{ name: "type", value: "record_expiry" }],
         }),
-      });
+      }), SINGLE_EMAIL_RETRY);
       if (resp.ok) sent += 1;
       else console.error(`[record-expiry-cron] send to ${to} failed: ${resp.status} ${(await resp.text()).slice(0, 200)}`);
     } catch (e) {

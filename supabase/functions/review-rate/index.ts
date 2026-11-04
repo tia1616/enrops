@@ -28,6 +28,7 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 import { loadOrgBrand, formatFromAddress } from "../_shared/orgBrand.ts";
+import { fetchWithRateLimitRetry, SINGLE_EMAIL_RETRY } from "../_shared/resendRateLimit.ts";
 import { hmacBase64Url, constantTimeEquals } from "../_shared/hmac.ts";
 import { esc as escapeHtml } from "../_shared/escapeHtml.ts";
 
@@ -166,7 +167,9 @@ serve(async (req: Request) => {
         // only resolves a program_id, not a camp_session_id, and this notification
         // fires for either). /admin/rosters is the one page that's always right.
         const rosterUrl = `${PUBLIC_SITE_URL}/admin/rosters`;
-        const resp = await fetch("https://api.resend.com/emails", {
+        // A 429 (Resend's limit is per ACCOUNT) is retried so a collision does not
+        // lose the operator's only signal of a low score.
+        const { res: resp } = await fetchWithRateLimitRetry(() => fetch("https://api.resend.com/emails", {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${RESEND_API_KEY}` },
           body: JSON.stringify({
@@ -178,7 +181,9 @@ serve(async (req: Request) => {
               + `<p><a href="${rosterUrl}">View the roster</a></p>`,
             text: `${parentName} rated ${programName || "a program"}${locationName ? ` at ${locationName}` : ""} ${score} star${score === 1 ? "" : "s"}.\nChild: ${childName}\nParent email: ${parent?.email ?? "unknown"}\nRoster: ${rosterUrl}`,
           }),
-        });
+        // A parent is waiting on this request (it redirects them afterwards), so
+        // the budget is one retry, ~1s at most, not the cron preset's ~3.5s.
+        }), { ...SINGLE_EMAIL_RETRY, maxRetries: 1, maxDelayMs: 1500 });
         // fetch only rejects on a network failure — a bad/rotated API key, a
         // rate limit, or a malformed payload all resolve normally with an
         // error STATUS, which the old code never checked. Checking resp.ok

@@ -33,6 +33,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
+import { fetchWithRateLimitRetry, SINGLE_EMAIL_RETRY } from '../_shared/resendRateLimit.ts';
 import { AVAILABILITY_OVERRIDE_NOTE_HTML, AVAILABILITY_OVERRIDE_NOTE_TEXT, hasAvailabilityOverride, distanceBonusNote } from '../_shared/offerCopy.ts';
 // Same fix as the two send-offer functions: dayLabel() reads day_of_week, which
 // on a camp holds only its FIRST day. See _shared/campProgram.ts.
@@ -290,7 +291,9 @@ serve(async (req: Request) => {
       // the shared platform domain), consistent with every other tenant email.
       const brand = await loadOrgBrand(supabase, org.id);
       const fromEmail = formatFromAddress(brand);
-      const r = await fetch('https://api.resend.com/emails', {
+      // A 429 is retried: Resend's limit is per ACCOUNT and this cron shares 16:00 UTC
+      // with delivery-alert and process-installments.
+      const { res: r } = await fetchWithRateLimitRetry(() => fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
         body: JSON.stringify({
@@ -301,7 +304,7 @@ serve(async (req: Request) => {
           html,
           text,
         }),
-      });
+      }), SINGLE_EMAIL_RETRY);
       if (!r.ok) {
         const errText = await r.text();
         reminderResults.push({ instructor_id: instructorId, sent: false, reason: `resend ${r.status}: ${errText.slice(0, 200)}` });
@@ -517,7 +520,7 @@ serve(async (req: Request) => {
       // the shared platform domain), consistent with every other tenant email.
       const brand = await loadOrgBrand(supabase, org.id);
       const fromEmail = formatFromAddress(brand);
-      const r = await fetch('https://api.resend.com/emails', {
+      const { res: r } = await fetchWithRateLimitRetry(() => fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
         body: JSON.stringify({
@@ -528,7 +531,7 @@ serve(async (req: Request) => {
           html,
           text,
         }),
-      });
+      }), SINGLE_EMAIL_RETRY);
       if (!r.ok) {
         const errText = await r.text();
         programReminderResults.push({ instructor_id: instructorId, sent: false, reason: `resend ${r.status}: ${errText.slice(0, 200)}` });

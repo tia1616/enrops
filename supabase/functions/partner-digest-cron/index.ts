@@ -25,6 +25,7 @@ import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 import { loadOrgBrand, formatFromAddress } from "../_shared/orgBrand.ts";
 import { deliver } from "../_shared/claimThenSend.ts";
+import { fetchWithRateLimitRetry, SINGLE_EMAIL_RETRY } from "../_shared/resendRateLimit.ts";
 import { renderDigest, type DigestRow } from "./digestEmail.ts";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
@@ -128,14 +129,16 @@ async function sendForReal(
 async function send(brand: Awaited<ReturnType<typeof loadOrgBrand>>, rows: DigestRow[], to: string): Promise<string | null> {
   const { subject, html, text } = renderDigest(brand, rows, PUBLIC_SITE_URL);
   try {
-    const resp = await fetch("https://api.resend.com/emails", {
+    // A 429 is retried (Resend's limit is per ACCOUNT). Without it a collision on
+    // Monday released the claim and the digest waited for a later run.
+    const { res: resp } = await fetchWithRateLimitRetry(() => fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${RESEND_API_KEY}` },
       body: JSON.stringify({
         from: formatFromAddress(brand), to, reply_to: brand.reply_to, subject, html, text,
         tags: [{ name: "type", value: "partner_digest" }],
       }),
-    });
+    }), SINGLE_EMAIL_RETRY);
     if (resp.ok) return ((await resp.json().catch(() => ({}))) as { id?: string }).id ?? "unknown";
     console.error(`[partner-digest-cron] send failed: ${resp.status} ${(await resp.text()).slice(0, 200)}`);
   } catch (e) {
