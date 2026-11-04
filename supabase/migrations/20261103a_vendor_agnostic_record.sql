@@ -102,14 +102,21 @@ create table if not exists public.instructor_clearances (
   check_type            text not null,
   clearance_body        text not null,
   clearance_body_other  text,
+  -- Training only (spec v3 P5: "training name, who gave it, completed,
+  -- expires"): the training's name. Who gave it is the clearance body.
+  item_name             text,
   scope                 text,
   completed_on          date not null,
   expires_on            date,
   entered_by            uuid,
   entered_at            timestamptz not null default now(),
   constraint instructor_clearances_type_check check (check_type in (
-    'background_check', 'fingerprint_clearance', 'registry_check', 'other'
+    'background_check', 'fingerprint_clearance', 'registry_check', 'training', 'other'
   )),
+  constraint instructor_clearances_item_name_check check (
+    (check_type = 'training' and char_length(btrim(coalesce(item_name, ''))) between 1 and 120)
+    or (check_type <> 'training' and item_name is null)
+  ),
   constraint instructor_clearances_body_check check (clearance_body in (
     'district_fingerprint', 'oregon_cbr', 'wa_dcyf', 'screening_company', 'other'
   )),
@@ -137,11 +144,15 @@ create policy instructor_clearances_member_select on public.instructor_clearance
 comment on table public.instructor_clearances is
   'Instructor statuses entered from another source (district fingerprint, Oregon CBR, WA DCYF, a screening company, another agency). Status only, never a report. Written by add_/remove_instructor_clearance().';
 
+-- (Staging briefly had a version without p_item_name; drop it so no stale
+-- overload remains.)
+drop function if exists public.add_instructor_clearance(uuid, text, text, text, text, date, date);
 create or replace function public.add_instructor_clearance(
   p_instructor_id uuid,
   p_check_type text,
   p_clearance_body text,
   p_clearance_body_other text,
+  p_item_name text,
   p_scope text,
   p_completed_on date,
   p_expires_on date
@@ -161,22 +172,24 @@ begin
   end if;
   insert into public.instructor_clearances (
     organization_id, instructor_id, check_type, clearance_body, clearance_body_other,
-    scope, completed_on, expires_on, entered_by
+    item_name, scope, completed_on, expires_on, entered_by
   ) values (
     v_org, p_instructor_id, p_check_type, p_clearance_body,
     case when p_clearance_body = 'other' then nullif(btrim(coalesce(p_clearance_body_other, '')), '') end,
+    case when p_check_type = 'training' then nullif(btrim(coalesce(p_item_name, '')), '') end,
     nullif(btrim(coalesce(p_scope, '')), ''), p_completed_on, p_expires_on, auth.uid()
   )
   returning id into v_id;
   insert into public.audit_events (organization_id, actor_user_id, actor_role, action, subject_type, subject_id, after)
   values (v_org, auth.uid(), 'provider_admin', 'clearance_added', 'instructor_clearance', v_id,
           jsonb_build_object('instructor_id', p_instructor_id, 'check_type', p_check_type,
-                             'clearance_body', p_clearance_body, 'completed_on', p_completed_on, 'expires_on', p_expires_on));
+                             'clearance_body', p_clearance_body, 'item_name', p_item_name,
+                             'completed_on', p_completed_on, 'expires_on', p_expires_on));
   return v_id;
 end;
 $$;
-revoke all on function public.add_instructor_clearance(uuid, text, text, text, text, date, date) from public, anon;
-grant execute on function public.add_instructor_clearance(uuid, text, text, text, text, date, date) to authenticated, service_role;
+revoke all on function public.add_instructor_clearance(uuid, text, text, text, text, text, date, date) from public, anon;
+grant execute on function public.add_instructor_clearance(uuid, text, text, text, text, text, date, date) to authenticated, service_role;
 
 create or replace function public.remove_instructor_clearance(p_id uuid)
 returns boolean
@@ -205,13 +218,15 @@ grant execute on function public.remove_instructor_clearance(uuid) to authentica
 -- What a partner (or the provider viewing that partner's page) sees: clearances
 -- of the instructors partner_portal_instructors shows for that partner, only
 -- for those who agreed to share. Never entered_by, never a company's name.
-create or replace function public.partner_portal_clearances(p_partner_id uuid)
+drop function if exists public.partner_portal_clearances(uuid);
+create function public.partner_portal_clearances(p_partner_id uuid)
 returns table (
   id uuid,
   instructor_id uuid,
   check_type text,
   clearance_body text,
   clearance_body_other text,
+  item_name text,
   scope text,
   completed_on date,
   expires_on date,
@@ -224,7 +239,7 @@ security definer
 set search_path = ''
 as $$
   select c.id, c.instructor_id, c.check_type, c.clearance_body, c.clearance_body_other,
-         c.scope, c.completed_on, c.expires_on, c.entered_at,
+         c.item_name, c.scope, c.completed_on, c.expires_on, c.entered_at,
          private.document_expiry_status(c.expires_on, c.organization_id)
   from public.partner_portal_instructors(p_partner_id) i
   join public.instructor_clearances c on c.instructor_id = i.instructor_id

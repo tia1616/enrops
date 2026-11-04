@@ -176,11 +176,25 @@ export const CHECK_TYPES = [
   { key: "background_check", label: "Background check" },
   { key: "fingerprint_clearance", label: "Fingerprint clearance" },
   { key: "registry_check", label: "Registry check" },
+  // Spec v3 P5: training from another organization, e.g. a partner's own.
+  { key: "training", label: "Training" },
   { key: "other", label: "Other check" },
 ];
 
+/** Who gave it, for a training: the agency typed, or the named body. */
+function bodyName(c) {
+  if (c?.clearance_body === "other") return (c.clearance_body_other || "").trim() || null;
+  return CLEARANCE_BODIES.find((b) => b.key === c?.clearance_body)?.shown ?? null;
+}
+
 /** What a partner reads for who cleared an instructor. */
 export function clearanceLabel(c) {
+  // Spec v3 label: "{Training name} from {organization}".
+  if (c?.check_type === "training") {
+    const name = (c.item_name || "").trim() || "Training";
+    const from = bodyName(c);
+    return from ? `${name} from ${from}` : name;
+  }
   const body = CLEARANCE_BODIES.find((b) => b.key === c?.clearance_body);
   if (body?.shown) return body.shown;
   const type = CHECK_TYPES.find((t) => t.key === c?.check_type)?.label ?? "Check";

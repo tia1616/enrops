@@ -260,6 +260,11 @@ import { decisionRecordedLine, decisionProblem, localDateOf, DECISIONS } from '.
   eq('any screening source can reach an all-green instructor', `${s.instructors.current} of ${s.instructors.total}`, '1 of 1');
 
   eq('rows get their own clearances only', withClearances([{ instructor_id: 'i1' }, { instructor_id: 'i2' }], [ode]).map((r) => r.clearances.length).join(), '1,0');
+  const pepper = { ...ode, id: 'c9', check_type: 'training', clearance_body: 'other', clearance_body_other: 'Impact NW', item_name: 'Pepper training', expires_on: null, status: 'no_expiry' };
+  eq('training reads as the spec labels it', clearanceLabel(pepper), 'Pepper training from Impact NW');
+  const withPepper = instructorChecklist({ ...base, clearances: [pepper] }, 'J2S', '2026-11-03');
+  ok('a training is its own line, never a background-check stand-in', withPepper[0].badge.label === 'Expired or Missing' && withPepper.some((l) => l.key === 'clearance:c9' && l.badge.label === 'Current'));
+
   eq('registration label', registrationLabel({ registration_system: 'jackrabbit' }), 'Jackrabbit');
   eq('registration other uses the typed name', registrationLabel({ registration_system: 'other', registration_system_other: 'Sports Engine' }), 'Sports Engine');
   eq('registration unset', registrationLabel(null), null);

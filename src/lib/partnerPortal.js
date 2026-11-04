@@ -154,17 +154,33 @@ export async function setRegistrationSystem(orgId, system, other) {
 export async function listInstructorClearances(instructorId) {
   const { data, error } = await supabase
     .from("instructor_clearances")
-    .select("id, check_type, clearance_body, clearance_body_other, scope, completed_on, expires_on, entered_at")
+    .select("id, check_type, clearance_body, clearance_body_other, item_name, scope, completed_on, expires_on, entered_at")
     .eq("instructor_id", instructorId)
     .order("completed_on", { ascending: false });
   if (error) throw error;
   return data ?? [];
 }
 
+/**
+ * Every agency name this provider has typed before, for "Another agency"
+ * suggestions (Jessica 2026-11-04: typed agencies join the list). Read
+ * through the provider's own rows, so it is per provider.
+ */
+export async function listAgencyNames(orgId) {
+  const { data, error } = await supabase
+    .from("instructor_clearances")
+    .select("clearance_body_other")
+    .eq("organization_id", orgId)
+    .not("clearance_body_other", "is", null);
+  if (error) return [];
+  return [...new Set((data ?? []).map((r) => r.clearance_body_other.trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+}
+
 export async function addInstructorClearance(instructorId, f) {
   const { data, error } = await supabase.rpc("add_instructor_clearance", {
     p_instructor_id: instructorId, p_check_type: f.check_type, p_clearance_body: f.clearance_body,
     p_clearance_body_other: f.clearance_body === "other" ? f.clearance_body_other : null,
+    p_item_name: f.check_type === "training" ? f.item_name : null,
     p_scope: f.scope || null, p_completed_on: f.completed_on, p_expires_on: f.expires_on || null,
   });
   if (error) throw error;
