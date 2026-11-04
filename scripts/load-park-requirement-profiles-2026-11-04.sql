@@ -27,7 +27,10 @@ begin
   if not ok then raise exception 'van bgc refused'; end if;
   ok := public.set_partner_requirement_detail(hv, 'insurance',
     'General liability $2M per occurrence / $2M aggregate. Sexual abuse and molestation $1M per claim, accepted in place of the city''s background check.',
-    'enrops spec v3 Happy Valley profile; the Scope of Work (page 2) says only "Obtain Insurance from Provider/Contractor"');
+    -- No park-facing source: the numbers are from enrops spec v3's Happy Valley
+    -- profile, and Happy Valley's Scope of Work (p2) says only "Obtain Insurance
+    -- from Provider/Contractor". Confirm with Kacy; Jessica adds the source.
+    null);
   if not ok then raise exception 'hv insurance refused'; end if;
   if wl is not null then
   ok := public.set_partner_requirement_detail(wl, 'background_check',
