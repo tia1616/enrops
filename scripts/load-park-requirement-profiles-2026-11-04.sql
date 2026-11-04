@@ -26,7 +26,10 @@ begin
     '2026 Recreation Services Agreement, page 2, item h');
   if not ok then raise exception 'van bgc refused'; end if;
   ok := public.set_partner_requirement_detail(hv, 'insurance',
-    'General liability $2M per occurrence / $2M aggregate. Sexual abuse and molestation $1M per claim, accepted in place of the city''s background check.',
+    -- Spec v3 line 215 also says "SAM accepted in place of the city check"; no
+    -- Happy Valley document says so and it reads as if insurance replaced a
+    -- background check, so it is left off (Jessica 2026-11-04).
+    'General liability $2M per occurrence / $2M aggregate. Sexual abuse and molestation $1M per claim.',
     -- No park-facing source: the numbers are from enrops spec v3's Happy Valley
     -- profile, and Happy Valley's Scope of Work (p2) says only "Obtain Insurance
     -- from Provider/Contractor". Confirm with Kacy; Jessica adds the source.

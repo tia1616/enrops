@@ -198,7 +198,7 @@ export function DocumentsTable({ s, orgName, today, onOpen, viewer = "partner", 
                       <>
                         <button
                           type="button" onClick={() => toggleHistory(d.id)} aria-expanded={openHistory.has(d.id)}
-                          className="mt-1 text-xs font-semibold text-j2s-ink/60 hover:underline"
+                          className="mt-1 text-xs font-semibold text-j2s-purple hover:underline"
                         >
                           {openHistory.has(d.id) ? "Hide earlier versions" : `Earlier versions (${d.versions.length})`}
                         </button>
@@ -308,7 +308,7 @@ export function InstructorGrid({ s, instructors, orgName, today, viewer = "partn
                         <button
                           key={l.key} type="button"
                           onClick={() => setPicked({ id: `x:${r.instructor_id}:${l.key}`, r, line: l })}
-                          className="mt-0.5 block text-left text-[11px] text-j2s-ink/60 hover:underline"
+                          className="mt-0.5 block text-left text-[11px] font-semibold text-j2s-purple hover:underline"
                         >
                           Also: {l.title} ({l.badge.label})
                         </button>
