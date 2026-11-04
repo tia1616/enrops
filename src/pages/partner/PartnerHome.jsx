@@ -14,6 +14,7 @@ import { providerSummary, requiredKeys } from "../../lib/partnerPortalLogic.js";
 import { formatDate } from "../../lib/providerDocumentLogic.js";
 import { PartnerShell, PartnerSignIn, NoAccess, useMemberships, todayIso } from "./partnerShared.jsx";
 import { RequirementsCell, InstructorsCell } from "./ProviderRecord.jsx";
+import InvitePanel from "./InvitePanel.jsx";
 
 // Spec v3 H1 states. Accepted / Lapsed / Invited / Unknown arrive with
 // invitations and decisions (Nov 6); until then every provider sharing with a
@@ -25,6 +26,9 @@ export default function PartnerHome() {
   const [rows, setRows] = useState(null); // [{ m, summary }] | null
   const [loadError, setLoadError] = useState("");
   const [site, setSite] = useState("");
+  // Unknown (saved) and Invited counts from the invitations list (20261105a);
+  // stays empty while invites are off.
+  const [inviteCounts, setInviteCounts] = useState({});
 
   // The visit log + usage capture (20261022b). Signing in lands here, so a host
   // who reads this table and leaves is still counted. Keyed on the partner ids,
@@ -88,7 +92,7 @@ export default function PartnerHome() {
   if (memberships.length === 0) return <PartnerShell onSignOut={signOut}><NoAccess email={user.email} onSignOut={signOut} />{error && <p className="error-text mt-3">{error}</p>}</PartnerShell>;
 
   const partnerNames = [...new Set(memberships.map((m) => m.partner_name))].join(", ");
-  const counts = { Pending: (rows ?? []).length };
+  const counts = { ...inviteCounts, Pending: (rows ?? []).length };
   const feedbackOrg = { id: memberships[0].organization_id };
 
   return (
@@ -114,6 +118,9 @@ export default function PartnerHome() {
           </div>
         ))}
       </div>
+
+      {/* Spec v3 H4. Renders nothing while invites are off. */}
+      <InvitePanel userId={user.id} onCounts={setInviteCounts} />
 
       {sites.length > 1 && (
         <label className="mt-6 flex items-center gap-2 text-sm text-j2s-ink/70">
