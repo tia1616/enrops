@@ -89,6 +89,7 @@ import { allocateCartFeeByLine } from '../_shared/cartFee.ts';
 import { INSTALLMENT_GROUP_SELECT, installmentGroupKey } from '../_shared/installmentGroup.ts';
 import { withResolvedFee, loadPlatformFeeDefaults } from '../_shared/feeConfig.ts';
 import { loadOrgBrand, formatFromAddress, OrgBrand } from '../_shared/orgBrand.ts';
+import { fetchWithRateLimitRetry, SINGLE_EMAIL_RETRY } from '../_shared/resendRateLimit.ts';
 import {
   addDaysUtc, chargeIdempotencyKey, classifyChargeError, declineFollowUp, DeclinePlan, FAMILY_PAY_BY_DAYS, formatRetryDate, isFinalNotice,
   NOT_CHARGEABLE_REGISTRATION_STATUSES, planDeclineRetry, PROVIDER_FOLLOWUP_DAYS,
@@ -1443,7 +1444,9 @@ async function sendOperatorAlert(
     return 'no_inbox';
   }
   try {
-    const resp = await fetch('https://api.resend.com/emails', {
+    // A 429 is retried: Resend's limit is per ACCOUNT, and this cron fires at 16:00
+    // UTC with delivery-alert and offer-reminders. Email only; no charge logic here.
+    const { res: resp } = await fetchWithRateLimitRetry(() => fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1456,7 +1459,7 @@ async function sendOperatorAlert(
         text: body,
         tags: [{ name: 'type', value: 'cron_alert' }],
       }),
-    });
+    }), SINGLE_EMAIL_RETRY);
     if (!resp.ok) {
       const errText = await resp.text();
       console.error('Resend send failed:', resp.status, errText);
@@ -1767,7 +1770,9 @@ async function sendParentDeclineNotice({
 </div>`.trim();
 
   try {
-    const resp = await fetch('https://api.resend.com/emails', {
+    // A 429 is retried (see sendOperatorAlert): a lost decline notice leaves a family
+    // not knowing their card failed.
+    const { res: resp } = await fetchWithRateLimitRetry(() => fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1785,7 +1790,7 @@ async function sendParentDeclineNotice({
           { name: 'installment_number', value: String(installmentNumber) },
         ],
       }),
-    });
+    }), SINGLE_EMAIL_RETRY);
     if (!resp.ok) {
       const errText = await resp.text();
       console.error(`Parent decline notice send failed for ${parent.email}:`, resp.status, errText);

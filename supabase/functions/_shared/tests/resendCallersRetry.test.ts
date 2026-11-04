@@ -35,8 +35,6 @@ const SCHEDULED = [
 const EXEMPT: Record<string, string> = {
   "lifecycle-automations-cron":
     "sendResendEmail() already retries 429/5xx in-run (IN_RUN_MAX_TRIES); the other call is an interactive test send whose error is shown to the operator",
-  "process-installments":
-    "prod's copy is DELIBERATELY composed and differs from staging (money path); editing the staging copy and deploying it would overwrite that. Needs its own change made against prod's tree",
 };
 
 function strip(src: string): string {
@@ -64,9 +62,6 @@ Deno.test("every scheduled function's direct Resend call retries a 429 or is exe
 Deno.test("an exemption must still be true", () => {
   const lifecycle = strip(Deno.readTextFileSync(`${ROOT}/lifecycle-automations-cron/index.ts`));
   assert(/resp\.status === 429/.test(lifecycle), "lifecycle is exempt but no longer handles 429");
-  // process-installments stays exempt only while it really has no wrapper to lose.
-  const pi = strip(Deno.readTextFileSync(`${ROOT}/process-installments/index.ts`));
-  assert(!/fetchWithRateLimitRetry/.test(pi), "process-installments now retries - remove its exemption");
 });
 
 Deno.test("every scheduled name still has a function directory", () => {
