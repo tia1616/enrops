@@ -46,6 +46,7 @@ import { withEmailAttribution } from "../_shared/emailAttribution.ts";
 import { chooseBodyText } from "../_shared/plainTextHalf.ts";
 import { sendableEmail } from "../_shared/sendableEmail.ts";
 import { fetchWithRateLimitRetry } from "../_shared/resendRateLimit.ts";
+import { earliestStartDate } from "../_shared/earliestStart.ts";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -1567,32 +1568,22 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
     tokens.set("first_session_date", program.first_session_date ? formatHumanDate(program.first_session_date) : "");
     // The deadline THIS parent is working against.
     //
-    // Emitted ONLY when every program this recipient is being told about shares
-    // one close date — the same all-or-nothing rule the camps branch uses for
-    // early_bird_deadline, and for the same reason. {{curriculum}} names ALL of
-    // a school's picked programs, so a single deadline drawn from the first one
-    // would be attached to every name in that sentence. Beatrice Morrow Cannady
-    // runs two fall programs starting four days apart (2026-09-14, 2026-09-18);
-    // taking the first would have told Cannady parents that the September 18
-    // class closed on the 7th, four days before it does, and a parent who
-    // believes that stops trying.
+    // The deadline THIS parent is working against: counted back from the EARLIEST
+    // start date among the classes this recipient is being told about. {{curriculum}}
+    // names ALL of a school's picked programs, so one date has to be safe for every
+    // name in the sentence; the earliest is. (This used to render EMPTY when the
+    // classes started on different days, which left "Register by  to be sure of your
+    // spot" in the Dec 15 subject and body - see _shared/earliestStart.ts.) Each
+    // class's own date still prints in {{program_details}}.
     //
-    // The close window is org-wide, so "same close date" is exactly "same
-    // first_session_date" — no need to compute each one to compare them.
-    //
-    // Empty when they disagree, and empty when any start date is missing.
-    // Dropping the sentence is the safe failure; there is no "close enough"
-    // deadline. Emitting the LATEST would be worse than the earliest, not
-    // better: it invites a parent to register for the early program after it
-    // has already closed.
-    const startDates = allPrograms.map((p) => p.first_session_date);
-    const everyProgramDated = startDates.length > 0 && startDates.every((d) => d != null);
-    const oneSharedStart = everyProgramDated && startDates.every((d) => d === startDates[0]);
+    // Empty only when there is nothing safe to count back from: a class with no
+    // start date. Never guess a deadline. The close window is org-wide.
     tokens.set(
       "registration_close_date",
-      oneSharedStart
-        ? registrationCloseDate(startDates[0], org.registration_close_days_before)
-        : "",
+      registrationCloseDate(
+        earliestStartDate(allPrograms.map((p) => p.first_session_date)),
+        org.registration_close_days_before,
+      ),
     );
 
     // {{program_details}} — one <li> per program at this recipient's school,
