@@ -28,6 +28,7 @@
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
+import { fetchWithRateLimitRetry, SINGLE_EMAIL_RETRY } from "../_shared/resendRateLimit.ts";
 import { loadOrgBrand, formatFromAddress, encodeDisplayName } from "../_shared/orgBrand.ts";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
@@ -155,7 +156,9 @@ async function alertOrg(supabase: SupabaseClient, orgId: string, rows: any[], te
   let sent = 0;
   for (const to of recipients) {
     try {
-      const resp = await fetch("https://api.resend.com/emails", {
+      // A 429 (Resend's limit is per ACCOUNT, shared with every campaign) is
+      // retried; before, it lost the one alert an operator gets for a failed email.
+      const { res: resp } = await fetchWithRateLimitRetry(() => fetch("https://api.resend.com/emails", {
         method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${RESEND_API_KEY}` },
         body: JSON.stringify({
@@ -167,7 +170,7 @@ async function alertOrg(supabase: SupabaseClient, orgId: string, rows: any[], te
           text,
           tags: [{ name: "type", value: "delivery_alert" }],
         }),
-      });
+      }), SINGLE_EMAIL_RETRY);
       if (resp.ok) sent += 1;
       else console.error(`[delivery-alert-cron] send to ${to} failed: ${resp.status} ${(await resp.text()).slice(0, 200)}`);
     } catch (e) {

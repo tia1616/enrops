@@ -33,6 +33,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
+import { fetchWithRateLimitRetry, SINGLE_EMAIL_RETRY } from '../_shared/resendRateLimit.ts';
 import { stageForDaysOut, daysBetween, allNudgeDaysOut } from '../_shared/subNudgeStages.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
@@ -426,12 +427,14 @@ async function send(from: string, to: string, replyTo: string | undefined,
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), 15_000);
   try {
-    const r = await fetch('https://api.resend.com/emails', {
+    // A 429 is retried (Resend's limit is per ACCOUNT). The 15s abort still bounds
+    // the whole attempt, retries included: the backoff totals ~3.5s at most.
+    const { res: r } = await fetchWithRateLimitRetry(() => fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
       body: JSON.stringify({ from, to, reply_to: replyTo, subject, html }),
       signal: abort.signal,
-    });
+    }), SINGLE_EMAIL_RETRY);
     if (!r.ok) {
       console.error('[sub-offer-nudges-cron] resend failed:', r.status, (await r.text()).slice(0, 300));
       return false;

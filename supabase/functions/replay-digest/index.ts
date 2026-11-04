@@ -12,6 +12,7 @@
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
+import { fetchWithRateLimitRetry, SINGLE_EMAIL_RETRY } from '../_shared/resendRateLimit.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -118,7 +119,8 @@ serve(async (req) => {
     // as the platform, which also breaks the day that tenant leaves.
     const platformBrand = await loadOrgBrand(supabase, null);
 
-    const r = await fetch('https://api.resend.com/emails', {
+    // A 429 is retried: it fires 15:00 UTC Mon/Wed/Fri with the campaign sender.
+    const { res: r } = await fetchWithRateLimitRetry(() => fetch('https://api.resend.com/emails', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
       body: JSON.stringify({
@@ -128,7 +130,7 @@ serve(async (req) => {
         subject: `Enrops replay digest — ${n} session${n === 1 ? '' : 's'} to review`,
         html,
       }),
-    });
+    }), SINGLE_EMAIL_RETRY);
     return json({ sessions: n, emailed: r.ok }, 200);
   } catch (e) {
     console.error('replay-digest error:', String(e));

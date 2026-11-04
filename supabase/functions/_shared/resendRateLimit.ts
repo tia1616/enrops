@@ -29,6 +29,11 @@ export type RateLimitRetryOptions = {
   random?: () => number;
 };
 
+/** For ONE transactional email (an alert, a digest, a notice). Short, because a
+ *  caller is often waiting on it: worst case ~3.5s of waiting in total before the
+ *  failure is reported as before. The campaign sender uses the longer defaults. */
+export const SINGLE_EMAIL_RETRY: RateLimitRetryOptions = { maxRetries: 3, baseDelayMs: 500, maxDelayMs: 4000 };
+
 /** `Retry-After` as milliseconds, or null when absent or not a plain number of
  *  seconds (Resend sends whole seconds; an HTTP-date form is ignored and the
  *  backoff schedule is used instead). */
