@@ -14,7 +14,7 @@ import { useEffect, useState } from "react";
 import DocumentStatusBadge from "../../components/DocumentStatusBadge.jsx";
 import {
   instructorChecklist, documentProvenance, worstBadge, REQUIREMENTS,
-  GRID_DATE, gridCellText, instructorCellDate, registrationLabel,
+  GRID_DATE, gridCellText, instructorCellDate, registrationLabel, localDateOf,
 } from "../../lib/partnerPortalLogic.js";
 import { getRecordSettings } from "../../lib/partnerPortal.js";
 import { formatDate, compareByExpiry } from "../../lib/providerDocumentLogic.js";
@@ -132,6 +132,13 @@ export function DocumentsTable({ s, orgName, today, onOpen, viewer = "partner", 
   const actions = renderActions ?? (({ d }) => d && (
     <button type="button" onClick={() => onOpen(d)} className="font-semibold text-j2s-purple hover:underline">View</button>
   ));
+  // Which documents have their earlier versions open (20261104a).
+  const [openHistory, setOpenHistory] = useState(() => new Set());
+  const toggleHistory = (id) => setOpenHistory((s) => {
+    const next = new Set(s);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
 
   return (
     <section className="mt-5 rounded-2xl bg-white shadow-card">
@@ -161,6 +168,30 @@ export function DocumentsTable({ s, orgName, today, onOpen, viewer = "partner", 
                     {/* The provider is told when one file is in EVERY partner's
                         packet, so changing it here isn't a surprise elsewhere. */}
                     {viewer === "provider" && d && !d.partner_id && <div className="text-xs text-j2s-ink/50">Shared with every partner</div>}
+                    {/* Earlier files, kept when a new version was uploaded, the
+                        way compliance tools keep a document's history. */}
+                    {d?.versions?.length > 0 && (
+                      <>
+                        <button
+                          type="button" onClick={() => toggleHistory(d.id)} aria-expanded={openHistory.has(d.id)}
+                          className="mt-1 text-xs font-semibold text-j2s-ink/60 hover:underline"
+                        >
+                          {openHistory.has(d.id) ? "Hide earlier versions" : `Earlier versions (${d.versions.length})`}
+                        </button>
+                        {openHistory.has(d.id) && (
+                          <ul className="mt-1 space-y-1">
+                            {d.versions.map((v) => (
+                              <li key={v.id} className="text-xs text-j2s-ink/60">
+                                {/* A file replaced early can still be in date. */}
+                                {!v.expires_on ? "No expiry" : `${v.expires_on < today ? "Expired" : "Valid until"} ${formatDate(v.expires_on)}`}
+                                {` · replaced ${formatDate(localDateOf(v.replaced_at))} · `}
+                                <button type="button" onClick={() => onOpen({ ...d, storage_path: v.storage_path })} className="font-semibold text-j2s-purple hover:underline">View</button>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </>
+                    )}
                   </td>
                   <td className={TD}>
                     {d ? <DocumentStatusBadge status={d.expiry_status} /> : <DocumentStatusBadge badge={badge} />}
