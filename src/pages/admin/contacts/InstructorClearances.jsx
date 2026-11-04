@@ -1,7 +1,7 @@
 // "Other clearances" on an instructor's record: statuses from outside enrops
 // (spec v3 P3 "Add a status from another source"; instructor_clearances,
 // 20261103a). A district fingerprint clearance, the Oregon CBR, a WA DCYF
-// portable check, a Texas FACT subscription, a check run by a screening
+// portable check, a check run by a screening
 // company (never named to partners), or another agency. Status only: who,
 // what kind, scope, completed, expires. Partners see these on the instructor's
 // row once the instructor has agreed to share; a current background check from

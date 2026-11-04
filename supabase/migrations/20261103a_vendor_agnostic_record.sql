@@ -8,9 +8,10 @@
 --
 -- 2. A STATUS FROM ANOTHER SOURCE. instructor_clearances holds checks the
 --    provider entered from outside enrops: a district fingerprint clearance, the
---    Oregon Central Background Registry, a Washington DCYF portable check, a
---    Texas FACT subscription, a check run by a screening company, or another
---    agency. Each row is a status only (spec v3 §1.6): who cleared, what kind,
+--    Oregon Central Background Registry, a Washington DCYF portable check (J2S
+--    works in Vancouver and Camas, WA), a check run by a screening company, or
+--    another agency. Only bodies where J2S works today (Jessica 2026-11-04: "we
+--    don't do texas"); a new one is added when a provider needs it. Each row is a status only (spec v3 §1.6): who cleared, what kind,
 --    scope, completed and expiry dates. Never a report.
 --
 --    NAMING (Jessica 2026-11-03, on Arielle's 10/28 rule "Keep the screening
@@ -110,7 +111,7 @@ create table if not exists public.instructor_clearances (
     'background_check', 'fingerprint_clearance', 'registry_check', 'other'
   )),
   constraint instructor_clearances_body_check check (clearance_body in (
-    'district_fingerprint', 'oregon_cbr', 'wa_dcyf', 'texas_fact', 'screening_company', 'other'
+    'district_fingerprint', 'oregon_cbr', 'wa_dcyf', 'screening_company', 'other'
   )),
   constraint instructor_clearances_body_other_check check (
     (clearance_body = 'other' and char_length(btrim(coalesce(clearance_body_other, ''))) between 1 and 80)
@@ -134,7 +135,7 @@ create policy instructor_clearances_member_select on public.instructor_clearance
   using (public.is_org_member(organization_id));
 
 comment on table public.instructor_clearances is
-  'Instructor statuses entered from another source (district fingerprint, Oregon CBR, WA DCYF, Texas FACT, a screening company, another agency). Status only, never a report. Written by add_/remove_instructor_clearance().';
+  'Instructor statuses entered from another source (district fingerprint, Oregon CBR, WA DCYF, a screening company, another agency). Status only, never a report. Written by add_/remove_instructor_clearance().';
 
 create or replace function public.add_instructor_clearance(
   p_instructor_id uuid,

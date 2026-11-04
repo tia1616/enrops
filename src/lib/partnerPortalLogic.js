@@ -168,7 +168,6 @@ export const CLEARANCE_BODIES = [
   { key: "district_fingerprint", label: "District fingerprint clearance (Oregon ODE)", shown: "District clearance (ODE fingerprint)", type: "fingerprint_clearance" },
   { key: "oregon_cbr", label: "Oregon Central Background Registry (DELC)", shown: "Oregon CBR", type: "registry_check" },
   { key: "wa_dcyf", label: "Washington DCYF portable background check", shown: "DCYF portable check", type: "background_check" },
-  { key: "texas_fact", label: "Texas FACT subscription", shown: "Texas FACT", type: "background_check" },
   { key: "screening_company", label: "A screening company (its name is not shown to partners)", shown: null, type: "background_check" },
   { key: "other", label: "Another agency", shown: null, type: "other" },
 ];
