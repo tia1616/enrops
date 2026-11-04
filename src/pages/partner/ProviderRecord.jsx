@@ -95,6 +95,30 @@ export function RegistrationLine({ orgId }) {
   return label ? <div className="mt-1 text-sm text-j2s-ink/60">Registration: {label}</div> : null;
 }
 
+/**
+ * What this partner requires, one line per required item that has its words
+ * filled in, with where it is written (spec v3 H2 section 6, as text: no
+ * automatic Met/Gap; 20261104b). Nothing when no item has words yet.
+ */
+export function RequirementsList({ requirements, viewer = "partner", partnerName }) {
+  const rows = (requirements || []).filter((r) => r.required && (r.detail || "").trim());
+  if (rows.length === 0) return null;
+  return (
+    <section className="mt-5 rounded-2xl bg-white p-4 shadow-card">
+      <h2 className="text-base font-bold text-j2s-ink">{viewer === "provider" ? `What ${partnerName} requires` : "Your requirements"}</h2>
+      <ul className="mt-2 space-y-2">
+        {rows.map((r) => (
+          <li key={r.requirement_key} className="text-sm">
+            <span className="font-semibold text-j2s-ink">{REQUIREMENT_LABEL[r.requirement_key] ?? r.requirement_key}:</span>{" "}
+            <span className="text-j2s-ink/80">{r.detail}</span>
+            {r.source && <div className="text-xs text-j2s-ink/50">Source: {r.source}</div>}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export function RecordSummary({ s }) {
   return (
     <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-j2s-ink/80">

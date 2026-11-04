@@ -216,6 +216,18 @@ export async function setPartnerRequirement(partnerId, key, required) {
 }
 
 /**
+ * What the partner requires for one item, in its own words, and where that is
+ * written (20261104b). Empty detail clears it. Owner/admin only; false = refused.
+ */
+export async function setPartnerRequirementDetail(partnerId, key, detail, source) {
+  const { data, error } = await supabase.rpc("set_partner_requirement_detail", {
+    p_partner_id: partnerId, p_requirement_key: key, p_detail: detail || null, p_source: source || null,
+  });
+  if (error) throw error;
+  if (data !== true) throw new Error("Only an owner or admin can change what a partner requires.");
+}
+
+/**
  * The partner view log (audit_events). Best-effort and silent: the database
  * refuses anything this partner may not log, and a failed write must never get
  * in the way of the records. Errors go to the console only, by design.
