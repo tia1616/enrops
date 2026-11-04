@@ -181,7 +181,9 @@ serve(async (req: Request) => {
               + `<p><a href="${rosterUrl}">View the roster</a></p>`,
             text: `${parentName} rated ${programName || "a program"}${locationName ? ` at ${locationName}` : ""} ${score} star${score === 1 ? "" : "s"}.\nChild: ${childName}\nParent email: ${parent?.email ?? "unknown"}\nRoster: ${rosterUrl}`,
           }),
-        }), SINGLE_EMAIL_RETRY);
+        // A parent is waiting on this request (it redirects them afterwards), so
+        // the budget is one retry, ~1s at most, not the cron preset's ~3.5s.
+        }), { ...SINGLE_EMAIL_RETRY, maxRetries: 1, maxDelayMs: 1500 });
         // fetch only rejects on a network failure — a bad/rotated API key, a
         // rate limit, or a malformed payload all resolve normally with an
         // error STATUS, which the old code never checked. Checking resp.ok
