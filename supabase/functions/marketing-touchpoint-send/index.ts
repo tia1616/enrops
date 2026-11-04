@@ -45,6 +45,7 @@ import { isDeadlineReminderLabel, splitByThrottle, throttleGapHours } from "../_
 import { withEmailAttribution } from "../_shared/emailAttribution.ts";
 import { chooseBodyText } from "../_shared/plainTextHalf.ts";
 import { sendableEmail } from "../_shared/sendableEmail.ts";
+import { fetchWithRateLimitRetry } from "../_shared/resendRateLimit.ts";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -124,10 +125,16 @@ const TEST_SEND_THROTTLE_PER_MINUTE = 30;
 // triggering 429s. Tune down if Resend complains.
 const SEND_PARALLEL_BATCH = 25; // legacy — only used for token-resolution parallelism now
 // Resend's /emails/batch endpoint takes up to 100 emails per request. Each
-// batch counts as ONE Resend API call (rate limit is 5 req/sec on Pro), so
-// 100 emails/batch × 5 batches/sec = 500 emails/sec capacity. Plenty for
-// any single touchpoint within the 150s edge-function budget.
+// batch counts as ONE Resend API call. The limit is 10 requests/sec for the
+// whole ACCOUNT (Resend's own 429 says so), not per invocation: an A/B pair of
+// campaigns scheduled for the same minute shares it, and so does every other
+// function that mails. 2026-11-04: campaign A lost one batch of 100 to exactly
+// that. So two defences, neither sufficient alone:
+//   - pace this invocation at ~2 requests/sec, leaving room for others, and
+//   - retry a 429 with backoff (sendBatchViaResend -> fetchWithRateLimitRetry).
+// 2 batches/sec × 100 = 200 emails/sec, still far inside the 150s budget.
 const RESEND_BATCH_SIZE = 100;
+const RESEND_BATCH_PACE_MS = 500;
 
 // Soft time budget for the send loop. Supabase edge functions hard-kill at
 // 150s. Leaving 20s headroom for cleanup + response serialization, we cap
@@ -136,8 +143,10 @@ const RESEND_BATCH_SIZE = 100;
 // 2. Mark already-sent recipients in marketing_sends as 'sent' (already done)
 // 3. Return ok:false with a partial-progress error so the cron sees the
 //    touchpoint as failed and the operator can re-queue it
-// Estimated capacity at this budget: ~10,000 recipients per touchpoint per
-// run, allowing for normal Resend latency variance.
+// Capacity at this budget: roughly 6,000-8,000 recipients per run at the
+// 500ms batch pace (RESEND_BATCH_PACE_MS) plus render/send latency. A bigger
+// audience ends as partial:true and the cron continues it next tick; dedup
+// means nobody is mailed twice.
 const SEND_TIME_BUDGET_MS = 130_000;
 
 // Tokens Ennie's draft pass approved. Anything outside this set in the touchpoint
@@ -167,6 +176,12 @@ type Body = {
   //              Used by the per-school preview dropdown in TouchpointCard.
   mode: "test" | "send" | "preview";
   recipient_ids?: string[];
+  // mode='send' only. An allowlist that can ONLY NARROW the audience: the send
+  // still runs every normal gate (approved list, already-enrolled, suppression,
+  // dedup, bad address) and then keeps just these recipient ids. It never adds
+  // anyone, so it cannot widen a send. Used to re-send to a vetted subset (e.g.
+  // the rows a 429 failed) without re-mailing the rest of the audience.
+  only_recipient_ids?: string[];
   // For mode='preview' only. The program_location_id (school) to render the
   // touchpoint AS IF a parent at that school received it. Their school's
   // matching program drives the per-program tokens, and the {{vip_block}}
@@ -346,6 +361,20 @@ serve(async (req: Request) => {
   if (body.mode === "preview" && (!body.preview_location_id || typeof body.preview_location_id !== "string")) {
     return json({ error: "preview_location_id required for mode='preview'" }, 400);
   }
+  // Present-but-malformed must REFUSE, never fall back to "no allowlist": the
+  // fallback is the whole audience, the opposite of what the caller asked for.
+  if (body.only_recipient_ids !== undefined) {
+    if (body.mode !== "send") {
+      return json({ error: "only_recipient_ids is only valid with mode='send'" }, 400);
+    }
+    if (
+      !Array.isArray(body.only_recipient_ids) ||
+      body.only_recipient_ids.length === 0 ||
+      !body.only_recipient_ids.every((x) => typeof x === "string" && x.length > 0)
+    ) {
+      return json({ error: "only_recipient_ids must be a non-empty array of recipient id strings" }, 400);
+    }
+  }
 
   // FAIL CLOSED on a missing unsubscribe secret, matching lifecycle-automations-cron.
   // Campaign email is promotional by definition, so every one of these sends is
@@ -478,6 +507,7 @@ serve(async (req: Request) => {
   // letting them drift.
   const isTestSend = body.mode === "test";
   let recipientRows: Recipient[] = [];
+  let onlyIdsReport: { requested: number; matched: number } | null = null;
   if (isTestSend) {
     if (!auth.userEmail) {
       return json({ error: "test mode requires authenticated user with email" }, 400);
@@ -497,6 +527,15 @@ serve(async (req: Request) => {
     const { data: rows, error: rErr } = await supabase.rpc("get_campaign_recipients", { p_campaign_id: campaign.id });
     if (rErr) return json({ error: `get_campaign_recipients failed: ${rErr.message}` }, 500);
     recipientRows = (rows ?? []) as Recipient[];
+    // Narrow-only (validated above). An id that is not in the eligible set is
+    // simply absent, so a typo or a since-enrolled family is skipped, not sent.
+    if (body.only_recipient_ids) {
+      const allow = new Set(body.only_recipient_ids);
+      recipientRows = recipientRows.filter((r) => allow.has(r.id));
+      // Reported back so a typo or a since-enrolled family shows up as
+      // requested > matched instead of a quiet short send.
+      onlyIdsReport = { requested: allow.size, matched: recipientRows.length };
+    }
   }
 
   // ---- Load programs the campaign picked (for per-program tokens) ----
@@ -1029,7 +1068,7 @@ serve(async (req: Request) => {
 
     let batchResp: { ok: true; ids: string[] } | { ok: false; error: string };
     try {
-      batchResp = await sendBatchViaResend(batchPayload);
+      batchResp = await sendBatchViaResend(batchPayload, sendLoopStartedAt + SEND_TIME_BUDGET_MS);
     } catch (e) {
       // Network errors (DNS, connection reset, abort, TLS) — catch so the
       // loop can continue with the next batch instead of dying.
@@ -1079,9 +1118,9 @@ serve(async (req: Request) => {
       }
     }
 
-    // Stay under Resend's 5 req/sec — pace batches at 1 per 250ms.
+    // Leave room under Resend's account-wide 10 req/sec (see RESEND_BATCH_PACE_MS).
     if (i + RESEND_BATCH_SIZE < ready.length) {
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      await new Promise((resolve) => setTimeout(resolve, RESEND_BATCH_PACE_MS));
     }
   }
 
@@ -1097,6 +1136,7 @@ serve(async (req: Request) => {
     campaign_id: campaign.id,
     touchpoint_id: touchpoint.id,
     mode: body.mode,
+    ...(onlyIdsReport ? { only_recipient_ids: onlyIdsReport } : {}),
     ...results,
   });
 });
@@ -2106,18 +2146,27 @@ async function sendBatchViaResend(
     // URL failed to build; Resend passes whatever is here straight through.
     headers?: Record<string, string>;
   }>,
+  // Epoch ms after which a 429 is no longer retried (the send loop's budget).
+  deadlineAt: number,
 ): Promise<{ ok: true; ids: string[] } | { ok: false; error: string }> {
-  const res = await fetch("https://api.resend.com/emails/batch", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${RESEND_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(emails),
-  });
+  // ONLY a 429 is retried: Resend refused the whole request before processing,
+  // so nothing went out. See _shared/resendRateLimit.ts for why 5xx/network
+  // errors are not.
+  const { res, retries } = await fetchWithRateLimitRetry(
+    () => fetch("https://api.resend.com/emails/batch", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${RESEND_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(emails),
+    }),
+    { deadlineAt },
+  );
   if (!res.ok) {
     const body = await res.text();
-    return { ok: false, error: `resend batch ${res.status}: ${body.slice(0, 300)}` };
+    const tried = retries > 0 ? ` (after ${retries} ${retries === 1 ? "retry" : "retries"})` : "";
+    return { ok: false, error: `resend batch ${res.status}${tried}: ${body.slice(0, 300)}` };
   }
   const data = await res.json();
   // Resend batch response shape: { data: [{ id: "..." }, ...] }. Defensive
