@@ -245,6 +245,17 @@ for (const h of hosts) {
         w.status >= 400, `status ${w.status}`);
     }
   }
+  // Invitations (20261105a): a login reads only its own partner's list, and a
+  // made-up link shows nothing.
+  for (const p of partnerIdsInPlay) {
+    const r = await call('/rest/v1/rpc/partner_invitations_for', { token: h.token, method: 'POST', body: { p_partner_id: p } });
+    if (!h.partners.has(p)) ok(`${who} reads no invitations of another partner (${p.slice(0, 8)})`, gotNothing(r), `${rows(r).length} row(s)`);
+  }
+  const fake = await call('/rest/v1/rpc/partner_invitation_preview', { token: h.token, method: 'POST', body: { p_token: 'f'.repeat(64) } });
+  ok(`${who} a made-up invitation link shows nothing`, gotNothing(fake), `status ${fake.status}`);
+  const directInv = await call('/rest/v1/partner_invitations?select=id', { token: h.token });
+  ok(`${who} cannot read partner_invitations directly`, gotNothing(directInv), `status ${directInv.status}`);
+
   const direct = await call('/rest/v1/partner_acceptances?select=id', { token: h.token });
   ok(`${who} cannot read partner_acceptances directly`, gotNothing(direct), `status ${direct.status}`);
 
@@ -278,7 +289,8 @@ for (const h of hosts) {
     const r = await call('/rest/v1/rpc/partner_requirements_for', { token: h.token, method: 'POST', body: { p_partner_id: p } });
     if (h.partners.has(p)) {
       ok(`${who} CONTROL: reads its own requirements`, rows(r).length > 0, `status ${r.status}`);
-      scanFields(`${who} requirements`, rows(r), new Set(['requirement_key', 'required']));
+      // detail + source: the partner's own requirement wording (20261104b), meant for partners.
+      scanFields(`${who} requirements`, rows(r), new Set(['requirement_key', 'required', 'detail', 'source']));
     } else {
       ok(`${who} reads no requirements of another partner (${p.slice(0, 8)})`, gotNothing(r), `${rows(r).length} row(s)`);
     }

@@ -79,7 +79,9 @@ export default function InviteAccept() {
       body: { email: email.trim(), redirect_to: window.location.href, context: "admin" },
     });
     if (error || data?.error) throw new Error(data?.error || "Couldn't send a sign-in link. Try again.");
-    setMsg({ kind: "ok", text: "Check your email for a sign-in link. It brings you back here." });
+    // Only an existing enrops account gets a link; the sender says nothing
+    // either way, so the page must not promise an email.
+    setMsg({ kind: "ok", text: `If ${email.trim()} has an enrops account, a sign-in link is on its way and brings you back here. No account yet? Set one up below.` });
   });
 
   if (inv === undefined || authLoading) return <PartnerShell><p className="py-24 text-center text-j2s-ink/60">Loading…</p></PartnerShell>;
