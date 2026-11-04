@@ -11,7 +11,8 @@ function scripted(statuses: Array<number | [number, Record<string, string>]>) {
     const s = statuses[Math.min(calls, statuses.length - 1)];
     calls++;
     const [status, headers] = Array.isArray(s) ? s : [s, {}];
-    return Promise.resolve(new Response(status === 200 ? '{"data":[]}' : '{"name":"x"}', { status, headers }));
+    const bodyText = status === 200 ? '{"data":[]}' : status === 429 ? '{"name":"rate_limit_exceeded","statusCode":429}' : '{"name":"x"}';
+    return Promise.resolve(new Response(bodyText, { status, headers }));
   };
   return { send, calls: () => calls };
 }
@@ -71,6 +72,23 @@ Deno.test("NEVER retries a 5xx, a 4xx, or a success - re-sending could mail a fa
     assertEquals(retries, 0);
     assertEquals(s.calls(), 1, `status ${status} must be sent exactly once`);
   }
+});
+
+Deno.test("a 429 that is a QUOTA error (not the per-second limit) fails fast, unretried", async () => {
+  for (const body of ['{"name":"daily_quota_exceeded","statusCode":429}', "", "not json"]) {
+    let calls = 0;
+    const send = () => { calls++; return Promise.resolve(new Response(body, { status: 429 })); };
+    const { res, retries } = await fetchWithRateLimitRetry(send, { sleep: noSleep });
+    assertEquals(res.status, 429);
+    assertEquals(retries, 0);
+    assertEquals(calls, 1, `body ${JSON.stringify(body)} must not be retried`);
+    assertEquals(await res.text(), body); // caller can still read the original body
+  }
+});
+
+Deno.test("a retried-out 429 still has a readable body for the caller's error", async () => {
+  const { res } = await fetchWithRateLimitRetry(scripted([429]).send, { maxRetries: 1, sleep: noSleep, random: () => 0 });
+  assert((await res.text()).includes("rate_limit_exceeded"));
 });
 
 Deno.test("a retry that would run past the deadline is not attempted", async () => {

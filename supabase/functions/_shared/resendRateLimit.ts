@@ -39,6 +39,16 @@ export function retryAfterMs(header: string | null | undefined): number | null {
   return Math.round(Number(trimmed) * 1000);
 }
 
+/** True when a 429's body names Resend's per-second `rate_limit_exceeded`.
+ *  Reads a clone so the caller can still read the original body for its error. */
+async function isRateLimitBody(res: Response): Promise<boolean> {
+  try {
+    return (await res.clone().text()).includes("rate_limit_exceeded");
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Runs `send()`, retrying while it answers 429. Returns the last response (a
  * 429 once retries or the deadline are used up) and how many retries happened,
@@ -60,6 +70,12 @@ export async function fetchWithRateLimitRetry(
   for (;;) {
     const res = await send();
     if (res.status !== 429 || retries >= maxRetries) return { res, retries };
+    // A 429 is not always a rate limit: Resend also uses it for an exhausted
+    // daily/monthly QUOTA, which no amount of waiting fixes and which would burn
+    // the whole send budget retrying every batch. Retry only the named rate
+    // limit; anything else (including an unreadable body) fails fast, exactly as
+    // it did before this helper existed.
+    if (!(await isRateLimitBody(res))) return { res, retries };
 
     // Honour the server's hint, but never wait LESS than our own backoff: a hint
     // of 0-1s straight after a burst has been seen to 429 again.

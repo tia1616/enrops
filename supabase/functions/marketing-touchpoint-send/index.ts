@@ -143,8 +143,10 @@ const RESEND_BATCH_PACE_MS = 500;
 // 2. Mark already-sent recipients in marketing_sends as 'sent' (already done)
 // 3. Return ok:false with a partial-progress error so the cron sees the
 //    touchpoint as failed and the operator can re-queue it
-// Estimated capacity at this budget: ~10,000 recipients per touchpoint per
-// run, allowing for normal Resend latency variance.
+// Capacity at this budget: roughly 6,000-8,000 recipients per run at the
+// 500ms batch pace (RESEND_BATCH_PACE_MS) plus render/send latency. A bigger
+// audience ends as partial:true and the cron continues it next tick; dedup
+// means nobody is mailed twice.
 const SEND_TIME_BUDGET_MS = 130_000;
 
 // Tokens Ennie's draft pass approved. Anything outside this set in the touchpoint
@@ -505,6 +507,7 @@ serve(async (req: Request) => {
   // letting them drift.
   const isTestSend = body.mode === "test";
   let recipientRows: Recipient[] = [];
+  let onlyIdsReport: { requested: number; matched: number } | null = null;
   if (isTestSend) {
     if (!auth.userEmail) {
       return json({ error: "test mode requires authenticated user with email" }, 400);
@@ -529,6 +532,9 @@ serve(async (req: Request) => {
     if (body.only_recipient_ids) {
       const allow = new Set(body.only_recipient_ids);
       recipientRows = recipientRows.filter((r) => allow.has(r.id));
+      // Reported back so a typo or a since-enrolled family shows up as
+      // requested > matched instead of a quiet short send.
+      onlyIdsReport = { requested: allow.size, matched: recipientRows.length };
     }
   }
 
@@ -1130,6 +1136,7 @@ serve(async (req: Request) => {
     campaign_id: campaign.id,
     touchpoint_id: touchpoint.id,
     mode: body.mode,
+    ...(onlyIdsReport ? { only_recipient_ids: onlyIdsReport } : {}),
     ...results,
   });
 });
