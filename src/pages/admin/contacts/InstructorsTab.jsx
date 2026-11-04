@@ -15,6 +15,7 @@ import Chevron from '../../../components/Chevron.jsx';
 // drift from Settings > Instructor documents or from the wizard.
 import { documentByKey } from '../../../lib/instructorDocuments.js';
 import { normalizePreferredName } from '../../../lib/instructorName.js';
+import InstructorClearances from './InstructorClearances.jsx';
 
 const PURPLE = '#1C004F';
 const BRIGHT = '#5847C9';   // indigo - primary actions (Figma)
@@ -832,6 +833,9 @@ function InstructorDetail({ row, age, onUploadBg, onRemove, onReactivate, isEdit
             {checkr === 'clear' ? 'Replace BG report →' : 'Upload prior BG report →'}
           </button>
         )}
+      </DetailItem>
+      <DetailItem label="Other clearances">
+        <InstructorClearances instructorId={row.id} />
       </DetailItem>
       <DetailItem label="Stripe payouts">
         {row.status?.stripe_payouts_enabled ? 'enabled' : <Em>not enabled</Em>}

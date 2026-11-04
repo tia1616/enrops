@@ -111,6 +111,15 @@ export function instructorChecklist(row, orgName, today) {
   const checkSource = vendor && row.background_check_completed_on ? `${byProvider} · from the provider's screening partner` : byProvider;
   const nothingOnFile = row.background_check_status === "missing";
 
+  // Statuses from another source (20261103a). A current background check from
+  // another source stands in for an enrops one that is missing, expired or
+  // still in review, so a provider on any screening company can reach green
+  // (spec v3 Nov 6 check 10). Every other one is its own line.
+  const others = (row.clearances || []).map((c) => clearanceLine(c, byProvider));
+  const okTone = (b) => b?.tone === "good" || b?.tone === "warn";
+  const standIn = okTone(status) ? null
+    : others.find((l) => l.checkType === "background_check" && okTone(l.badge)) ?? null;
+
   const signed = (key, title, date, verb) => ({
     key,
     title,
@@ -120,7 +129,14 @@ export function instructorChecklist(row, orgName, today) {
   });
 
   return [
-    {
+    standIn ? {
+      key: "background_check",
+      title: "Background check",
+      badge: standIn.badge,
+      detail: [standIn.title, standIn.detail].filter(Boolean).join(" · "),
+      meta: standIn.meta,
+      date: standIn.expiresOn,
+    } : {
       key: "background_check",
       title: "Background check",
       badge: status,
@@ -137,7 +153,105 @@ export function instructorChecklist(row, orgName, today) {
     signed("code_of_conduct", "Code of conduct", row.code_of_conduct_on, "Signed"),
     signed("mandatory_reporter", "Mandatory reporter", row.mandatory_reporter_on, "Acknowledged"),
     signed("contractor_agreement", "Contractor agreement", row.agreement_signed_on, "Signed"),
+    ...others.filter((l) => l !== standIn),
   ];
+}
+
+// --- Statuses from another source (instructor_clearances, 20261103a) --------
+
+// Who cleared the instructor. `label` is what the provider picks from;
+// `shown` is what a partner reads. Public clearance bodies are named; a
+// screening COMPANY never is (Jessica 2026-11-03, on Arielle's 10/28 rule
+// "Keep the screening vendor's name off every screen and email"), so it has
+// no name field at all. `type` is the check type the form starts on.
+export const CLEARANCE_BODIES = [
+  { key: "district_fingerprint", label: "District fingerprint clearance (Oregon ODE)", shown: "District clearance (ODE fingerprint)", type: "fingerprint_clearance" },
+  { key: "oregon_cbr", label: "Oregon Central Background Registry (DELC)", shown: "Oregon CBR", type: "registry_check" },
+  { key: "wa_dcyf", label: "Washington DCYF portable background check", shown: "DCYF portable check", type: "background_check" },
+  { key: "screening_company", label: "A screening company (its name is not shown to partners)", shown: null, type: "background_check" },
+  { key: "other", label: "Another agency", shown: null, type: "other" },
+];
+
+export const CHECK_TYPES = [
+  { key: "background_check", label: "Background check" },
+  { key: "fingerprint_clearance", label: "Fingerprint clearance" },
+  { key: "registry_check", label: "Registry check" },
+  // Spec v3 P5: training from another organization, e.g. a partner's own.
+  { key: "training", label: "Training" },
+  { key: "other", label: "Other check" },
+];
+
+/** Who gave it, for a training: the agency typed, or the named body. */
+function bodyName(c) {
+  if (c?.clearance_body === "other") return (c.clearance_body_other || "").trim() || null;
+  return CLEARANCE_BODIES.find((b) => b.key === c?.clearance_body)?.shown ?? null;
+}
+
+/** What a partner reads for who cleared an instructor. */
+export function clearanceLabel(c) {
+  // Spec v3 label: "{Training name} from {organization}".
+  if (c?.check_type === "training") {
+    const name = (c.item_name || "").trim() || "Training";
+    const from = bodyName(c);
+    return from ? `${name} from ${from}` : name;
+  }
+  const body = CLEARANCE_BODIES.find((b) => b.key === c?.clearance_body);
+  if (body?.shown) return body.shown;
+  const type = CHECK_TYPES.find((t) => t.key === c?.check_type)?.label ?? "Check";
+  if (c?.clearance_body === "other" && (c.clearance_body_other || "").trim()) return c.clearance_body_other.trim();
+  return `${type} from the provider's screening company`;
+}
+
+/** One checklist line for a status entered from another source. */
+export function clearanceLine(c, byProvider) {
+  const badge = EXPIRY_STATUS[c.status] ?? CHECK_STATUS.in_review;
+  const detail = [
+    c.completed_on ? `Completed ${formatDate(c.completed_on)}` : null,
+    c.expires_on ? `${c.status === "expired" ? "Expired" : "Renews"} ${formatDate(c.expires_on)}` : null,
+    (c.scope || "").trim() ? `Scope: ${c.scope.trim()}` : null,
+  ].filter(Boolean).join(" · ");
+  return {
+    key: `clearance:${c.id}`,
+    title: clearanceLabel(c),
+    badge,
+    detail,
+    // The viewer's own date for when it was entered, not UTC's.
+    meta: provenance(localDateOf(c.entered_at), byProvider),
+    checkType: c.check_type,
+    expiresOn: c.expires_on ?? null,
+  };
+}
+
+/** Attach each instructor's clearances (partner_portal_clearances rows) to its row. */
+export function withClearances(instructors, clearances) {
+  const by = new Map();
+  for (const c of clearances || []) {
+    if (!by.has(c.instructor_id)) by.set(c.instructor_id, []);
+    by.get(c.instructor_id).push(c);
+  }
+  return (instructors || []).map((r) => ({ ...r, clearances: by.get(r.instructor_id) ?? [] }));
+}
+
+// Where a provider registers families (provider_record_settings, 20261103a).
+export const REGISTRATION_SYSTEMS = [
+  { key: "enrops", label: "enrops" },
+  { key: "jackrabbit", label: "Jackrabbit" },
+  { key: "sawyer", label: "Sawyer" },
+  { key: "active", label: "ACTIVE Network" },
+  { key: "amilia", label: "Amilia" },
+  { key: "facilitron", label: "Facilitron" },
+  { key: "jumbula", label: "Jumbula" },
+  { key: "coursestorm", label: "CourseStorm" },
+  { key: "own_website", label: "Its own website" },
+  { key: "paper", label: "Paper forms" },
+  { key: "other", label: "Other" },
+];
+
+/** "Jackrabbit", or the typed name for Other; null when not set. */
+export function registrationLabel(settings) {
+  if (!settings?.registration_system) return null;
+  if (settings.registration_system === "other") return (settings.registration_system_other || "").trim() || null;
+  return REGISTRATION_SYSTEMS.find((s) => s.key === settings.registration_system)?.label ?? null;
 }
 
 // --- What a partner requires (partner_requirements_for, 20261026a) ---------
@@ -301,6 +415,7 @@ export function providerSummary({ docs, instructors, partnerId, orgName, today, 
   const dates = [
     ...(docs || []).filter((d) => !d.partner_id || d.partner_id === partnerId).map((d) => d.updated_at && String(d.updated_at).slice(0, 10)),
     ...(instructors || []).flatMap((r) => [r.background_check_as_of, r.training_as_of, r.code_of_conduct_on, r.mandatory_reporter_on, r.agreement_signed_on]),
+    ...(instructors || []).flatMap((r) => (r.shared ? (r.clearances || []).map((c) => localDateOf(c.entered_at)) : [])),
   ].filter(Boolean).sort();
   const lastChange = dates.length ? dates[dates.length - 1] : null;
 

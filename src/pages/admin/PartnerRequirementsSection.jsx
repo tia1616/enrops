@@ -8,7 +8,7 @@
 // edit the same list itself.
 
 import { useState } from "react";
-import { setPartnerRequirement } from "../../lib/partnerPortal.js";
+import { setPartnerRequirement, setPartnerRequirementDetail } from "../../lib/partnerPortal.js";
 import { REQUIREMENTS } from "../../lib/partnerPortalLogic.js";
 
 const INK = "#1a1a1a";
@@ -29,6 +29,29 @@ export default function PartnerRequirementsSection({ partner, rows, canManage, o
   const [note, setNote] = useState("");
 
   const isRequired = (key) => !!rows?.find((r) => r.requirement_key === key)?.required;
+  const rowFor = (key) => rows?.find((r) => r.requirement_key === key) ?? null;
+  // The item whose "what they require" text is open for editing (20261104b).
+  const [editing, setEditing] = useState(null); // { key, detail, source } | null
+
+  async function saveDetail() {
+    if (!editing) return;
+    setSavingKey(editing.key);
+    setNote("");
+    setError("");
+    try {
+      const detail = editing.detail.trim();
+      const source = editing.source.trim();
+      await setPartnerRequirementDetail(partner.id, editing.key, detail, source);
+      onChange((rs) => (rs || []).map((r) => (r.requirement_key === editing.key
+        ? { ...r, detail: detail || null, source: detail ? source || null : null } : r)));
+      setEditing(null);
+      setNote("Saved.");
+    } catch (err) {
+      setError(`That didn't save: ${err?.message ?? "unknown error"}`);
+    } finally {
+      setSavingKey("");
+    }
+  }
 
   async function toggle(req) {
     const next = !isRequired(req.key);
@@ -63,19 +86,68 @@ export default function PartnerRequirementsSection({ partner, rows, canManage, o
           {GROUPS.map((g) => (
             <fieldset key={g.kind} style={{ border: "none", padding: 0, margin: 0, minWidth: 220 }}>
               <legend style={{ fontSize: 12, fontWeight: 700, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>{g.title}</legend>
-              {REQUIREMENTS.filter((r) => r.kind === g.kind).map((r) => (
-                <label key={r.key} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 0", fontSize: 14, color: INK, cursor: canManage ? "pointer" : "default" }}>
-                  <input
-                    type="checkbox"
-                    checked={isRequired(r.key)}
-                    disabled={!canManage || !!savingKey}
-                    onChange={() => toggle(r)}
-                    style={{ width: 16, height: 16 }}
-                  />
-                  {r.label}
-                  {savingKey === r.key && <span style={{ fontSize: 12, color: MUTED }}>Saving…</span>}
-                </label>
-              ))}
+              {REQUIREMENTS.filter((r) => r.kind === g.kind).map((r) => {
+                const row = rowFor(r.key);
+                const open = editing?.key === r.key;
+                return (
+                  <div key={r.key} style={{ padding: "5px 0" }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, color: INK, cursor: canManage ? "pointer" : "default" }}>
+                      <input
+                        type="checkbox"
+                        checked={isRequired(r.key)}
+                        disabled={!canManage || !!savingKey}
+                        onChange={() => toggle(r)}
+                        style={{ width: 16, height: 16 }}
+                      />
+                      {r.label}
+                      {savingKey === r.key && <span style={{ fontSize: 12, color: MUTED }}>Saving…</span>}
+                    </label>
+                    {/* What they require for this item, in their words, and where
+                        it is written (spec v3 H3 "what you require" + "source"). */}
+                    {isRequired(r.key) && !open && (
+                      <div style={{ marginLeft: 24, fontSize: 12, color: MUTED, lineHeight: 1.45, maxWidth: 360 }}>
+                        {row?.detail ? <span style={{ color: INK }}>{row.detail}</span> : null}
+                        {row?.source ? <div>Source: {row.source}</div> : null}
+                        {canManage && (
+                          <button
+                            type="button" disabled={!!savingKey}
+                            onClick={() => setEditing({ key: r.key, detail: row?.detail ?? "", source: row?.source ?? "" })}
+                            style={{ background: "none", border: "none", padding: 0, color: "#5847C9", fontSize: 12, fontWeight: 600, cursor: "pointer", textDecoration: "underline", fontFamily: "inherit" }}
+                          >
+                            {row?.detail ? "Edit details" : "Add what they require"}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {open && (
+                      <div style={{ marginLeft: 24, display: "grid", gap: 6, maxWidth: 360 }}>
+                        <textarea
+                          aria-label={`What ${partner.partner_name} requires for ${r.label}`} rows={3} maxLength={600}
+                          value={editing.detail} onChange={(e) => setEditing({ ...editing, detail: e.target.value })}
+                          placeholder="In their words, e.g. General liability $1M per occurrence / $2M aggregate"
+                          style={{ fontSize: 13, padding: 6, borderRadius: 6, border: `1px solid ${RULE}`, fontFamily: "inherit" }}
+                        />
+                        <input
+                          aria-label="Where it's written" maxLength={200}
+                          value={editing.source} onChange={(e) => setEditing({ ...editing, source: e.target.value })}
+                          placeholder="Where it's written, e.g. 2026 agreement, page 6"
+                          style={{ fontSize: 13, padding: 6, borderRadius: 6, border: `1px solid ${RULE}`, fontFamily: "inherit" }}
+                        />
+                        <div style={{ display: "flex", gap: 10 }}>
+                          <button type="button" onClick={saveDetail} disabled={!!savingKey}
+                            style={{ padding: "5px 12px", borderRadius: 6, border: "none", background: "#1C004F", color: "#fff", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "inherit" }}>
+                            {savingKey === r.key ? "Saving…" : "Save"}
+                          </button>
+                          <button type="button" onClick={() => setEditing(null)} disabled={!!savingKey}
+                            style={{ background: "none", border: "none", color: MUTED, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </fieldset>
           ))}
         </div>

@@ -88,7 +88,8 @@ export default function ProviderDocumentForm({ partner, editing, kind, onCancel,
   async function remove() {
     if (busy) return;
     const shared = !editing.partner_id ? " It's shared with every partner, so it goes from all of them." : "";
-    if (!window.confirm(`Remove "${editing.title}"?${shared} This can't be undone.`)) return;
+    const history = editing.versions?.length ? ` Its ${editing.versions.length} earlier version${editing.versions.length === 1 ? "" : "s"} go too.` : "";
+    if (!window.confirm(`Remove "${editing.title}"?${shared}${history} This can't be undone.`)) return;
     setBusy("remove"); setError("");
     try {
       await onRemove(editing);
@@ -143,7 +144,7 @@ export default function ProviderDocumentForm({ partner, editing, kind, onCancel,
       <div style={hint}>
         {editing
           ? (file
-              ? `This replaces ${editing.original_filename || "the current file"}. Partners will see the new one.`
+              ? `Partners will see the new one. ${editing.original_filename || "The current file"} stays under Earlier versions.`
               : `On file now: ${editing.original_filename || "a file"}. Only choose one to replace it, for example when it's renewed.`)
           : "PDF, JPG or PNG, up to 10 MB."}
       </div>

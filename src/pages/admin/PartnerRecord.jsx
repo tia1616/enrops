@@ -21,7 +21,7 @@ import ModalShell from "../../components/ModalShell.jsx";
 import ProviderDocumentForm from "./ProviderDocumentForm.jsx";
 import PartnerLoginsSection from "./PartnerLoginsSection.jsx";
 import PartnerRequirementsSection from "./PartnerRequirementsSection.jsx";
-import { DocumentsTable, InstructorGrid, RecordSummary } from "../partner/ProviderRecord.jsx";
+import { DocumentsTable, InstructorGrid, RecordSummary, RegistrationLine, RequirementsList } from "../partner/ProviderRecord.jsx";
 import PartnerDecision from "../partner/PartnerDecision.jsx";
 import { todayIso } from "../partner/partnerShared.jsx";
 import { usePermissions } from "../../lib/permissions.js";
@@ -181,7 +181,9 @@ export default function PartnerRecord() {
         <div style={{ padding: 40, color: MUTED, textAlign: "center" }}>Loading…</div>
       ) : (
         <>
+          <RegistrationLine orgId={org?.id} />
           <RecordSummary s={s} />
+          <RequirementsList requirements={requirements} viewer="provider" partnerName={partner.partner_name} />
           <DocumentsTable
             s={s} orgName={orgName} today={today} onOpen={open}
             viewer="provider" partnerName={partner.partner_name} renderActions={actions}

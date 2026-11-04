@@ -11,14 +11,30 @@ const SIGNED_URL_TTL = 60 * 10;
 const LIST_COLUMNS =
   "id, organization_id, partner_id, doc_type, title, received_on, effective_on, expires_on, storage_path, original_filename, updated_at, expiry_status";
 
-/** Every document this provider has on file, with its expiry status. */
+/**
+ * Every document this provider has on file, with its expiry status. Each
+ * carries `versions`: its earlier files, newest first (20261104a), readable by
+ * whoever can read the document. If that read fails the documents still load,
+ * with no history shown.
+ */
 export async function listProviderDocuments(orgId) {
-  const { data, error } = await supabase
-    .from("provider_documents_with_status")
-    .select(LIST_COLUMNS)
-    .eq("organization_id", orgId);
-  if (error) throw error;
-  return data ?? []; // ordered for display by the page (compareByExpiry)
+  const [docs, versions] = await Promise.all([
+    supabase.from("provider_documents_with_status").select(LIST_COLUMNS).eq("organization_id", orgId),
+    supabase
+      .from("provider_document_versions")
+      .select("id, document_id, storage_path, original_filename, received_on, effective_on, expires_on, replaced_at")
+      .eq("organization_id", orgId)
+      .order("replaced_at", { ascending: false }),
+  ]);
+  if (docs.error) throw docs.error;
+  if (versions.error) console.warn("[providerDocuments] history not loaded:", versions.error.message);
+  const byDoc = new Map();
+  for (const v of versions.error ? [] : versions.data ?? []) {
+    if (!byDoc.has(v.document_id)) byDoc.set(v.document_id, []);
+    byDoc.get(v.document_id).push(v);
+  }
+  // Ordered for display by the page (compareByExpiry).
+  return (docs.data ?? []).map((d) => ({ ...d, versions: byDoc.get(d.id) ?? [] }));
 }
 
 /**
@@ -91,9 +107,10 @@ export async function createProviderDocument(orgId, draft, file) {
 
 /**
  * Edit a document, optionally replacing its file. A new file is uploaded and the
- * row repointed before the old file is removed, so the row never points at
- * nothing. Removing the old file is best effort (see removeFile).
- * The kind and the partner are never changed here (editPatchFromDraft).
+ * row repointed. The old file is KEPT: the database copies it into the
+ * document's history as the row is repointed (20261104a), so a host can still
+ * open what it reviewed. The kind and the partner are never changed here
+ * (editPatchFromDraft).
  */
 export async function updateProviderDocument(row, draft, file) {
   const patch = editPatchFromDraft(draft);
@@ -108,18 +125,23 @@ export async function updateProviderDocument(row, draft, file) {
     if (newPath) await removeFile(newPath);
     throw error;
   }
-  if (newPath && row.storage_path !== newPath) await removeFile(row.storage_path);
 }
 
 /**
- * Delete a document. The row goes first: once it is gone, partners and the rest
- * of the team can no longer open the file, so a failed file removal leaves it
- * readable only to the provider's own owners/admins (see removeFile).
+ * Delete a document and its history. The row goes first (its history rows go
+ * with it): once it is gone, partners and the rest of the team can no longer
+ * open any of its files, so a failed file removal leaves a file readable only
+ * to the provider's own owners/admins (see removeFile).
  */
 export async function deleteProviderDocument(row) {
+  const { data: versions } = await supabase
+    .from("provider_document_versions")
+    .select("storage_path")
+    .eq("document_id", row.id);
   const { error } = await supabase.from("provider_documents").delete().eq("id", row.id);
   if (error) throw error;
   await removeFile(row.storage_path);
+  for (const v of versions ?? []) await removeFile(v.storage_path);
 }
 
 /**

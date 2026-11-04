@@ -24,7 +24,7 @@ import { listPartnerInstructors, listPartnerRequirements, logPartnerPortalEvent 
 import { listProviderDocuments, openDocumentInNewTab } from "../../lib/providerDocuments.js";
 import { providerSummary, requiredKeys } from "../../lib/partnerPortalLogic.js";
 import { PartnerShell, PartnerSignIn, NoAccess, useMemberships, todayIso } from "./partnerShared.jsx";
-import { DocumentsTable, InstructorGrid, RecordSummary } from "./ProviderRecord.jsx";
+import { DocumentsTable, InstructorGrid, RecordSummary, RegistrationLine, RequirementsList } from "./ProviderRecord.jsx";
 import PartnerDecision from "./PartnerDecision.jsx";
 
 export default function PartnerProviderDetail() {
@@ -100,6 +100,7 @@ export default function PartnerProviderDetail() {
       <Link to="/partner" className="text-sm text-j2s-ink/60 hover:underline">← All providers</Link>
       <div className="mt-2 text-sm font-semibold uppercase tracking-wide text-j2s-ink/50">{m.partner_name}</div>
       <h1 className="mt-1 text-3xl font-bold text-j2s-ink">{orgName}</h1>
+      <RegistrationLine orgId={m.organization_id} />
 
       {(error || loadError || openError) && <p className="error-text mt-4">{error || loadError || openError}</p>}
 
@@ -111,6 +112,8 @@ export default function PartnerProviderDetail() {
           {(requirements === null || requirements?.length === 0) && (
             <p className="mt-2 text-xs text-j2s-ink/50">Showing every standard requirement: your list couldn't be loaded just now.</p>
           )}
+
+          <RequirementsList requirements={requirements} />
 
           <DocumentsTable s={s} orgName={orgName} today={today} onOpen={open} />
 

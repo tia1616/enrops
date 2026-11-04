@@ -10,12 +10,13 @@
 // put its own buttons on each document row (`renderActions`). What is counted,
 // and how, is providerSummary() in partnerPortalLogic.js, for both.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import DocumentStatusBadge from "../../components/DocumentStatusBadge.jsx";
 import {
   instructorChecklist, documentProvenance, worstBadge, REQUIREMENTS,
-  GRID_DATE, gridCellText, instructorCellDate,
+  GRID_DATE, gridCellText, instructorCellDate, registrationLabel, localDateOf,
 } from "../../lib/partnerPortalLogic.js";
+import { getRecordSettings } from "../../lib/partnerPortal.js";
 import { formatDate, compareByExpiry } from "../../lib/providerDocumentLogic.js";
 
 // Short column headers; the full names live in REQUIREMENTS.
@@ -78,6 +79,46 @@ export function InstructorsCell({ s }) {
 }
 
 /** The answer first: requirements met, instructors current. Each clause carries its OWN chip. */
+/**
+ * "Registration: Jackrabbit" - where this provider registers families (spec v3
+ * H2 business section, plain text; 20261103a). Nothing when not set. Loads on
+ * its own so the record's other reads never wait on it.
+ */
+export function RegistrationLine({ orgId }) {
+  const [settings, setSettings] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    if (orgId) getRecordSettings(orgId).then((s) => { if (!cancelled) setSettings(s); });
+    return () => { cancelled = true; };
+  }, [orgId]);
+  const label = registrationLabel(settings);
+  return label ? <div className="mt-1 text-sm text-j2s-ink/60">Registration: {label}</div> : null;
+}
+
+/**
+ * What this partner requires, one line per required item that has its words
+ * filled in, with where it is written (spec v3 H2 section 6, as text: no
+ * automatic Met/Gap; 20261104b). Nothing when no item has words yet.
+ */
+export function RequirementsList({ requirements, viewer = "partner", partnerName }) {
+  const rows = (requirements || []).filter((r) => r.required && (r.detail || "").trim());
+  if (rows.length === 0) return null;
+  return (
+    <section className="mt-5 rounded-2xl bg-white p-4 shadow-card">
+      <h2 className="text-base font-bold text-j2s-ink">{viewer === "provider" ? `What ${partnerName} requires` : "Your requirements"}</h2>
+      <ul className="mt-2 space-y-2">
+        {rows.map((r) => (
+          <li key={r.requirement_key} className="text-sm">
+            <span className="font-semibold text-j2s-ink">{REQUIREMENT_LABEL[r.requirement_key] ?? r.requirement_key}:</span>{" "}
+            <span className="text-j2s-ink/80">{r.detail}</span>
+            {r.source && <div className="text-xs text-j2s-ink/50">Source: {r.source}</div>}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export function RecordSummary({ s }) {
   return (
     <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-j2s-ink/80">
@@ -115,6 +156,13 @@ export function DocumentsTable({ s, orgName, today, onOpen, viewer = "partner", 
   const actions = renderActions ?? (({ d }) => d && (
     <button type="button" onClick={() => onOpen(d)} className="font-semibold text-j2s-purple hover:underline">View</button>
   ));
+  // Which documents have their earlier versions open (20261104a).
+  const [openHistory, setOpenHistory] = useState(() => new Set());
+  const toggleHistory = (id) => setOpenHistory((s) => {
+    const next = new Set(s);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
 
   return (
     <section className="mt-5 rounded-2xl bg-white shadow-card">
@@ -144,6 +192,30 @@ export function DocumentsTable({ s, orgName, today, onOpen, viewer = "partner", 
                     {/* The provider is told when one file is in EVERY partner's
                         packet, so changing it here isn't a surprise elsewhere. */}
                     {viewer === "provider" && d && !d.partner_id && <div className="text-xs text-j2s-ink/50">Shared with every partner</div>}
+                    {/* Earlier files, kept when a new version was uploaded, the
+                        way compliance tools keep a document's history. */}
+                    {d?.versions?.length > 0 && (
+                      <>
+                        <button
+                          type="button" onClick={() => toggleHistory(d.id)} aria-expanded={openHistory.has(d.id)}
+                          className="mt-1 text-xs font-semibold text-j2s-purple hover:underline"
+                        >
+                          {openHistory.has(d.id) ? "Hide earlier versions" : `Earlier versions (${d.versions.length})`}
+                        </button>
+                        {openHistory.has(d.id) && (
+                          <ul className="mt-1 space-y-1">
+                            {d.versions.map((v) => (
+                              <li key={v.id} className="text-xs text-j2s-ink/60">
+                                {/* A file replaced early can still be in date. */}
+                                {!v.expires_on ? "No expiry" : `${v.expires_on < today ? "Expired" : "Valid until"} ${formatDate(v.expires_on)}`}
+                                {` · replaced ${formatDate(localDateOf(v.replaced_at))} · `}
+                                <button type="button" onClick={() => onOpen({ ...d, storage_path: v.storage_path })} className="font-semibold text-j2s-purple hover:underline">View</button>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </>
+                    )}
                   </td>
                   <td className={TD}>
                     {d ? <DocumentStatusBadge status={d.expiry_status} /> : <DocumentStatusBadge badge={badge} />}
@@ -231,6 +303,16 @@ export function InstructorGrid({ s, instructors, orgName, today, viewer = "partn
                       {r.shared && (r.email || r.phone) && (
                         <div className="mt-0.5 text-[11px] text-j2s-purple [overflow-wrap:anywhere]">{[r.email, r.phone].filter(Boolean).join(" · ")}</div>
                       )}
+                      {/* Statuses from another source that no column shows (20261103a). */}
+                      {r.shared && lines.filter((l) => l.key.startsWith("clearance:")).map((l) => (
+                        <button
+                          key={l.key} type="button"
+                          onClick={() => setPicked({ id: `x:${r.instructor_id}:${l.key}`, r, line: l })}
+                          className="mt-0.5 block text-left text-[11px] font-semibold text-j2s-purple hover:underline"
+                        >
+                          Also: {l.title} ({l.badge.label})
+                        </button>
+                      ))}
                     </th>
                     {!r.shared
                       ? (cols.length > 0 && cell({
@@ -242,7 +324,8 @@ export function InstructorGrid({ s, instructors, orgName, today, viewer = "partn
                         const l = lines.find((x) => x.key === k);
                         return l ? cell({
                           id: `l:${r.instructor_id}:${k}`, badge: l.badge,
-                          text: gridCellText(l.badge, instructorCellDate(r, k)),
+                          // A stand-in from another source carries its own date (20261103a).
+                          text: gridCellText(l.badge, "date" in l ? l.date : instructorCellDate(r, k)),
                           meta: l.meta,
                           onPick: () => setPicked({ id: `l:${r.instructor_id}:${k}`, r, line: l }),
                         }) : <td key={k} className="border-b border-l border-j2s-ink/10" />;
