@@ -175,8 +175,22 @@ export async function watermarkJpeg(
     if (logo) {
       const p = logoPlacement(img.width, img.height, logo.width, logo.height);
       logo.resize(p.width, p.height);
+      // The same soft violet shadow the enrops mark gets, from the logo's own
+      // silhouette, so a dark logo still reads on a dark photo.
+      const logoShadow = logo.clone();
+      const [sr, sg, sb] = [0x1c, 0x00, 0x4f];
+      for (let y = 1; y <= logoShadow.height; y++) {
+        for (let x = 1; x <= logoShadow.width; x++) {
+          const a = logoShadow.getPixelAt(x, y) & 0xff;
+          logoShadow.setPixelAt(x, y, Image.rgbaToColor(sr, sg, sb, a));
+        }
+      }
+      logoShadow.opacity(0.45);
       logo.opacity(0.92);
-      img.composite(logo, p.margin, Math.max(0, img.height - p.height - p.margin));
+      const lx = p.margin;
+      const ly = Math.max(0, img.height - p.height - p.margin);
+      img.composite(logoShadow, lx + SHADOW_OFFSET, ly + SHADOW_OFFSET);
+      img.composite(logo, lx, ly);
     }
   }
 

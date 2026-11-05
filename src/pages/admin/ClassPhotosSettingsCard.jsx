@@ -1,4 +1,6 @@
-// Settings card for class photos: the on/off switch, and the review list.
+// Settings card for class photos: the on/off switch, the "add your logo" switch
+// (organizations.class_photo_show_logo, off by default; the enrops mark stays on
+// every photo either way), and the review list.
 //
 // The switch is organizations.class_photos_enabled, ON by default for every
 // provider. Off hides the instructor "Class photos" section and the family Photos

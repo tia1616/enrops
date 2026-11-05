@@ -39,8 +39,26 @@ const MAX_LOGO_BYTES = 2 * 1024 * 1024;
  * our own public bucket - never an arbitrary URL from this function's network
  * position. Anything else, or any failure, returns null.
  */
+// An instructor often uploads several photos in a row; the logo is the same for
+// all of them. Kept per isolate for a few minutes, keyed by URL, so a new logo
+// (a new URL, or the same one after the TTL) is picked up without a redeploy.
+const LOGO_TTL_MS = 10 * 60 * 1000;
+const logoCache = new Map<string, { bytes: Uint8Array; at: number }>();
+
 async function fetchProviderLogo(url: unknown, orgId: string): Promise<Uint8Array | null> {
   if (typeof url !== 'string' || !url) return null;
+  // Keyed by org AND url: keyed by url alone, a provider who pointed their
+  // logo_email_url at another provider's logo would get a cache hit that skips
+  // the own-folder check below.
+  const key = `${orgId}|${url}`;
+  const hit = logoCache.get(key);
+  if (hit && Date.now() - hit.at < LOGO_TTL_MS) return hit.bytes;
+  const bytes = await fetchProviderLogoUncached(url, orgId);
+  if (bytes) logoCache.set(key, { bytes, at: Date.now() });
+  return bytes;
+}
+
+async function fetchProviderLogoUncached(url: string, orgId: string): Promise<Uint8Array | null> {
   const base = (Deno.env.get('SUPABASE_URL') ?? '').replace(/\/+$/, '');
   const allowed = `${base}/storage/v1/object/public/org-assets/${orgId}/`;
   if (!base || !url.startsWith(allowed) || url.includes('..')) {
