@@ -1,4 +1,6 @@
-// Settings card for class photos: the on/off switch, and the review list.
+// Settings card for class photos: the on/off switch, the "add your logo" switch
+// (organizations.class_photo_show_logo, off by default; the enrops mark stays on
+// every photo either way), and the review list.
 //
 // The switch is organizations.class_photos_enabled, ON by default for every
 // provider. Off hides the instructor "Class photos" section and the family Photos
@@ -9,6 +11,7 @@
 // photo here without having to find the instructor who took it.
 
 import { useCallback, useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
 import { signPhotoUrls, deleteClassPhoto } from "../../lib/classPhotos.js";
 import { PhotoGrid, PhotoLightbox } from "../../components/ClassPhotoGrid.jsx";
@@ -28,6 +31,12 @@ export default function ClassPhotosSettingsCard({ org }) {
   const orgId = org?.id;
   const [enabled, setEnabled] = useState(null); // null = loading
   const [saving, setSaving] = useState(false);
+  // Their own logo on photos, alongside the enrops mark. OFF by default
+  // (organizations.class_photo_show_logo). The logo is the one on the Branding
+  // page - logo_email_url is the PNG upload-class-photo stamps.
+  const [showLogo, setShowLogo] = useState(null);
+  const [hasLogo, setHasLogo] = useState(false);
+  const [savingLogo, setSavingLogo] = useState(false);
   const [err, setErr] = useState("");
   const [photos, setPhotos] = useState(null);
   const [urls, setUrls] = useState({});
@@ -38,10 +47,16 @@ export default function ClassPhotosSettingsCard({ org }) {
     if (!orgId) return undefined;
     let cancelled = false;
     (async () => {
-      const { data, error } = await supabase.from("organizations").select("class_photos_enabled").eq("id", orgId).maybeSingle();
+      const { data, error } = await supabase
+        .from("organizations")
+        .select("class_photos_enabled, class_photo_show_logo, logo_email_url")
+        .eq("id", orgId)
+        .maybeSingle();
       if (cancelled) return;
       if (error) { console.error("[ClassPhotosSettingsCard] flag load failed", error); setErr("Couldn't load this setting."); return; }
       setEnabled(data?.class_photos_enabled === true);
+      setShowLogo(data?.class_photo_show_logo === true);
+      setHasLogo(!!data?.logo_email_url);
     })();
     return () => { cancelled = true; };
   }, [orgId]);
@@ -95,6 +110,20 @@ export default function ClassPhotosSettingsCard({ org }) {
     setEnabled(data[0].class_photos_enabled === true);
   }
 
+  async function toggleLogo() {
+    setSavingLogo(true);
+    setErr("");
+    const next = !showLogo;
+    // Read back for the same reason as the main switch: a refused write affects
+    // zero rows with no error.
+    const { data, error } = await supabase
+      .from("organizations").update({ class_photo_show_logo: next }).eq("id", orgId).select("class_photo_show_logo");
+    setSavingLogo(false);
+    if (error) { console.error("[ClassPhotosSettingsCard] logo save failed", error); setErr("That didn't save. Try again."); return; }
+    if (!data || data.length === 0) { setErr("Only an owner or admin can change this setting."); return; }
+    setShowLogo(data[0].class_photo_show_logo === true);
+  }
+
   const openPhoto = open ? (photos || []).find((p) => p.id === open) : null;
   // Grouped under "class · day" so a provider can find the photo a parent wrote
   // about ("the one from Tuesday") without opening every thumbnail.
@@ -129,6 +158,29 @@ export default function ClassPhotosSettingsCard({ org }) {
             {enabled === null ? "..." : saving ? "Saving..." : enabled ? "On" : "Turn on"}
           </button>
         </div>
+        {enabled && (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, marginTop: 16, borderTop: `1px solid ${RULE}`, paddingTop: 14 }}>
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>Add your logo to photos</div>
+              <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
+                {hasLogo
+                  ? "Your logo goes in the bottom-left corner, alongside the enrops mark. It applies to photos taken from now on."
+                  : <>Add your logo on the <Link to="/admin/branding" style={{ color: BRIGHT, fontWeight: 600 }}>Branding page</Link> first.</>}
+              </div>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={showLogo === true}
+              disabled={showLogo === null || savingLogo || (!hasLogo && !showLogo)}
+              onClick={toggleLogo}
+              style={{ flexShrink: 0, padding: "9px 16px", background: showLogo ? "#2f7d32" : BRIGHT, color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", opacity: showLogo === null || savingLogo || (!hasLogo && !showLogo) ? 0.6 : 1 }}
+            >
+              {showLogo === null ? "..." : savingLogo ? "Saving..." : showLogo ? "On" : "Turn on"}
+            </button>
+          </div>
+        )}
+
         {err && <div style={{ color: "#b0413e", fontSize: 13, marginTop: 10 }}>{err}</div>}
 
         {enabled && photos !== null && (

@@ -1,7 +1,8 @@
 // upload-class-photo - an instructor files one photo against a class day.
 //
 // Flow: authenticate the instructor -> check the provider has class photos on
-// -> stamp the enrops watermark -> store the marked JPEG in the private
+// -> stamp the enrops watermark (plus the provider's logo when they turned it
+// on) -> store the marked JPEG in the private
 // `class-photos` bucket -> insert the class_photos row AS THE CALLER.
 //
 // THE INSERT IS THE AUTHORIZATION. The row is written under the instructor's own
@@ -27,6 +28,57 @@ const BUCKET = 'class-photos';
 const MAX_UPLOAD_BYTES = 6 * 1024 * 1024;
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// A logo PNG is tens of KB; this only stops a mistake from decoding something huge.
+const MAX_LOGO_BYTES = 2 * 1024 * 1024;
+
+/**
+ * The provider's email logo, which regenerate-email-logo writes to
+ * org-assets/<org id>/logo-email.png. logo_email_url is a column the provider can
+ * update, so it is fetched ONLY when it points into this provider's own folder in
+ * our own public bucket - never an arbitrary URL from this function's network
+ * position. Anything else, or any failure, returns null.
+ */
+// An instructor often uploads several photos in a row; the logo is the same for
+// all of them. Kept per isolate for a few minutes, keyed by URL, so a new logo
+// (a new URL, or the same one after the TTL) is picked up without a redeploy.
+const LOGO_TTL_MS = 10 * 60 * 1000;
+const logoCache = new Map<string, { bytes: Uint8Array; at: number }>();
+
+async function fetchProviderLogo(url: unknown, orgId: string): Promise<Uint8Array | null> {
+  if (typeof url !== 'string' || !url) return null;
+  // Keyed by org AND url: keyed by url alone, a provider who pointed their
+  // logo_email_url at another provider's logo would get a cache hit that skips
+  // the own-folder check below.
+  const key = `${orgId}|${url}`;
+  const hit = logoCache.get(key);
+  if (hit && Date.now() - hit.at < LOGO_TTL_MS) return hit.bytes;
+  const bytes = await fetchProviderLogoUncached(url, orgId);
+  if (bytes) logoCache.set(key, { bytes, at: Date.now() });
+  return bytes;
+}
+
+async function fetchProviderLogoUncached(url: string, orgId: string): Promise<Uint8Array | null> {
+  const base = (Deno.env.get('SUPABASE_URL') ?? '').replace(/\/+$/, '');
+  const allowed = `${base}/storage/v1/object/public/org-assets/${orgId}/`;
+  if (!base || !url.startsWith(allowed) || url.includes('..')) {
+    console.error('[upload-class-photo] logo url outside the provider folder, skipped:', url);
+    return null;
+  }
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) {
+      console.error('[upload-class-photo] logo fetch', res.status, url);
+      return null;
+    }
+    const buf = new Uint8Array(await res.arrayBuffer());
+    if (buf.length === 0 || buf.length > MAX_LOGO_BYTES) return null;
+    return buf;
+  } catch (e) {
+    console.error('[upload-class-photo] logo fetch failed, stamping enrops only:', e);
+    return null;
+  }
+}
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 serve(async (req: Request) => {
@@ -73,7 +125,7 @@ serve(async (req: Request) => {
     }
     const { data: org, error: oErr } = await admin
       .from('organizations')
-      .select('class_photos_enabled')
+      .select('class_photos_enabled, class_photo_show_logo, logo_email_url')
       .eq('id', program.organization_id)
       .maybeSingle();
     if (oErr) {
@@ -85,9 +137,16 @@ serve(async (req: Request) => {
     const bytes = new Uint8Array(await file.arrayBuffer());
     if (!isJpeg(bytes)) return json({ error: 'not_a_jpeg' }, 415);
 
+    // The provider's logo rides along only when they turned it on. Missing,
+    // unreachable or oversized, it is skipped and the photo still goes up with
+    // the enrops mark: a logo problem must never cost an instructor the photo.
+    const providerLogo = org.class_photo_show_logo === true
+      ? await fetchProviderLogo(org.logo_email_url, program.organization_id)
+      : null;
+
     let marked: Uint8Array;
     try {
-      marked = await watermarkJpeg(bytes);
+      marked = await watermarkJpeg(bytes, { providerLogo });
     } catch (e) {
       if (e instanceof Error && e.message === 'image_too_large') {
         return json({ error: 'file_too_large' }, 413);

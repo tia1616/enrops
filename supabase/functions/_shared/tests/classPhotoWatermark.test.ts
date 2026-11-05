@@ -2,7 +2,64 @@
 // change the corner it claims to, and (3) refuse anything that is not a JPEG.
 import { assert, assertEquals, assertRejects } from 'https://deno.land/std@0.177.0/testing/asserts.ts';
 import { Image } from 'https://deno.land/x/imagescript@1.3.0/mod.ts';
-import { watermarkJpeg, isJpeg, markPlacement, jpegDimensions, MAX_DIM } from '../classPhotoWatermark.ts';
+import { watermarkJpeg, isJpeg, markPlacement, logoPlacement, jpegDimensions, MAX_DIM } from '../classPhotoWatermark.ts';
+
+// --- the provider's own logo (2026-11-05) ---
+
+async function redSquarePng(size: number): Promise<Uint8Array> {
+  const img = new Image(size, size);
+  img.fill(0xff0000ff);
+  return await img.encode(); // PNG
+}
+
+function cornerDiff(a: Image, b: Image, x0: number, y0: number, x1: number, y1: number) {
+  let max = 0;
+  for (let x = x0; x < x1; x += 2) for (let y = y0; y < y1; y += 2) {
+    const p = a.getRGBAAt(x, y), q = b.getRGBAAt(x, y);
+    max = Math.max(max, Math.abs(p[0] - q[0]) + Math.abs(p[1] - q[1]) + Math.abs(p[2] - q[2]));
+  }
+  return max;
+}
+
+Deno.test('a provider logo lands bottom-LEFT and the enrops mark keeps bottom-right', async () => {
+  const src = await solidJpeg(1000, 700, 0x2e8b57ff);
+  const out = await watermarkJpeg(src, { providerLogo: await redSquarePng(300) });
+  const before = (await Image.decode(src)) as Image;
+  const after = (await Image.decode(out)) as Image;
+  const lp = logoPlacement(1000, 700, 300, 300);
+  // inside the logo box, bottom-left, the photo turned red
+  assert(cornerDiff(before, after, lp.margin + 4, 700 - lp.margin - lp.height + 4, lp.margin + lp.width - 4, 700 - lp.margin - 4) > 200,
+    'the provider logo is not visible bottom-left');
+  // the enrops mark is still there, bottom-right
+  const { width, margin } = markPlacement(1000, 700);
+  assert(cornerDiff(before, after, 1000 - width - margin, 700 - margin - 30, 1000 - margin, 700 - margin) > 120,
+    'the enrops mark went missing when a logo was added');
+  // top-right stays clean - neither mark wandered
+  assert(cornerDiff(before, after, 900, 10, 990, 60) < 18, 'a mark landed top-right');
+});
+
+Deno.test('a logo that will not decode still yields a marked photo (enrops only)', async () => {
+  const src = await solidJpeg(800, 600, 0x336699ff);
+  const out = await watermarkJpeg(src, { providerLogo: new Uint8Array([1, 2, 3, 4, 5]) });
+  assert(isJpeg(out));
+  const after = (await Image.decode(out)) as Image;
+  assertEquals([after.width, after.height], [800, 600]);
+});
+
+Deno.test('no logo is byte-for-byte the old behaviour', async () => {
+  const src = await solidJpeg(640, 480, 0x884422ff);
+  assertEquals(await watermarkJpeg(src), await watermarkJpeg(src, { providerLogo: null }));
+});
+
+Deno.test('logo sizing: square by height, very wide capped at 30% of the width', () => {
+  const sq = logoPlacement(1000, 700, 300, 300);
+  assertEquals([sq.width, sq.height], [77, 77]);
+  const wide = logoPlacement(1000, 700, 2000, 100);
+  assertEquals(wide.width, 300);
+  assert(wide.height < 77, 'a capped wide logo should get shorter, not overflow');
+  const tiny = logoPlacement(200, 150, 300, 300);
+  assertEquals(tiny.height, 56); // the legibility floor
+});
 
 async function solidJpeg(w: number, h: number, rgba: number): Promise<Uint8Array> {
   const img = new Image(w, h);

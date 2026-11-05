@@ -1,4 +1,7 @@
-// Stamps the enrops wordmark on a class photo and returns a JPEG.
+// Stamps the enrops wordmark on a class photo and returns a JPEG - plus the
+// provider's own logo in the opposite corner when they have turned that on
+// (organizations.class_photo_show_logo, off by default). The enrops mark is
+// always there; the provider's logo is in addition to it, never instead.
 //
 // WHY SERVER-SIDE. The mark is applied before the file is ever stored, so an
 // unmarked original cannot exist in the bucket and an instructor's phone cannot
@@ -104,7 +107,44 @@ export function jpegDimensions(b: Uint8Array): { width: number; height: number }
   return null;
 }
 
-export async function watermarkJpeg(input: Uint8Array): Promise<Uint8Array> {
+// The provider's own logo, when they have turned it on. Bottom-LEFT, so the
+// enrops mark keeps its corner and the two never overlap. Sized by HEIGHT, not
+// width: logos are square badges as often as they are wide wordmarks, and a
+// width share would make a square badge far taller than the enrops mark.
+const LOGO_HEIGHT_SHARE = 0.11;
+const LOGO_MIN_HEIGHT = 56;
+const LOGO_MAX_WIDTH_SHARE = 0.3; // a very wide wordmark-style logo stops here
+
+/** Size and inset for the provider logo, from the photo and the logo's own shape. */
+export function logoPlacement(photoW: number, photoH: number, logoW: number, logoH: number) {
+  let height = Math.max(LOGO_MIN_HEIGHT, Math.round(photoH * LOGO_HEIGHT_SHARE));
+  let width = Math.round((logoW / logoH) * height);
+  const maxW = Math.round(photoW * LOGO_MAX_WIDTH_SHARE);
+  if (width > maxW) {
+    width = maxW;
+    height = Math.max(1, Math.round((logoH / logoW) * width));
+  }
+  const margin = Math.round(photoW * MARGIN_SHARE);
+  return { width, height, margin };
+}
+
+// A logo that will not decode must never cost the instructor the photo: the
+// enrops mark still goes on, and the miss is logged for us, not shown to them.
+async function decodeLogo(bytes: Uint8Array): Promise<Image | null> {
+  try {
+    const img = await Image.decode(bytes);
+    if (!(img instanceof Image) || img.width === 0 || img.height === 0) return null;
+    return img;
+  } catch (e) {
+    console.error('[classPhotoWatermark] provider logo did not decode, stamping enrops only:', e);
+    return null;
+  }
+}
+
+export async function watermarkJpeg(
+  input: Uint8Array,
+  opts: { providerLogo?: Uint8Array | null } = {},
+): Promise<Uint8Array> {
   if (!isJpeg(input)) throw new Error('not_a_jpeg');
   const dims = jpegDimensions(input);
   if (!dims || dims.width === 0 || dims.height === 0) throw new Error('image_unreadable');
@@ -129,6 +169,30 @@ export async function watermarkJpeg(input: Uint8Array): Promise<Uint8Array> {
   const y = Math.max(0, img.height - mark.height - margin);
   img.composite(shadow, x + SHADOW_OFFSET, y + SHADOW_OFFSET);
   img.composite(mark, x, y);
+
+  if (opts.providerLogo && opts.providerLogo.length > 0) {
+    const logo = await decodeLogo(opts.providerLogo);
+    if (logo) {
+      const p = logoPlacement(img.width, img.height, logo.width, logo.height);
+      logo.resize(p.width, p.height);
+      // The same soft violet shadow the enrops mark gets, from the logo's own
+      // silhouette, so a dark logo still reads on a dark photo.
+      const logoShadow = logo.clone();
+      const [sr, sg, sb] = [0x1c, 0x00, 0x4f];
+      for (let y = 1; y <= logoShadow.height; y++) {
+        for (let x = 1; x <= logoShadow.width; x++) {
+          const a = logoShadow.getPixelAt(x, y) & 0xff;
+          logoShadow.setPixelAt(x, y, Image.rgbaToColor(sr, sg, sb, a));
+        }
+      }
+      logoShadow.opacity(0.45);
+      logo.opacity(0.92);
+      const lx = p.margin;
+      const ly = Math.max(0, img.height - p.height - p.margin);
+      img.composite(logoShadow, lx + SHADOW_OFFSET, ly + SHADOW_OFFSET);
+      img.composite(logo, lx, ly);
+    }
+  }
 
   return await img.encodeJPEG(JPEG_QUALITY);
 }
