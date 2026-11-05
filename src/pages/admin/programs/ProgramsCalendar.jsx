@@ -162,7 +162,7 @@ export default function ProgramsCalendar() {
     // so the operator gets a sentence instead of a Postgres error.
     const target = programs.find((p) => p.id === programId);
     if (publishBlockedByMissingDate(target)) {
-      alert(`${PUBLISH_NEEDS_DATE} Open Expand on this class to set it. It stays a draft until then.`);
+      alert(`${PUBLISH_NEEDS_DATE} Set the first class date under Expand and save it, then publish. It stays a draft until then.`);
       return;
     }
     if (publishBlockedByStripe(org, target)) {

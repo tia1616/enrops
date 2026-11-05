@@ -19,6 +19,13 @@
 -- enrops listing is not where they get their dates. Backend jobs (service_role)
 -- and direct SQL are exempt, as in the Stripe gate - no backend path publishes a
 -- class today, and a gate that broke an untraced job would fail the wrong way.
+-- Platform admins are deliberately NOT exempt (the Stripe gate exempts them): a
+-- dateless live class is as wrong when an admin publishes it as when a tenant
+-- does, and there is no support task that needs one.
+--
+-- The UPDATE trigger is narrowed to the three columns the rule reads. That is
+-- safe here, unlike the Stripe gate: nothing else on the row can make a class
+-- dateless or make it live.
 
 create or replace function public.tg_programs_require_date_to_publish()
 returns trigger
@@ -57,7 +64,7 @@ create trigger trg_programs_require_date_ins
 
 drop trigger if exists trg_programs_require_date_upd on public.programs;
 create trigger trg_programs_require_date_upd
-  before update on public.programs
+  before update of status, first_session_date, runs_own_registration on public.programs
   for each row execute function public.tg_programs_require_date_to_publish();
 
 -- WHY (2): an early bird belongs to one term's sale. Carrying it copied a fall
