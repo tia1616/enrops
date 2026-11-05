@@ -25,6 +25,16 @@ export function inviteOpening(host: string): string {
     `It works with whatever registration system you already use.`;
 }
 
+/**
+ * "Reply to this email to reach Kacy Cullen at Happy Valley Parks and Rec."
+ * The person AND the host, so a provider who doesn't know the name still
+ * knows who they're writing to (Jessica 2026-11-05).
+ */
+export function replyLine(inv: InviteForEmail): string {
+  const who = (inv.inviter_name || "").trim();
+  return who ? `Reply to this email to reach ${who} at ${inv.host_name}.` : `Reply to this email to reach ${inv.host_name}.`;
+}
+
 export function renderInvite(
   brand: { logo_url: string | null; primary_color: string; page_bg_color: string },
   inv: InviteForEmail,
@@ -43,10 +53,10 @@ export function renderInvite(
     <p style="font-size:15px;color:#1a1a1a;line-height:1.5;margin:0 0 16px;">${esc(opening)}</p>
     ${note ? `<p style="font-size:15px;color:#1a1a1a;line-height:1.5;margin:0 0 16px;padding:12px;background:#f6f5fb;border-radius:8px;">${esc(note)}${from ? `<br><span style="color:#6b6b6b;">${esc(from)}</span>` : ""}</p>` : ""}
     <a href="${esc(link)}" style="display:inline-block;background:${esc(brand.primary_color)};color:#fff;text-decoration:none;padding:11px 20px;border-radius:8px;font-size:15px;font-weight:600;">See the invitation</a>
-    <p style="font-size:13px;color:#6b6b6b;line-height:1.5;margin:20px 0 0;">Reply to this email to reach ${esc(from || inv.host_name)}.</p>
+    <p style="font-size:13px;color:#6b6b6b;line-height:1.5;margin:20px 0 0;">${esc(replyLine(inv))}</p>
   </div></body></html>`;
   const text = `${subject}\n\n${opening}\n\n` + (note ? `${note}${from ? `\n${from}` : ""}\n\n` : "") +
-    `See the invitation: ${link}\n\nReply to this email to reach ${from || inv.host_name}.\n`;
+    `See the invitation: ${link}\n\n${replyLine(inv)}\n`;
   return { subject, html, text };
 }
 

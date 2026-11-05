@@ -61,7 +61,7 @@ export default function InvitePanel({ userId, onCounts }) {
     setPreview({ open: true, loading: true, error: null, subject: "", html: "", from: "" });
     try {
       const r = await sendInvitations({ action: "preview", partner_id: host.partner_id, business_name: form.business_name, message: form.message });
-      setPreview({ open: true, loading: false, error: null, subject: r.subject, html: r.html, from: r.from });
+      setPreview({ open: true, loading: false, error: null, subject: r.subject, html: r.html, from: r.from, replyTo: r.reply_to });
     } catch (e) {
       setPreview({ open: true, loading: false, error: e?.message || "Couldn't render the preview.", subject: "", html: "", from: "" });
     }
@@ -160,7 +160,11 @@ export default function InvitePanel({ userId, onCounts }) {
         open={!!preview.open}
         onClose={() => setPreview({ open: false })}
         title={form.business_name.trim() ? `As ${form.business_name.trim()} would get it` : "As the provider would get it"}
-        badges={preview.from ? [{ label: `From ${preview.from}`, color: "#4b3fb0", bg: "#F2F0FF" }, { label: "Replies come to you", color: "#57534e", bg: "#f5f5f4" }] : []}
+        badges={preview.from ? [
+          { label: `From ${preview.from}`, color: "#4b3fb0", bg: "#F2F0FF" },
+          // The actual address, the way email tools show a reply-to (Jessica 2026-11-05).
+          ...(preview.replyTo ? [{ label: `Replies go to ${preview.replyTo}`, color: "#57534e", bg: "#f5f5f4" }] : []),
+        ] : []}
         subject={preview.subject}
         bodyHtml={preview.html}
         loading={!!preview.loading}

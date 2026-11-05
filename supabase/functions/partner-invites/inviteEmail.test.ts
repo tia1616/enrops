@@ -1,7 +1,7 @@
 // Pins the invitation email and the reminder timing (spec v3 H4).
 
 import { assertEquals, assert } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { inviteSubject, inviteOpening, renderInvite, reminderDue, parseEmails } from "./inviteEmail.ts";
+import { inviteSubject, inviteOpening, renderInvite, reminderDue, parseEmails, replyLine } from "./inviteEmail.ts";
 
 const inv = { host_name: "Happy Valley Parks and Rec", inviter_name: "Kacy Cullen", business_name_as_typed: "Tenant Two Arts", message: null };
 
@@ -17,6 +17,11 @@ Deno.test("escaped, links to the invitation, no em dash", () => {
   assert(!html.includes("<b>hi</b>"));
   assert(html.includes('href="https://x/invite/t"'));
   assert(!html.includes("—") && !text.includes("—"));
+});
+
+Deno.test("the reply line names the person and the host", () => {
+  assertEquals(replyLine(inv), "Reply to this email to reach Kacy Cullen at Happy Valley Parks and Rec.");
+  assertEquals(replyLine({ ...inv, inviter_name: null }), "Reply to this email to reach Happy Valley Parks and Rec.");
 });
 
 Deno.test("reminders on day 3 and day 7, once each", () => {
