@@ -46,6 +46,8 @@ import EarlyBirdRow, { useEarlyBirdPreview, earlyBirdPatch } from "../../../comp
 import PriceTierField from "../../../components/PriceTierField.jsx";
 import {
   publishBlockedByStripe,
+  publishBlockedByMissingDate,
+  PUBLISH_NEEDS_DATE,
   publishErrorMessage,
   PUBLISH_GATE_CTA,
   PUBLISH_GATE_CTA_SAVE,
@@ -159,6 +161,10 @@ export default function ProgramsCalendar() {
     // devtools. The database trigger is the third and last line; this one exists
     // so the operator gets a sentence instead of a Postgres error.
     const target = programs.find((p) => p.id === programId);
+    if (publishBlockedByMissingDate(target)) {
+      alert(`${PUBLISH_NEEDS_DATE} Open Expand on this class to set it. It stays a draft until then.`);
+      return;
+    }
     if (publishBlockedByStripe(org, target)) {
       alert(`${PUBLISH_GATE_WHY} Connect Stripe on the Payments screen, then publish. ${PUBLISH_GATE_STAYS_DRAFT_HINT}`);
       return;
