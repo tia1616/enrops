@@ -30,6 +30,7 @@ import { loadOrgBrand, formatFromAddress } from "../_shared/orgBrand.ts";
 import { fetchWithRateLimitRetry, SINGLE_EMAIL_RETRY } from "../_shared/resendRateLimit.ts";
 import { renderExpiryEmail, type DueItem } from "./expiryEmail.ts";
 import { deliver } from "../_shared/claimThenSend.ts";
+import { isEmailAllowed } from "../_shared/emailGuard.ts";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -136,7 +137,9 @@ async function send(supabase: SupabaseClient, orgId: string, items: DueItem[], r
   const brand = await loadOrgBrand(supabase, orgId);
   const { subject, html, text } = renderExpiryEmail(brand, items, PUBLIC_SITE_URL);
   let sent = 0;
-  for (const to of recipients) {
+  // Staging recipient guard (no-op on prod): never mail an address the staging
+  // allowlist doesn't hold.
+  for (const to of recipients.filter(isEmailAllowed)) {
     try {
       // A 429 is retried (Resend's limit is per ACCOUNT, shared with campaigns).
       const { res: resp } = await fetchWithRateLimitRetry(() => fetch("https://api.resend.com/emails", {

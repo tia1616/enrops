@@ -280,6 +280,12 @@ verify_jwt = false
 [functions.partner-digest-cron]
 verify_jwt = false
 
+# Partner invitations (20261105a). A host admin calls it signed in (the
+# function then checks they are host_admin of that partner); the daily
+# reminder run also sends INVITES_SECRET. Off until invites open.
+[functions.partner-invites]
+verify_jwt = true
+
 [functions.marketing-resend-webhook]
 verify_jwt = false
 

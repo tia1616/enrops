@@ -20,6 +20,9 @@ export default function EmailPreviewDrawer({
   loading = false,
   error = null,
   badges = [],
+  // Optional header line in place of "As a parent at ...", for previews that
+  // are not to a parent (e.g. a partner's invitation to a provider).
+  title = null,
 }) {
   useEffect(() => {
     if (!open) return;
@@ -34,9 +37,9 @@ export default function EmailPreviewDrawer({
   // server's representative school name, so an area preview reads "in Portland"
   // not "at Overlook House". Area → "in", school → "at".
   const headerName = previewLabel ?? schoolName;
-  const previewHeader = headerName
+  const previewHeader = title ?? (headerName
     ? `As a parent ${previewKind === "area" ? "in" : "at"} ${headerName}`
-    : "Rendered email";
+    : "Rendered email");
 
   return (
     <div

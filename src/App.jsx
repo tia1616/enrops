@@ -88,6 +88,7 @@ const PartnerRecord = lazy(() => import('./pages/admin/PartnerRecord.jsx'));
 const PartnerPortal = lazy(() => import('./pages/portal/PartnerPortal.jsx'));
 const PartnerHome = lazy(() => import('./pages/partner/PartnerHome.jsx'));
 const PartnerProviderDetail = lazy(() => import('./pages/partner/PartnerProviderDetail.jsx'));
+const InviteAccept = lazy(() => import('./pages/partner/InviteAccept.jsx'));
 const InstructorDocuments = lazy(() => import('./pages/admin/InstructorDocuments.jsx'));
 const TrainingSettings = lazy(() => import('./pages/admin/TrainingSettings.jsx'));
 const BrandLogoSettings = lazy(() => import('./pages/admin/BrandLogoSettings.jsx'));
@@ -227,6 +228,8 @@ export default function App() {
           the database (partner_portal_memberships + RLS), never the URL. */}
       <Route path="/partner" element={<PartnerHome />} />
       <Route path="/partner/:partnerId" element={<PartnerProviderDetail />} />
+      {/* A provider answers a host's invitation (spec v3 P1; off until invites open). */}
+      <Route path="/invite/:token" element={<InviteAccept />} />
       <Route path="/privacy" element={<PolicyPage policyType="privacy" orgSlug="enrops" />} />
       <Route path="/terms" element={<PolicyPage policyType="terms" orgSlug="enrops" />} />
       <Route path="/acceptable-use" element={<PolicyPage policyType="acceptable-use" orgSlug="enrops" />} />

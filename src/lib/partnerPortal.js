@@ -258,3 +258,72 @@ export async function recordPartnerDecision(partnerId, { decision, note, title }
   if (error) throw error;
   return data;
 }
+
+// --- Invites (20261105a; OFF until platform_settings 'partner_invites') -----
+
+/** Whether invites are open. False on any error, so a failure hides the feature. */
+export async function invitesEnabled() {
+  const { data, error } = await supabase.rpc("partner_invites_enabled");
+  return !error && data === true;
+}
+
+/** The partners this signed-in person is a host_admin for (their own grants only, by RLS). */
+export async function myHostAdminPartners(userId) {
+  const { data, error } = await supabase
+    .from("partner_portal_access")
+    .select("partner_id, role, partner:partners(partner_name, inactive)")
+    .eq("auth_user_id", userId)
+    .eq("role", "host_admin");
+  if (error) return [];
+  return (data ?? []).filter((a) => !a.partner?.inactive);
+}
+
+/** One partner's invitations, newest first (that partner's logins only). */
+export async function listInvitations(partnerId) {
+  const { data, error } = await supabase.rpc("partner_invitations_for", { p_partner_id: partnerId });
+  if (error) throw error;
+  return data ?? [];
+}
+
+/** Save or send invitations: { action: "save"|"send", partner_id, emails, business_name, message } or { action: "send", invitation_id }. */
+export async function sendInvitations(body) {
+  const { data, error } = await supabase.functions.invoke("partner-invites", { body });
+  if (error) {
+    const detail = await error.context?.json?.().catch(() => null);
+    throw new Error(detail?.error || error.message);
+  }
+  if (data?.error) throw new Error(data.error);
+  return data;
+}
+
+/** What an invite link shows: { host_name, business_name, invited_email, state, expires_at, categories } or null. */
+export async function previewInvitation(token) {
+  const { data, error } = await supabase.rpc("partner_invitation_preview", { p_token: token });
+  if (error) throw error;
+  return (data ?? [])[0] ?? null;
+}
+
+/** Share the provider's record with the host. Returns the new partner id. */
+export async function acceptInvitation(token, orgId) {
+  const { data, error } = await supabase.rpc("accept_partner_invitation", { p_token: token, p_org: orgId, p_consent: true });
+  if (error) throw error;
+  return data;
+}
+
+/** "Not now", with an optional note to the host. */
+export async function declineInvitation(token, note) {
+  const { data, error } = await supabase.rpc("decline_partner_invitation", { p_token: token, p_note: note || null });
+  if (error) throw error;
+  return data === true;
+}
+
+/** The businesses this person can accept for: owner or admin. */
+export async function myAdminOrgs(userId) {
+  const { data, error } = await supabase
+    .from("org_members")
+    .select("organization_id, role, organization:organizations(name)")
+    .eq("auth_user_id", userId)
+    .in("role", ["owner", "admin"]);
+  if (error) return [];
+  return (data ?? []).map((m) => ({ id: m.organization_id, name: m.organization?.name ?? "Your business" }));
+}
