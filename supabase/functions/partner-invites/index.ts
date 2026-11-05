@@ -22,6 +22,8 @@ import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 import { loadOrgBrand, encodeDisplayName } from "../_shared/orgBrand.ts";
 import { renderInvite, reminderDue, parseEmails, type InviteKind } from "./inviteEmail.ts";
+import { isEmailAllowed } from "../_shared/emailGuard.ts";
+import { fetchWithRateLimitRetry, SINGLE_EMAIL_RETRY } from "../_shared/resendRateLimit.ts";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -122,7 +124,10 @@ serve(async (req) => {
     if (error) { results.push({ email, error: error.message }); continue; }
     if (body.action === "save") { results.push({ email, state: "saved" }); continue; }
     const ok = await sendOne(supabase, inv, "invite");
-    results.push({ email, state: ok ? "sent" : "saved", ...(ok ? {} : { error: "Couldn't send; it's saved on your list." }) });
+    const reason = isEmailAllowed(email)
+      ? "Couldn't send; it's saved on your list."
+      : "Not sent: this is a test site and that address isn't on its test list. It's saved on your list.";
+    results.push({ email, state: ok ? "sent" : "saved", ...(ok ? {} : { error: reason }) });
   }
   await supabase.from("audit_events").insert({
     organization_id: access.organization_id, partner_id: partnerId, actor_user_id: uid, actor_role: "host_admin",
@@ -152,12 +157,18 @@ async function sendOne(supabase: SupabaseClient, inv: any, kind: InviteKind, rem
   const brand = await loadOrgBrand(supabase, null);
   const { subject, html, text } = renderInvite(brand, inv, link, kind);
   const from = `${encodeDisplayName(`${inv.host_name} via enrops`)} <${brand.sender_email}>`;
+  // Staging recipient guard (no-op on prod): a test never reaches a real provider.
+  if (!isEmailAllowed(inv.invited_email)) {
+    console.log("[partner-invites] held back by the staging allowlist");
+    return false;
+  }
   try {
-    const resp = await fetch("https://api.resend.com/emails", {
+    // A 429 is retried (Resend's limit is per ACCOUNT, shared with campaigns).
+    const { res: resp } = await fetchWithRateLimitRetry(() => fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${RESEND_API_KEY}` },
       body: JSON.stringify({ from, to: inv.invited_email, reply_to: inv.inviter_email, subject, html, text, tags: [{ name: "type", value: "partner_invitation" }] }),
-    });
+    }), SINGLE_EMAIL_RETRY);
     if (!resp.ok) { console.error(`[partner-invites] send failed: ${resp.status} ${(await resp.text()).slice(0, 200)}`); return false; }
   } catch (e) {
     console.error("[partner-invites] send threw:", e);

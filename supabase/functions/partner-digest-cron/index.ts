@@ -25,6 +25,7 @@ import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 import { loadOrgBrand, formatFromAddress } from "../_shared/orgBrand.ts";
 import { deliver } from "../_shared/claimThenSend.ts";
+import { isEmailAllowed } from "../_shared/emailGuard.ts";
 import { fetchWithRateLimitRetry, SINGLE_EMAIL_RETRY } from "../_shared/resendRateLimit.ts";
 import { renderDigest, type DigestRow } from "./digestEmail.ts";
 
@@ -127,6 +128,11 @@ async function sendForReal(
 
 /** The Resend message id, or null when the send failed. */
 async function send(brand: Awaited<ReturnType<typeof loadOrgBrand>>, rows: DigestRow[], to: string): Promise<string | null> {
+  // Staging recipient guard (no-op on prod).
+  if (!isEmailAllowed(to)) {
+    console.log("[partner-digest-cron] held back by the staging allowlist");
+    return null;
+  }
   const { subject, html, text } = renderDigest(brand, rows, PUBLIC_SITE_URL);
   try {
     // A 429 is retried (Resend's limit is per ACCOUNT). Without it a collision on
