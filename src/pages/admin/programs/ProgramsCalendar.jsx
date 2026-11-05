@@ -4126,6 +4126,7 @@ function BulkCopyModal({ programs, sourceTerm, orgId, onCopy, onClose, onGoToTer
   const [year, setYear] = useState("");
   const target = composeCopyTerm(season, year);
   const [existingCount, setExistingCount] = useState(null);
+  const [countFailed, setCountFailed] = useState(false);
   const [copying, setCopying] = useState(false);
   const [result, setResult] = useState(null); // { copied, failed } | null
   const [error, setError] = useState("");
@@ -4134,6 +4135,7 @@ function BulkCopyModal({ programs, sourceTerm, orgId, onCopy, onClose, onGoToTer
   // doesn't quietly make a second set of every class.
   useEffect(() => {
     setExistingCount(null);
+    setCountFailed(false);
     if (!target || !orgId) return;
     let cancelled = false;
     (async () => {
@@ -4142,7 +4144,11 @@ function BulkCopyModal({ programs, sourceTerm, orgId, onCopy, onClose, onGoToTer
         .select("id", { count: "exact", head: true })
         .eq("organization_id", orgId)
         .eq("term", target);
-      if (!cancelled && !cErr) setExistingCount(count ?? 0);
+      if (cancelled) return;
+      // A failed read must not look like an empty term - that is the one case
+      // the warning exists for.
+      if (cErr) setCountFailed(true);
+      else setExistingCount(count ?? 0);
     })();
     return () => { cancelled = true; };
   }, [target, orgId]);
@@ -4166,6 +4172,25 @@ function BulkCopyModal({ programs, sourceTerm, orgId, onCopy, onClose, onGoToTer
     setCopying(true);
     try {
       setResult(await onCopy(picked, target));
+    } catch (e) {
+      setError(e?.message ?? String(e));
+    } finally {
+      setCopying(false);
+    }
+  }
+
+  // Retry ONLY the classes that failed. Reopening the dialog would tick every
+  // class again, and copying those makes a second draft of each one that
+  // already went through.
+  async function handleRetryFailed() {
+    if (copying || !result?.failed?.length) return;
+    setCopying(true);
+    try {
+      const retry = await onCopy(result.failed.map((f) => f.program), target);
+      setResult((prev) => ({
+        copied: [...(prev?.copied ?? []), ...retry.copied],
+        failed: retry.failed,
+      }));
     } catch (e) {
       setError(e?.message ?? String(e));
     } finally {
@@ -4214,10 +4239,16 @@ function BulkCopyModal({ programs, sourceTerm, orgId, onCopy, onClose, onGoToTer
                 ))}
               </div>
             )}
+            {error && <div style={{ fontSize: 13, color: "#b53737" }}>{error}</div>}
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
-              <button type="button" onClick={onClose} style={bulkSecondaryBtn}>Close</button>
+              <button type="button" onClick={onClose} disabled={copying} style={bulkSecondaryBtn}>Close</button>
+              {result.failed.length > 0 && (
+                <button type="button" onClick={handleRetryFailed} disabled={copying} style={bulkSecondaryBtn}>
+                  {copying ? "Trying again…" : `Try the ${result.failed.length} again`}
+                </button>
+              )}
               {result.copied.length > 0 && (
-                <button type="button" onClick={() => onGoToTerm(target)} style={bulkPrimaryBtn}>
+                <button type="button" onClick={() => onGoToTerm(target)} disabled={copying} style={bulkPrimaryBtn}>
                   Go to {targetLabel} →
                 </button>
               )}
@@ -4243,6 +4274,11 @@ function BulkCopyModal({ programs, sourceTerm, orgId, onCopy, onClose, onGoToTer
             {!sameTerm && existingCount > 0 && (
               <div style={{ fontSize: 13, color: "#8a5a00" }}>
                 {targetLabel} already has {existingCount} {existingCount === 1 ? "class" : "classes"}. If you've copied these before, copying again makes a second set.
+              </div>
+            )}
+            {!sameTerm && countFailed && (
+              <div style={{ fontSize: 13, color: "#8a5a00" }}>
+                Couldn't check whether {targetLabel} already has classes. Switch the term picker to {targetLabel} first if you might have copied these before.
               </div>
             )}
 
