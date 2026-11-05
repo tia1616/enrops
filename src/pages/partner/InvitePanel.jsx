@@ -11,16 +11,10 @@ import { useEffect, useRef, useState } from "react";
 import { invitesEnabled, myHostAdminPartners, listInvitations, sendInvitations } from "../../lib/partnerPortal.js";
 import { formatDate } from "../../lib/providerDocumentLogic.js";
 import { localDateOf } from "../../lib/partnerPortalLogic.js";
+import EmailPreviewDrawer from "../admin/marketing-v2/EmailPreviewDrawer.jsx";
 
 // H1's words for an invitation's state.
 const STATE_LABEL = { saved: "Unknown", sent: "Invited", opened: "Invited (opened)", accepted: "Shared", declined: "Not now", expired: "Expired" };
-
-/** Spec v3 H4 body opening, as the provider reads it. */
-function opening(host) {
-  return `${host} uses enrops to see the status of every outside provider's insurance, agreements and screening in one place. ` +
-    `You keep your own record; ${host} sees only the status you choose to share, never a background report. ` +
-    `It works with whatever registration system you already use.`;
-}
 
 const day = (ts) => (ts ? formatDate(localDateOf(ts)) : null);
 
@@ -33,6 +27,7 @@ export default function InvitePanel({ userId, onCounts }) {
   const [form, setForm] = useState({ business_name: "", emails: "", message: "" });
   const [msg, setMsg] = useState({ kind: "", text: "" });
   const [busy, setBusy] = useState(false);
+  const [preview, setPreview] = useState({ open: false });
   const guard = useRef(false);
 
   async function load(hs) {
@@ -61,7 +56,16 @@ export default function InvitePanel({ userId, onCounts }) {
 
   if (!enabled) return null;
   const host = hosts[0];
-  const hostName = host?.partner?.partner_name ?? "";
+
+  async function openPreview() {
+    setPreview({ open: true, loading: true, error: null, subject: "", html: "", from: "" });
+    try {
+      const r = await sendInvitations({ action: "preview", partner_id: host.partner_id, business_name: form.business_name, message: form.message });
+      setPreview({ open: true, loading: false, error: null, subject: r.subject, html: r.html, from: r.from });
+    } catch (e) {
+      setPreview({ open: true, loading: false, error: e?.message || "Couldn't render the preview.", subject: "", html: "", from: "" });
+    }
+  }
 
   async function submit(action) {
     if (guard.current) return;
@@ -118,15 +122,12 @@ export default function InvitePanel({ userId, onCounts }) {
             <span className="font-semibold">Message</span> <span className="text-j2s-ink/50">(optional)</span>
             <textarea className="input-field mt-1" rows={2} maxLength={1000} value={form.message} onChange={(e) => setForm({ ...form, message: e.target.value })} />
           </label>
-          {/* The email, as the provider gets it (spec v3 H4). */}
-          <div className="rounded-xl border border-j2s-ink/10 bg-[#FBFBFB] p-3 text-sm">
-            <div className="text-xs text-j2s-ink/50">From: {hostName} via enrops · Replies come to you</div>
-            <div className="mt-1 font-semibold text-j2s-ink">{hostName} invites you to share your safety record</div>
-            <p className="mt-1 text-j2s-ink/80">{opening(hostName)}</p>
-            {form.message.trim() && <p className="mt-2 whitespace-pre-line text-j2s-ink/80">{form.message.trim()}</p>}
-          </div>
           <div className="flex flex-wrap items-center gap-3">
             <button type="button" className="btn-j2s-primary" disabled={busy} onClick={() => submit("send")}>{busy ? "Sending…" : "Send invite"}</button>
+            {/* The email exactly as it goes (spec v3 H4 "The email preview shows
+                exactly what the provider will get"), in enrops's existing
+                email-preview drawer. */}
+            <button type="button" className="text-sm font-semibold text-j2s-purple hover:underline" disabled={busy} onClick={openPreview}>Preview email</button>
             <button type="button" className="text-sm font-semibold text-j2s-purple hover:underline" disabled={busy} onClick={() => submit("save")}>Save to my list</button>
             <button type="button" className="text-sm text-j2s-ink/60 hover:underline" disabled={busy} onClick={() => setOpen(false)}>Cancel</button>
           </div>
@@ -154,6 +155,17 @@ export default function InvitePanel({ userId, onCounts }) {
           ))}
         </ul>
       )}
+
+      <EmailPreviewDrawer
+        open={!!preview.open}
+        onClose={() => setPreview({ open: false })}
+        title={form.business_name.trim() ? `As ${form.business_name.trim()} would get it` : "As the provider would get it"}
+        badges={preview.from ? [{ label: `From ${preview.from}`, color: "#4b3fb0", bg: "#F2F0FF" }, { label: "Replies come to you", color: "#57534e", bg: "#f5f5f4" }] : []}
+        subject={preview.subject}
+        bodyHtml={preview.html}
+        loading={!!preview.loading}
+        error={preview.error}
+      />
     </section>
   );
 }

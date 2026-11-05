@@ -76,6 +76,22 @@ serve(async (req) => {
     return json({ ok: sent, sent: sent ? 1 : 0 }, sent ? 200 : 502);
   }
 
+  // The email exactly as it would go, without sending (the admin email-preview
+  // pattern: server-rendered subject + HTML). Host admin of that partner only.
+  if (body?.action === "preview") {
+    const pid = typeof body?.partner_id === "string" ? body.partner_id : null;
+    const access = pid ? await hostAdmin(supabase, uid, pid) : null;
+    if (!access) return json({ error: "Only a host admin can invite providers." }, 403);
+    const brand = await loadOrgBrand(supabase, null);
+    const { subject, html } = renderInvite(brand, {
+      host_name: access.partner_name,
+      inviter_name: access.contact_name,
+      business_name_as_typed: String(body?.business_name ?? "").trim(),
+      message: String(body?.message ?? "").trim() || null,
+    }, `${PUBLIC_SITE_URL}/invite/preview`, "invite");
+    return json({ subject, html, from: `${access.partner_name} via enrops`, reply_to: access.contact_email }, 200);
+  }
+
   if (body?.action !== "save" && body?.action !== "send") return json({ error: "Unknown action." }, 400);
   const partnerId = typeof body?.partner_id === "string" ? body.partner_id : null;
   const emails = parseEmails(body?.emails);
