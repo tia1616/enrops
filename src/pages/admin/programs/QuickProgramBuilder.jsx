@@ -52,6 +52,7 @@ import {
   publishBlockedByStripe,
   PUBLISH_GATE_CTA_SAVE,
   PUBLISH_GATE_WHY,
+  PUBLISH_NEEDS_DATE,
   STRIPE_CONNECT_ROUTE,
 } from "../../../lib/publishGate.js";
 
@@ -675,6 +676,13 @@ export default function QuickProgramBuilder() {
     { ...org, stripe_charges_enabled: chargesResolved },
     { price_cents: priceValid ? priceCents : 0, runs_own_registration: false },
   );
+  // A weekly class's start date is optional for a DRAFT, but Create publishes,
+  // and a live class with no first date shows families no dates at all (the
+  // database refuses it too - tg_programs_require_date_to_publish). Camps and
+  // one-offs already require the date in `valid`, so this only bites a weekly
+  // class.
+  const needsDateToPublish = !startDate;
+  const canPublish = valid && !needsDateToPublish;
 
   // ---- First-program onboarding ----------------------------------------
   //
@@ -927,6 +935,10 @@ export default function QuickProgramBuilder() {
     // the DB trigger would reject it anyway. Drafts are never gated.
     if (!asDraft && publishBlocked) {
       setErr(`${PUBLISH_GATE_WHY} Save this as a draft instead, then connect Stripe.`);
+      return null;
+    }
+    if (!asDraft && needsDateToPublish) {
+      setErr(`${PUBLISH_NEEDS_DATE} Save as draft works without one.`);
       return null;
     }
     setSubmitting(true);
@@ -1804,8 +1816,9 @@ export default function QuickProgramBuilder() {
       // in as `asDraft`, and a SyntheticEvent is truthy — every Create would
       // have silently saved a draft.
       onClick={() => handleCreate(false)}
-      disabled={!valid || submitting}
-      style={{ ...primaryBtn, flex: 1, opacity: !valid || submitting ? 0.55 : 1, cursor: !valid || submitting ? "not-allowed" : "pointer" }}
+      disabled={!canPublish || submitting}
+      title={valid && needsDateToPublish ? `${PUBLISH_NEEDS_DATE} Save as draft works without one.` : undefined}
+      style={{ ...primaryBtn, flex: 1, opacity: !canPublish || submitting ? 0.55 : 1, cursor: !canPublish || submitting ? "not-allowed" : "pointer" }}
     >
       {/* `submitting` is shared with the draft button, so this said "Creating…"
           while the operator was saving a draft — the publish control announcing
@@ -2732,7 +2745,9 @@ export default function QuickProgramBuilder() {
               same class of lie the sentence was rewritten to remove. */}
           {publishBlocked
             ? `${PUBLISH_GATE_WHY} We'll save this class as a draft before sending you to Stripe, so nothing you've typed is lost.`
-            : org?.uses_enrops_registration === true
+            : valid && needsDateToPublish
+              ? `${PUBLISH_NEEDS_DATE} Save as draft works without one.`
+              : org?.uses_enrops_registration === true
               ? "Create puts the class on your registration page straight away. Save as draft keeps it private, with its dates worked out, until you publish it."
               : "Create makes the class straight away. Save as draft keeps it private, with its dates worked out, until you're ready."}
         </div>

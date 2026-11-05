@@ -10,6 +10,7 @@ import { readFileSync } from 'node:fs';
 import {
   takesMoneyThroughEnrops,
   publishBlockedByStripe,
+  publishBlockedByMissingDate,
   publishErrorMessage,
   PUBLISH_GATE_SQLSTATE,
   STRIPE_CONNECT_ROUTE,
@@ -125,6 +126,31 @@ eq('Connect Stripe comes BEFORE Publish when Stripe is needed',
 const builder = readFileSync(new URL('../pages/admin/programs/QuickProgramBuilder.jsx', import.meta.url), 'utf8');
 eq('success screen does not hardcode the step past Connect Stripe',
    /current=\{notConnected \? 2 : 3\}/.test(builder), true);
+
+// --- A class can't go live without a first class date (2026-11-05) ---
+eq('no date -> blocked',                 publishBlockedByMissingDate({ first_session_date: null, runs_own_registration: false }), true);
+eq('empty-string date -> blocked',       publishBlockedByMissingDate({ first_session_date: '' }), true);
+eq('has a date -> allowed',              publishBlockedByMissingDate({ first_session_date: '2027-01-12' }), false);
+eq('registers elsewhere -> exempt',      publishBlockedByMissingDate({ first_session_date: null, runs_own_registration: true }), false);
+eq('unknown program -> not blocked',     publishBlockedByMissingDate(undefined), false);
+
+// Drift pins: the trigger has the same exemption, the same SQLSTATE, and leaves
+// an already-live dateless class editable (prod had one with a paid family).
+const dateSql = readFileSync(
+  new URL('../../supabase/migrations/20261105b_publish_needs_start_date_and_copy_clears_early_bird.sql', import.meta.url),
+  'utf8',
+);
+eq('date trigger reads runs_own_registration', dateSql.includes('new.runs_own_registration is true'), true);
+eq('date trigger raises the frontend SQLSTATE', dateSql.includes(`errcode = '${PUBLISH_GATE_SQLSTATE}'`), true);
+eq('date trigger leaves an already-live dateless class editable',
+   /old\.status, 'open'\) = 'open'\s+and old\.first_session_date is null/.test(dateSql), true);
+// The copy stops carrying the early bird: price_cents, then the two early-bird
+// columns as null, then vip_price_cents - in the SELECT list.
+eq('duplicate_program inserts no early bird', /price_cents, null, null, vip_price_cents/.test(dateSql), true);
+// Both screens that publish say why BEFORE the write.
+eq('ProgramsCalendar checks the date before publishing',
+   readFileSync(new URL('../pages/admin/programs/ProgramsCalendar.jsx', import.meta.url), 'utf8').includes('publishBlockedByMissingDate(target)'), true);
+eq('QuickProgramBuilder Create needs the date', /disabled=\{!canPublish \|\| submitting\}/.test(builder), true);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

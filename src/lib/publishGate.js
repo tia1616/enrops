@@ -95,6 +95,18 @@ export const STRIPE_CONNECT_ROUTE = "/admin/finances";
 export const PUBLISH_GATE_SQLSTATE = "ENRPS";
 
 /**
+ * A class can't go live without a first class date: it derives no dates, so
+ * the family who registers sees none. The database enforces it too
+ * (tg_programs_require_date_to_publish, same SQLSTATE); this is the sentence
+ * the screens show BEFORE the write, so nobody needs to hit the error.
+ * Externally registered classes are exempt, as they are in the trigger.
+ */
+export const PUBLISH_NEEDS_DATE = "Add the first class date before you publish. Families need dates to register.";
+export function publishBlockedByMissingDate(program) {
+  return !!program && program.runs_own_registration !== true && !program.first_session_date;
+}
+
+/**
  * Turn whatever came back from a publish write into something an operator can
  * act on. The trigger's own message is already written for them, so for our
  * error we pass it through; anything else is a genuine failure and keeps its

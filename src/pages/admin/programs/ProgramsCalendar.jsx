@@ -46,6 +46,8 @@ import EarlyBirdRow, { useEarlyBirdPreview, earlyBirdPatch } from "../../../comp
 import PriceTierField from "../../../components/PriceTierField.jsx";
 import {
   publishBlockedByStripe,
+  publishBlockedByMissingDate,
+  PUBLISH_NEEDS_DATE,
   publishErrorMessage,
   PUBLISH_GATE_CTA,
   PUBLISH_GATE_CTA_SAVE,
@@ -133,6 +135,7 @@ export default function ProgramsCalendar() {
   const [curricula, setCurricula] = useState([]);
   const [editingProgram, setEditingProgram] = useState(null);
   const [editingFacility, setEditingFacility] = useState(null); // program object or null
+  const [bulkCopyOpen, setBulkCopyOpen] = useState(false);
 
   async function saveFacility({ programId, requested_at, approved_at, notes }) {
     const payload = {
@@ -158,6 +161,10 @@ export default function ProgramsCalendar() {
     // devtools. The database trigger is the third and last line; this one exists
     // so the operator gets a sentence instead of a Postgres error.
     const target = programs.find((p) => p.id === programId);
+    if (publishBlockedByMissingDate(target)) {
+      alert(`${PUBLISH_NEEDS_DATE} Set the first class date under Expand and save it, then publish. It stays a draft until then.`);
+      return;
+    }
     if (publishBlockedByStripe(org, target)) {
       alert(`${PUBLISH_GATE_WHY} Connect Stripe on the Payments screen, then publish. ${PUBLISH_GATE_STAYS_DRAFT_HINT}`);
       return;
@@ -524,11 +531,41 @@ export default function ProgramsCalendar() {
   // lands as status='draft' with no first-session-date, so it never appears
   // live before the operator reviews it and picks real dates.
   async function duplicateProgram(programId, targetTerm) {
+    const newId = await copyOneProgram(programId, targetTerm);
+    await addTermToPicker(targetTerm);
+    return newId;
+  }
+
+  // The one call that copies a row. Both the per-class Copy and the bulk Copy go
+  // through it, so a class copied either way is the same draft.
+  async function copyOneProgram(programId, targetTerm) {
     const { data: newId, error: dupErr } = await supabase.rpc("duplicate_program", {
       p_program_id: programId,
       p_target_term: targetTerm,
     });
     if (dupErr) throw dupErr;
+    return newId;
+  }
+
+  // Bulk copy: the SAME duplicate_program, once per class, one at a time so a
+  // failure names the class it happened on and the rest still copy. The term
+  // picker is refreshed once at the end, not once per class.
+  async function duplicatePrograms(programList, targetTerm) {
+    const copied = [];
+    const failed = [];
+    for (const p of programList) {
+      try {
+        await copyOneProgram(p.id, targetTerm);
+        copied.push(p);
+      } catch (err) {
+        failed.push({ program: p, message: err?.message ?? String(err) });
+      }
+    }
+    if (copied.length > 0) await addTermToPicker(targetTerm);
+    return { copied, failed };
+  }
+
+  async function addTermToPicker(targetTerm) {
     // The copy can land in a term the picker has never listed (Jeff copied to
     // Winter but the term picker still showed only Fall, so the draft was
     // unreachable). Refresh the term list so the new term is selectable. The
@@ -558,7 +595,6 @@ export default function ProgramsCalendar() {
     } else {
       setTermOptions((prev) => mergeTarget(prev));
     }
-    return newId;
   }
 
   // Which term parents can currently see/register for (org-wide, not per-view).
@@ -1110,6 +1146,19 @@ export default function ProgramsCalendar() {
             {!term && <option value="">{termsLoaded ? "No terms yet" : "Loading terms…"}</option>}
             {termOptions.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
           </select>
+          {term && !loading && programs.some((p) => !isCampProgram(p)) && (
+            <button
+              type="button"
+              onClick={() => setBulkCopyOpen(true)}
+              style={{
+                padding: "8px 14px", background: "#fff", color: BRIGHT, border: `1px solid ${BRIGHT}`,
+                borderRadius: 8, fontSize: 14, fontWeight: 600, fontFamily: "inherit", cursor: "pointer",
+              }}
+              title="Copy this term's classes into another term as drafts"
+            >
+              Copy classes to another term
+            </button>
+          )}
           {/* "By school" groups by partner school — meaningless for a lean
               single-venue op, so show only Calendar for them. J2S keeps both. */}
           {org?.instructor_pay_model !== "enrops_platform" && (
@@ -1286,6 +1335,17 @@ export default function ProgramsCalendar() {
               orgSlug={org?.slug}
               orgActiveTerm={org?.active_registration_term}
             />
+      )}
+
+      {bulkCopyOpen && (
+        <BulkCopyModal
+          programs={programs}
+          sourceTerm={term}
+          orgId={org?.id}
+          onCopy={duplicatePrograms}
+          onClose={() => setBulkCopyOpen(false)}
+          onGoToTerm={(t) => { setBulkCopyOpen(false); setTerm(t); }}
+        />
       )}
 
       {editingFacility && (
@@ -2163,16 +2223,7 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
   const [copyYear, setCopyYear] = useState("");     // 4-digit year string, e.g. "2027"
   const [copying, setCopying] = useState(false);
   const [copyResult, setCopyResult] = useState(null); // { ok: bool, message }
-  // FA{yy}/WI{yy}/... code the DB expects, composed from the two dropdowns.
-  const copyTargetTerm = copySeason && copyYear
-    ? `${copySeason}${String(Number(copyYear)).slice(-2)}`
-    : "";
-  // Year choices: this year through +3, enough to copy forward a season or two
-  // without offering a scroll of irrelevant years. Labels are the full year.
-  const copyYearChoices = (() => {
-    const y = new Date().getFullYear();
-    return [y, y + 1, y + 2, y + 3];
-  })();
+  const copyTargetTerm = composeCopyTerm(copySeason, copyYear);
 
   // Range mode live preview: as the operator types start/end, ask the DB to derive
   // the count + skipped no-school days for THIS location's calendar. Params-based
@@ -3463,27 +3514,12 @@ function ExpandedProgramPanel({ program, dates, drift, districtHasCalendar, onUp
           Copy to another term
         </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <select
-            value={copySeason}
-            onChange={(e) => { setCopySeason(e.target.value); setCopyResult(null); }}
-            style={{ ...expandInputStyle, width: 130 }}
-            aria-label="Season to copy into"
-          >
-            <option value="">Season…</option>
-            <option value="FA">Fall</option>
-            <option value="WI">Winter</option>
-            <option value="SP">Spring</option>
-            <option value="SU">Summer</option>
-          </select>
-          <select
-            value={copyYear}
-            onChange={(e) => { setCopyYear(e.target.value); setCopyResult(null); }}
-            style={{ ...expandInputStyle, width: 110 }}
-            aria-label="Year to copy into"
-          >
-            <option value="">Year…</option>
-            {copyYearChoices.map((y) => <option key={y} value={String(y)}>{y}</option>)}
-          </select>
+          <CopyTermPicker
+            season={copySeason}
+            year={copyYear}
+            onSeason={(v) => { setCopySeason(v); setCopyResult(null); }}
+            onYear={(v) => { setCopyYear(v); setCopyResult(null); }}
+          />
           <button
             type="button"
             onClick={handleDuplicate}
@@ -4019,6 +4055,317 @@ function FacilityPill({ program, onClick }) {
     </button>
   );
 }
+
+// ---- Copy to another term (shared by the per-class Copy and the bulk Copy) ----
+
+// FA{yy}/WI{yy}/... code the DB expects, composed from the two dropdowns, so the
+// operator never sees or types a raw code like "WI27".
+function composeCopyTerm(season, year) {
+  return season && year ? `${season}${String(Number(year)).slice(-2)}` : "";
+}
+
+// Year choices: this year through +3, enough to copy forward a season or two
+// without offering a scroll of irrelevant years.
+function copyYearChoices() {
+  const y = new Date().getFullYear();
+  return [y, y + 1, y + 2, y + 3];
+}
+
+function CopyTermPicker({ season, year, onSeason, onYear, disabled = false }) {
+  return (
+    <>
+      <select
+        value={season}
+        onChange={(e) => onSeason(e.target.value)}
+        disabled={disabled}
+        style={{ ...expandInputStyle, width: 130 }}
+        aria-label="Season to copy into"
+      >
+        <option value="">Season…</option>
+        <option value="FA">Fall</option>
+        <option value="WI">Winter</option>
+        <option value="SP">Spring</option>
+        <option value="SU">Summer</option>
+      </select>
+      <select
+        value={year}
+        onChange={(e) => onYear(e.target.value)}
+        disabled={disabled}
+        style={{ ...expandInputStyle, width: 110 }}
+        aria-label="Year to copy into"
+      >
+        <option value="">Year…</option>
+        {copyYearChoices().map((y) => <option key={y} value={String(y)}>{y}</option>)}
+      </select>
+    </>
+  );
+}
+
+const WEEKDAY_ORDER = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+
+// Copy many of this term's classes into another term in one go. Each copy is
+// made by the same duplicate_program the per-class Copy uses, so it lands as a
+// draft with no first class date: the operator sets each start date before
+// publishing, because a new term's start dates can't be known in bulk. Camps are
+// left out - this is for weekly classes.
+function BulkCopyModal({ programs, sourceTerm, orgId, onCopy, onClose, onGoToTerm }) {
+  const classes = useMemo(() => {
+    const list = (programs ?? []).filter((p) => !isCampProgram(p));
+    return [...list].sort((a, b) => {
+      const sa = a.program_locations?.name ?? "";
+      const sb = b.program_locations?.name ?? "";
+      if (sa !== sb) return sa.localeCompare(sb);
+      const da = WEEKDAY_ORDER.indexOf(String(a.day_of_week ?? "").toLowerCase());
+      const db = WEEKDAY_ORDER.indexOf(String(b.day_of_week ?? "").toLowerCase());
+      if (da !== db) return da - db;
+      return String(a.start_time ?? "").localeCompare(String(b.start_time ?? ""));
+    });
+  }, [programs]);
+  const campCount = (programs ?? []).length - classes.length;
+
+  // Everything ticked except cancelled classes, which are rarely what anyone
+  // wants to run again.
+  const [selected, setSelected] = useState(
+    () => new Set(classes.filter((p) => p.status !== "cancelled").map((p) => p.id)),
+  );
+  const [season, setSeason] = useState("");
+  const [year, setYear] = useState("");
+  const target = composeCopyTerm(season, year);
+  const [existingCount, setExistingCount] = useState(null);
+  const [countFailed, setCountFailed] = useState(false);
+  const [copying, setCopying] = useState(false);
+  const [result, setResult] = useState(null); // { copied, failed } | null
+  const [error, setError] = useState("");
+
+  // How many classes the target term already has, so a second click of Copy
+  // doesn't quietly make a second set of every class.
+  useEffect(() => {
+    setExistingCount(null);
+    setCountFailed(false);
+    if (!target || !orgId) return;
+    let cancelled = false;
+    (async () => {
+      const { count, error: cErr } = await supabase
+        .from("programs")
+        .select("id", { count: "exact", head: true })
+        .eq("organization_id", orgId)
+        .eq("term", target);
+      if (cancelled) return;
+      // A failed read must not look like an empty term - that is the one case
+      // the warning exists for.
+      if (cErr) setCountFailed(true);
+      else setExistingCount(count ?? 0);
+    })();
+    return () => { cancelled = true; };
+  }, [target, orgId]);
+
+  function toggle(id) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  const allChecked = classes.length > 0 && classes.every((p) => selected.has(p.id));
+  const picked = classes.filter((p) => selected.has(p.id));
+  const sameTerm = target && target === sourceTerm;
+  const canCopy = !copying && !result && target && !sameTerm && picked.length > 0;
+
+  async function handleCopy() {
+    if (!canCopy) return;
+    setError("");
+    setCopying(true);
+    try {
+      setResult(await onCopy(picked, target));
+    } catch (e) {
+      setError(e?.message ?? String(e));
+    } finally {
+      setCopying(false);
+    }
+  }
+
+  // Retry ONLY the classes that failed. Reopening the dialog would tick every
+  // class again, and copying those makes a second draft of each one that
+  // already went through.
+  async function handleRetryFailed() {
+    if (copying || !result?.failed?.length) return;
+    setCopying(true);
+    try {
+      const retry = await onCopy(result.failed.map((f) => f.program), target);
+      setResult((prev) => ({
+        copied: [...(prev?.copied ?? []), ...retry.copied],
+        failed: retry.failed,
+      }));
+    } catch (e) {
+      setError(e?.message ?? String(e));
+    } finally {
+      setCopying(false);
+    }
+  }
+
+  const targetLabel = target ? formatTermLabel(target) : "";
+
+  return (
+    <div
+      onClick={(e) => { if (e.target === e.currentTarget && !copying) onClose?.(); }}
+      style={{
+        position: "fixed", inset: 0, background: "rgba(28, 0, 79, 0.35)", zIndex: 1000,
+        display: "flex", alignItems: "center", justifyContent: "center", padding: 16,
+      }}
+    >
+      <div style={{
+        background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, maxWidth: 620, width: "100%",
+        maxHeight: "90vh", padding: "20px 24px", boxShadow: "0 12px 32px rgba(0,0,0,0.15)",
+        display: "flex", flexDirection: "column", gap: 14, boxSizing: "border-box",
+      }}>
+        <div>
+          <div style={{ fontSize: 18, fontWeight: 700, color: INK }}>Copy classes to another term</div>
+          <div style={{ fontSize: 13, color: MUTED, marginTop: 2 }}>
+            Each class is copied as a draft with the same site, day, time, grades and price. Set each start date before you publish.
+          </div>
+        </div>
+
+        {result ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {result.copied.length > 0 && (
+              <div style={{ fontSize: 14, color: OK_GREEN, fontWeight: 600 }}>
+                ✓ Copied {result.copied.length} {result.copied.length === 1 ? "class" : "classes"} into {targetLabel} as drafts.
+              </div>
+            )}
+            {result.failed.length > 0 && (
+              <div style={{ fontSize: 13, color: "#b53737" }}>
+                <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                  {result.failed.length} didn't copy:
+                </div>
+                {result.failed.map((f) => (
+                  <div key={f.program.id}>
+                    {f.program.curriculum} · {f.program.program_locations?.name ?? "(no site)"}: {f.message}
+                  </div>
+                ))}
+              </div>
+            )}
+            {error && <div style={{ fontSize: 13, color: "#b53737" }}>{error}</div>}
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+              <button type="button" onClick={onClose} disabled={copying} style={bulkSecondaryBtn}>Close</button>
+              {result.failed.length > 0 && (
+                <button type="button" onClick={handleRetryFailed} disabled={copying} style={bulkSecondaryBtn}>
+                  {copying ? "Trying again…" : `Try the ${result.failed.length} again`}
+                </button>
+              )}
+              {result.copied.length > 0 && (
+                <button type="button" onClick={() => onGoToTerm(target)} disabled={copying} style={bulkPrimaryBtn}>
+                  Go to {targetLabel} →
+                </button>
+              )}
+            </div>
+          </div>
+        ) : (
+          <>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: INK }}>Copy into</span>
+              <CopyTermPicker
+                season={season}
+                year={year}
+                onSeason={setSeason}
+                onYear={setYear}
+                disabled={copying}
+              />
+            </div>
+            {sameTerm && (
+              <div style={{ fontSize: 13, color: "#b53737" }}>
+                These classes are already in {targetLabel}. Pick a different term.
+              </div>
+            )}
+            {!sameTerm && existingCount > 0 && (
+              <div style={{ fontSize: 13, color: "#8a5a00" }}>
+                {targetLabel} already has {existingCount} {existingCount === 1 ? "class" : "classes"}. If you've copied these before, copying again makes a second set.
+              </div>
+            )}
+            {!sameTerm && countFailed && (
+              <div style={{ fontSize: 13, color: "#8a5a00" }}>
+                Couldn't check whether {targetLabel} already has classes. Switch the term picker to {targetLabel} first if you might have copied these before.
+              </div>
+            )}
+
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13 }}>
+              <span style={{ color: MUTED }}>
+                {picked.length} of {classes.length} selected
+                {campCount > 0 ? ` · camps aren't copied here` : ""}
+              </span>
+              <button
+                type="button"
+                onClick={() => setSelected(allChecked ? new Set() : new Set(classes.map((p) => p.id)))}
+                disabled={copying}
+                style={{ background: "none", border: "none", color: BRIGHT, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", fontSize: 13, padding: 0 }}
+              >
+                {allChecked ? "Select none" : "Select all"}
+              </button>
+            </div>
+
+            <div style={{ overflowY: "auto", border: `1px solid ${RULE}`, borderRadius: 8, minHeight: 0, flex: "1 1 auto" }}>
+              {classes.map((p) => (
+                <label
+                  key={p.id}
+                  style={{
+                    display: "flex", gap: 10, alignItems: "flex-start", padding: "9px 12px",
+                    borderBottom: `1px solid ${RULE}`, cursor: copying ? "default" : "pointer", fontSize: 13.5,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected.has(p.id)}
+                    onChange={() => toggle(p.id)}
+                    disabled={copying}
+                    style={{ marginTop: 2 }}
+                  />
+                  <span style={{ minWidth: 0 }}>
+                    <span style={{ fontWeight: 600, color: INK }}>{p.curriculum}</span>
+                    {p.status === "cancelled" && <span style={{ color: "#b53737" }}> (cancelled)</span>}
+                    {p.status === "draft" && <span style={{ color: MUTED }}> (draft)</span>}
+                    <br />
+                    <span style={{ color: MUTED }}>
+                      {p.program_locations?.name ?? "(no site)"}
+                      {p.day_of_week ? ` · ${p.day_of_week}` : ""}
+                      {p.start_time ? ` · ${p.start_time}` : ""}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </div>
+
+            {error && <div style={{ fontSize: 13, color: "#b53737" }}>{error}</div>}
+
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>
+              <button type="button" onClick={onClose} disabled={copying} style={bulkSecondaryBtn}>Cancel</button>
+              <button
+                type="button"
+                onClick={handleCopy}
+                disabled={!canCopy}
+                style={{ ...bulkPrimaryBtn, opacity: canCopy ? 1 : 0.6, cursor: canCopy ? "pointer" : "default" }}
+              >
+                {copying
+                  ? "Copying…"
+                  : target && !sameTerm
+                    ? `Copy ${picked.length} ${picked.length === 1 ? "class" : "classes"} to ${targetLabel}`
+                    : "Copy"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const bulkPrimaryBtn = {
+  background: BRIGHT, color: "#fff", border: `1px solid ${BRIGHT}`, padding: "8px 16px",
+  borderRadius: 6, fontSize: 13.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer",
+};
+const bulkSecondaryBtn = {
+  background: "transparent", color: INK, border: `1px solid ${RULE}`, padding: "8px 16px",
+  borderRadius: 6, fontSize: 13.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer",
+};
 
 function FacilityRequestModal({ program, onCancel, onSave }) {
   const [requested, setRequested] = useState(program.facility_requested_at ?? "");
