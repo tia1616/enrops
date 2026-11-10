@@ -116,6 +116,11 @@ export interface FraudAlertInput {
   fraudType: string | null;
   /** Stripe's `actionable`. False = already refunded or disputed. Defaults true. */
   actionable?: boolean;
+  /**
+   * Whether the charge resolved to a registration in enrops, even if its
+   * details could not be loaded. Defaults to "children were loaded".
+   */
+  matchedRegistration?: boolean;
 }
 
 // Fraud types where the card itself was misused (stolen, lost, counterfeit,
@@ -134,7 +139,7 @@ export function renderFraudWarningAlert(i: FraudAlertInput): { subject: string; 
   const who = i.parentName?.trim() || 'a family';
   const actionable = i.actionable !== false;
   const cardMisuse = !!i.fraudType && CARD_MISUSE_TYPES.has(i.fraudType);
-  const matched = i.children.length > 0;
+  const matched = i.matchedRegistration ?? i.children.length > 0;
 
   const subject = actionable
     ? `Fraud warning on a payment from ${who}: contact them today`
@@ -234,8 +239,10 @@ export interface FraudWarningDeps {
 }
 
 // A claim older than this with no alerted_at is treated as a run that died
-// mid-send. Far longer than one webhook run (Stripe times out at ~20s), far
-// shorter than Stripe's first retry interval in practice.
+// mid-send. It only has to be longer than one webhook run (Stripe stops
+// waiting after about 20 seconds). Correctness does not depend on Stripe's
+// retry timing: a delivery that finds a fresh unsent claim answers 500, so
+// Stripe keeps retrying until the claim is either sent or stale.
 const STALE_CLAIM_MS = 5 * 60 * 1000;
 
 export interface FraudWarningEvent {
@@ -276,7 +283,11 @@ export async function handleEarlyFraudWarning(
   const orgId = owner.organizationId;
 
   // Claim FIRST: the unique stripe_warning_id is what makes this send once.
+  // created_at is stamped from THIS clock (not the DB default) because the
+  // stale-claim check below compares against this clock too; mixing the two
+  // would let clock skew shrink the window and take over a live claim.
   const { error: claimErr } = await admin.from('fraud_warnings').insert({
+    created_at: new Date(deps.now?.() ?? Date.now()).toISOString(),
     organization_id: orgId,
     stripe_warning_id: efw.id,
     stripe_charge_id: chargeId,
@@ -406,6 +417,10 @@ export async function handleEarlyFraudWarning(
     paidOn,
     statementDescriptor,
     fraudType: efw.fraud_type ?? null,
+    // "Matched" means the charge resolved to a registration - NOT that the
+    // detail read succeeded. A timed-out detail read must not tell the
+    // operator to go through enrops support for a payment they can refund.
+    matchedRegistration: regIds.size > 0,
     // Stripe sets actionable=false when the charge is already refunded or
     // disputed, so "refund it now" would be advice that cannot be followed.
     actionable: efw.actionable !== false,

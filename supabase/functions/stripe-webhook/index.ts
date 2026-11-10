@@ -2411,6 +2411,14 @@ async function sendOperatorAlert(
         tags: [{ name: 'type', value: 'operator_alert' }],
       }),
     });
+    // A keyed send answered 409 means Resend has already seen this key - an
+    // earlier attempt was accepted (its body may differ, since the email is
+    // rebuilt from fresh reads). The email went out; reporting failure would
+    // release the claim and loop retries for the key's 24h lifetime.
+    if (idempotencyKey && resp.status === 409) {
+      console.log(`[stripe-webhook] operator alert already sent under key ${idempotencyKey}`);
+      return true;
+    }
     if (!resp.ok) {
       console.error('Operator alert send failed:', resp.status, await resp.text());
       return false;

@@ -126,6 +126,12 @@ Deno.test('unmatched but amount loaded: still says unmatched (the refund advice 
   assert(!body.includes('refund it in enrops'));
 });
 
+Deno.test('matched registration whose details failed to load: still says refund in enrops', () => {
+  const { body } = renderFraudWarningAlert({ ...PETERSON, children: [], matchedRegistration: true });
+  assert(!body.includes('could not match') && !body.includes('enrops support'));
+  assertStringIncludes(body, 'refund it in enrops right away');
+});
+
 Deno.test('matched: no "could not match" line, refund in enrops', () => {
   const { body } = renderFraudWarningAlert(PETERSON);
   assert(!body.includes('could not match'));
