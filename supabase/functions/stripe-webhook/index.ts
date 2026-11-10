@@ -96,6 +96,7 @@ import { resolveFeeConfig, loadPlatformFeeDefaults } from '../_shared/feeConfig.
 import { isEmailAllowed } from '../_shared/emailGuard.ts';
 import { logTransactionalSend, formatSendError } from '../_shared/sendLog.ts';
 import { maybeAlertOperatorFlagged } from '../_shared/operatorFlagAlert.ts';
+import { resolveChargeOwner, handleEarlyFraudWarning } from '../_shared/fraudWarningAlert.ts';
 import { alertMarginShortfall } from '../_shared/marginShortfallAlert.ts';
 import { decodeCreditAllocation } from '../_shared/creditAllocation.ts';
 import {
@@ -1260,6 +1261,15 @@ serve(async (req) => {
       // v4 section 5: mirror disputes so an operator does not have to watch a
       // second dashboard. READ-ONLY - we never respond to or decide a dispute.
       await handleDispute(admin, event);
+    } else if (event.type === 'radar.early_fraud_warning.created') {
+      // The cardholder's bank reported a charge as fraud - the step before a
+      // chargeback. Alert the operator the same day. See _shared/fraudWarningAlert.ts.
+      const result = await handleEarlyFraudWarning(
+        admin,
+        event as unknown as { account?: string | null; data: { object: unknown } },
+        fraudWarningDeps(admin),
+      );
+      if (result === 'retry') return new Response('fraud warning alert not sent; retry', { status: 500 });
     } else if (event.type === 'transfer.reversed') {
       // Fires when a Stripe transfer to a connected account is reversed.
       // For Enrops-platform-routed instructor payouts (operator's stripeAccount
@@ -2174,34 +2184,9 @@ async function handleDispute(admin: SupabaseClient, event: Stripe.Event) {
   // Find the org via the charge we already recorded. A dispute we cannot map to
   // a registration is not an error worth failing the webhook over, but it IS
   // worth logging: it means money is being clawed back on a charge we have no
-  // record of.
-  let organizationId: string | null = null;
-  let registrationId: string | null = null;
-  if (piId) {
-    const { data: instRow } = await admin
-      .from('installments').select('organization_id, registration_id')
-      .eq('stripe_payment_intent_id', piId).limit(1).maybeSingle();
-    const inst = instRow as { organization_id: string; registration_id: string } | null;
-    if (inst) {
-      organizationId = inst.organization_id;
-      registrationId = inst.registration_id;
-    } else {
-      const { data: regRow } = await admin
-        .from('registrations').select('id, organization_id')
-        .eq('stripe_payment_intent_id', piId).limit(1).maybeSingle();
-      const reg = regRow as { id: string; organization_id: string } | null;
-      if (reg) {
-        organizationId = reg.organization_id;
-        registrationId = reg.id;
-      }
-    }
-  }
-  // Fall back to the connected account when the charge predates our records.
-  if (!organizationId && chargeAccountId) {
-    const { data: orgRow } = await admin
-      .from('organizations').select('id').eq('stripe_account_id', chargeAccountId).maybeSingle();
-    organizationId = (orgRow as { id: string } | null)?.id ?? null;
-  }
+  // record of. The lookup is shared with the fraud-warning alert; this caller
+  // keeps its original behaviour and does not act on lookupFailed.
+  const { organizationId, registrationId } = await resolveChargeOwner(admin, piId, chargeAccountId);
   if (!organizationId) {
     console.error(
       `[dispute] ${dispute.id} could not be mapped to an org (pi=${piId}, acct=${chargeAccountId}); not recording`,
@@ -2242,6 +2227,27 @@ async function handleDispute(admin: SupabaseClient, event: Stripe.Event) {
     return;
   }
   console.log(`[dispute] ${dispute.id} ${dispute.status} (${row.borne_by} bears it) for org ${organizationId}`);
+}
+
+// ── radar.early_fraud_warning.created ──────────────────────────────────────
+//
+// The cardholder's bank reported a charge as fraud. Alert the operator's own
+// inbox once, with the family's contact details, so they can call the family
+// the same day. Never refunds or changes anything. Full rationale in
+// _shared/fraudWarningAlert.ts.
+//
+// The handler lives in _shared/fraudWarningAlert.ts; this binds it to this
+// file's Stripe client, brand loader and operator-alert sender.
+function fraudWarningDeps(admin: SupabaseClient) {
+  return {
+    retrieveCharge: (chargeId: string, stripeAccount: string | null) =>
+      stripe.charges.retrieve(chargeId, {}, stripeAccount ? { stripeAccount } : undefined) as unknown as Promise<{
+        amount?: number | null; created?: number | null; calculated_statement_descriptor?: string | null;
+      }>,
+    loadBrand: (orgId: string) => loadOrgBrand(admin, orgId),
+    sendAlert: (brand: OrgBrand, to: string | null, subject: string, body: string, idempotencyKey: string) =>
+      sendOperatorAlert({ brand, to, subject, body, idempotencyKey }),
+  };
 }
 
 async function autoCreateParentAccount(
@@ -2361,28 +2367,53 @@ async function sendAccountReadyEmail(admin: SupabaseClient, brand: OrgBrand, ema
 // or a provider's Stripe internals. A missing address means we have nowhere
 // inside the tenant to put it, and the answer is to refuse and say so - never
 // to fall back to the platform, which is how this data reached Enrops before.
+//
+// Returns whether Resend accepted the email. Existing callers ignore it; the
+// fraud-warning alert uses it to release its claim and have Stripe retry.
 async function sendOperatorAlert(
-  { brand, to, subject, body }: { brand: OrgBrand; to: string | null; subject: string; body: string },
-) {
+  { brand, to, subject, body, idempotencyKey }: {
+    brand: OrgBrand; to: string | null; subject: string; body: string;
+    /** Optional. When set, Resend drops a repeat of the same key (24h), so a retry cannot send twice. */
+    idempotencyKey?: string;
+  },
+): Promise<boolean> {
   if (!to) {
     console.error('[stripe-webhook] operator alert NOT sent - org has no inbox of its own', {
       organization_id: brand.org_id,
       subject,
     });
-    return;
+    return false;
   }
   try {
-    await fetch('https://api.resend.com/emails', {
+    const resp = await fetch('https://api.resend.com/emails', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${RESEND_API_KEY}`,
+        ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+      },
       body: JSON.stringify({
         from: formatFromAddress(brand), to,
         subject: `[Enrops Alert] ${subject}`, text: body,
         tags: [{ name: 'type', value: 'operator_alert' }],
       }),
     });
+    // A keyed send answered 409 means Resend has already seen this key - an
+    // earlier attempt was accepted (its body may differ, since the email is
+    // rebuilt from fresh reads). The email went out; reporting failure would
+    // release the claim and loop retries for the key's 24h lifetime.
+    if (idempotencyKey && resp.status === 409) {
+      console.log(`[stripe-webhook] operator alert already sent under key ${idempotencyKey}`);
+      return true;
+    }
+    if (!resp.ok) {
+      console.error('Operator alert send failed:', resp.status, await resp.text());
+      return false;
+    }
+    return true;
   } catch (err) {
     console.error('Operator alert send failed:', err);
+    return false;
   }
 }
 
