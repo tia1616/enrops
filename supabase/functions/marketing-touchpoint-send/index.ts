@@ -47,6 +47,7 @@ import { chooseBodyText } from "../_shared/plainTextHalf.ts";
 import { sendableEmail } from "../_shared/sendableEmail.ts";
 import { fetchWithRateLimitRetry } from "../_shared/resendRateLimit.ts";
 import { earliestStartDate } from "../_shared/earliestStart.ts";
+import { readAllPages, marketingReadPageSize } from "../_shared/keysetPages.ts";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -90,6 +91,11 @@ const PUBLIC_SITE_URL = (Deno.env.get("PUBLIC_SITE_URL") ?? "https://enrops.com"
 
 // Already-delivered statuses for dedup. Mirrors marketing-send.
 const DELIVERED_STATUSES = ["sent", "delivered", "opened", "clicked"];
+
+// Rows per page for the two reads that can exceed PostgREST's silent 1000-row
+// cap: the recipient list and the per-touchpoint dedup set. See keysetPages.ts.
+// MARKETING_READ_PAGE_SIZE exists only so staging can prove a multi-page send.
+const READ_PAGE_SIZE = marketingReadPageSize(Deno.env.get("MARKETING_READ_PAGE_SIZE"));
 
 // Stand-in personalisation for a TEST send only. An operator's own test row is
 // bootstrapped with an email and nothing else, so the name tokens resolved to
@@ -500,7 +506,8 @@ serve(async (req: Request) => {
   // For mode='test', bootstrap an admin recipient (single row). For mode='send',
   // call the get_campaign_recipients SQL function which joins through
   // marketing_campaigns to enforce org match and reads from the campaign's
-  // approved_recipient_ids in one round-trip. No client-side chunking, no
+  // approved_recipient_ids, paged by id (readAllPages) so PostgREST's 1000-row
+  // cap cannot shorten the list. No client-side chunking, no
   // URL-length cliff at 500+ UUIDs, and no need for the cron to ship the
   // full ID list through a fetch body.
   // One flag, read once, used by both the recipient bootstrap below and the
@@ -525,9 +532,19 @@ serve(async (req: Request) => {
     if (aErr || !adminRow) return json({ error: `admin recipient lookup failed: ${aErr?.message ?? "unknown"}` }, 500);
     recipientRows = [adminRow];
   } else {
-    const { data: rows, error: rErr } = await supabase.rpc("get_campaign_recipients", { p_campaign_id: campaign.id });
-    if (rErr) return json({ error: `get_campaign_recipients failed: ${rErr.message}` }, 500);
-    recipientRows = (rows ?? []) as Recipient[];
+    // Every eligible recipient, not the first 1,000: one unpaged rpc() here was
+    // silently capped by PostgREST and mailed 1,000 of 1,286 on 2026-11-10.
+    const { rows, error: rErr } = await readAllPages<Recipient>(
+      (afterId, limit) => {
+        let q = supabase.rpc("get_campaign_recipients", { p_campaign_id: campaign.id }).order("id").limit(limit);
+        if (afterId) q = q.gt("id", afterId);
+        return q;
+      },
+      (r) => r.id,
+      READ_PAGE_SIZE,
+    );
+    if (rErr) return json({ error: `get_campaign_recipients failed: ${rErr}` }, 500);
+    recipientRows = rows;
     // Narrow-only (validated above). An id that is not in the eligible set is
     // simply absent, so a typo or a since-enrolled family is skipped, not sent.
     if (body.only_recipient_ids) {
@@ -665,7 +682,7 @@ serve(async (req: Request) => {
   //
   // Scoped by (campaign_id, touchpoint_id) so we don't need a recipient_id
   // IN-clause — the query returns at most one row per recipient who's
-  // already received this touchpoint. Single round-trip.
+  // already received this touchpoint.
   //
   // is_test-exempt: this one INCLUDES test rows on purpose. The reporting
   // surfaces exclude them because a rehearsal is not reach; here the question is
@@ -673,15 +690,31 @@ serve(async (req: Request) => {
   // operator's own row a test is a yes. Filtering them out would mail an
   // operator the real campaign right after they tested it. Test sends bypass
   // this set entirely (isTestSend below), so it never blocks a re-test.
+  //
+  // Paged like the recipient list: an unpaged read here returns at most 1,000
+  // delivered rows, so re-running a bigger touchpoint (a partial re-queue, or an
+  // operator re-queue after a failure) would mail everyone past the first 1,000
+  // a second time. The throttle deliberately ignores this touchpoint's own sends,
+  // so nothing else would catch it.
   const alreadyDelivered = new Set<string>();
-  const { data: prior, error: pErr } = await supabase
-    .from("marketing_sends")
-    .select("recipient_id")
-    .eq("campaign_id", campaign.id)
-    .eq("touchpoint_id", touchpoint.id)
-    .in("status", DELIVERED_STATUSES);
-  if (pErr) return json({ error: `dedup query failed: ${pErr.message}` }, 500);
-  for (const r of (prior ?? []) as Array<{ recipient_id: string }>) alreadyDelivered.add(r.recipient_id);
+  const { rows: prior, error: pErr } = await readAllPages<{ id: string; recipient_id: string }>(
+    (afterId, limit) => {
+      let q = supabase
+        .from("marketing_sends")
+        .select("id, recipient_id")
+        .eq("campaign_id", campaign.id)
+        .eq("touchpoint_id", touchpoint.id)
+        .in("status", DELIVERED_STATUSES)
+        .order("id")
+        .limit(limit);
+      if (afterId) q = q.gt("id", afterId);
+      return q;
+    },
+    (r) => r.id,
+    READ_PAGE_SIZE,
+  );
+  if (pErr) return json({ error: `dedup query failed: ${pErr}` }, 500);
+  for (const r of prior) alreadyDelivered.add(r.recipient_id);
 
   // ---- Optional per-campaign overrides from draft_inputs ----
   const registrationUrlOverride = typeof draftInputs.registration_url_override === "string"

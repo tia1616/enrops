@@ -212,21 +212,27 @@ serve(async (req: Request) => {
       // errors and the surrounding count query is guarded. No PII — only the
       // campaign subject line + counts (rule #4).
       try {
-        const { data: tally } = await supabase
+        // Counted with head-only count queries, not by fetching rows: a row read
+        // is capped at 1,000 by PostgREST, so any touchpoint bigger than that
+        // reported 1,000 (or fewer) as its reach.
+        // is_test = false only. recipients_sent feeds the analytics stream as
+        // reach; an operator's own test sends are not reach. Since the
+        // per-touchpoint dedup stopped applying to tests (2026-09-07) there can
+        // be many per touchpoint, so this is the difference between a real
+        // number and one inflated by however long they spent editing.
+        const tally = (statuses: string[]) => supabase
           .from("marketing_sends")
-          .select("status")
+          .select("id", { count: "exact", head: true })
           .eq("campaign_id", tp.campaign_id)
           .eq("touchpoint_id", tp.id)
-          // is_test = false only. recipients_sent feeds the analytics stream as
-          // reach; an operator's own test sends are not reach. Since the
-          // per-touchpoint dedup stopped applying to tests (2026-09-07) there can
-          // be many per touchpoint, so this is the difference between a real
-          // number and one inflated by however long they spent editing.
-          .eq("is_test", false);
-        const tallyRows = (tally ?? []) as Array<{ status: string }>;
-        const DELIVERED = new Set(["sent", "delivered", "opened", "clicked"]);
-        const recipientsSent = tallyRows.filter((r) => DELIVERED.has(r.status)).length;
-        const recipientsFailed = tallyRows.filter((r) => r.status === "failed").length;
+          .eq("is_test", false)
+          .in("status", statuses);
+        const [{ count: sentCountAll }, { count: failedCountAll }] = await Promise.all([
+          tally(["sent", "delivered", "opened", "clicked"]),
+          tally(["failed"]),
+        ]);
+        const recipientsSent = sentCountAll ?? 0;
+        const recipientsFailed = failedCountAll ?? 0;
         const payload = (tp.payload ?? {}) as { label?: string; subject?: string | null };
         await logEnrollmentEvent(supabase, {
           actionType: ENROLLMENT_ACTIONS.MARKETING_SENT,
