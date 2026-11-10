@@ -17,6 +17,8 @@
 // claimed BEFORE the send (Stripe retries, and two endpoints point at
 // stripe-webhook). If the send fails the claim is released and the caller
 // returns 500, so Stripe's retry gets another go rather than the alert vanishing.
+// If the run dies between claim and send, the unsent claim goes stale and the
+// next redelivery takes it over (alerted_at stays NULL until the send succeeds).
 
 // deno-lint-ignore-file no-explicit-any
 
@@ -42,30 +44,41 @@ export async function resolveChargeOwner(
   chargeAccountId: string | null,
 ): Promise<ChargeOwner> {
   let lookupFailed = false;
+  let organizationId: string | null = null;
+  let registrationId: string | null = null;
   if (piId) {
     const { data: instRow, error: instErr } = await admin
       .from('installments').select('organization_id, registration_id')
       .eq('stripe_payment_intent_id', piId).limit(1).maybeSingle();
     if (instErr) lookupFailed = true;
-    const inst = instRow as { organization_id: string; registration_id: string } | null;
-    if (inst) return { organizationId: inst.organization_id, registrationId: inst.registration_id, lookupFailed };
-
-    const { data: regRow, error: regErr } = await admin
-      .from('registrations').select('id, organization_id')
-      .eq('stripe_payment_intent_id', piId).limit(1).maybeSingle();
-    if (regErr) lookupFailed = true;
-    const reg = regRow as { id: string; organization_id: string } | null;
-    if (reg) return { organizationId: reg.organization_id, registrationId: reg.id, lookupFailed };
+    const inst = instRow as { organization_id: string | null; registration_id: string | null } | null;
+    if (inst) {
+      // installments.organization_id is NULLABLE (20260806b). A found row with
+      // no org still owns the registration and still skips the registrations
+      // lookup - exactly as handleDispute always did - and falls through to
+      // the connected-account fallback below.
+      organizationId = inst.organization_id ?? null;
+      registrationId = inst.registration_id ?? null;
+    } else {
+      const { data: regRow, error: regErr } = await admin
+        .from('registrations').select('id, organization_id')
+        .eq('stripe_payment_intent_id', piId).limit(1).maybeSingle();
+      if (regErr) lookupFailed = true;
+      const reg = regRow as { id: string; organization_id: string } | null;
+      if (reg) {
+        organizationId = reg.organization_id;
+        registrationId = reg.id;
+      }
+    }
   }
   // Fall back to the connected account when the charge predates our records.
-  if (chargeAccountId) {
+  if (!organizationId && chargeAccountId) {
     const { data: orgRow, error: orgErr } = await admin
       .from('organizations').select('id').eq('stripe_account_id', chargeAccountId).maybeSingle();
     if (orgErr) lookupFailed = true;
-    const id = (orgRow as { id: string } | null)?.id ?? null;
-    if (id) return { organizationId: id, registrationId: null, lookupFailed };
+    organizationId = (orgRow as { id: string } | null)?.id ?? null;
   }
-  return { organizationId: null, registrationId: null, lookupFailed };
+  return { organizationId, registrationId, lookupFailed };
 }
 
 // Stripe's fraud_type values, in words an operator reads. Unknown values fall
@@ -101,18 +114,56 @@ export interface FraudAlertInput {
   /** What the family sees on their card statement, or null when unknown. */
   statementDescriptor: string | null;
   fraudType: string | null;
+  /** Stripe's `actionable`. False = already refunded or disputed. Defaults true. */
+  actionable?: boolean;
 }
+
+// Fraud types where the card itself was misused (stolen, lost, counterfeit,
+// never received, opened fraudulently). For these the cardholder is, by the
+// bank's account, NOT the person who registered - so "they did not recognize
+// the charge" and "ask them to tell their bank" are the wrong story.
+const CARD_MISUSE_TYPES = new Set([
+  'card_never_received',
+  'fraudulent_card_application',
+  'made_with_counterfeit_card',
+  'made_with_lost_card',
+  'made_with_stolen_card',
+]);
 
 export function renderFraudWarningAlert(i: FraudAlertInput): { subject: string; body: string } {
   const who = i.parentName?.trim() || 'a family';
-  const subject = `Fraud warning on a payment from ${who}: contact them today`;
+  const actionable = i.actionable !== false;
+  const cardMisuse = !!i.fraudType && CARD_MISUSE_TYPES.has(i.fraudType);
+  const matched = i.children.length > 0;
+
+  const subject = actionable
+    ? `Fraud warning on a payment from ${who}: contact them today`
+    : `Fraud warning on a payment from ${who}: no action needed`;
 
   const lines: string[] = [];
-  lines.push(
-    `The bank for ${who} has reported a payment to you as ${describeFraudType(i.fraudType)}. `
-      + `This usually means they did not recognize the charge on their card statement. `
-      + `Banks often turn these into chargebacks within hours, so please contact the family today.`,
-  );
+  // Each opening sentence is said against the state that selects it:
+  //   not actionable -> already refunded or disputed; nothing to do here.
+  //   card misuse    -> the card was reported misused; the payer may not be the cardholder.
+  //   otherwise      -> the cardholder says they did not authorize it; usually unrecognized.
+  if (!actionable) {
+    lines.push(
+      `The cardholder's bank has reported a payment to you as ${describeFraudType(i.fraudType)}. `
+        + `Stripe says this payment has already been refunded or disputed, so there is nothing to do here. `
+        + `If it was disputed, you will see it under Disputes in Finances.`,
+    );
+  } else if (cardMisuse) {
+    lines.push(
+      `The cardholder's bank has reported a payment to you as ${describeFraudType(i.fraudType)}. `
+        + `The person who registered may not be the cardholder. `
+        + `A bank can turn this into a chargeback within hours, so please contact the family today.`,
+    );
+  } else {
+    lines.push(
+      `The cardholder's bank has reported a payment from ${who} as ${describeFraudType(i.fraudType)}. `
+        + `This usually means they did not recognize the charge on their card statement. `
+        + `A bank can turn this into a chargeback within hours, so please contact the family today.`,
+    );
+  }
 
   lines.push('');
   lines.push('FAMILY');
@@ -131,17 +182,34 @@ export function renderFraudWarningAlert(i: FraudAlertInput): { subject: string; 
   for (const c of i.children) {
     lines.push(`- ${c.childFirstName}: ${c.programName}${c.siteName ? ` at ${c.siteName}` : ''}`);
   }
-  if (i.amountCents == null && !i.paidOn && !i.statementDescriptor && i.children.length === 0) {
-    lines.push('- We could not load the payment details. Search for the family in Registrations.');
+  // Any time the registration could not be matched, say so - even when the
+  // amount loaded - because the refund advice below depends on that match.
+  if (!matched) {
+    lines.push('- We could not match this payment to a registration in enrops.');
   }
+
+  if (!actionable) return { subject, body: lines.join('\n') };
 
   lines.push('');
   lines.push('WHAT TO DO');
-  lines.push('- If they made the payment: ask them to tell their bank the charge is theirs.');
-  lines.push(
-    '- If they did not: refund it in enrops right away. Once the bank opens a dispute, '
-      + 'the payment can no longer be refunded.',
-  );
+  // Unmatched: there is no registration to refund from, and on a destination
+  // charge the operator has no Stripe dashboard view of the payment either.
+  const refundWhere = matched
+    ? 'refund it in enrops right away'
+    : 'contact enrops support right away to have it refunded';
+  if (cardMisuse) {
+    lines.push('- Ask the family how they paid and whether the card was theirs.');
+    lines.push(
+      `- If it was not their card, or you cannot reach them: ${refundWhere}. `
+        + 'Once the bank opens a dispute, the payment can no longer be refunded.',
+    );
+  } else {
+    lines.push('- If they made the payment: ask them to tell their bank the charge is theirs.');
+    lines.push(
+      `- If they did not: ${refundWhere}. Once the bank opens a dispute, `
+        + 'the payment can no longer be refunded.',
+    );
+  }
 
   return { subject, body: lines.join('\n') };
 }
@@ -149,9 +217,8 @@ export function renderFraudWarningAlert(i: FraudAlertInput): { subject: string; 
 // ── The handler ─────────────────────────────────────────────────────────────
 //
 // Lives here, not inline in stripe-webhook, so it can be run against a real
-// database with the Stripe read and the email send stubbed (see the staging
-// harness in scripts/) and so prod's composed stripe-webhook carries only a
-// one-line dispatch for it.
+// database with the Stripe read and the email send stubbed, and so prod's
+// composed stripe-webhook carries only a small dispatch for it.
 
 export interface FraudWarningDeps {
   /** Read a charge: { amount, created, calculated_statement_descriptor }. */
@@ -161,8 +228,15 @@ export interface FraudWarningDeps {
   /** Loads the org's brand; only tenant_alert_email is read from it here. */
   loadBrand: (orgId: string) => Promise<{ tenant_alert_email: string | null }>;
   /** Sends to the tenant inbox; true when the email was accepted. */
-  sendAlert: (brand: any, to: string | null, subject: string, body: string) => Promise<boolean>;
+  sendAlert: (brand: any, to: string | null, subject: string, body: string, idempotencyKey: string) => Promise<boolean>;
+  /** Clock, for tests. Defaults to Date.now. */
+  now?: () => number;
 }
+
+// A claim older than this with no alerted_at is treated as a run that died
+// mid-send. Far longer than one webhook run (Stripe times out at ~20s), far
+// shorter than Stripe's first retry interval in practice.
+const STALE_CLAIM_MS = 5 * 60 * 1000;
 
 export interface FraudWarningEvent {
   account?: string | null;
@@ -180,7 +254,7 @@ export async function handleEarlyFraudWarning(
   const efw = event.data.object as {
     id: string; charge: string | { id: string } | null;
     payment_intent?: string | { id: string } | null;
-    fraud_type?: string | null; created?: number;
+    fraud_type?: string | null; created?: number; actionable?: boolean;
   };
   const chargeAccountId = event.account ?? null;
   const chargeId = typeof efw.charge === 'string' ? efw.charge : efw.charge?.id ?? null;
@@ -213,12 +287,49 @@ export async function handleEarlyFraudWarning(
     warned_at: efw.created ? new Date(efw.created * 1000).toISOString() : null,
   });
   if (claimErr) {
-    if ((claimErr as { code?: string }).code === '23505') {
-      console.log(`[fraud warning] ${efw.id} already alerted; skipping redelivery`);
-      return 'done';
+    if ((claimErr as { code?: string }).code !== '23505') {
+      console.error(`[fraud warning] ${efw.id} could not be claimed:`, claimErr.message);
+      return 'retry';
     }
-    console.error(`[fraud warning] ${efw.id} could not be claimed:`, claimErr.message);
-    return 'retry';
+    // Someone holds the claim. Normally that delivery sent (or is sending) the
+    // alert and this one stops. But if that run died between claim and send,
+    // the row sits there unsent and every retry would skip it forever - the
+    // silently-lost alert this feature exists to prevent. So a claim that is
+    // STALE and was NEVER SENT is taken over, in one conditional UPDATE so two
+    // redeliveries cannot both take it.
+    const staleBefore = new Date((deps.now?.() ?? Date.now()) - STALE_CLAIM_MS).toISOString();
+    const { data: taken, error: takeErr } = await admin
+      .from('fraud_warnings')
+      .update({ created_at: new Date(deps.now?.() ?? Date.now()).toISOString() })
+      .eq('stripe_warning_id', efw.id)
+      .is('alerted_at', null)
+      .lt('created_at', staleBefore)
+      .select('id');
+    if (takeErr) {
+      console.error(`[fraud warning] ${efw.id} stale-claim check failed:`, takeErr.message);
+      return 'retry';
+    }
+    if (!taken || taken.length === 0) {
+      // Not stale enough to take. If that claim was already SENT, we are done.
+      // If it is fresh and unsent, its holder is mid-send - or died. Answer
+      // 'retry' so Stripe comes back: by then the holder has either stamped
+      // alerted_at (-> done) or released the claim / gone stale (-> we send).
+      // A 200 here would end Stripe's retries for this endpoint and, if the
+      // holder had died, lose the alert.
+      const { data: held, error: heldErr } = await admin
+        .from('fraud_warnings').select('alerted_at').eq('stripe_warning_id', efw.id).maybeSingle();
+      if (heldErr) {
+        console.error(`[fraud warning] ${efw.id} could not read the held claim:`, heldErr.message);
+        return 'retry';
+      }
+      if ((held as { alerted_at: string | null } | null)?.alerted_at) {
+        console.log(`[fraud warning] ${efw.id} already alerted; skipping redelivery`);
+        return 'done';
+      }
+      console.log(`[fraud warning] ${efw.id} held by an in-flight delivery; asking Stripe to retry`);
+      return 'retry';
+    }
+    console.warn(`[fraud warning] ${efw.id} took over a stale unsent claim`);
   }
 
   // DETAILS ARE BEST-EFFORT. Every read below degrades to a shorter email
@@ -295,19 +406,32 @@ export async function handleEarlyFraudWarning(
     paidOn,
     statementDescriptor,
     fraudType: efw.fraud_type ?? null,
+    // Stripe sets actionable=false when the charge is already refunded or
+    // disputed, so "refund it now" would be advice that cannot be followed.
+    actionable: efw.actionable !== false,
   });
 
   const brand = await deps.loadBrand(orgId);
-  const sent = await deps.sendAlert(brand, brand.tenant_alert_email, subject, body);
+  // The idempotency key makes a retry after "Resend accepted it but the
+  // connection dropped" a no-op at Resend instead of a second email.
+  const sent = await deps.sendAlert(brand, brand.tenant_alert_email, subject, body, `efw-${efw.id}`);
   if (!sent) {
-    // No inbox at all is permanent: retrying cannot fix it, and the sender has
-    // already logged it. Keep the claim so redeliveries stop here.
-    if (!brand.tenant_alert_email) return 'done';
-    // A failed send is transient: release the claim so Stripe's retry can send.
+    // ANY failed send releases the claim and asks Stripe to retry - including
+    // "no inbox". loadOrgBrand swallows its own read error, so a database blip
+    // looks exactly like an org with no alert address; treating that as
+    // permanent would answer 200 and lose the alert. A genuinely inbox-less org
+    // costs Stripe some retries and sends nothing, which is the honest outcome.
     const { error: relErr } = await admin.from('fraud_warnings').delete().eq('stripe_warning_id', efw.id);
     if (relErr) console.error(`[fraud warning] ${efw.id} claim could not be released:`, relErr.message);
     return 'retry';
   }
+  // Mark it sent. If this write fails the email still went; the only cost is
+  // that a redelivery >5 minutes later could send a second copy - a duplicate
+  // alert, never a missing one, so it is logged and not retried.
+  const { error: markErr } = await admin
+    .from('fraud_warnings').update({ alerted_at: new Date(deps.now?.() ?? Date.now()).toISOString() })
+    .eq('stripe_warning_id', efw.id);
+  if (markErr) console.error(`[fraud warning] ${efw.id} sent but could not be marked sent:`, markErr.message);
   console.log(`[fraud warning] ${efw.id} alerted org ${orgId} (${children.length} registration(s))`);
   return 'done';
 }

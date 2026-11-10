@@ -45,6 +45,18 @@ Deno.test('unknown charge falls back to the connected account', async () => {
   assertEquals(await resolveChargeOwner(admin, 'pi_3', 'acct_x'), { organizationId: 'org3', registrationId: null, lookupFailed: false });
 });
 
+Deno.test('an installments row with a NULL org keeps its registration and still falls back to the account', async () => {
+  // installments.organization_id is nullable (20260806b). handleDispute always
+  // handled this: registration from the row, org from event.account, and the
+  // registrations table never consulted.
+  const admin = fakeAdmin({
+    installments: { data: { organization_id: null, registration_id: 'reg9' }, error: null },
+    organizations: { data: { id: 'org9' }, error: null },
+  });
+  assertEquals(await resolveChargeOwner(admin, 'pi_9', 'acct_9'), { organizationId: 'org9', registrationId: 'reg9', lookupFailed: false });
+  assertEquals(admin.calls, ['installments', 'organizations']);
+});
+
 Deno.test('nothing found and no account = no owner, NOT a lookup failure', async () => {
   const admin = fakeAdmin({});
   assertEquals(await resolveChargeOwner(admin, 'pi_4', null), { organizationId: null, registrationId: null, lookupFailed: false });
@@ -94,21 +106,45 @@ Deno.test('no em dashes in operator-facing copy', () => {
   assert(!subject.includes('—') && !body.includes('—'));
 });
 
-Deno.test('with nothing loaded the alert still sends and says where to look', () => {
+Deno.test('with nothing loaded the alert still sends, says it is unmatched, and never says "refund it in enrops"', () => {
   const { subject, body } = renderFraudWarningAlert({
     parentName: null, parentEmail: null, parentPhone: null, children: [],
     amountCents: null, paidOn: null, statementDescriptor: null, fraudType: null,
   });
   assertEquals(subject, 'Fraud warning on a payment from a family: contact them today');
   assertStringIncludes(body, 'Name not on file');
-  assertStringIncludes(body, 'could not load the payment details');
+  assertStringIncludes(body, 'could not match this payment to a registration');
+  assertStringIncludes(body, 'contact enrops support');
   assertStringIncludes(body, 'a fraudulent charge');
-  assert(!body.includes('Phone:') && !body.includes('$'));
+  assert(!body.includes('Phone:') && !body.includes('$') && !body.includes('refund it in enrops'));
 });
 
-Deno.test('the "could not load" line does not appear when any detail loaded', () => {
-  const { body } = renderFraudWarningAlert({ ...PETERSON, children: [], amountCents: null, paidOn: null });
-  assert(!body.includes('could not load'));
+Deno.test('unmatched but amount loaded: still says unmatched (the refund advice depends on it)', () => {
+  const { body } = renderFraudWarningAlert({ ...PETERSON, children: [] });
+  assertStringIncludes(body, '$508.82');
+  assertStringIncludes(body, 'could not match this payment');
+  assert(!body.includes('refund it in enrops'));
+});
+
+Deno.test('matched: no "could not match" line, refund in enrops', () => {
+  const { body } = renderFraudWarningAlert(PETERSON);
+  assert(!body.includes('could not match'));
+  assertStringIncludes(body, 'refund it in enrops right away');
+});
+
+Deno.test('not actionable (already refunded or disputed): no action asked, no refund advice', () => {
+  const { subject, body } = renderFraudWarningAlert({ ...PETERSON, actionable: false });
+  assertEquals(subject, 'Fraud warning on a payment from Carrie Peterson: no action needed');
+  assertStringIncludes(body, 'already been refunded or disputed');
+  assert(!body.includes('WHAT TO DO') && !body.includes('refund it') && !body.includes('contact the family today'));
+});
+
+Deno.test('stolen card: does not claim the family failed to recognize it, does not ask them to call their bank', () => {
+  const { body } = renderFraudWarningAlert({ ...PETERSON, fraudType: 'made_with_stolen_card' });
+  assertStringIncludes(body, 'a charge made with a stolen card');
+  assertStringIncludes(body, 'may not be the cardholder');
+  assert(!body.includes('did not recognize') && !body.includes('tell their bank'));
+  assertStringIncludes(body, 'refund it in enrops right away');
 });
 
 Deno.test('unknown fraud type falls back to plain words, never the code', () => {

@@ -2258,8 +2258,8 @@ function fraudWarningDeps(admin: SupabaseClient) {
         amount?: number | null; created?: number | null; calculated_statement_descriptor?: string | null;
       }>,
     loadBrand: (orgId: string) => loadOrgBrand(admin, orgId),
-    sendAlert: (brand: OrgBrand, to: string | null, subject: string, body: string) =>
-      sendOperatorAlert({ brand, to, subject, body }),
+    sendAlert: (brand: OrgBrand, to: string | null, subject: string, body: string, idempotencyKey: string) =>
+      sendOperatorAlert({ brand, to, subject, body, idempotencyKey }),
   };
 }
 
@@ -2384,7 +2384,11 @@ async function sendAccountReadyEmail(admin: SupabaseClient, brand: OrgBrand, ema
 // Returns whether Resend accepted the email. Existing callers ignore it; the
 // fraud-warning alert uses it to release its claim and have Stripe retry.
 async function sendOperatorAlert(
-  { brand, to, subject, body }: { brand: OrgBrand; to: string | null; subject: string; body: string },
+  { brand, to, subject, body, idempotencyKey }: {
+    brand: OrgBrand; to: string | null; subject: string; body: string;
+    /** Optional. When set, Resend drops a repeat of the same key (24h), so a retry cannot send twice. */
+    idempotencyKey?: string;
+  },
 ): Promise<boolean> {
   if (!to) {
     console.error('[stripe-webhook] operator alert NOT sent - org has no inbox of its own', {
@@ -2396,7 +2400,11 @@ async function sendOperatorAlert(
   try {
     const resp = await fetch('https://api.resend.com/emails', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${RESEND_API_KEY}`,
+        ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+      },
       body: JSON.stringify({
         from: formatFromAddress(brand), to,
         subject: `[Enrops Alert] ${subject}`, text: body,

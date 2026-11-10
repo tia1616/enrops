@@ -13,9 +13,11 @@
 -- WHAT THE ROW IS FOR: it is the CLAIM that makes the operator alert send
 -- exactly once. Stripe retries webhooks, and two endpoints point at
 -- stripe-webhook, so one warning can arrive more than once. The webhook inserts
--- here FIRST; a 23505 on stripe_warning_id means another delivery already
--- alerted and this one stops. If the alert email then fails, the webhook
--- deletes its claim and returns 500 so Stripe's retry gets another go.
+-- here FIRST; a 23505 on stripe_warning_id means another delivery holds the
+-- claim and this one stops - unless that claim is stale and never sent
+-- (alerted_at NULL, older than 5 minutes), which a redelivery takes over. If
+-- the alert email fails, the webhook deletes its claim and returns 500 so
+-- Stripe's retry gets another go.
 --
 -- Written only by the service role. No app surface reads it yet, so no grant to
 -- anon or authenticated (and, per the 2026-10-30 Supabase change, new tables get
@@ -33,6 +35,11 @@ CREATE TABLE IF NOT EXISTS public.fraud_warnings (
   -- Stripe's vocabulary, stored verbatim (e.g. 'unauthorized_use_of_card').
   fraud_type                text,
   warned_at                 timestamptz,
+  -- When the operator email was accepted. NULL while a send is in flight, when
+  -- a run died mid-send, or when the org had no alert inbox. A redelivery takes
+  -- over a NULL claim once it is 5 minutes old - see handleEarlyFraudWarning.
+  alerted_at                timestamptz,
+  -- When the current claim was taken (re-stamped on a takeover).
   created_at                timestamptz NOT NULL DEFAULT now()
 );
 
@@ -46,4 +53,4 @@ ALTER TABLE public.fraud_warnings ENABLE ROW LEVEL SECURITY;
 
 -- No policies on purpose: only the service role touches this table.
 REVOKE ALL ON public.fraud_warnings FROM anon, authenticated;
-GRANT SELECT, INSERT, DELETE ON public.fraud_warnings TO service_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.fraud_warnings TO service_role;
