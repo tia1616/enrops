@@ -39,6 +39,33 @@ Deno.test("the recipient list and the dedup set are both read through readAllPag
   // No other unpaged read of DELIVERED rows for this touchpoint may come back.
   const deliveredReads = [...SRC.matchAll(/\.in\("status", DELIVERED_STATUSES\)/g)].length;
   assertEquals(deliveredReads, 1, "one delivered-rows read, the paged one");
+  // Keyset needs the ORDER BY: without it pages skip rows and the dedup set is short.
+  assert(/\.in\("status", DELIVERED_STATUSES\)\s*\.order\("id"\)\s*\.limit\(limit\)/.test(SRC),
+    "dedup pages must be ordered by id and limited");
+});
+
+Deno.test("the suppression list is read through readAllPages, ordered by id", () => {
+  const supAt = SRC.indexOf('.from("marketing_suppressions")');
+  assert(supAt > 0, "suppression read not found");
+  assertEquals([...SRC.matchAll(/\.from\("marketing_suppressions"\)/g)].length, 1, "one suppression read");
+  assert(SRC.slice(Math.max(0, supAt - 400), supAt).includes("readAllPages<{ id: string; email: string }>("),
+    "suppression read must sit inside readAllPages");
+  assert(/\.from\("marketing_suppressions"\)\s*\.select\("id, email"\)\s*\.eq\("organization_id", campaign\.organization_id\)\s*\.order\("id"\)\s*\.limit\(limit\)/.test(SRC),
+    "suppression pages must be ordered by id and limited");
+});
+
+Deno.test("paged-read errors are tested as !== null, never by truthiness", () => {
+  // readAllPages can return a non-empty error only now, but a truthiness test
+  // on an error STRING is exactly how an empty message failed open.
+  for (const v of ["rErr", "sErr", "pErr"]) {
+    assert(SRC.includes(`if (${v} !== null) return json(`), `${v} must be tested with !== null`);
+  }
+});
+
+Deno.test("the page-size override is read per request and gated to staging", () => {
+  assert(!/^const READ_PAGE_SIZE/m.test(SRC), "no module-scope page size");
+  assert(SRC.includes('hostname === "mumfymlapolsfdnpewci.supabase.co"'), "override must be staging-only");
+  assert(SRC.includes("const pageSize = readPageSize();"), "page size read inside the handler");
 });
 
 Deno.test("only_recipient_ids only filters recipientRows - never adds to it", () => {
