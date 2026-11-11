@@ -172,6 +172,11 @@ export default function StepReview({
                     {scheduleStr && (
                       <p className="mt-1 text-sm text-j2s-ink/70">{scheduleStr}</p>
                     )}
+                    {l.prerequisites && (
+                      <p className="mt-1 text-sm text-j2s-ink/70">
+                        <span className="font-bold">Prerequisites: </span>{l.prerequisites}
+                      </p>
+                    )}
                     <p className="mt-1 text-xs text-j2s-ink/50">
                       Child {l.child_index + 1}
                       {student?.first_name && `: ${student.first_name} ${student.last_name}`}

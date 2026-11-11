@@ -291,6 +291,9 @@ export function calculateCart(cart) {
           label,
           program_id: prog.id,
           program_name: prog.curriculum,
+          // Parent-facing prerequisite line (curriculumPrereqs.js), shown on the
+          // review screen. Display only - never read by pricing or the server.
+          prerequisites: prog.prerequisites || null,
           school_name: prog.school_name || prog.program_locations?.name || item.program.school_name || '',
           day_of_week: prog.day_of_week,
           // A CAMP'S DAYS, so the review line can say "Mon-Fri" instead of

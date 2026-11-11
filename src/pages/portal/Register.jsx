@@ -18,6 +18,7 @@ import { parseRegFields, pickupDnrConflicts } from './register-steps/RegExtraFie
 import { renderWaiverText } from '../../lib/waiverText.js';
 import { vipBundleAllowed, fetchVipOfferingPublic } from '../../lib/vipOffering.js';
 import { readAttribution } from '../../lib/attribution.js';
+import { fetchPrereqMap, withPrerequisites } from '../../lib/curriculumPrereqs.js';
 
 // Tenant resolution: `org` (id, slug, name, ...) is provided by PublicLayout
 // via Outlet context — see src/layouts/PublicLayout.jsx. No more hardcoded
@@ -432,7 +433,7 @@ export default function Register() {
   }, [programs, schools]);
 
   async function load() {
-    const [schoolsRes, programsRes, waiversRes, regFieldsRes, feeRes, cancelPolicyRes] = await Promise.all([
+    const [schoolsRes, programsRes, waiversRes, regFieldsRes, feeRes, cancelPolicyRes, prereqMap] = await Promise.all([
       // program_locations_public, NOT the base table. The old comment below said
       // "Anon-safe: public_read_program_locations allows anon reads" - true, but
       // that policy is `TO public`, so it served signed-in families too and let
@@ -492,10 +493,13 @@ export default function Register() {
         .eq('policy_type', 'cancellation')
         .eq('published', true)
         .maybeSingle(),
+      // The curriculum's parent-facing prerequisite line, restated on the cart
+      // line before payment. Soft-fails to an empty map.
+      fetchPrereqMap(supabase, ORG_ID),
     ]);
 
     setSchools(schoolsRes.data || []);
-    setPrograms(programsRes.data || []);
+    setPrograms(withPrerequisites(programsRes.data || [], prereqMap));
     // Substitute the business name into the waiver text here, at the one place
     // it is loaded, rather than in each component that displays it — a reader
     // that forgot would show a family "{{org}}" in a contract.

@@ -24,6 +24,7 @@ import { programAction, fullFlagMap, ACTION_WAITLIST, ACTION_EXTERNAL } from '..
 import WaitlistModal from '../../components/WaitlistModal.jsx';
 import { isGroupingDistrict } from '../../lib/districts.js';
 import { vipBundleAllowed, fetchVipOfferingPublic } from '../../lib/vipOffering.js';
+import { fetchPrereqMap, withPrerequisites } from '../../lib/curriculumPrereqs.js';
 
 // Tenant resolution: `org` (id, slug, name, active_registration_term, ...) is
 // provided by PublicLayout via Outlet context (from the public_org_directory
@@ -58,6 +59,26 @@ const WEEKLY_DAY_ORDER = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thurs
 // revealed nothing when clicked. A control may only claim what its condition
 // proves. scrollHeight > clientHeight IS the claim: it is true exactly when the
 // clamped box is hiding something, at every width and font size.
+// The curriculum's prerequisite line, shown under the description on every card
+// variant. Not clamped: it is the sentence that tells a parent whether Level 1 is
+// required, so hiding it behind a "More" would defeat it. Renders nothing when
+// the curriculum has none.
+function PrereqLine({ text, lean }) {
+  if (!text) return null;
+  if (lean) {
+    return (
+      <div style={{ fontSize: 13, color: '#4a4a4a', marginTop: 4, marginBottom: 6, lineHeight: 1.4 }}>
+        <span style={{ fontWeight: 700 }}>Prerequisites: </span>{text}
+      </div>
+    );
+  }
+  return (
+    <p className="mt-1 mb-2.5 whitespace-pre-line text-sm text-j2s-ink/75 leading-snug">
+      <span className="font-bold">Prerequisites: </span>{text}
+    </p>
+  );
+}
+
 function LeanDescription({ text }) {
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
@@ -369,7 +390,7 @@ export default function Home() {
     // out {} either way, exactly as it did before.
     //
     // Fee config stays OUT of this batch deliberately - see below.
-    const [brRes, scRes, pgRes, futureRes, wcRes, dtRes, vipPublic] = await Promise.all([
+    const [brRes, scRes, pgRes, futureRes, wcRes, dtRes, vipPublic, prereqMap] = await Promise.all([
       // Branding (hero copy, colors, etc) - multi-tenant ready. Any provider
       // can customize these via org_branding row; defaults apply if blank.
       supabase
@@ -512,11 +533,14 @@ export default function Home() {
       // This business's year-bundle setting (20261012a) - see vipOffering.js
       // for why it is its own read. Resolves to null on failure, never throws.
       fetchVipOfferingPublic(supabase, org.id),
+      // The curriculum's parent-facing prerequisite line (soft-fails to an empty
+      // map). See curriculumPrereqs.js for why this exists.
+      fetchPrereqMap(supabase, org.id),
     ]);
 
     const br = brRes.data;
     const sc = scRes.data;
-    const pg = pgRes.data;
+    const pg = pgRes.data ? withPrerequisites(pgRes.data, prereqMap) : pgRes.data;
     const wc = wcRes.data;
     // id -> name. A district whose name we cannot read falls out of the map and
     // its schools land in the OTHER_DISTRICT bucket, which is what happened to
@@ -1201,6 +1225,7 @@ export default function Home() {
                                   with the card below so a change here cannot miss
                                   its twin. */}
                               <LeanDescription text={p.short_description} />
+                              <PrereqLine text={p.prerequisites} lean />
                               {whereStr && (
                                 <div style={{ fontSize: 13, fontWeight: 600, color: '#1a1a1a', marginTop: 2 }}>{whereStr}</div>
                               )}
@@ -1223,6 +1248,7 @@ export default function Home() {
                             {/* Same shared component as the external-registration
                                 card above. This is the one Jeff's families see. */}
                             <LeanDescription text={p.short_description} />
+                            <PrereqLine text={p.prerequisites} lean />
                             {whereStr && (
                               <div style={{ fontSize: 13, fontWeight: 600, color: '#1a1a1a', marginTop: 2 }}>{whereStr}</div>
                             )}
@@ -1594,6 +1620,7 @@ export default function Home() {
                             {p.short_description && (
                               <p className="mt-1 mb-2.5 whitespace-pre-line text-sm text-j2s-ink/65 leading-snug">{p.short_description}</p>
                             )}
+                            <PrereqLine text={p.prerequisites} />
                             {whereStr && <p className="mt-1 text-sm font-semibold text-j2s-ink">{whereStr}</p>}
                             {metaStr && <p className="mt-1 text-sm text-j2s-ink/70">{metaStr}</p>}
                             {scheduleStr && (
@@ -1667,6 +1694,7 @@ export default function Home() {
                               {p.short_description}
                             </p>
                           )}
+                          <PrereqLine text={p.prerequisites} />
                           {whereStr && <p className="mt-1 text-sm font-semibold text-j2s-ink">{whereStr}</p>}
                           {metaStr && <p className="mt-1 text-sm text-j2s-ink/70">{metaStr}</p>}
                           {/* Session count used to live on the line above, but only
