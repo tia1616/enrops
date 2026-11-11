@@ -163,6 +163,7 @@ serve(async (req: Request) => {
     const sentCount = sendResult.sent ?? 0;
     const failedCount = sendResult.failed ?? 0;
     let newStatus: string;
+    let countFailMsg: string | null = null;
     if (!sendResult.ok) newStatus = "failed";
     else if (sendResult.partial) newStatus = "queued"; // re-queue for next tick
     else if (failedCount > 0) newStatus = "failed";
@@ -173,14 +174,21 @@ serve(async (req: Request) => {
       // already de-duplicated, so this tick sent 0 although earlier ticks mailed
       // real families. Calling that 'skipped' skips the MARKETING_SENT analytics
       // event and leaves the campaign badge on "Scheduled". Ask the log.
-      const { count: deliveredEarlier } = await supabase
+      const { count: deliveredEarlier, error: deErr } = await supabase
         .from("marketing_sends")
         .select("id", { count: "exact", head: true })
         .eq("campaign_id", tp.campaign_id)
         .eq("touchpoint_id", tp.id)
         .eq("is_test", false)
         .in("status", ["sent", "delivered", "opened", "clicked"]);
-      newStatus = (deliveredEarlier ?? 0) > 0 ? "sent" : "skipped";
+      if (deErr || deliveredEarlier == null) {
+        // Can't tell whether earlier ticks mailed anyone. 'skipped' would claim
+        // nobody was; 'failed' is visible and a re-queue is safe (dedup).
+        newStatus = "failed";
+        countFailMsg = `could not count earlier deliveries: ${deErr?.message || "no count returned"}`;
+      } else {
+        newStatus = deliveredEarlier > 0 ? "sent" : "skipped";
+      }
     }
 
     // Persist error_message on failure so future debugging doesn't require
@@ -188,7 +196,7 @@ serve(async (req: Request) => {
     // string or, when it returned per-recipient failures with no top-level
     // error, a compact summary. On success/skip/partial, clear any prior error.
     const errMsg = newStatus === "failed"
-      ? (sendResult.error
+      ? (countFailMsg ?? sendResult.error
           ?? (failedCount > 0 ? `${failedCount} of ${sentCount + failedCount} recipients failed (send fn returned no top-level error)` : "send fn returned ok=false with no error string"))
       : null;
     await supabase
@@ -227,12 +235,18 @@ serve(async (req: Request) => {
           .eq("touchpoint_id", tp.id)
           .eq("is_test", false)
           .in("status", statuses);
-        const [{ count: sentCountAll }, { count: failedCountAll }] = await Promise.all([
+        const [sentTally, failedTally] = await Promise.all([
           tally(["sent", "delivered", "opened", "clicked"]),
           tally(["failed"]),
         ]);
-        const recipientsSent = sentCountAll ?? 0;
-        const recipientsFailed = failedCountAll ?? 0;
+        // The event is write-once (dedupeKey + ON CONFLICT DO NOTHING), so a
+        // failed count must skip the log, never record 0 forever.
+        const countErr = sentTally.error ?? failedTally.error;
+        if (countErr || sentTally.count == null || failedTally.count == null) {
+          throw new Error(`reach count failed: ${countErr?.message || "no count returned"}`);
+        }
+        const recipientsSent = sentTally.count;
+        const recipientsFailed = failedTally.count;
         const payload = (tp.payload ?? {}) as { label?: string; subject?: string | null };
         await logEnrollmentEvent(supabase, {
           actionType: ENROLLMENT_ACTIONS.MARKETING_SENT,

@@ -85,7 +85,46 @@ Deno.test("a query that ignores the after-key errors instead of looping or dupli
     Promise.resolve({ data: ids(limit), error: null });
   const { rows, error } = await readAllPages(fetchPage, (r) => r.id, 5);
   assertEquals(rows.length, 0);
-  assert(error?.includes("did not advance"));
+  assert(error?.includes("out of order"));
+});
+
+Deno.test("a query that lost its ORDER BY errors instead of silently skipping rows", async () => {
+  // Applies id > after and the limit, but returns rows in heap order. Page 1
+  // [c,a,e] ends at e, so keyset would skip b and d while every page's LAST
+  // key still rises - the old last-key-only check returned error null here.
+  const heap = ["c", "a", "e", "b", "g", "d", "f"].map((id) => ({ id }));
+  const fetchPage = (after: string | null, limit: number): Promise<PageResult<Row>> =>
+    Promise.resolve({ data: heap.filter((r) => after === null || r.id > after).slice(0, limit), error: null });
+  const { rows, error } = await readAllPages(fetchPage, (r) => r.id, 3);
+  assertEquals(rows.length, 0);
+  assert(error?.includes("out of order"));
+});
+
+Deno.test("an error with an EMPTY message still fails closed", async () => {
+  // postgrest-js returns {message: ""} for a non-2xx with an empty body. A
+  // caller that tested the message text would read that as success and run
+  // the dedup with an empty set - re-mailing everyone already delivered.
+  let call = 0;
+  const fetchPage = (_after: string | null, limit: number): Promise<PageResult<Row>> => {
+    call++;
+    if (call === 2) return Promise.resolve({ data: null, error: { message: "" } });
+    return Promise.resolve({ data: ids(limit), error: null });
+  };
+  const { rows, error } = await readAllPages(fetchPage, (r) => r.id, 5);
+  assertEquals(rows.length, 0);
+  assert(typeof error === "string" && error.length > 0, "error must be a non-empty string");
+});
+
+Deno.test("null data with no error is a failure, not the end of the list", async () => {
+  let call = 0;
+  const fetchPage = (_after: string | null, limit: number): Promise<PageResult<Row>> => {
+    call++;
+    if (call === 2) return Promise.resolve({ data: null, error: null });
+    return Promise.resolve({ data: ids(limit), error: null });
+  };
+  const { rows, error } = await readAllPages(fetchPage, (r) => r.id, 5);
+  assertEquals(rows.length, 0, "never the first page passed off as the whole list");
+  assert(error?.includes("no data"));
 });
 
 Deno.test("page ceiling turns a runaway read into an error", async () => {
@@ -93,6 +132,13 @@ Deno.test("page ceiling turns a runaway read into an error", async () => {
   const { rows, error } = await readAllPages(s.fetchPage, (r) => r.id, 5, 3);
   assertEquals(rows.length, 0);
   assert(error?.includes("more than 3 pages"));
+});
+
+Deno.test("exactly maxPages full pages is NOT over the ceiling (the closing empty page is free)", async () => {
+  const s = fakeServer(ids(15), 1000);
+  const { rows, error } = await readAllPages(s.fetchPage, (r) => r.id, 5, 3);
+  assertEquals(error, null);
+  assertEquals(rows.length, 15);
 });
 
 Deno.test("uuid strings compare in the same order Postgres sorts uuids", () => {
@@ -103,12 +149,19 @@ Deno.test("uuid strings compare in the same order Postgres sorts uuids", () => {
   assert(a < b && b < c);
 });
 
-Deno.test("marketingReadPageSize: default 1000, accepts 1..1000 only", () => {
-  assertEquals(marketingReadPageSize(undefined), 1000);
-  assertEquals(marketingReadPageSize(""), 1000);
-  assertEquals(marketingReadPageSize("abc"), 1000);
-  assertEquals(marketingReadPageSize("0"), 1000);
-  assertEquals(marketingReadPageSize("5000"), 1000);
-  assertEquals(marketingReadPageSize("2.5"), 1000);
-  assertEquals(marketingReadPageSize("40"), 40);
+Deno.test("marketingReadPageSize: staging accepts 1..1000 only, default 1000", () => {
+  assertEquals(marketingReadPageSize(undefined, true), 1000);
+  assertEquals(marketingReadPageSize("", true), 1000);
+  assertEquals(marketingReadPageSize("abc", true), 1000);
+  assertEquals(marketingReadPageSize("0", true), 1000);
+  assertEquals(marketingReadPageSize("5000", true), 1000);
+  assertEquals(marketingReadPageSize("2.5", true), 1000);
+  assertEquals(marketingReadPageSize("40", true), 40);
+});
+
+Deno.test("marketingReadPageSize: off staging the override is ignored", () => {
+  // Size 3 on prod's 1,095-recipient list would be ~366 full re-runs of
+  // get_campaign_recipients and a killed send with nobody mailed.
+  assertEquals(marketingReadPageSize("3", false), 1000);
+  assertEquals(marketingReadPageSize("40", false), 1000);
 });

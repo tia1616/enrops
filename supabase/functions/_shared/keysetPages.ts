@@ -41,27 +41,46 @@ export async function readAllPages<T>(
   if (!Number.isInteger(pageSize) || pageSize < 1) return { rows: [], error: `invalid page size ${pageSize}` };
   const rows: T[] = [];
   let afterKey: string | null = null;
-  for (let page = 0; page < maxPages; page++) {
+  // maxPages counts pages WITH rows; the closing empty page is always allowed.
+  for (let page = 0; page <= maxPages; page++) {
     const { data, error } = await fetchPage(afterKey, pageSize);
-    if (error) return { rows: [], error: error.message };
-    const batch = data ?? [];
-    if (batch.length === 0) return { rows, error: null };
-    const last = keyOf(batch[batch.length - 1]);
-    if (afterKey !== null && !(last > afterKey)) {
-      // The page did not move forward: the query is not ordered by the key, or
-      // ignores the after-key filter. Refuse rather than loop or duplicate.
-      return { rows: [], error: `paging did not advance past ${afterKey}` };
+    // Any error OBJECT fails closed. postgrest-js hands back {message: ""} for a
+    // non-2xx with an empty body, so never let the caller test message text.
+    if (error) return { rows: [], error: error.message || `page read failed: ${safeJson(error)}` };
+    // A real empty page is []. null (an empty 2xx/404 body) is not "the end".
+    if (!Array.isArray(data)) return { rows: [], error: "page read returned no data" };
+    if (data.length === 0) return { rows, error: null };
+    if (page === maxPages) break;
+    // Every key must rise, from afterKey through the last row of the page. This
+    // catches a query that dropped its ORDER BY (keyset would skip rows) or
+    // ignores the after-key filter (it would loop or duplicate).
+    let prev = afterKey;
+    for (const row of data) {
+      const k = keyOf(row);
+      if (typeof k !== "string" || (prev !== null && !(k > prev))) {
+        return { rows: [], error: `paging out of order at ${String(k)} (after ${prev})` };
+      }
+      prev = k;
     }
-    rows.push(...batch);
-    afterKey = last;
+    rows.push(...data);
+    afterKey = prev;
   }
   return { rows: [], error: `more than ${maxPages} pages of ${pageSize} rows` };
 }
 
-/** Page size for marketing reads. Overridable per environment so staging, which
- *  has ~100 recipients, can prove a multi-page send with a tiny page. Falls back
- *  to 1000 for anything missing, non-numeric or out of 1..1000. */
-export function marketingReadPageSize(raw: string | undefined | null): number {
+function safeJson(v: unknown): string {
+  try { return JSON.stringify(v); } catch { return String(v); }
+}
+
+/** Page size for marketing reads. Always 1000 except on STAGING, where an
+ *  override lets ~100 synthetic recipients prove a multi-page send. Never honored
+ *  elsewhere: each page re-runs get_campaign_recipients in full (~0.9 s for 1,095
+ *  rows, EXPLAIN ANALYZE on prod 2026-11-10), so size 3 on a 1,095 list is ~366
+ *  calls and the 150 s wall clock kills the send before anyone is mailed.
+ *  Callers read the env at CALL time: a warm isolate keeps a module-scope value
+ *  after the secret changes. */
+export function marketingReadPageSize(raw: string | undefined | null, isStaging: boolean): number {
+  if (!isStaging) return 1000;
   const n = Number(raw);
   return Number.isInteger(n) && n >= 1 && n <= 1000 ? n : 1000;
 }

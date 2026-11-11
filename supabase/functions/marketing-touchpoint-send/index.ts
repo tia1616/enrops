@@ -92,10 +92,15 @@ const PUBLIC_SITE_URL = (Deno.env.get("PUBLIC_SITE_URL") ?? "https://enrops.com"
 // Already-delivered statuses for dedup. Mirrors marketing-send.
 const DELIVERED_STATUSES = ["sent", "delivered", "opened", "clicked"];
 
-// Rows per page for the two reads that can exceed PostgREST's silent 1000-row
-// cap: the recipient list and the per-touchpoint dedup set. See keysetPages.ts.
-// MARKETING_READ_PAGE_SIZE exists only so staging can prove a multi-page send.
-const READ_PAGE_SIZE = marketingReadPageSize(Deno.env.get("MARKETING_READ_PAGE_SIZE"));
+// Rows per page for the reads that can exceed PostgREST's silent 1000-row cap:
+// the recipient list, the suppression list and the per-touchpoint dedup set.
+// See keysetPages.ts. Read per request (not at module load) and honored only on
+// the staging project, so a stray MARKETING_READ_PAGE_SIZE can never slow prod.
+function readPageSize(): number {
+  let isStaging = false;
+  try { isStaging = new URL(SUPABASE_URL).hostname === "mumfymlapolsfdnpewci.supabase.co"; } catch { /* prod default */ }
+  return marketingReadPageSize(Deno.env.get("MARKETING_READ_PAGE_SIZE"), isStaging);
+}
 
 // Stand-in personalisation for a TEST send only. An operator's own test row is
 // bootstrapped with an email and nothing else, so the name tokens resolved to
@@ -122,9 +127,11 @@ const TEST_SEND_THROTTLE_PER_MINUTE = 30;
 // detected". Dropping to 200 keeps each URL ~7KB which Cloudflare passes.
 // IN_QUERY_CHUNK removed 2026-06-03 — chunking through PostgREST URL .in()
 // clauses was a workaround for not having a server-side recipient resolver.
-// Replaced by get_campaign_recipients(campaign_id) SQL function (one round
-// trip, no URL chunking) for recipient loading + by a touchpoint-scoped
-// dedup query (no recipient_id IN-clause needed).
+// Replaced by get_campaign_recipients(campaign_id) SQL function (no URL
+// chunking) for recipient loading + by a touchpoint-scoped dedup query (no
+// recipient_id IN-clause needed). Both are now paged by id (readAllPages,
+// 2026-11-10), so each is ceil(N/1000)+1 round trips, and every recipient page
+// re-runs the whole function.
 
 // Number of recipients to send to in parallel within a single function
 // invocation. Resend rate-limits at ~10 req/sec on Pro tier; 25-parallel
@@ -154,6 +161,10 @@ const RESEND_BATCH_PACE_MS = 500;
 // 500ms batch pace (RESEND_BATCH_PACE_MS) plus render/send latency. A bigger
 // audience ends as partial:true and the cron continues it next tick; dedup
 // means nobody is mailed twice.
+// The budget starts at the send loop, so the paged recipient read before it is
+// NOT counted, only the 150s wall clock bounds it: ~0.68 ms per eligible row
+// per page (EXPLAIN ANALYZE on prod, 2026-11-10), about 3.6 s for today's
+// largest list (1,782). Revisit if a list nears ~8,000.
 const SEND_TIME_BUDGET_MS = 130_000;
 
 // Tokens Ennie's draft pass approved. Anything outside this set in the touchpoint
@@ -514,6 +525,7 @@ serve(async (req: Request) => {
   // dedup bypass further down — rather than testing body.mode in two places and
   // letting them drift.
   const isTestSend = body.mode === "test";
+  const pageSize = readPageSize();
   let recipientRows: Recipient[] = [];
   let onlyIdsReport: { requested: number; matched: number } | null = null;
   if (isTestSend) {
@@ -541,9 +553,9 @@ serve(async (req: Request) => {
         return q;
       },
       (r) => r.id,
-      READ_PAGE_SIZE,
+      pageSize,
     );
-    if (rErr) return json({ error: `get_campaign_recipients failed: ${rErr}` }, 500);
+    if (rErr !== null) return json({ error: `get_campaign_recipients failed: ${rErr}` }, 500);
     recipientRows = rows;
     // Narrow-only (validated above). An id that is not in the eligible set is
     // simply absent, so a typo or a since-enrolled family is skipped, not sent.
@@ -652,25 +664,30 @@ serve(async (req: Request) => {
   }
 
   // ---- Suppressions ----
-  // Paginate: an unbounded select hits PostgREST's implicit 1000-row cap, so an
-  // org with >1000 suppressions would under-fetch and email people who
-  // unsubscribed. Fail closed on a read error (same contract as the dedup query
-  // below) — we can't honor unsubscribes we couldn't read, so skip this tick;
-  // the cron retries in ~5 min.
+  // Paged by id (readAllPages): an unbounded select hits PostgREST's 1000-row
+  // cap and would email people who unsubscribed. Keyset, not OFFSET: the old
+  // unordered OFFSET loop could skip a row when an unsubscribe landed between
+  // pages. Fail closed on a read error (same contract as the dedup query
+  // below): we can't honor unsubscribes we couldn't read, so refuse this send.
   const suppressedEmails = new Set<string>();
   {
-    const PAGE = 1000;
-    for (let from = 0; ; from += PAGE) {
-      const { data: sup, error: sErr } = await supabase
-        .from("marketing_suppressions")
-        .select("email")
-        .eq("organization_id", campaign.organization_id)
-        .range(from, from + PAGE - 1);
-      if (sErr) return json({ error: `suppression query failed: ${sErr.message}` }, 500);
-      for (const s of (sup ?? []) as Array<{ email: string }>) {
-        if (s.email) suppressedEmails.add(s.email.toLowerCase());
-      }
-      if (!sup || sup.length < PAGE) break;
+    const { rows: sup, error: sErr } = await readAllPages<{ id: string; email: string }>(
+      (afterId, limit) => {
+        let q = supabase
+          .from("marketing_suppressions")
+          .select("id, email")
+          .eq("organization_id", campaign.organization_id)
+          .order("id")
+          .limit(limit);
+        if (afterId) q = q.gt("id", afterId);
+        return q;
+      },
+      (r) => r.id,
+      pageSize,
+    );
+    if (sErr !== null) return json({ error: `suppression query failed: ${sErr}` }, 500);
+    for (const s of sup) {
+      if (s.email) suppressedEmails.add(s.email.toLowerCase());
     }
   }
 
@@ -711,9 +728,9 @@ serve(async (req: Request) => {
       return q;
     },
     (r) => r.id,
-    READ_PAGE_SIZE,
+    pageSize,
   );
-  if (pErr) return json({ error: `dedup query failed: ${pErr}` }, 500);
+  if (pErr !== null) return json({ error: `dedup query failed: ${pErr}` }, 500);
   for (const r of prior) alreadyDelivered.add(r.recipient_id);
 
   // ---- Optional per-campaign overrides from draft_inputs ----
