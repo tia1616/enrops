@@ -21,6 +21,7 @@ import { gradeFitProblem } from '../../../lib/grades.js';
 // before the card cannot disagree about which class a warning is about. It lived
 // here as a local function first, which is exactly how the two screens drifted.
 import { programForLine } from '../../../lib/cartPrograms.js';
+import PrereqLine from '../../../components/PrereqLine.jsx';
 
 // Was the fifth copy of this map. Now src/lib/dismissal.js. Review shows the
 // same summary the roster will, provider name included, so what the parent
@@ -172,11 +173,7 @@ export default function StepReview({
                     {scheduleStr && (
                       <p className="mt-1 text-sm text-j2s-ink/70">{scheduleStr}</p>
                     )}
-                    {l.prerequisites && (
-                      <p className="mt-1 text-sm text-j2s-ink/70">
-                        <span className="font-bold">Prerequisites: </span>{l.prerequisites}
-                      </p>
-                    )}
+                    <PrereqLine text={l.prerequisites} variant="compact" className="mt-1" />
                     <p className="mt-1 text-xs text-j2s-ink/50">
                       Child {l.child_index + 1}
                       {student?.first_name && `: ${student.first_name} ${student.last_name}`}

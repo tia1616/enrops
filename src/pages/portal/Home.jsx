@@ -25,6 +25,7 @@ import WaitlistModal from '../../components/WaitlistModal.jsx';
 import { isGroupingDistrict } from '../../lib/districts.js';
 import { vipBundleAllowed, fetchVipOfferingPublic } from '../../lib/vipOffering.js';
 import { fetchPrereqMap, withPrerequisites } from '../../lib/curriculumPrereqs.js';
+import PrereqLine from '../../components/PrereqLine.jsx';
 
 // Tenant resolution: `org` (id, slug, name, active_registration_term, ...) is
 // provided by PublicLayout via Outlet context (from the public_org_directory
@@ -59,26 +60,6 @@ const WEEKLY_DAY_ORDER = { Sunday: 0, Monday: 1, Tuesday: 2, Wednesday: 3, Thurs
 // revealed nothing when clicked. A control may only claim what its condition
 // proves. scrollHeight > clientHeight IS the claim: it is true exactly when the
 // clamped box is hiding something, at every width and font size.
-// The curriculum's prerequisite line, shown under the description on every card
-// variant. Not clamped: it is the sentence that tells a parent whether Level 1 is
-// required, so hiding it behind a "More" would defeat it. Renders nothing when
-// the curriculum has none.
-function PrereqLine({ text, lean }) {
-  if (!text) return null;
-  if (lean) {
-    return (
-      <div style={{ fontSize: 13, color: '#4a4a4a', marginTop: 4, marginBottom: 6, lineHeight: 1.4 }}>
-        <span style={{ fontWeight: 700 }}>Prerequisites: </span>{text}
-      </div>
-    );
-  }
-  return (
-    <p className="mt-1 mb-2.5 whitespace-pre-line text-sm text-j2s-ink/75 leading-snug">
-      <span className="font-bold">Prerequisites: </span>{text}
-    </p>
-  );
-}
-
 function LeanDescription({ text }) {
   const [expanded, setExpanded] = useState(false);
   const [overflows, setOverflows] = useState(false);
@@ -571,7 +552,9 @@ export default function Home() {
     // Look up Winter/Spring matches for each fall program to determine VIP
     // eligibility. A fall program is VIP-eligible only if that school year's
     // Winter AND Spring exist at the same school + day.
-    const futureTerms = futureRes?.data;
+    // Bundle legs carry their own curriculum's prerequisite: a Winter leg is
+    // often the Level 2 of the Fall class, which is the one that needs saying.
+    const futureTerms = futureRes?.data ? withPrerequisites(futureRes.data, prereqMap) : futureRes?.data;
     const bundles = {};
     if (pg && pg.length && bundleTerms) {
       // A CAMP IS NEVER A BUNDLE LEG - INCLUDING THE FIRST ONE. The winter and
@@ -1225,7 +1208,7 @@ export default function Home() {
                                   with the card below so a change here cannot miss
                                   its twin. */}
                               <LeanDescription text={p.short_description} />
-                              <PrereqLine text={p.prerequisites} lean />
+                              <PrereqLine text={p.prerequisites} variant="lean" />
                               {whereStr && (
                                 <div style={{ fontSize: 13, fontWeight: 600, color: '#1a1a1a', marginTop: 2 }}>{whereStr}</div>
                               )}
@@ -1248,7 +1231,7 @@ export default function Home() {
                             {/* Same shared component as the external-registration
                                 card above. This is the one Jeff's families see. */}
                             <LeanDescription text={p.short_description} />
-                            <PrereqLine text={p.prerequisites} lean />
+                            <PrereqLine text={p.prerequisites} variant="lean" />
                             {whereStr && (
                               <div style={{ fontSize: 13, fontWeight: 600, color: '#1a1a1a', marginTop: 2 }}>{whereStr}</div>
                             )}
@@ -1752,9 +1735,18 @@ export default function Home() {
                                 <p>
                                   <span className="font-bold">Winter:</span> {bundle.winter.curriculum}
                                 </p>
+                                {/* A leg's prerequisite only when it says something
+                                    the card header above has not already said. */}
+                                {bundle.winter.prerequisites !== p.prerequisites && (
+                                  <PrereqLine text={bundle.winter.prerequisites} variant="leg" />
+                                )}
                                 <p>
                                   <span className="font-bold">Spring:</span> {bundle.spring.curriculum}
                                 </p>
+                                {bundle.spring.prerequisites !== p.prerequisites
+                                  && bundle.spring.prerequisites !== bundle.winter.prerequisites && (
+                                  <PrereqLine text={bundle.spring.prerequisites} variant="leg" />
+                                )}
                               </div>
                               {/* #9: VIP = filled primary button.
                                   A full fall class cannot be sold as a bundle either -

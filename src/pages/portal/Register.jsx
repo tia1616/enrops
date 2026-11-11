@@ -55,6 +55,9 @@ export default function Register() {
   const [step, setStep] = useState(0);
   const [schools, setSchools] = useState([]);
   const [programs, setPrograms] = useState([]);
+  // curriculum_id -> prerequisite text, filled by load(). A ref, not state: only
+  // the VIP-leg effect reads it, and it must not re-run that effect.
+  const prereqMapRef = useRef(new Map());
   const [waivers, setWaivers] = useState([]);
   // customizable-registration: org's enabled standard + active custom questions.
   // Empty {std:{},custom:[]} = today's behavior (no extra fields render).
@@ -416,8 +419,11 @@ export default function Register() {
         setActiveChildItem({ program, isVip: false });
         return;
       }
-      const winter = matches?.find((p) => p.term === bundleTerms.winter);
-      const spring = matches?.find((p) => p.term === bundleTerms.spring);
+      // Legs carry their own curriculum's prerequisite - the Winter leg is often
+      // the Level 2 of the Fall class. Map captured by load() into the ref.
+      const legs = withPrerequisites(matches || [], prereqMapRef.current);
+      const winter = legs.find((p) => p.term === bundleTerms.winter);
+      const spring = legs.find((p) => p.term === bundleTerms.spring);
       if (winter && spring) {
         setActiveChildItem({
           program,
@@ -499,6 +505,9 @@ export default function Register() {
     ]);
 
     setSchools(schoolsRes.data || []);
+    // Set BEFORE setPrograms: the VIP-leg effect runs off `programs` changing
+    // and reads this ref.
+    prereqMapRef.current = prereqMap;
     setPrograms(withPrerequisites(programsRes.data || [], prereqMap));
     // Substitute the business name into the waiver text here, at the one place
     // it is loaded, rather than in each component that displays it — a reader
