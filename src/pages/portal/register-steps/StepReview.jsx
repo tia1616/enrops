@@ -22,6 +22,26 @@ import { gradeFitProblem } from '../../../lib/grades.js';
 // here as a local function first, which is exactly how the two screens drifted.
 import { programForLine } from '../../../lib/cartPrograms.js';
 import PrereqLine from '../../../components/PrereqLine.jsx';
+import { prereqsOncePerBundle } from '../../../lib/curriculumPrereqs.js';
+
+const EMPTY_PREREQS = new Map();
+
+// Each cart line's prerequisite, said once per VIP bundle (same rule as the
+// catalog card). Lines of one bundle are consecutive and share child_index.
+function linePrereqs(lines, prereqMap) {
+  const out = new Array(lines.length).fill(null);
+  let i = 0;
+  while (i < lines.length) {
+    let j = i + 1;
+    if (lines[i].is_vip) {
+      while (j < lines.length && lines[j].is_vip && lines[j].child_index === lines[i].child_index) j++;
+    }
+    const texts = prereqsOncePerBundle(lines.slice(i, j).map((l) => prereqMap.get(l.curriculum_id)));
+    texts.forEach((t, k) => { out[i + k] = t; });
+    i = j;
+  }
+  return out;
+}
 
 // Was the fifth copy of this map. Now src/lib/dismissal.js. Review shows the
 // same summary the roster will, provider name included, so what the parent
@@ -31,6 +51,9 @@ const nm = (c) => `${c?.first_name ?? ''} ${c?.last_name ?? ''}`.trim();
 export default function StepReview({
   cart,
   pricing,
+  // curriculum_id -> prerequisite text, loaded this visit (curriculumPrereqs.js).
+  // Defaulted so the screen renders without lines if it is ever mounted bare.
+  prereqMap = EMPTY_PREREQS,
   installmentSchedule,
   // The per-registration splits behind that schedule, so the plan preview can
   // price each child's fee on its own line the way the charge will.
@@ -126,6 +149,8 @@ export default function StepReview({
   const canUseInstallments = canOfferPaymentPlan
     ?? (!!installmentSchedule && pricing.total_cents >= INSTALLMENT_MIN_CENTS);
 
+  const prereqTexts = linePrereqs(pricing.lines, prereqMap);
+
   return (
     <div>
       <h1 className="font-titan text-3xl text-j2s-ink sm:text-4xl">
@@ -173,7 +198,7 @@ export default function StepReview({
                     {scheduleStr && (
                       <p className="mt-1 text-sm text-j2s-ink/70">{scheduleStr}</p>
                     )}
-                    <PrereqLine text={l.prerequisites} variant="compact" className="mt-1" />
+                    <PrereqLine text={prereqTexts[i]} variant="compact" className="mt-1" />
                     <p className="mt-1 text-xs text-j2s-ink/50">
                       Child {l.child_index + 1}
                       {student?.first_name && `: ${student.first_name} ${student.last_name}`}

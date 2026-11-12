@@ -18,7 +18,7 @@ import { parseRegFields, pickupDnrConflicts } from './register-steps/RegExtraFie
 import { renderWaiverText } from '../../lib/waiverText.js';
 import { vipBundleAllowed, fetchVipOfferingPublic } from '../../lib/vipOffering.js';
 import { readAttribution } from '../../lib/attribution.js';
-import { fetchPrereqMap, withPrerequisites } from '../../lib/curriculumPrereqs.js';
+import { fetchPrereqMap } from '../../lib/curriculumPrereqs.js';
 
 // Tenant resolution: `org` (id, slug, name, ...) is provided by PublicLayout
 // via Outlet context — see src/layouts/PublicLayout.jsx. No more hardcoded
@@ -55,9 +55,10 @@ export default function Register() {
   const [step, setStep] = useState(0);
   const [schools, setSchools] = useState([]);
   const [programs, setPrograms] = useState([]);
-  // curriculum_id -> prerequisite text, filled by load(). A ref, not state: only
-  // the VIP-leg effect reads it, and it must not re-run that effect.
-  const prereqMapRef = useRef(new Map());
+  // curriculum_id -> prerequisite text, loaded fresh on every visit. The review
+  // screen looks each cart line up here by its curriculum_id, so a cart restored
+  // from sessionStorage still shows the CURRENT text (never a frozen copy).
+  const [prereqMap, setPrereqMap] = useState(() => new Map());
   const [waivers, setWaivers] = useState([]);
   // customizable-registration: org's enabled standard + active custom questions.
   // Empty {std:{},custom:[]} = today's behavior (no extra fields render).
@@ -419,11 +420,8 @@ export default function Register() {
         setActiveChildItem({ program, isVip: false });
         return;
       }
-      // Legs carry their own curriculum's prerequisite - the Winter leg is often
-      // the Level 2 of the Fall class. Map captured by load() into the ref.
-      const legs = withPrerequisites(matches || [], prereqMapRef.current);
-      const winter = legs.find((p) => p.term === bundleTerms.winter);
-      const spring = legs.find((p) => p.term === bundleTerms.spring);
+      const winter = matches?.find((p) => p.term === bundleTerms.winter);
+      const spring = matches?.find((p) => p.term === bundleTerms.spring);
       if (winter && spring) {
         setActiveChildItem({
           program,
@@ -439,7 +437,7 @@ export default function Register() {
   }, [programs, schools]);
 
   async function load() {
-    const [schoolsRes, programsRes, waiversRes, regFieldsRes, feeRes, cancelPolicyRes, prereqMap] = await Promise.all([
+    const [schoolsRes, programsRes, waiversRes, regFieldsRes, feeRes, cancelPolicyRes, prereqs] = await Promise.all([
       // program_locations_public, NOT the base table. The old comment below said
       // "Anon-safe: public_read_program_locations allows anon reads" - true, but
       // that policy is `TO public`, so it served signed-in families too and let
@@ -505,10 +503,8 @@ export default function Register() {
     ]);
 
     setSchools(schoolsRes.data || []);
-    // Set BEFORE setPrograms: the VIP-leg effect runs off `programs` changing
-    // and reads this ref.
-    prereqMapRef.current = prereqMap;
-    setPrograms(withPrerequisites(programsRes.data || [], prereqMap));
+    setPrereqMap(prereqs);
+    setPrograms(programsRes.data || []);
     // Substitute the business name into the waiver text here, at the one place
     // it is loaded, rather than in each component that displays it — a reader
     // that forgot would show a family "{{org}}" in a contract.
@@ -1030,6 +1026,7 @@ export default function Register() {
             <StepReview
               cart={cart}
               pricing={pricing}
+              prereqMap={prereqMap}
               orgName={org?.name || ''}
               installmentSchedule={installmentSchedule?.display || null}
               // Same two props the Pay step gets, and for the same reason: the

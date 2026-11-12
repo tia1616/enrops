@@ -38,6 +38,20 @@ export function withPrerequisites(programs, prereqMap) {
   }));
 }
 
+// A year bundle lists Fall, Winter and Spring together. Say each prerequisite
+// ONCE: a leg whose text was already shown for an earlier leg gets null. ONE
+// rule for the catalog card and the review screen, so they cannot disagree.
+// texts: [fall, winter, spring] (any may be null) -> same length, repeats nulled.
+export function prereqsOncePerBundle(texts) {
+  const seen = new Set();
+  return (texts || []).map((t) => {
+    const c = cleanPrereq(t);
+    if (!c || seen.has(c)) return null;
+    seen.add(c);
+    return c;
+  });
+}
+
 // Soft-fails: a read error returns an empty map and the page renders as it did
 // before. The line is a courtesy to the family, never a gate on checkout.
 export async function fetchPrereqMap(supabase, orgId) {

@@ -11,7 +11,7 @@ export default function PrereqLine({ text, variant = 'card', className = '' }) {
   const label = <span style={{ fontWeight: 700 }}>Prerequisites: </span>;
   if (variant === 'lean') {
     return (
-      <div style={{ fontSize: 13, color: '#4a4a4a', marginTop: 4, marginBottom: 6, lineHeight: 1.4 }}>
+      <div style={{ fontSize: 13, color: '#4a4a4a', marginTop: 4, marginBottom: 6, lineHeight: 1.4, whiteSpace: 'pre-line' }}>
         {label}{text}
       </div>
     );

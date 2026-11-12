@@ -24,7 +24,7 @@ import { programAction, fullFlagMap, ACTION_WAITLIST, ACTION_EXTERNAL } from '..
 import WaitlistModal from '../../components/WaitlistModal.jsx';
 import { isGroupingDistrict } from '../../lib/districts.js';
 import { vipBundleAllowed, fetchVipOfferingPublic } from '../../lib/vipOffering.js';
-import { fetchPrereqMap, withPrerequisites } from '../../lib/curriculumPrereqs.js';
+import { fetchPrereqMap, withPrerequisites, prereqsOncePerBundle } from '../../lib/curriculumPrereqs.js';
 import PrereqLine from '../../components/PrereqLine.jsx';
 
 // Tenant resolution: `org` (id, slug, name, active_registration_term, ...) is
@@ -1631,6 +1631,11 @@ export default function Home() {
                     }
                     const bundle = vipBundles[p.id];
                     const vipEligible = !!bundle;
+                    // [fall, winter, spring] with repeats nulled; [0] is unused
+                    // because the header already shows the Fall line.
+                    const legPrereqs = bundle
+                      ? prereqsOncePerBundle([p.prerequisites, bundle.winter.prerequisites, bundle.spring.prerequisites])
+                      : [];
                     const fallPricing = basePriceForItem({ program: p, isVip: false, timeZone: org?.timezone || 'UTC' });
                     const fallShowsEarlyBird = fallPricing.is_legacy;
                     const fallEarlyBirdLabel = fallPricing.early_bird_deadline
@@ -1735,18 +1740,14 @@ export default function Home() {
                                 <p>
                                   <span className="font-bold">Winter:</span> {bundle.winter.curriculum}
                                 </p>
-                                {/* A leg's prerequisite only when it says something
-                                    the card header above has not already said. */}
-                                {bundle.winter.prerequisites !== p.prerequisites && (
-                                  <PrereqLine text={bundle.winter.prerequisites} variant="leg" />
-                                )}
+                                {/* Each prerequisite said once per bundle - the Fall
+                                    one is already in the card header above. Same
+                                    rule as the review screen (prereqsOncePerBundle). */}
+                                <PrereqLine text={legPrereqs[1]} variant="leg" />
                                 <p>
                                   <span className="font-bold">Spring:</span> {bundle.spring.curriculum}
                                 </p>
-                                {bundle.spring.prerequisites !== p.prerequisites
-                                  && bundle.spring.prerequisites !== bundle.winter.prerequisites && (
-                                  <PrereqLine text={bundle.spring.prerequisites} variant="leg" />
-                                )}
+                                <PrereqLine text={legPrereqs[2]} variant="leg" />
                               </div>
                               {/* #9: VIP = filled primary button.
                                   A full fall class cannot be sold as a bundle either -
