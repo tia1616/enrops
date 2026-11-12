@@ -18,8 +18,15 @@
 --  - PUBLISHED only. extract-curriculum-details (re-upload) rewrites name and
 --    description with fresh AI text in the same UPDATE that sets status
 --    'extracted' - that text is unreviewed and must not reach live cards.
---  - Cancelled and finished programs keep the name they ran under (rosters,
---    reports and family history refer to them).
+--    KNOWN GAP: edits made while a class is 'extracted' are not carried when
+--    it is republished (the status flip has no old text to compare against).
+--    Re-uploading a class that already has scheduled programs is rare; edit
+--    the description once more after publishing to carry it.
+--  - Cancelled programs keep the name they ran under. Programs with an
+--    end_date in the past do too - but weekly classes rarely set end_date
+--    (98 of 109 open linked prod programs, 2026-11-12), so a finished weekly
+--    class that is still 'open' IS renamed. Harmless for a cosmetic rename;
+--    tighten here if a last-session date ever becomes a column.
 --  - A blank name never cascades (the editor no longer saves one either).
 --  - Blank program description = blank old description: a linked program with
 --    no description picks up the class's, as the program wizard would have.
