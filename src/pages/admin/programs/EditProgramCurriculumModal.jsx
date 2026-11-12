@@ -443,6 +443,12 @@ export default function EditProgramCurriculumModal({
       programId: program.id,
       curriculum_id: pickedCurriculum.id,
       curriculum: pickedCurriculum.name,
+      // The description moves with the class (the edge fn writes it). Prefer
+      // what the server says it wrote; an older deployed fn returns nothing,
+      // in which case leave the row's description as the server left it.
+      ...(result && "short_description" in result
+        ? { short_description: result.short_description }
+        : {}),
       notify_result: result,
     });
   }

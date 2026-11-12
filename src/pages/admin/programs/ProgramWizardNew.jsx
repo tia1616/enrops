@@ -587,7 +587,14 @@ export default function ProgramWizardNew() {
       ...f,
       curriculum_id: cur.id,
       curriculum: cur.name,
-      short_description: f.short_description || cur.short_description || "",
+      // The description follows the class until the operator types their own.
+      // `f.short_description || ...` kept the FIRST pick's description forever:
+      // pick Architects, switch to Pokémon, and the Pokémon class was saved with
+      // the Architects blurb (the same bug the Change class swap had - prod
+      // 2026-11-12). Typed text is still never overwritten.
+      short_description: touched.has("short_description")
+        ? f.short_description
+        : (cur.short_description || ""),
       max_capacity: touched.has("max_capacity")
         ? f.max_capacity
         : (cur.class_size_max ?? f.max_capacity),

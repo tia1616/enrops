@@ -1372,10 +1372,15 @@ export default function ProgramsCalendar() {
           curricula={curricula}
           enrollment={enrollmentByProgram[editingProgram.id]}
           onCancel={() => setEditingProgram(null)}
-          onSaved={({ programId, curriculum_id, curriculum }) => {
+          onSaved={({ programId, curriculum_id, curriculum, ...rest }) => {
+            // short_description rides along when the server returned it: the
+            // swap now replaces the description with the new class's, and the
+            // open panel's resync adopts it from this row - otherwise its next
+            // save would write the OLD class's description back.
+            const desc = "short_description" in rest ? { short_description: rest.short_description } : {};
             setPrograms((prev) =>
               prev.map((p) =>
-                p.id === programId ? { ...p, curriculum_id, curriculum } : p
+                p.id === programId ? { ...p, curriculum_id, curriculum, ...desc } : p
               )
             );
             setEditingProgram(null);
