@@ -206,7 +206,7 @@ export default function CampSessionForm({ org, orgId, cycle, session = null, onC
             .order("name"),
           supabase
             .from("curricula")
-            .select("id, name, category, class_size_max, age_range_min, age_range_max")
+            .select("id, name, category, class_size_max, age_range_min, age_range_max, short_description")
             .eq("organization_id", orgId)
             .eq("status", "published")
             .order("name"),
@@ -401,6 +401,14 @@ export default function CampSessionForm({ org, orgId, cycle, session = null, onC
     if (!touched.has("ages_max") && cur.age_range_max != null) {
       next.ages_max = cur.age_range_max;
       if (!filled.includes("ages")) filled.push("ages");
+    }
+    // THE DESCRIPTION FOLLOWS THE CLASS until the operator types their own -
+    // the same rule as the program wizard and the Change class swap. Without it
+    // a camp moved to another class kept the old class's blurb (prod
+    // 2026-11-12, after-school twin of this bug).
+    if (!touched.has("short_description")) {
+      next.short_description = cur.short_description || "";
+      if (cur.short_description) filled.push("description");
     }
     setForm(next);
     setPrefilled(filled);

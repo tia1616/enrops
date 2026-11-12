@@ -52,6 +52,30 @@ export function prereqsOncePerBundle(texts) {
   });
 }
 
+// Each review-screen cart line's prerequisite, said once per VIP bundle. A
+// bundle is the run of VIP lines starting at its 'Fall' line for one child, so
+// a child with TWO bundles gets each bundle's lines judged on their own.
+// lines: pricing.lines; prereqMap: curriculum_id -> text.
+export function linePrereqs(lines, prereqMap) {
+  const list = lines || [];
+  const get = (l) => (prereqMap && l?.curriculum_id ? prereqMap.get(l.curriculum_id) : null);
+  const out = new Array(list.length).fill(null);
+  let i = 0;
+  while (i < list.length) {
+    let j = i + 1;
+    if (list[i].is_vip) {
+      while (
+        j < list.length && list[j].is_vip
+        && list[j].child_index === list[i].child_index
+        && list[j].term_label !== 'Fall'
+      ) j++;
+    }
+    prereqsOncePerBundle(list.slice(i, j).map(get)).forEach((t, k) => { out[i + k] = t; });
+    i = j;
+  }
+  return out;
+}
+
 // Soft-fails: a read error returns an empty map and the page renders as it did
 // before. The line is a courtesy to the family, never a gate on checkout.
 export async function fetchPrereqMap(supabase, orgId) {

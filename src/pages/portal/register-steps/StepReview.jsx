@@ -22,26 +22,11 @@ import { gradeFitProblem } from '../../../lib/grades.js';
 // here as a local function first, which is exactly how the two screens drifted.
 import { programForLine } from '../../../lib/cartPrograms.js';
 import PrereqLine from '../../../components/PrereqLine.jsx';
-import { prereqsOncePerBundle } from '../../../lib/curriculumPrereqs.js';
+// Each cart line's prerequisite, said once per VIP bundle (same rule as the
+// catalog card). Lives in the lib so it is tested.
+import { linePrereqs } from '../../../lib/curriculumPrereqs.js';
 
 const EMPTY_PREREQS = new Map();
-
-// Each cart line's prerequisite, said once per VIP bundle (same rule as the
-// catalog card). Lines of one bundle are consecutive and share child_index.
-function linePrereqs(lines, prereqMap) {
-  const out = new Array(lines.length).fill(null);
-  let i = 0;
-  while (i < lines.length) {
-    let j = i + 1;
-    if (lines[i].is_vip) {
-      while (j < lines.length && lines[j].is_vip && lines[j].child_index === lines[i].child_index) j++;
-    }
-    const texts = prereqsOncePerBundle(lines.slice(i, j).map((l) => prereqMap.get(l.curriculum_id)));
-    texts.forEach((t, k) => { out[i + k] = t; });
-    i = j;
-  }
-  return out;
-}
 
 // Was the fifth copy of this map. Now src/lib/dismissal.js. Review shows the
 // same summary the roster will, provider name included, so what the parent

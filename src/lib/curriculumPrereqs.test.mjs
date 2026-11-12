@@ -1,6 +1,6 @@
 // Pins the parent-facing prerequisite helper. Plain node script, run by
 // scripts/run-src-tests.mjs.
-import { cleanPrereq, buildPrereqMap, withPrerequisites, fetchPrereqMap, prereqsOncePerBundle } from './curriculumPrereqs.js';
+import { cleanPrereq, buildPrereqMap, withPrerequisites, fetchPrereqMap, prereqsOncePerBundle, linePrereqs } from './curriculumPrereqs.js';
 import { calculateCart } from './pricing.js';
 
 let pass = 0, fail = 0;
@@ -67,6 +67,17 @@ const vip = calculateCart({
   vip_enabled: true,
 });
 eq('cart: VIP lines each carry their own leg curriculum_id', vip.lines.map((l) => l.curriculum_id), ['cur-a', 'cur-b', 'cur-a']);
+
+// Review lines: once per bundle, and two bundles for one child judged apart.
+const pm = new Map([['a', 'R'], ['b', 'L2']]);
+const L = (cid, vip, child, term) => ({ curriculum_id: cid, is_vip: vip, child_index: child, term_label: term });
+eq('review: plain lines each show their own', linePrereqs([L('a', false, 0, null), L('a', false, 1, null)], pm), ['R', 'R']);
+eq('review: one bundle says each text once', linePrereqs([L('a', true, 0, 'Fall'), L('b', true, 0, 'Winter'), L('a', true, 0, 'Spring')], pm), ['R', 'L2', null]);
+eq('review: two bundles for one child judged separately', linePrereqs([
+  L('a', true, 0, 'Fall'), L('a', true, 0, 'Winter'), L('a', true, 0, 'Spring'),
+  L('a', true, 0, 'Fall'), L('a', true, 0, 'Winter'), L('a', true, 0, 'Spring'),
+], pm), ['R', null, null, 'R', null, null]);
+eq('review: no map is safe', linePrereqs([L('a', false, 0, null)], undefined), [null]);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
