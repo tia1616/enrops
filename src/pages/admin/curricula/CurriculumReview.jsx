@@ -544,6 +544,14 @@ export default function CurriculumReview() {
     const timers = debounceTimers.current;
     const existing = timers.get(fieldName);
     if (existing) clearTimeout(existing.timer);
+    // NEVER SAVE A BLANK NAME. A class rename now carries to every linked
+    // program (migration 20261112a), so a mid-typing "" would blank every card
+    // title if the tab closed there. The box still shows what they typed; only
+    // a real name is written.
+    if (fieldName === "name" && !String(columnPatch?.name ?? "").trim()) {
+      timers.delete(fieldName);
+      return;
+    }
     const run = () => persistTopField(fieldName, columnPatch, extractedValue);
     if (immediate) {
       timers.delete(fieldName);

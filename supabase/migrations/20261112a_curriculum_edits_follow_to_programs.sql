@@ -7,12 +7,22 @@
 -- after the class became "Minecraft Makers", and the Level 2 class's
 -- prerequisite note named a Level 1 that no card showed.
 --
--- THE RULE (one place): when a curriculum's name or short_description changes,
--- every program LINKED to it that still shows the OLD value takes the NEW one.
--- A program whose text differs from the old value was written for that program
--- on purpose (a site note, a custom blurb) and is left alone - only 38 of 126
--- linked prod programs carry the class description verbatim, so a blanket
--- overwrite would erase real work.
+-- THE RULE (one place): when a PUBLISHED curriculum's name or short_description
+-- changes, every program LINKED to it that is not cancelled or finished and
+-- still shows the OLD value takes the NEW one.
+--
+--  - Text that differs from the old value was written for that program on
+--    purpose (a site note, a custom blurb) and is left alone. Only 38 of 126
+--    linked prod programs carry the class description verbatim, so a blanket
+--    overwrite would erase real work.
+--  - PUBLISHED only. extract-curriculum-details (re-upload) rewrites name and
+--    description with fresh AI text in the same UPDATE that sets status
+--    'extracted' - that text is unreviewed and must not reach live cards.
+--  - Cancelled and finished programs keep the name they ran under (rosters,
+--    reports and family history refer to them).
+--  - A blank name never cascades (the editor no longer saves one either).
+--  - Blank program description = blank old description: a linked program with
+--    no description picks up the class's, as the program wizard would have.
 --
 -- NOT camp_sessions. Its curriculum_name is deliberately different from the
 -- curriculum title on 44 of 51 prod camps, and apps-script-roster-sync uses it
@@ -34,15 +44,17 @@ security definer
 set search_path = public, pg_temp
 as $$
 begin
-  -- No "skip a blank name" guard, on purpose: the editor saves mid-typing, so a
-  -- momentary "" is one step of a chain (old -> "" -> new). Skipping it would
-  -- leave programs on the old name while the class moves on, and every later
-  -- step would then fail the equals-OLD test - the rename would never arrive.
-  if new.name is distinct from old.name then
+  if new.status is distinct from 'published' then
+    return null;
+  end if;
+
+  if new.name is distinct from old.name and btrim(coalesce(new.name, '')) <> '' then
     update public.programs p
        set curriculum = new.name
      where p.curriculum_id = new.id
        and p.organization_id = new.organization_id
+       and p.status is distinct from 'cancelled'
+       and (p.end_date is null or p.end_date >= current_date)
        and btrim(coalesce(p.curriculum, '')) = btrim(coalesce(old.name, ''));
   end if;
 
@@ -51,8 +63,8 @@ begin
        set short_description = nullif(btrim(coalesce(new.short_description, '')), '')
      where p.curriculum_id = new.id
        and p.organization_id = new.organization_id
-       -- blank = blank too: a linked program with no description picks up the
-       -- class's first one, which is what the program wizard would have done.
+       and p.status is distinct from 'cancelled'
+       and (p.end_date is null or p.end_date >= current_date)
        and btrim(coalesce(p.short_description, '')) = btrim(coalesce(old.short_description, ''));
   end if;
 
