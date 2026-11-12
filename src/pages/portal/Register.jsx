@@ -18,6 +18,7 @@ import { parseRegFields, pickupDnrConflicts } from './register-steps/RegExtraFie
 import { renderWaiverText } from '../../lib/waiverText.js';
 import { vipBundleAllowed, fetchVipOfferingPublic } from '../../lib/vipOffering.js';
 import { readAttribution } from '../../lib/attribution.js';
+import { fetchPrereqMap } from '../../lib/curriculumPrereqs.js';
 
 // Tenant resolution: `org` (id, slug, name, ...) is provided by PublicLayout
 // via Outlet context — see src/layouts/PublicLayout.jsx. No more hardcoded
@@ -54,6 +55,10 @@ export default function Register() {
   const [step, setStep] = useState(0);
   const [schools, setSchools] = useState([]);
   const [programs, setPrograms] = useState([]);
+  // curriculum_id -> prerequisite text, loaded fresh on every visit. The review
+  // screen looks each cart line up here by its curriculum_id, so a cart restored
+  // from sessionStorage still shows the CURRENT text (never a frozen copy).
+  const [prereqMap, setPrereqMap] = useState(() => new Map());
   const [waivers, setWaivers] = useState([]);
   // customizable-registration: org's enabled standard + active custom questions.
   // Empty {std:{},custom:[]} = today's behavior (no extra fields render).
@@ -432,7 +437,7 @@ export default function Register() {
   }, [programs, schools]);
 
   async function load() {
-    const [schoolsRes, programsRes, waiversRes, regFieldsRes, feeRes, cancelPolicyRes] = await Promise.all([
+    const [schoolsRes, programsRes, waiversRes, regFieldsRes, feeRes, cancelPolicyRes, prereqs] = await Promise.all([
       // program_locations_public, NOT the base table. The old comment below said
       // "Anon-safe: public_read_program_locations allows anon reads" - true, but
       // that policy is `TO public`, so it served signed-in families too and let
@@ -492,9 +497,13 @@ export default function Register() {
         .eq('policy_type', 'cancellation')
         .eq('published', true)
         .maybeSingle(),
+      // The curriculum's parent-facing prerequisite line, restated on the cart
+      // line before payment. Soft-fails to an empty map.
+      fetchPrereqMap(supabase, ORG_ID),
     ]);
 
     setSchools(schoolsRes.data || []);
+    setPrereqMap(prereqs);
     setPrograms(programsRes.data || []);
     // Substitute the business name into the waiver text here, at the one place
     // it is loaded, rather than in each component that displays it — a reader
@@ -1017,6 +1026,7 @@ export default function Register() {
             <StepReview
               cart={cart}
               pricing={pricing}
+              prereqMap={prereqMap}
               orgName={org?.name || ''}
               installmentSchedule={installmentSchedule?.display || null}
               // Same two props the Pay step gets, and for the same reason: the

@@ -2,7 +2,8 @@
 // fan-out for EditProgramCurriculumModal.
 //
 // Owns three things together so they can't drift:
-//   1. UPDATE programs SET curriculum_id, curriculum
+//   1. UPDATE programs SET curriculum_id, curriculum, short_description (the
+//      new class's own description - it moves with the class)
 //   2. Resend send to every non-cancelled registered family (if opted in)
 //   3. Resend send to the program's confirmed instructor (if opted in and
 //      the instructor was already informed about this program — i.e.
@@ -45,6 +46,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 import { groupFamilyRecipients, rowsToRegistrationShape } from '../_shared/familyRecipients.ts';
 import { venueLabel } from '../_shared/roomLabel.ts';
+import { descriptionAfterClassChange } from '../_shared/programDescription.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -183,7 +185,7 @@ serve(async (req: Request) => {
     const { data: program, error: progErr } = await supabase
       .from('programs')
       .select(`
-        id, organization_id, curriculum, curriculum_id,
+        id, organization_id, curriculum, curriculum_id, short_description,
         day_of_week, start_time, end_time, room,
         program_locations (id, name, room_number)
       `)
@@ -199,7 +201,7 @@ serve(async (req: Request) => {
     // Verify the target curriculum is real and belongs to the same org.
     const { data: targetCurriculum, error: curErr } = await supabase
       .from('curricula')
-      .select('id, name, organization_id')
+      .select('id, name, organization_id, short_description')
       .eq('id', toCurriculumId)
       .maybeSingle();
     if (curErr || !targetCurriculum) return json({ error: 'curriculum_not_found' }, 404);
@@ -342,11 +344,22 @@ serve(async (req: Request) => {
     // ── Commit the DB write FIRST. Emails go out only against a real
     //    updated record so families/instructors reading at the same time
     //    see consistent state in their portals.
+    // THE DESCRIPTION MOVES WITH THE CLASS. It used to stay behind: the swap
+    // wrote the new class and name but left the OLD class's description on the
+    // program, so families saw e.g. a Minecraft blurb on a Pokémon LEGO card
+    // (prod 2026-11-12: 12 programs, every one traced to a swap here). A FIRST
+    // match keeps the operator's own words. Rule + tests: _shared/programDescription.ts.
+    const newDescription = descriptionAfterClassChange({
+      isFirstMatch,
+      current: program.short_description,
+      target: targetCurriculum.short_description,
+    });
     const { error: upErr } = await supabase
       .from('programs')
       .update({
         curriculum_id: toCurriculumId,
         curriculum: toCurriculumName,
+        short_description: newDescription,
       })
       .eq('id', programId)
       .eq('organization_id', orgId);
@@ -549,6 +562,9 @@ serve(async (req: Request) => {
 
     return json({
       curriculum_saved: true,
+      // What the program's description now is, so the open editor panel adopts
+      // it instead of writing the old class's description back on its next save.
+      short_description: newDescription,
       family: {
         choice: familyChoice,
         sent_count: familySentCount,

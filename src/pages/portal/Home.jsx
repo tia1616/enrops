@@ -24,6 +24,8 @@ import { programAction, fullFlagMap, ACTION_WAITLIST, ACTION_EXTERNAL } from '..
 import WaitlistModal from '../../components/WaitlistModal.jsx';
 import { isGroupingDistrict } from '../../lib/districts.js';
 import { vipBundleAllowed, fetchVipOfferingPublic } from '../../lib/vipOffering.js';
+import { fetchPrereqMap, withPrerequisites, prereqsOncePerBundle } from '../../lib/curriculumPrereqs.js';
+import PrereqLine from '../../components/PrereqLine.jsx';
 
 // Tenant resolution: `org` (id, slug, name, active_registration_term, ...) is
 // provided by PublicLayout via Outlet context (from the public_org_directory
@@ -369,7 +371,7 @@ export default function Home() {
     // out {} either way, exactly as it did before.
     //
     // Fee config stays OUT of this batch deliberately - see below.
-    const [brRes, scRes, pgRes, futureRes, wcRes, dtRes, vipPublic] = await Promise.all([
+    const [brRes, scRes, pgRes, futureRes, wcRes, dtRes, vipPublic, prereqMap] = await Promise.all([
       // Branding (hero copy, colors, etc) - multi-tenant ready. Any provider
       // can customize these via org_branding row; defaults apply if blank.
       supabase
@@ -512,11 +514,14 @@ export default function Home() {
       // This business's year-bundle setting (20261012a) - see vipOffering.js
       // for why it is its own read. Resolves to null on failure, never throws.
       fetchVipOfferingPublic(supabase, org.id),
+      // The curriculum's parent-facing prerequisite line (soft-fails to an empty
+      // map). See curriculumPrereqs.js for why this exists.
+      fetchPrereqMap(supabase, org.id),
     ]);
 
     const br = brRes.data;
     const sc = scRes.data;
-    const pg = pgRes.data;
+    const pg = pgRes.data ? withPrerequisites(pgRes.data, prereqMap) : pgRes.data;
     const wc = wcRes.data;
     // id -> name. A district whose name we cannot read falls out of the map and
     // its schools land in the OTHER_DISTRICT bucket, which is what happened to
@@ -547,7 +552,9 @@ export default function Home() {
     // Look up Winter/Spring matches for each fall program to determine VIP
     // eligibility. A fall program is VIP-eligible only if that school year's
     // Winter AND Spring exist at the same school + day.
-    const futureTerms = futureRes?.data;
+    // Bundle legs carry their own curriculum's prerequisite: a Winter leg is
+    // often the Level 2 of the Fall class, which is the one that needs saying.
+    const futureTerms = futureRes?.data ? withPrerequisites(futureRes.data, prereqMap) : futureRes?.data;
     const bundles = {};
     if (pg && pg.length && bundleTerms) {
       // A CAMP IS NEVER A BUNDLE LEG - INCLUDING THE FIRST ONE. The winter and
@@ -1165,6 +1172,7 @@ export default function Home() {
                                   with the card below so a change here cannot miss
                                   its twin. */}
                               <LeanDescription text={p.short_description} />
+                              <PrereqLine text={p.prerequisites} variant="lean" />
                               {whereStr && (
                                 <div style={{ fontSize: 13, fontWeight: 600, color: '#1a1a1a', marginTop: 2 }}>{whereStr}</div>
                               )}
@@ -1187,6 +1195,7 @@ export default function Home() {
                             {/* Same shared component as the external-registration
                                 card above. This is the one Jeff's families see. */}
                             <LeanDescription text={p.short_description} />
+                            <PrereqLine text={p.prerequisites} variant="lean" />
                             {whereStr && (
                               <div style={{ fontSize: 13, fontWeight: 600, color: '#1a1a1a', marginTop: 2 }}>{whereStr}</div>
                             )}
@@ -1558,6 +1567,7 @@ export default function Home() {
                             {p.short_description && (
                               <p className="mt-1 mb-2.5 whitespace-pre-line text-sm text-j2s-ink/65 leading-snug">{p.short_description}</p>
                             )}
+                            <PrereqLine text={p.prerequisites} />
                             {whereStr && <p className="mt-1 text-sm font-semibold text-j2s-ink">{whereStr}</p>}
                             {metaStr && <p className="mt-1 text-sm text-j2s-ink/70">{metaStr}</p>}
                             {scheduleStr && (
@@ -1585,6 +1595,11 @@ export default function Home() {
                     }
                     const bundle = vipBundles[p.id];
                     const vipEligible = !!bundle;
+                    // [fall, winter, spring] with repeats nulled; [0] is unused
+                    // because the header already shows the Fall line.
+                    const legPrereqs = bundle
+                      ? prereqsOncePerBundle([p.prerequisites, bundle.winter.prerequisites, bundle.spring.prerequisites])
+                      : [];
                     const fallPricing = basePriceForItem({ program: p, isVip: false, timeZone: org?.timezone || 'UTC' });
                     const fallShowsEarlyBird = fallPricing.is_legacy;
                     const fallEarlyBirdLabel = fallPricing.early_bird_deadline
@@ -1631,6 +1646,7 @@ export default function Home() {
                               {p.short_description}
                             </p>
                           )}
+                          <PrereqLine text={p.prerequisites} />
                           {whereStr && <p className="mt-1 text-sm font-semibold text-j2s-ink">{whereStr}</p>}
                           {metaStr && <p className="mt-1 text-sm text-j2s-ink/70">{metaStr}</p>}
                           {/* Session count used to live on the line above, but only
@@ -1688,9 +1704,14 @@ export default function Home() {
                                 <p>
                                   <span className="font-bold">Winter:</span> {bundle.winter.curriculum}
                                 </p>
+                                {/* Each prerequisite said once per bundle - the Fall
+                                    one is already in the card header above. Same
+                                    rule as the review screen (prereqsOncePerBundle). */}
+                                <PrereqLine text={legPrereqs[1]} variant="leg" />
                                 <p>
                                   <span className="font-bold">Spring:</span> {bundle.spring.curriculum}
                                 </p>
+                                <PrereqLine text={legPrereqs[2]} variant="leg" />
                               </div>
                               {/* #9: VIP = filled primary button.
                                   A full fall class cannot be sold as a bundle either -

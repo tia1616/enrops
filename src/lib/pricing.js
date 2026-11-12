@@ -291,6 +291,10 @@ export function calculateCart(cart) {
           label,
           program_id: prog.id,
           program_name: prog.curriculum,
+          // So the review screen can look up this leg's prerequisite from the
+          // map loaded THIS visit (curriculumPrereqs.js), never text frozen into
+          // a sessionStorage cart. Display only - not read by pricing or server.
+          curriculum_id: prog.curriculum_id || null,
           school_name: prog.school_name || prog.program_locations?.name || item.program.school_name || '',
           day_of_week: prog.day_of_week,
           // A CAMP'S DAYS, so the review line can say "Mon-Fri" instead of
