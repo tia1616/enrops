@@ -94,6 +94,10 @@ const WORKING_LABEL = {
   teaching: 'already teaching an after-school class at that time',
   camp: 'already at a camp at that time',
   subbing: 'already subbing at that time',
+  // 20261113b: no overlap, but another school that day is inside the
+  // provider's minimum travel time. accept_sub_offer refuses the same case,
+  // so offering anyway would only be turned down when they say yes.
+  too_close: 'not enough time to get here from another school that day',
 };
 
 // Three display groups, best first:
@@ -129,8 +133,11 @@ function classify(av) {
   // tight_gap: they have another booking that day which does NOT overlap this
   // class, but leaves a tight turnaround to get between the two. They stay exactly
   // where they ranked -- pickable, and in SUGGEST if they matched -- because this
-  // is a note about the drive, not a reason they can't do it. Only a real time
-  // OVERLAP sets is_working and moves someone out (20260818b).
+  // is a note about the drive, not a reason they can't do it. A real time
+  // OVERLAP sets is_working and moves someone out (20260818b), and so does
+  // another school inside the provider's minimum travel time (working_reason
+  // 'too_close', 20261113b) - tight_gap is now only what is left: same-school
+  // turnarounds, or a different school that clears the minimum but is under 60.
   //
   // No specific duration in this copy on purpose: the threshold lives in the RPC
   // (and the board's TRAVEL_GAP_WARN_MIN), and stating "an hour" here would be a
@@ -873,14 +880,18 @@ function GroupHeader({ meta, count, first }) {
 
 // One clickable candidate row: radio dot + name + the availability note.
 function SubRow({ row, selected, onSelect }) {
-  const { instr, note, outOfArea, group } = row;
+  const { instr, note, outOfArea, group, av } = row;
   const noteColor = group === OUT ? CORAL : MUTED;
+  // Too close to another school that day (20261113b): accept_sub_offer refuses
+  // them every time, so an offer could only ever bounce when they say yes.
+  // The row stays visible with its reason; it just cannot be ticked.
+  const tooClose = av?.is_working && av?.working_reason === 'too_close';
   // Somebody with no email cannot be asked, and the function validates the
   // whole batch BEFORE contacting anyone — so one unpickable person in a tick
   // of five sends ZERO emails and returns a 400 that, past one missing address,
   // does not even name who. Fail-safe, but the operator finds out after
   // pressing send. Stopping the tick is the same answer given earlier.
-  const pickable = !!instr.email;
+  const pickable = !!instr.email && !tooClose;
   const choose = () => { if (pickable) onSelect(); };
   return (
     /* A CHECKBOX, not a radio. Several people can be asked about one class-day
@@ -935,7 +946,7 @@ function SubRow({ row, selected, onSelect }) {
             address this person cannot be asked at all, and the function
             validates the whole batch before contacting anybody — so ticking
             them silently costs everybody else on the round their email too. */}
-        {!pickable && (
+        {!instr.email && (
           <div style={{ fontSize: 11, color: CORAL }}>no email on file — can't be asked</div>
         )}
       </div>

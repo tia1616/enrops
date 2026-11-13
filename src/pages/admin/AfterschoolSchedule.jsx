@@ -22,7 +22,7 @@ import ScheduleStepBar from "../../components/ScheduleStepBar.jsx";
 import TabStrip from "../../components/TabStrip.jsx";
 import { useAdminNarrow, cardRow, cardCell } from "../../lib/adminViewport.js";
 import { resolveBoardSendIntro } from "../../lib/boardSendCopy.js";
-import { classifyOther } from "../../lib/scheduleConflicts.js";
+import { classifyOther, tooCloseBetweenSites } from "../../lib/scheduleConflicts.js";
 import { pickFocusedStep } from "../../lib/scheduleSteps.js";
 import { programScheduleSummary, formatDayLabel, isCampProgram, programWeekdays } from "../../lib/programSchedule.js";
 import { parseBonusDollars } from "../../lib/bonusAmount.js";
@@ -845,6 +845,14 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   // Reset week focus to the default when the term or org changes.
   useEffect(() => { setFocusedWeekStart(undefined); }, [term, org?.id]);
 
+  // The provider's minimum minutes between two schools on one day (20261113a),
+  // the same number match-afterschool reads. It arrives on `org` from
+  // AdminLayout's org load, which fails the whole shell closed when it cannot
+  // read. No guessed default: if the number is somehow absent, siteGapMin is
+  // null and evaluate() holds EVERY same-day pairing at another school for the
+  // operator to check, rather than assuming a gap the provider never set.
+  const siteGapMin = Number.isFinite(org?.min_minutes_between_sites) ? org.min_minutes_between_sites : null;
+
   // Realtime: when an instructor accepts / requests a change in their portal,
   // the board updates without a manual refresh. Reload on any program_assignments
   // change that touches a program in the current term.
@@ -1193,7 +1201,7 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   }, [state]);
 
   const counts = useMemo(() => {
-    const c = { assigned: 0, accepted: 0, flagged: 0, changeRequested: 0, needsHire: 0, instructors: 0, proposed: 0, sendable: 0, draft: 0 };
+    const c = { assigned: 0, accepted: 0, flagged: 0, changeRequested: 0, needsHire: 0, instructors: 0, proposed: 0, matcherDrafts: 0, sendable: 0, draft: 0 };
     if (state.status !== "ready") return c;
     for (const e of enriched.values()) {
       // An open slot is counted ON ITS OWN, not only when it is the headline
@@ -1213,7 +1221,12 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
       else c.assigned++;
     }
     for (const a of state.assignments) {
-      if (a.status === "proposed") c.proposed++;
+      if (a.status === "proposed") {
+        c.proposed++;
+        // The matcher's OWN untouched suggestions - the only rows a re-run may
+        // redo (match-afterschool skips anything with assigned_by set).
+        if (a.assigned_by == null) c.matcherDrafts++;
+      }
       else if (a.status === "confirmed" && !a.email_sent_at) c.sendable++;
     }
     c.instructors = state.instructors.length;
@@ -1503,6 +1516,9 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     // matcher draft blocks here too — but the copy stays honest about it being a
     // draft rather than claiming they "already teach" it.
     const committed = committedDays.get(instructorId);
+    // Set below when another school that day is closer than the provider's
+    // minimum gap; returned only after the max-days check (see there).
+    let siteGapBlock = null;
     // Checked on EVERY day the program occupies, not just its first. A Mon-Thu
     // camp against a Wednesday class is a real clash that reading day_of_week
     // alone could never see. Each entry keeps the day it clashes on so the
@@ -1626,12 +1642,41 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
             : `${first} also has ${list} on ${days} at the same school.`
         );
       }
+      // Another school with LESS than the provider's minimum gap (20261113a): a
+      // block, but an overridable one - the operator may know the two sites are
+      // across the street, and the matcher (which has nobody looking) is the one
+      // that treats it as hard. NOT returned here: an early overridable return
+      // would let "Assign anyway" skip the max-days check below, which is a hard
+      // block. It is held and returned after that check instead.
+      // A class with no site on either side counts as a different site, the same
+      // reading match-afterschool uses: we cannot prove it is one building.
+      // Unknown minimum -> Infinity: every readable pairing at another school is
+      // held (fail closed), with copy that says why.
+      const gapForRule = siteGapMin == null ? Infinity : siteGapMin;
+      const tooClose = others.filter((o) =>
+        o.c.when === "yes" && tooCloseBetweenSites(o, program.program_location_id ?? null, gapForRule));
+      if (tooClose.length) {
+        const list = nameList(tooClose);
+        const days = [...new Set(tooClose.map((o) => labelFor(o.c.dayCode)))].join(" and ");
+        const shortest = Math.min(...tooClose.map((o) => o.gap));
+        siteGapBlock = {
+          ok: false,
+          overridable: true,
+          blockKind: "site_gap",
+          reason: siteGapMin == null
+            ? `${first} has ${list} on ${days} at another school, and your minimum time between schools couldn't be loaded. Check the drive before assigning.`
+            : `${first} has ${list} on ${days} at another school, with ${shortest === 0 ? "no time" : `only ${shortest} min`} to get there. Your minimum between schools is ${siteGapMin} min.`,
+          warnings,
+        };
+      }
       // Another school with a tight turnaround: allowed, but flag the drive. Jessica's
       // number — "might not be possible unless they're close together". She knows the
       // drive; the software doesn't, so this warns and never blocks.
       // Same rule as the same-school warning above: a drive between two schools
       // is only worth flagging once we know the two actually fall on one day.
-      const tight = others.filter((o) => !o.sameSchool && o.tight && o.c.when === "yes");
+      // Pairs already under the minimum are named by the block above, not twice.
+      const tooCloseIds = new Set(tooClose.map((o) => o.c.program_id));
+      const tight = others.filter((o) => !o.sameSchool && o.tight && o.c.when === "yes" && !tooCloseIds.has(o.c.program_id));
       if (tight.length) {
         const list = nameList(tight);
         const days = [...new Set(tight.map((o) => labelFor(o.c.dayCode)))].join(" and ");
@@ -1669,6 +1714,10 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     // function now, so every early return carries them too. See the block comment
     // there before adding anything here.
     if (av.needs_confirmation) warnings.push(`${first}'s availability is unconfirmed.`);
+    // The cross-school gap block, held until the hard max-days check had its say,
+    // and after the unconfirmed note so "Assign anyway" still shows it (same
+    // warnings array).
+    if (siteGapBlock) return siteGapBlock;
     // campYes: an eligible camp row is eligible BECAUSE they said yes to it by
     // name (anyone else returned above), and the picker labels it so the
     // operator does not have to check the Availability tab.
@@ -3348,7 +3397,13 @@ function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCa
   const selKey = steps.some((s) => s.key === selected) ? selected : firstActive;
 
   const someStaffed = (counts.assigned + counts.accepted + counts.flagged + counts.changeRequested) > 0;
-  const nothingToMatch = counts.needsHire === 0;
+  // Nothing to match only when no class needs anyone AND the matcher has no
+  // suggestions of its own left to redo. Keying on needsHire alone hid the
+  // button the moment every class had a draft, so a rule change (the 60-min
+  // gap between schools, 2026-11-13) could never be re-applied to a draft the
+  // old rules built. Hand picks, approved and emailed rows are never redone.
+  const nothingToMatch = counts.needsHire === 0 && counts.matcherDrafts === 0;
+  const matchLabel = counts.needsHire === 0 ? "Re-match draft" : (someStaffed ? "Match remaining" : "Match instructors");
   const out = Math.max(0, counts.instructors - submittedCount);
 
   const PANELS = {
@@ -3375,7 +3430,7 @@ function Header({ term, campCycles, afterschoolTerms, onSwitchTerm, onSwitchToCa
               : `${counts.proposed} draft match${counts.proposed === 1 ? "" : "es"} ready to lock in.`)
           : "Draft is built. Locking it in sends no emails.",
       actions: [
-        ...(!nothingToMatch ? [{ label: busy === "matching" ? "Matching…" : (someStaffed ? "Match remaining" : "Match instructors"), onClick: onMatch, primary: counts.proposed === 0, disabled: !!busy || !hasPrograms }] : []),
+        ...(!nothingToMatch ? [{ label: busy === "matching" ? "Matching…" : matchLabel, onClick: onMatch, primary: counts.proposed === 0, disabled: !!busy || !hasPrograms }] : []),
         ...(counts.proposed > 0 && !offersOut ? [{ label: busy === "approving" ? "Locking in…" : "Lock in draft", onClick: onApprove, primary: true, disabled: !!busy, note: "no emails sent" }] : []),
       ],
     },

@@ -28,5 +28,16 @@ check("edge fn detail uses the approved sentence", edge.includes(`detail: "${SEN
 check("portal no longer says 'already covering another class'", !/already covering another class/.test(portal));
 check("edge fn detail no longer says 'already covering another class'", !/detail:.*already covering another class/.test(edge));
 
+// too_close (20261113b): accept_sub_offer returns it for a sub day too close to
+// another school. If the edge fn stops handling it, the accept falls through to
+// "unrecognised accept outcome" and the instructor sees a generic 500.
+const migration = readFileSync(join(root, "supabase", "migrations", "20261113b_sub_travel_time_between_sites.sql"), "utf8");
+const modal = readFileSync(join(root, "src", "pages", "admin", "AssignSubModal.jsx"), "utf8");
+check("accept_sub_offer can return too_close", /'outcome', 'too_close'/.test(migration));
+check("edge fn handles the too_close outcome", edge.includes("result.outcome === 'too_close'"));
+check("edge fn answers too_close with the time_conflict code the portal explains", /too_close'\) \{[\s\S]{0,900}error: 'time_conflict'/.test(edge));
+check("picker labels the too_close reason", /too_close:\s*'/.test(modal));
+check("picker cannot tick a too_close person", /working_reason === 'too_close'/.test(modal) && /!!instr\.email && !tooClose/.test(modal));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
