@@ -169,6 +169,20 @@ serve(async (req: Request) => {
           detail: "This overlaps with another class on your schedule that day. Contact the office if that's wrong.",
         }, 409);
       }
+      if (result.outcome === 'too_close') {
+        // No overlap, but another school that day is closer than the
+        // provider's minimum travel time (20261113b). Same error code as an
+        // overlap, so the portal treats it the same way (an explanation, not a
+        // failure) and shows this detail instead of the overlap sentence.
+        // Wording drafted 2026-11-13, awaiting Jessica's approval.
+        const mins = Number((result as { min_minutes?: number }).min_minutes) || null;
+        return json({
+          error: 'time_conflict',
+          detail: mins
+            ? `This is less than ${mins} minutes from another class you have at a different school that day. Contact the office if that's wrong.`
+            : "This is too close to another class you have at a different school that day. Contact the office if that's wrong.",
+        }, 409);
+      }
       if (result.outcome === 'lost') {
         // Their own offer has already been closed as covered by the RPC. Tell
         // them plainly rather than failing: they said yes, and the honest answer
