@@ -4,9 +4,12 @@
 //   HARD  instructor available the program's weekday, and their selected time
 //         buckets cover [class_start - ARRIVAL_BUFFER, class_end] (arrive 15 min
 //         early, stay to the end)
-//   HARD  no TIME-OVERLAPPING programs (can't be in two places at once). Two
-//         non-overlapping classes the same weekday are fine, even at different
-//         schools (20260818a) -- the operator judges the drive.
+//   HARD  no TIME-OVERLAPPING programs (can't be in two places at once).
+//         Back-to-back at the SAME site is fine (one building). At DIFFERENT
+//         sites the same day, the next class must start at least
+//         organizations.min_minutes_between_sites after the last one ends
+//         (20261113a) - this run writes with nobody looking, so it does not get
+//         to assume the drive is short. The board lets an operator override it.
 //   HARD  respect the days/week cap (max_days)
 //   HARD  only `open` programs are auto-matched (drafts excluded)
 //   HARD  never auto-assign an instructor to an area they marked `unavailable`
@@ -27,9 +30,11 @@
 // Assignment is greedy and curriculum-driven: each round we EXTEND a curriculum
 // someone already teaches before SEEDING a new one (so classes of one curriculum
 // consolidate onto as few instructors as possible), taking the most-constrained
-// class within that set. The winner for a class is chosen by: already-teaches-this
-// curriculum -> can-cover-the-most-other-classes-of-it -> enjoys-this-family ->
-// area preference -> fewest curricula so far -> confirmed-before-tentative -> fairness.
+// class within that set. The winner for a class is chosen by: already at this
+// school that day -> already-teaches-this curriculum -> stays within the class-type
+// target (organizations.target_curricula_per_instructor) -> area preference ->
+// enjoys-this-family -> can-cover-the-most-other-classes-of-it -> fewest curricula
+// so far -> confirmed-before-tentative -> fairness.
 //
 // AUTH: caller must be owner/admin of organization_id. Heavy lifting runs with
 // the service role; organization_id + term scope every query.
@@ -45,6 +50,7 @@ import { getUntrainedInstructorIds } from '../_shared/trainingGate.ts';
 // The one Deno definition of "is this program a camp". Used here to EXCLUDE
 // camps from auto-matching - see the long note at the programs query.
 import { isCampProgram, programWeekdays } from '../_shared/campProgram.ts';
+import { clashesWithSiteGap } from '../_shared/siteGap.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -239,6 +245,19 @@ serve(async (req) => {
     const locName = new Map<string, string>();
     const locArea = new Map<string, string | null>();
     for (const l of locRaw ?? []) { locName.set(l.id, l.name); locArea.set(l.id, l.area ?? null); }
+
+    // ----- Provider settings that shape the match (20261113a) -----
+    // FAILS CLOSED: a run that cannot read the cross-site gap would quietly fall
+    // back to "touching is fine" - the exact Atfalati Ridge -> Alameda 2:35 pair
+    // this setting exists to stop - and write it with nobody looking.
+    const { data: orgSettings, error: orgSetErr } = await admin
+      .from('organizations')
+      .select('min_minutes_between_sites, target_curricula_per_instructor')
+      .eq('id', organizationId)
+      .maybeSingle();
+    if (orgSetErr || !orgSettings) return json({ error: `Load provider settings: ${orgSetErr?.message ?? 'not found'}` }, 500);
+    const SITE_GAP_MIN = Math.max(0, Number(orgSettings.min_minutes_between_sites ?? 0));
+    const KIT_TARGET = Math.max(1, Number(orgSettings.target_curricula_per_instructor ?? 3));
 
     // ----- Instructors -----
     const { data: instRaw, error: instErr } = await admin
@@ -449,9 +468,12 @@ serve(async (req) => {
     // 12:15-at-one-school against 3:25-at-another and forced a hand redo every
     // term; J2S runs exactly that OES Wednesday pair.
     //
-    // Mirrors check_program_assignment_conflict AND the board's evaluate(): touching
-    // times don't overlap (2:00-3:25 then 3:25-4:25 -> start < otherEnd is false when
-    // equal), and an unreadable time on either side fails SAFE as a conflict, since
+    // Mirrors check_program_assignment_conflict AND the board's evaluate() for the
+    // SAME site: touching times don't overlap (2:00-3:25 then 3:25-4:25 -> start <
+    // otherEnd is false when equal). For DIFFERENT sites it is deliberately STRICTER
+    // than the trigger (min_minutes_between_sites, 20261113a) - stricter is safe,
+    // since the trigger only ever refuses what this already would. An unreadable
+    // time on either side fails SAFE as a conflict, since
     // the matcher writes without a human looking. parse12h returns null for a time
     // with no AM/PM, so "2:30" lands in that fail-safe branch here just as the
     // trigger's small-hours guard catches it in SQL -- the two stay in agreement,
@@ -479,7 +501,9 @@ serve(async (req) => {
     // below). Without them it stays conservative: a shared weekday at a clashing
     // time is a conflict even though a break camp usually runs when classes do
     // not. A refusal costs one manual assignment; the other way double-books someone.
-    function wouldConflict(instructorId: string, prog: any): boolean {
+    // siteGapMin defaults to the provider's setting; the needs-hire explainer
+    // passes 0 to ask "would they be free if the drive did not count?".
+    function wouldConflict(instructorId: string, prog: any, siteGapMin: number = SITE_GAP_MIN): boolean {
       const days = programWeekdays(prog);
       if (days.length === 0) return false;
       const slots = committedSlots.get(instructorId);
@@ -502,7 +526,17 @@ serve(async (req) => {
         if (from && to && s.from && s.to && (to < s.from || s.to < from)) return false;
         // Unreadable time on either side: can't prove no overlap -> fail safe.
         if (s.start == null || s.end == null || start == null || end == null) return true;
-        return start < s.end && s.start < end;
+        // DIFFERENT SITES need travel time (20261113a): widen each side by the
+        // gap, so 1:35-2:35 at one school and 2:35 at another clash. Same site
+        // keeps the plain overlap test - back-to-back in one building is the
+        // pairing operators run on purpose (OES 2:00-3:25 / 3:25-4:25). A side
+        // with no site is treated as a different site: we cannot prove it is
+        // the same building, and this writes without a human looking.
+        return clashesWithSiteGap(
+          { start, end, locationId: prog.program_location_id ?? null },
+          { start: s.start, end: s.end, locationId: s.locationId },
+          siteGapMin,
+        );
       });
     }
     const loadCount = new Map<string, number>();
@@ -621,7 +655,7 @@ serve(async (req) => {
     }
 
     // Everything except the area check: time/day fit, not double-booked, under cap.
-    function eligibleCore(inst: PoolInstr, prog: any): boolean {
+    function eligibleCore(inst: PoolInstr, prog: any, siteGapMin: number = SITE_GAP_MIN): boolean {
       // A CAMP ASKS A DIFFERENT QUESTION, and answers it from a different place.
       // The weekday window below is an after-school answer ("I can start at
       // 1:00, after my other job"); a camp runs 9-3 on named dates and the
@@ -634,7 +668,7 @@ serve(async (req) => {
         if (declinedByProgram.get(prog.id)?.has(inst.id)) return false;
         if (!inst.campYes.has(prog.id)) return false;
         if (!hasUsableTime(prog)) return false;
-        return !wouldConflict(inst.id, prog);
+        return !wouldConflict(inst.id, prog, siteGapMin);
       }
       const dc = dayCode(prog.day_of_week);
       if (!dc) return false;
@@ -648,7 +682,7 @@ serve(async (req) => {
       if (start == null || end == null || from == null) return false;
       if (start - ARRIVAL_BUFFER_MIN < from) return false;   // can't arrive in time
       if (until != null && end > until) return false;         // class runs past when they must leave
-      if (wouldConflict(inst.id, prog)) return false;
+      if (wouldConflict(inst.id, prog, siteGapMin)) return false;
       // Cap on DAYS, counting the day this class would add. A second class on a day
       // they already work costs no extra day.
       if (inst.maxDays != null && daysUsed(inst.id, dc) > inst.maxDays) return false;
@@ -740,14 +774,29 @@ serve(async (req) => {
         .some((s) => !s.isCamp && !s.external && s.dc === dc && s.locationId === locationId);
     }
 
-    // Assign one program to its best candidate. Winner order:
-    //   0. already at this school on this weekday (adjacent class — no travel, no day)
+    // Would taking this class keep the instructor within the provider's class-type
+    // (material kit) target? A class of a curriculum they already carry costs no
+    // new kit; a class with no curriculum on file cannot be counted, so it never
+    // counts against them.
+    function withinKitTarget(inst: PoolInstr, prog: any): boolean {
+      if (!currKey(prog) || holdsCurriculum(inst, prog)) return true;
+      return (assignedCurricula.get(inst.id)?.size ?? 0) + 1 <= KIT_TARGET;
+    }
+
+    // Assign one program to its best candidate. Winner order (20261113a):
+    //   0. already at this school on this weekday (adjacent class — no travel, no day),
+    //      as long as it keeps them within the class-type target
     //   1. already teaches this curriculum (continuity) — unless area = unavailable
-    //   2. can cover the most OTHER classes of this curriculum (start a long chain)
-    //   3. enjoys this curriculum family (LEGO / coding / robotics) — soft guide
-    //   4. area preference
-    //   5. fewest distinct curricula so far (don't pile a new set onto someone)
-    //   6. confirmed-before-tentative, then fewer classes, then name
+    //   2. stays within the class-type target. Over it is still possible, but only
+    //      when nobody within target is eligible - i.e. instead of leaving the class
+    //      unstaffed. Before this, "fewest curricula" sat 6th, under reach, family
+    //      and area, so the most-available instructor collected a new kit every
+    //      time one came up (WI27 prod: 10 class types across 16 classes).
+    //   3. area preference
+    //   4. enjoys this curriculum family (LEGO / coding / robotics) — soft guide
+    //   5. can cover the most OTHER classes of this curriculum (start a long chain)
+    //   6. fewest distinct curricula so far (don't pile a new set onto someone)
+    //   7. confirmed-before-tentative, then fewer classes, then name
     function assignWinner(prog: any) {
       const candidates = pool.filter((inst) => eligible(inst, prog));
       if (candidates.length === 0) return;
@@ -757,19 +806,25 @@ serve(async (req) => {
         // Being already on-site that day beats curriculum continuity: continuity saves
         // prep, but this saves a trip AND a day, and it's the pattern operators actually
         // run (same person covers the back-to-back pair at one school).
-        const aHere = alreadyAtSchoolToday(a, prog);
-        const bHere = alreadyAtSchoolToday(b, prog);
+        // ...but not at the price of a kit past the target (20261113a): someone
+        // already in the building who would have to carry a 4th class type does
+        // not outrank an eligible instructor who stays within it. They fall back
+        // to the ordinary order below, where the target decides.
+        const aHere = alreadyAtSchoolToday(a, prog) && withinKitTarget(a, prog);
+        const bHere = alreadyAtSchoolToday(b, prog) && withinKitTarget(b, prog);
         if (aHere !== bHere) return aHere ? -1 : 1;
         // candidates are all eligible(), so 'unavailable' areas are already excluded.
         const aSticky = holdsCurriculum(a, prog);
         const bSticky = holdsCurriculum(b, prog);
         if (aSticky !== bSticky) return aSticky ? -1 : 1;
-        const ra = reachOf.get(a.id)!, rb = reachOf.get(b.id)!;
-        if (rb !== ra) return rb - ra;
-        const aCat = prefersCategory(a, prog), bCat = prefersCategory(b, prog);
-        if (aCat !== bCat) return aCat ? -1 : 1;
+        const aIn = withinKitTarget(a, prog), bIn = withinKitTarget(b, prog);
+        if (aIn !== bIn) return aIn ? -1 : 1;
         const sa = areaScore(a, prog), sb = areaScore(b, prog);
         if (sb !== sa) return sb - sa;
+        const aCat = prefersCategory(a, prog), bCat = prefersCategory(b, prog);
+        if (aCat !== bCat) return aCat ? -1 : 1;
+        const ra = reachOf.get(a.id)!, rb = reachOf.get(b.id)!;
+        if (rb !== ra) return rb - ra;
         const ca = assignedCurricula.get(a.id)?.size ?? 0, cb = assignedCurricula.get(b.id)?.size ?? 0;
         if (ca !== cb) return ca - cb;
         if (a.needsConfirmation !== b.needsConfirmation) return a.needsConfirmation ? 1 : -1;
@@ -850,10 +905,22 @@ serve(async (req) => {
       // Not someone already on this class - naming them here would suggest they
       // could also take its other slot, which they cannot.
       const blockedByArea = pool.filter((inst) => !takenBy.get(prog.id)?.has(inst.id) && eligibleCore(inst, prog) && areaPrefFor(inst, prog) === 'unavailable');
+      // Anyone the cross-site gap ALONE kept off it (20261113a): free if the drive
+      // did not count, not free once it does. Named, because "already booked
+      // elsewhere" sends the operator hunting for a double-booking that is not
+      // there, and the board lets them assign anyway when the sites are close.
+      const blockedByGap = SITE_GAP_MIN > 0
+        ? pool.filter((inst) => !takenBy.get(prog.id)?.has(inst.id)
+            && areaPrefFor(inst, prog) !== 'unavailable'
+            && eligibleCore(inst, prog, 0) && !eligibleCore(inst, prog))
+        : [];
       let reason: string;
       if (blockedByArea.length > 0) {
         const names = blockedByArea.map((i) => i.name).join(', ');
         reason = `${names} could take this class but marked this area as unavailable. Assign by hand if you'd like.`;
+      } else if (blockedByGap.length > 0) {
+        const names = blockedByGap.map((i) => i.name).join(', ');
+        reason = `${names} could take this class but would have less than ${SITE_GAP_MIN} min to get here from another school that day. Assign by hand if the two schools are close.`;
       } else if (isCampProgram(prog)) {
         // A CAMP IS NOT STAFFED OFF WEEKDAYS, so it must not be explained in
         // them. "No instructor is available for this weekday and time window"
@@ -969,17 +1036,27 @@ serve(async (req) => {
     // Re-read after the writes: a refused row above is now a needs-hire.
     const placedDecisions = decisions.filter((d) => d.status === 'assigned');
 
-    // Materials metric: distinct curricula (= class sets) per instructor across all
-    // assignments, including locked/confirmed ones.
+    // Materials metric: distinct curricula (= class sets) per instructor across this
+    // run's placed rows AND the locked rows they already hold - the kits they will
+    // actually carry. Keyed by currKey, the same key the winner order uses: keying
+    // by curriculum NAME (as this did) counted a renamed curriculum twice and two
+    // curricula sharing a name once, so the summary disagreed with the decisions.
     const setsByInstr = new Map<string, Set<string>>();
-    for (const d of placedDecisions) {
-      const ck = d.curriculum_name ? `name:${String(d.curriculum_name).trim().toLowerCase()}` : null;
-      if (!ck) continue;
-      if (!setsByInstr.has(d.instructor_id)) setsByInstr.set(d.instructor_id, new Set());
-      setsByInstr.get(d.instructor_id)!.add(ck);
+    const placedIds = new Set(placedDecisions.map((d) => d.instructor_id));
+    for (const id of placedIds) {
+      const held = assignedCurricula.get(id);
+      if (held?.size) setsByInstr.set(id, new Set(held));
     }
-    let totalSets = 0, maxSets = 0;
-    for (const s of setsByInstr.values()) { totalSets += s.size; if (s.size > maxSets) maxSets = s.size; }
+    // A refused insert is now a needs-hire, but assignWinner already added its
+    // curriculum to assignedCurricula; that is a kit they will NOT carry, so the
+    // count can read one high for a refused row. Rare (refused > 0 means the rule
+    // drifted) and logged as refused_rows, so it is left visible rather than hidden.
+    let totalSets = 0, maxSets = 0, overTarget = 0;
+    for (const s of setsByInstr.values()) {
+      totalSets += s.size;
+      if (s.size > maxSets) maxSets = s.size;
+      if (s.size > KIT_TARGET) overTarget++;
+    }
 
     if (!dryRun) {
       await logPlatformEvent(admin, {
@@ -1018,7 +1095,8 @@ serve(async (req) => {
         instructors_in_pool: pool.length,
         missing_surveys: missingSurveys,
         missing_training: missingTraining,
-        curriculum_sets: { total: totalSets, max_per_instructor: maxSets, instructors_assigned: setsByInstr.size },
+        curriculum_sets: { total: totalSets, max_per_instructor: maxSets, instructors_assigned: setsByInstr.size, target: KIT_TARGET, instructors_over_target: overTarget },
+        min_minutes_between_sites: SITE_GAP_MIN,
       },
       decisions,
       write_stats: writeStats,

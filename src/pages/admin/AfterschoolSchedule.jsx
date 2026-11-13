@@ -22,7 +22,7 @@ import ScheduleStepBar from "../../components/ScheduleStepBar.jsx";
 import TabStrip from "../../components/TabStrip.jsx";
 import { useAdminNarrow, cardRow, cardCell } from "../../lib/adminViewport.js";
 import { resolveBoardSendIntro } from "../../lib/boardSendCopy.js";
-import { classifyOther } from "../../lib/scheduleConflicts.js";
+import { classifyOther, tooCloseBetweenSites } from "../../lib/scheduleConflicts.js";
 import { pickFocusedStep } from "../../lib/scheduleSteps.js";
 import { programScheduleSummary, formatDayLabel, isCampProgram, programWeekdays } from "../../lib/programSchedule.js";
 import { parseBonusDollars } from "../../lib/bonusAmount.js";
@@ -845,6 +845,36 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   // Reset week focus to the default when the term or org changes.
   useEffect(() => { setFocusedWeekStart(undefined); }, [term, org?.id]);
 
+  // The provider's minimum minutes between two schools on one day (20261113a),
+  // the same number match-afterschool reads. Read here rather than added to the
+  // shared AdminLayout org select, which only this board needs. Until it loads,
+  // and if the read fails, the column's own default (30) applies - the block it
+  // feeds is overridable, so a stale 30 costs one "Assign anyway", whereas 0
+  // would silently drop the rule.
+  const SITE_GAP_DEFAULT_MIN = 30;
+  const [siteGapMin, setSiteGapMin] = useState(SITE_GAP_DEFAULT_MIN);
+  useEffect(() => {
+    if (!org?.id) return;
+    let cancelled = false;
+    // Never carry the previous org's number into this one while the read runs.
+    setSiteGapMin(SITE_GAP_DEFAULT_MIN);
+    (async () => {
+      const { data, error } = await supabase
+        .from("organizations")
+        .select("min_minutes_between_sites")
+        .eq("id", org.id)
+        .maybeSingle();
+      if (cancelled) return;
+      if (error || !data) {
+        console.warn("[AfterschoolSchedule] min_minutes_between_sites read failed; using default", error?.message);
+        setSiteGapMin(SITE_GAP_DEFAULT_MIN);
+        return;
+      }
+      setSiteGapMin(Number(data.min_minutes_between_sites ?? SITE_GAP_DEFAULT_MIN));
+    })();
+    return () => { cancelled = true; };
+  }, [org?.id]);
+
   // Realtime: when an instructor accepts / requests a change in their portal,
   // the board updates without a manual refresh. Reload on any program_assignments
   // change that touches a program in the current term.
@@ -1503,6 +1533,9 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     // matcher draft blocks here too — but the copy stays honest about it being a
     // draft rather than claiming they "already teach" it.
     const committed = committedDays.get(instructorId);
+    // Set below when another school that day is closer than the provider's
+    // minimum gap; returned only after the max-days check (see there).
+    let siteGapBlock = null;
     // Checked on EVERY day the program occupies, not just its first. A Mon-Thu
     // camp against a Wednesday class is a real clash that reading day_of_week
     // alone could never see. Each entry keeps the day it clashes on so the
@@ -1626,12 +1659,36 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
             : `${first} also has ${list} on ${days} at the same school.`
         );
       }
+      // Another school with LESS than the provider's minimum gap (20261113a): a
+      // block, but an overridable one - the operator may know the two sites are
+      // across the street, and the matcher (which has nobody looking) is the one
+      // that treats it as hard. NOT returned here: an early overridable return
+      // would let "Assign anyway" skip the max-days check below, which is a hard
+      // block. It is held and returned after that check instead.
+      // A class with no site on either side counts as a different site, the same
+      // reading match-afterschool uses: we cannot prove it is one building.
+      const tooClose = others.filter((o) =>
+        o.c.when === "yes" && tooCloseBetweenSites(o, program.program_location_id ?? null, siteGapMin));
+      if (tooClose.length) {
+        const list = nameList(tooClose);
+        const days = [...new Set(tooClose.map((o) => labelFor(o.c.dayCode)))].join(" and ");
+        const shortest = Math.min(...tooClose.map((o) => o.gap));
+        siteGapBlock = {
+          ok: false,
+          overridable: true,
+          blockKind: "site_gap",
+          reason: `${first} has ${list} on ${days} at another school, with ${shortest === 0 ? "no time" : `only ${shortest} min`} to get there. Your minimum between schools is ${siteGapMin} min.`,
+          warnings,
+        };
+      }
       // Another school with a tight turnaround: allowed, but flag the drive. Jessica's
       // number — "might not be possible unless they're close together". She knows the
       // drive; the software doesn't, so this warns and never blocks.
       // Same rule as the same-school warning above: a drive between two schools
       // is only worth flagging once we know the two actually fall on one day.
-      const tight = others.filter((o) => !o.sameSchool && o.tight && o.c.when === "yes");
+      // Pairs already under the minimum are named by the block above, not twice.
+      const tooCloseIds = new Set(tooClose.map((o) => o.c.program_id));
+      const tight = others.filter((o) => !o.sameSchool && o.tight && o.c.when === "yes" && !tooCloseIds.has(o.c.program_id));
       if (tight.length) {
         const list = nameList(tight);
         const days = [...new Set(tight.map((o) => labelFor(o.c.dayCode)))].join(" and ");
@@ -1669,6 +1726,10 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
     // function now, so every early return carries them too. See the block comment
     // there before adding anything here.
     if (av.needs_confirmation) warnings.push(`${first}'s availability is unconfirmed.`);
+    // The cross-school gap block, held until the hard max-days check had its say,
+    // and after the unconfirmed note so "Assign anyway" still shows it (same
+    // warnings array).
+    if (siteGapBlock) return siteGapBlock;
     // campYes: an eligible camp row is eligible BECAUSE they said yes to it by
     // name (anyone else returned above), and the picker labels it so the
     // operator does not have to check the Availability tab.
