@@ -149,5 +149,14 @@ const min = (h, m = 0) => h * 60 + m;
   ok('no site on target -> still too close', tooCloseBetweenSites(cls, null, 30) === true);
 }
 
+// Unknown minimum: the board passes Infinity and holds every readable
+// different-school pairing, however far apart.
+{
+  const far = classifyOther({ start: min(15, 25), end: min(16, 25), loc: 'oes' }, { start: min(12, 15), end: min(13, 15), loc: 'grass' }, 60);
+  const same = classifyOther({ start: min(15, 25), end: min(16, 25), loc: 'oes' }, { start: min(14, 0), end: min(15, 25), loc: 'oes' }, 60);
+  ok('unknown minimum -> different school held', tooCloseBetweenSites(far, 'oes', Infinity) === true);
+  ok('unknown minimum -> same school still fine', tooCloseBetweenSites(same, 'oes', Infinity) === false);
+}
+
 console.log(`\nscheduleConflicts: ${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);

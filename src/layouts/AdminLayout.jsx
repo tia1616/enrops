@@ -523,7 +523,10 @@ export default function AdminLayout() {
         // select arrives as undefined — which would have hidden it from the one
         // org it is written for. Same flag the onboarding wizard uses to decide
         // whether to show the Stripe step, so the two surfaces cannot disagree.
-        .select("id, name, slug, email, timezone, active_registration_term, uses_enrops_registration, venue_model, background_check_config, instructor_pay_model, instructor_pay_enabled, platform_plan, stripe_charges_enabled, fee_pass_through, venue_answer, program_cadence, default_age_min, default_age_max, onboarding_completed_at")
+        // min_minutes_between_sites: the after-school board's travel-time rule
+        // between schools (20261113a). Read HERE so it shares this load's
+        // fail-closed shell; the column must exist on an env before this ships.
+        .select("id, name, slug, email, timezone, active_registration_term, uses_enrops_registration, venue_model, background_check_config, instructor_pay_model, instructor_pay_enabled, platform_plan, stripe_charges_enabled, fee_pass_through, venue_answer, program_cadence, default_age_min, default_age_max, onboarding_completed_at, min_minutes_between_sites")
           .eq("id", memberRow.organization_id)
           .maybeSingle();
         if (!mounted) return;
