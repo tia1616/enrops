@@ -23,7 +23,8 @@
 -- organizations has table-level grants (relacl), so no column grant is needed.
 
 alter table public.organizations
-  add column if not exists min_minutes_between_sites integer not null default 30,
+  -- 60, not 30: Jessica 2026-11-13, "30 isn't enough".
+  add column if not exists min_minutes_between_sites integer not null default 60,
   add column if not exists target_curricula_per_instructor integer not null default 3;
 
 alter table public.organizations

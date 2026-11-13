@@ -848,10 +848,10 @@ export default function AfterschoolSchedule({ org, term, campCycles = [], afters
   // The provider's minimum minutes between two schools on one day (20261113a),
   // the same number match-afterschool reads. Read here rather than added to the
   // shared AdminLayout org select, which only this board needs. Until it loads,
-  // and if the read fails, the column's own default (30) applies - the block it
-  // feeds is overridable, so a stale 30 costs one "Assign anyway", whereas 0
+  // and if the read fails, the column's own default (60) applies - the block it
+  // feeds is overridable, so a stale 60 costs one "Assign anyway", whereas 0
   // would silently drop the rule.
-  const SITE_GAP_DEFAULT_MIN = 30;
+  const SITE_GAP_DEFAULT_MIN = 60;
   const [siteGapMin, setSiteGapMin] = useState(SITE_GAP_DEFAULT_MIN);
   useEffect(() => {
     if (!org?.id) return;
