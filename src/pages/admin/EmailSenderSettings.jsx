@@ -722,6 +722,7 @@ export default function EmailSenderSettings() {
           <div style={{ marginTop: 14 }}>
             <div style={{ fontSize: 12, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>Preview</div>
             {subPreviewErr && <div style={hint}>{subPreviewErr}</div>}
+            {!subPreview && !subPreviewErr && <div style={hint}>Loading preview…</div>}
             {subPreview && (
               <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, overflow: "hidden", background: "#fff" }}>
                 <div style={{ padding: "10px 14px", borderBottom: `1px solid ${RULE}`, fontSize: 13, color: INK, lineHeight: 1.5 }}>
