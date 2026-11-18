@@ -41,6 +41,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
 import { loadOrgBrand, formatFromAddress, resolveTestRecipient, NO_TENANT_INBOX_MESSAGE } from '../_shared/orgBrand.ts';
 import { roomDisplay } from '../_shared/roomLabel.ts';
+import { subSignOff } from '../_shared/subSignOff.ts';
 
 // Per-environment site origin. Staging Supabase sets PUBLIC_SITE_URL to the staging
 // site so portal links in offer emails point at staging, not prod. Defaults to prod.
@@ -353,7 +354,7 @@ serve(async (req: Request) => {
       .maybeSingle();
 
     const primary = branding?.primary_color ?? DEFAULT_PRIMARY;
-    const senderFirstName = (branding?.email_from_name ?? org?.name ?? '').split(' ')[0] || 'the team';
+    const senderSignOff = subSignOff(org?.name, branding?.email_from_name);
 
     // Tenant brand for the sender line: FROM the tenant's verified/shared-platform
     // address, never the hardcoded J2S domain. Loaded once (single-email fn).
@@ -488,7 +489,7 @@ serve(async (req: Request) => {
     <p style="font-size:15px;line-height:1.55;margin:0 0 14px;">Open your portal to accept or decline — once you accept, you'll see the lesson plan and the day's roster.</p>
     <p style="margin:18px 0 22px;"><a href="${portalUrl}" style="background:${primary};color:#fff;text-decoration:none;padding:10px 18px;border-radius:6px;font-size:14px;font-weight:600;display:inline-block;">Open your portal</a></p>
     <p style="font-size:14px;line-height:1.55;color:${MUTED};margin:0 0 6px;">If this day doesn't work, just decline in the portal and I'll find someone else — no harm done.</p>
-    <p style="font-size:14px;line-height:1.55;margin:18px 0 0;">— ${escapeHtml(senderFirstName)} @ ${escapeHtml(org?.name ?? '')}</p>
+    <p style="font-size:14px;line-height:1.55;margin:18px 0 0;">— ${escapeHtml(senderSignOff)}</p>
   </div>
 </body></html>`;
 
@@ -512,7 +513,7 @@ serve(async (req: Request) => {
       ``,
       `If this day doesn't work, just decline in the portal and I'll find someone else — no harm done.`,
       ``,
-      `— ${senderFirstName} @ ${org?.name ?? ''}`,
+      `— ${senderSignOff}`,
     ].filter(Boolean);
     const text = textParts.join('\n');
 

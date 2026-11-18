@@ -85,6 +85,10 @@ export default function EmailSenderSettings() {
   const [fromName, setFromName] = useState("");
   const [replyTo, setReplyTo] = useState("");
   const [mailingAddress, setMailingAddress] = useState("");
+  // organizations.sub_coordination_notes — plain text added to the email sent
+  // when a sub accepts (respond-to-sub-offer escapes it). The column is
+  // NOT NULL DEFAULT '', so blank saves as '' and never null.
+  const [subNotes, setSubNotes] = useState("");
   // organizations.alert_email — where OUR alerts to the operator go.
   //
   // THIS FIELD NEVER WRITES NULL, and that is load-bearing. loadOrgBrand's
@@ -122,7 +126,7 @@ export default function EmailSenderSettings() {
   const [linkUrl, setLinkUrl] = useState("");
   // Snapshot of the last loaded/saved values so the Save button can grey out
   // when there's nothing to save, and light up when you change something.
-  const [saved, setSaved] = useState({ fromName: "", replyTo: "", mailingAddress: "", alertEmail: "", sigHtml: "", sigImageUrl: "" });
+  const [saved, setSaved] = useState({ fromName: "", replyTo: "", mailingAddress: "", subNotes: "", alertEmail: "", sigHtml: "", sigImageUrl: "" });
   const [preview, setPreview] = useState(null); // { from, reply_to, reply_to_source, sender_source, ... }
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -161,7 +165,7 @@ export default function EmailSenderSettings() {
       // force when alert_email is empty.
       const { data: orgRow } = await supabase
         .from("organizations")
-        .select("mailing_address, logo_url, alert_email, email")
+        .select("mailing_address, logo_url, alert_email, email, sub_coordination_notes")
         .eq("id", org.id)
         .maybeSingle();
       if (!cancelled) {
@@ -178,6 +182,7 @@ export default function EmailSenderSettings() {
         setFromName(data?.email_from_name ?? "");
         setReplyTo(data?.email_reply_to ?? "");
         setMailingAddress(orgRow?.mailing_address ?? "");
+        setSubNotes(orgRow?.sub_coordination_notes ?? "");
         // Pre-fill with the address actually in force, so the box is never
         // mysteriously blank for an org that IS receiving alerts today.
         const storedA = orgRow?.alert_email ?? "";
@@ -195,6 +200,7 @@ export default function EmailSenderSettings() {
           fromName: data?.email_from_name ?? "",
           replyTo: data?.email_reply_to ?? "",
           mailingAddress: orgRow?.mailing_address ?? "",
+          subNotes: orgRow?.sub_coordination_notes ?? "",
           // The pre-filled value, not the raw column — otherwise an org whose
           // alert_email is null loads permanently "dirty".
           alertEmail: storedA || orgE,
@@ -297,12 +303,14 @@ export default function EmailSenderSettings() {
         .from("organizations")
         .update({
           mailing_address: mailingAddress.trim() || null,
+          // NOT NULL DEFAULT '' — blank is '', never null.
+          sub_coordination_notes: subNotes.trim(),
           // Omitted entirely unless this field changed, so an untouched null
           // column stays null. When present it is never null — see above.
           ...(alertDirty ? { alert_email: alertToSave } : {}),
         })
         .eq("id", org.id)
-        .select("mailing_address, alert_email, email")
+        .select("mailing_address, alert_email, email, sub_coordination_notes")
         .maybeSingle();
       if (addrErr) throw addrErr;
       if (!savedOrg) throw new Error("That didn't save. Your role may not have permission to change organization settings — ask an owner or admin.");
@@ -314,9 +322,11 @@ export default function EmailSenderSettings() {
       setOrgEmail(orgEmailBack);
       setAlertEmail(storedBack || orgEmailBack);
       setMailingAddress(savedOrg.mailing_address ?? "");
+      setSubNotes(savedOrg.sub_coordination_notes ?? "");
       setSaved({
         fromName, replyTo,
         mailingAddress: savedOrg.mailing_address ?? "",
+        subNotes: savedOrg.sub_coordination_notes ?? "",
         alertEmail: storedBack || orgEmailBack,
         sigHtml, sigImageUrl, sigImgMode,
       });
@@ -457,6 +467,7 @@ export default function EmailSenderSettings() {
 
   const dirty =
     fromName !== saved.fromName || replyTo !== saved.replyTo || mailingAddress !== saved.mailingAddress ||
+    subNotes !== saved.subNotes ||
     alertEmail !== saved.alertEmail ||
     sigHtml !== saved.sigHtml || sigImageUrl !== saved.sigImageUrl || sigImgMode !== saved.sigImgMode;
 
@@ -678,6 +689,12 @@ export default function EmailSenderSettings() {
               </div>
             </div>
           )}
+        </div>
+
+        <div style={{ borderTop: `1px solid ${RULE}`, margin: "22px 0 0", paddingTop: 20 }}>
+          <label style={lbl} htmlFor="sub-notes">Sub coordination note</label>
+          <textarea id="sub-notes" value={subNotes} onChange={(e) => setSubNotes(e.target.value)} rows={3} style={{ ...input, resize: "vertical", lineHeight: 1.5 }} />
+          <div style={hint}>Added to the email sent when a sub accepts. Leave blank to skip.</div>
         </div>
 
         {saveErr && (
