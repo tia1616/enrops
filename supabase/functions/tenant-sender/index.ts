@@ -7,15 +7,19 @@
 // real emails will use.
 //
 // AUTH: caller must be owner/admin of organization_id.
-// INPUT:  { organization_id, action: 'preview' | 'test', to? }
+// INPUT:  { organization_id, action: 'preview' | 'test' | 'sub_coordination_preview', to?, note?, from_name? }
 // OUTPUT: preview -> { from, sender_name, sender_email, reply_to, sender_source, org_name }
 //         test    -> { sent, held_back?, to, from, error? }
+//         sub_coordination_preview -> { subject, html }  (renders only, sends nothing)
 
 import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, formatFromAddress, renderSignatureBlock } from '../_shared/orgBrand.ts';
 import { isEmailAllowed, emailGuardActive } from '../_shared/emailGuard.ts';
+import { buildSubCoordinationEmail } from '../_shared/subCoordinationEmail.ts';
+import { subSignOff } from '../_shared/subSignOff.ts';
 
+const PUBLIC_SITE_URL = (Deno.env.get('PUBLIC_SITE_URL') ?? 'https://enrops.com').replace(/\/+$/, '');
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
@@ -116,6 +120,35 @@ serve(async (req) => {
         return json({ sent: false, to, from, error: errText.slice(0, 240) });
       }
       return json({ sent: true, to, from });
+    }
+
+    if (action === 'sub_coordination_preview') {
+      // The "sub accepted" email exactly as respond-to-sub-offer builds it (same
+      // builder, same sign-off rule), with sample people and the page's UNSAVED
+      // note + sender name, so the operator sees it before saving. Sends nothing,
+      // writes nothing; owner/admin gated above like the other actions.
+      const [{ data: org }, { data: branding }] = await Promise.all([
+        admin.from('organizations').select('name, slug, sub_coordination_notes').eq('id', organizationId).maybeSingle(),
+        admin.from('org_branding').select('email_from_name').eq('organization_id', organizationId).maybeSingle(),
+      ]);
+      const note = typeof body.note === 'string' ? body.note.slice(0, 5000) : (org?.sub_coordination_notes ?? '');
+      const fromName = typeof body.from_name === 'string' ? body.from_name : (branding?.email_from_name ?? null);
+      // A real upcoming weekday, so the sample reads like the email they'll get.
+      const d = new Date();
+      d.setDate(d.getDate() + ((2 - d.getDay() + 7) % 7 || 7)); // next Tuesday
+      const friendlyDate = d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+      const portalUrl = org?.slug ? `${PUBLIC_SITE_URL}/${org.slug}/instructor` : PUBLIC_SITE_URL;
+      const email = buildSubCoordinationEmail({
+        regularFirst: 'Maria',
+        subFirst: 'Dana',
+        curriculumName: 'LEGO Robotics',
+        locationName: 'Lincoln Elementary',
+        friendlyDate,
+        portalUrl,
+        coordinationNotes: note,
+        signOff: subSignOff(org?.name, fromName),
+      });
+      return json({ subject: email.subject, html: email.html });
     }
 
     return json({ error: 'unknown action' }, 400);

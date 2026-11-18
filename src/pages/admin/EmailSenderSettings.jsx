@@ -89,6 +89,10 @@ export default function EmailSenderSettings() {
   // when a sub accepts (respond-to-sub-offer escapes it). The column is
   // NOT NULL DEFAULT '', so blank saves as '' and never null.
   const [subNotes, setSubNotes] = useState("");
+  // The real "sub accepted" email, rendered server-side by tenant-sender from the
+  // same builder respond-to-sub-offer sends with, using what's typed right now.
+  const [subPreview, setSubPreview] = useState(null); // { subject, html }
+  const [subPreviewErr, setSubPreviewErr] = useState("");
   // organizations.alert_email — where OUR alerts to the operator go.
   //
   // THIS FIELD NEVER WRITES NULL, and that is load-bearing. loadOrgBrand's
@@ -216,6 +220,24 @@ export default function EmailSenderSettings() {
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [org?.id]);
+
+  // Re-render the sub email preview as the note or sender name changes. Debounced
+  // so typing doesn't fire a request per keystroke; a stale response (an older
+  // request finishing last) is dropped so the preview never shows old text.
+  useEffect(() => {
+    if (loading || !org?.id) return;
+    let stale = false;
+    const t = setTimeout(async () => {
+      const { data, error: e } = await supabase.functions.invoke("tenant-sender", {
+        body: { organization_id: org.id, action: "sub_coordination_preview", note: subNotes, from_name: fromName },
+      });
+      if (stale) return;
+      if (e || !data?.html) { setSubPreviewErr("Couldn't load the preview."); return; }
+      setSubPreviewErr("");
+      setSubPreview({ subject: data.subject, html: data.html });
+    }, 400);
+    return () => { stale = true; clearTimeout(t); };
+  }, [loading, org?.id, subNotes, fromName]);
 
   // Seed the contentEditable's HTML once after load — React must not re-write it
   // on every keystroke (that would fight the cursor). We read innerHTML back into
@@ -696,6 +718,24 @@ export default function EmailSenderSettings() {
           <label style={lbl} htmlFor="sub-notes">Sub coordination note</label>
           <textarea id="sub-notes" value={subNotes} onChange={(e) => setSubNotes(e.target.value)} rows={3} style={{ ...input, resize: "vertical", lineHeight: 1.5 }} />
           <div style={hint}>Added to the email sent when a sub accepts. Leave blank to skip.</div>
+
+          <div style={{ marginTop: 14 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>Preview</div>
+            {subPreviewErr && <div style={hint}>{subPreviewErr}</div>}
+            {subPreview && (
+              <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, overflow: "hidden", background: "#fff" }}>
+                <div style={{ padding: "10px 14px", borderBottom: `1px solid ${RULE}`, fontSize: 13, color: INK, lineHeight: 1.5 }}>
+                  <div><strong>Subject:</strong> {subPreview.subject}</div>
+                  <div style={{ color: MUTED }}>
+                    To the instructor being covered and the sub. Other instructors on that class
+                    {storedAlertTrimmed ? <> and <strong>{storedAlertTrimmed}</strong></> : null} are copied.
+                  </div>
+                </div>
+                <iframe title="Sub accepted email preview" sandbox="" srcDoc={subPreview.html} style={{ width: "100%", height: 400, border: "none", display: "block", background: "#fff" }} />
+              </div>
+            )}
+            <div style={hint}>Sample names and class. Your note and sign-off are real.</div>
+          </div>
         </div>
 
         {saveErr && (

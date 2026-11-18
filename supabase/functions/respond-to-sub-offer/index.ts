@@ -20,6 +20,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { corsHeaders, json, resolveInstructor, adminClient } from '../_shared/instructor.ts';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 import { subSignOff } from '../_shared/subSignOff.ts';
+import { buildSubCoordinationEmail } from '../_shared/subCoordinationEmail.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
 // Per-environment site origin. Staging Supabase sets PUBLIC_SITE_URL to the staging
@@ -467,41 +468,10 @@ async function sendCoordinationEmail(
   const portalUrl = org?.slug ? `${PUBLIC_SITE_URL}/${org.slug}/instructor` : PUBLIC_SITE_URL;
   const coordinationNotes = (org?.sub_coordination_notes || '').trim();
 
-  const subject = `Coordinating ${friendlyDate.replace(/^[A-Za-z]+, /, '')} — ${curriculumName || 'sub day'}${locationName ? ` at ${locationName}` : ''}`;
-
-  const middleParagraphHtml = coordinationNotes
-    ? `<p style="font-size:15px;line-height:1.55;margin:0 0 14px;">${escapeHtml(coordinationNotes).replace(/\r?\n/g, '<br>')}</p>`
-    : '';
-  const middleParagraphText = coordinationNotes ? `${coordinationNotes}\n\n` : '';
-
-  const html = `<!doctype html>
-<html><body style="margin:0;background:#FBFBFB;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#1a1a1a;">
-  <div style="max-width:560px;margin:0 auto;padding:24px;">
-    <p style="font-size:15px;line-height:1.55;margin:0 0 14px;">Hi ${escapeHtml(regularFirst)} and ${escapeHtml(subFirst)},</p>
-    <p style="font-size:15px;line-height:1.55;margin:0 0 14px;"><strong>${escapeHtml(subFirst)}</strong> is covering <strong>${escapeHtml(regularFirst)}</strong>'s class for <strong>${escapeHtml(curriculumName || 'this class')}</strong>${locationName ? ` at <strong>${escapeHtml(locationName)}</strong>` : ''} on <strong>${escapeHtml(friendlyDate)}</strong>.</p>
-    <p style="font-size:15px;line-height:1.55;margin:0 0 14px;">You are both copied on this email so you can communicate. You can exchange phone numbers if you'd like.</p>
-    ${middleParagraphHtml}
-    <p style="font-size:14px;line-height:1.55;margin:0 0 18px;color:#6b6b6b;">${escapeHtml(subFirst)} — the roster and lesson plan are in your portal: <a href="${portalUrl}" style="color:#1C004F;">${portalUrl}</a></p>
-    <p style="font-size:14px;line-height:1.55;margin:18px 0 0;">Please let me know if you have any questions.</p>
-    <p style="font-size:14px;line-height:1.55;margin:14px 0 0;">— ${escapeHtml(senderSignOff)}</p>
-  </div>
-</body></html>`;
-
-  const text = [
-    `Hi ${regularFirst} and ${subFirst},`,
-    ``,
-    `${subFirst} is covering ${regularFirst}'s class for ${curriculumName || 'this class'}${locationName ? ` at ${locationName}` : ''} on ${friendlyDate}.`,
-    ``,
-    `You are both copied on this email so you can communicate. You can exchange phone numbers if you'd like.`,
-    ``,
-    middleParagraphText.trim(),
-    ``,
-    `${subFirst} — the roster and lesson plan are in your portal: ${portalUrl}`,
-    ``,
-    `Please let me know if you have any questions.`,
-    ``,
-    `— ${senderSignOff}`,
-  ].filter((line) => line !== undefined).join('\n');
+  const { subject, html, text } = buildSubCoordinationEmail({
+    regularFirst, subFirst, curriculumName, locationName, friendlyDate, portalUrl,
+    coordinationNotes, signOff: senderSignOff,
+  });
 
   // Loop in the OTHER confirmed instructors on this session/program (esp. the
   // LEAD) so whoever is actually on-site with the sub that day knows who's
