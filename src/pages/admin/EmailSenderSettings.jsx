@@ -69,6 +69,16 @@ export default function EmailSenderSettings() {
   const [fromName, setFromName] = useState("");
   const [replyTo, setReplyTo] = useState("");
   const [mailingAddress, setMailingAddress] = useState("");
+  // organizations.sub_coordination_notes — plain text added to the email sent
+  // when a sub accepts (respond-to-sub-offer escapes it). The column is
+  // NOT NULL DEFAULT '', so blank saves as '' and never null.
+  const [subNotes, setSubNotes] = useState("");
+  // The real "sub accepted" email, rendered server-side by tenant-sender from the
+  // same builder respond-to-sub-offer sends with, using what's typed right now.
+  const [subPreview, setSubPreview] = useState(null); // { subject, html }
+  const [subPreviewErr, setSubPreviewErr] = useState("");
+  // organizations.alert_email, read only to say who the sub email copies.
+  const [alertInbox, setAlertInbox] = useState("");
   // Signature: rich HTML (from the WYSIWYG box) + an optional image URL. Stored
   // as sanitized HTML in org_branding.email_signature.
   const [sigHtml, setSigHtml] = useState("");
@@ -86,7 +96,7 @@ export default function EmailSenderSettings() {
   const [linkUrl, setLinkUrl] = useState("");
   // Snapshot of the last loaded/saved values so the Save button can grey out
   // when there's nothing to save, and light up when you change something.
-  const [saved, setSaved] = useState({ fromName: "", replyTo: "", mailingAddress: "", sigHtml: "", sigImageUrl: "" });
+  const [saved, setSaved] = useState({ fromName: "", replyTo: "", mailingAddress: "", subNotes: "", sigHtml: "", sigImageUrl: "" });
   const [preview, setPreview] = useState(null); // { from, reply_to }
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -120,7 +130,7 @@ export default function EmailSenderSettings() {
       // mailing_address lives on organizations (CAN-SPAM footer), not org_branding.
       const { data: orgRow } = await supabase
         .from("organizations")
-        .select("mailing_address, logo_url")
+        .select("mailing_address, logo_url, sub_coordination_notes, alert_email")
         .eq("id", org.id)
         .maybeSingle();
       if (!cancelled) {
@@ -137,6 +147,8 @@ export default function EmailSenderSettings() {
         setFromName(data?.email_from_name ?? "");
         setReplyTo(data?.email_reply_to ?? "");
         setMailingAddress(orgRow?.mailing_address ?? "");
+        setSubNotes(orgRow?.sub_coordination_notes ?? "");
+        setAlertInbox((orgRow?.alert_email ?? "").trim());
         setSigHtml(sig);
         setSigImageUrl(customImg);
         setOrgLogo(logo);
@@ -145,6 +157,7 @@ export default function EmailSenderSettings() {
           fromName: data?.email_from_name ?? "",
           replyTo: data?.email_reply_to ?? "",
           mailingAddress: orgRow?.mailing_address ?? "",
+          subNotes: orgRow?.sub_coordination_notes ?? "",
           sigHtml: sig,
           sigImageUrl: customImg,
           sigImgMode: mode,
@@ -157,6 +170,24 @@ export default function EmailSenderSettings() {
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [org?.id]);
+
+  // Re-render the sub email preview as the note or sender name changes. Debounced
+  // so typing doesn't fire a request per keystroke; a stale response (an older
+  // request finishing last) is dropped so the preview never shows old text.
+  useEffect(() => {
+    if (loading || !org?.id) return;
+    let stale = false;
+    const t = setTimeout(async () => {
+      const { data, error: e } = await supabase.functions.invoke("tenant-sender", {
+        body: { organization_id: org.id, action: "sub_coordination_preview", note: subNotes, from_name: fromName },
+      });
+      if (stale) return;
+      if (e || !data?.html) { setSubPreview(null); setSubPreviewErr("Couldn't load the preview."); return; }
+      setSubPreviewErr("");
+      setSubPreview({ subject: data.subject, html: data.html });
+    }, 400);
+    return () => { stale = true; clearTimeout(t); };
+  }, [loading, org?.id, subNotes, fromName]);
 
   // Seed the contentEditable's HTML once after load — React must not re-write it
   // on every keystroke (that would fight the cursor). We read innerHTML back into
@@ -189,13 +220,22 @@ export default function EmailSenderSettings() {
         .from("org_branding").upsert(fields, { onConflict: "organization_id" });
       if (e) throw e;
       // mailing_address lives on organizations (its own row already exists).
+      // sub_coordination_notes only when its box changed, so a save elsewhere on
+      // the page can't put back a stale copy. NOT NULL DEFAULT '': blank is ''.
+      const subNotesDirty = subNotes !== saved.subNotes;
+      const subNotesToSave = subNotes.trim();
       const { error: addrErr } = await supabase
         .from("organizations")
-        .update({ mailing_address: mailingAddress.trim() || null })
+        .update({
+          mailing_address: mailingAddress.trim() || null,
+          ...(subNotesDirty ? { sub_coordination_notes: subNotesToSave } : {}),
+        })
         .eq("id", org.id);
       if (addrErr) throw addrErr;
       flash("Sender saved.");
-      setSaved({ fromName, replyTo, mailingAddress, sigHtml, sigImageUrl, sigImgMode });
+      const subNotesNow = subNotesDirty ? subNotesToSave : saved.subNotes;
+      setSubNotes(subNotesNow);
+      setSaved({ fromName, replyTo, mailingAddress, subNotes: subNotesNow, sigHtml, sigImageUrl, sigImgMode });
       await loadPreview();
     } catch (e) {
       setError(e.message ?? "Couldn't save your sender settings.");
@@ -328,6 +368,7 @@ export default function EmailSenderSettings() {
 
   const dirty =
     fromName !== saved.fromName || replyTo !== saved.replyTo || mailingAddress !== saved.mailingAddress ||
+    subNotes !== saved.subNotes ||
     sigHtml !== saved.sigHtml || sigImageUrl !== saved.sigImageUrl || sigImgMode !== saved.sigImgMode;
 
   if (loading) {
@@ -456,6 +497,31 @@ export default function EmailSenderSettings() {
               </div>
             </div>
           )}
+        </div>
+
+        <div style={{ borderTop: `1px solid ${RULE}`, margin: "22px 0 0", paddingTop: 20 }}>
+          <label style={lbl} htmlFor="sub-notes">Sub coordination note</label>
+          <textarea id="sub-notes" value={subNotes} onChange={(e) => setSubNotes(e.target.value)} rows={3} style={{ ...input, resize: "vertical", lineHeight: 1.5 }} />
+          <div style={hint}>Added to the email sent when a sub accepts. Leave blank to skip.</div>
+
+          <div style={{ marginTop: 14 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: MUTED, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 6 }}>Preview</div>
+            {subPreviewErr && <div style={hint}>{subPreviewErr}</div>}
+            {!subPreview && !subPreviewErr && <div style={hint}>Loading preview…</div>}
+            {subPreview && (
+              <div style={{ border: `1px solid ${RULE}`, borderRadius: 8, overflow: "hidden", background: "#fff" }}>
+                <div style={{ padding: "10px 14px", borderBottom: `1px solid ${RULE}`, fontSize: 13, color: INK, lineHeight: 1.5 }}>
+                  <div><strong>Subject:</strong> {subPreview.subject}</div>
+                  <div style={{ color: MUTED }}>
+                    To the instructor being covered and the sub. Other instructors on that class
+                    {alertInbox ? <> and <strong>{alertInbox}</strong></> : null} are copied.
+                  </div>
+                </div>
+                <iframe title="Sub accepted email preview" sandbox="" srcDoc={subPreview.html} style={{ width: "100%", height: 400, border: "none", display: "block", background: "#fff" }} />
+              </div>
+            )}
+            <div style={hint}>Sample names and class. Your note and sign-off are real.</div>
+          </div>
         </div>
 
         <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 18 }}>

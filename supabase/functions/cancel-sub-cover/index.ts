@@ -30,6 +30,7 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 import { isProgramClassDay } from '../_shared/programScheduleDay.ts';
+import { subSignOff } from '../_shared/subSignOff.ts';
 
 const PUBLIC_SITE_URL = (Deno.env.get('PUBLIC_SITE_URL') ?? 'https://enrops.com').replace(/\/+$/, '');
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY')!;
@@ -359,7 +360,7 @@ async function notifyCancelled(
   const subFirst = sub.preferred_name || sub.first_name || 'there';
   const friendlyDate = fmtDate(row.date);
   const className = curriculumName || 'that class';
-  const senderFirstName = (branding?.email_from_name ?? org?.name ?? '').split(' ')[0] || 'the team';
+  const senderSignOff = subSignOff(org?.name, branding?.email_from_name);
   const portalUrl = org?.slug ? `${PUBLIC_SITE_URL}/${org.slug}/instructor` : PUBLIC_SITE_URL;
   const brand = await loadOrgBrand(supabase, row.organization_id);
   const fromEmail = formatFromAddress(brand);
@@ -412,12 +413,12 @@ async function notifyCancelled(
     <p style="font-size:15px;line-height:1.55;margin:0 0 14px;">Hi ${escapeHtml(greetingName)},</p>
     ${body.map((l) => `<p style="font-size:15px;line-height:1.55;margin:0 0 14px;">${escapeHtml(l)}</p>`).join('\n    ')}
     <p style="font-size:14px;line-height:1.55;margin:0 0 18px;color:#6b6b6b;">Your days are in your portal: <a href="${portalUrl}" style="color:#1C004F;">${portalUrl}</a></p>
-    <p style="font-size:14px;line-height:1.55;margin:18px 0 0;">- ${escapeHtml(senderFirstName)}${org?.name ? ` @ ${escapeHtml(org.name)}` : ''}</p>
+    <p style="font-size:14px;line-height:1.55;margin:18px 0 0;">- ${escapeHtml(senderSignOff)}</p>
   </div>
 </body></html>`,
       text: [`Hi ${greetingName},`, ``, ...body.flatMap((l) => [l, ``]),
         `Your days are in your portal: ${portalUrl}`, ``,
-        `- ${senderFirstName}${org?.name ? ` @ ${org.name}` : ''}`].join('\n'),
+        `- ${senderSignOff}`].join('\n'),
     };
   };
 
