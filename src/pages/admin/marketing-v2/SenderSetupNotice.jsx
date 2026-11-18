@@ -8,34 +8,78 @@
 // address, not the provider. Shown on the Family Comms surfaces until set.
 //
 // Multi-tenant: scoped to the passed org id. No hardcoded tenant.
+//
+// ROLE: owner/admin only, and that is not cosmetic. This notice renders on the
+// Comms surfaces, which are gated on "send" — a tier that INCLUDES staff — but
+// its only action is a link to /admin/email-sender, which is gated on
+// "settings" (owner/admin). Showing it to staff means telling someone to fix
+// something the next click refuses to let them fix: they land on "Settings
+// isn't available for your role". A nudge nobody can act on is worse than no
+// nudge, so it is hidden for roles that cannot reach the destination.
 
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
+import { usePermissions } from "../../../lib/permissions";
 import { BRIGHT, INK, MUTED, RULE } from "../marketing/tokens.jsx";
 
 export default function SenderSetupNotice({ orgId }) {
   // Start false so the banner never flashes before we know the real state.
   const [needsSetup, setNeedsSetup] = useState(false);
+  // Separate from needsSetup on purpose. "hasn't chosen a reply-to" and "replies
+  // land nowhere useful" are different facts and the copy for them is different:
+  // one is a suggestion, the other is a problem. Folding them together is what
+  // made this notice tell providers something untrue about their own email.
+  //
+  // THREE-VALUED, and null is not laziness. Both booleans assert a destination:
+  // true says "they reach your account email", false says "they reach a default
+  // address, not you". If the read that decides between them fails we know
+  // neither, and defaulting to either one prints a claim we cannot back - the
+  // exact mistake this whole change exists to correct. null gets copy that names
+  // no destination at all.
+  const [repliesReachThem, setRepliesReachThem] = useState(null);
+  const perm = usePermissions();
 
   useEffect(() => {
     if (!orgId) return;
     let cancelled = false;
     (async () => {
-      const { data, error } = await supabase
-        .from("org_branding")
-        .select("email_reply_to")
-        .eq("organization_id", orgId)
-        .maybeSingle();
-      // On error, stay silent rather than show a banner we're unsure about.
-      if (!cancelled && !error) {
-        setNeedsSetup(((data?.email_reply_to ?? "").trim()).length === 0);
+      // organizations.email is read too, NOT just org_branding.email_reply_to.
+      // Reading only the latter made this notice say "replies go to a default
+      // address — not your inbox" to every org that had never opened the Email
+      // sender page, including ones whose account email IS what replies resolve
+      // to and does reach them. That was flatly untrue for The Ukulele Project,
+      // and it contradicted /admin/email-sender, which showed that org its own
+      // address with no warning at all. Same cascade as _shared/orgBrand.ts
+      // resolveReplyTo(), so the nudge and the destination agree.
+      const [brandingRes, orgRes] = await Promise.all([
+        supabase.from("org_branding").select("email_reply_to").eq("organization_id", orgId).maybeSingle(),
+        supabase.from("organizations").select("email").eq("id", orgId).maybeSingle(),
+      ]);
+      if (cancelled) return;
+      // WHETHER to show the notice depends on the branding read ONLY. The org read
+      // exists to pick the WORDING, so letting it gate the notice's existence would
+      // trade a correct signal for a cosmetic one: a transient failure of a query
+      // added for copy would silently hide a nudge the branding row alone had
+      // already earned. On error, stay silent rather than show a banner we're
+      // unsure about - but only for the read that actually decides.
+      if (!brandingRes.error) {
+        const hasBranding = ((brandingRes.data?.email_reply_to ?? "").trim()).length > 0;
+        setNeedsSetup(!hasBranding);
+        // Only refine the wording when we actually know. If this read failed,
+        // repliesReachThem stays null and the copy names no destination.
+        if (!orgRes.error) {
+          const hasOrgEmail = ((orgRes.data?.email ?? "").trim()).length > 0;
+          setRepliesReachThem(hasBranding || hasOrgEmail);
+        }
       }
     })();
     return () => { cancelled = true; };
   }, [orgId]);
 
-  if (!needsSetup) return null;
+  // Two separate questions, deliberately not folded together: needsSetup is
+  // "is this true", canManageSettings is "can THIS reader do anything about it".
+  if (!needsSetup || !perm.canManageSettings) return null;
 
   return (
     <div
@@ -56,7 +100,11 @@ export default function SenderSetupNotice({ orgId }) {
       <span style={{ fontSize: 13.5, color: INK, lineHeight: 1.5 }}>
         📨 <strong>Set your reply-to email.</strong>{" "}
         <span style={{ color: MUTED }}>
-          Right now, when a family replies to your emails it goes to a default address — not your inbox.
+          {repliesReachThem === true
+            ? "Family replies currently go to your account email. Choose where you'd like them instead."
+            : repliesReachThem === false
+              ? "Right now, when a family replies to your emails it goes to a default address — not your inbox."
+              : "Choose where you'd like family replies to land."}
         </span>
       </span>
       <Link
