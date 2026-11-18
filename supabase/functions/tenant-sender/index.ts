@@ -131,7 +131,7 @@ serve(async (req) => {
         admin.from('organizations').select('name, slug, sub_coordination_notes').eq('id', organizationId).maybeSingle(),
         admin.from('org_branding').select('email_from_name').eq('organization_id', organizationId).maybeSingle(),
       ]);
-      const note = typeof body.note === 'string' ? body.note.slice(0, 5000) : (org?.sub_coordination_notes ?? '');
+      const note = typeof body.note === 'string' ? body.note : (org?.sub_coordination_notes ?? '');
       const fromName = typeof body.from_name === 'string' ? body.from_name : (branding?.email_from_name ?? null);
       // A real upcoming weekday, so the sample reads like the email they'll get.
       const d = new Date();

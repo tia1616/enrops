@@ -232,7 +232,7 @@ export default function EmailSenderSettings() {
         body: { organization_id: org.id, action: "sub_coordination_preview", note: subNotes, from_name: fromName },
       });
       if (stale) return;
-      if (e || !data?.html) { setSubPreviewErr("Couldn't load the preview."); return; }
+      if (e || !data?.html) { setSubPreview(null); setSubPreviewErr("Couldn't load the preview."); return; }
       setSubPreviewErr("");
       setSubPreview({ subject: data.subject, html: data.html });
     }, 400);
