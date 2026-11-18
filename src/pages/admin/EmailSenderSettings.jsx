@@ -303,8 +303,9 @@ export default function EmailSenderSettings() {
         .from("organizations")
         .update({
           mailing_address: mailingAddress.trim() || null,
-          // NOT NULL DEFAULT '' — blank is '', never null.
-          sub_coordination_notes: subNotes.trim(),
+          // Only when this box changed, so a save elsewhere on the page can't
+          // put back a stale copy. NOT NULL DEFAULT '': blank is '', never null.
+          ...(subNotes !== saved.subNotes ? { sub_coordination_notes: subNotes.trim() } : {}),
           // Omitted entirely unless this field changed, so an untouched null
           // column stays null. When present it is never null — see above.
           ...(alertDirty ? { alert_email: alertToSave } : {}),

@@ -470,7 +470,7 @@ async function sendCoordinationEmail(
   const subject = `Coordinating ${friendlyDate.replace(/^[A-Za-z]+, /, '')} — ${curriculumName || 'sub day'}${locationName ? ` at ${locationName}` : ''}`;
 
   const middleParagraphHtml = coordinationNotes
-    ? `<p style="font-size:15px;line-height:1.55;margin:0 0 14px;">${escapeHtml(coordinationNotes)}</p>`
+    ? `<p style="font-size:15px;line-height:1.55;margin:0 0 14px;">${escapeHtml(coordinationNotes).replace(/\r?\n/g, '<br>')}</p>`
     : '';
   const middleParagraphText = coordinationNotes ? `${coordinationNotes}\n\n` : '';
 
