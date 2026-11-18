@@ -52,7 +52,13 @@ jobs:
         # type-check at deploy time either. Strict type-checking would
         # flag pre-existing warnings in non-test files and block CI on
         # unrelated noise.
-        run: deno test --allow-net --allow-read=supabase/functions,supabase/migrations,src --no-check supabase/functions/
+        # --no-lock: esm.sh's CDN does not serve byte-identical files from
+        # every edge. On 2026-11-18 GitHub's runners got a different
+        # esm.sh/tslib@2.8.1 than the copy pinned in deno.lock (which local
+        # runs and other edges still serve), and Deno's integrity check
+        # stopped the job before any test ran (exit 10). The lockfile is
+        # still used locally; CI tests just don't pin remote bytes.
+        run: deno test --no-lock --allow-net --allow-read=supabase/functions,supabase/migrations,src --no-check supabase/functions/
 
       - name: Set up Node
         uses: actions/setup-node@v4
