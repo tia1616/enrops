@@ -77,6 +77,7 @@ const Finances = lazy(() => import('./pages/admin/Finances.jsx'));
 const Payouts = lazy(() => import('./pages/admin/Payouts.jsx'));
 const Discounts = lazy(() => import('./pages/admin/Discounts.jsx'));
 const TeamPage = lazy(() => import('./pages/admin/team/TeamPage.jsx'));
+const HelpPage = lazy(() => import('./pages/admin/HelpPage.jsx'));
 const AdminSettings = lazy(() => import('./pages/admin/AdminSettings.jsx'));
 const SurveySettings = lazy(() => import('./pages/admin/SurveySettings.jsx'));
 const RegistrationQuestions = lazy(() => import('./pages/admin/RegistrationQuestions.jsx'));
@@ -413,6 +414,7 @@ export default function App() {
         <Route path="payouts" element={<InstructorRoute><Payouts /></InstructorRoute>} />
         <Route path="discounts" element={<Discounts />} />
         <Route path="team" element={<TeamPage />} />
+        <Route path="help" element={<HelpPage />} />
         <Route path="time-saved" element={<TimeSavedPage />} />
         <Route path="settings" element={<AdminSettings />} />
         <Route path="survey-settings" element={<SurveySettings />} />

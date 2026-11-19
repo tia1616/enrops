@@ -60,6 +60,9 @@ const BARE_ROUTES = new Set([
   'class-schedule', 'programs', 'programs/quick-new',
   'programs/:programId/roster', 'curricula', 'curricula/new', 'curricula/:id/extracting',
   'curricula/:id/review', 'curricula/:id/edit', 'schools', 'calendars', 'rosters',
+  // Help renders the bundled provider guides: static text, no data read, so
+  // every org and role that reaches /admin may read it.
+  'help',
   // THE INSTRUCTOR SURFACES CAME OFF THIS LIST on 2026-08-13. schedule,
   // schedule/print, instructors, availability, class-reports and pay-rates are
   // now wrapped in InstructorRoute — the /code-review finding this ledger's

@@ -403,7 +403,7 @@ export default function Discounts() {
       <div style={{ ...card, marginBottom: 16 }}>
         <div style={{ ...cardTitle, display: "flex", alignItems: "center", gap: 7 }}>
           Sibling discount
-          <EnnieTip title="Why offer a sibling discount?">
+          <EnnieTip title="Why offer a sibling discount?" guide="discounts">
             A family with two children is deciding whether to sign up twice. A
             small automatic discount usually costs you less than losing that
             second registration.
@@ -434,7 +434,7 @@ export default function Discounts() {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
         <div style={{ fontSize: 18, fontWeight: 700, color: PURPLE, display: "flex", alignItems: "center", gap: 7 }}>
           Promo codes
-          <EnnieTip title="What makes a promo code work?">
+          <EnnieTip title="What makes a promo code work?" guide="discounts">
             Give each code a reason and an end date. Open-ended codes get passed
             around and quietly become your new price.
           </EnnieTip>
