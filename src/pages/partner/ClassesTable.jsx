@@ -15,7 +15,7 @@ import DocumentStatusBadge from "../../components/DocumentStatusBadge.jsx";
 import { listPartnerClasses, getClassRoster, getRegistrationFields, setReportedEnrollment } from "../../lib/partnerPortal.js";
 import {
   scheduleText, enrolledText, countSourceText, classBadge, rosterAvailable,
-  sortClasses, rosterDisplayRows, asksDismissal,
+  sortClasses, rosterDisplayRows, asksDismissal, showsHomeroom,
 } from "../../lib/partnerClasses.js";
 
 const TH = "border-b border-j2s-ink/10 bg-white px-3 py-2 text-left text-xs font-semibold text-j2s-ink/60";
@@ -60,7 +60,8 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
         getClassRoster(partnerId, c.kind, c.class_id),
         getRegistrationFields(orgId, c.kind === "class" ? c.class_id : null),
       ]);
-      setRosters((m) => ({ ...m, [k]: { rows: rosterDisplayRows(rows), asks: asksDismissal(fields, c.kind) } }));
+      const shown = rosterDisplayRows(rows);
+      setRosters((m) => ({ ...m, [k]: { rows: shown, asks: asksDismissal(fields, c.kind), homeroom: showsHomeroom(shown) } }));
     } catch (err) {
       setRosters((m) => ({ ...m, [k]: { error: `Couldn't load the roster: ${err?.message ?? "unknown error"}` } }));
     } finally {
@@ -179,7 +180,7 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
                                 <tr>
                                   <th className="px-2 py-1 text-left text-xs font-semibold text-j2s-ink/60">Student</th>
                                   <th className="px-2 py-1 text-left text-xs font-semibold text-j2s-ink/60">Grade</th>
-                                  <th className="px-2 py-1 text-left text-xs font-semibold text-j2s-ink/60">Homeroom</th>
+                                  {roster.homeroom && <th className="px-2 py-1 text-left text-xs font-semibold text-j2s-ink/60">Homeroom</th>}
                                   {roster.asks && <th className="px-2 py-1 text-left text-xs font-semibold text-j2s-ink/60">Dismissal</th>}
                                 </tr>
                               </thead>
@@ -188,7 +189,7 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
                                   <tr key={r.key}>
                                     <td className="px-2 py-1 text-j2s-ink">{r.name}</td>
                                     <td className="px-2 py-1 text-j2s-ink/80">{r.grade}</td>
-                                    <td className="px-2 py-1 text-j2s-ink/80">{r.homeroom}</td>
+                                    {roster.homeroom && <td className="px-2 py-1 text-j2s-ink/80">{r.homeroom ?? "Not stated"}</td>}
                                     {roster.asks && <td className="px-2 py-1 text-j2s-ink/80">{r.dismissal}</td>}
                                   </tr>
                                 ))}

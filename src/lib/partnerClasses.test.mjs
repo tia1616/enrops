@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 import {
   scheduleText, enrolledText, countSourceText, classBadge, rosterAvailable,
-  sortClasses, rosterDisplayRows, asksDismissal, shortDate,
+  sortClasses, rosterDisplayRows, asksDismissal, shortDate, showsHomeroom,
 } from './partnerClasses.js';
 
 let pass = 0, fail = 0;
@@ -67,7 +67,15 @@ const roster = rosterDisplayRows([
 ]);
 eq('sorted by first name, case-insensitive', roster.map((r) => r.name), ['Ava Li', 'zoe Ng']);
 eq('K grade', roster[1].grade, 'K');
-eq('blank homeroom says so', roster[1].homeroom, 'Not stated');
+eq('blank homeroom is none', roster[1].homeroom, null);
+eq('homeroom column shows when a child has one', showsHomeroom(roster), true);
+eq('no homeroom anywhere hides the column (parks, camps)', showsHomeroom(rosterDisplayRows([{ row_key: '1', first_name: 'A', homeroom: null }, { row_key: '2', first_name: 'B', homeroom: '' }])), false);
+eq('empty roster hides it', showsHomeroom([]), false);
+{
+  const sqlc = readFileSync(new URL('../../supabase/migrations/20261119c_partner_roster_homeroom_schools_only.sql', import.meta.url), 'utf8');
+  eq('homeroom only for a school class', sqlc.includes("p_kind = 'class' and private.partner_is_school(p.partner_type)"), true);
+  eq('camp roster never carries homeroom', /r\.camp_session_id = p_class_id/.test(sqlc) && sqlc.includes('null::text,'), true);
+}
 eq('no dismissal answer says so', roster[1].dismissal, 'Not stated');
 eq('only display fields', Object.keys(roster[0]).sort(), ['dismissal', 'grade', 'homeroom', 'key', 'name']);
 
