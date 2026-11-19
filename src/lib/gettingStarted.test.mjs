@@ -44,7 +44,8 @@ const soon = nextStageLine({ stageOneDone: true, today, orgPrograms: [{ status: 
 ok(soon.stage === 4 && soon.firstDate === "2026-12-01", "a class starting in 12 days: stage 4");
 ok(nextStageLine({ stageOneDone: true, today, orgPrograms: [{ status: "open", first_session_date: "2026-12-04" }] }).stage === 2, "15 days out is not yet stage 4");
 ok(nextStageLine({ stageOneDone: true, today, orgPrograms: [{ status: "draft", first_session_date: "2026-11-25" }] }).stage === 2, "a draft starting soon does not trigger stage 4");
-ok(nextStageLine({ stageOneDone: true, today, orgPrograms: [{ status: "open", first_session_date: "2026-11-01" }] }).stage === 2, "a class that already started is not stage 4");
+ok(nextStageLine({ stageOneDone: true, today, orgPrograms: [{ status: "open", first_session_date: "2026-11-01" }] }) === null, "a class that already started: not stage 4, and no 'you're live' line either");
+ok(nextStageLine({ stageOneDone: true, today, orgPrograms: [{ status: "open", first_session_date: "2026-09-08" }, { status: "open", first_session_date: "2027-01-12" }] }) === null, "established provider, next class far off: no line at all");
 ok(nextStageLine({ stageOneDone: true, today, orgPrograms: [{ status: "open", first_session_date: today }] }).stage === 4, "starting today is still stage 4");
 
 const ended = {
@@ -61,7 +62,9 @@ ok(nextStageLine({ ...ended, datesByProgram: { ...ended.datesByProgram, b: [{ da
 ok(nextStageLine({ ...ended, termPrograms: [], datesByProgram: {} }).stage === 2, "no classes in the term is not 'the term ended'");
 ok(nextStageLine({ ...ended, termPrograms: [{ id: "a", status: "draft" }] }).stage === 2, "drafts never end a term");
 const both = nextStageLine({ ...ended, orgPrograms: [{ status: "open", first_session_date: "2026-11-25" }] });
-ok(both.stage === 6, "stage 6 outranks stage 4, one line at a time");
+ok(both.stage === 4, "next term already published: the term-ended line gives way to stage 4");
+ok(nextStageLine({ ...ended, orgPrograms: [{ status: "open", first_session_date: "2026-09-10" }, { status: "open", first_session_date: "2027-01-12" }] }) === null, "next term published and far off: nothing to nag about");
+ok(nextStageLine({ ...ended, orgPrograms: [{ status: "draft", first_session_date: "2027-01-12" }] }).stage === 6, "a DRAFT next term does not count as lined up");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

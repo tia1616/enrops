@@ -61,7 +61,7 @@ function formatDay(ymd) {
   return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
 }
 
-export default function GettingStartedCard({ org, term, termPrograms, datesByProgram }) {
+export default function GettingStartedCard({ org, term, termPrograms, datesByProgram, loading }) {
   // Every program in the org, not just the term on screen: a class saved under
   // another term still means "you built one".
   const [orgPrograms, setOrgPrograms] = useState(null); // null = not loaded or failed
@@ -139,12 +139,14 @@ export default function GettingStartedCard({ org, term, termPrograms, datesByPro
     );
   }
 
+  // While the page is loading a new term, its label and its classes can belong
+  // to different terms, so the term half is withheld until they match.
   const line = nextStageLine({
     stageOneDone,
     orgPrograms,
-    term,
-    termPrograms: termPrograms || [],
-    datesByProgram: datesByProgram || {},
+    term: loading ? null : term,
+    termPrograms: loading ? [] : termPrograms || [],
+    datesByProgram: loading ? {} : datesByProgram || {},
     today: todayLocalISO(),
   });
   if (!line) return null;
@@ -166,7 +168,7 @@ export default function GettingStartedCard({ org, term, termPrograms, datesByPro
       <>
         {/* Not the guide's goal line: it names a school partner, and a studio
             provider has none. */}
-        Your first class is {formatDay(line.firstDate)}. What to do in the two weeks before:{" "}
+        Your next class starts {formatDay(line.firstDate)}. What to do in the two weeks before:{" "}
         <GuideLink href={`/admin/help#guide-${g.slug}`}>{g.title} ↗</GuideLink>
       </>
     );

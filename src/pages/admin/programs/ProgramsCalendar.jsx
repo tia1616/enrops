@@ -13,7 +13,7 @@
 // import white-screened /admin/programs while npm run build and 76 unit tests all
 // passed - JSX is never type-checked, so a missing binding is a RUNTIME
 // ReferenceError, invisible to every static gate.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useOutletContext } from "react-router-dom";
 import { supabase } from "../../../lib/supabase.js";
 import { useAdminNarrow, tapTarget } from "../../../lib/adminViewport.js";
@@ -29,7 +29,7 @@ import { isCampProgram, firstMeetingDayOnOrAfter, campDayMismatchMessage } from 
 import FamiliesPayNote, { useOrgFeeConfig } from "../../../components/FamiliesPayNote.jsx";
 import ShareLink from "../../../components/ShareLink.jsx";
 import EnnieTip from "../../../components/EnnieTip.jsx";
-import GettingStartedCard from "./GettingStartedCard.jsx";
+const GettingStartedCard = lazy(() => import("./GettingStartedCard.jsx"));
 import EmbedSnippet from "../../../components/EmbedSnippet.jsx";
 import { buildCatalogUrl } from "../../../lib/regLinks.js";
 import { WAITLIST_STATUS } from "../../../lib/waitlistState.js";
@@ -1173,16 +1173,18 @@ export default function ProgramsCalendar() {
 
       {/* Getting started (onboarding chunk 2): providers who run registration
           on enrops only, and only owners/admins, who can do every step on it.
-          The term and its classes are passed only once they have loaded
-          together, so the "term has ended" line never reads one term's label
-          against the previous term's classes. */}
+          Lazy, so the guide text it reads is only downloaded by the providers
+          who see it. `loading` lets it ignore the term while a new one loads. */}
       {org?.instructor_pay_model === "enrops_platform" && org?.uses_enrops_registration !== false && perm.canManageSettings && (
-        <GettingStartedCard
-          org={org}
-          term={loading ? null : term}
-          termPrograms={loading ? [] : programs}
-          datesByProgram={loading ? {} : sessionDatesByProgram}
-        />
+        <Suspense fallback={null}>
+          <GettingStartedCard
+            org={org}
+            term={term}
+            termPrograms={programs}
+            datesByProgram={sessionDatesByProgram}
+            loading={loading}
+          />
+        </Suspense>
       )}
       {term && termsLoaded && (
         activeTerm === term ? (
