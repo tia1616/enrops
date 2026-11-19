@@ -53,7 +53,7 @@ Three things and you're live: build a class, connect Stripe, share the link.
 
    Then tap **Next: build my first class →**. (**Not now** skips them, and they come back next time.)
 3. Fill in **Program name**, **Price** and **Spots**. Add a **Description** and **Photo** if you have them.
-4. Pick the **Location** (or **Which site?**). Use **+ Add a location** (or **+ Add a site**) if it's new.
+4. Pick the **Location** (or **Which site?**). Use **+ Add a location** (or **+ Add a site**) if it's new. Choose its **District**, or **No district (studio, library, private site)**. If it's at a school, tick **This is at a school or another organization's site** so you can send them rosters. Tap **Save location**.
 5. Choose **What kind of thing is this?**
    - **Weekly series:** day of the week, start and end time, **First class date**, **# of classes**.
    - **One-off workshop:** the date.
@@ -78,14 +78,14 @@ Three things and you're live: build a class, connect Stripe, share the link.
 **When you need it:** any class at a school, or any class whose families follow a school calendar. Do it before you share your link, because families see the dates.
 
 **Steps**
-1. **Programs → Locations.** Open the location and choose its **District**. Pick **No district (studio, library, private site)** only if it truly doesn't follow a school calendar.
+1. **Programs → Locations.** Tap **Open** on the site, choose its **District**, and tap **Save changes**. Pick **No district (library, church, private site)** only if it truly doesn't follow a school calendar.
 2. **Programs → School calendar.** Find the district and tap **Add calendar**.
 3. Under **Pull dates…**, paste a link to the district calendar, upload the PDF, or paste the text, then tap **Extract**.
 4. Check **First day of school**, **Last day of school**, **No-school days** and **Early-release days**. Fix anything that's off and tap **Save calendar**.
 5. When asked whether you teach on early-release days, choose **Yes, I teach on early-release days** (and the time) or **No, we skip those days**.
 
 **Ennie's advice**
-- The district is the piece people miss. Everything looks saved and the dates are simply wrong. Every school location needs one.
+- The district is the piece people miss. Everything looks saved and the dates are simply wrong. Every school site needs one.
 - One district calendar covers every school in that district. You only upload it once per school year.
 - The early-release answer can be changed later with the **Class times** button on that calendar's row.
 - A single day off (a field trip, a snow day): **Programs → Scheduled programs**, open the class, **Mark a no-school day**.
@@ -132,8 +132,7 @@ Three things and you're live: build a class, connect Stripe, share the link.
 - Check it on your phone too, not just a computer.
 - At checkout families see your price plus the enrops service fee on its own line, so nobody is surprised.
 - Where to send it: the principal or front office, your school newsletter contact, and the families you already know.
-<!-- VERIFY before publishing: when does a later-term class open to families? Every self-signup org on prod has active_registration_term = FA26 (checked 2026-11-19). -->
-- A class in a later term shows "Not open to families yet".
+- When you share a class from a term that isn't open yet, the share panel says **Not open to families yet**. Camps are the exception: their link works as soon as you publish. See **Open the new term to families**.
 
 **If it goes wrong**
 - The share button says **Connect Stripe to share your link →**: families can't pay until Stripe is connected.

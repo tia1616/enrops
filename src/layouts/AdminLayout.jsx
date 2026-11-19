@@ -168,6 +168,10 @@ const NAV = [
   // reach but not use. One viewer exists on prod. Same posture as /admin/email-sender.
   { to: "/admin/settings", label: "Settings", gate: "settings", match: ["/admin/settings", "/admin/waivers", "/admin/survey-settings", "/admin/pay-rates", "/admin/email-sender", "/admin/branding", "/admin/instructor-documents"] }, // owner/admin only
   { to: "/admin/team", label: "Team", gate: "team" },             // owner/admin only
+  // The provider guides (src/content/guides). Ungated: every role on every plan
+  // can read how enrops works, and it is static text with no data behind it.
+  // Last, where products put Help.
+  { to: "/admin/help", label: "Help" },
 ];
 
 // Lean registration operators (instructor_pay_model === 'enrops_platform') run a

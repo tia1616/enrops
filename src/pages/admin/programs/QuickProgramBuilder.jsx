@@ -1900,7 +1900,7 @@ export default function QuickProgramBuilder() {
             camp, and the fields alone (days it runs, first/last day) are a weak
             signal next to a heading that says "program". */}
         {campOnlyDoor ? "Create a camp" : "Create a program"}
-        <EnnieTip title="Can I change this later?">
+        <EnnieTip title="Can I change this later?" guide="faq-edit-live">
           Yes &mdash; the name, price, times and dates can all be edited after you
           publish. Families who already registered keep the price they paid.
         </EnnieTip>

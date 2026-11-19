@@ -980,13 +980,13 @@ export default function Finances() {
             the state rather than config.fee_pass_through so the tip follows the
             toggle without a reload. */}
         {isLean && config && (feePassThrough ? (
-          <EnnieTip title="Why do families see the fee?">
+          <EnnieTip title="Why do families see the fee?" guide="fees">
             They see it before they pay, on purpose. Costs that appear at the last
             step are the number one reason people abandon an online order (40%,
             Baymard Institute). Shown up front, the same cost doesn&rsquo;t do that.
           </EnnieTip>
         ) : (
-          <EnnieTip title="Why is there no fee at checkout?">
+          <EnnieTip title="Why is there no fee at checkout?" guide="fees">
             Families pay exactly your class price, because you&rsquo;re covering
             the fee. Nothing turns up at the last step that wasn&rsquo;t on the
             class page &mdash; and last-step surprises are the number one reason

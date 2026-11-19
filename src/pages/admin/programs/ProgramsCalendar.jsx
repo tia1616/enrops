@@ -3760,7 +3760,7 @@ function SessionDatesPanel({ program, dates, districtHasCalendar, onScheduleChan
             uppercase heading above so the bubble text doesn't inherit
             text-transform. Adds what the subtitle doesn't say: it's district-wide
             and flows to families + instructors on its own. */}
-        <EnnieTip title="What's a no-school day?">
+        <EnnieTip title="What's a no-school day?" guide="school-calendar">
           A day school is closed, so class doesn't meet. Your schedule skips it and
           runs a week or more longer, and that updates for families and instructors
           automatically. Missing one? Use "Mark a no-school day" — choose all of

@@ -47,8 +47,8 @@ Two weeks out, make sure families know what's coming and your school knows who's
 **Steps**
 1. **Programs → Class rosters → View / print →** on the class.
 2. Tap **Email roster to partner**.
-3. If the location isn't linked to a school partner yet, you're asked to pick one. If none are listed, email hello@enrops.com and we'll set it up.
-4. Tick the contacts who should get it, or type other emails separated by commas.
+3. If the site isn't linked to a school partner yet, you're asked to pick one. If none are listed, go to **Programs → Locations**, open the site, and tap **Add as a school partner**.
+4. Tick the contacts who should get it, or type other emails separated by commas. To add the school's contacts: **Programs → Locations**, **Open** the school, then **Contacts → + Add contact**.
 5. Tap **Send roster**. The roster is attached as a PDF, and the subject is filled in from the class details.
 
 **Ennie's advice**
