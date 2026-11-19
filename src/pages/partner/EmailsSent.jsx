@@ -5,7 +5,7 @@
 //
 // Rendered by the partner's page AND the provider's own page for that partner,
 // so the provider sees exactly what the partner sees. The database
-// (partner_portal_emails_sent, 20261119b) decides which reminders a login may
+// (partner_portal_emails_sent, 20261119d) decides which reminders a login may
 // see; this file only words them.
 
 import { useEffect, useState } from "react";

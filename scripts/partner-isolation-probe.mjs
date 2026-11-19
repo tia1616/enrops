@@ -112,7 +112,7 @@ const CLASS_FIELDS = new Set([
   'kind', 'class_id', 'title', 'site', 'day_of_week', 'class_days', 'start_time', 'end_time',
   'first_date', 'last_date', 'status', 'max_capacity', 'count_source', 'enrolled', 'reported_on', 'instructors',
 ]);
-// 20261119b. A count of recipients, never their addresses.
+// 20261119d. A count of recipients, never their addresses.
 const EMAIL_FIELDS = new Set(['sent_at', 'kind', 'subject_type', 'doc_type', 'about', 'expires_on', 'tier', 'recipients']);
 const ROSTER_FIELDS = new Set([
   'row_key', 'registered_at', 'first_name', 'last_name', 'grade', 'homeroom', 'dismissal_method', 'aftercare_provider',
@@ -270,7 +270,7 @@ for (const h of hosts) {
     ok(`${who} cannot type a count for "${c.title}"`, typed.json !== true, `got ${typed.text.slice(0, 40)}`);
   }
   scanFields(`${who} rosters`, rosterRows, ROSTER_FIELDS);
-  // Emails sent (20261119b): own partner only; a background-check reminder
+  // Emails sent (20261119d): own partner only; a background-check reminder
   // only for an instructor this login already sees as shared; field allowlist.
   // A reminder may name an instructor who taught here before (history), but
   // only one who has agreed to share; consent is the ground truth from the service read.

@@ -1,4 +1,4 @@
-// Partner portal "Emails sent" (20261119b): the words for each reminder enrops
+// Partner portal "Emails sent" (20261119d): the words for each reminder enrops
 // sent the provider, pure. The rows come from public.partner_portal_emails_sent(),
 // which already decided what this partner may see.
 

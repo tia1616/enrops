@@ -1,4 +1,4 @@
-// Partner portal "Emails sent" (20261119b): the words.
+// Partner portal "Emails sent" (20261119d): the words.
 import { readFileSync } from 'node:fs';
 import { reminderText, sentLine } from './partnerEmails.js';
 
@@ -24,7 +24,7 @@ eq('sent line, no count', sentLine({ ...doc, recipients: 0 }), 'Sent Dec 18, 202
 
 // The database decides visibility; pin the rules it must keep.
 {
-  const sql = readFileSync(new URL('../../supabase/migrations/20261119b_partner_portal_emails_sent.sql', import.meta.url), 'utf8');
+  const sql = readFileSync(new URL('../../supabase/migrations/20261119d_partner_portal_emails_sent.sql', import.meta.url), 'utf8');
   eq('only documents shared with this partner', sql.includes('(d.partner_id is null or d.partner_id = p_partner_id)'), true);
   eq('instructor reminders need sharing consent', sql.includes('i.partner_sharing_agreed_at is not null'), true);
   eq('instructor reminders need a class or camp at this login\'s sites', (sql.match(/pl\.partner_id = p_partner_id and \(v_sites is null or pl\.id = any\(v_sites\)\)/g) || []).length, 2);
