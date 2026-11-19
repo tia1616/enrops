@@ -27,6 +27,7 @@ import { PartnerShell, PartnerSignIn, NoAccess, useMemberships, todayIso } from 
 import { DocumentsTable, InstructorGrid, RecordSummary, RegistrationLine, RequirementsList } from "./ProviderRecord.jsx";
 import PartnerDecision from "./PartnerDecision.jsx";
 import ClassesTable from "./ClassesTable.jsx";
+import EmailsSent from "./EmailsSent.jsx";
 
 export default function PartnerProviderDetail() {
   const { partnerId } = useParams();
@@ -123,6 +124,8 @@ export default function PartnerProviderDetail() {
           {/* Keyed on the partner: a picked cell must never carry over to
               another provider's record. */}
           <InstructorGrid key={m.partner_id} s={s} instructors={instructors} orgName={orgName} today={today} />
+
+          <EmailsSent key={`emails:${m.partner_id}`} partnerId={m.partner_id} orgName={orgName} />
 
           <PartnerDecision key={`decision:${m.partner_id}`} partnerId={m.partner_id} />
         </>

@@ -361,6 +361,16 @@ export async function setReportedEnrollment(kind, classId, enrolled) {
   return true;
 }
 
+/**
+ * Reminder emails enrops sent this provider about items this partner can see
+ * (20261119b), newest first. Recipients are a count only.
+ */
+export async function listPartnerEmailsSent(partnerId) {
+  const { data, error } = await supabase.rpc("partner_portal_emails_sent", { p_partner_id: partnerId });
+  if (error) throw error;
+  return data ?? [];
+}
+
 /** The businesses this person can accept for: owner or admin. */
 export async function myAdminOrgs(userId) {
   const { data, error } = await supabase

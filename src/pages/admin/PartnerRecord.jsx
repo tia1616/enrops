@@ -24,6 +24,7 @@ import PartnerRequirementsSection from "./PartnerRequirementsSection.jsx";
 import { DocumentsTable, InstructorGrid, RecordSummary, RegistrationLine, RequirementsList } from "../partner/ProviderRecord.jsx";
 import PartnerDecision from "../partner/PartnerDecision.jsx";
 import ClassesTable from "../partner/ClassesTable.jsx";
+import EmailsSent from "../partner/EmailsSent.jsx";
 import { todayIso } from "../partner/partnerShared.jsx";
 import { usePermissions } from "../../lib/permissions.js";
 import { listPartnerInstructors, listPartnerRequirements } from "../../lib/partnerPortal.js";
@@ -203,6 +204,7 @@ export default function PartnerRecord() {
             key={partnerId} s={s} instructors={instructors} orgName={orgName} today={today}
             viewer="provider" partnerName={partner.partner_name}
           />
+          <EmailsSent key={`emails:${partnerId}`} partnerId={partnerId} orgName={orgName} viewer="provider" partnerName={partner.partner_name} />
           <PartnerDecision key={`decision:${partnerId}`} partnerId={partnerId} partnerName={partner.partner_name} />
         </>
       )}
