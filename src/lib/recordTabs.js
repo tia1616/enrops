@@ -8,6 +8,18 @@ export function alertFor(badges) {
   return null;
 }
 
+/**
+ * The short word on the Decision tab, with its dot: null when nothing is
+ * recorded. Both "accepted" kinds read "Accepted" (the tab is narrow; the full
+ * wording is inside the tab).
+ */
+export function decisionTag(decision) {
+  if (!decision) return null;
+  if (decision === "accepted" || decision === "accepted_alongside_own_form") return { text: "Accepted", alert: null };
+  if (decision === "not_accepted") return { text: "Not accepted", alert: "bad" };
+  return { text: "Withdrawn", alert: null };
+}
+
 /** The tab a #name asks for, or the first tab when it names none of these. */
 export function tabFromHash(hash, ids) {
   const h = String(hash ?? "").replace(/^#/, "");

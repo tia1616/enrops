@@ -18,8 +18,12 @@ function DecisionLabel({ d }) {
   return <DocumentStatusBadge badge={DECISIONS[d.decision] ?? DECISIONS.withdrawn} />;
 }
 
-/** `partnerName` set = the provider is looking (wording names the partner). */
-export default function PartnerDecision({ partnerId, partnerName = null }) {
+/**
+ * `partnerName` set = the provider is looking (wording names the partner).
+ * `onLatest(decision)`: the current decision's key ('accepted', ...) or null,
+ * for the page's Decision tab (decisionTag), on load and after each recorded one.
+ */
+export default function PartnerDecision({ partnerId, partnerName = null, onLatest }) {
   const provider = Boolean(partnerName);
   // undefined = loading, null = not available to this login.
   const [panel, setPanel] = useState(undefined);
@@ -41,6 +45,8 @@ export default function PartnerDecision({ partnerId, partnerName = null }) {
   async function load() {
     const p = await getPartnerDecisions(partnerId);
     setPanel(p);
+    const latest = p?.decisions?.[0];
+    onLatest?.(latest ? latest.decision : null);
     return p;
   }
 

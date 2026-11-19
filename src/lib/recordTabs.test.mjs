@@ -1,5 +1,5 @@
 // Provider-record tabs: the dot on a tab and the tab a link opens.
-import { alertFor, tabFromHash } from './recordTabs.js';
+import { alertFor, tabFromHash, decisionTag } from './recordTabs.js';
 
 let pass = 0, fail = 0;
 function eq(name, actual, expected) {
@@ -14,6 +14,12 @@ eq('in review: amber', alertFor([{ tone: 'review' }]), 'attention');
 eq('neutral is not a problem', alertFor([{ tone: 'neutral' }]), null);
 eq('nothing: no dot', alertFor([]), null);
 eq('missing list: no dot', alertFor(undefined), null);
+
+eq('no decision: no tag', decisionTag(null), null);
+eq('accepted', decisionTag('accepted'), { text: 'Accepted', alert: null });
+eq('accepted alongside own form reads Accepted', decisionTag('accepted_alongside_own_form'), { text: 'Accepted', alert: null });
+eq('not accepted is red', decisionTag('not_accepted'), { text: 'Not accepted', alert: 'bad' });
+eq('withdrawn', decisionTag('withdrawn'), { text: 'Withdrawn', alert: null });
 
 const IDS = ['documents', 'classes', 'instructors', 'emails'];
 eq('link opens its tab', tabFromHash('#classes', IDS), 'classes');

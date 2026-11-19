@@ -1,7 +1,7 @@
 // Tabs for one provider's record (Jessica 2026-11-19: "the page is growing too
-// long"). The summary stays above the tabs and the partner's decision below
-// them, so both show on every tab; each section is one tab, the way vendor
-// pages in TrustLayer and myCOI are laid out.
+// long"). The summary stays above the tabs, on every tab; each section is one
+// tab, the way vendor pages in TrustLayer and myCOI are laid out. The partner's
+// decision is its own tab, its current answer on the tab (Jessica 2026-11-19).
 //
 // Used by the partner's page AND the provider's own page for that partner, so
 // both have the same layout. The row is TabStrip, the scroller every admin tab
@@ -51,7 +51,8 @@ export function useRecordTab(ids) {
 }
 
 /**
- * The tab row. `tabs`: [{ id, label, count?, alert? }] where alert is
+ * The tab row. `tabs`: [{ id, label, count?, tag?, alert? }] (tag = a short
+ * word such as "Accepted") where alert is
  * 'bad' (red dot: something missing or expired) or 'attention' (amber dot:
  * expiring or in review). `sticky` pins the row to the top while scrolling.
  */
@@ -92,6 +93,9 @@ export function RecordTabRow({ tabs, active, onChange, label = "Record sections"
               {t.label}
               {t.count != null && (
                 <span className={`rounded-full px-1.5 text-xs tabular-nums ${on ? "bg-j2s-purple/10" : "bg-j2s-ink/5"}`}>{t.count}</span>
+              )}
+              {t.tag && (
+                <span className={`rounded-full px-1.5 text-xs font-medium ${on ? "bg-j2s-purple/10" : "bg-j2s-ink/5"}`}>{t.tag}</span>
               )}
               {t.alert && DOT[t.alert] && (
                 <>

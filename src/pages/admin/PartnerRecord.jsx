@@ -26,10 +26,11 @@ import PartnerDecision from "../partner/PartnerDecision.jsx";
 import ClassesTable from "../partner/ClassesTable.jsx";
 import EmailsSent from "../partner/EmailsSent.jsx";
 import { RecordTabRow, RecordTabPanel, useRecordTab, alertFor } from "../partner/RecordTabs.jsx";
+import { decisionTag } from "../../lib/recordTabs.js";
 
-// The partner's four tabs first, in the partner's order, then the two that only
+// The partner's five tabs first, in the partner's order, then the two that only
 // the provider has (what this partner requires, and its logins + activity).
-const PROVIDER_TABS = ["documents", "classes", "instructors", "emails", "requirements", "logins"];
+const PROVIDER_TABS = ["documents", "classes", "instructors", "emails", "decision", "requirements", "logins"];
 import { todayIso } from "../partner/partnerShared.jsx";
 import { usePermissions } from "../../lib/permissions.js";
 import { listPartnerInstructors, listPartnerRequirements } from "../../lib/partnerPortal.js";
@@ -69,6 +70,7 @@ export default function PartnerRecord() {
   const [tab, setTab] = useRecordTab(PROVIDER_TABS);
   const [classCount, setClassCount] = useState(null);
   const [emailCount, setEmailCount] = useState(null);
+  const [decision, setDecision] = useState(null);
 
   function flash(msg) { setToast(msg); setTimeout(() => setToast(""), 3500); }
 
@@ -86,7 +88,7 @@ export default function PartnerRecord() {
     if (!org?.id) return;
     let cancelled = false;
     setPartner(undefined); setDocs(null); setInstructors(null); setRequirements(undefined); setError(""); setForm(null);
-    setClassCount(null); setEmailCount(null);
+    setClassCount(null); setEmailCount(null); setDecision(null);
     getPartner(org.id, partnerId)
       .then((p) => { if (!cancelled) setPartner(p); })
       .catch((err) => { if (!cancelled) { setPartner(null); setError(`Couldn't load this partner: ${err?.message ?? "unknown error"}`); } });
@@ -199,7 +201,7 @@ export default function PartnerRecord() {
           <RecordSummary s={s} />
 
           {/* Same tabs as the partner's page, plus the provider-only two
-              (RecordTabs.jsx). The decision below shows on every tab. */}
+              (RecordTabs.jsx). */}
           <RecordTabRow
             active={tab} onChange={setTab}
             tabs={[
@@ -207,6 +209,7 @@ export default function PartnerRecord() {
               { id: "classes", label: "Classes", count: classCount },
               { id: "instructors", label: "Instructors", count: s.instructors.total || null, alert: s.instructors.total ? alertFor([s.instructors.badge]) : null },
               { id: "emails", label: "Emails sent", count: emailCount },
+              { id: "decision", label: "Decision", tag: decisionTag(decision)?.text, alert: decisionTag(decision)?.alert },
               { id: "requirements", label: "What they require" },
               { id: "logins", label: "Logins" },
             ]}
@@ -254,7 +257,9 @@ export default function PartnerRecord() {
             <PartnerLoginsSection key={`logins:${partnerId}`} org={org} partner={partner} canManage={canManage} onMessage={flash} />
           </RecordTabPanel>
 
-          <PartnerDecision key={`decision:${partnerId}`} partnerId={partnerId} partnerName={partner.partner_name} />
+          <RecordTabPanel id="decision" active={tab}>
+            <PartnerDecision key={`decision:${partnerId}`} partnerId={partnerId} partnerName={partner.partner_name} onLatest={setDecision} />
+          </RecordTabPanel>
         </>
       )}
 
