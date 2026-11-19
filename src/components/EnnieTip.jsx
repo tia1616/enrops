@@ -26,7 +26,6 @@
 //   <EnnieTip title="Why do families see the fee?">Because…</EnnieTip>
 
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
 import Ennie from './Ennie.jsx';
 import useViewportClamp, { VIEWPORT_GUTTER } from '../lib/useViewportClamp';
 
@@ -108,7 +107,7 @@ export default function EnnieTip({
   label = 'Why this matters',
   align = 'left',
   // A heading id in src/content/guides (e.g. "discounts"). When set, the bubble
-  // ends with "Read the full guide" linking to /admin/help#<id>. guides.test.mjs
+  // ends with "Read the full guide", opening /admin/help#<id> in a new tab. guides.test.mjs
   // fails if the id does not exist.
   guide,
 }) {
@@ -310,14 +309,19 @@ export default function EnnieTip({
                 <div style={{ fontSize: 13.5, fontWeight: 400, color: INK, lineHeight: 1.55 }}>
                   {children}
                 </div>
+                {/* A NEW TAB, never in-app navigation: these bubbles sit inside
+                    the class builder and the promo-code form, and leaving the
+                    page would throw away whatever the provider had typed. */}
                 {guide && (
-                  <Link
-                    to={`/admin/help#${guide}`}
+                  <a
+                    href={`/admin/help#${guide}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
                     onClick={() => setOpen(false)}
                     style={{ display: 'inline-block', marginTop: 6, fontSize: 13, fontWeight: 600, color: BRIGHT }}
                   >
-                    Read the full guide →
-                  </Link>
+                    Read the full guide ↗
+                  </a>
                 )}
               </div>
             </div>

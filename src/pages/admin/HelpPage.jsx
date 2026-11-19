@@ -41,7 +41,10 @@ function Heading({ level, children }) {
         fontWeight: 700,
         color: PURPLE,
         margin: level === 2 ? "28px 0 8px" : "20px 0 6px",
-        scrollMarginTop: 16,
+        // On a phone the admin bar is sticky at the top; AdminLayout publishes
+        // its height as --admin-bar-h. Without it a linked heading lands under
+        // the bar.
+        scrollMarginTop: "calc(var(--admin-bar-h, 0px) + 16px)",
       }}
     >
       {kids}
@@ -107,7 +110,7 @@ export default function HelpPage() {
           key={g.file}
           id={`guide-${g.slug}`}
           aria-labelledby={`guide-title-${g.slug}`}
-          style={{ borderTop: `1px solid ${RULE}`, marginTop: 28, paddingTop: 20, scrollMarginTop: 16 }}
+          style={{ borderTop: `1px solid ${RULE}`, marginTop: 28, paddingTop: 20, scrollMarginTop: "calc(var(--admin-bar-h, 0px) + 16px)" }}
         >
           <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: 0.4, textTransform: "uppercase", color: MUTED }}>
             {guideLabel(g)}

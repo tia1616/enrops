@@ -66,6 +66,8 @@ function walk(d) {
 let links = 0;
 for (const file of walk(join(here, ".."))) {
   const src = readFileSync(file, "utf8");
+  // Only a literal guide="..." can be checked, so anything else is refused.
+  ok(!/<EnnieTip\b[^>]*\bguide=\{/.test(src), `${file.split(/[\\/]src[\\/]/).pop()}: EnnieTip guide is a literal string`);
   for (const m of src.matchAll(/<EnnieTip\b[^>]*\bguide="([^"]+)"/g)) {
     links++;
     ok(ids.has(m[1]), `${file.split(/[\\/]src[\\/]/).pop()}: guide="${m[1]}" exists in the guides`);
