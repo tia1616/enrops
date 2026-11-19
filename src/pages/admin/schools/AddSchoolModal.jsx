@@ -1,9 +1,10 @@
 // AddSchoolModal — the unified, fast "Add a location" flow.
 //
 // One step: type the name (Places autocomplete fills the address), pick a type,
-// choose the district, and save. Behind the scenes it writes BOTH a partners
-// row and an auto-linked program_locations row (1:1), so every location created
-// here is clean from day one — the operator never sees the two-table plumbing.
+// choose the district, and save. When "This is at a school or another
+// organization's site" is ticked it writes BOTH a partners row and an auto-linked
+// program_locations row (1:1) through save_site; unticked (a studio, the
+// provider's own space) it writes the site alone.
 //
 // DISTRICT IS AN EXPLICIT CHOICE (2026-08-05). The district select used to
 // default to "" = "no public district", so an operator who never touched it got
@@ -63,6 +64,14 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
   const [area, setArea] = useState("");
   const [districtId, setDistrictId] = useState("");
   const [newDistrictName, setNewDistrictName] = useState("");
+  // "Is this at a school or another organization's site?" Every provider gets
+  // this one list now, including studios, so the school partner is no longer
+  // assumed. Starts ticked for partner-first orgs (J2S, Jeff: every site has
+  // been a partner site) and for a self-serve provider who said they go out to
+  // sites; unticked for a studio.
+  const [atPartner, setAtPartner] = useState(
+    org?.venue_model === "own_venue" ? org?.venue_answer === "goes_to_sites" : true,
+  );
   const [umbrellaMode, setUmbrellaMode] = useState(false);
   const [umbrellaPartnerId, setUmbrellaPartnerId] = useState("");
   const [newUmbrellaName, setNewUmbrellaName] = useState("");
@@ -95,8 +104,8 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
     setError("");
     const trimmed = name.trim();
     if (!trimmed) { setError("Location name is required."); return; }
-    if (umbrellaMode && !umbrellaPartnerId) { setError("Pick the umbrella org this venue belongs to, or create one."); return; }
-    if (umbrellaMode && umbrellaPartnerId === NEW_UMBRELLA && !newUmbrellaName.trim()) {
+    if (atPartner && umbrellaMode && !umbrellaPartnerId) { setError("Pick the umbrella org this venue belongs to, or create one."); return; }
+    if (atPartner && umbrellaMode && umbrellaPartnerId === NEW_UMBRELLA && !newUmbrellaName.trim()) {
       setError("Enter a name for the new umbrella org."); return;
     }
     setBusy(true);
@@ -107,18 +116,19 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
       //   - umbrella, existing  -> link to it
       //   - umbrella, new       -> create it (a same-name umbrella is reused)
       //   - otherwise           -> create this school's own 1:1 partner
-      const isUmbrellaPick = umbrellaMode && umbrellaPartnerId !== NEW_UMBRELLA;
-      const isUmbrellaNew = umbrellaMode && umbrellaPartnerId === NEW_UMBRELLA;
+      const useUmbrella = atPartner && umbrellaMode;
+      const isUmbrellaPick = useUmbrella && umbrellaPartnerId !== NEW_UMBRELLA;
+      const isUmbrellaNew = useUmbrella && umbrellaPartnerId === NEW_UMBRELLA;
       const row = await saveSite(supabase, {
         organizationId: org.id,
         name: trimmed,
         address,
         area: area.trim() || parseCity(address) || "",
-        atPartner: true,
+        atPartner,
         partnerId: isUmbrellaPick ? umbrellaPartnerId : null,
         partnerName: isUmbrellaNew ? newUmbrellaName : "",
-        partnerType: umbrellaMode ? "" : type,
-        partnerIsUmbrella: umbrellaMode,
+        partnerType: !atPartner || useUmbrella ? "" : type,
+        partnerIsUmbrella: useUmbrella,
         districtChoice: districtId,
         newDistrictName,
       });
@@ -187,13 +197,25 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
             </div>
           </label>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-            <label>
-              <Lbl>Type</Lbl>
-              <select value={type} onChange={(e) => setType(e.target.value)} style={inputStyle} disabled={busy || umbrellaMode}>
-                {PARTNER_TYPES.map((t) => <option key={t.v} value={t.v}>{t.label}</option>)}
-              </select>
-            </label>
+          <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 14, color: INK, cursor: "pointer", lineHeight: 1.4 }}>
+            <input type="checkbox" checked={atPartner} onChange={(e) => setAtPartner(e.target.checked)} disabled={busy} style={{ marginTop: 3 }} />
+            <span>
+              This is at a school or another organization&apos;s site
+              <span style={{ display: "block", fontSize: 12, color: MUTED, marginTop: 2 }}>
+                We&apos;ll add it as a school partner too, so you can send them rosters.
+              </span>
+            </span>
+          </label>
+
+          <div style={{ display: "grid", gridTemplateColumns: atPartner ? "1fr 1fr" : "1fr", gap: 14 }}>
+            {atPartner && (
+              <label>
+                <Lbl>Type</Lbl>
+                <select value={type} onChange={(e) => setType(e.target.value)} style={inputStyle} disabled={busy || umbrellaMode}>
+                  {PARTNER_TYPES.map((t) => <option key={t.v} value={t.v}>{t.label}</option>)}
+                </select>
+              </label>
+            )}
             <label>
               <Lbl>District *</Lbl>
               <select value={districtId} onChange={(e) => setDistrictId(e.target.value)} style={inputStyle} disabled={busy}>
@@ -241,7 +263,7 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
             <input type="text" value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Filled from the name, or type it in" style={inputStyle} disabled={busy} />
           </label>
 
-          <div style={{ borderTop: `1px solid ${RULE}`, paddingTop: 12 }}>
+          {atPartner && <div style={{ borderTop: `1px solid ${RULE}`, paddingTop: 12 }}>
             <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: INK, cursor: "pointer" }}>
               <input type="checkbox" checked={umbrellaMode} onChange={(e) => setUmbrellaMode(e.target.checked)} disabled={busy} />
               This venue belongs to a bigger organization (Parks &amp; Rec, a district)
@@ -270,7 +292,7 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
                 </div>
               </div>
             )}
-          </div>
+          </div>}
         </div>
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 20, paddingTop: 14, borderTop: `1px solid ${RULE}` }}>

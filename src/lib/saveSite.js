@@ -1,7 +1,9 @@
 // saveSite: the ONE way a new site (program_locations row) is created.
 //
-// Every "add a location" form calls this: AddSchoolModal, LocationsList and the
-// quick program builder. It calls the save_site RPC (migration 20261119b), which
+// Every "add a location" form calls this: AddSchoolModal, VenueEditor (adding a
+// venue under a partner) and the quick program builder. (LocationsList used it
+// too until that flat list was retired for the one SchoolsList, 2026-11-19.)
+// It calls the save_site RPC (migration 20261119b), which
 // writes the district, the school partner and the site in ONE transaction. Before
 // this, each form had its own copy of the district match-before-create and its own
 // slug code, and AddSchoolModal could leave an orphan partner behind when the site
@@ -66,6 +68,37 @@ export function siteRpcArgs({
 export async function saveSite(supabase, input) {
   const args = siteRpcArgs(input);
   const { data, error } = await supabase.rpc("save_site", args);
+  if (error) throw error;
+  return data;
+}
+
+// Writes the fields save_site doesn't take (room, legacy code, day-of contact,
+// instructions, notes) onto a site it just created. Only non-blank values, so it
+// never writes NULL over anything. Returns an error message or null.
+export const SAVED_BY_SAVE_SITE = new Set([
+  "name", "address", "area", "district_id", "newDistrictName", "partner_id", "at_partner",
+]);
+export async function writeSiteExtras(supabase, locationId, draft) {
+  const rest = {};
+  for (const [k, v] of Object.entries(draft ?? {})) {
+    if (SAVED_BY_SAVE_SITE.has(k)) continue;
+    const val = typeof v === "string" ? v.trim() : v;
+    if (val !== "" && val != null) rest[k] = val;
+  }
+  if (Object.keys(rest).length === 0) return null;
+  const { error } = await supabase.from("program_locations").update(rest).eq("id", locationId);
+  return error
+    ? `The location was added, but its other details didn't save (${error.message}). Open it and save them again.`
+    : null;
+}
+
+// An existing site with no partner becomes a school-partner site, in one
+// transaction (make_site_a_partner, migration 20261119e). Returns the site row.
+export async function makeSiteAPartner(supabase, locationId, partnerType = "") {
+  const { data, error } = await supabase.rpc("make_site_a_partner", {
+    p_location_id: locationId,
+    p_partner_type: (partnerType ?? "").trim() || null,
+  });
   if (error) throw error;
   return data;
 }

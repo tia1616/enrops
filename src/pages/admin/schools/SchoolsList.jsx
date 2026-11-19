@@ -6,8 +6,9 @@
 //     parent card that expands to its venues (Square / Jackrabbit pattern);
 //   • a contact-only partner (district office you talk to but don't run
 //     programs at yet) is first-class, with an "Add a venue" path;
-//   • orphan venues (no partner) surface in the inline, self-emptying
-//     NeedsLinkingSection so cleanup happens in the flow of work.
+//   • a site with no partner (a studio, or a school not linked yet) is its own
+//     card; its drawer links it to a partner or makes it one (2026-11-19, this
+//     replaced the NeedsLinkingSection nag on this page).
 //
 // Each card shows readiness (address · contact · calendar) and activity
 // (programs/camps) at a glance — the question an operator running programs at
@@ -16,14 +17,14 @@
 // reuses the existing field-complete editors, so nothing is lost in the merge.
 
 import { useEffect, useMemo, useState } from "react";
-import { useOutletContext } from "react-router-dom";
+import { useOutletContext, useSearchParams } from "react-router-dom";
 import { supabase } from "../../../lib/supabase";
 import Chevron from "../../../components/Chevron.jsx";
-import NeedsLinkingSection from "../contacts/NeedsLinkingSection.jsx";
 import ImportContactsModal from "../contacts/ImportContactsModal.jsx";
 import FindMissingAddressesModal from "../FindMissingAddressesModal.jsx";
 import AddSchoolModal from "./AddSchoolModal.jsx";
 import SchoolDetailDrawer from "./SchoolDetailDrawer.jsx";
+import SiteDetailDrawer from "./SiteDetailDrawer.jsx";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -74,6 +75,14 @@ export default function SchoolsList() {
   const [importing, setImporting] = useState(false);
   const [findingAddresses, setFindingAddresses] = useState(false);
   const [selectedPartner, setSelectedPartner] = useState(null);
+  // A site with NO partner (a studio) renders as its own card, for EVERY org
+  // (Jessica 2026-11-19: "have it for jeff and me as well"). This replaced the
+  // NeedsLinkingSection nag on this page: one card per site, and the site drawer
+  // links it to an existing partner (Linked partner) or makes it one. On prod at
+  // the time, J2S and Ukulele had 0 live unlinked sites, so nothing they saw
+  // changed. venue_model is no longer read here.
+  const [selectedSiteId, setSelectedSiteId] = useState(null);
+  const [searchParams, setSearchParams] = useSearchParams();
   const [refreshKey, setRefreshKey] = useState(0);
 
   async function loadDistricts() {
@@ -107,7 +116,7 @@ export default function SchoolsList() {
         // location can carry EITHER. J2S staging has 50 locations with free-text
         // districts and matching free-text calendars, so their dates DO skip
         // no-school days — telling them otherwise would be a false alarm.
-        .select("id, name, address, area, district_id, district, partner_id")
+        .select("id, name, address, area, district_id, district, partner_id, archived")
         .eq("organization_id", org.id).order("name"),
     ]);
     if (pErr || lErr) {
@@ -225,23 +234,83 @@ export default function SchoolsList() {
     });
   }, [partners, venuesByPartner, contactCounts, calendarDistrictIds, activityByLoc, districtName]);
 
+  // Partner-less sites as their own cards. Archived sites stay hidden, as the
+  // NeedsLinkingSection this replaced hid them too (archived = false).
+  const sites = useMemo(() => {
+    return locations
+      .filter((l) => !l.partner_id && !l.archived)
+      .map((l) => {
+        const a = activityByLoc.get(l.id) ?? { programs: 0, camps: 0 };
+        return {
+          kind: "site",
+          site: l,
+          partner: null,
+          venues: [l],
+          distId: l.district_id ?? null,
+          districtName: l.district_id ? districtName.get(l.district_id) : null,
+          hasAddress: !!(l.address && String(l.address).trim()),
+          hasCalendar: !!l.district_id && calendarDistrictIds.has(l.district_id),
+          hasNoDistrictAtAll: !l.district_id && !(l.district && String(l.district).trim()),
+          programs: a.programs,
+          camps: a.camps,
+        };
+      });
+  }, [locations, activityByLoc, districtName, calendarDistrictIds]);
+
+  // Deep link: /admin/schools?edit=<location id> opens that location's drawer
+  // (the import's "Edit details" links). The flat list used to handle this; a
+  // partner site opens its school drawer, a partner-less site its site drawer.
+  useEffect(() => {
+    const editId = searchParams.get("edit");
+    if (!editId || partners === null || locations.length === 0) return;
+    const loc = locations.find((l) => l.id === editId);
+    // NOT FOUND YET is not "not found". The import's done screen navigates here
+    // the same moment it starts the reload that brings its new rows in, so the
+    // first pass sees the OLD list. Keep the param until the location arrives;
+    // stripping it on a miss made every "Edit details" link for a just-imported
+    // school do nothing (independent review 2026-11-19).
+    if (!loc) return;
+    if (loc.partner_id) {
+      const p = (partners ?? []).find((x) => x.id === loc.partner_id);
+      if (!p) return; // its partner row hasn't arrived yet either
+      setSelectedPartner(p);
+    } else {
+      setSelectedSiteId(loc.id);
+    }
+    const next = new URLSearchParams(searchParams);
+    next.delete("edit");
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, partners, locations]);
+
+  async function openPartnerById(partnerId) {
+    const { data: fresh } = await supabase.from("partners")
+      .select("id, partner_name, partner_type, location_area, locations_managed, marketing_notes, invoicing_notes, planning_notes, implementation_notes, other_notes, inactive")
+      .eq("id", partnerId).single();
+    setSelectedSiteId(null);
+    setSelectedPartner(fresh ?? null);
+  }
+
+  // Studio cards count too, on what a studio CAN be missing: an address, or a
+  // calendar for the district it chose. No contact chip (contacts are a partner's).
   const needsSetupCount = useMemo(
-    () => schools.filter((s) => !s.isContactOnly && (!s.hasAddress || !s.hasContact || !s.hasCalendar)).length,
-    [schools],
+    () => schools.filter((s) => !s.isContactOnly && (!s.hasAddress || !s.hasContact || !s.hasCalendar)).length
+      + sites.filter((s) => !s.hasAddress || (s.distId && !s.hasCalendar)).length,
+    [schools, sites],
   );
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return schools.filter((s) => {
-      if (!showInactive && s.partner.inactive) return false;
+    return [...schools, ...sites].filter((s) => {
+      if (!showInactive && s.partner?.inactive) return false;
       if (!q) return true;
       const hay = [
-        s.partner.partner_name, typeLabel(s.partner.partner_type), s.partner.location_area,
+        s.partner?.partner_name, typeLabel(s.partner?.partner_type), s.partner?.location_area,
         s.districtName, ...s.venues.map((v) => `${v.name} ${v.address ?? ""} ${v.area ?? ""}`),
       ].filter(Boolean).join(" ").toLowerCase();
       return hay.includes(q);
-    });
-  }, [schools, query, showInactive, refreshKey]);
+    }).sort((a, b) => (a.partner?.partner_name ?? a.site?.name ?? "").localeCompare(b.partner?.partner_name ?? b.site?.name ?? ""));
+  }, [schools, sites, query, showInactive, refreshKey]);
 
   const inactiveCount = schools.filter((s) => s.partner.inactive).length;
 
@@ -279,7 +348,8 @@ export default function SchoolsList() {
 
   const totalVenues = locations.filter((l) => l.partner_id).length;
   const placesEnabled = !!import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
-  const missingAddressCount = locations.filter((l) => !l.address || !String(l.address).trim()).length;
+  // Archived sites are hidden from the cards, so they don't count here either.
+  const missingAddressCount = locations.filter((l) => !l.archived && (!l.address || !String(l.address).trim())).length;
   const minsSaved = schools.length * MINUTES_SAVED_PER_PARTNER;
   const savedLabel = minsSaved >= 60 ? `~${Math.round(minsSaved / 60)}h` : `~${minsSaved}m`;
 
@@ -293,7 +363,7 @@ export default function SchoolsList() {
               umbrella with several venues) — for the common 1:1 case "22
               locations · 22 venues" read as two different things. */}
           {partners === null ? "Loading…" : [
-            `${schools.length} location${schools.length === 1 ? "" : "s"}`,
+            `${schools.length + sites.length} location${schools.length + sites.length === 1 ? "" : "s"}`,
             ...(totalVenues !== schools.length ? [`${totalVenues} venue${totalVenues === 1 ? "" : "s"}`] : []),
             `${districts.length} district${districts.length === 1 ? "" : "s"}`,
           ].join(" · ")}
@@ -352,9 +422,6 @@ export default function SchoolsList() {
         </div>
       )}
 
-      {/* Inline, self-emptying cleanup for orphan venues. */}
-      <NeedsLinkingSection org={org} onChanged={refresh} />
-
       {partners === null && <div style={{ color: MUTED, fontSize: 13 }}>Loading…</div>}
 
       {partners !== null && filtered.length === 0 && (
@@ -394,7 +461,9 @@ export default function SchoolsList() {
             </div>
           )}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {g.items.map((s) => (
+            {g.items.map((s) => s.kind === "site" ? (
+              <SiteCard key={`site-${s.site.id}`} item={s} onOpen={() => setSelectedSiteId(s.site.id)} />
+            ) : (
               <SchoolCard
                 key={s.partner.id}
                 school={s}
@@ -416,18 +485,32 @@ export default function SchoolsList() {
           districtsWarning={districtLoadError}
           onClose={() => setAdding(false)}
           onDistrictsChanged={loadDistricts}
-          onCreated={async ({ partnerId }) => {
+          onCreated={async ({ partnerId, locationId }) => {
             setAdding(false);
             await loadDistricts();
             await load();
-            const p = (partners ?? []).find((x) => x.id === partnerId);
+            // No partner = a studio (the "at a school" box was unticked): open
+            // its site drawer instead of a school drawer that has nothing to show.
+            if (!partnerId) {
+              setSelectedSiteId(locationId);
+              refresh();
+              return;
+            }
             // partners state may be stale; refetch to grab the brand-new partner.
-            const { data: fresh } = await supabase.from("partners")
-              .select("id, partner_name, partner_type, location_area, locations_managed, marketing_notes, invoicing_notes, planning_notes, implementation_notes, other_notes, inactive")
-              .eq("id", partnerId).single();
-            setSelectedPartner(fresh ?? p ?? null);
+            await openPartnerById(partnerId);
             refresh();
           }}
+        />
+      )}
+
+      {selectedSiteId && (
+        <SiteDetailDrawer
+          org={org} locationId={selectedSiteId} districts={districts} partners={(partners ?? [])}
+          districtsWarning={districtLoadError}
+          onClose={() => setSelectedSiteId(null)}
+          onDistrictsChanged={loadDistricts}
+          onChanged={refresh}
+          onBecamePartner={(pid) => { openPartnerById(pid); refresh(); }}
         />
       )}
 
@@ -559,6 +642,42 @@ function SchoolCard({ school, expanded, onToggle, onOpen, activityByLoc, calenda
           <button type="button" onClick={onOpen} style={{ ...addChip, alignSelf: "flex-start" }}>+ Add another venue</button>
         </div>
       )}
+    </div>
+  );
+}
+
+// A site with no school partner (a studio, the provider's own space). Same card
+// shape as SchoolCard so the list reads as one list, minus what a studio has no
+// use for: no partner type, no contacts chip (contacts belong to a partner).
+function SiteCard({ item, onOpen }) {
+  const { site, hasAddress, hasCalendar, programs, camps } = item;
+  return (
+    <div style={{ background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: "14px 16px" }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <span style={{ fontSize: 15, fontWeight: 700, color: INK }}>{site.name}</span>
+          <div style={{ fontSize: 13, color: site.address ? MUTED : AMBER, marginTop: 4 }}>
+            {site.address || "No address yet"}
+          </div>
+          {/* On the card itself, so it survives "Group by district" being off
+              (the group header is the only other place that says it). */}
+          {item.hasNoDistrictAtAll && (
+            <div style={{ fontSize: 12, color: "#8a6d1f", marginTop: 4 }}>
+              No district, so class dates won&apos;t skip no-school days.
+            </div>
+          )}
+        </div>
+        <button type="button" onClick={onOpen}
+          style={{ flexShrink: 0, padding: "6px 14px", background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontSize: 12.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>
+          Open
+        </button>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", marginTop: 12 }}>
+        <ReadyChip ok={hasAddress} okLabel="Address" addLabel="Add address" onAdd={onOpen} />
+        {site.district_id && <ReadyChip ok={hasCalendar} okLabel="Calendar" addLabel="Add calendar" onAdd={onOpen} />}
+        <span style={{ flex: 1 }} />
+        <ActivityLabel programs={programs} camps={camps} />
+      </div>
     </div>
   );
 }

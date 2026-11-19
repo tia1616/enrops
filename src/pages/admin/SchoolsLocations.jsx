@@ -5,9 +5,10 @@
 //       people's places. Partner-first: SchoolsList renders each partner + its
 //       venue(s); a venue with no partner is an orphan to link.
 //
-//   'own_venue' (e.g. Shoreview Chess, Mrs. Richelle) — the tenant runs at its
-//       OWN location(s). No external partner; a partner-less venue is NORMAL.
-//       LocationsList renders the venues directly.
+//   'own_venue' (e.g. Shoreview Chess, Mrs. Richelle, every self-serve signup)
+//       — the tenant runs at its OWN location(s). A partner-less venue is NORMAL,
+//       so the same SchoolsList shows it as its own card (since 2026-11-19; the
+//       separate flat LocationsList was retired).
 //
 // The Calendars tab (closure / no-class days that flow into session dates) stays
 // in BOTH shapes. Only the first tab's help copy and the rendered list swap.
@@ -20,7 +21,6 @@
 
 import { useSearchParams, useOutletContext } from 'react-router-dom';
 import SchoolsList from './schools/SchoolsList';
-import LocationsList from './LocationsList';
 import CalendarsList from './CalendarsList';
 
 const INK = '#1a1a1a';
@@ -33,7 +33,7 @@ const BRIGHT = '#5847C9';   // indigo - active tabs/actions (Figma)
 // help copy, and rendered list change.
 const OWN_VENUE_TABS = [
   { key: 'schools',   label: 'Locations',
-    help: 'The places you run your classes — your center, studios, or online. Add each one’s address, room, and arrival details once and they flow into every roster and reminder.' },
+    help: 'The places you run your classes — your own space, studios, or the schools and other sites you teach at. Add each one’s address and room once and they flow into your registration page and emails.' },
   { key: 'calendars', label: 'School calendar',
     help: 'Closure and no-class days that flow into every program’s session dates.' },
 ];
@@ -102,9 +102,10 @@ export default function SchoolsLocations() {
         })}
       </div>
 
-      {tab === 'calendars'
-        ? <CalendarsList />
-        : (ownVenue ? <LocationsList embedded /> : <SchoolsList />)}
+      {/* ONE list for every provider (Jessica 2026-11-19, "Yes, school cards").
+          SchoolsList renders partner-less sites as their own cards for own_venue
+          orgs; the old flat LocationsList is gone. */}
+      {tab === 'calendars' ? <CalendarsList /> : <SchoolsList />}
     </div>
   );
 }

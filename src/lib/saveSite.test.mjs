@@ -51,3 +51,48 @@ test("blank optional strings become null, not empty strings", () => {
   assert.equal(a.p_area, null);
   assert.equal(a.p_partner_type, null);
 });
+
+import { writeSiteExtras, SAVED_BY_SAVE_SITE } from "./saveSite.js";
+
+function fakeSupabase(result = { error: null }) {
+  const calls = [];
+  return {
+    calls,
+    from(table) {
+      return {
+        update(row) {
+          return { eq(col, val) { calls.push({ table, row, col, val }); return Promise.resolve(result); } };
+        },
+      };
+    },
+  };
+}
+
+test("extras: writes only non-blank fields save_site didn't take", async () => {
+  const sb = fakeSupabase();
+  const err = await writeSiteExtras(sb, "loc-1", {
+    name: "X", address: "a", district_id: "d", partner_id: "p", at_partner: true,
+    room_number: " Room 4 ", contact_email: "", notes: "   ", food_drink_policy: null,
+  });
+  assert.equal(err, null);
+  assert.equal(sb.calls.length, 1);
+  assert.deepEqual(sb.calls[0].row, { room_number: "Room 4" });
+  assert.equal(sb.calls[0].val, "loc-1");
+});
+
+test("extras: nothing to write means no request at all", async () => {
+  const sb = fakeSupabase();
+  const err = await writeSiteExtras(sb, "loc-1", { name: "X", room_number: "", notes: "  " });
+  assert.equal(err, null);
+  assert.equal(sb.calls.length, 0);
+});
+
+test("extras: a failed write says the site WAS added", async () => {
+  const sb = fakeSupabase({ error: { message: "boom" } });
+  const err = await writeSiteExtras(sb, "loc-1", { room_number: "4" });
+  assert.match(err, /The location was added/);
+});
+
+test("extras never re-writes a field save_site owns", () => {
+  for (const k of ["name", "address", "area", "district_id", "partner_id"]) assert.ok(SAVED_BY_SAVE_SITE.has(k));
+});
