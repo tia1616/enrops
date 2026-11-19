@@ -103,7 +103,7 @@ export default function PartnerRequirementsSection({ partner, rows, canManage: r
         {isPartner
           ? (setByPartner
               ? `This is your list. ${orgName || "The provider"} sees it and is reminded to keep these current.`
-              : `${orgName || "The provider"} filled this in from your paperwork. Change anything that's wrong; once you do, the list is yours and only your admins can change it.`)
+              : `${orgName || "The provider"} set this list up for you. Change anything that's wrong; once you do, the list is yours and only your admins can change it.`)
           : (setByPartner
               ? `${partner.partner_name} set this list themselves${setOn ? ` on ${setOn}` : ""}, so only they can change it.`
               : "Tick what's in their packet. Their portal shows and counts only these, so they're never told something is missing that they don't ask for.")}
@@ -194,7 +194,7 @@ export default function PartnerRequirementsSection({ partner, rows, canManage: r
             : !isPartner && setByPartner
               ? `Only ${partner.partner_name} can change this list now.`
               : isPartner
-                ? "Only your admin logins can change these."
+                ? "Only your admin logins that see every site can change these."
                 : "Only an owner or admin can change these."}
         </div>
       )}

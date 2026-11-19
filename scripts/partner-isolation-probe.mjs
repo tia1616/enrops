@@ -291,7 +291,9 @@ for (const h of hosts) {
     const ctl = await call('/rest/v1/rpc/partner_requirements_control', { token: h.token, method: 'POST', body: { p_partner_id: p } });
     if (h.partners.has(p)) {
       const row = rows(ctl)[0];
-      const hostAdminHere = h.grants.some((g) => g.partner_id === p && g.role === 'host_admin');
+      // An admin login that sees every site (site_ids null); one limited to a
+      // site may not rewrite the partner-wide list.
+      const hostAdminHere = h.grants.some((g) => g.partner_id === p && g.role === 'host_admin' && !Array.isArray(g.site_ids));
       ok(`${who} may edit its own list only as host_admin`, !!row && row.can_edit === hostAdminHere, `can_edit ${row?.can_edit}`);
       if (!hostAdminHere) {
         const w = await call('/rest/v1/rpc/set_partner_requirement', { token: h.token, method: 'POST', body: { p_partner_id: p, p_requirement_key: 'business_license', p_required: true } });
@@ -381,7 +383,7 @@ for (const h of hosts) {
     } else {
       ok(`${who} reads no requirements of another partner (${p.slice(0, 8)})`, gotNothing(r), `${rows(r).length} row(s)`);
     }
-    const mayEdit = h.partners.has(p) && h.grants.some((g) => g.partner_id === p && g.role === 'host_admin');
+    const mayEdit = h.partners.has(p) && h.grants.some((g) => g.partner_id === p && g.role === 'host_admin' && !Array.isArray(g.site_ids));
     if (!mayEdit) {
       const set = await call('/rest/v1/rpc/set_partner_requirement', {
         token: h.token, method: 'POST', body: { p_partner_id: p, p_requirement_key: 'business_license', p_required: true },

@@ -39,9 +39,17 @@ as $$
 $$;
 revoke all on function private.partner_owns_requirements(uuid) from public, anon, authenticated;
 
--- 2. Who is calling, for these two writes: 'host_admin' (this partner's admin
--- login), 'provider_admin' (the provider's owner/admin, and the partner has not
--- taken the list over), or null (refused).
+-- 2. Who is calling, for these two writes: 'provider_admin' (the provider's
+-- owner/admin, and the partner has not taken the list over), 'host_admin'
+-- (this partner's admin login that sees EVERY site: the list covers all of the
+-- partner's sites, so a login limited to one site manager's school must not
+-- rewrite it for the other eight), or null (refused).
+--
+-- The provider is checked FIRST: a provider admin who also holds a partner
+-- login (a test login, a founder) would otherwise be logged as the partner and
+-- hand the list over by ticking a box on their own admin page. After a
+-- hand-over the provider branch no longer applies, so that person edits as
+-- the partner, which is what they then are.
 create or replace function private.requirements_editor(p_partner_id uuid, p_org uuid)
 returns text
 language sql
@@ -51,14 +59,15 @@ set search_path to ''
 as $$
   select case
     when auth.uid() is null then null
+    when public.can_admin_org(p_org) and not private.partner_owns_requirements(p_partner_id) then 'provider_admin'
     when exists (
       select 1 from public.partner_portal_access a
       join public.partners p on p.id = a.partner_id
       where a.auth_user_id = auth.uid() and a.partner_id = p_partner_id
         and a.organization_id = p_org and a.role = 'host_admin'
+        and a.site_ids is null
         and coalesce(p.inactive, false) = false
     ) then 'host_admin'
-    when public.can_admin_org(p_org) and not private.partner_owns_requirements(p_partner_id) then 'provider_admin'
     else null
   end;
 $$;
