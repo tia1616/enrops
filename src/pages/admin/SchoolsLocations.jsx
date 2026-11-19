@@ -33,7 +33,7 @@ const BRIGHT = '#5847C9';   // indigo - active tabs/actions (Figma)
 // help copy, and rendered list change.
 const OWN_VENUE_TABS = [
   { key: 'schools',   label: 'Locations',
-    help: 'The places you run your classes — your center, studios, or online. Add each one’s address, room, and arrival details once and they flow into every roster and reminder.' },
+    help: 'The places you run your classes — your own space, studios, or the schools and other sites you teach at. Add each one’s address and room once and they flow into your registration page and emails.' },
   { key: 'calendars', label: 'School calendar',
     help: 'Closure and no-class days that flow into every program’s session dates.' },
 ];

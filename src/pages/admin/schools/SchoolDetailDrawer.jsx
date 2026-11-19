@@ -19,6 +19,7 @@ import { supabase } from "../../../lib/supabase";
 import Chevron from "../../../components/Chevron.jsx";
 import VenueEditor from "./VenueEditor.jsx";
 import { PartnerEditor, ContactsList } from "../contacts/PartnerListSection.jsx";
+import { canManageInstructors } from "../../../lib/entitlements.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -148,7 +149,12 @@ export default function SchoolDetailDrawer({ org, partner, districts = [], partn
 
         <div style={{ padding: "18px 24px 40px", display: "flex", flexDirection: "column", gap: 22 }}>
           {/* Venue & logistics */}
-          <Section title="Venue & logistics" hint="Address, room, arrival/dismissal, food policy and notes — these render into instructor offer, patch, and reminder emails.">
+          {/* Copy follows the plan, like VenueEditor's fields: a plan with no
+              instructors (every self-serve provider now gets this drawer) has
+              no instructor emails for these to render into. */}
+          <Section title="Venue & logistics" hint={canManageInstructors(org)
+            ? "Address, room, arrival/dismissal, food policy and notes — these render into instructor offer, patch, and reminder emails."
+            : "Address, district and room for this school."}>
             {venues === null ? (
               <div style={{ color: MUTED, fontSize: 13 }}>Loading…</div>
             ) : venues.length === 0 ? (

@@ -16,7 +16,7 @@
 import { useState } from "react";
 import { supabase } from "../../../lib/supabase";
 import { groupingDistricts, isGroupingDistrict } from "../../../lib/districts.js";
-import { saveSite, writeSiteExtras, NEW_DISTRICT, NO_DISTRICT } from "../../../lib/saveSite.js";
+import { saveSite, writeSiteExtras, SAVED_BY_SAVE_SITE, NEW_DISTRICT, NO_DISTRICT } from "../../../lib/saveSite.js";
 import { canManageInstructors } from "../../../lib/entitlements.js";
 import DistrictsWarning from "../../../components/DistrictsWarning.jsx";
 import PlacesAutocomplete, { PlacesLookupHint } from "../../../components/PlacesAutocomplete";
@@ -196,7 +196,13 @@ export default function VenueEditor({
         });
         if (draft.district_id === NEW_DISTRICT && onDistrictsChanged) await onDistrictsChanged();
         const extrasErr = await writeSiteExtras(supabase, created.id, draft);
-        const { data: full } = await supabase.from("program_locations").select("*").eq("id", created.id).single();
+        // save_site already returned the full row; re-read only if extras may
+        // have changed it.
+        const extrasTried = Object.entries(draft).some(([k, v]) =>
+          !SAVED_BY_SAVE_SITE.has(k) && typeof v === "string" && v.trim() !== "");
+        const { data: full } = extrasTried
+          ? await supabase.from("program_locations").select("*").eq("id", created.id).single()
+          : { data: created };
         if (extrasErr) {
           // Stay open on the row that now exists, and say so. Calling onSaved
           // here closed the editor in SchoolDetailDrawer, so the message landed

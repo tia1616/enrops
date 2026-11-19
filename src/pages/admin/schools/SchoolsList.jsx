@@ -293,9 +293,12 @@ export default function SchoolsList() {
     setSelectedPartner(fresh ?? null);
   }
 
+  // Studio cards count too, on what a studio CAN be missing: an address, or a
+  // calendar for the district it chose. No contact chip (contacts are a partner's).
   const needsSetupCount = useMemo(
-    () => schools.filter((s) => !s.isContactOnly && (!s.hasAddress || !s.hasContact || !s.hasCalendar)).length,
-    [schools],
+    () => schools.filter((s) => !s.isContactOnly && (!s.hasAddress || !s.hasContact || !s.hasCalendar)).length
+      + sites.filter((s) => !s.hasAddress || (s.distId && !s.hasCalendar)).length,
+    [schools, sites],
   );
 
   const filtered = useMemo(() => {
@@ -347,7 +350,8 @@ export default function SchoolsList() {
 
   const totalVenues = locations.filter((l) => l.partner_id).length;
   const placesEnabled = !!import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
-  const missingAddressCount = locations.filter((l) => !l.address || !String(l.address).trim()).length;
+  // Archived sites are hidden from the cards, so they don't count here either.
+  const missingAddressCount = locations.filter((l) => !l.archived && (!l.address || !String(l.address).trim())).length;
   const minsSaved = schools.length * MINUTES_SAVED_PER_PARTNER;
   const savedLabel = minsSaved >= 60 ? `~${Math.round(minsSaved / 60)}h` : `~${minsSaved}m`;
 
