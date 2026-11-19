@@ -25,6 +25,7 @@
 import { useState, useEffect, useRef } from "react";
 import { supabase } from "../../../lib/supabase";
 import { groupingDistricts } from "../../../lib/districts.js";
+import { saveSite, NEW_DISTRICT, NO_DISTRICT } from "../../../lib/saveSite.js";
 import PlacesAutocomplete, { PlacesLookupHint } from "../../../components/PlacesAutocomplete";
 import DistrictsWarning from "../../../components/DistrictsWarning.jsx";
 
@@ -34,10 +35,9 @@ const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
 const RED = "#b53737";
 
-const NEW_DISTRICT = "__new__";
-// Explicit "this place has no district" (a library, church, private site). Kept
+// NEW_DISTRICT / NO_DISTRICT come from lib/saveSite.js. NO_DISTRICT is the
+// explicit "this place has no district" (a library, church, private site), kept
 // distinct from "" so an untouched select can't silently mean "no district".
-const NO_DISTRICT = "__none__";
 const NEW_UMBRELLA = "__new_umbrella__";
 
 const PARTNER_TYPES = [
@@ -91,25 +91,6 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
     if (placeAddr && !address.trim()) setAddress(placeAddr);
   }
 
-  async function resolveDistrictId() {
-    // "" = the operator hasn't chosen yet. Refuse rather than silently saving a
-    // districtless location (see the DISTRICT IS AN EXPLICIT CHOICE note above).
-    if (districtId === "") {
-      throw new Error("Choose this location's district — or pick “No district” if it doesn't follow one.");
-    }
-    if (districtId === NO_DISTRICT) return null; // deliberate: no district
-    if (districtId !== NEW_DISTRICT) return districtId || null;
-    const nm = newDistrictName.trim();
-    if (!nm) throw new Error("Enter a name for the new district, or pick an existing one.");
-    const existing = districts.find((d) => (d.name ?? "").trim().toLowerCase() === nm.toLowerCase());
-    if (existing) return existing.id;
-    const { data, error: dErr } = await supabase
-      .from("districts").insert({ organization_id: org.id, name: nm }).select("id").single();
-    if (dErr) throw dErr;
-    if (onDistrictsChanged) await onDistrictsChanged();
-    return data.id;
-  }
-
   async function save() {
     setError("");
     const trimmed = name.trim();
@@ -120,62 +101,30 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
     }
     setBusy(true);
     try {
-      const resolvedDistrictId = await resolveDistrictId();
-      const resolvedArea = area.trim() || parseCity(address) || null;
+      // ONE transaction (save_site): district, school partner and site land
+      // together or not at all. This used to be three separate inserts, and a
+      // failed site insert left an orphan partner behind.
+      //   - umbrella, existing  -> link to it
+      //   - umbrella, new       -> create it (a same-name umbrella is reused)
+      //   - otherwise           -> create this school's own 1:1 partner
+      const isUmbrellaPick = umbrellaMode && umbrellaPartnerId !== NEW_UMBRELLA;
+      const isUmbrellaNew = umbrellaMode && umbrellaPartnerId === NEW_UMBRELLA;
+      const row = await saveSite(supabase, {
+        organizationId: org.id,
+        name: trimmed,
+        address,
+        area: area.trim() || parseCity(address) || "",
+        atPartner: true,
+        partnerId: isUmbrellaPick ? umbrellaPartnerId : null,
+        partnerName: isUmbrellaNew ? newUmbrellaName : "",
+        partnerType: umbrellaMode ? "" : type,
+        partnerIsUmbrella: umbrellaMode,
+        districtChoice: districtId,
+        newDistrictName,
+      });
+      if (districtId === NEW_DISTRICT && onDistrictsChanged) await onDistrictsChanged();
 
-      // 1) Partner: reuse the umbrella (existing or just-created), or create a
-      //    fresh 1:1 partner for this school.
-      let partnerId;
-      if (umbrellaMode) {
-        if (umbrellaPartnerId === NEW_UMBRELLA) {
-          const { data: umb, error: uErr } = await supabase
-            .from("partners")
-            .insert({ organization_id: org.id, partner_name: newUmbrellaName.trim() })
-            .select("id")
-            .single();
-          if (uErr) throw uErr;
-          partnerId = umb.id;
-        } else {
-          partnerId = umbrellaPartnerId;
-        }
-      } else {
-        const { data: partnerRow, error: pErr } = await supabase
-          .from("partners")
-          .insert({
-            organization_id: org.id,
-            partner_name: trimmed,
-            partner_type: type || null,
-            location_area: resolvedArea,
-          })
-          .select("id")
-          .single();
-        if (pErr) throw pErr;
-        partnerId = partnerRow.id;
-      }
-
-      // 2) Venue: auto-linked to the partner above.
-      const base = (trimmed.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40)) || "venue";
-      const slug = `${base}-${Math.random().toString(36).slice(2, 8)}`;
-      const { data: locRow, error: lErr } = await supabase
-        .from("program_locations")
-        .insert({
-          organization_id: org.id,
-          name: trimmed,
-          address: address.trim() || null,
-          area: resolvedArea,
-          district_id: resolvedDistrictId,
-          partner_id: partnerId,
-          slug,
-        })
-        .select("id")
-        .single();
-      if (lErr) {
-        // If the partner was just created but the venue failed, surface it clearly —
-        // the partner row is harmless (shows as contact-only) and can be retried.
-        throw lErr;
-      }
-
-      if (onCreated) await onCreated({ partnerId, locationId: locRow.id });
+      if (onCreated) await onCreated({ partnerId: row.partner_id, locationId: row.id });
     } catch (e) {
       console.error("[AddSchoolModal] save failed", e);
       setError(e.message ?? "Couldn't save.");

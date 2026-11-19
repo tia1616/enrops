@@ -31,6 +31,8 @@ import ProgramSteps from "../../../components/ProgramSteps.jsx";
 import { STRIPE_CONNECT_ESTIMATE_SENTENCE } from "../../../lib/stripeConnectEstimate.js";
 import EnnieTip from "../../../components/EnnieTip.jsx";
 import PlacesAutocomplete, { PlacesLookupHint } from "../../../components/PlacesAutocomplete.jsx";
+import { saveSite, NEW_DISTRICT, NO_DISTRICT } from "../../../lib/saveSite.js";
+import { groupingDistricts } from "../../../lib/districts.js";
 import { ensureBrowserSafeImage, downscaleImage, extensionFor } from "../../../lib/heicConvert.js";
 import { WaiverOrgName } from "../../../components/OrgNameInText.jsx";
 import {
@@ -502,7 +504,8 @@ export default function QuickProgramBuilder() {
           // an address up could not see it again anywhere on this screen.
           // district_id comes back so we can warn when the chosen location has
           // no district — its class dates then never skip no-school days, and
-          // three of the four ways to create a location leave it unset. The
+          // locations made before save_site (20261119b), or by the import, can
+          // have none. The
           // legacy free-text `district` comes back too: it still resolves
           // closures through the legacy calendar match, so a location carrying
           // one is NOT broken and must not be warned about.
@@ -558,6 +561,36 @@ export default function QuickProgramBuilder() {
   const [newLocAddress, setNewLocAddress] = useState("");
   const [savingLoc, setSavingLoc] = useState(false);
   const [locErr, setLocErr] = useState("");
+  // "Is this at a school or another organization's site?" (Jessica 2026-11-19:
+  // yes creates the school partner, name only). Asked here because every
+  // self-serve provider's sites were being created with no partner and no
+  // district: on prod, 10 of 10 since September. Starts ticked only for a
+  // provider who told us they go out to sites.
+  const [newLocAtPartner, setNewLocAtPartner] = useState(false);
+  // District choice for the new site: "" untouched (refused), NO_DISTRICT,
+  // NEW_DISTRICT, or a districts.id. Same picker values as every add form.
+  const [newLocDistrict, setNewLocDistrict] = useState("");
+  const [newLocDistrictName, setNewLocDistrictName] = useState("");
+  // This screen never loaded districts; load them only when the add form opens.
+  const [districts, setDistricts] = useState([]);
+  const [districtsFailed, setDistrictsFailed] = useState(false);
+  useEffect(() => {
+    if (!addingLocation || !org?.id) return;
+    let cancelled = false;
+    setNewLocAtPartner(profile.venue_answer === "goes_to_sites");
+    (async () => {
+      const { data, error } = await supabase
+        .from("districts")
+        .select("id, name, district_type")
+        .eq("organization_id", org.id)
+        .order("name");
+      if (cancelled) return;
+      if (error) { setDistrictsFailed(true); setDistricts([]); }
+      else { setDistrictsFailed(false); setDistricts(data ?? []); }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [addingLocation, org?.id]);
 
   // Same gate the other location surfaces use: without a Maps key the widget
   // degrades to a plain input, so don't offer to fill in an address we can't find.
@@ -578,26 +611,25 @@ export default function QuickProgramBuilder() {
     setSavingLoc(true);
     setLocErr("");
     try {
-      // program_locations.slug is NOT NULL + globally unique; generate one from
-      // the name with a random suffix (mirrors LocationsList).
-      const base = nm.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "venue";
-      const slug = `${base}-${Math.random().toString(36).slice(2, 8)}`;
-      const { data, error } = await supabase
-        .from("program_locations")
-        .insert({ organization_id: org.id, name: nm, address: newLocAddress.trim() || null, slug })
-        // Read the address back too, so the just-added location shows its
-        // address immediately instead of only after a page reload. district_id
-        // comes back for the same reason the list read selects it — the
-        // no-district warning must be right for a just-added location too (this
-        // path doesn't set one, so it is always null here).
-        .select("id, name, address, district_id, district")
-        .single();
-      if (error) throw error;
+      // save_site (lib/saveSite.js): district, school partner and site in one
+      // transaction - the same path as the Locations page and AddSchoolModal.
+      // It returns the full row, so address and district_id are right for the
+      // no-district warning straight away.
+      const data = await saveSite(supabase, {
+        organizationId: org.id,
+        name: nm,
+        address: newLocAddress,
+        atPartner: newLocAtPartner,
+        districtChoice: newLocDistrict,
+        newDistrictName: newLocDistrictName,
+      });
       setLocations((ls) => [...ls, { id: data.id, name: data.name, address: data.address, district_id: data.district_id ?? null, district: data.district ?? null }].sort((a, b) => a.name.localeCompare(b.name)));
       setLocationId(data.id);
       setAddingLocation(false);
       setNewLocName("");
       setNewLocAddress("");
+      setNewLocDistrict("");
+      setNewLocDistrictName("");
     } catch (e) {
       setLocErr(e?.message ?? "Couldn't save that location.");
     } finally {
@@ -1278,7 +1310,8 @@ export default function QuickProgramBuilder() {
     // anything else exists. Leaving them out meant Cancel threw that away in
     // silence, because every program field was still untouched.
     newLocName.trim() !== "" ||
-    newLocAddress.trim() !== "";
+    newLocAddress.trim() !== "" ||
+    newLocDistrictName.trim() !== "";
 
   function handleCancel() {
     if (formIsDirty) {
@@ -2233,12 +2266,57 @@ export default function QuickProgramBuilder() {
                 onChange={(e) => setNewLocAddress(e.target.value)}
                 placeholder="Address (optional)"
               />
+              {/* Two questions, both needed for the site to work later: is there a
+                  school partner behind it (rosters, Partner portal), and which
+                  district's calendar do its class dates follow. */}
+              <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 14, color: INK, cursor: "pointer", lineHeight: 1.4, marginTop: 10 }}>
+                <input
+                  type="checkbox"
+                  checked={newLocAtPartner}
+                  onChange={(e) => setNewLocAtPartner(e.target.checked)}
+                  style={{ marginTop: 3 }}
+                />
+                <span>
+                  This is at a school or another organization&apos;s site
+                  <span style={{ display: "block", fontSize: 12, color: MUTED, marginTop: 2 }}>
+                    We&apos;ll add it as a school partner too, so you can send them rosters.
+                  </span>
+                </span>
+              </label>
+              <label style={{ ...labelStyle, marginTop: 10 }} htmlFor="qpb-new-district">District *</label>
+              <select
+                id="qpb-new-district"
+                style={inputStyle}
+                value={newLocDistrict}
+                onChange={(e) => setNewLocDistrict(e.target.value)}
+              >
+                <option value="">Choose a district…</option>
+                {groupingDistricts(districts).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                <option value={NEW_DISTRICT}>+ Create a new district…</option>
+                <option value={NO_DISTRICT}>No district (studio, library, private site)</option>
+              </select>
+              {newLocDistrict === NEW_DISTRICT && (
+                <input
+                  style={{ ...inputStyle, marginTop: 8 }}
+                  value={newLocDistrictName}
+                  onChange={(e) => setNewLocDistrictName(e.target.value)}
+                  placeholder="New district name, e.g. Portland Public Schools"
+                  maxLength={120}
+                />
+              )}
+              <div style={{ fontSize: 12, color: newLocDistrict === NO_DISTRICT ? "#8a6d1f" : MUTED, marginTop: 6, lineHeight: 1.5 }}>
+                {districtsFailed
+                  ? "Couldn't load your districts just now. Refresh before creating one, so you don't end up with a duplicate."
+                  : newLocDistrict === NO_DISTRICT
+                    ? "No district means no school calendar here, so this location's class dates won't skip no-school days."
+                    : "The district's calendar is what makes class dates skip no-school days. Pick the one this location follows."}
+              </div>
               {locErr && <div style={{ color: "#b53737", fontSize: 12, marginTop: 6 }}>{locErr}</div>}
               <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
                 <button type="button" onClick={saveNewLocation} disabled={savingLoc || !newLocName.trim()} style={{ ...primaryBtn, opacity: savingLoc || !newLocName.trim() ? 0.55 : 1 }}>
                   {savingLoc ? "Saving…" : "Save location"}
                 </button>
-                <button type="button" onClick={() => { setAddingLocation(false); setNewLocName(""); setNewLocAddress(""); setLocErr(""); }} style={{ ...primaryBtn, background: "#fff", color: BRIGHT, border: `1px solid ${RULE}` }}>
+                <button type="button" onClick={() => { setAddingLocation(false); setNewLocName(""); setNewLocAddress(""); setNewLocDistrict(""); setNewLocDistrictName(""); setLocErr(""); }} style={{ ...primaryBtn, background: "#fff", color: BRIGHT, border: `1px solid ${RULE}` }}>
                   Cancel
                 </button>
               </div>
