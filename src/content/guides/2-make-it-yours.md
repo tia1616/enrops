@@ -15,13 +15,13 @@ We set you up with sensible starting points. This is where you make them yours. 
 
 **Steps**
 1. **Settings → Registration questions → Manage →**.
-2. Under **Optional standard questions**, review the pickup and dismissal questions. They start switched on.
+2. Under **Optional standard questions**, check the pickup and dismissal questions. If you told us your classes are at schools or other sites, they were added when you built your first class.
 3. Under **Ways a family can say their child leaves**, tick every option you actually allow: released to a parent or authorized adult, walks or bikes home, takes the bus, goes to aftercare, something else.
 4. Tap **Save standard questions**.
 5. To ask something of your own, tap **+ Add question** under **Your own questions**. Pick the **Answer type**, choose whether to ask it on every program or one class, and tap **Add question**.
 
 **Ennie's advice**
-- The dismissal and pickup questions show as on, but they're only added to your form when you tap **Save standard questions**. Do this before your first family registers.
+- Changes here only reach your form when you tap **Save standard questions**. The page warns you if something is unsaved.
 - **Takes the bus** and **Something else** start switched off. If any of your kids ride a bus, tick **Takes the bus**, or families can't tell you.
 - Your form always asks for the child's name, grade and birth date, allergies and medical notes, an emergency contact, the parent's name, email and phone, and a mailing address. You don't need to add those.
 - Pick the answer type carefully. A question that needs words should be **Short text** or **Long text**, not a checkbox.

@@ -1,7 +1,7 @@
 ---
 stage: 3
 title: Fill your classes
-opens_when: TBD (ask Jessica; "link shared" can't be detected)
+opens_when: stage 1 complete (a program is published and Stripe charges are on). Jessica 2026-11-19.
 goal: Families who already know you hear about the class.
 ---
 
