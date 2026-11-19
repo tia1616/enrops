@@ -20,7 +20,8 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { listPartnerInstructors, listPartnerRequirements, logPartnerPortalEvent } from "../../lib/partnerPortal.js";
+import { listPartnerInstructors, listPartnerRequirements, logPartnerPortalEvent, getRequirementsControl } from "../../lib/partnerPortal.js";
+import PartnerRequirementsSection from "../admin/PartnerRequirementsSection.jsx";
 import { listProviderDocuments, openDocumentInNewTab } from "../../lib/providerDocuments.js";
 import { providerSummary, requiredKeys } from "../../lib/partnerPortalLogic.js";
 import { PartnerShell, PartnerSignIn, NoAccess, useMemberships, todayIso } from "./partnerShared.jsx";
@@ -31,7 +32,7 @@ import EmailsSent from "./EmailsSent.jsx";
 import { RecordTabRow, RecordTabPanel, useRecordTab, alertFor } from "./RecordTabs.jsx";
 import { decisionTag } from "../../lib/recordTabs.js";
 
-const PARTNER_TABS = ["documents", "classes", "instructors", "emails", "decision"];
+const PARTNER_TABS = ["documents", "classes", "instructors", "emails", "requirements", "decision"];
 
 export default function PartnerProviderDetail() {
   const { partnerId } = useParams();
@@ -50,10 +51,19 @@ export default function PartnerProviderDetail() {
   const [classCount, setClassCount] = useState(null);
   const [emailCount, setEmailCount] = useState(null);
   const [decision, setDecision] = useState(null);
+  // undefined = loading, null = couldn't load (20261119p).
+  const [reqControl, setReqControl] = useState(undefined);
+  const reqControlFor = useRef(null);
+  function loadReqControl(partnerId) {
+    reqControlFor.current = partnerId;
+    getRequirementsControl(partnerId)
+      .then((c) => { if (reqControlFor.current === partnerId) setReqControl(c); })
+      .catch(() => { if (reqControlFor.current === partnerId) setReqControl(null); });
+  }
 
   useEffect(() => {
     setDocs(null); setInstructors(null); setRequirements(undefined); setLoadError("");
-    setClassCount(null); setEmailCount(null); setDecision(null);
+    setClassCount(null); setEmailCount(null); setDecision(null); setReqControl(undefined);
     if (!m) return;
     let cancelled = false;
     // The view log: this partner opened this provider's record.
@@ -64,6 +74,7 @@ export default function PartnerProviderDetail() {
     listPartnerInstructors(m.partner_id)
       .then((r) => { if (!cancelled) setInstructors(r); })
       .catch((err) => { if (!cancelled) { setInstructors([]); setLoadError(`Couldn't load instructors: ${err?.message ?? "unknown error"}`); } });
+    loadReqControl(m.partner_id);
     listPartnerRequirements(m.partner_id)
       .then((r) => { if (!cancelled) setRequirements(r); })
       .catch(() => { if (!cancelled) setRequirements(null); });
@@ -134,6 +145,7 @@ export default function PartnerProviderDetail() {
               { id: "classes", label: "Classes", count: classCount },
               { id: "instructors", label: "Instructors", count: s.instructors.total || null, alert: s.instructors.total ? alertFor([s.instructors.badge]) : null },
               { id: "emails", label: "Emails sent", count: emailCount },
+              { id: "requirements", label: "Requirements" },
               { id: "decision", label: "Decision", tag: decisionTag(decision)?.text, alert: decisionTag(decision)?.alert },
             ]}
           />
@@ -155,6 +167,18 @@ export default function PartnerProviderDetail() {
 
           <RecordTabPanel id="emails" active={tab}>
             <EmailsSent key={`emails:${m.partner_id}`} partnerId={m.partner_id} orgName={orgName} onCount={setEmailCount} />
+          </RecordTabPanel>
+
+          <RecordTabPanel id="requirements" active={tab}>
+            {/* The same checklist the provider sees, worded for the partner;
+                its admin logins can change it (20261119p). */}
+            <PartnerRequirementsSection
+              key={`requirements:${m.partner_id}`}
+              partner={{ id: m.partner_id, partner_name: m.partner_name }}
+              rows={requirements} canManage onChange={setRequirements}
+              viewer="partner" orgName={orgName} control={reqControl}
+              onSaved={() => loadReqControl(m.partner_id)}
+            />
           </RecordTabPanel>
 
           <RecordTabPanel id="decision" active={tab}>

@@ -33,7 +33,7 @@ import { decisionTag } from "../../lib/recordTabs.js";
 const PROVIDER_TABS = ["documents", "classes", "instructors", "emails", "decision", "requirements", "logins"];
 import { todayIso } from "../partner/partnerShared.jsx";
 import { usePermissions } from "../../lib/permissions.js";
-import { listPartnerInstructors, listPartnerRequirements } from "../../lib/partnerPortal.js";
+import { listPartnerInstructors, listPartnerRequirements, getRequirementsControl } from "../../lib/partnerPortal.js";
 import { providerSummary, requiredKeys, REQUIREMENTS } from "../../lib/partnerPortalLogic.js";
 import {
   listProviderDocuments, getPartner, createProviderDocument, updateProviderDocument,
@@ -71,6 +71,17 @@ export default function PartnerRecord() {
   const [classCount, setClassCount] = useState(null);
   const [emailCount, setEmailCount] = useState(null);
   const [decision, setDecision] = useState(null);
+  // undefined = loading, null = couldn't load (20261119p).
+  const [reqControl, setReqControl] = useState(undefined);
+  // An answer for a partner this page has since left is dropped.
+  const reqControlFor = useRef(null);
+  function loadReqControl() {
+    const id = partnerId;
+    reqControlFor.current = id;
+    getRequirementsControl(id)
+      .then((c) => { if (reqControlFor.current === id) setReqControl(c); })
+      .catch(() => { if (reqControlFor.current === id) setReqControl(null); });
+  }
 
   function flash(msg) { setToast(msg); setTimeout(() => setToast(""), 3500); }
 
@@ -88,7 +99,7 @@ export default function PartnerRecord() {
     if (!org?.id) return;
     let cancelled = false;
     setPartner(undefined); setDocs(null); setInstructors(null); setRequirements(undefined); setError(""); setForm(null);
-    setClassCount(null); setEmailCount(null); setDecision(null);
+    setClassCount(null); setEmailCount(null); setDecision(null); setReqControl(undefined);
     getPartner(org.id, partnerId)
       .then((p) => { if (!cancelled) setPartner(p); })
       .catch((err) => { if (!cancelled) { setPartner(null); setError(`Couldn't load this partner: ${err?.message ?? "unknown error"}`); } });
@@ -98,6 +109,7 @@ export default function PartnerRecord() {
     listPartnerInstructors(partnerId)
       .then((r) => { if (!cancelled) setInstructors(r); })
       .catch((err) => { if (!cancelled) { setInstructors([]); setError(`Couldn't load instructors: ${err?.message ?? "unknown error"}`); } });
+    loadReqControl();
     listPartnerRequirements(partnerId)
       .then((r) => { if (!cancelled) setRequirements(r); })
       .catch(() => { if (!cancelled) setRequirements(null); });
@@ -210,7 +222,7 @@ export default function PartnerRecord() {
               { id: "instructors", label: "Instructors", count: s.instructors.total || null, alert: s.instructors.total ? alertFor([s.instructors.badge]) : null },
               { id: "emails", label: "Emails sent", count: emailCount },
               { id: "decision", label: "Decision", tag: decisionTag(decision)?.text, alert: decisionTag(decision)?.alert },
-              { id: "requirements", label: "What they require" },
+              { id: "requirements", label: "What they require", tag: reqControl?.set_by_partner ? "Set by them" : null },
               { id: "logins", label: "Logins" },
             ]}
           />
@@ -250,7 +262,10 @@ export default function PartnerRecord() {
           <RecordTabPanel id="requirements" active={tab}>
             {/* Keys are unique among siblings: two equal keys here once made
                 React render this section twice. */}
-            <PartnerRequirementsSection key={`requirements:${partnerId}`} partner={partner} rows={requirements} canManage={canManage} onChange={setRequirements} />
+            <PartnerRequirementsSection
+              key={`requirements:${partnerId}`} partner={partner} rows={requirements} canManage={canManage}
+              onChange={setRequirements} control={reqControl} onSaved={loadReqControl}
+            />
           </RecordTabPanel>
 
           <RecordTabPanel id="logins" active={tab}>
