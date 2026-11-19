@@ -93,7 +93,7 @@ export async function writeSiteExtras(supabase, locationId, draft) {
 }
 
 // An existing site with no partner becomes a school-partner site, in one
-// transaction (make_site_a_partner, migration 20261119c). Returns the site row.
+// transaction (make_site_a_partner, migration 20261119e). Returns the site row.
 export async function makeSiteAPartner(supabase, locationId, partnerType = "") {
   const { data, error } = await supabase.rpc("make_site_a_partner", {
     p_location_id: locationId,

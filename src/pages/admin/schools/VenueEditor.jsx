@@ -110,7 +110,12 @@ export default function VenueEditor({
   onDistrictsChanged,
   districtsWarning = "",
 }) {
-  const isNew = !location;
+  // The site this editor created, if save_site succeeded but writing its other
+  // fields did not. From then on this editor is EDITING that row: a second Save
+  // must update it, never create a duplicate site (independent review 2026-11-19).
+  const [createdLoc, setCreatedLoc] = useState(null);
+  const current = location ?? createdLoc;
+  const isNew = !current;
   const briefsInstructors = canManageInstructors(org);
   const [draft, setDraft] = useState(
     location ? draftFrom(location) : { ...emptyDraft(), partner_id: lockedPartnerId ?? "" },
@@ -135,7 +140,7 @@ export default function VenueEditor({
   // the school's calendar source, which is the exact damage this option exists to
   // prevent (/code-review 2026-08-17). The saved row cannot change while the form is
   // open, so the option stays available for the whole edit.
-  const linkedRow = (districts ?? []).find((d) => d.id === location?.district_id) ?? null;
+  const linkedRow = (districts ?? []).find((d) => d.id === current?.district_id) ?? null;
   const linkedOwnsCalendar = !!linkedRow && !isGroupingDistrict(linkedRow);
   // TWO DIFFERENT QUESTIONS, two booleans - see the same pair in LocationsList.
   // linkedOwnsCalendar decides whether the OPTION is offered (from the saved row, so
@@ -193,10 +198,24 @@ export default function VenueEditor({
         const extrasErr = await writeSiteExtras(supabase, created.id, draft);
         const { data: full } = await supabase.from("program_locations").select("*").eq("id", created.id).single();
         if (extrasErr) {
-          if (onSaved) await onSaved(full ?? created);
-          throw new Error(extrasErr);
+          // Stay open on the row that now exists, and say so. Calling onSaved
+          // here closed the editor in SchoolDetailDrawer, so the message landed
+          // on a component nobody could see and the details were silently lost.
+          setCreatedLoc(full ?? created);
+          setDraft((d) => ({ ...d, district_id: (full ?? created).district_id ?? NO_DISTRICT, newDistrictName: "" }));
+          // Not extrasErr's "open it and save again": it IS still open, and the
+          // button now reads "Save changes" (isNew is false from here).
+          setError("The location was added, but its other details didn't save. Tap Save changes to try again.");
+          return;
         }
-        if (onSaved) await onSaved(full ?? created);
+        // The site IS saved. A failure in the parent's refresh after this must
+        // not read as "Couldn't save", or the operator adds it again.
+        try {
+          if (onSaved) await onSaved(full ?? created);
+        } catch (cbErr) {
+          console.error("[VenueEditor] saved, but refreshing failed:", cbErr);
+          setError("Saved. Refresh the page to see it in the list.");
+        }
         return;
       }
 
@@ -239,7 +258,9 @@ export default function VenueEditor({
         const { data, error: updErr } = await supabase
           .from("program_locations")
           .update(payload)
-          .eq("id", location.id)
+          // `current`, not `location`: after a half-saved add this editor is
+          // editing the row it created, which the parent never passed in.
+          .eq("id", current.id)
           .select("*")
           .single();
         if (updErr) throw updErr;
@@ -279,7 +300,9 @@ export default function VenueEditor({
         <input type="text" {...bind("address")} placeholder="e.g. 2037 Douglas St, Forest Grove, OR 97116" style={inputStyle} />
       </Field>
 
-      <Field label="Area" hint="The area this venue is in (e.g. Portland, Hillsboro). Instructors rank areas in their availability survey, and instructor matching uses it. Defaults to the city from the address.">
+      <Field label="Area" hint={briefsInstructors
+        ? "The area this venue is in (e.g. Portland, Hillsboro). Instructors rank areas in their availability survey, and instructor matching uses it. Defaults to the city from the address."
+        : "The town or neighbourhood this location is in. Defaults to the city from the address."}>
         <input type="text" {...bind("area")} placeholder={parseCity(draft.address) ? `e.g. ${parseCity(draft.address)} (from address)` : "e.g. Portland"} style={inputStyle} />
         {!draft.area?.trim() && parseCity(draft.address) && (
           <button
@@ -294,7 +317,9 @@ export default function VenueEditor({
 
       <Field
         label={isNew ? "District *" : "District"}
-        hint="Group this school under a district (e.g. Portland Public Schools) so its academic calendar applies automatically. Set one up once, then attach every school in it. Not shown to instructors."
+        hint={briefsInstructors
+          ? "Group this school under a district (e.g. Portland Public Schools) so its academic calendar applies automatically. Set one up once, then attach every school in it. Not shown to instructors."
+          : "If you run inside a school district, attaching it here means their no-school days are skipped when your class dates are worked out."}
       >
         <select {...bind("district_id")} style={inputStyle}>
           {/* Only on a NEW venue: "" is the untouched state save refuses, so it
@@ -373,7 +398,9 @@ export default function VenueEditor({
         </Field>
       )}
 
-      {!lockedPartnerId && (
+      {/* Hidden on plans with no instructors, as the old flat list hid it: there
+          the site drawer's "Add as a school partner" button is the one way. */}
+      {!lockedPartnerId && briefsInstructors && (
         <Field
           label="Linked partner"
           hint="The org that operates this venue — usually the school itself, or the umbrella for community venues (e.g. Firstenburg → Vancouver Parks & Rec). Roster emails go to this partner's contacts."

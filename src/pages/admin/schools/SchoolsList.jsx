@@ -266,13 +266,18 @@ export default function SchoolsList() {
     const editId = searchParams.get("edit");
     if (!editId || partners === null || locations.length === 0) return;
     const loc = locations.find((l) => l.id === editId);
-    if (loc) {
-      if (loc.partner_id) {
-        const p = (partners ?? []).find((x) => x.id === loc.partner_id);
-        if (p) setSelectedPartner(p);
-      } else {
-        setSelectedSiteId(loc.id);
-      }
+    // NOT FOUND YET is not "not found". The import's done screen navigates here
+    // the same moment it starts the reload that brings its new rows in, so the
+    // first pass sees the OLD list. Keep the param until the location arrives;
+    // stripping it on a miss made every "Edit details" link for a just-imported
+    // school do nothing (independent review 2026-11-19).
+    if (!loc) return;
+    if (loc.partner_id) {
+      const p = (partners ?? []).find((x) => x.id === loc.partner_id);
+      if (!p) return; // its partner row hasn't arrived yet either
+      setSelectedPartner(p);
+    } else {
+      setSelectedSiteId(loc.id);
     }
     const next = new URLSearchParams(searchParams);
     next.delete("edit");
@@ -657,6 +662,13 @@ function SiteCard({ item, onOpen }) {
           <div style={{ fontSize: 13, color: site.address ? MUTED : AMBER, marginTop: 4 }}>
             {site.address || "No address yet"}
           </div>
+          {/* On the card itself, so it survives "Group by district" being off
+              (the group header is the only other place that says it). */}
+          {item.hasNoDistrictAtAll && (
+            <div style={{ fontSize: 12, color: "#8a6d1f", marginTop: 4 }}>
+              No district, so class dates won&apos;t skip no-school days.
+            </div>
+          )}
         </div>
         <button type="button" onClick={onOpen}
           style={{ flexShrink: 0, padding: "6px 14px", background: "transparent", color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontSize: 12.5, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}>
