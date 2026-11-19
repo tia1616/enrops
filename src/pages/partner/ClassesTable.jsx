@@ -122,8 +122,9 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
               {/* One heading row per term (Kacy Cullen, 2026-11-19), then its classes. */}
               {groupClassesByTerm(classes, formatTermLabel).flatMap((g) => [
                 <tr key={`term:${g.key}`}>
-                  <th colSpan={4} scope="colgroup" className="border-b border-j2s-ink/10 bg-j2s-ink/[0.03] px-3 pb-1.5 pt-3 text-left text-sm font-bold text-j2s-ink">
-                    {g.label}
+                  <th colSpan={4} scope="rowgroup" className="border-b border-j2s-ink/10 bg-j2s-ink/[0.03] px-3 pb-1.5 pt-3 text-left text-sm font-bold text-j2s-ink">
+                    {/* Pinned like the class column, so it stays on screen when a phone scrolls the table sideways. */}
+                    <span className="sticky left-3">{g.label}</span>
                   </th>
                 </tr>,
                 ...g.classes.flatMap((c) => {
