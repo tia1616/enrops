@@ -5,17 +5,29 @@
 // missing Insurance certificate), otherwise picked. It goes to this partner, or
 // to every partner when the provider says so.
 //
-// Managing a saved document: upload a new version, change its dates, or remove
-// it. Its kind and who it is shown to are NOT editable (Jessica 2026-10-27:
+// Every document has a Name, shown to partners. A new one takes it from the
+// file name (titleFromFilename) unless the kind has its own default
+// (certificate, business license); it is always editable.
+//
+// Managing a saved document: rename it, upload a new version, change its
+// dates, or remove it. Its kind and who it is shown to are NOT editable (Jessica 2026-10-27:
 // Edit on a certificate, with the kind changed to agreement, turned two parks'
 // certificates into agreements and deleted the certificate files). A different
 // document is added, never made by editing another. updateProviderDocument
 // enforces the same thing for any other caller.
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
-  DOC_TYPES, docTypeLabel, blankDraft, draftFromRow, draftProblem, fileProblem, formatDate,
+  DOC_TYPES, docTypeLabel, blankDraft, draftFromRow, draftProblem, fileProblem, formatDate, titleFromFilename,
 } from "../../lib/providerDocumentLogic.js";
+
+// What a good name looks like, per kind.
+const NAME_PLACEHOLDER = {
+  insurance: "e.g. Certificate of liability insurance",
+  agreement: "e.g. Scope of Work: Winter Classes 2027",
+  business_license: "e.g. City of West Linn business license",
+  other: "e.g. W-9",
+};
 
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
@@ -56,12 +68,20 @@ export default function ProviderDocumentForm({ partner, editing, kind, onCancel,
 
   function set(field, value) { setDraft((d) => ({ ...d, [field]: value })); }
 
+  // The name this form filled in itself (a kind's default, or one taken from
+  // the file). A name the person typed is never replaced; one we filled in is.
+  const autoTitle = useRef(editing ? null : draft.title);
+
+  function isAutoTitle(title) {
+    return !title.trim() || title === autoTitle.current;
+  }
+
   function changeType(key) {
     setDraft((d) => {
+      if (!isAutoTitle(d.title)) return { ...d, doc_type: key, no_expiry: key === "insurance" ? false : d.no_expiry };
       const nextDefault = DOC_TYPES.find((t) => t.key === key)?.defaultTitle ?? "";
-      // Only "Other document" shows a Name box, so every other kind takes its
-      // own name; a name typed for "Other" must not ride along hidden.
-      const title = key === "other" ? (d.doc_type === "other" ? d.title : "") : nextDefault;
+      const title = nextDefault || (file ? titleFromFilename(file.name) : "");
+      autoTitle.current = title;
       return { ...d, doc_type: key, title, no_expiry: key === "insurance" ? false : d.no_expiry };
     });
   }
@@ -71,6 +91,17 @@ export default function ProviderDocumentForm({ partner, editing, kind, onCancel,
     const p = fileProblem(f);
     setFileError(p ?? "");
     setFile(p ? null : f);
+    // A new document with no name yet takes it from the file. Renewing an
+    // existing one keeps its name (the file name is often a broker's code).
+    if (!p && f && !editing) {
+      setDraft((d) => {
+        const kindDefault = DOC_TYPES.find((t) => t.key === d.doc_type)?.defaultTitle ?? "";
+        if (!isAutoTitle(d.title) || (kindDefault && d.title === kindDefault)) return d;
+        const title = titleFromFilename(f.name);
+        autoTitle.current = title;
+        return { ...d, title };
+      });
+    }
   }
 
   async function submit(e) {
@@ -112,13 +143,17 @@ export default function ProviderDocumentForm({ partner, editing, kind, onCancel,
         </select>
       )}
 
-      {/* Only "Other document" needs a name; the rest are named by their kind. */}
-      {draft.doc_type === "other" && (
-        <>
-          <label style={{ ...lbl, marginTop: 16 }}>Name</label>
-          <input type="text" value={draft.title} onChange={(e) => set("title", e.target.value)} placeholder="e.g. W-9" style={input} />
-        </>
-      )}
+      {/* Every document has a name partners can tell apart (2026-11-19): two
+          agreements both called "Partner agreement" read as a duplicate. */}
+      <label htmlFor="provider-doc-name" style={{ ...lbl, marginTop: 16 }}>Name</label>
+      <input
+        id="provider-doc-name" type="text" value={draft.title}
+        onChange={(e) => set("title", e.target.value)}
+        placeholder={NAME_PLACEHOLDER[draft.doc_type] ?? "e.g. W-9"} style={input}
+      />
+      <div style={hint}>
+        {editing ? "This is the name partners see." : "This is the name partners see. It fills in from the file you choose; change it to anything clearer."}
+      </div>
 
       <label style={{ ...lbl, marginTop: 16 }}>Shown to</label>
       {editing ? (
