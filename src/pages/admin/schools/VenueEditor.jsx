@@ -30,8 +30,11 @@ const NEW_DISTRICT = "__new__";
 // Explicit "follows no district". Distinct from "" so an untouched picker on a
 // NEW venue can't silently mean "no district" — that default is what left a
 // provider with 17 of 22 locations whose dates never skipped no-school days.
-// This is the THIRD form that adds a location (AddSchoolModal, LocationsList's
-// side card, and this drawer editor): a change to one belongs in all three.
+// AddSchoolModal, LocationsList and the quick builder now ADD sites through
+// save_site (lib/saveSite.js). This drawer editor still inserts directly when
+// adding a venue to an existing partner; moving it onto save_site is the next
+// chunk (docs/handoffs/2026-11-19-site-form-build-plan.md). Until then a change
+// to the add rules belongs here AND in save_site.
 const NO_DISTRICT = "__none__";
 
 function parseCity(address) {

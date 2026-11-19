@@ -504,7 +504,8 @@ export default function QuickProgramBuilder() {
           // an address up could not see it again anywhere on this screen.
           // district_id comes back so we can warn when the chosen location has
           // no district — its class dates then never skip no-school days, and
-          // three of the four ways to create a location leave it unset. The
+          // locations made before save_site (20261119b), or by the import, can
+          // have none. The
           // legacy free-text `district` comes back too: it still resolves
           // closures through the legacy calendar match, so a location carrying
           // one is NOT broken and must not be warned about.
@@ -1309,7 +1310,8 @@ export default function QuickProgramBuilder() {
     // anything else exists. Leaving them out meant Cancel threw that away in
     // silence, because every program field was still untouched.
     newLocName.trim() !== "" ||
-    newLocAddress.trim() !== "";
+    newLocAddress.trim() !== "" ||
+    newLocDistrictName.trim() !== "";
 
   function handleCancel() {
     if (formIsDirty) {
