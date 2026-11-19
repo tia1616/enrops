@@ -25,6 +25,11 @@ import { DocumentsTable, InstructorGrid, RecordSummary, RegistrationLine, Requir
 import PartnerDecision from "../partner/PartnerDecision.jsx";
 import ClassesTable from "../partner/ClassesTable.jsx";
 import EmailsSent from "../partner/EmailsSent.jsx";
+import { RecordTabRow, RecordTabPanel, useRecordTab, alertFor } from "../partner/RecordTabs.jsx";
+
+// The partner's four tabs first, in the partner's order, then the two that only
+// the provider has (what this partner requires, and its logins + activity).
+const PROVIDER_TABS = ["documents", "classes", "instructors", "emails", "requirements", "logins"];
 import { todayIso } from "../partner/partnerShared.jsx";
 import { usePermissions } from "../../lib/permissions.js";
 import { listPartnerInstructors, listPartnerRequirements } from "../../lib/partnerPortal.js";
@@ -61,6 +66,9 @@ export default function PartnerRecord() {
   const [toast, setToast] = useState("");
   const [form, setForm] = useState(null); // null | { editing: row|null, kind: string|null }
   const opening = useRef(false);
+  const [tab, setTab] = useRecordTab(PROVIDER_TABS);
+  const [classCount, setClassCount] = useState(null);
+  const [emailCount, setEmailCount] = useState(null);
 
   function flash(msg) { setToast(msg); setTimeout(() => setToast(""), 3500); }
 
@@ -78,6 +86,7 @@ export default function PartnerRecord() {
     if (!org?.id) return;
     let cancelled = false;
     setPartner(undefined); setDocs(null); setInstructors(null); setRequirements(undefined); setError(""); setForm(null);
+    setClassCount(null); setEmailCount(null);
     getPartner(org.id, partnerId)
       .then((p) => { if (!cancelled) setPartner(p); })
       .catch((err) => { if (!cancelled) { setPartner(null); setError(`Couldn't load this partner: ${err?.message ?? "unknown error"}`); } });
@@ -185,37 +194,66 @@ export default function PartnerRecord() {
         <>
           <RegistrationLine orgId={org?.id} />
           <RecordSummary s={s} />
-          <RequirementsList requirements={requirements} viewer="provider" partnerName={partner.partner_name} />
-          <DocumentsTable
-            s={s} orgName={orgName} today={today} onOpen={open}
-            viewer="provider" partnerName={partner.partner_name} renderActions={actions}
+
+          {/* Same tabs as the partner's page, plus the provider-only two
+              (RecordTabs.jsx). The decision below shows on every tab. */}
+          <RecordTabRow
+            active={tab} onChange={setTab}
+            tabs={[
+              { id: "documents", label: "Documents", alert: alertFor(s.business.map((b) => b.badge)) },
+              { id: "classes", label: "Classes", count: classCount },
+              { id: "instructors", label: "Instructors", count: s.instructors.total || null, alert: s.instructors.total ? alertFor([s.instructors.badge]) : null },
+              { id: "emails", label: "Emails sent", count: emailCount },
+              { id: "requirements", label: "What they require" },
+              { id: "logins", label: "Logins" },
+            ]}
           />
-          {canManage && (
-            <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
-              <button type="button" style={primaryBtn} onClick={() => setForm({ editing: null, kind: null })}>Add another document</button>
-            </div>
-          )}
-          <ClassesTable
-            key={`classes:${partnerId}`} partnerId={partnerId} orgId={org?.id} orgName={orgName}
-            viewer="provider" partnerName={partner.partner_name} canEdit={canManage}
-          />
-          {/* Keyed on the partner: a picked cell must never carry over. */}
-          <InstructorGrid
-            key={partnerId} s={s} instructors={instructors} orgName={orgName} today={today}
-            viewer="provider" partnerName={partner.partner_name}
-          />
-          <EmailsSent key={`emails:${partnerId}`} partnerId={partnerId} orgName={orgName} viewer="provider" partnerName={partner.partner_name} />
+
+          <RecordTabPanel id="documents" active={tab}>
+            <RequirementsList requirements={requirements} viewer="provider" partnerName={partner.partner_name} />
+            <DocumentsTable
+              s={s} orgName={orgName} today={today} onOpen={open}
+              viewer="provider" partnerName={partner.partner_name} renderActions={actions}
+            />
+            {canManage && (
+              <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
+                <button type="button" style={primaryBtn} onClick={() => setForm({ editing: null, kind: null })}>Add another document</button>
+              </div>
+            )}
+          </RecordTabPanel>
+
+          <RecordTabPanel id="classes" active={tab}>
+            <ClassesTable
+              key={`classes:${partnerId}`} partnerId={partnerId} orgId={org?.id} orgName={orgName}
+              viewer="provider" partnerName={partner.partner_name} canEdit={canManage} onCount={setClassCount}
+            />
+          </RecordTabPanel>
+
+          <RecordTabPanel id="instructors" active={tab}>
+            {/* Keyed on the partner: a picked cell must never carry over. */}
+            <InstructorGrid
+              key={partnerId} s={s} instructors={instructors} orgName={orgName} today={today}
+              viewer="provider" partnerName={partner.partner_name}
+            />
+          </RecordTabPanel>
+
+          <RecordTabPanel id="emails" active={tab}>
+            <EmailsSent key={`emails:${partnerId}`} partnerId={partnerId} orgName={orgName} viewer="provider" partnerName={partner.partner_name} onCount={setEmailCount} />
+          </RecordTabPanel>
+
+          <RecordTabPanel id="requirements" active={tab}>
+            {/* Keys are unique among siblings: two equal keys here once made
+                React render this section twice. */}
+            <PartnerRequirementsSection key={`requirements:${partnerId}`} partner={partner} rows={requirements} canManage={canManage} onChange={setRequirements} />
+          </RecordTabPanel>
+
+          <RecordTabPanel id="logins" active={tab}>
+            <PartnerLoginsSection key={`logins:${partnerId}`} org={org} partner={partner} canManage={canManage} onMessage={flash} />
+          </RecordTabPanel>
+
           <PartnerDecision key={`decision:${partnerId}`} partnerId={partnerId} partnerName={partner.partner_name} />
         </>
       )}
-
-      {requirements !== undefined && (
-        // Keys are unique among siblings: two equal keys here once made React
-        // render this section twice.
-        <PartnerRequirementsSection key={`requirements:${partnerId}`} partner={partner} rows={requirements} canManage={canManage} onChange={setRequirements} />
-      )}
-
-      <PartnerLoginsSection key={`logins:${partnerId}`} org={org} partner={partner} canManage={canManage} onMessage={flash} />
 
       {form && (
         <ModalShell title={form.editing ? "Manage document" : `Add a document for ${partner.partner_name}`} onClose={() => setForm(null)} maxWidth={560}>

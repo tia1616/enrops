@@ -23,7 +23,8 @@ const TD = "border-b border-j2s-ink/10 px-3 py-2 align-top";
 
 const keyOf = (c) => `${c.kind}:${c.class_id}`;
 
-export default function ClassesTable({ partnerId, orgId, orgName, viewer = "partner", partnerName = "", canEdit = false }) {
+// `onCount(n)`: how many classes loaded, for the count on the page's tab (null = failed).
+export default function ClassesTable({ partnerId, orgId, orgName, viewer = "partner", partnerName = "", canEdit = false, onCount }) {
   const [classes, setClasses] = useState(null);
   const [loadError, setLoadError] = useState("");
   const [open, setOpen] = useState(null);          // key of the class whose roster is open
@@ -36,9 +37,11 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
     try {
       const rows = await listPartnerClasses(partnerId);
       setClasses(sortClasses(rows));
+      onCount?.(rows.length);
       setLoadError("");
     } catch (err) {
       setClasses((prev) => prev ?? []);
+      onCount?.(null);
       setLoadError(`Couldn't load classes: ${err?.message ?? "unknown error"}`);
     }
   }

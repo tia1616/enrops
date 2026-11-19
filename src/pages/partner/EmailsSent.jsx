@@ -13,7 +13,8 @@ import { listPartnerEmailsSent } from "../../lib/partnerPortal.js";
 import { reminderText, sentLine } from "../../lib/partnerEmails.js";
 import { DOC_TYPE_LABEL } from "./ProviderRecord.jsx";
 
-export default function EmailsSent({ partnerId, orgName, viewer = "partner", partnerName = "" }) {
+// `onCount(n)`: how many reminders loaded, for the count on the page's tab (null = failed).
+export default function EmailsSent({ partnerId, orgName, viewer = "partner", partnerName = "", onCount }) {
   const [rows, setRows] = useState(null);
   const [error, setError] = useState("");
 
@@ -22,8 +23,8 @@ export default function EmailsSent({ partnerId, orgName, viewer = "partner", par
     setRows(null); setError("");
     if (!partnerId) return undefined;
     listPartnerEmailsSent(partnerId)
-      .then((r) => { if (!cancelled) setRows(r); })
-      .catch((err) => { if (!cancelled) { setRows([]); setError(`Couldn't load emails sent: ${err?.message ?? "unknown error"}`); } });
+      .then((r) => { if (!cancelled) { setRows(r); onCount?.(r.length); } })
+      .catch((err) => { if (!cancelled) { setRows([]); onCount?.(null); setError(`Couldn't load emails sent: ${err?.message ?? "unknown error"}`); } });
     return () => { cancelled = true; };
   }, [partnerId]);
 

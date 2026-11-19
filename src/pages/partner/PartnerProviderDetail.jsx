@@ -28,6 +28,9 @@ import { DocumentsTable, InstructorGrid, RecordSummary, RegistrationLine, Requir
 import PartnerDecision from "./PartnerDecision.jsx";
 import ClassesTable from "./ClassesTable.jsx";
 import EmailsSent from "./EmailsSent.jsx";
+import { RecordTabRow, RecordTabPanel, useRecordTab, alertFor } from "./RecordTabs.jsx";
+
+const PARTNER_TABS = ["documents", "classes", "instructors", "emails"];
 
 export default function PartnerProviderDetail() {
   const { partnerId } = useParams();
@@ -42,9 +45,13 @@ export default function PartnerProviderDetail() {
   const [loadError, setLoadError] = useState("");
   const [openError, setOpenError] = useState("");
   const opening = useRef(false);
+  const [tab, setTab] = useRecordTab(PARTNER_TABS);
+  const [classCount, setClassCount] = useState(null);
+  const [emailCount, setEmailCount] = useState(null);
 
   useEffect(() => {
     setDocs(null); setInstructors(null); setRequirements(undefined); setLoadError("");
+    setClassCount(null); setEmailCount(null);
     if (!m) return;
     let cancelled = false;
     // The view log: this partner opened this provider's record.
@@ -115,17 +122,37 @@ export default function PartnerProviderDetail() {
             <p className="mt-2 text-xs text-j2s-ink/50">Showing every standard requirement: your list couldn't be loaded just now.</p>
           )}
 
-          <RequirementsList requirements={requirements} />
+          {/* One section per tab; the summary above and the decision below
+              show on every tab (RecordTabs.jsx). */}
+          <RecordTabRow
+            sticky
+            active={tab} onChange={setTab}
+            tabs={[
+              { id: "documents", label: "Documents", alert: alertFor(s.business.map((b) => b.badge)) },
+              { id: "classes", label: "Classes", count: classCount },
+              { id: "instructors", label: "Instructors", count: s.instructors.total || null, alert: s.instructors.total ? alertFor([s.instructors.badge]) : null },
+              { id: "emails", label: "Emails sent", count: emailCount },
+            ]}
+          />
 
-          <DocumentsTable s={s} orgName={orgName} today={today} onOpen={open} />
+          <RecordTabPanel id="documents" active={tab}>
+            <RequirementsList requirements={requirements} />
+            <DocumentsTable s={s} orgName={orgName} today={today} onOpen={open} />
+          </RecordTabPanel>
 
-          <ClassesTable key={`classes:${m.partner_id}`} partnerId={m.partner_id} orgId={m.organization_id} orgName={orgName} />
+          <RecordTabPanel id="classes" active={tab}>
+            <ClassesTable key={`classes:${m.partner_id}`} partnerId={m.partner_id} orgId={m.organization_id} orgName={orgName} onCount={setClassCount} />
+          </RecordTabPanel>
 
-          {/* Keyed on the partner: a picked cell must never carry over to
-              another provider's record. */}
-          <InstructorGrid key={m.partner_id} s={s} instructors={instructors} orgName={orgName} today={today} />
+          <RecordTabPanel id="instructors" active={tab}>
+            {/* Keyed on the partner: a picked cell must never carry over to
+                another provider's record. */}
+            <InstructorGrid key={m.partner_id} s={s} instructors={instructors} orgName={orgName} today={today} />
+          </RecordTabPanel>
 
-          <EmailsSent key={`emails:${m.partner_id}`} partnerId={m.partner_id} orgName={orgName} />
+          <RecordTabPanel id="emails" active={tab}>
+            <EmailsSent key={`emails:${m.partner_id}`} partnerId={m.partner_id} orgName={orgName} onCount={setEmailCount} />
+          </RecordTabPanel>
 
           <PartnerDecision key={`decision:${m.partner_id}`} partnerId={m.partner_id} />
         </>
