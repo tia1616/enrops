@@ -10,10 +10,28 @@
 
 export const DOC_TYPES = [
   { key: "insurance", label: "Insurance certificate", defaultTitle: "Certificate of liability insurance" },
-  { key: "agreement", label: "Partner agreement", defaultTitle: "Partner agreement" },
+  // No default name: a partner often has several agreements at once (classes,
+  // winter camps, spring camp), and four documents all called "Partner
+  // agreement" read as duplicates (Kacy Cullen, Happy Valley, 2026-11-19). The
+  // name comes from the file instead (titleFromFilename) and can be edited.
+  { key: "agreement", label: "Partner agreement", defaultTitle: "" },
   { key: "business_license", label: "Business license", defaultTitle: "Business license" },
   { key: "other", label: "Other document", defaultTitle: "" },
 ];
+
+/**
+ * A document name from its file name: "Scope of Work - Winter Camps (2).pdf"
+ * -> "Scope of Work - Winter Camps". Drops the extension and a browser's
+ * " (1)" copy number; underscores become spaces. "" when nothing is left.
+ */
+export function titleFromFilename(name) {
+  let s = String(name ?? "").trim();
+  // Only real document extensions, so "Agreement v1.2" keeps its ".2".
+  s = s.replace(/\.(pdf|jpe?g|png|docx?)$/i, "");
+  s = s.replace(/\s*\(\d+\)$/, "");
+  s = s.replace(/_+/g, " ").replace(/\s{2,}/g, " ").trim();
+  return s;
+}
 
 export function docTypeLabel(key) {
   return DOC_TYPES.find((t) => t.key === key)?.label ?? "Document";

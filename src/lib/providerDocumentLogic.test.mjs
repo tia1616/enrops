@@ -36,11 +36,25 @@ ok('insurance cannot opt out of expiry', draftProblem({ ...ins, expires_on: '', 
 ok('blank title refused', draftProblem({ ...ins, title: '   ' }, { hasFile: true }) !== null);
 
 const agr = blankDraft('agreement');
+// Names (2026-11-19): an agreement has no default name, so the form fills it from the file.
+{
+  const { titleFromFilename } = await import('./providerDocumentLogic.js');
+  eq('agreement starts unnamed', agr.title, '');
+  eq('unnamed agreement cannot be saved', draftProblem({ ...agr, no_expiry: true }, { hasFile: true }), 'Give the document a name.');
+  eq('certificate keeps its default name', blankDraft('insurance').title, 'Certificate of liability insurance');
+  eq('name from file', titleFromFilename('Scope of Work - Journey to STEAM Winter Camps.pdf'), 'Scope of Work - Journey to STEAM Winter Camps');
+  eq('browser copy number dropped', titleFromFilename('Scope of Work - Winter Classes 26-27 (2).pdf'), 'Scope of Work - Winter Classes 26-27');
+  eq('underscores become spaces', titleFromFilename('City_of_Happy_Valley_COI.PDF'), 'City of Happy Valley COI');
+  eq('nothing left is empty', titleFromFilename('.pdf'), '');
+  eq('a version number is not an extension', titleFromFilename('Agreement v1.2'), 'Agreement v1.2');
+  eq('Word extension dropped', titleFromFilename('2026 COV Recreation Services Agreement.docx'), '2026 COV Recreation Services Agreement');
+  eq('no file name', titleFromFilename(undefined), '');
+}
 ok('agreement needs expiry OR the no-expiry tick', draftProblem(agr, { hasFile: true }) !== null);
-eq('agreement with no-expiry tick is valid', draftProblem({ ...agr, no_expiry: true }, { hasFile: true }), null);
+eq('agreement with no-expiry tick is valid', draftProblem({ ...agr, title: 'Scope of Work', no_expiry: true }, { hasFile: true }), null);
 // The form shows no start date, so a stale one never blocks a save; it is
 // dropped when the new expiry is earlier (the table's CHECK would refuse it).
-eq('a hidden start date never blocks saving', draftProblem({ ...agr, effective_on: '2026-05-01', expires_on: '2026-04-01' }, { hasFile: true }), null);
+eq('a hidden start date never blocks saving', draftProblem({ ...agr, title: 'Scope of Work', effective_on: '2026-05-01', expires_on: '2026-04-01' }, { hasFile: true }), null);
 eq('a start date after the new expiry is dropped', rowFromDraft({ ...agr, title: 'A', effective_on: '2026-05-01', expires_on: '2026-04-01' }).effective_on, null);
 eq('a start date before the expiry is kept', rowFromDraft({ ...agr, title: 'A', effective_on: '2026-03-01', expires_on: '2026-04-01' }).effective_on, '2026-03-01');
 
