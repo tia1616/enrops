@@ -18,6 +18,7 @@ import {
 } from "../../lib/partnerPortalLogic.js";
 import { getRecordSettings } from "../../lib/partnerPortal.js";
 import { formatDate, compareByExpiry } from "../../lib/providerDocumentLogic.js";
+import { telHref } from "../../lib/telHref.js";
 
 // Short column headers; the full names live in REQUIREMENTS.
 const SHORT = {
@@ -304,9 +305,9 @@ export function InstructorGrid({ s, instructors, orgName, today, viewer = "partn
                         <div className="mt-0.5 text-[11px] text-j2s-purple [overflow-wrap:anywhere]">
                           {r.email}
                           {r.email && r.phone && " · "}
-                          {/* Tap to call, for day-of changes (Happy Valley 11/5). Same tel: shape as the admin rosters. */}
-                          {r.phone && (r.phone.replace(/[^0-9+]/g, "")
-                            ? <a href={`tel:${r.phone.replace(/[^0-9+]/g, "")}`} className="inline-block py-1 font-semibold underline">{r.phone}</a>
+                          {/* Tap to call, for day-of changes (Happy Valley 11/5). */}
+                          {r.phone && (telHref(r.phone)
+                            ? <a href={telHref(r.phone)} className="inline-block py-1 font-semibold underline">{r.phone}</a>
                             : r.phone)}
                         </div>
                       )}
