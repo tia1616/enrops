@@ -93,22 +93,40 @@ begin
      where p.organization_id = p_organization_id
        and p.partner_name = v_pname;
     if v_existing is not null then
-      select exists (select 1 from program_locations l where l.partner_id = v_existing)
-        into v_has_site;
+      -- Archived sites don't count: re-adding a school whose old site was
+      -- archived is the same school coming back.
+      select exists (
+        select 1 from program_locations l
+         where l.partner_id = v_existing and coalesce(l.archived, false) = false
+      ) into v_has_site;
       if coalesce(p_partner_is_umbrella, false) or not v_has_site then
         v_partner_id := v_existing;
+        -- Fill the type only where the reused row has none (an import or a
+        -- contact-only partner). Never overwrite a type someone already set.
+        update partners
+           set partner_type = nullif(btrim(coalesce(p_partner_type, '')), '')
+         where id = v_existing
+           and partner_type is null
+           and nullif(btrim(coalesce(p_partner_type, '')), '') is not null;
       else
-        raise exception 'You already have a site linked to a school partner called "%". If this is a second site for the same organization, tick "belongs to a bigger organization" and pick it. Otherwise give this one a different name.', v_pname;
+        -- Worded for EVERY form that calls this: only AddSchoolModal has the
+        -- umbrella option, so don't send people to a box their screen lacks.
+        raise exception 'You already have a site for a school partner called "%". Give this site a different name, for example add the campus or street.', v_pname;
       end if;
     else
-      insert into partners (organization_id, partner_name, partner_type, location_area)
-      values (
-        p_organization_id,
-        v_pname,
-        nullif(btrim(coalesce(p_partner_type, '')), ''),
-        case when coalesce(p_partner_is_umbrella, false) then null else v_area end
-      )
-      returning id into v_partner_id;
+      begin
+        insert into partners (organization_id, partner_name, partner_type, location_area)
+        values (
+          p_organization_id,
+          v_pname,
+          nullif(btrim(coalesce(p_partner_type, '')), ''),
+          case when coalesce(p_partner_is_umbrella, false) then null else v_area end
+        )
+        returning id into v_partner_id;
+      exception when unique_violation then
+        -- Someone added the same name between our check and this insert.
+        raise exception 'A school partner called "%" was just added by someone else. Try saving again.', v_pname;
+      end;
     end if;
   end if;
 

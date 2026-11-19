@@ -786,8 +786,10 @@ function EditCard({ title, draft, bind, applyPlace, applyAddressCity, setAtPartn
 
       {/* New sites only, and only when no partner was picked below: ticking
           this makes save_site create the school partner (name only, no
-          contacts), so rosters to the school and the Partner portal work for
-          this site. A studio or the provider's own space stays unticked. */}
+          contacts), so Email roster to partner can find the school for this
+          site. Not promising the Partner portal: a lean org has no screen to
+          add that partner's contacts yet. A studio stays unticked. Same
+          sentence as the quick builder's copy of this checkbox. */}
       {isNew && !draft.partner_id && (
         <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 14, color: "#1a1a1a", cursor: "pointer", lineHeight: 1.4 }}>
           <input
@@ -799,7 +801,7 @@ function EditCard({ title, draft, bind, applyPlace, applyAddressCity, setAtPartn
           <span>
             This is at a school or another organization&apos;s site
             <span style={{ display: "block", fontSize: 12, color: "#6b6b6b", marginTop: 2 }}>
-              We&apos;ll add it as a school partner too, so you can send them rosters and use the Partner portal.
+              We&apos;ll add it as a school partner too, so you can send them rosters.
             </span>
           </span>
         </label>

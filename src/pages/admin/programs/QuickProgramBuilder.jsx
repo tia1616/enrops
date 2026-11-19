@@ -2279,7 +2279,7 @@ export default function QuickProgramBuilder() {
                 <span>
                   This is at a school or another organization&apos;s site
                   <span style={{ display: "block", fontSize: 12, color: MUTED, marginTop: 2 }}>
-                    We&apos;ll add it as a school partner too, so you can send them rosters later.
+                    We&apos;ll add it as a school partner too, so you can send them rosters.
                   </span>
                 </span>
               </label>
