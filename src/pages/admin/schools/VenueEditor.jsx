@@ -16,6 +16,8 @@
 import { useState } from "react";
 import { supabase } from "../../../lib/supabase";
 import { groupingDistricts, isGroupingDistrict } from "../../../lib/districts.js";
+import { saveSite, writeSiteExtras, NEW_DISTRICT, NO_DISTRICT } from "../../../lib/saveSite.js";
+import { canManageInstructors } from "../../../lib/entitlements.js";
 import DistrictsWarning from "../../../components/DistrictsWarning.jsx";
 import PlacesAutocomplete, { PlacesLookupHint } from "../../../components/PlacesAutocomplete";
 
@@ -26,16 +28,12 @@ const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
 const CORAL = "#D9694F";
 
-const NEW_DISTRICT = "__new__";
-// Explicit "follows no district". Distinct from "" so an untouched picker on a
+// NEW_DISTRICT / NO_DISTRICT come from lib/saveSite.js. NO_DISTRICT is the
+// explicit "follows no district", distinct from "" so an untouched picker on a
 // NEW venue can't silently mean "no district" — that default is what left a
 // provider with 17 of 22 locations whose dates never skipped no-school days.
-// AddSchoolModal, LocationsList and the quick builder now ADD sites through
-// save_site (lib/saveSite.js). This drawer editor still inserts directly when
-// adding a venue to an existing partner; moving it onto save_site is the next
-// chunk (docs/handoffs/2026-11-19-site-form-build-plan.md). Until then a change
-// to the add rules belongs here AND in save_site.
-const NO_DISTRICT = "__none__";
+// Every form ADDS sites through save_site (lib/saveSite.js), this one included,
+// so a change to the add rules belongs in save_site only.
 
 function parseCity(address) {
   if (!address) return "";
@@ -113,6 +111,7 @@ export default function VenueEditor({
   districtsWarning = "",
 }) {
   const isNew = !location;
+  const briefsInstructors = canManageInstructors(org);
   const [draft, setDraft] = useState(
     location ? draftFrom(location) : { ...emptyDraft(), partner_id: lockedPartnerId ?? "" },
   );
@@ -177,6 +176,30 @@ export default function VenueEditor({
     setSaving(true);
     setError(null);
     try {
+      // A NEW venue goes through save_site, the one add path every form shares
+      // (district + partner + site in one transaction). The fields save_site
+      // doesn't take are written straight after onto the row it returned.
+      if (isNew) {
+        const created = await saveSite(supabase, {
+          organizationId: org.id,
+          name: draft.name,
+          address: draft.address,
+          area: (draft.area && draft.area.trim()) ? draft.area : (parseCity(draft.address) || ""),
+          partnerId: lockedPartnerId || draft.partner_id || null,
+          districtChoice: draft.district_id,
+          newDistrictName: draft.newDistrictName,
+        });
+        if (draft.district_id === NEW_DISTRICT && onDistrictsChanged) await onDistrictsChanged();
+        const extrasErr = await writeSiteExtras(supabase, created.id, draft);
+        const { data: full } = await supabase.from("program_locations").select("*").eq("id", created.id).single();
+        if (extrasErr) {
+          if (onSaved) await onSaved(full ?? created);
+          throw new Error(extrasErr);
+        }
+        if (onSaved) await onSaved(full ?? created);
+        return;
+      }
+
       // Resolve the district picker (create inline if needed, dedupe by name).
       // NO_DISTRICT is a deliberate "none" and resolves to null, same as "" did.
       let resolvedDistrictId =
@@ -211,17 +234,8 @@ export default function VenueEditor({
       if (lockedPartnerId) payload.partner_id = lockedPartnerId;
 
       let savedLoc;
-      if (isNew) {
-        const base = (draft.name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40)) || "venue";
-        const slug = `${base}-${Math.random().toString(36).slice(2, 8)}`;
-        const { data, error: insErr } = await supabase
-          .from("program_locations")
-          .insert({ ...payload, slug, organization_id: org.id })
-          .select("*")
-          .single();
-        if (insErr) throw insErr;
-        savedLoc = data;
-      } else {
+      {
+        // Edit only: new venues returned above via save_site.
         const { data, error: updErr } = await supabase
           .from("program_locations")
           .update(payload)
@@ -245,7 +259,7 @@ export default function VenueEditor({
       <Field
         label="Venue name *"
         hint={<PlacesLookupHint enabled={placesEnabled} down={lookupDown} />}
-        instructorFacing
+        instructorFacing={briefsInstructors}
       >
         {placesEnabled ? (
           <PlacesAutocomplete
@@ -261,7 +275,7 @@ export default function VenueEditor({
         )}
       </Field>
 
-      <Field label="Address" instructorFacing>
+      <Field label="Address" instructorFacing={briefsInstructors}>
         <input type="text" {...bind("address")} placeholder="e.g. 2037 Douglas St, Forest Grove, OR 97116" style={inputStyle} />
       </Field>
 
@@ -340,14 +354,24 @@ export default function VenueEditor({
         )}
       </Field>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
-        <Field label="Room number" instructorFacing>
+      {/* A plan with no instructors (free, registration-only) gets the short
+          form the old Locations list gave it: room, and nothing that only
+          exists to brief an instructor. Keyed on the PLAN (canManageInstructors),
+          not the account type, so a founding provider keeps every field. */}
+      {briefsInstructors ? (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+          <Field label="Room number" instructorFacing>
+            <input type="text" {...bind("room_number")} placeholder="e.g. Room 12 or Gym B" style={inputStyle} />
+          </Field>
+          <Field label="Legacy district code (internal)" hint="Older free-text code, kept only to match calendars you uploaded before districts existed. Prefer the District picker above.">
+            <input type="text" {...bind("district")} placeholder="e.g. Hillsboro" style={inputStyle} />
+          </Field>
+        </div>
+      ) : (
+        <Field label="Room number" hint="Optional. Shown to families if you set it.">
           <input type="text" {...bind("room_number")} placeholder="e.g. Room 12 or Gym B" style={inputStyle} />
         </Field>
-        <Field label="Legacy district code (internal)" hint="Older free-text code, kept only to match calendars you uploaded before districts existed. Prefer the District picker above.">
-          <input type="text" {...bind("district")} placeholder="e.g. Hillsboro" style={inputStyle} />
-        </Field>
-      </div>
+      )}
 
       {!lockedPartnerId && (
         <Field
@@ -365,6 +389,7 @@ export default function VenueEditor({
         </Field>
       )}
 
+      {briefsInstructors && (<>
       <Field label="Arrival instructions (instructor)" hint="Park where? Door codes? Sign-in routine? Keys? — only seen by instructors, never sent to parents." instructorFacing>
         <textarea {...bind("arrival_instructions")} placeholder="e.g. Park in the back lot, enter through the gym door, sign in at the front desk. Door code: 4827#." rows={3} style={textareaStyle} />
       </Field>
@@ -400,6 +425,7 @@ export default function VenueEditor({
       <Field label="Notes" hint="Anything else worth telling the instructor about this venue." instructorFacing>
         <textarea {...bind("notes")} placeholder="e.g. Air conditioning is unreliable on hot days — bring a fan." rows={2} style={textareaStyle} />
       </Field>
+      </>)}
 
       {error && <div style={errorBanner}>{error}</div>}
 
