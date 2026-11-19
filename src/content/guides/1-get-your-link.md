@@ -64,7 +64,7 @@ Three things and you're live: build a class, connect Stripe, share the link.
 **Ennie's advice**
 - Under the price you'll see "Families pay $X". That's the number to put on your flyer, because it's what families actually pay.
 - Not sure of your price? Publish your best number. You can change it before families register, and anyone who already registered keeps the price they paid.
-- Write the description outcome first: what kids walk away with. That's what parents read.
+- Write the description outcome first: what kids walk away with.
 - A weekly class needs a **First class date** before it can go live. You can save a draft without one.
 - If the first class date falls on a different weekday than the day you picked, the dates follow the date. Check the dates preview.
 
@@ -129,9 +129,9 @@ Three things and you're live: build a class, connect Stripe, share the link.
 5. Have your own website? On **Programs**, tap **Add to your website** and **Copy code**, then paste it into your site.
 
 **Ennie's advice**
-- Check it on your phone. Most families register on a phone, and that's where problems show up first.
+- Check it on your phone too, not just a computer.
 - At checkout families see your price plus the enrops service fee on its own line, so nobody is surprised.
-- Where to send it: the principal or front office, your school newsletter contact, and the families you already know. One personal text to a parent you know beats a cold email blast.
+- Where to send it: the principal or front office, your school newsletter contact, and the families you already know.
 <!-- VERIFY before publishing: when does a later-term class open to families? Every self-signup org on prod has active_registration_term = FA26 (checked 2026-11-19). -->
 - A class in a later term shows "Not open to families yet".
 

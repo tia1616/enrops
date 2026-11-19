@@ -2,14 +2,7 @@
 stage: 4
 title: Run the term
 opens_when: about 14 days before the first class
-goal: Families get a welcome, your school partner has the roster, and class one runs smoothly.
-checklist:
-  - id: automations
-    label: Turn on your welcome email
-    done_when: the welcome automation for the org's program type is on
-  - id: roster-to-partner
-    label: Send the roster to your school partner
-    done_when: a roster email has been sent for an upcoming class
+goal: Families get a welcome and your school partner has the roster.
 ---
 
 # Run the term
@@ -32,7 +25,7 @@ Two weeks out, make sure families know what's coming and your school knows who's
 - **Payment coming up:** reminds families on a payment plan before a payment. On.
 
 **Ennie's advice**
-- Turn on the welcome email. It's the one families notice most when it's missing: where to go, when to arrive, what to bring.
+- The welcome email is off until you turn it on.
 - Read each email before you turn it on. You're the one families will reply to.
 - If your families register on your own website instead of enrops, these emails don't send.
 
@@ -59,8 +52,7 @@ Two weeks out, make sure families know what's coming and your school knows who's
 5. Tap **Send roster**. The roster is attached as a PDF, and the subject is filled in from the class details.
 
 **Ennie's advice**
-- Send it a few days before class one, then again if anyone joins late. The front office uses it to know who stays after school.
-- Add every office contact who needs it, not just the principal.
+- Send it before class one, and again if anyone joins late.
 
 ## Invite families to the parent portal {#invite-families}
 

@@ -1,20 +1,11 @@
 ---
 stage: 3
 title: Fill your classes
-opens_when: link shared
-goal: Families who already know you hear about the class, and the ones who need a nudge get one.
-checklist:
-  - id: import-families
-    label: Bring in the families you already know
-    done_when: the org has at least one family contact
-  - id: discounts
-    label: Decide on a sibling discount
-    done_when: the org has saved a sibling discount setting (on or off)
+opens_when: TBD (ask Jessica; "link shared" can't be detected)
+goal: Families who already know you hear about the class.
 ---
 
 # Fill your classes
-
-Your best families are the ones who already know you. Start there.
 
 ## Bring in the families you already know {#import-families}
 
@@ -32,7 +23,7 @@ Your best families are the ones who already know you. Start there.
 
 **Ennie's advice**
 - A PDF or Word list works too. We read it for you, then you check the columns before anything is saved.
-- Only upload families who agreed to hear from you. Emailing people who didn't sign up hurts your sender reputation and gets your emails sent to spam.
+- Only upload families who agreed to hear from you. The upload asks you to confirm that.
 
 ## Email the families in a class {#message-families}
 

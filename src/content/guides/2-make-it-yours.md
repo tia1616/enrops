@@ -3,16 +3,6 @@ stage: 2
 title: Make it yours
 opens_when: first program published
 goal: Families see your logo, read your words, and reply to you.
-checklist:
-  - id: registration-questions
-    label: Save your registration questions
-    done_when: the org has saved its standard questions at least once
-  - id: waivers
-    label: Read your waivers and cancellation policy
-    done_when: the seeded cancellation policy has been edited or kept (seeded_by_platform is false, or it was acknowledged)
-  - id: branding
-    label: Add your logo
-    done_when: organizations.logo_url is set
 ---
 
 # Make it yours

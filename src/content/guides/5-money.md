@@ -51,7 +51,7 @@ goal: You know where your money is, and you can refund or credit a family in a m
 4. Tell families. Use **Message families** and tick **Also include families who have left or been refunded**, so the ones you just refunded get it too.
 
 **Ennie's advice**
-- When you cancel, families should get their money back. When a family cancels, a credit is often the kinder option for both of you.
+- A rule of thumb: when you cancel, refund the family. When the family cancels, offer credit.
 - Changed your mind? **Reopen as draft** brings the class back.
 
 ## Stop selling a class {#stop-selling}

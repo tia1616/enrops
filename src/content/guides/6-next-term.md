@@ -7,8 +7,6 @@ goal: Next term's classes are copied, dated and open, and this term's families h
 
 # Next term
 
-The families who just finished are the most likely to come back. Open next term before they forget.
-
 ## Copy your classes to the next term {#copy-to-term}
 
 **Steps**
@@ -29,7 +27,7 @@ The families who just finished are the most likely to come back. Open next term 
 - Camps stay on your page until their last day, whatever the term.
 
 **Ennie's advice**
-- Email this term's families the day you open the new one. They're the most likely to come back.
+- When the new term is open, tell this term's families with **Message families**.
 
 ## What the term codes mean {#term-codes}
 
