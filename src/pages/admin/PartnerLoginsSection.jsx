@@ -192,7 +192,7 @@ export default function PartnerLoginsSection({ org, partner, canManage, onMessag
     <section style={{ marginTop: 28 }}>
       <h2 style={{ margin: "0 0 4px", fontSize: 18, fontWeight: 700, color: INK }}>Who at {partner.partner_name} can log in</h2>
       <p style={{ margin: "0 0 12px", fontSize: 13.5, color: MUTED, lineHeight: 1.5, maxWidth: 600 }}>
-        They see what's above, and nothing shown only to your other partners.
+        They see the Documents, Classes, Instructors, Emails sent and Decision tabs, and nothing shown only to your other partners.
       </p>
 
       {error && <div style={{ marginBottom: 12, padding: "10px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, color: "#991b1b", fontSize: 13 }}>{error}</div>}

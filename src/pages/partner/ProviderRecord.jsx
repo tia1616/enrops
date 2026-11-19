@@ -29,7 +29,7 @@ const SHORT = {
   contractor_agreement: "Contractor agreement",
 };
 const REQUIREMENT_LABEL = Object.fromEntries(REQUIREMENTS.map((r) => [r.key, r.label]));
-const DOC_TYPE_LABEL = { insurance: "Insurance certificate", agreement: "Agreement", business_license: "Business license", other: "Document" };
+export const DOC_TYPE_LABEL = { insurance: "Insurance certificate", agreement: "Agreement", business_license: "Business license", other: "Document" };
 
 // Cell colours follow the chip tones, with the words always present in the cell.
 const CELL_TONE = {

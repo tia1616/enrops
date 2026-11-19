@@ -105,9 +105,16 @@ export function rosterDisplayRows(rows) {
     key: id,
     name: `${r.first_name ?? ""} ${r.last_name ?? ""}`.trim() || "Unnamed",
     grade: gradeLabel(r.grade) ?? "",
-    homeroom: (r.homeroom ?? "").trim() || "Not stated",
+    // null when the database sends none: it sends homeroom only for a school's
+    // class (20261119c), so parks and camps never get the column.
+    homeroom: (r.homeroom ?? "").trim() || null,
     dismissal: dismissalSummary(r) ?? "Not stated",
   }));
+}
+
+/** Show the Homeroom column? Only when some child on this roster has one. */
+export function showsHomeroom(rows) {
+  return (rows ?? []).some((r) => !!r.homeroom);
 }
 
 /**

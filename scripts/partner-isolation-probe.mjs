@@ -112,6 +112,8 @@ const CLASS_FIELDS = new Set([
   'kind', 'class_id', 'title', 'site', 'day_of_week', 'class_days', 'start_time', 'end_time',
   'first_date', 'last_date', 'status', 'max_capacity', 'count_source', 'enrolled', 'reported_on', 'instructors',
 ]);
+// 20261119d. A count of recipients, never their addresses.
+const EMAIL_FIELDS = new Set(['sent_at', 'kind', 'subject_type', 'doc_type', 'about', 'expires_on', 'tier', 'recipients']);
 const ROSTER_FIELDS = new Set([
   'row_key', 'registered_at', 'first_name', 'last_name', 'grade', 'homeroom', 'dismissal_method', 'aftercare_provider',
 ]);
@@ -141,6 +143,8 @@ const grantsRes = await asService(
   '/rest/v1/partner_portal_access?select=id,partner_id,organization_id,role,contact_id,site_ids,contact:partner_contacts(contact_email)',
 );
 const allGrants = rows(grantsRes);
+const consentRes = await asService('/rest/v1/instructors?select=first_name,last_name&partner_sharing_agreed_at=not.is.null');
+const consentingInstructorNames = new Set(rows(consentRes).map((x) => `${x.first_name ?? ''} ${x.last_name ?? ''}`.trim()));
 const docsRes = await asService(`/rest/v1/provider_documents?select=id,organization_id,partner_id,storage_path`);
 const allDocs = rows(docsRes);
 const locRes = await asService('/rest/v1/program_locations?select=id,name,partner_id&partner_id=not.is.null');
@@ -266,6 +270,21 @@ for (const h of hosts) {
     ok(`${who} cannot type a count for "${c.title}"`, typed.json !== true, `got ${typed.text.slice(0, 40)}`);
   }
   scanFields(`${who} rosters`, rosterRows, ROSTER_FIELDS);
+  // Emails sent (20261119d): own partner only; a background-check reminder
+  // only for an instructor this login already sees as shared; field allowlist.
+  // A reminder may name an instructor who taught here before (history), but
+  // only one who has agreed to share; consent is the ground truth from the service read.
+  const sharedNames = consentingInstructorNames;
+  const emailRows = [];
+  for (const p of partnerIdsInPlay) {
+    const r = await call('/rest/v1/rpc/partner_portal_emails_sent', { token: h.token, method: 'POST', body: { p_partner_id: p } });
+    if (h.partners.has(p)) emailRows.push(...rows(r));
+    else ok(`${who} sees no emails sent for another partner (${p.slice(0, 8)})`, gotNothing(r), `${rows(r).length} row(s)`);
+  }
+  const strayBgc = emailRows.filter((e) => e.subject_type === 'background_check' && !sharedNames.has(e.about));
+  ok(`${who} background-check reminders only for instructors who agreed to share`, strayBgc.length === 0, strayBgc.map((e) => e.about).join(', '));
+  scanFields(`${who} emails sent`, emailRows, EMAIL_FIELDS);
+
   const directRe = await call('/rest/v1/reported_enrollments?select=id', { token: h.token });
   ok(`${who} cannot read reported_enrollments directly`, gotNothing(directRe), `status ${directRe.status}`);
 
@@ -410,6 +429,10 @@ for (const p of partnerIdsInPlay) {
 for (const p of partnerIdsInPlay) {
   const r = await call('/rest/v1/rpc/partner_portal_classes', { method: 'POST', body: { p_partner_id: p } });
   ok(`anon: no classes for ${p.slice(0, 8)}`, gotNothing(r), `status ${r.status}`);
+}
+for (const p of partnerIdsInPlay) {
+  const r = await call('/rest/v1/rpc/partner_portal_emails_sent', { method: 'POST', body: { p_partner_id: p } });
+  ok(`anon: no emails sent for ${p.slice(0, 8)}`, gotNothing(r), `status ${r.status}`);
 }
 const anonRoster = await call('/rest/v1/rpc/partner_portal_class_roster', { method: 'POST', body: { p_partner_id: partnerIdsInPlay[0], p_kind: 'class', p_class_id: '00000000-0000-0000-0000-000000000000' } });
 ok('anon: no roster', gotNothing(anonRoster), `status ${anonRoster.status}`);
