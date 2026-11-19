@@ -10,6 +10,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useOutletContext, useSearchParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { groupingDistricts, isGroupingDistrict } from "../../lib/districts.js";
+import { saveSite, NEW_DISTRICT, NO_DISTRICT } from "../../lib/saveSite.js";
 import DistrictsWarning from "../../components/DistrictsWarning.jsx";
 import PlacesAutocomplete, { PlacesLookupHint } from "../../components/PlacesAutocomplete";
 import FindMissingAddressesModal from "./FindMissingAddressesModal";
@@ -51,14 +52,11 @@ function parseCity(address) {
   return m ? m[1].trim() : "";
 }
 
-// Sentinel value for the District picker's "create a new district" option.
-const NEW_DISTRICT = "__new__";
-// Explicit "this place follows no district" (a studio, library, private site).
-// Kept distinct from "" so an untouched picker on a NEW location can't silently
-// mean "no district" — that default is what left a provider with 17 of 22
-// locations whose class dates never skipped no-school days. Mirrors
-// AddSchoolModal, which is the same choice in the partner-venue shape.
-const NO_DISTRICT = "__none__";
+// NEW_DISTRICT / NO_DISTRICT come from lib/saveSite.js, shared by every add form.
+// NO_DISTRICT is the explicit "this place follows no district" (a studio,
+// library, private site), kept distinct from "" so an untouched picker on a NEW
+// location can't silently mean "no district" - that default is what left a
+// provider with 17 of 22 locations whose class dates never skipped no-school days.
 
 const EMPTY_DRAFT = {
   name: "",
@@ -280,7 +278,10 @@ export default function LocationsList({ embedded = false }) {
 
   function startNew() {
     setError(null);
-    setDraft({ ...EMPTY_DRAFT });
+    // at_partner: "Is this at a school or another organization's site?" Starts
+    // ticked only for a provider who told us they go out to sites; "both" and
+    // "own space" start unticked. Transient - never written as a column.
+    setDraft({ ...EMPTY_DRAFT, at_partner: org?.venue_answer === "goes_to_sites" });
     setEditingId("new");
   }
 
@@ -341,6 +342,47 @@ export default function LocationsList({ embedded = false }) {
     setSaving(true);
     setError(null);
     try {
+      // A NEW location goes through save_site (lib/saveSite.js): the district,
+      // the school partner (when "at a school" is ticked) and the site are one
+      // transaction, the same path as AddSchoolModal and the quick builder.
+      // Everything save_site doesn't take (room, legacy code, contact,
+      // instructions) is written straight after onto the row it returned.
+      if (editingId === "new") {
+        const row = await saveSite(supabase, {
+          organizationId: org.id,
+          name: draft.name,
+          address: draft.address,
+          area: (draft.area && draft.area.trim()) ? draft.area : (parseCity(draft.address) || ""),
+          atPartner: !!draft.at_partner,
+          partnerId: draft.partner_id || null,
+          districtChoice: draft.district_id,
+          newDistrictName: draft.newDistrictName,
+        });
+        const SAVED_BY_RPC = new Set(["name", "address", "area", "district_id", "newDistrictName", "partner_id", "at_partner"]);
+        const rest = {};
+        for (const [k, v] of Object.entries(draft)) {
+          if (SAVED_BY_RPC.has(k)) continue;
+          const val = typeof v === "string" ? v.trim() : v;
+          if (val !== "" && val != null) rest[k] = val;
+        }
+        if (Object.keys(rest).length > 0) {
+          const { error: restErr } = await supabase
+            .from("program_locations")
+            .update(rest)
+            .eq("id", row.id);
+          if (restErr) {
+            // The site itself IS saved. Say exactly that, so nobody re-adds it
+            // and makes a duplicate.
+            await fetchLocations();
+            throw new Error(`The location was added, but its other details didn't save (${restErr.message}). Open it and save them again.`);
+          }
+        }
+        await fetchLocations();
+        await fetchDistricts();
+        cancelEdit();
+        return;
+      }
+
       // Resolve the District picker. "+ Create new district" inserts the district
       // entity first; otherwise use the selected id (or null to unlink). The
       // legacy free-text `district` column is left untouched — it stays the
@@ -376,23 +418,14 @@ export default function LocationsList({ embedded = false }) {
       // district_id + newDistrictName are handled explicitly above, not via the loop.
       const payload = {};
       for (const [k, v] of Object.entries(draft)) {
-        if (k === "district_id" || k === "newDistrictName") continue;
+        if (k === "district_id" || k === "newDistrictName" || k === "at_partner") continue;
         payload[k] = typeof v === "string" && v.trim() === "" ? null : (typeof v === "string" ? v.trim() : v);
       }
       payload.district_id = resolvedDistrictId;
       // Area defaults to the address city when left blank (matches the availability survey + matcher).
       payload.area = (draft.area && draft.area.trim()) ? draft.area.trim() : (parseCity(draft.address) || null);
-      if (editingId === "new") {
-        // program_locations.slug is NOT NULL and globally UNIQUE, but the form
-        // doesn't collect one. Generate it from the name with a short random
-        // suffix so it's unique even if another tenant has the same venue name.
-        const base = (draft.name.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40)) || "venue";
-        const slug = `${base}-${Math.random().toString(36).slice(2, 8)}`;
-        const { error: insErr } = await supabase
-          .from("program_locations")
-          .insert({ ...payload, slug, organization_id: org.id });
-        if (insErr) throw insErr;
-      } else {
+      {
+        // Edit only: new locations returned above via save_site.
         const { error: updErr } = await supabase
           .from("program_locations")
           .update(payload)
@@ -551,6 +584,7 @@ export default function LocationsList({ embedded = false }) {
               bind={bind}
               applyPlace={applyPlace}
               applyAddressCity={applyAddressCity}
+              setAtPartner={(v) => setDraft((d) => ({ ...d, at_partner: v }))}
               partners={partners}
               districts={districts}
               savedDistrictId={savedDistrictId}
@@ -673,7 +707,7 @@ function DisplayCard({ loc, campCount, district, onEdit, isLean = false }) {
   );
 }
 
-function EditCard({ title, draft, bind, applyPlace, applyAddressCity, partners, districts, savedDistrictId = null, districtsWarning = "", error, saving, onSave, onCancel, isNew, isLean = false, inDrawer }) {
+function EditCard({ title, draft, bind, applyPlace, applyAddressCity, setAtPartner = () => {}, partners, districts, savedDistrictId = null, districtsWarning = "", error, saving, onSave, onCancel, isNew, isLean = false, inDrawer }) {
   const placesEnabled = !!import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
   // Whether the Google lookup actually started. Without this the field degrades
   // to a plain box on failure and says nothing, which reads as broken.
@@ -749,6 +783,27 @@ function EditCard({ title, draft, bind, applyPlace, applyAddressCity, partners, 
       <Field label="Address" instructorFacing={!isLean}>
         <input type="text" {...bind("address")} placeholder="e.g. 2037 Douglas St, Forest Grove, OR 97116" style={inputStyle} />
       </Field>
+
+      {/* New sites only, and only when no partner was picked below: ticking
+          this makes save_site create the school partner (name only, no
+          contacts), so rosters to the school and the Partner portal work for
+          this site. A studio or the provider's own space stays unticked. */}
+      {isNew && !draft.partner_id && (
+        <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 14, color: "#1a1a1a", cursor: "pointer", lineHeight: 1.4 }}>
+          <input
+            type="checkbox"
+            checked={!!draft.at_partner}
+            onChange={(e) => setAtPartner(e.target.checked)}
+            style={{ marginTop: 3 }}
+          />
+          <span>
+            This is at a school or another organization&apos;s site
+            <span style={{ display: "block", fontSize: 12, color: "#6b6b6b", marginTop: 2 }}>
+              We&apos;ll add it as a school partner too, so you can send them rosters and use the Partner portal.
+            </span>
+          </span>
+        </label>
+      )}
 
       <Field
         label="Area"
