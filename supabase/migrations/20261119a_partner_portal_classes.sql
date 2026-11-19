@@ -162,12 +162,12 @@ begin
     case when pr.runs_own_registration then null
          when not v_enrops then (select re.enrolled from public.reported_enrollments re where re.program_id = pr.id)
          else (select count(*)::integer from public.registrations r
-               where r.program_id = pr.id and private.registration_on_roster(r)) end,
+               where r.program_id = pr.id and r.student_id is not null and private.registration_on_roster(r)) end,
     case when not pr.runs_own_registration and not v_enrops
          then (select (re.reported_at at time zone v_tz)::date from public.reported_enrollments re where re.program_id = pr.id) end,
     (select array_agg(i.first_name || ' ' || i.last_name order by i.first_name, i.last_name)
        from public.program_assignments pa
-       join public.instructors i on i.id = pa.instructor_id and i.organization_id = v_org
+       join public.instructors i on i.id = pa.instructor_id and i.organization_id = v_org and i.is_active
       where pa.program_id = pr.id and pa.organization_id = v_org and pa.status = 'confirmed')
   from progs pr
   where coalesce(pr.dates[array_length(pr.dates, 1)], pr.end_date, pr.first_session_date, v_today) >= v_today
@@ -193,12 +193,12 @@ begin
     case when cs.runs_own_registration then null
          when not v_enrops then (select re.enrolled from public.reported_enrollments re where re.camp_session_id = cs.id)
          else (select count(*)::integer from public.registrations r
-               where r.camp_session_id = cs.id and private.registration_on_roster(r)) end,
+               where r.camp_session_id = cs.id and r.student_id is not null and private.registration_on_roster(r)) end,
     case when not cs.runs_own_registration and not v_enrops
          then (select (re.reported_at at time zone v_tz)::date from public.reported_enrollments re where re.camp_session_id = cs.id) end,
     (select array_agg(i.first_name || ' ' || i.last_name order by i.first_name, i.last_name)
        from public.camp_assignments ca
-       join public.instructors i on i.id = ca.instructor_id and i.organization_id = v_org
+       join public.instructors i on i.id = ca.instructor_id and i.organization_id = v_org and i.is_active
       where ca.camp_session_id = cs.id and ca.organization_id = v_org and ca.status = 'confirmed')
   from public.camp_sessions cs
   join public.program_locations pl on pl.id = cs.location_id
@@ -272,13 +272,23 @@ begin
             case when p_kind = 'class' then 'program' else 'camp_session' end, p_class_id);
   end if;
 
-  return query
-  select r.id, r.registered_at, st.first_name, st.last_name, st.grade, st.homeroom_teacher,
-         st.dismissal_method, st.aftercare_provider
-  from public.registrations r
-  join public.students st on st.id = r.student_id
-  where (case when p_kind = 'class' then r.program_id else r.camp_session_id end) = p_class_id
-    and private.registration_on_roster(r);
+  -- Two plain branches so each uses its own index. The inner join to students
+  -- is the count's `student_id is not null`: same rows both ways.
+  if p_kind = 'class' then
+    return query
+    select r.id, r.registered_at, st.first_name, st.last_name, st.grade, st.homeroom_teacher,
+           st.dismissal_method, st.aftercare_provider
+    from public.registrations r
+    join public.students st on st.id = r.student_id
+    where r.program_id = p_class_id and private.registration_on_roster(r);
+  else
+    return query
+    select r.id, r.registered_at, st.first_name, st.last_name, st.grade, st.homeroom_teacher,
+           st.dismissal_method, st.aftercare_provider
+    from public.registrations r
+    join public.students st on st.id = r.student_id
+    where r.camp_session_id = p_class_id and private.registration_on_roster(r);
+  end if;
 end;
 $$;
 revoke all on function public.partner_portal_class_roster(uuid, text, uuid) from public, anon;

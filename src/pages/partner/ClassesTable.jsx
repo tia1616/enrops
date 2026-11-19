@@ -78,6 +78,8 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
     setEdit((e) => ({ ...e, saving: true, error: "" }));
     try {
       await setReportedEnrollment(c.kind, c.class_id, n);
+      // Counts just changed; a roster fetched earlier must not outlive them.
+      setRosters({}); setOpen(null);
       await load();
       setEdit(null);
       setSaved(keyOf(c));
