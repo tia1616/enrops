@@ -59,9 +59,11 @@ const MD = {
   h2: ({ node, children }) => <Heading level={2}>{children}</Heading>,
   h3: ({ node, children }) => <Heading level={3}>{children}</Heading>,
   p: ({ node, ...p }) => <p style={{ margin: "8px 0", lineHeight: 1.6 }} {...p} />,
-  ul: ({ node, ...p }) => <ul style={{ margin: "6px 0", paddingLeft: 22, lineHeight: 1.6 }} {...p} />,
-  ol: ({ node, ...p }) => <ol style={{ margin: "6px 0", paddingLeft: 22, lineHeight: 1.6 }} {...p} />,
-  li: ({ node, ...p }) => <li style={{ margin: "3px 0" }} {...p} />,
+  // listStyleType set EXPLICITLY: the app's global CSS resets lists to
+  // list-style none, which on staging dropped every step number and bullet.
+  ul: ({ node, ...p }) => <ul style={{ margin: "6px 0", paddingLeft: 22, lineHeight: 1.6, listStyleType: "disc" }} {...p} />,
+  ol: ({ node, ...p }) => <ol style={{ margin: "6px 0", paddingLeft: 22, lineHeight: 1.6, listStyleType: "decimal" }} {...p} />,
+  li: ({ node, ...p }) => <li style={{ margin: "3px 0", listStyleType: "inherit" }} {...p} />,
   strong: ({ node, ...p }) => <strong style={{ fontWeight: 700, color: INK }} {...p} />,
   code: ({ node, ...p }) => (
     <code style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontSize: "0.92em", background: "#f3f1ea", borderRadius: 4, padding: "1px 5px" }} {...p} />
