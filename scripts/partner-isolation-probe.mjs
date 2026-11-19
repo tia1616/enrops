@@ -109,7 +109,7 @@ const MEMBERSHIP_FIELDS = new Set(['partner_id', 'partner_name', 'organization_i
 // 20261119a. A roster carries only what the emailed roster PDF prints: never a
 // parent, a contact, a birth date or who may collect the child.
 const CLASS_FIELDS = new Set([
-  'kind', 'class_id', 'title', 'site', 'day_of_week', 'class_days', 'start_time', 'end_time',
+  'kind', 'class_id', 'title', 'term', 'site', 'day_of_week', 'class_days', 'start_time', 'end_time',
   'first_date', 'last_date', 'status', 'max_capacity', 'count_source', 'enrolled', 'reported_on', 'instructors',
 ]);
 // 20261119d. A count of recipients, never their addresses.
