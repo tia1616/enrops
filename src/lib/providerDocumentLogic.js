@@ -26,7 +26,8 @@ export const DOC_TYPES = [
  */
 export function titleFromFilename(name) {
   let s = String(name ?? "").trim();
-  s = s.replace(/\.[A-Za-z0-9]{1,5}$/, "");
+  // Only real document extensions, so "Agreement v1.2" keeps its ".2".
+  s = s.replace(/\.(pdf|jpe?g|png|docx?)$/i, "");
   s = s.replace(/\s*\(\d+\)$/, "");
   s = s.replace(/_+/g, " ").replace(/\s{2,}/g, " ").trim();
   return s;

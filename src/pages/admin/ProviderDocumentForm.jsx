@@ -25,7 +25,7 @@ import {
 const NAME_PLACEHOLDER = {
   insurance: "e.g. Certificate of liability insurance",
   agreement: "e.g. Scope of Work: Winter Classes 2027",
-  business_license: "e.g. City of West Linn business license",
+  business_license: "e.g. City business license",
   other: "e.g. W-9",
 };
 

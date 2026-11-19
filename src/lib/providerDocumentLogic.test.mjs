@@ -46,6 +46,8 @@ const agr = blankDraft('agreement');
   eq('browser copy number dropped', titleFromFilename('Scope of Work - Winter Classes 26-27 (2).pdf'), 'Scope of Work - Winter Classes 26-27');
   eq('underscores become spaces', titleFromFilename('City_of_Happy_Valley_COI.PDF'), 'City of Happy Valley COI');
   eq('nothing left is empty', titleFromFilename('.pdf'), '');
+  eq('a version number is not an extension', titleFromFilename('Agreement v1.2'), 'Agreement v1.2');
+  eq('Word extension dropped', titleFromFilename('2026 COV Recreation Services Agreement.docx'), '2026 COV Recreation Services Agreement');
   eq('no file name', titleFromFilename(undefined), '');
 }
 ok('agreement needs expiry OR the no-expiry tick', draftProblem(agr, { hasFile: true }) !== null);
