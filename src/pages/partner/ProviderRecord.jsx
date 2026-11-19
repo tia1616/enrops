@@ -301,7 +301,14 @@ export function InstructorGrid({ s, instructors, orgName, today, viewer = "partn
                       <div className="text-[11px] text-j2s-ink/50">{(r.sites || []).join(", ")}</div>
                       {/* Contact in the row (Jessica 10/19: partners see full names AND contact info). */}
                       {r.shared && (r.email || r.phone) && (
-                        <div className="mt-0.5 text-[11px] text-j2s-purple [overflow-wrap:anywhere]">{[r.email, r.phone].filter(Boolean).join(" · ")}</div>
+                        <div className="mt-0.5 text-[11px] text-j2s-purple [overflow-wrap:anywhere]">
+                          {r.email}
+                          {r.email && r.phone && " · "}
+                          {/* Tap to call, for day-of changes (Happy Valley 11/5). Same tel: shape as the admin rosters. */}
+                          {r.phone && (r.phone.replace(/[^0-9+]/g, "")
+                            ? <a href={`tel:${r.phone.replace(/[^0-9+]/g, "")}`} className="inline-block py-1 font-semibold underline">{r.phone}</a>
+                            : r.phone)}
+                        </div>
                       )}
                       {/* Statuses from another source that no column shows (20261103a). */}
                       {r.shared && lines.filter((l) => l.key.startsWith("clearance:")).map((l) => (
