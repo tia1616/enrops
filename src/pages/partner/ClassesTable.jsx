@@ -111,7 +111,6 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
                 <th className={TH}>Enrolled</th>
                 <th className={TH}>Status</th>
                 <th className={TH}>Instructor</th>
-                <th className={TH} />
               </tr>
             </thead>
             <tbody>
@@ -127,6 +126,13 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
                       <div className="font-medium text-j2s-ink">{c.title || "Untitled class"}</div>
                       <div className="text-xs text-j2s-ink/55">{c.site}{c.kind === "camp" ? " · Camp" : ""}</div>
                       <div className="text-xs text-j2s-ink/55">{scheduleText(c)}</div>
+                      {/* In the pinned first column so it is on screen on a phone. */}
+                      {rosterAvailable(c) && (
+                        <button type="button" onClick={() => toggleRoster(c)} aria-expanded={open === k}
+                          className="mt-0.5 py-1 text-xs font-semibold text-j2s-purple hover:underline">
+                          {open === k ? "Hide roster" : "Roster"}
+                        </button>
+                      )}
                     </td>
                     <td className={`${TD} min-w-[9rem]`}>
                       {count != null && <div className="text-base font-semibold tabular-nums text-j2s-ink">{count}</div>}
@@ -156,18 +162,10 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
                     <td className={`${TD} min-w-[8rem] text-j2s-ink/80`}>
                       {c.instructors?.length ? c.instructors.join(", ") : <span className="text-j2s-ink/45">Not assigned yet</span>}
                     </td>
-                    <td className={`${TD} whitespace-nowrap`}>
-                      {rosterAvailable(c) && (
-                        <button type="button" onClick={() => toggleRoster(c)} aria-expanded={open === k}
-                          className="py-1 font-semibold text-j2s-purple hover:underline">
-                          {open === k ? "Hide roster" : "Roster"}
-                        </button>
-                      )}
-                    </td>
                   </tr>,
                   open === k && (
                     <tr key={`${k}:roster`}>
-                      <td colSpan={5} className="border-b border-j2s-ink/10 bg-j2s-ink/[0.02] px-3 py-3">
+                      <td colSpan={4} className="border-b border-j2s-ink/10 bg-j2s-ink/[0.02] px-3 py-3">
                         {!roster ? (
                           <p className="text-sm text-j2s-ink/60">Loading roster…</p>
                         ) : roster.error ? (
