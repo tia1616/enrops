@@ -26,7 +26,8 @@ eq('sent line, no count', sentLine({ ...doc, recipients: 0 }), 'Sent Dec 18, 202
 {
   const sql = readFileSync(new URL('../../supabase/migrations/20261119b_partner_portal_emails_sent.sql', import.meta.url), 'utf8');
   eq('only documents shared with this partner', sql.includes('(d.partner_id is null or d.partner_id = p_partner_id)'), true);
-  eq('instructors through the instructor list, shared only', sql.includes('public.partner_portal_instructors(p_partner_id) pi on pi.instructor_id = n.subject_id and pi.shared'), true);
+  eq('instructor reminders need sharing consent', sql.includes('i.partner_sharing_agreed_at is not null'), true);
+  eq('instructor reminders need a class or camp at this login\'s sites', (sql.match(/pl\.partner_id = p_partner_id and \(v_sites is null or pl\.id = any\(v_sites\)\)/g) || []).length, 2);
   eq('same gate as classes', sql.includes('private.partner_portal_scope(p_partner_id)'), true);
   const returns = sql.slice(sql.indexOf('returns table('), sql.indexOf('language plpgsql'));
   eq('recipients are a count, not addresses', returns.includes('recipients integer') && !/email|address/i.test(returns), true);

@@ -15,10 +15,12 @@
 --     (partner_id null = every partner, or this partner), the rule
 --     PartnerProviderDetail uses for the Documents table. A deleted document's
 --     reminders drop out with it.
---   background check reminders: only instructors this login already sees as
---     SHARED in public.partner_portal_instructors() (their sites, active, the
---     instructor agreed to share). That function is called, not copied, so the
---     two can never disagree about who an instructor is visible to.
+--   background check reminders: an instructor who has agreed to share with
+--     partners (the same consent partner_portal_instructors honours) AND has had
+--     a confirmed class or camp at one of this login's sites. "Has had", not
+--     "has now": this is a history, and a reminder that went out while Riley
+--     taught at Happy Valley must not vanish when the class ends (review
+--     2026-11-19). Withdrawn consent hides them again, as on the instructor list.
 -- Recipients are a COUNT, never addresses: the provider's own staff emails are
 -- the provider's business.
 --
@@ -37,9 +39,10 @@ set search_path to ''
 as $$
 declare
   v_org uuid;
+  v_sites uuid[];
   v_ok boolean;
 begin
-  select s.organization_id, s.allowed into v_org, v_ok
+  select s.organization_id, s.site_ids, s.allowed into v_org, v_sites, v_ok
   from private.partner_portal_scope(p_partner_id) s;
   if not coalesce(v_ok, false) then
     return;
@@ -58,13 +61,28 @@ begin
   union all
 
   select n.sent_at, 'expiry_reminder'::text, n.subject_type, null::text,
-         btrim(coalesce(pi.first_name, '') || ' ' || coalesce(pi.last_name, '')),
+         btrim(coalesce(i.first_name, '') || ' ' || coalesce(i.last_name, '')),
          n.expires_on, n.tier, n.recipients
   from public.record_expiry_notices n
-  join public.partner_portal_instructors(p_partner_id) pi on pi.instructor_id = n.subject_id and pi.shared
+  join public.instructors i on i.id = n.subject_id and i.organization_id = v_org
   where n.organization_id = v_org
     and n.subject_type = 'background_check'
     and n.sent_at is not null
+    and i.partner_sharing_agreed_at is not null
+    and (
+      exists (
+        select 1 from public.program_assignments pa
+        join public.programs pr on pr.id = pa.program_id
+        join public.program_locations pl on pl.id = pr.program_location_id
+        where pa.instructor_id = i.id and pa.organization_id = v_org and pa.status = 'confirmed'
+          and pl.partner_id = p_partner_id and (v_sites is null or pl.id = any(v_sites)))
+      or exists (
+        select 1 from public.camp_assignments ca
+        join public.camp_sessions cs on cs.id = ca.camp_session_id
+        join public.program_locations pl on pl.id = cs.location_id
+        where ca.instructor_id = i.id and ca.organization_id = v_org and ca.status = 'confirmed'
+          and pl.partner_id = p_partner_id and (v_sites is null or pl.id = any(v_sites)))
+    )
 
   order by 1 desc
   limit 50;

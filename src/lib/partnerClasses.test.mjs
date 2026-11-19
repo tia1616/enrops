@@ -73,8 +73,10 @@ eq('no homeroom anywhere hides the column (parks, camps)', showsHomeroom(rosterD
 eq('empty roster hides it', showsHomeroom([]), false);
 {
   const sqlc = readFileSync(new URL('../../supabase/migrations/20261119c_partner_roster_homeroom_schools_only.sql', import.meta.url), 'utf8');
-  eq('homeroom only for a school class', sqlc.includes("p_kind = 'class' and private.partner_is_school(p.partner_type)"), true);
-  eq('camp roster never carries homeroom', /r\.camp_session_id = p_class_id/.test(sqlc) && sqlc.includes('null::text,'), true);
+  eq('homeroom only for a school class (or an untyped partner)', sqlc.includes("p_kind = 'class' and (p.partner_type is null or private.partner_is_school(p.partner_type))"), true);
+  // The camp branch is the last `return query` block; it must carry null::text, never homeroom_teacher.
+  const campBranch = sqlc.slice(sqlc.lastIndexOf('return query'), sqlc.indexOf('r.camp_session_id = p_class_id'));
+  eq('camp roster never carries homeroom', campBranch.includes('null::text') && !campBranch.includes('homeroom_teacher'), true);
 }
 eq('no dismissal answer says so', roster[1].dismissal, 'Not stated');
 eq('only display fields', Object.keys(roster[0]).sort(), ['dismissal', 'grade', 'homeroom', 'key', 'name']);

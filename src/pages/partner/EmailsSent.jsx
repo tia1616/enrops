@@ -27,7 +27,9 @@ export default function EmailsSent({ partnerId, orgName, viewer = "partner", par
     return () => { cancelled = true; };
   }, [partnerId]);
 
-  const heading = viewer === "provider" ? "Reminders enrops sent you" : `Emails sent to ${orgName || "this provider"}`;
+  const heading = viewer === "provider"
+    ? `Reminders about ${partnerName || "this partner"}'s items`
+    : `Emails sent to ${orgName || "this provider"}`;
 
   return (
     <section className="mt-5 rounded-2xl bg-white p-4 shadow-card">

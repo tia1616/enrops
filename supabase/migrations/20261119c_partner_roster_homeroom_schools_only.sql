@@ -77,8 +77,10 @@ begin
     return;
   end if;
 
-  -- Homeroom only for a school's class (20261119c).
-  select p_kind = 'class' and private.partner_is_school(p.partner_type) into v_homeroom
+  -- Homeroom only for a school's class (20261119c). A partner whose type was
+  -- never set might be a school, so it keeps homeroom: showing it to a parks
+  -- department costs a column; hiding it from a school costs the answers.
+  select p_kind = 'class' and (p.partner_type is null or private.partner_is_school(p.partner_type)) into v_homeroom
   from public.partners p where p.id = p_partner_id;
 
   if not v_admin then

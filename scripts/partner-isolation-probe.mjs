@@ -143,6 +143,8 @@ const grantsRes = await asService(
   '/rest/v1/partner_portal_access?select=id,partner_id,organization_id,role,contact_id,site_ids,contact:partner_contacts(contact_email)',
 );
 const allGrants = rows(grantsRes);
+const consentRes = await asService('/rest/v1/instructors?select=first_name,last_name&partner_sharing_agreed_at=not.is.null');
+const consentingInstructorNames = new Set(rows(consentRes).map((x) => `${x.first_name ?? ''} ${x.last_name ?? ''}`.trim()));
 const docsRes = await asService(`/rest/v1/provider_documents?select=id,organization_id,partner_id,storage_path`);
 const allDocs = rows(docsRes);
 const locRes = await asService('/rest/v1/program_locations?select=id,name,partner_id&partner_id=not.is.null');
@@ -270,7 +272,9 @@ for (const h of hosts) {
   scanFields(`${who} rosters`, rosterRows, ROSTER_FIELDS);
   // Emails sent (20261119b): own partner only; a background-check reminder
   // only for an instructor this login already sees as shared; field allowlist.
-  const sharedNames = new Set(ownInstructorRows.filter((x) => x.shared).map((x) => `${x.first_name ?? ''} ${x.last_name ?? ''}`.trim()));
+  // A reminder may name an instructor who taught here before (history), but
+  // only one who has agreed to share; consent is the ground truth from the service read.
+  const sharedNames = consentingInstructorNames;
   const emailRows = [];
   for (const p of partnerIdsInPlay) {
     const r = await call('/rest/v1/rpc/partner_portal_emails_sent', { token: h.token, method: 'POST', body: { p_partner_id: p } });
@@ -278,7 +282,7 @@ for (const h of hosts) {
     else ok(`${who} sees no emails sent for another partner (${p.slice(0, 8)})`, gotNothing(r), `${rows(r).length} row(s)`);
   }
   const strayBgc = emailRows.filter((e) => e.subject_type === 'background_check' && !sharedNames.has(e.about));
-  ok(`${who} background-check reminders only for instructors it sees as shared`, strayBgc.length === 0, strayBgc.map((e) => e.about).join(', '));
+  ok(`${who} background-check reminders only for instructors who agreed to share`, strayBgc.length === 0, strayBgc.map((e) => e.about).join(', '));
   scanFields(`${who} emails sent`, emailRows, EMAIL_FIELDS);
 
   const directRe = await call('/rest/v1/reported_enrollments?select=id', { token: h.token });
