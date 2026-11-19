@@ -29,6 +29,7 @@ import { isCampProgram, firstMeetingDayOnOrAfter, campDayMismatchMessage } from 
 import FamiliesPayNote, { useOrgFeeConfig } from "../../../components/FamiliesPayNote.jsx";
 import ShareLink from "../../../components/ShareLink.jsx";
 import EnnieTip from "../../../components/EnnieTip.jsx";
+import GettingStartedCard from "./GettingStartedCard.jsx";
 import EmbedSnippet from "../../../components/EmbedSnippet.jsx";
 import { buildCatalogUrl } from "../../../lib/regLinks.js";
 import { WAITLIST_STATUS } from "../../../lib/waitlistState.js";
@@ -1170,6 +1171,19 @@ export default function ProgramsCalendar() {
         </div>
       </div>
 
+      {/* Getting started (onboarding chunk 2): providers who run registration
+          on enrops only, and only owners/admins, who can do every step on it.
+          The term and its classes are passed only once they have loaded
+          together, so the "term has ended" line never reads one term's label
+          against the previous term's classes. */}
+      {org?.instructor_pay_model === "enrops_platform" && org?.uses_enrops_registration !== false && perm.canManageSettings && (
+        <GettingStartedCard
+          org={org}
+          term={loading ? null : term}
+          termPrograms={loading ? [] : programs}
+          datesByProgram={loading ? {} : sessionDatesByProgram}
+        />
+      )}
       {term && termsLoaded && (
         activeTerm === term ? (
           // Honest state: a term can be "open for registration" while the org has

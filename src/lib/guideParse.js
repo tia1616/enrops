@@ -6,9 +6,9 @@
 // React - so the node test can run it against the real files.
 //
 // Format (see src/content/guides/README.md):
-//   - optional front matter between --- lines; only flat `key: value` lines are
-//     read (stage, title, goal). Nested lists such as `checklist:` are ignored
-//     here; the Getting started card reads those later.
+//   - optional front matter between --- lines: flat `key: value` lines (stage,
+//     title, goal), plus a `checklist:` list of { id, label, done_when } that
+//     the Getting started card on Programs reads its item labels from.
 //   - one `# Title` line, dropped from the body because the page renders the
 //     title from front matter.
 //   - every `##` / `###` heading ends in an id: `## Sign up {#sign-up}`.
@@ -22,11 +22,23 @@ export function parseGuide(raw, file = "") {
   const meta = {};
   let body = text;
   const fm = FRONT_MATTER.exec(text);
+  const checklist = [];
   if (fm) {
     body = text.slice(fm[0].length);
+    let inChecklist = false;
     for (const line of fm[1].split("\n")) {
       const kv = /^([a-z_]+):\s*(.*)$/.exec(line);
-      if (kv && kv[2].trim() !== "") meta[kv[1]] = kv[2].trim();
+      if (kv) {
+        inChecklist = kv[1] === "checklist";
+        if (kv[2].trim() !== "") meta[kv[1]] = kv[2].trim();
+        continue;
+      }
+      // checklist items: "  - id: x" starts one, "    label: y" fills it.
+      if (!inChecklist) continue;
+      const item = /^\s*-\s*([a-z_]+):\s*(.*)$/.exec(line);
+      const field = /^\s+([a-z_]+):\s*(.*)$/.exec(line);
+      if (item) checklist.push({ [item[1]]: item[2].trim() });
+      else if (field && checklist.length) checklist[checklist.length - 1][field[1]] = field[2].trim();
     }
   }
   body = body.replace(/<!--[\s\S]*?-->\n?/g, "");
@@ -40,7 +52,7 @@ export function parseGuide(raw, file = "") {
 
   const stage = meta.stage != null && /^\d+$/.test(meta.stage) ? Number(meta.stage) : null;
   const slug = String(file).replace(/\.md$/, "");
-  return { file, slug, stage, title: meta.title || "", goal: meta.goal || "", body, sections };
+  return { file, slug, stage, title: meta.title || "", goal: meta.goal || "", body, sections, checklist };
 }
 
 // "Sign up {#sign-up}" -> { text: "Sign up", id: "sign-up" }. A heading with no
