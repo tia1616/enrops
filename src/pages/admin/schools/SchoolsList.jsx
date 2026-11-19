@@ -6,8 +6,9 @@
 //     parent card that expands to its venues (Square / Jackrabbit pattern);
 //   • a contact-only partner (district office you talk to but don't run
 //     programs at yet) is first-class, with an "Add a venue" path;
-//   • orphan venues (no partner) surface in the inline, self-emptying
-//     NeedsLinkingSection so cleanup happens in the flow of work.
+//   • a site with no partner (a studio, or a school not linked yet) is its own
+//     card; its drawer links it to a partner or makes it one (2026-11-19, this
+//     replaced the NeedsLinkingSection nag on this page).
 //
 // Each card shows readiness (address · contact · calendar) and activity
 // (programs/camps) at a glance — the question an operator running programs at
@@ -19,7 +20,6 @@ import { useEffect, useMemo, useState } from "react";
 import { useOutletContext, useSearchParams } from "react-router-dom";
 import { supabase } from "../../../lib/supabase";
 import Chevron from "../../../components/Chevron.jsx";
-import NeedsLinkingSection from "../contacts/NeedsLinkingSection.jsx";
 import ImportContactsModal from "../contacts/ImportContactsModal.jsx";
 import FindMissingAddressesModal from "../FindMissingAddressesModal.jsx";
 import AddSchoolModal from "./AddSchoolModal.jsx";
@@ -75,13 +75,13 @@ export default function SchoolsList() {
   const [importing, setImporting] = useState(false);
   const [findingAddresses, setFindingAddresses] = useState(false);
   const [selectedPartner, setSelectedPartner] = useState(null);
-  // A site with NO partner (a studio). Every provider gets this one list now
-  // (Jessica 2026-11-19); for a self-serve provider (venue_model own_venue) a
-  // partner-less site is normal and renders as its own card. For partner-first
-  // orgs (J2S, Jeff) it is still an orphan to link, so they keep the
-  // NeedsLinkingSection exactly as before. No org's venue_model data changes.
+  // A site with NO partner (a studio) renders as its own card, for EVERY org
+  // (Jessica 2026-11-19: "have it for jeff and me as well"). This replaced the
+  // NeedsLinkingSection nag on this page: one card per site, and the site drawer
+  // links it to an existing partner (Linked partner) or makes it one. On prod at
+  // the time, J2S and Ukulele had 0 live unlinked sites, so nothing they saw
+  // changed. venue_model is no longer read here.
   const [selectedSiteId, setSelectedSiteId] = useState(null);
-  const showSiteCards = org?.venue_model === "own_venue";
   const [searchParams, setSearchParams] = useSearchParams();
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -234,11 +234,9 @@ export default function SchoolsList() {
     });
   }, [partners, venuesByPartner, contactCounts, calendarDistrictIds, activityByLoc, districtName]);
 
-  // Partner-less sites as their own cards (self-serve providers only; see
-  // showSiteCards). Archived sites stay hidden, as the old flat list did not
-  // show them either.
+  // Partner-less sites as their own cards. Archived sites stay hidden, as the
+  // NeedsLinkingSection this replaced hid them too (archived = false).
   const sites = useMemo(() => {
-    if (!showSiteCards) return [];
     return locations
       .filter((l) => !l.partner_id && !l.archived)
       .map((l) => {
@@ -257,7 +255,7 @@ export default function SchoolsList() {
           camps: a.camps,
         };
       });
-  }, [showSiteCards, locations, activityByLoc, districtName, calendarDistrictIds]);
+  }, [locations, activityByLoc, districtName, calendarDistrictIds]);
 
   // Deep link: /admin/schools?edit=<location id> opens that location's drawer
   // (the import's "Edit details" links). The flat list used to handle this; a
@@ -423,11 +421,6 @@ export default function SchoolsList() {
           {loadError || districtLoadError}
         </div>
       )}
-
-      {/* Inline, self-emptying cleanup for orphan venues - partner-first orgs
-          only. For a self-serve provider a partner-less site is a studio and
-          already has its own card below, so nagging about it would be wrong. */}
-      {!showSiteCards && <NeedsLinkingSection org={org} onChanged={refresh} />}
 
       {partners === null && <div style={{ color: MUTED, fontSize: 13 }}>Loading…</div>}
 
