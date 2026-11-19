@@ -326,10 +326,11 @@ function PartnerActivity({ org, partner, grants }) {
       const [{ data: events, error: e1 }, docs] = await Promise.all([
         supabase
           .from("audit_events")
-          .select("id, occurred_at, actor_user_id, partner_id, action, subject_id")
+          .select("id, occurred_at, actor_user_id, partner_id, action, subject_type, subject_id")
           .eq("organization_id", org.id)
           .eq("partner_id", partner.id)
-          .in("action", ["portal_viewed", "document_opened"])
+          // roster_opened: a partner opened a class roster (20261119a).
+          .in("action", ["portal_viewed", "document_opened", "roster_opened"])
           .order("occurred_at", { ascending: false })
           .limit(25),
         listProviderDocuments(org.id).catch(() => []),
@@ -337,6 +338,15 @@ function PartnerActivity({ org, partner, grants }) {
       if (cancelled) return;
       if (e1) { setFailed(true); return; }
       const titles = new Map(docs.map((d) => [d.id, d.title]));
+      // Class names for roster opens. A failed lookup only loses the name.
+      const ids = (kind) => [...new Set((events ?? []).filter((e) => e.action === "roster_opened" && e.subject_type === kind).map((e) => e.subject_id))];
+      const [progs, camps] = await Promise.all([
+        ids("program").length ? supabase.from("programs").select("id, curriculum").in("id", ids("program")) : { data: [] },
+        ids("camp_session").length ? supabase.from("camp_sessions").select("id, curriculum_name").in("id", ids("camp_session")) : { data: [] },
+      ]);
+      if (cancelled) return;
+      for (const p of progs.data ?? []) titles.set(p.id, p.curriculum);
+      for (const c of camps.data ?? []) titles.set(c.id, c.curriculum_name);
       setRows((events ?? []).map((ev) => ({ ...ev, docTitle: titles.get(ev.subject_id) })));
     })();
     return () => { cancelled = true; };
@@ -362,7 +372,11 @@ function PartnerActivity({ org, partner, grants }) {
           rows.map((ev, i) => (
             <div key={ev.id} style={{ padding: "10px 0", borderTop: i === 0 ? "none" : `1px solid ${RULE}`, fontSize: 13, color: INK }}>
               <span style={{ fontWeight: 600 }}>{who(ev)}</span>{" "}
-              {ev.action === "document_opened" ? <>opened {ev.docTitle ? `"${ev.docTitle}"` : "a document that has since been removed"}</> : "viewed your records"}
+              {ev.action === "document_opened"
+                ? <>opened {ev.docTitle ? `"${ev.docTitle}"` : "a document that has since been removed"}</>
+                : ev.action === "roster_opened"
+                  ? <>opened the roster for {ev.docTitle ? `"${ev.docTitle}"` : "a class"}</>
+                  : "viewed your records"}
               <span style={{ color: MUTED }}> · {new Date(ev.occurred_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
             </div>
           ))

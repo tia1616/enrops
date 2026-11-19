@@ -23,6 +23,7 @@ import PartnerLoginsSection from "./PartnerLoginsSection.jsx";
 import PartnerRequirementsSection from "./PartnerRequirementsSection.jsx";
 import { DocumentsTable, InstructorGrid, RecordSummary, RegistrationLine, RequirementsList } from "../partner/ProviderRecord.jsx";
 import PartnerDecision from "../partner/PartnerDecision.jsx";
+import ClassesTable from "../partner/ClassesTable.jsx";
 import { todayIso } from "../partner/partnerShared.jsx";
 import { usePermissions } from "../../lib/permissions.js";
 import { listPartnerInstructors, listPartnerRequirements } from "../../lib/partnerPortal.js";
@@ -193,6 +194,10 @@ export default function PartnerRecord() {
               <button type="button" style={primaryBtn} onClick={() => setForm({ editing: null, kind: null })}>Add another document</button>
             </div>
           )}
+          <ClassesTable
+            key={`classes:${partnerId}`} partnerId={partnerId} orgId={org?.id} orgName={orgName}
+            viewer="provider" partnerName={partner.partner_name} canEdit={canManage}
+          />
           {/* Keyed on the partner: a picked cell must never carry over. */}
           <InstructorGrid
             key={partnerId} s={s} instructors={instructors} orgName={orgName} today={today}
