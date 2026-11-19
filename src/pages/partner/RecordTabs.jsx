@@ -68,7 +68,9 @@ export function RecordTabRow({ tabs, active, onChange, label = "Record sections"
   }
 
   return (
-    <div className={`${sticky ? "sticky top-0 z-30" : ""} mt-5 border-b border-j2s-ink/10 bg-[#FBFBFB]`} onKeyDown={onKeyDown}>
+    // A background only when pinned (the partner shell's page colour, so content
+    // scrolling under it is hidden); unpinned it takes the page's own.
+    <div className={`${sticky ? "sticky top-0 z-30 bg-[#FBFBFB]" : ""} mt-5 border-b border-j2s-ink/10`} onKeyDown={onKeyDown}>
       <TabStrip role="tablist" label={label} style={{ gap: 4 }}>
         {tabs.map((t) => {
           const on = t.id === active;
@@ -92,7 +94,10 @@ export function RecordTabRow({ tabs, active, onChange, label = "Record sections"
                 <span className={`rounded-full px-1.5 text-xs tabular-nums ${on ? "bg-j2s-purple/10" : "bg-j2s-ink/5"}`}>{t.count}</span>
               )}
               {t.alert && DOT[t.alert] && (
-                <span className={`h-2 w-2 rounded-full ${DOT[t.alert]}`} aria-label={t.alert === "bad" ? "needs attention" : "coming up"} />
+                <>
+                  <span className={`h-2 w-2 rounded-full ${DOT[t.alert]}`} aria-hidden="true" />
+                  <span className="sr-only">{t.alert === "bad" ? "(needs attention)" : "(something coming up)"}</span>
+                </>
               )}
             </button>
           );

@@ -186,7 +186,10 @@ export default function PartnerRecord() {
       )}
 
       {error && <div role="alert" style={{ marginTop: 16, padding: "10px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, color: "#991b1b", fontSize: 13 }}>{error}</div>}
-      {toast && <div role="status" style={{ marginTop: 16, padding: "10px 12px", background: GREEN_BG, border: "1px solid #bbf7d0", borderRadius: 8, color: GREEN_INK, fontSize: 13 }}>{toast}</div>}
+      {/* Pinned to the bottom of the screen: with the record in tabs, the
+          action that raised it (a login sent, a document saved) can be far below
+          the top of the page. */}
+      {toast && <div role="status" style={{ position: "fixed", left: "50%", transform: "translateX(-50%)", bottom: "calc(16px + env(safe-area-inset-bottom, 0px))", zIndex: 60, maxWidth: "calc(100vw - 32px)", padding: "10px 14px", background: GREEN_BG, border: "1px solid #bbf7d0", borderRadius: 8, color: GREEN_INK, fontSize: 13, boxShadow: "0 4px 14px rgba(0,0,0,0.12)" }}>{toast}</div>}
 
       {loading ? (
         <div style={{ padding: 40, color: MUTED, textAlign: "center" }}>Loading…</div>
