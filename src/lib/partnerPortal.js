@@ -317,6 +317,50 @@ export async function declineInvitation(token, note) {
   return data === true;
 }
 
+// --- Classes at a partner's sites (20261119a) --------------------------------
+
+/**
+ * Every class and camp at this partner's sites that has not ended, with
+ * enrolled / max and where that count comes from. Same access as the
+ * instructor list (the partner's logins, by site; the provider's owner/admin).
+ */
+export async function listPartnerClasses(partnerId) {
+  const { data, error } = await supabase.rpc("partner_portal_classes", { p_partner_id: partnerId });
+  if (error) throw error;
+  return data ?? [];
+}
+
+/**
+ * One class's roster: name, grade, homeroom, dismissal. Nothing else exists
+ * in the response. A partner's open is logged by the database in this call.
+ */
+export async function getClassRoster(partnerId, kind, classId) {
+  const { data, error } = await supabase.rpc("partner_portal_class_roster", { p_partner_id: partnerId, p_kind: kind, p_class_id: classId });
+  if (error) throw error;
+  return data ?? [];
+}
+
+/**
+ * The provider's registration questions, for "is there a Dismissal column"
+ * (asksDismissal). null when the read fails, which shows the column.
+ */
+export async function getRegistrationFields(orgId, programId) {
+  const { data, error } = await supabase.rpc("get_active_registration_fields", { p_org_id: orgId, p_program_id: programId ?? null });
+  if (error) {
+    console.warn("[partnerPortal] registration questions not loaded; showing dismissal:", error.message);
+    return null;
+  }
+  return data ?? [];
+}
+
+/** The provider types a count for a class it registers outside enrops. Owner/admin only; false = refused. */
+export async function setReportedEnrollment(kind, classId, enrolled) {
+  const { data, error } = await supabase.rpc("set_reported_enrollment", { p_kind: kind, p_class_id: classId, p_enrolled: enrolled });
+  if (error) throw error;
+  if (data !== true) throw new Error("Only an owner or admin can enter a count, and only for a class you register outside enrops.");
+  return true;
+}
+
 /** The businesses this person can accept for: owner or admin. */
 export async function myAdminOrgs(userId) {
   const { data, error } = await supabase

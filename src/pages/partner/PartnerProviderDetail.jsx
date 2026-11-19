@@ -26,6 +26,7 @@ import { providerSummary, requiredKeys } from "../../lib/partnerPortalLogic.js";
 import { PartnerShell, PartnerSignIn, NoAccess, useMemberships, todayIso } from "./partnerShared.jsx";
 import { DocumentsTable, InstructorGrid, RecordSummary, RegistrationLine, RequirementsList } from "./ProviderRecord.jsx";
 import PartnerDecision from "./PartnerDecision.jsx";
+import ClassesTable from "./ClassesTable.jsx";
 
 export default function PartnerProviderDetail() {
   const { partnerId } = useParams();
@@ -116,6 +117,8 @@ export default function PartnerProviderDetail() {
           <RequirementsList requirements={requirements} />
 
           <DocumentsTable s={s} orgName={orgName} today={today} onOpen={open} />
+
+          <ClassesTable key={`classes:${m.partner_id}`} partnerId={m.partner_id} orgId={m.organization_id} orgName={orgName} />
 
           {/* Keyed on the partner: a picked cell must never carry over to
               another provider's record. */}

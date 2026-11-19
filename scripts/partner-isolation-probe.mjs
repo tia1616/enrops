@@ -106,6 +106,15 @@ const DOCUMENT_FIELDS = new Set([
   'expires_on', 'storage_path', 'original_filename', 'created_by', 'created_at', 'updated_at', 'expiry_status',
 ]);
 const MEMBERSHIP_FIELDS = new Set(['partner_id', 'partner_name', 'organization_id', 'organization_name', 'organization_slug']);
+// 20261119a. A roster carries only what the emailed roster PDF prints: never a
+// parent, a contact, a birth date or who may collect the child.
+const CLASS_FIELDS = new Set([
+  'kind', 'class_id', 'title', 'site', 'day_of_week', 'class_days', 'start_time', 'end_time',
+  'first_date', 'last_date', 'status', 'max_capacity', 'count_source', 'enrolled', 'reported_on', 'instructors',
+]);
+const ROSTER_FIELDS = new Set([
+  'row_key', 'registered_at', 'first_name', 'last_name', 'grade', 'homeroom', 'dismissal_method', 'aftercare_provider',
+]);
 // Belt and braces on top of the allowlists: these names are never acceptable.
 const FORBIDDEN_KEY = /(^|_)(dob|birth|birthday|date_of_birth|ssn|social|address|street|zip|postal|report)(_|$)/i;
 // Full SSN, or a masked one ending in the last four.
@@ -224,6 +233,41 @@ for (const h of hosts) {
   }
   ok(`${who} CONTROL: sees at least one instructor`, ownInstructorRows.length > 0);
   scanFields(`${who} instructors`, ownInstructorRows, INSTRUCTOR_FIELDS);
+
+  // Classes and rosters (20261119a). Own partner: only allowed sites; another
+  // partner: nothing. A roster is asked for under the right partner and under
+  // every wrong one. (A partner's roster open writes a roster_opened row, like
+  // the document opens above: staging only.)
+  const ownClasses = [];
+  for (const p of partnerIdsInPlay) {
+    const r = await call('/rest/v1/rpc/partner_portal_classes', { token: h.token, method: 'POST', body: { p_partner_id: p } });
+    if (h.partners.has(p)) {
+      const list = rows(r);
+      ownClasses.push(...list.map((c) => ({ ...c, _partner: p })));
+      const sites = allowedSites(h, p);
+      const offSite = list.filter((c) => !sites.has(c.site));
+      ok(`${who} classes are only at the sites its login allows`, offSite.length === 0, offSite.map((c) => `${c.title} @ ${c.site}`).join('; '));
+    } else {
+      ok(`${who} gets no classes for another partner (${p.slice(0, 8)})`, gotNothing(r), `${rows(r).length} row(s)`);
+    }
+  }
+  scanFields(`${who} classes`, ownClasses.map(({ _partner, ...c }) => c), CLASS_FIELDS);
+  const rosterRows = [];
+  for (const c of ownClasses.filter((x) => x.count_source === 'enrops' && x.status === 'open')) {
+    const r = await call('/rest/v1/rpc/partner_portal_class_roster', { token: h.token, method: 'POST', body: { p_partner_id: c._partner, p_kind: c.kind, p_class_id: c.class_id } });
+    const list = rows(r);
+    rosterRows.push(...list);
+    ok(`${who} roster of "${c.title}" has as many children as its count`, list.length === c.enrolled, `${list.length} vs ${c.enrolled}`);
+    for (const p of partnerIdsInPlay.filter((x) => x !== c._partner)) {
+      const w = await call('/rest/v1/rpc/partner_portal_class_roster', { token: h.token, method: 'POST', body: { p_partner_id: p, p_kind: c.kind, p_class_id: c.class_id } });
+      ok(`${who} cannot read "${c.title}" through another partner (${p.slice(0, 8)})`, gotNothing(w), `${rows(w).length} row(s)`);
+    }
+    const typed = await call('/rest/v1/rpc/set_reported_enrollment', { token: h.token, method: 'POST', body: { p_kind: c.kind, p_class_id: c.class_id, p_enrolled: 99 } });
+    ok(`${who} cannot type a count for "${c.title}"`, typed.json !== true, `got ${typed.text.slice(0, 40)}`);
+  }
+  scanFields(`${who} rosters`, rosterRows, ROSTER_FIELDS);
+  const directRe = await call('/rest/v1/reported_enrollments?select=id', { token: h.token });
+  ok(`${who} cannot read reported_enrollments directly`, gotNothing(directRe), `status ${directRe.status}`);
 
   // Decisions (20261102b). Reads for every partner; writes only where they
   // must be REFUSED, because an accepted write is a permanent append-only row.
@@ -363,6 +407,12 @@ for (const p of partnerIdsInPlay) {
   const r = await call('/rest/v1/rpc/partner_portal_instructors', { method: 'POST', body: { p_partner_id: p } });
   ok(`anon: no instructors for ${p.slice(0, 8)}`, gotNothing(r), `status ${r.status}`);
 }
+for (const p of partnerIdsInPlay) {
+  const r = await call('/rest/v1/rpc/partner_portal_classes', { method: 'POST', body: { p_partner_id: p } });
+  ok(`anon: no classes for ${p.slice(0, 8)}`, gotNothing(r), `status ${r.status}`);
+}
+const anonRoster = await call('/rest/v1/rpc/partner_portal_class_roster', { method: 'POST', body: { p_partner_id: partnerIdsInPlay[0], p_kind: 'class', p_class_id: '00000000-0000-0000-0000-000000000000' } });
+ok('anon: no roster', gotNothing(anonRoster), `status ${anonRoster.status}`);
 const anonDocs = await call('/rest/v1/provider_documents_with_status?select=id');
 ok('anon: no documents', gotNothing(anonDocs), `status ${anonDocs.status}`);
 
