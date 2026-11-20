@@ -177,6 +177,46 @@ serve(async (req: Request) => {
       }
     }
 
+    // District. The import's "School district" column used to land ONLY in the
+    // legacy free-text program_locations.district, so an imported school never
+    // joined a real district: no school calendar applied and its classes did
+    // not skip that district's no-school days. Every other add path (save_site)
+    // writes district_id. Same rule as save_site: match the org's districts
+    // case-insensitively (districts_org_name_lower_uniq), else create one.
+    // The free-text column is still written as before; legacy readers use it.
+    const districtIdByKey = new Map<string, string>();
+    const loadDistricts = async () => {
+      const { data } = await supabase.from('districts').select('id, name').eq('organization_id', orgId);
+      for (const d of data ?? []) districtIdByKey.set(String(d.name).trim().toLowerCase(), d.id as string);
+    };
+    await loadDistricts();
+    const resolveDistrictId = async (raw: string): Promise<{ id: string | null; err?: string }> => {
+      const dname = raw.trim();
+      const key = dname.toLowerCase();
+      const hit = districtIdByKey.get(key);
+      if (hit) return { id: hit };
+      const { data, error } = await supabase
+        .from('districts').insert({ organization_id: orgId, name: dname }).select('id').maybeSingle();
+      if (data?.id) { districtIdByKey.set(key, data.id as string); return { id: data.id as string }; }
+      // Another writer added it between our read and this insert: read again.
+      if (error?.code === '23505') {
+        await loadDistricts();
+        const again = districtIdByKey.get(key);
+        if (again) return { id: again };
+      }
+      return { id: null, err: error?.message ?? 'district insert failed' };
+    };
+    // Fill district_id only where the site has none (never overwrite a district
+    // the operator chose). Returns false when the district could not be saved.
+    const fillDistrictId = async (
+      patch: Record<string, unknown>, locDistrict: string | null, currentDistrictId: string | null | undefined, partnerName: string,
+    ) => {
+      if (!locDistrict || currentDistrictId) return;
+      const r = await resolveDistrictId(locDistrict);
+      if (r.id) patch.district_id = r.id;
+      else errors.push({ partner: partnerName, reason: `district "${locDistrict}": ${r.err}` });
+    };
+
     let partnersCreated = 0;
     let partnersMerged = 0;
     let partnersSkipped = 0;
@@ -345,11 +385,12 @@ serve(async (req: Request) => {
             const patch: Record<string, unknown> = { partner_id: partnerId };
             // Read the full row so we know which fields are blank.
             const { data: currentLoc } = await supabase
-              .from('program_locations').select('address, room_number, district')
+              .from('program_locations').select('address, room_number, district, district_id')
               .eq('id', existingLoc.id).maybeSingle();
             if (locAddress && !(currentLoc?.address)) patch.address = locAddress;
             if (locRoom && !(currentLoc?.room_number)) patch.room_number = locRoom;
             if (locDistrict && !(currentLoc?.district)) patch.district = locDistrict;
+            await fillDistrictId(patch, locDistrict, currentLoc?.district_id as string | null, name);
             const { error: linkErr } = await supabase
               .from('program_locations').update(patch).eq('id', existingLoc.id).is('partner_id', null);
             if (linkErr) {
@@ -370,11 +411,12 @@ serve(async (req: Request) => {
             const patch: Record<string, unknown> = {};
             if (locAddress || locRoom || locDistrict) {
               const { data: currentLoc } = await supabase
-                .from('program_locations').select('address, room_number, district')
+                .from('program_locations').select('address, room_number, district, district_id')
                 .eq('id', existingLoc.id).maybeSingle();
               if (locAddress && !(currentLoc?.address)) patch.address = locAddress;
               if (locRoom && !(currentLoc?.room_number)) patch.room_number = locRoom;
               if (locDistrict && !(currentLoc?.district)) patch.district = locDistrict;
+              await fillDistrictId(patch, locDistrict, currentLoc?.district_id as string | null, name);
             }
             if (Object.keys(patch).length > 0) {
               const { error: fillErr } = await supabase
@@ -391,6 +433,7 @@ serve(async (req: Request) => {
           if (locAddress) insertLoc.address = locAddress;
           if (locRoom) insertLoc.room_number = locRoom;
           if (locDistrict) insertLoc.district = locDistrict;
+          await fillDistrictId(insertLoc, locDistrict, null, name);
           const { data: newLoc, error: locErr } = await supabase
             .from('program_locations').insert(insertLoc).select('id').maybeSingle();
           if (locErr || !newLoc) {
