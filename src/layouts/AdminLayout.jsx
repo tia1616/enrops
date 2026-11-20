@@ -9,6 +9,7 @@ import { supabase } from "../lib/supabase";
 import PwaInstallButton from "../components/pwa/PwaInstallButton.jsx";
 import EnropsWordmark from "../components/EnropsWordmark.jsx";
 import FeedbackWidget from "../components/feedback/FeedbackWidget.jsx";
+import HelpTour from "../components/HelpTour.jsx";
 import AnnouncementBanner from "../components/feedback/AnnouncementBanner.jsx";
 import { getPermissions } from "../lib/permissions";
 import { canManageInstructors } from "../lib/entitlements.js";
@@ -859,6 +860,7 @@ export default function AdminLayout() {
         <button
           type="button"
           onClick={() => setNavOpen((v) => !v)}
+          data-tour="menu"
           aria-expanded={navOpen}
           aria-controls="admin-nav"
           aria-label={navOpen ? "Close menu" : "Open menu"}
@@ -954,6 +956,8 @@ export default function AdminLayout() {
               return (
                 <Link
                   key={item.to}
+                  // HelpTour points at this item.
+                  data-tour={item.to === "/admin/help" ? "help" : undefined}
                   to={item.soon ? location.pathname : navLandingTo(item, org, perm)}
                   // Close on TAP, not only on a route change. The effect that
                   // closes this menu keys on location.pathname, so tapping the
@@ -998,7 +1002,10 @@ export default function AdminLayout() {
               sidebar (not a floating corner pill) so it never covers page action
               bars like marketing's "Approve & schedule". Removed 2026-07-24,
               restored 2026-07-27 at Jessica's request. */}
-          <FeedbackWidget org={org} />
+          {/* data-tour: HelpTour points at this button. */}
+          <div data-tour="feedback">
+            <FeedbackWidget org={org} />
+          </div>
 
           {/* Lifetime time-saved tally — every Director action contributes. */}
           {timeSavedTotal != null && timeSavedTotal > 0 && (
@@ -1138,6 +1145,8 @@ export default function AdminLayout() {
                 still believed the old slug was current. */}
             <Outlet context={{ user, org, orgMember, setOrg }} />
           </Suspense>
+          {/* Once per person: where the "?", Help and Share feedback are. */}
+          <HelpTour userId={user?.id} pathname={location.pathname} />
           </>
           )}
 
