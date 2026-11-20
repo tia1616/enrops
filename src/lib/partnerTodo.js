@@ -92,6 +92,12 @@ export function partnerTodo({ s, instructors, orgName, today }) {
               : `Upload ${who}'s background check.`,
             action: { type: "instructor", instructorId: r.instructor_id, upload: "background-check" },
           });
+        } else if (tone === "warn" && l.date) {
+          // A check from another agency is standing in and it is the one
+          // renewing (instructorChecklist sets `date` only then). It is renewed
+          // on their record, under statuses from another source, not with the
+          // enrops upload.
+          items.push({ key: `bgc:${r.instructor_id}`, tone, text: `${who}'s background check from another agency renews ${formatDate(l.date)}. Add the new one on their record before then.`, action: { type: "instructor", instructorId: r.instructor_id } });
         } else if (tone === "warn") {
           items.push({ key: `bgc:${r.instructor_id}`, tone, text: `${who}'s background check renews ${formatDate(r.background_check_expires_on)}. Upload the new one before then.`, action: { type: "instructor", instructorId: r.instructor_id, upload: "background-check" } });
         }

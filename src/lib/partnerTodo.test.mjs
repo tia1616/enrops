@@ -1,6 +1,7 @@
 // The provider's to-do list for one partner (2026-11-20).
 import { partnerTodo } from './partnerTodo.js';
 import { providerSummary, requiredKeys } from './partnerPortalLogic.js';
+import { formatDate } from './providerDocumentLogic.js';
 
 let pass = 0, fail = 0;
 function eq(name, actual, expected) {
@@ -66,6 +67,20 @@ eq('red before amber', todo.findIndex((t) => t.tone === 'warn') > todo.findLastI
   const without = [{ ...withStandIn[0], clearances: [] }];
   const s3 = providerSummary({ docs, instructors: without, partnerId: P, orgName: 'J2S', today: TODAY, required });
   eq('control: without it, the date is asked for', partnerTodo({ s: s3, instructors: without, orgName: 'J2S', today: TODAY }).some((t) => t.key === 'bgc:sam'), true);
+}
+
+// The stand-in itself is renewing: date and action come from IT, not the
+// expired enrops check (which would read "renews <a past date>").
+{
+  const renewing = [shared({
+    id: 'jo', first: 'Jo', background_check_status: 'expired', background_check_expires_on: '2026-08-01',
+    clearances: [{ id: 'c2', clearance_body: 'wa_dcyf', check_type: 'background_check', completed_on: '2024-12-01', expires_on: '2026-12-01', entered_at: '2024-12-02T00:00:00Z', status: 'expiring_soon' }],
+  })];
+  const s4 = providerSummary({ docs, instructors: renewing, partnerId: P, orgName: 'J2S', today: TODAY, required });
+  const jo = partnerTodo({ s: s4, instructors: renewing, orgName: 'J2S', today: TODAY }).find((t) => t.key === 'bgc:jo');
+  eq('stand-in renewing: amber', jo?.tone, 'warn');
+  eq('stand-in renewing: its own date', jo?.text.includes(formatDate('2026-12-01')), true);
+  eq('stand-in renewing: opens the record, not the enrops upload', jo?.action, { type: 'instructor', instructorId: 'jo' });
 }
 
 eq('nothing loaded: empty', partnerTodo({ s: null, instructors: [], orgName: '', today: TODAY }), []);
