@@ -1,4 +1,5 @@
-// "Where do you register families?" (spec v3 P2), on the provider's Partner
+// "What platform do families use to register for your programs?" (Jessica's
+// wording 2026-11-20; spec v3 P2), on the provider's Partner
 // portal page. One answer for the whole record: partners read it as plain text
 // on the provider's page, and any system works (the record never depends on
 // enrops registration). Stored in provider_record_settings (20261103a), written
@@ -55,9 +56,9 @@ export default function RegistrationSystemField({ orgId, canManage }) {
   return (
     <div style={{ marginTop: 16, padding: "14px 16px", background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12 }}>
       <label htmlFor="registration-system" style={{ display: "block", fontSize: 14, fontWeight: 600, color: INK }}>
-        Where do you register families?
+        What platform do families use to register for your programs?
       </label>
-      <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>Any system works. Your record does not depend on it.</div>
+      <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>Any platform works. Your record does not depend on it.</div>
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", marginTop: 8 }}>
         <select
           id="registration-system" value={system} disabled={!canManage || saving}
@@ -69,9 +70,9 @@ export default function RegistrationSystemField({ orgId, canManage }) {
         </select>
         {system === "other" && (
           <input
-            aria-label="Name of the system" value={other} maxLength={80} disabled={!canManage || saving}
+            aria-label="Name of the platform" value={other} maxLength={80} disabled={!canManage || saving}
             onChange={(e) => { setOther(e.target.value); setStatus({ kind: "", text: "" }); }}
-            placeholder="Name of the system"
+            placeholder="Name of the platform"
             style={{ padding: "7px 10px", borderRadius: 8, border: `1px solid ${RULE}`, fontSize: 14, fontFamily: "inherit" }}
           />
         )}
