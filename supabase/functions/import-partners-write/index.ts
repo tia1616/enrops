@@ -206,12 +206,21 @@ serve(async (req: Request) => {
       }
       return { id: null, err: error?.message ?? 'district insert failed' };
     };
-    // Fill district_id only where the site has none (never overwrite a district
-    // the operator chose). Returns false when the district could not be saved.
-    const fillDistrictId = async (
-      patch: Record<string, unknown>, locDistrict: string | null, currentDistrictId: string | null | undefined, partnerName: string,
+    // Fill the district only where the site has NONE, by id or by text. A site
+    // already linked to a district keeps it, and gets no free-text either:
+    // matching_district_calendars ORs on that text, so a spreadsheet's text
+    // that disagrees with the linked district would pull in a second calendar.
+    // Callers pass the row they READ; on a failed read they skip this call, so
+    // an unread row is never treated as blank. A district that can't be saved
+    // goes into errors[] and the site still saves without it.
+    const fillDistrictFields = async (
+      patch: Record<string, unknown>,
+      locDistrict: string | null,
+      current: { district?: unknown; district_id?: unknown },
+      partnerName: string,
     ) => {
-      if (!locDistrict || currentDistrictId) return;
+      if (!locDistrict || current.district_id) return;
+      if (!current.district) patch.district = locDistrict;
       const r = await resolveDistrictId(locDistrict);
       if (r.id) patch.district_id = r.id;
       else errors.push({ partner: partnerName, reason: `district "${locDistrict}": ${r.err}` });
@@ -389,8 +398,7 @@ serve(async (req: Request) => {
               .eq('id', existingLoc.id).maybeSingle();
             if (locAddress && !(currentLoc?.address)) patch.address = locAddress;
             if (locRoom && !(currentLoc?.room_number)) patch.room_number = locRoom;
-            if (locDistrict && !(currentLoc?.district)) patch.district = locDistrict;
-            await fillDistrictId(patch, locDistrict, currentLoc?.district_id as string | null, name);
+            if (currentLoc) await fillDistrictFields(patch, locDistrict, currentLoc, name);
             const { error: linkErr } = await supabase
               .from('program_locations').update(patch).eq('id', existingLoc.id).is('partner_id', null);
             if (linkErr) {
@@ -415,8 +423,7 @@ serve(async (req: Request) => {
                 .eq('id', existingLoc.id).maybeSingle();
               if (locAddress && !(currentLoc?.address)) patch.address = locAddress;
               if (locRoom && !(currentLoc?.room_number)) patch.room_number = locRoom;
-              if (locDistrict && !(currentLoc?.district)) patch.district = locDistrict;
-              await fillDistrictId(patch, locDistrict, currentLoc?.district_id as string | null, name);
+              if (currentLoc) await fillDistrictFields(patch, locDistrict, currentLoc, name);
             }
             if (Object.keys(patch).length > 0) {
               const { error: fillErr } = await supabase
@@ -432,8 +439,7 @@ serve(async (req: Request) => {
           };
           if (locAddress) insertLoc.address = locAddress;
           if (locRoom) insertLoc.room_number = locRoom;
-          if (locDistrict) insertLoc.district = locDistrict;
-          await fillDistrictId(insertLoc, locDistrict, null, name);
+          await fillDistrictFields(insertLoc, locDistrict, { district: null, district_id: null }, name);
           const { data: newLoc, error: locErr } = await supabase
             .from('program_locations').insert(insertLoc).select('id').maybeSingle();
           if (locErr || !newLoc) {
