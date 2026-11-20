@@ -1328,7 +1328,7 @@ const paperLinkBtn = {
 
 function paperError(err) {
   if (err?.code === '42501') return 'Only an owner or admin can record this.';
-  if (err?.code === '22023') return 'Enter the date it was signed. It can’t be in the future.';
+  if (err?.code === '22023' && /date/i.test(err?.message ?? '')) return 'Enter the date it was signed. It can’t be in the future.';
   return `That didn’t save: ${err?.message ?? 'unknown error'}`;
 }
 
@@ -1338,6 +1338,8 @@ function PaperRecordLine({ instructorId, ack, onChanged }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   async function remove() {
+    // Partners see the form as missing again the moment it's gone.
+    if (!window.confirm(`Remove the paper record of ${documentByKey(ack.document_id)?.label ?? 'this form'}? Partners will see it as missing.`)) return;
     setBusy(true);
     setErr('');
     const { error } = await supabase.rpc('remove_paper_signature', { p_instructor_id: instructorId, p_document_id: ack.document_id });
