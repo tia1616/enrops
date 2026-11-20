@@ -11,8 +11,9 @@
 // Action types (the page turns each into a button or link):
 //   upload      { requirementKey }   a required document with nothing on file
 //   renew       { doc }              a document on file that is expired / expiring
-//   instructor  { instructorId, upload? }   open that instructor's record
-//                                           (upload: "background-check" opens the upload)
+//   instructor  { instructorId, upload?, paper? }   open that instructor's record
+//                                           (upload: "background-check" opens the upload;
+//                                            paper: <form> opens "Record one signed on paper")
 //   share       { instructorId }     the instructor must agree in their portal
 
 import { instructorChecklist } from "./partnerPortalLogic.js";
@@ -26,10 +27,12 @@ function name(r) {
   return `${r.first_name ?? ""} ${r.last_name ?? ""}`.trim() || "An instructor";
 }
 
+// Checklist key -> what it's called, and the form key the paper record takes
+// (contractor_acknowledgments.document_id, record_paper_signature 20261120s).
 const SIGNED = {
-  code_of_conduct: "the code of conduct",
-  mandatory_reporter: "the mandatory reporter acknowledgment",
-  contractor_agreement: "the contractor agreement",
+  code_of_conduct: { name: "the code of conduct", form: "code_of_conduct" },
+  mandatory_reporter: { name: "the mandatory reporter acknowledgment", form: "mandatory_reporter_ack" },
+  contractor_agreement: { name: "the contractor agreement", form: "contractor_agreement" },
 };
 
 /**
@@ -105,7 +108,7 @@ export function partnerTodo({ s, instructors, orgName, today }) {
       } else if (l.key === "training" && tone === "bad") {
         items.push({ key: `training:${r.instructor_id}`, tone, text: `Add ${who}'s training date.`, action: { type: "instructor", instructorId: r.instructor_id } });
       } else if (SIGNED[l.key] && tone === "bad") {
-        items.push({ key: `${l.key}:${r.instructor_id}`, tone, text: `${who} hasn't signed ${SIGNED[l.key]} in enrops. They sign it during instructor onboarding.`, action: { type: "instructor", instructorId: r.instructor_id } });
+        items.push({ key: `${l.key}:${r.instructor_id}`, tone, text: `${who} hasn't signed ${SIGNED[l.key].name}. If they signed it on paper, record it on their record.`, action: { type: "instructor", instructorId: r.instructor_id, paper: SIGNED[l.key].form } });
       }
     }
   }

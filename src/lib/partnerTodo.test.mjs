@@ -48,6 +48,7 @@ eq('a current document is not listed', Object.keys(byKey).some((k) => k.startsWi
 eq('expired check: upload for that instructor', byKey['bgc:ricky']?.action, { type: 'instructor', instructorId: 'ricky', upload: 'background-check' });
 eq('missing training', byKey['training:kyle']?.text, 'Add Kyle Test\'s training date.');
 eq('missing signature, required', !!byKey['code_of_conduct:kyle'], true);
+eq('missing signature: opens the paper form for that form', byKey['code_of_conduct:kyle']?.action, { type: 'instructor', instructorId: 'kyle', paper: 'code_of_conduct' });
 eq('not-required item is never listed', Object.keys(byKey).some((k) => k.startsWith('mandatory_reporter')), false);
 eq('cleared but no date: ask for the report with its date', byKey['bgc:ana']?.text, 'Ana Test\'s background check is cleared but has no completed date. Upload the report again with its date.');
 eq('not shared: one share item, nothing else about them', todo.filter((t) => t.key.endsWith(':lukas')).map((t) => t.action.type), ['share']);
