@@ -81,6 +81,51 @@ export function rosterAvailable(c) {
   return c.count_source === "enrops" && c.status === "open";
 }
 
+/**
+ * The term code a dated camp falls in, by its first date's month: Dec-Feb
+ * Winter (December counts toward the next year, as a provider's "Winter
+ * 2026/27" does), Mar-May Spring, Jun-Aug Summer, Sep-Nov Fall. Classes carry
+ * their own programs.term and never come here. null with no date.
+ */
+export function termCodeForDate(iso) {
+  const m = /^(\d{4})-(\d{2})-\d{2}/.exec(String(iso ?? ""));
+  if (!m) return null;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  if (month === 12) return `WI${String((year + 1) % 100).padStart(2, "0")}`;
+  const yy = String(year % 100).padStart(2, "0");
+  if (month <= 2) return `WI${yy}`;
+  if (month <= 5) return `SP${yy}`;
+  if (month <= 8) return `SU${yy}`;
+  return `FA${yy}`;
+}
+
+/** A class's term: its own, else (a camp) the season of its first date. */
+export function termOfClass(c) {
+  return c?.term || termCodeForDate(c?.first_date) || null;
+}
+
+/**
+ * Classes in term groups, earliest term first (Kacy Cullen, 2026-11-19):
+ * [{ key, label, classes }]. `labelFor(code)` turns "WI27" into "Winter
+ * 2027" (terms.js formatTermLabel, passed in so this file stays free of the
+ * Supabase client). A class with no term and no date goes in a last group,
+ * "Dates not set yet". Within a group, sortClasses order.
+ */
+export function groupClassesByTerm(rows, labelFor = (t) => t) {
+  const groups = new Map();
+  for (const c of rows ?? []) {
+    const key = termOfClass(c) ?? "";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(c);
+  }
+  const firstDate = (cs) => cs.map((c) => c.first_date).filter(Boolean).sort()[0] ?? "9999";
+  return [...groups.entries()]
+    .map(([key, cs]) => ({ key, label: key ? labelFor(key) : "Dates not set yet", classes: sortClasses(cs), start: firstDate(cs) }))
+    .sort((a, b) => (a.key === "") - (b.key === "") || a.start.localeCompare(b.start) || a.key.localeCompare(b.key))
+    .map(({ key, label, classes }) => ({ key, label, classes }));
+}
+
 /** Sites, then first date, then name: the order a coordinator scans a season in. */
 export function sortClasses(rows) {
   return [...(rows ?? [])].sort((a, b) =>

@@ -12,10 +12,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import DocumentStatusBadge from "../../components/DocumentStatusBadge.jsx";
+import { formatTermLabel } from "../../lib/terms.js";
 import { listPartnerClasses, getClassRoster, getRegistrationFields, setReportedEnrollment } from "../../lib/partnerPortal.js";
 import {
   scheduleText, enrolledText, countSourceText, classBadge, rosterAvailable,
-  sortClasses, rosterDisplayRows, asksDismissal, showsHomeroom,
+  sortClasses, rosterDisplayRows, asksDismissal, showsHomeroom, groupClassesByTerm,
 } from "../../lib/partnerClasses.js";
 
 const TH = "border-b border-j2s-ink/10 bg-white px-3 py-2 text-left text-xs font-semibold text-j2s-ink/60";
@@ -118,7 +119,15 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
               </tr>
             </thead>
             <tbody>
-              {classes.map((c) => {
+              {/* One heading row per term (Kacy Cullen, 2026-11-19), then its classes. */}
+              {groupClassesByTerm(classes, formatTermLabel).flatMap((g) => [
+                <tr key={`term:${g.key}`}>
+                  <th colSpan={4} scope="rowgroup" className="border-b border-j2s-ink/10 bg-j2s-ink/[0.03] px-3 pb-1.5 pt-3 text-left text-sm font-bold text-j2s-ink">
+                    {/* Pinned like the class column, so it stays on screen when a phone scrolls the table sideways. */}
+                    <span className="sticky left-3">{g.label}</span>
+                  </th>
+                </tr>,
+                ...g.classes.flatMap((c) => {
                 const k = keyOf(c);
                 const count = enrolledText(c);
                 const roster = rosters[k];
@@ -204,7 +213,8 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
                     </tr>
                   ),
                 ];
-              })}
+              }),
+              ])}
             </tbody>
           </table>
         </div>

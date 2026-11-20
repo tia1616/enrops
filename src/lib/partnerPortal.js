@@ -205,6 +205,11 @@ export async function listPartnerRequirements(partnerId) {
 }
 
 /** Turn one requirement on or off for a partner. Owner/admin only; false = refused. */
+// Refused writes (20261119p): a viewer login, a provider after the partner took
+// its list over, or no access. One sentence for all three; the page already
+// says which applies.
+const REQUIREMENT_REFUSED = "You can't change this list. Refresh the page to see who can.";
+
 export async function setPartnerRequirement(partnerId, key, required) {
   const { data, error } = await supabase.rpc("set_partner_requirement", {
     p_partner_id: partnerId,
@@ -212,7 +217,7 @@ export async function setPartnerRequirement(partnerId, key, required) {
     p_required: required,
   });
   if (error) throw error;
-  if (data !== true) throw new Error("Only an owner or admin can change what a partner requires.");
+  if (data !== true) throw new Error(REQUIREMENT_REFUSED);
 }
 
 /**
@@ -224,7 +229,17 @@ export async function setPartnerRequirementDetail(partnerId, key, detail, source
     p_partner_id: partnerId, p_requirement_key: key, p_detail: detail || null, p_source: source || null,
   });
   if (error) throw error;
-  if (data !== true) throw new Error("Only an owner or admin can change what a partner requires.");
+  if (data !== true) throw new Error(REQUIREMENT_REFUSED);
+}
+
+/**
+ * May this login change the partner's list, and has the partner taken it over
+ * (20261119p)? null when the caller may not see this partner at all.
+ */
+export async function getRequirementsControl(partnerId) {
+  const { data, error } = await supabase.rpc("partner_requirements_control", { p_partner_id: partnerId });
+  if (error) throw error;
+  return data?.[0] ?? null;
 }
 
 /**

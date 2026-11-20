@@ -109,7 +109,7 @@ const MEMBERSHIP_FIELDS = new Set(['partner_id', 'partner_name', 'organization_i
 // 20261119a. A roster carries only what the emailed roster PDF prints: never a
 // parent, a contact, a birth date or who may collect the child.
 const CLASS_FIELDS = new Set([
-  'kind', 'class_id', 'title', 'site', 'day_of_week', 'class_days', 'start_time', 'end_time',
+  'kind', 'class_id', 'title', 'term', 'site', 'day_of_week', 'class_days', 'start_time', 'end_time',
   'first_date', 'last_date', 'status', 'max_capacity', 'count_source', 'enrolled', 'reported_on', 'instructors',
 ]);
 // 20261119d. A count of recipients, never their addresses.
@@ -285,6 +285,29 @@ for (const h of hosts) {
   ok(`${who} background-check reminders only for instructors who agreed to share`, strayBgc.length === 0, strayBgc.map((e) => e.about).join(', '));
   scanFields(`${who} emails sent`, emailRows, EMAIL_FIELDS);
 
+  // Requirements (20261119p). Only REFUSED writes are tried: an accepted one is
+  // a permanent audit row that hands the partner its list for good.
+  for (const p of partnerIdsInPlay) {
+    const ctl = await call('/rest/v1/rpc/partner_requirements_control', { token: h.token, method: 'POST', body: { p_partner_id: p } });
+    if (h.partners.has(p)) {
+      const row = rows(ctl)[0];
+      // An admin login that sees every site (site_ids null); one limited to a
+      // site may not rewrite the partner-wide list.
+      const hostAdminHere = h.grants.some((g) => g.partner_id === p && g.role === 'host_admin' && !Array.isArray(g.site_ids));
+      ok(`${who} may edit its own list only as host_admin`, !!row && row.can_edit === hostAdminHere, `can_edit ${row?.can_edit}`);
+      if (!hostAdminHere) {
+        const w = await call('/rest/v1/rpc/set_partner_requirement', { token: h.token, method: 'POST', body: { p_partner_id: p, p_requirement_key: 'business_license', p_required: true } });
+        ok(`${who} cannot change its list as a viewer`, w.json !== true, `got ${w.text.slice(0, 40)}`);
+      }
+    } else {
+      ok(`${who} reads no requirement controls of another partner (${p.slice(0, 8)})`, gotNothing(ctl), `${rows(ctl).length} row(s)`);
+      const w = await call('/rest/v1/rpc/set_partner_requirement', { token: h.token, method: 'POST', body: { p_partner_id: p, p_requirement_key: 'business_license', p_required: true } });
+      ok(`${who} cannot change another partner's list (${p.slice(0, 8)})`, w.json !== true, `got ${w.text.slice(0, 40)}`);
+      const d = await call('/rest/v1/rpc/set_partner_requirement_detail', { token: h.token, method: 'POST', body: { p_partner_id: p, p_requirement_key: 'insurance', p_detail: 'probe', p_source: null } });
+      ok(`${who} cannot write another partner's requirement wording (${p.slice(0, 8)})`, d.json !== true, `got ${d.text.slice(0, 40)}`);
+    }
+  }
+
   const directRe = await call('/rest/v1/reported_enrollments?select=id', { token: h.token });
   ok(`${who} cannot read reported_enrollments directly`, gotNothing(directRe), `status ${directRe.status}`);
 
@@ -346,8 +369,11 @@ for (const h of hosts) {
     else ok(`${who} cannot open another partner's file ${d.id.slice(0, 8)}`, !signed, `status ${r.status}`);
   }
 
-  // What each partner requires (20261026a): its own list, nobody else's, and
-  // it cannot change any list.
+  // What each partner requires (20261026a): its own list, nobody else's. Since
+  // 20261119p a host_admin MAY change its own list, so the write is tried only
+  // where it must be refused (a viewer, or another partner): an accepted write
+  // is a permanent audit row that hands the partner its list (this probe did
+  // exactly that to two staging partners on 2026-11-19 before the guard).
   for (const p of partnerIdsInPlay) {
     const r = await call('/rest/v1/rpc/partner_requirements_for', { token: h.token, method: 'POST', body: { p_partner_id: p } });
     if (h.partners.has(p)) {
@@ -357,10 +383,13 @@ for (const h of hosts) {
     } else {
       ok(`${who} reads no requirements of another partner (${p.slice(0, 8)})`, gotNothing(r), `${rows(r).length} row(s)`);
     }
-    const set = await call('/rest/v1/rpc/set_partner_requirement', {
-      token: h.token, method: 'POST', body: { p_partner_id: p, p_requirement_key: 'business_license', p_required: true },
-    });
-    ok(`${who} cannot change requirements (${p.slice(0, 8)})`, set.json !== true, `got ${set.text.slice(0, 40)}`);
+    const mayEdit = h.partners.has(p) && h.grants.some((g) => g.partner_id === p && g.role === 'host_admin' && !Array.isArray(g.site_ids));
+    if (!mayEdit) {
+      const set = await call('/rest/v1/rpc/set_partner_requirement', {
+        token: h.token, method: 'POST', body: { p_partner_id: p, p_requirement_key: 'business_license', p_required: true },
+      });
+      ok(`${who} cannot change requirements (${p.slice(0, 8)})`, set.json !== true, `got ${set.text.slice(0, 40)}`);
+    }
   }
 
   // Grants: only its own.
@@ -433,6 +462,12 @@ for (const p of partnerIdsInPlay) {
 for (const p of partnerIdsInPlay) {
   const r = await call('/rest/v1/rpc/partner_portal_emails_sent', { method: 'POST', body: { p_partner_id: p } });
   ok(`anon: no emails sent for ${p.slice(0, 8)}`, gotNothing(r), `status ${r.status}`);
+}
+for (const p of partnerIdsInPlay) {
+  const c = await call('/rest/v1/rpc/partner_requirements_control', { method: 'POST', body: { p_partner_id: p } });
+  ok(`anon: no requirement controls for ${p.slice(0, 8)}`, gotNothing(c), `status ${c.status}`);
+  const w = await call('/rest/v1/rpc/set_partner_requirement', { method: 'POST', body: { p_partner_id: p, p_requirement_key: 'business_license', p_required: true } });
+  ok(`anon: cannot change requirements for ${p.slice(0, 8)}`, w.json !== true, `status ${w.status}`);
 }
 const anonRoster = await call('/rest/v1/rpc/partner_portal_class_roster', { method: 'POST', body: { p_partner_id: partnerIdsInPlay[0], p_kind: 'class', p_class_id: '00000000-0000-0000-0000-000000000000' } });
 ok('anon: no roster', gotNothing(anonRoster), `status ${anonRoster.status}`);

@@ -60,6 +60,30 @@ eq('site, then first date', sortClasses([
   { site: 'A', first_date: null, title: 'w' },
 ]).map((c) => c.title), ['z', 'y', 'w', 'x']);
 
+// --- terms (Kacy Cullen, 2026-11-19) ------------------------------------------------
+{
+  const { termCodeForDate, termOfClass, groupClassesByTerm } = await import('./partnerClasses.js');
+  eq('December is next year\'s winter', termCodeForDate('2026-12-28'), 'WI27');
+  eq('February is winter', termCodeForDate('2027-02-05'), 'WI27');
+  eq('April is spring', termCodeForDate('2027-04-19'), 'SP27');
+  eq('July is summer', termCodeForDate('2027-07-12'), 'SU27');
+  eq('October is fall', termCodeForDate('2026-10-05'), 'FA26');
+  eq('no date, no term', termCodeForDate(null), null);
+  eq('a class keeps its own term', termOfClass({ term: 'SP27', first_date: '2027-01-12' }), 'SP27');
+  eq('a camp takes its season', termOfClass({ term: null, first_date: '2027-07-12' }), 'SU27');
+  const label = (t) => ({ WI27: 'Winter 2027', SP27: 'Spring 2027', SU27: 'Summer 2027' })[t] ?? t;
+  const g = groupClassesByTerm([
+    { title: 'Robotics', term: 'SP27', first_date: '2027-04-06', site: 'A' },
+    { title: 'Camp', term: null, first_date: '2027-07-12', site: 'A' },
+    { title: 'LEGO', term: 'WI27', first_date: '2027-01-12', site: 'A' },
+    { title: 'Draft', term: null, first_date: null, site: 'A' },
+    { title: 'Mario', term: 'WI27', first_date: null, site: 'A' },
+  ], label);
+  eq('earliest term first, undated last', g.map((x) => x.label), ['Winter 2027', 'Spring 2027', 'Summer 2027', 'Dates not set yet']);
+  eq('a dateless class with a term stays in its term', g[0].classes.map((c) => c.title), ['LEGO', 'Mario']);
+  eq('empty list, no groups', groupClassesByTerm([], label), []);
+}
+
 // --- roster rows: the shared roster order, only the agreed fields ------------------
 const roster = rosterDisplayRows([
   { row_key: '2', registered_at: '2026-10-02', first_name: 'zoe', last_name: 'Ng', grade: 0, homeroom: ' ', dismissal_method: null },

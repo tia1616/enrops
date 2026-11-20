@@ -20,7 +20,9 @@ import {
   listPortalAccess, listGrantableContacts, grantPortalAccess, removePortalAccess,
   sendPartnerSignInLink, listPartnerSites, setPortalAccessSites,
 } from "../../lib/partnerPortal.js";
-import { accessStatus, contactsWithoutAccess, siteScopeLabel, siteIdsToSave } from "../../lib/partnerPortalLogic.js";
+import { accessStatus, contactsWithoutAccess, siteScopeLabel, siteIdsToSave, REQUIREMENTS } from "../../lib/partnerPortalLogic.js";
+
+const REQUIREMENT_NAME = Object.fromEntries(REQUIREMENTS.map((r) => [r.key, r.label.toLowerCase()]));
 import { supabase } from "../../lib/supabase";
 import { listProviderDocuments } from "../../lib/providerDocuments.js";
 
@@ -192,7 +194,7 @@ export default function PartnerLoginsSection({ org, partner, canManage, onMessag
     <section style={{ marginTop: 28 }}>
       <h2 style={{ margin: "0 0 4px", fontSize: 18, fontWeight: 700, color: INK }}>Who at {partner.partner_name} can log in</h2>
       <p style={{ margin: "0 0 12px", fontSize: 13.5, color: MUTED, lineHeight: 1.5, maxWidth: 600 }}>
-        They see the Documents, Classes, Instructors, Emails sent and Decision tabs, and nothing shown only to your other partners.
+        They see the Documents, Classes, Instructors, Emails sent, Requirements and Decision tabs, and nothing shown only to your other partners. Their admin logins that see every site can change their own requirements.
       </p>
 
       {error && <div style={{ marginBottom: 12, padding: "10px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, color: "#991b1b", fontSize: 13 }}>{error}</div>}
@@ -326,11 +328,14 @@ function PartnerActivity({ org, partner, grants }) {
       const [{ data: events, error: e1 }, docs] = await Promise.all([
         supabase
           .from("audit_events")
-          .select("id, occurred_at, actor_user_id, partner_id, action, subject_type, subject_id")
+          .select("id, occurred_at, actor_user_id, actor_role, partner_id, action, subject_type, subject_id, after")
           .eq("organization_id", org.id)
           .eq("partner_id", partner.id)
           // roster_opened: a partner opened a class roster (20261119a).
-          .in("action", ["portal_viewed", "document_opened", "roster_opened"])
+          // partner_requirement_*: the partner changed its own list (20261119p);
+          // the provider's own changes are not "their activity", hence actor_role.
+          .in("action", ["portal_viewed", "document_opened", "roster_opened", "partner_requirement_changed", "partner_requirement_detail_set"])
+          .in("actor_role", ["partner", "host_admin"])
           .order("occurred_at", { ascending: false })
           .limit(25),
         listProviderDocuments(org.id).catch(() => []),
@@ -360,14 +365,14 @@ function PartnerActivity({ org, partner, grants }) {
 
   return (
     <div style={{ marginTop: 18 }}>
-      <div style={{ fontSize: 14, fontWeight: 600, color: INK, marginBottom: 6 }}>What they've opened</div>
+      <div style={{ fontSize: 14, fontWeight: 600, color: INK, marginBottom: 6 }}>What they've opened and changed</div>
       <div style={{ background: PANEL, border: `1px solid ${RULE}`, borderRadius: 12, padding: "6px 20px" }}>
         {failed ? (
           <div style={{ padding: "12px 0", color: "#991b1b", fontSize: 13 }}>Couldn't load partner activity.</div>
         ) : rows === null ? (
           <div style={{ padding: "12px 0", color: MUTED, fontSize: 13 }}>Loading…</div>
         ) : rows.length === 0 ? (
-          <div style={{ padding: "12px 0", color: MUTED, fontSize: 13 }}>No one at {partner.partner_name} has opened your records yet.</div>
+          <div style={{ padding: "12px 0", color: MUTED, fontSize: 13 }}>No one at {partner.partner_name} has opened or changed anything yet.</div>
         ) : (
           rows.map((ev, i) => (
             <div key={ev.id} style={{ padding: "10px 0", borderTop: i === 0 ? "none" : `1px solid ${RULE}`, fontSize: 13, color: INK }}>
@@ -376,7 +381,11 @@ function PartnerActivity({ org, partner, grants }) {
                 ? <>opened {ev.docTitle ? `"${ev.docTitle}"` : "a document that has since been removed"}</>
                 : ev.action === "roster_opened"
                   ? <>opened the roster for {ev.docTitle ? `"${ev.docTitle}"` : "a class"}</>
-                  : "viewed your records"}
+                  : ev.action === "partner_requirement_changed"
+                    ? <>{ev.after?.required ? "now requires" : "no longer requires"} {REQUIREMENT_NAME[ev.after?.key] ?? "an item"}</>
+                    : ev.action === "partner_requirement_detail_set"
+                      ? <>updated what they require for {REQUIREMENT_NAME[ev.after?.key] ?? "an item"}</>
+                      : "viewed your records"}
               <span style={{ color: MUTED }}> · {new Date(ev.occurred_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
             </div>
           ))
