@@ -11,6 +11,7 @@ import { useLocation } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import { GUIDES } from "../../lib/guides.js";
 import { splitHeadingId } from "../../lib/guideParse.js";
+import { REPLAY_EVENT, HELP_EMAIL } from "../../components/HelpTour.jsx";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -18,7 +19,6 @@ const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
 
-const HELP_EMAIL = "hello@enrops.com";
 
 // Headings are plain text ending in {#id}. react-markdown hands us the text as
 // children, so the id is read off the last string child and stripped.
@@ -91,7 +91,14 @@ export default function HelpPage() {
       <h1 style={{ fontSize: 26, fontWeight: 700, color: PURPLE, margin: 0 }}>Help</h1>
       <p style={{ color: MUTED, margin: "6px 0 20px", lineHeight: 1.55 }}>
         Guides in the order you&apos;ll need them. Stuck? Email{" "}
-        <a href={`mailto:${HELP_EMAIL}`} style={{ color: BRIGHT }}>{HELP_EMAIL}</a>.
+        <a href={`mailto:${HELP_EMAIL}`} style={{ color: BRIGHT }}>{HELP_EMAIL}</a>.{" "}
+        <button
+          type="button"
+          onClick={() => window.dispatchEvent(new Event(REPLAY_EVENT))}
+          style={{ background: "none", border: "none", padding: 0, color: BRIGHT, fontFamily: "inherit", fontSize: "inherit", fontWeight: 600, cursor: "pointer", textDecoration: "underline" }}
+        >
+          Show me around again
+        </button>
       </p>
 
       <nav aria-label="Guides" style={{ border: `1px solid ${RULE}`, borderRadius: 10, background: "#fff", padding: "14px 18px", marginBottom: 12 }}>

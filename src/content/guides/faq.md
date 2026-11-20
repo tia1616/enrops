@@ -152,4 +152,4 @@ Not yet.
 ## Getting help
 
 ### Who do I ask? {#faq-help}
-Ask Ennie here, or email hello@enrops.com. A real person on the enrops team answers.
+Tap **Share feedback** in the menu, or email hello@enrops.com. A real person on the enrops team answers.
