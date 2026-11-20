@@ -173,7 +173,10 @@ export default function HelpTour({ userId, pathname }) {
   } else if (rect) {
     cardPos = { left: Math.max(16, Math.min(rect.right - CARD_W, vw - CARD_W - 16)), top: Math.max(16, Math.min(rect.bottom + 14, vh - 260)) };
   } else {
-    cardPos = { left: Math.max(16, (vw - CARD_W) / 2), top: Math.max(16, vh * 0.28) };
+    // Centred with CSS, not computed: a resize with no target re-renders
+    // nothing (rect stays null), so a computed position would stay wherever
+    // the window was when the step opened.
+    cardPos = { left: "50%", top: "28vh", transform: "translateX(-50%)" };
   }
 
   return (
