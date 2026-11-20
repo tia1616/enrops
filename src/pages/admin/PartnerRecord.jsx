@@ -24,13 +24,17 @@ import PartnerRequirementsSection from "./PartnerRequirementsSection.jsx";
 import { DocumentsTable, InstructorGrid, RecordSummary, RegistrationLine, RequirementsList } from "../partner/ProviderRecord.jsx";
 import PartnerDecision from "../partner/PartnerDecision.jsx";
 import ClassesTable from "../partner/ClassesTable.jsx";
+import ProviderTodo from "./ProviderTodo.jsx";
+import { partnerTodo } from "../../lib/partnerTodo.js";
 import EmailsSent from "../partner/EmailsSent.jsx";
 import { RecordTabRow, RecordTabPanel, useRecordTab, alertFor } from "../partner/RecordTabs.jsx";
 import { decisionTag } from "../../lib/recordTabs.js";
 
-// The partner's five tabs first, in the partner's order, then the two that only
+// After To do, the partner's five tabs in the partner's order, then the two that only
 // the provider has (what this partner requires, and its logins + activity).
-const PROVIDER_TABS = ["documents", "classes", "instructors", "emails", "decision", "requirements", "logins"];
+// "todo" first: on the provider's own page, what's left to do comes before
+// the record itself (2026-11-20).
+const PROVIDER_TABS = ["todo", "documents", "classes", "instructors", "emails", "decision", "requirements", "logins"];
 import { todayIso } from "../partner/partnerShared.jsx";
 import { usePermissions } from "../../lib/permissions.js";
 import { listPartnerInstructors, listPartnerRequirements, getRequirementsControl } from "../../lib/partnerPortal.js";
@@ -136,6 +140,9 @@ export default function PartnerRecord() {
   const s = loading ? null : providerSummary({
     docs: shown, instructors, partnerId, orgName, today, required: requiredKeys(requirements),
   });
+  // What this partner still needs from the provider (2026-11-20), from the
+  // same summary the partner sees.
+  const todo = s ? partnerTodo({ s, instructors, orgName, today }) : [];
 
   async function open(d) {
     // A second click while the file is on its way would open it twice.
@@ -217,6 +224,7 @@ export default function PartnerRecord() {
           <RecordTabRow
             active={tab} onChange={setTab}
             tabs={[
+              { id: "todo", label: "To do", count: todo.length || null, alert: todo.some((t) => t.tone === "bad") ? "bad" : todo.length ? "attention" : null },
               { id: "documents", label: "Documents", alert: alertFor(s.business.map((b) => b.badge)) },
               { id: "classes", label: "Classes", count: classCount },
               { id: "instructors", label: "Instructors", count: s.instructors.total || null, alert: s.instructors.total ? alertFor([s.instructors.badge]) : null },
@@ -226,6 +234,15 @@ export default function PartnerRecord() {
               { id: "logins", label: "Logins" },
             ]}
           />
+
+          <RecordTabPanel id="todo" active={tab}>
+            <ProviderTodo
+              items={todo} partnerName={partner.partner_name} canManage={canManage}
+              onUpload={(key) => setForm({ editing: null, kind: DOC_FOR[key] })}
+              onRenew={(doc) => setForm({ editing: doc, kind: null })}
+              instructorPortalUrl={`${window.location.origin}/${org?.slug}/instructor`}
+            />
+          </RecordTabPanel>
 
           <RecordTabPanel id="documents" active={tab}>
             <RequirementsList requirements={requirements} viewer="provider" partnerName={partner.partner_name} />
