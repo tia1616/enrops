@@ -106,7 +106,7 @@ export default function PartnerRequirementsSection({ partner, rows, canManage: r
               : `This is the standard list. Tick what you need from ${orgName || "this provider"} and untick what you don't; ${orgName || "they"} will see your list.`)
           : (setByPartner
               ? `${partner.partner_name} set this list${setOn ? ` on ${setOn}` : ""}. Only they can change it, from their portal.`
-              : `${partner.partner_name} hasn't changed the standard list yet. Only they can change it, from their portal.`)}
+              : `This is ${partner.partner_name}'s list. Only they can change it, from their portal.`)}
       </p>
 
       {!rows || rows.length === 0 ? (

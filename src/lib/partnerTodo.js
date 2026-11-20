@@ -82,7 +82,8 @@ export function partnerTodo({ s, instructors, orgName, today }) {
         // only an instructor the partner still sees as "In review" for a missing
         // date is asked for one.
         if (r.background_check_status === "awaiting_date" && l.badge?.tone === "review") {
-          items.push({ key: `bgc:${r.instructor_id}`, tone: "bad", text: `Add the date ${who}'s background check was completed.`, action: { type: "instructor", instructorId: r.instructor_id, upload: "background-check" } });
+          // The upload form takes the report and its date together, so say so.
+          items.push({ key: `bgc:${r.instructor_id}`, tone: "bad", text: `${who}'s background check is cleared but has no completed date. Upload the report again with its date.`, action: { type: "instructor", instructorId: r.instructor_id, upload: "background-check" } });
         } else if (tone === "bad") {
           items.push({
             key: `bgc:${r.instructor_id}`, tone,

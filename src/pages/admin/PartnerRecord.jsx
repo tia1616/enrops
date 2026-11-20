@@ -238,6 +238,7 @@ export default function PartnerRecord() {
           <RecordTabPanel id="todo" active={tab}>
             <ProviderTodo
               items={todo} partnerName={partner.partner_name} canManage={canManage}
+              requirementsUnknown={requirements === null || requirements?.length === 0}
               onUpload={(key) => setForm({ editing: null, kind: DOC_FOR[key] })}
               onRenew={(doc) => setForm({ editing: doc, kind: null })}
               instructorPortalUrl={`${window.location.origin}/${org?.slug}/instructor`}

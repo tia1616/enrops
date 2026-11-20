@@ -20,7 +20,7 @@ const actionBtn = { background: "none", border: "none", padding: 0, color: BRIGH
  * instructor signs in at, for the share items. `canManage` hides the document
  * buttons for roles that can't upload (the links still show where to go).
  */
-export default function ProviderTodo({ items, partnerName, onUpload, onRenew, instructorPortalUrl, canManage }) {
+export default function ProviderTodo({ items, partnerName, onUpload, onRenew, instructorPortalUrl, canManage, requirementsUnknown = false }) {
   const [copied, setCopied] = useState("");
 
   async function copyPortalLink(key) {
@@ -42,6 +42,13 @@ export default function ProviderTodo({ items, partnerName, onUpload, onRenew, in
           ? `These show as missing, expired or due soon on ${partnerName}'s page. Fix each one where it's linked.`
           : `Everything ${partnerName} requires shows as current on their page.`}
       </p>
+      {/* Requirements failed to load: everything counts, as on the partner's
+          own page, so this list may include things they don't ask for. */}
+      {requirementsUnknown && (
+        <p style={{ margin: "0 0 10px", fontSize: 12.5, color: "#92400e" }}>
+          Couldn't load {partnerName}'s requirements just now, so this counts every standard item. Refresh to try again.
+        </p>
+      )}
       {items.length > 0 && (
         <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
           {items.map((it, i) => (
