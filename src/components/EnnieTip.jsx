@@ -231,8 +231,10 @@ export default function EnnieTip({
           padding: 0,
           fontFamily: 'inherit',
           cursor: 'pointer',
-          // Open: plum with a white "?", so it reads as pressed.
-          ...(open ? { background: PURPLE, color: '#fff', borderColor: PURPLE } : null),
+          // Open: plum with a white "?", so it reads as pressed. The FULL border
+          // shorthand, never borderColor: mixing shorthand and longhand makes
+          // React clear border-color on close, leaving a plum ring on the gold.
+          ...(open ? { background: PURPLE, color: '#fff', border: `1.5px solid ${PURPLE}` } : null),
           transition: 'background 120ms ease, color 120ms ease',
         }}
       >
