@@ -6,11 +6,11 @@
 // owns the list (partner_requirements_for, which also holds the defaults) so the
 // record above re-counts the moment a tick saves.
 //
-// The partner edits the SAME list on its own page (spec v3 H3, 20261119p):
-// `viewer="partner"` words it for them. One owner: once the partner has changed
-// it, the provider sees "Set by <partner>" and can no longer change it
-// (`control` from partner_requirements_control decides; `canManage` is the
-// caller's own role check on top).
+// The list is the PARTNER's (20261120r, Jessica 2026-11-20): only the
+// partner's every-site admin login edits it, on its own page
+// (`viewer="partner"`). The provider's page shows it read-only, with who set
+// it. `control` (partner_requirements_control) decides; `canManage` is the
+// caller's own role check on top.
 
 import { useState } from "react";
 import { setPartnerRequirement, setPartnerRequirementDetail } from "../../lib/partnerPortal.js";
@@ -103,10 +103,10 @@ export default function PartnerRequirementsSection({ partner, rows, canManage: r
         {isPartner
           ? (setByPartner
               ? `This is your list. ${orgName || "The provider"} sees it and is reminded to keep these current.`
-              : `${orgName || "The provider"} set this list up for you. Change anything that's wrong; once you do, the list is yours and only your admins can change it.`)
+              : `This is the standard list. Tick what you need from ${orgName || "this provider"} and untick what you don't; ${orgName || "they"} will see your list.`)
           : (setByPartner
-              ? `${partner.partner_name} set this list themselves${setOn ? ` on ${setOn}` : ""}, so only they can change it.`
-              : "Tick what's in their packet. Their portal shows and counts only these, so they're never told something is missing that they don't ask for.")}
+              ? `${partner.partner_name} set this list${setOn ? ` on ${setOn}` : ""}. Only they can change it, from their portal.`
+              : `This is ${partner.partner_name}'s list. Only they can change it, from their portal.`)}
       </p>
 
       {!rows || rows.length === 0 ? (
@@ -184,18 +184,15 @@ export default function PartnerRequirementsSection({ partner, rows, canManage: r
       )}
       {error && <div role="alert" style={{ marginTop: 10, fontSize: 13, color: "#991b1b" }}>{error}</div>}
       {note && <div role="status" style={{ marginTop: 10, fontSize: 13, color: "#166534" }}>{note}</div>}
-      {rows && rows.length > 0 && !canManage && control !== undefined && (
-        // Each branch true in its state: the check failed (null); the partner
-        // took it over (provider reading); a partner viewer login; a provider
-        // role that isn't owner/admin. undefined = still loading: say nothing.
+      {rows && rows.length > 0 && !canManage && control !== undefined && (control === null || isPartner) && (
+        // The provider never edits (20261120r) and the intro already says the
+        // partner owns it, so only two states need a line: the check failed
+        // (null), or a partner login that can't edit (a viewer, or an admin
+        // limited to some sites). undefined = still loading: say nothing.
         <div style={{ marginTop: 8, fontSize: 12, color: MUTED }}>
           {control === null
             ? "Couldn't check who can change this list just now. Refresh to try again."
-            : !isPartner && setByPartner
-              ? `Only ${partner.partner_name} can change this list now.`
-              : isPartner
-                ? "Only your admin logins that see every site can change these."
-                : "Only an owner or admin can change these."}
+            : "Only your admin logins that see every site can change these."}
         </div>
       )}
     </section>

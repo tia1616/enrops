@@ -6,7 +6,7 @@
 //
 // Each row is collapsed to a one-liner; click to expand and see everything.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { supabase } from '../../../lib/supabase';
 import { avatarUrl, isValidAvatarKey } from '../../../lib/avatars';
 import { phoneIsValid, looksLikeName, emailIsValid } from '../../../lib/validation';
@@ -102,6 +102,28 @@ export default function InstructorsTab({ org }) {
   const [addOpen, setAddOpen] = useState(false);
   const [removeRow, setRemoveRow] = useState(null);
   const [editingNameId, setEditingNameId] = useState(null);
+
+  // ?instructor=<id>[&upload=background-check]: the partner portal to-do list
+  // links straight to one instructor (2026-11-20). Once the list has loaded,
+  // open that row, bring it into view, and open the background-check upload
+  // when asked. Runs once per page load, so it never fights the operator.
+  const deepLinkDone = useRef(false);
+  useEffect(() => {
+    if (deepLinkDone.current || !rows) return;
+    deepLinkDone.current = true;
+    const params = new URLSearchParams(window.location.search);
+    const id = params.get('instructor');
+    const row = id && rows.find((r) => r.id === id);
+    if (!row) return;
+    if (!row.is_active) setShowInactive(true);
+    setSearch('');
+    setExpanded((s) => new Set(s).add(id));
+    if (params.get('upload') === 'background-check') {
+      setBgUploadInstructorId(id);
+      setBgUploadOpen(true);
+    }
+    requestAnimationFrame(() => document.getElementById(`instructor-${id}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+  }, [rows]);
 
   useEffect(() => {
     if (!org?.id) return;
@@ -412,8 +434,9 @@ export default function InstructorsTab({ org }) {
           </div>
         )}
         {filtered.map((r) => (
+          // id: the partner to-do list links here (?instructor=<id>).
+          <div key={r.id} id={`instructor-${r.id}`}>
           <InstructorRow
-            key={r.id}
             row={r}
             expanded={expanded.has(r.id)}
             onToggle={() => toggleExpand(r.id)}
@@ -429,6 +452,7 @@ export default function InstructorsTab({ org }) {
             onSaveName={(vals) => saveName(r.id, vals)}
             onPatchRow={(patch) => setRows((rs) => (rs ?? []).map((x) => (x.id === r.id ? { ...x, ...patch(x) } : x)))}
           />
+          </div>
         ))}
       </div>
 
