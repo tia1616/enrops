@@ -15,6 +15,7 @@
 //   - Nothing behind it is clickable while it is open; it is a short modal.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import Ennie from "./Ennie.jsx";
+import { TIP_GLYPH_STYLE } from "./EnnieTip.jsx";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -30,15 +31,11 @@ const seenKey = (userId) => `enrops.helptour.seen.${userId}`;
 const QUIET_PATHS = ["/admin/programs/quick-new", "/admin/programs/new"];
 
 function QuestionGlyph() {
-  // Drawn like EnnieTip's "?" so the provider recognises it on the page.
+  // EnnieTip's own glyph style, so the tour shows exactly what is on the page.
   return (
     <span
       aria-hidden="true"
-      style={{
-        display: "inline-flex", alignItems: "center", justifyContent: "center",
-        width: 18, height: 18, borderRadius: 9, border: `1.5px solid ${BRIGHT}`,
-        color: BRIGHT, fontSize: 11, fontWeight: 700, verticalAlign: "middle", margin: "0 2px",
-      }}
+      style={{ ...TIP_GLYPH_STYLE, verticalAlign: "middle", margin: "0 2px" }}
     >
       ?
     </span>

@@ -35,6 +35,27 @@ const INK = '#1a1a1a';
 const CLOUD_FILL = '#ffffff';
 const CLOUD_LINE = '#CECBF6';
 
+// The "?" itself. Jessica 2026-11-20: the thin indigo outline was too easy to
+// miss, so it is a FILLED brand-gold circle (#F8A638, the platform accent) with
+// a plum "?" (about 9:1 contrast). Exported so the Help tour draws the exact
+// same glyph it is teaching people to look for: one look, one place.
+export const TIP_GLYPH_SIZE = 20;
+export const TIP_GLYPH_STYLE = {
+  width: TIP_GLYPH_SIZE,
+  height: TIP_GLYPH_SIZE,
+  borderRadius: TIP_GLYPH_SIZE / 2,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  fontSize: 12.5,
+  fontWeight: 800,
+  lineHeight: 1,
+  background: '#F8A638',
+  color: PURPLE,
+  border: '1.5px solid #F8A638',
+  boxSizing: 'border-box',
+};
+
 const CONTENT_W = 500;   // ~2x the first build, per review
 const PAD = 11;          // room for the scallops to bulge into
 const MAX_STEP = 22;     // widest a single scallop may be
@@ -206,21 +227,12 @@ export default function EnnieTip({
         aria-controls={open ? panelId : undefined}
         aria-label={title ? `${label}: ${title}` : label}
         style={{
-          width: 18,
-          height: 18,
-          borderRadius: 9,
+          ...TIP_GLYPH_STYLE,
           padding: 0,
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
           fontFamily: 'inherit',
-          fontSize: 11,
-          fontWeight: 700,
-          lineHeight: 1,
           cursor: 'pointer',
-          background: open ? BRIGHT : 'transparent',
-          color: open ? '#fff' : BRIGHT,
-          border: `1.5px solid ${BRIGHT}`,
+          // Open: plum with a white "?", so it reads as pressed.
+          ...(open ? { background: PURPLE, color: '#fff', borderColor: PURPLE } : null),
           transition: 'background 120ms ease, color 120ms ease',
         }}
       >
