@@ -11,7 +11,7 @@ import { useLocation } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import { GUIDES } from "../../lib/guides.js";
 import { splitHeadingId } from "../../lib/guideParse.js";
-import { REPLAY_EVENT } from "../../components/HelpTour.jsx";
+import { REPLAY_EVENT, HELP_EMAIL } from "../../components/HelpTour.jsx";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -19,7 +19,6 @@ const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
 
-const HELP_EMAIL = "hello@enrops.com";
 
 // Headings are plain text ending in {#id}. react-markdown hands us the text as
 // children, so the id is read off the last string child and stripped.

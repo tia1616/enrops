@@ -22,6 +22,8 @@ const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 
 export const REPLAY_EVENT = "enrops:help-tour-replay";
+// The one place the support address is written for the Help page and the tour.
+export const HELP_EMAIL = "hello@enrops.com";
 const seenKey = (userId) => `enrops.helptour.seen.${userId}`;
 
 // Paths where the tour must not interrupt: the class builders.
@@ -49,7 +51,7 @@ const STEPS = [
     title: "Look for the ?",
     body: (
       <>
-        Next to many settings you&apos;ll see a <QuestionGlyph />. Tap it for a quick explanation and a link to the full guide.
+        On some pages you&apos;ll see a <QuestionGlyph /> next to a setting. Tap it for a quick explanation and a link to the full guide.
       </>
     ),
   },
@@ -62,8 +64,8 @@ const STEPS = [
   {
     target: "feedback",
     title: "Ask us anything",
-    body: <>Tap <strong>Share feedback</strong> with a question or an idea. A real person reads every message. Or email hello@enrops.com.</>,
-    phoneBody: <>Open the <strong>Menu</strong> and tap <strong>Share feedback</strong> with a question or an idea. A real person reads every message. Or email hello@enrops.com.</>,
+    body: <>Tap <strong>Share feedback</strong> with a question or an idea. A real person reads every message. Or email {HELP_EMAIL}.</>,
+    phoneBody: <>Open the <strong>Menu</strong> and tap <strong>Share feedback</strong> with a question or an idea. A real person reads every message. Or email {HELP_EMAIL}.</>,
   },
 ];
 
@@ -80,17 +82,21 @@ export default function HelpTour({ userId, pathname }) {
   const [step, setStep] = useState(0);
   const [rect, setRect] = useState(null); // highlighted element, or null = centred
   const [viaMenu, setViaMenu] = useState(false);
+  // Remembered for this session too, so a failed localStorage write (storage
+  // full) cannot reopen the tour every time the provider leaves the builder.
+  const [doneThisSession, setDoneThisSession] = useState(false);
   const nextRef = useRef(null);
+  const cardRef = useRef(null);
 
   const quiet = QUIET_PATHS.some((p) => pathname === p || pathname?.startsWith(p + "/"));
 
   // First visit: open once, outside the builder.
   useEffect(() => {
-    if (!userId || quiet) return;
+    if (!userId || quiet || doneThisSession) return;
     let seen = false;
     try { seen = localStorage.getItem(seenKey(userId)) === "1"; } catch { seen = true; }
     if (!seen) { setStep(0); setOpen(true); }
-  }, [userId, quiet]);
+  }, [userId, quiet, doneThisSession]);
 
   // Replay from the Help page.
   useEffect(() => {
@@ -101,6 +107,7 @@ export default function HelpTour({ userId, pathname }) {
 
   const finish = useCallback(() => {
     try { if (userId) localStorage.setItem(seenKey(userId), "1"); } catch { /* private window */ }
+    setDoneThisSession(true);
     setOpen(false);
   }, [userId]);
 
@@ -132,7 +139,17 @@ export default function HelpTour({ userId, pathname }) {
   useEffect(() => {
     if (!open) return undefined;
     nextRef.current?.focus();
-    const onKey = (e) => { if (e.key === "Escape") finish(); };
+    const onKey = (e) => {
+      if (e.key === "Escape") { finish(); return; }
+      // Keep Tab inside the card: the page behind is dimmed and unclickable.
+      if (e.key !== "Tab" || !cardRef.current) return;
+      const btns = [...cardRef.current.querySelectorAll("button")];
+      if (btns.length === 0) return;
+      const i = btns.indexOf(document.activeElement);
+      e.preventDefault();
+      const n = e.shiftKey ? (i <= 0 ? btns.length - 1 : i - 1) : (i + 1) % btns.length;
+      btns[n].focus();
+    };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [open, step, finish]);
@@ -149,10 +166,12 @@ export default function HelpTour({ userId, pathname }) {
   // Card beside the target when there is room (desktop sidebar), otherwise
   // below it (phone Menu button), otherwise centred.
   let cardPos;
+  // The 16px floors are applied LAST so a very short window can never push the
+  // card above the top of the screen.
   if (rect && rect.right + 16 + CARD_W <= vw - 16) {
-    cardPos = { left: rect.right + 16, top: Math.min(Math.max(16, rect.top - 20), vh - 260) };
+    cardPos = { left: rect.right + 16, top: Math.max(16, Math.min(rect.top - 20, vh - 260)) };
   } else if (rect) {
-    cardPos = { left: Math.min(Math.max(16, rect.right - CARD_W), vw - CARD_W - 16), top: Math.min(rect.bottom + 14, vh - 260) };
+    cardPos = { left: Math.max(16, Math.min(rect.right - CARD_W, vw - CARD_W - 16)), top: Math.max(16, Math.min(rect.bottom + 14, vh - 260)) };
   } else {
     cardPos = { left: Math.max(16, (vw - CARD_W) / 2), top: Math.max(16, vh * 0.28) };
   }
@@ -178,6 +197,7 @@ export default function HelpTour({ userId, pathname }) {
       )}
 
       <div
+        ref={cardRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="help-tour-title"
