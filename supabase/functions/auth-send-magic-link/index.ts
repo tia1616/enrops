@@ -217,9 +217,44 @@ serve(async (req: Request) => {
         createdNewAccount = true;
         console.log(`Auto-created auth user for operator signup ${email}`);
       } else {
-        // Don't reveal whether email exists — always say "check your inbox"
-        console.log(`No auth user found for ${email}, returning success silently`);
-        return json({ sent: true });
+        // A FAMILY ON FILE WITH NO LOGIN YET. Same auto-create-on-first-sign-in
+        // the instructor branch has, for the same reason: the address is on a
+        // record the business made, and the magic link itself is the proof of
+        // control - only the owner of the inbox can use what is sent.
+        //
+        // Reachable mainly after an operator CORRECTS a family's email (roster
+        // or Contacts): 20261123b unlinks the old login, and the corrected
+        // address usually has no account. Without this, the parent sign-in page
+        // stayed silent for that address and the family was locked out.
+        // on_auth_user_created_link_parent links the new account to the row.
+        //
+        // The response is the same `{ sent: true }` either way, so this reveals
+        // nothing about which addresses are families.
+        let familyOnFile = false;
+        if ((context === undefined || context === null || context === 'parent') && isEmailAllowed(email)) {
+          const { data: parentRow } = await supabase
+            .from('parents')
+            .select('id')
+            .ilike('email', email.replace(/[\\%_]/g, (c: string) => `\\${c}`))
+            .is('auth_id', null)
+            .limit(1)
+            .maybeSingle();
+          familyOnFile = !!parentRow;
+        }
+        if (!familyOnFile) {
+          // Don't reveal whether email exists — always say "check your inbox"
+          console.log(`No auth user found for ${email}, returning success silently`);
+          return json({ sent: true });
+        }
+        const { data: created, error: createErr } = await supabase.auth.admin.createUser({
+          email,
+          email_confirm: true,
+        });
+        if (createErr || !created?.user) {
+          throw new Error(`Couldn't create auth user: ${createErr?.message ?? 'unknown error'}`);
+        }
+        user = created.user;
+        console.log(`Auto-created auth user for a family on file (context=${context ?? 'parent'})`);
       }
     }
 
