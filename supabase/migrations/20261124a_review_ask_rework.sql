@@ -50,7 +50,11 @@ alter table public.automations
   add column if not exists withdrawn_body_override text,
   -- Reminder to families with no click, N days after the ask. NULL/0 = off.
   add column if not exists reminder_days_after smallint
-    check (reminder_days_after is null or reminder_days_after between 1 and 14);
+    check (reminder_days_after is null or reminder_days_after between 1 and 14),
+  -- false = the message carries its own personal sign-off, so the org's email
+  -- signature block is left off (no second sign-off). Default true: every
+  -- existing automation renders exactly as before.
+  add column if not exists show_signature boolean not null default true;
 
 comment on column public.automations.trigger_override is
   'NULL = use automation_templates.trigger_type. Lets one org run review_request off the last session while another runs it off engagement.';

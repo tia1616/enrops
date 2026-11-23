@@ -174,6 +174,8 @@ interface AutomationRow {
   withdrawn_body_override?: string | null;
   // Reminder N days after a review ask to families with no click. NULL = off.
   reminder_days_after?: number | null;
+  // false = leave the org signature block off (the message signs itself).
+  show_signature?: boolean | null;
   template: TemplateRow;
   // timezone drives what "today" means for this org's audience windows — a
   // sweep runs at every hour of the day, so UTC is not good enough.
@@ -196,6 +198,7 @@ interface TestSendParams {
   audience?: "parent" | "instructor";
   preview_attachments?: unknown; // DRAFT email_attachments jsonb, so the test send matches the editor
   variant?: "withdrawn";
+  show_signature?: boolean;
 }
 
 interface TestSendResult {
@@ -214,6 +217,7 @@ interface PreviewParams {
   audience?: "parent" | "instructor";
   preview_attachments?: unknown; // DRAFT email_attachments jsonb, so the preview matches the editor
   variant?: "withdrawn";
+  show_signature?: boolean;
 }
 
 interface PreviewResult {
@@ -378,6 +382,7 @@ serve(async (req) => {
           audience: parsedAudience,
           preview_attachments: body.preview_attachments,
           variant: parsedVariant,
+          show_signature: typeof body.show_signature === "boolean" ? body.show_signature : undefined,
         };
       } else if (body?.mode === "preview") {
         previewParams = {
@@ -390,6 +395,7 @@ serve(async (req) => {
           audience: parsedAudience,
           preview_attachments: body.preview_attachments,
           variant: parsedVariant,
+          show_signature: typeof body.show_signature === "boolean" ? body.show_signature : undefined,
         };
       } else if (typeof body?.registration_id === "string") {
         eventRegistrationId = body.registration_id;
@@ -480,7 +486,7 @@ serve(async (req) => {
     .from("automations")
     .select(`
       id, organization_id, template_id, enabled, subject_override, body_override, timing_override, enabled_at, email_attachments,
-      trigger_override, reply_to_override, withdrawn_subject_override, withdrawn_body_override, reminder_days_after,
+      trigger_override, reply_to_override, withdrawn_subject_override, withdrawn_body_override, reminder_days_after, show_signature,
       template:automation_templates!inner (
         id, key, display_name, trigger_type, applies_to_program_type, mailing_type,
         default_subject, default_body, default_timing, time_saved_minutes_per_send, is_v1_enabled,
@@ -853,7 +859,7 @@ async function sendOne(
     a.template?.audience,
     entry.recipient_role,
   );
-  const fullHtml = wrapInShell(innerBody, brand, unsubscribeUrl, platformSurface);
+  const fullHtml = wrapInShell(innerBody, brand, unsubscribeUrl, platformSurface, a.show_signature !== false);
   const platformFooterText = renderPlatformFooterText(platformSurface);
   const plainBody = htmlToPlainText(renderedHtml) + downloadButtonsText
     + (platformFooterText ? `\n\n${platformFooterText}` : "");
@@ -1068,6 +1074,7 @@ interface RenderInput {
   audience?: "parent" | "instructor"; // no_school_day: which role variant to render
   preview_attachments?: unknown; // the DRAFT email_attachments jsonb ([{id,attach}]) so the preview/test reflects unsaved changes
   variant?: "withdrawn"; // review_request: render the withdrawn / refunded wording
+  show_signature?: boolean; // the editor's unsaved "include signature" toggle
 }
 interface RenderOutput {
   ok: boolean;
@@ -1184,9 +1191,28 @@ async function renderLifecycleEmail(supabase: SupabaseClient, input: RenderInput
 
   // Editor passes the current draft; fall back to template defaults so the
   // unmodified template can also be previewed/tested.
+  // No draft passed (a direct call, not the editor) = what a REAL send would
+  // use: this org's saved wording first, then the template default. Falling
+  // straight to the template default sent a test that was not the real email.
   const wantWithdrawn = input.variant === "withdrawn";
-  let subjectTpl = input.preview_subject ?? (wantWithdrawn ? template.default_withdrawn_subject : null) ?? template.default_subject;
-  let bodyTpl = input.preview_body ?? (wantWithdrawn ? template.default_withdrawn_body : null) ?? template.default_body;
+  // deno-lint-ignore no-explicit-any
+  let saved: Record<string, any> = {};
+  {
+    const { data: savedRow, error: savedErr } = await supabase
+      .from("automations")
+      .select("subject_override, body_override, withdrawn_subject_override, withdrawn_body_override, show_signature")
+      .eq("organization_id", input.organization_id)
+      .eq("template_id", template.id)
+      .maybeSingle();
+    if (savedErr) return { ok: false, error: `saved wording lookup failed: ${savedErr.message}` };
+    saved = savedRow ?? {};
+  }
+  let subjectTpl = input.preview_subject
+    ?? (wantWithdrawn ? (saved.withdrawn_subject_override ?? template.default_withdrawn_subject) : saved.subject_override)
+    ?? template.default_subject;
+  let bodyTpl = input.preview_body
+    ?? (wantWithdrawn ? (saved.withdrawn_body_override ?? template.default_withdrawn_body) : saved.body_override)
+    ?? template.default_body;
   // no_school_day instructor variant: swap in the fixed instructor copy (not the
   // operator's parent draft) and render {{first_name}} as an instructor. Lets the
   // editor preview + test-send BOTH role variants of a two-audience automation.
@@ -1220,6 +1246,8 @@ async function renderLifecycleEmail(supabase: SupabaseClient, input: RenderInput
     // input.audience is the preview/test-send audience toggle, so the operator
     // previewing the instructor half of no_school_day sees no line either.
     surfaceForAutomation(template?.key, template?.audience, input.audience),
+    // The editor's unsaved toggle wins; otherwise what a real send would use.
+    input.show_signature ?? (saved.show_signature === false ? false : true),
   );
 
   return { ok: true, subject, html: fullHtml, brand, template_key: template.key, used_real_data: usedRealData, resend_attachments: resendAttachments };
@@ -1257,6 +1285,7 @@ async function runTestSend(supabase: SupabaseClient, params: TestSendParams): Pr
     audience: params.audience,
     preview_attachments: params.preview_attachments,
     variant: params.variant,
+    show_signature: params.show_signature,
   });
   if (!rendered.ok) return { ok: false, error: rendered.error };
 
@@ -1315,6 +1344,7 @@ async function runPreview(supabase: SupabaseClient, params: PreviewParams): Prom
     audience: params.audience,
     preview_attachments: params.preview_attachments,
     variant: params.variant,
+    show_signature: params.show_signature,
   });
   if (!rendered.ok) return { ok: false, error: rendered.error };
   return { ok: true, subject: rendered.subject, body_html: rendered.html, used_real_data: rendered.used_real_data };
@@ -4526,7 +4556,10 @@ async function buildReviewRateUrls(registrationId: string | null, orgId: string)
 // _shared/platformFooter.ts). null renders NO line, which is what instructor
 // automations get — the checklist scopes the line to parents and partners — so
 // those emails stay byte-for-byte unchanged.
-function wrapInShell(innerBody: string, brand: OrgBrand, unsubscribeUrl = "", surface: string | null = null): string {
+// showSignature = automations.show_signature. false only where the message
+// already signs itself off (the review ask "Jessica, Journey to STEAM, phone"),
+// so the org's signature block would be a second sign-off.
+function wrapInShell(innerBody: string, brand: OrgBrand, unsubscribeUrl = "", surface: string | null = null, showSignature = true): string {
   // White-background shell with the tenant logo on top — no generic gradient
   // banner. Every provider will brand differently and a hardcoded purple
   // bleeds platform color into their identity. Wordmark fallback only when
@@ -4559,7 +4592,7 @@ function wrapInShell(innerBody: string, brand: OrgBrand, unsubscribeUrl = "", su
 <div style="padding:32px 30px 8px;text-align:center;">${logoBlock}</div>
 <div style="padding:16px 30px 32px;color:#1A1530;font-size:16px;line-height:1.6;">
 ${innerBody}
-${renderSignatureBlock(brand)}
+${showSignature ? renderSignatureBlock(brand) : ""}
 </div>
 <div style="padding:18px 30px;text-align:center;color:#888;font-size:11px;border-top:1px solid #eee;">
 ${escapeHtml(brand.org_name)} · ${new Date().getFullYear()}${addressBlock}${unsubBlock}

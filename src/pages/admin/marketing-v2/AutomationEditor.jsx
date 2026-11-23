@@ -471,6 +471,9 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
     return () => { alive = false; };
   }, [isReviewAsk, orgId]);
   const reviewOffLastSession = isReviewAsk && reviewSettings.trigger === "days_after_last_session";
+  // Only the review ask exposes the toggle; every other template lets the
+  // server use the saved value (true for all of them).
+  const showSignatureParam = isReviewAsk ? reviewSettings.showSignature !== false : undefined;
   const [reviewLink, setReviewLink] = useState(
     isReviewLink ? extractReviewUrl(currentReviewBody) : "",
   );
@@ -579,6 +582,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
               test_program_id: srcType === "program" ? srcId : null,
               audience: audienceParam,
               variant: variantParam,
+              show_signature: showSignatureParam,
             },
           },
         );
@@ -595,7 +599,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       }
     }, 500);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [wantsServerPreview, realSourceSelected, selectedSource, subject, body, emailAttachments, orgId, template.key, audienceParam, variantParam]);
+  }, [wantsServerPreview, realSourceSelected, selectedSource, subject, body, emailAttachments, orgId, template.key, audienceParam, variantParam, showSignatureParam]);
 
   function toggleBodyEdit() {
     if (editingBody) {
@@ -785,6 +789,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
         patch.trigger_override = reviewSettings.trigger === "days_after_last_session" ? "days_after_last_session" : null;
         patch.reminder_days_after = reviewSettings.reminderOn ? remDays : null;
         patch.reply_to_override = replyToClean || null;
+        patch.show_signature = reviewSettings.showSignature !== false;
         if (hasWithdrawnCopy) {
           const ws = decodeCommonEntities(wdSubject);
           const wb = decodeCommonEntities(wdBody);
@@ -990,6 +995,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
             test_program_id: srcType === "program" ? srcId : null,
             audience: audienceParam,
             variant: variantParam,
+            show_signature: showSignatureParam,
           },
         },
       );

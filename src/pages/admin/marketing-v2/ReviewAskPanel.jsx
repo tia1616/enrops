@@ -97,6 +97,14 @@ export function ReviewAskSettings({ value, onChange }) {
         />
         <p style={help}>Leave blank to use your usual reply-to. Families who reply should reach someone who reads it the same day.</p>
       </div>
+
+      <div style={{ marginTop: 16 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, color: INK }}>
+          <input type="checkbox" checked={v.showSignature} onChange={(e) => set({ showSignature: e.target.checked })} />
+          <span>Add my email signature under this message</span>
+        </label>
+        <p style={help}>Turn this off when the message already signs off with your name, so families do not see two sign-offs.</p>
+      </div>
     </div>
   );
 }
@@ -192,6 +200,7 @@ export function reviewSettingsFrom(automation, googleUrl) {
     reminderOn: (automation?.reminder_days_after ?? 0) >= 1,
     reminderDays: String((automation?.reminder_days_after ?? 0) >= 1 ? automation.reminder_days_after : 3),
     replyTo: automation?.reply_to_override ?? "",
+    showSignature: automation?.show_signature !== false,
     googleUrl: googleUrl ?? "",
   };
 }
