@@ -179,11 +179,11 @@ serve(async (req) => {
     }
 
     let skippedActive = 0;
-    const toInvite: Array<{ first_name: string; last_name: string; email: string; hasAccount: boolean; parentId: string; existingId: string | null }> = [];
+    const toInvite: Array<{ first_name: string; last_name: string; email: string; hasAccount: boolean; parentId: string }> = [];
     for (const c of candidates) {
       const existing = userByEmail.get(c.email.toLowerCase());
       if (existing?.last_sign_in_at) { skippedActive++; continue; } // already signed in — truly has access
-      toInvite.push({ first_name: c.first_name, last_name: c.last_name, email: c.email, hasAccount: !!existing, parentId: c.id, existingId: existing?.id ?? null });
+      toInvite.push({ first_name: c.first_name, last_name: c.last_name, email: c.email, hasAccount: !!existing, parentId: c.id });
     }
 
     // Staging recipient guard: on staging, only allowlisted inboxes actually
