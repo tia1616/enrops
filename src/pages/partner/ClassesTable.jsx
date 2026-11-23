@@ -19,8 +19,8 @@ import {
   sortClasses, rosterDisplayRows, asksDismissal, showsHomeroom, groupClassesByTerm,
 } from "../../lib/partnerClasses.js";
 import {
-  listMarketingAsks, listClassMedia, uploadClassMedia, removeClassMedia, marketingFileUrl,
-  shareMarketingFile, COPY_LINK_DAYS,
+  listMarketingAsks, listClassMedia, uploadClassMedia, removeClassMedia,
+  openMarketingFile, copyMarketingLink, canShareFiles, prepareShareFile, shareFile, COPY_LINK_DAYS,
 } from "../../lib/partnerMarketing.js";
 import {
   wantedAsks, indexMedia, mediaKey, itemOf, askLine, fileProblemForAsk, shareName, extOfPath, mediaGaps,
@@ -282,6 +282,7 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
 function ClassMediaLine({ c, ask, file, viewer, canEdit, orgId, partnerName, termLabel, onChanged }) {
   const [busy, setBusy] = useState("");
   const [note, setNote] = useState(null); // { ok } | { err }
+  const [prepared, setPrepared] = useState(null); // a downloaded File waiting for a second Share tap
   const label = itemOf(ask.item_key).label;
   const isProvider = viewer === "provider";
   const name = file ? shareName(c.title, termLabel, ask.item_key, extOfPath(file.storage_path)) : "";
@@ -306,20 +307,29 @@ function ClassMediaLine({ c, ask, file, viewer, canEdit, orgId, partnerName, ter
     });
   }
 
-  const download = () => run("download", async () => {
-    window.open(await marketingFileUrl(file.storage_path, { download: name }), "_blank", "noopener");
-  });
+  // Each browser call happens inside the tap (see partnerMarketing.js), so a
+  // phone's browser never blocks it.
+  const download = () => run("download", () => openMarketingFile(file.storage_path, name));
   const copyLink = () => run("copy", async () => {
-    await navigator.clipboard.writeText(await marketingFileUrl(file.storage_path, { download: name, days: COPY_LINK_DAYS }));
+    await copyMarketingLink(file.storage_path, name);
     setNote({ ok: `Link copied. It works for ${COPY_LINK_DAYS} days, no sign-in needed.` });
   });
-  const share = () => run("share", async () => {
-    const r = await shareMarketingFile(file.storage_path, name);
-    if (r === "unsupported") {
-      await navigator.clipboard.writeText(await marketingFileUrl(file.storage_path, { download: name, days: COPY_LINK_DAYS }));
-      setNote({ ok: `This browser can't share files, so the link is copied instead. It works for ${COPY_LINK_DAYS} days.` });
+  const share = () => {
+    if (!canShareFiles()) {
+      // No share sheet here (most desktop browsers): copy the link instead.
+      run("share", async () => {
+        await copyMarketingLink(file.storage_path, name);
+        setNote({ ok: `This browser can't share files, so the link is copied instead. It works for ${COPY_LINK_DAYS} days.` });
+      });
+      return;
     }
-  });
+    run("share", async () => {
+      const f = prepared ?? await prepareShareFile(file.storage_path, name);
+      const r = await shareFile(f);
+      if (r === "again") { setPrepared(f); setNote({ ok: "Ready. Tap Share again." }); }
+      else setPrepared(null);
+    });
+  };
   const remove = () => {
     if (!window.confirm(`Remove the ${label.toLowerCase()} from ${c.title || "this class"}?`)) return;
     run("remove", async () => { await removeClassMedia(c, ask.item_key); await onChanged(); });

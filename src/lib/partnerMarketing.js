@@ -119,25 +119,65 @@ export async function marketingFileUrl(path, { download, days = 0 } = {}) {
 
 export const COPY_LINK_DAYS = LINK_DAYS;
 
-/**
- * Share the file itself through the device's share sheet (Mail, Messages,
- * Teams...). Resolves "shared", "cancelled", or "unsupported" when this
- * browser can't share files (the caller then offers Copy link).
- */
-export async function shareMarketingFile(path, name) {
-  if (typeof navigator === "undefined" || !navigator.share || !navigator.canShare) return "unsupported";
-  const url = await marketingFileUrl(path);
-  const blob = await (await fetch(url)).blob();
-  const file = new File([blob], name, { type: blob.type || undefined });
-  if (!navigator.canShare({ files: [file] })) return "unsupported";
+// Browsers only allow a new tab, a clipboard write or a share sheet DURING the
+// tap. Each helper below does its browser call before any network wait, or
+// hands the browser a promise, so Safari on a phone doesn't refuse it.
+
+/** Open the file in a new tab. Call straight from the tap. */
+export async function openMarketingFile(path, name) {
+  const tab = window.open("", "_blank");
+  if (tab) tab.opener = null;
   try {
-    await navigator.share({ files: [file], title: name });
+    const url = await marketingFileUrl(path, { download: name });
+    if (tab) tab.location.href = url;
+    else window.location.assign(url);
+  } catch (err) {
+    tab?.close();
+    throw err;
+  }
+}
+
+/** Copy a 7-day link. Call straight from the tap. */
+export async function copyMarketingLink(path, name) {
+  const link = marketingFileUrl(path, { download: name, days: LINK_DAYS });
+  const Item = globalThis.ClipboardItem;
+  if (Item && navigator.clipboard?.write) {
+    // The write starts now, inside the tap; the text arrives when the link does.
+    await navigator.clipboard.write([new Item({ "text/plain": link.then((u) => new Blob([u], { type: "text/plain" })) })]);
+  } else {
+    await navigator.clipboard.writeText(await link);
+  }
+}
+
+/** Can this browser share files at all? Checked without downloading anything. */
+export function canShareFiles() {
+  try {
+    return typeof navigator !== "undefined" && !!navigator.share && !!navigator.canShare
+      && navigator.canShare({ files: [new File([""], "x.pdf", { type: "application/pdf" })] });
+  } catch {
+    return false;
+  }
+}
+
+/** Download the file into a File to share (the first tap). */
+export async function prepareShareFile(path, name) {
+  const blob = await (await fetch(await marketingFileUrl(path))).blob();
+  return new File([blob], name, { type: blob.type || undefined });
+}
+
+/**
+ * Share a prepared file through the device's share sheet (Mail, Messages,
+ * Teams...). Resolves "shared", "cancelled", or "again" when the tap's
+ * permission ran out while the file downloaded (the caller asks for one more
+ * tap, which shares at once).
+ */
+export async function shareFile(file) {
+  try {
+    await navigator.share({ files: [file], title: file.name });
     return "shared";
   } catch (err) {
     if (err?.name === "AbortError") return "cancelled";
-    // The tap's permission ran out while the file downloaded (a slow
-    // connection): offer Copy link rather than an error.
-    if (err?.name === "NotAllowedError") return "unsupported";
+    if (err?.name === "NotAllowedError") return "again";
     throw err;
   }
 }

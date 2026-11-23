@@ -289,6 +289,8 @@ begin
     raise exception 'file type not accepted' using errcode = '22023';
   end if;
 
+  -- Two uploads to one class at once queue here instead of colliding.
+  perform pg_advisory_xact_lock(hashtext('class_media:' || p_kind || ':' || p_class_id::text || ':' || p_item_key));
   select m.storage_path into v_old from public.class_media m
   where m.item_key = p_item_key
     and ((p_kind = 'class' and m.program_id = p_class_id) or (p_kind = 'camp' and m.camp_session_id = p_class_id));

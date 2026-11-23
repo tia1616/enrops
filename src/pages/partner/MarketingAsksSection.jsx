@@ -11,7 +11,7 @@
 
 import { useEffect, useState } from "react";
 import {
-  listMarketingAsks, setMarketingAsk, getPartnerLogo, uploadPartnerLogo, marketingFileUrl,
+  listMarketingAsks, setMarketingAsk, getPartnerLogo, uploadPartnerLogo, openMarketingFile,
 } from "../../lib/partnerMarketing.js";
 import { MARKETING_ITEMS, FILE_TYPES, ACCESSIBLE_HINT, askLine, extOfPath } from "../../lib/partnerMarketingLogic.js";
 import { fileProblem } from "../../lib/providerDocumentLogic.js";
@@ -81,7 +81,8 @@ export default function MarketingAsksSection({ partner, viewer = "partner", orgN
   async function openLogo() {
     try {
       const name = `${partner.partner_name || "Partner"} logo.${extOfPath(logo.storage_path)}`;
-      window.open(await marketingFileUrl(logo.storage_path, { download: name }), "_blank", "noopener");
+      // Opens the tab inside the tap, so a phone's pop-up blocker allows it.
+      await openMarketingFile(logo.storage_path, name);
     } catch (err) {
       setMsg((m) => ({ ...m, logo: { err: `Couldn't open the logo: ${err?.message ?? "unknown error"}` } }));
     }
