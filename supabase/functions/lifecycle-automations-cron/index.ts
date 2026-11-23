@@ -76,6 +76,7 @@ import { isOnRoster } from "../_shared/rosterOrder.ts";
 import { abandonedResumeUrl } from "./abandonedResumeUrl.ts";
 import { formatChildNameList } from "../_shared/childNameList.ts";
 import { photoDaysToNotify, classPhotoRecipients, PHOTO_LOOKBACK_DAYS, type EnrolledReg } from "./classPhotosAudience.ts";
+import { finalPhotoFire, teachersOnDay, type LeadAssignment, type SettledSub } from "./finalPhotoReminder.ts";
 import { hmacBase64Url } from "../_shared/hmac.ts";
 import {
   installmentReminderRecipients, installmentLabel, REMINDER_DAYS_AHEAD, type ReminderRow,
@@ -86,7 +87,7 @@ import { addDaysUtc, formatRetryDate } from "../_shared/declineRetry.ts";
 // ensure_default_on_automation, 20261012a). src/lib/entitlements.js
 // isOptOutAutomation says the same thing to the Comms screen: keep the two lists
 // identical.
-const DEFAULT_ON_TEMPLATE_KEYS = ["class_photos", "installment_reminder"];
+const DEFAULT_ON_TEMPLATE_KEYS = ["class_photos", "installment_reminder", "final_class_photo"];
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -271,6 +272,11 @@ interface AudienceEntry {
   // photos themselves are never in the email; the portal visit is the point.
   photos_url?: string;
   photo_count?: string;   // drives {{photo_count}}: how many were shared that day
+  // ── final_class_photo only ──
+  // drives {{last_class_date}}: "today" on the morning of, else "Tuesday, December 8".
+  last_class_date?: string;
+  // drives {{instructor_portal_url}}: /<slug>/instructor, where photos are uploaded.
+  instructor_portal_url?: string;
   // ── installment_reminder only ──
   // drives {{charge_date}} ("Friday, November 6") and {{installment_label}}
   // ("second"). There is deliberately no amount token: see
@@ -544,6 +550,9 @@ async function runAutomation(
       return await runPartnerRosterAutomation(supabase, a);
     case "class_photos_uploaded":
       audience = await resolveClassPhotosAudience(supabase, a);
+      break;
+    case "final_class_photo":
+      audience = await resolveFinalClassPhotoAudience(supabase, a);
       break;
     case "installment_reminder":
       audience = await resolveInstallmentReminderAudience(supabase, a);
@@ -1062,6 +1071,9 @@ async function renderLifecycleEmail(supabase: SupabaseClient, input: RenderInput
     // class_photos sample: the REAL portal link, so a test send's button works.
     photos_url: `${PUBLIC_SITE_URL}/${org.slug}/dashboard?tab=photos`,
     photo_count: "6",
+    // final_class_photo sample: the REAL instructor portal, so a test send's button works.
+    last_class_date: "Tuesday, December 8",
+    instructor_portal_url: `${PUBLIC_SITE_URL}/${org.slug}/instructor`,
     // installment_reminder sample, so a test send reads like the real thing.
     charge_date: "Friday, November 6",
     installment_label: "second",
@@ -2042,6 +2054,152 @@ async function resolveInstallmentReminderAudience(
     charge_date: formatRetryDate(rec.charge_date),
     installment_label: installmentLabel(rec.installment_number),
   }));
+}
+
+// ─── Final class photo (instructor reminder, classes only) ──────────────────
+// Reminds whoever teaches a class's LAST session to take a class photo and share
+// it in enrops: once 2-7 days before (see finalPhotoReminder.ts for the window)
+// and again the morning of. Recipient = each confirmed assignment's instructor,
+// or the settled substitute covering that assignment on that day (a confirmed
+// sub can upload photos for the day they cover, 20261009b).
+// Skipped: provider has class photos off (nowhere to upload), partner-run classes
+// (photos are hidden from instructors there), camps (a "week before" a 5-day camp
+// is before it starts), and classes with no confirmed family (no one to share with).
+async function resolveFinalClassPhotoAudience(
+  supabase: SupabaseClient,
+  a: AutomationRow,
+): Promise<AudienceEntry[]> {
+  // Separate read for the same reason as resolveClassPhotosAudience.
+  const { data: org, error: orgErr } = await supabase
+    .from("organizations").select("class_photos_enabled").eq("id", a.organization_id).maybeSingle();
+  if (orgErr) throw orgErr;
+  if (!org?.class_photos_enabled) return [];
+
+  const today = orgToday(a.org.timezone, new Date());
+  const horizon = addDays(today, 7);
+  const { data: programs, error: pErr } = await supabase
+    .from("programs")
+    .select("id, curriculum, runs_own_registration, class_days, first_session_date, end_date, program_locations ( name )")
+    .eq("organization_id", a.organization_id)
+    .eq("status", "open");
+  if (pErr) throw pErr;
+
+  // Due classes: their derived last session (honors closures) puts a send today.
+  const due = new Map<string, { lastDay: string; fire: "week_before" | "day_of"; name: string; location: string }>();
+  for (const p of classProgramsOnly((programs ?? []) as any[])) {
+    if (isPartnerRun(p)) continue;
+    // Cheap bounds before the per-program RPC: already over, or not ending within a week.
+    if (p.end_date && p.end_date < today) continue;
+    if (p.first_session_date && p.first_session_date > horizon) continue;
+    const { data: sessions, error: dErr } = await supabase
+      .rpc("derive_program_session_dates", { p_program_id: p.id });
+    if (dErr) {
+      console.error(`[lifecycle-automations-cron] derive_program_session_dates failed for program ${p.id}:`, dErr);
+      continue;
+    }
+    const list = (sessions ?? []) as string[];
+    const lastDay = list.length > 0 ? list[list.length - 1] : null;
+    const fire = finalPhotoFire(lastDay, today);
+    if (!fire || !lastDay) continue;
+    due.set(p.id, {
+      lastDay,
+      fire,
+      name: p.curriculum ?? "your class",
+      location: p.program_locations?.name ?? "",
+    });
+  }
+  if (due.size === 0) return [];
+  const dueIds = [...due.keys()];
+
+  // Only classes with at least one confirmed, uncancelled family.
+  const { data: regs, error: rErr } = await supabase
+    .from("registrations")
+    .select("program_id")
+    .eq("organization_id", a.organization_id)
+    .eq("status", "confirmed")
+    .is("cancelled_at", null)
+    .in("program_id", dueIds);
+  if (rErr) throw rErr;
+  const withFamilies = new Set(((regs ?? []) as any[]).map((r) => r.program_id));
+
+  const { data: assigns, error: asgErr } = await supabase
+    .from("program_assignments")
+    .select("id, program_id, instructor_id")
+    .eq("organization_id", a.organization_id)
+    .eq("status", "confirmed")
+    .in("program_id", dueIds);
+  if (asgErr) throw asgErr;
+  const assignRows = ((assigns ?? []) as any[]).filter((r) => withFamilies.has(r.program_id));
+  if (assignRows.length === 0) return [];
+
+  const { data: subRows, error: subErr } = await supabase
+    .from("assignment_substitutions")
+    .select("parent_assignment_id, sub_instructor_id, date")
+    .eq("organization_id", a.organization_id)
+    .eq("parent_assignment_type", "program")
+    .in("status", ["confirmed", "taught"])
+    .in("parent_assignment_id", assignRows.map((r) => r.id));
+  if (subErr) throw subErr;
+
+  const teachersByProgram = new Map<string, string[]>();
+  for (const pid of new Set(assignRows.map((r) => r.program_id as string))) {
+    const lastDay = due.get(pid)!.lastDay;
+    const leads: LeadAssignment[] = assignRows
+      .filter((r) => r.program_id === pid)
+      .map((r) => ({ assignmentId: r.id, instructorId: r.instructor_id }));
+    const leadIds = new Set(leads.map((l) => l.assignmentId));
+    const subs: SettledSub[] = ((subRows ?? []) as any[])
+      .filter((s) => leadIds.has(s.parent_assignment_id) && s.date === lastDay)
+      .map((s) => ({ assignmentId: s.parent_assignment_id, subInstructorId: s.sub_instructor_id }));
+    teachersByProgram.set(pid, teachersOnDay(leads, subs));
+  }
+
+  const instructorIds = [...new Set([...teachersByProgram.values()].flat())];
+  const { data: instructors, error: iErr } = await supabase
+    .from("instructors")
+    .select("id, first_name, preferred_name, email")
+    .eq("organization_id", a.organization_id)
+    .eq("is_active", true)
+    .in("id", instructorIds);
+  if (iErr) throw iErr;
+  const instructorById = new Map(((instructors ?? []) as any[]).map((i) => [i.id, i]));
+
+  const portalUrl = `${PUBLIC_SITE_URL}/${a.org.slug}/instructor`;
+  const entries: AudienceEntry[] = [];
+  for (const [pid, teacherIds] of teachersByProgram) {
+    const d = due.get(pid)!;
+    for (const iid of teacherIds) {
+      const ins = instructorById.get(iid);
+      if (!ins?.email) continue;
+      entries.push({
+        // Keyed on the last day too: if a closure moves the last class, the
+        // reminder follows the new date rather than counting as already sent.
+        context_key: `final_photo:program:${pid}:last:${d.lastDay}:${d.fire}:instructor:${iid}`,
+        parent_id: null,
+        parent_email: ins.email,
+        parent_first_name: ins.preferred_name?.trim() || ins.first_name,
+        child_first_name: null,
+        program_name: d.name,
+        program_start_date: "",
+        program_end_date: formatDate(d.lastDay),
+        location_name: d.location,
+        abandoned_resume_url: "",
+        age_turning: "",
+        final_showcase_raw: "",
+        mid_term_skills_raw: [],
+        final_recap_skills_raw: [],
+        arrival_instructions_raw: "",
+        dismissal_instructions_raw: "",
+        session_dates_raw: [],
+        register_url: "",
+        next_term_available: false,
+        recipient_role: "instructor",
+        last_class_date: d.fire === "day_of" ? "today" : formatDate(d.lastDay),
+        instructor_portal_url: portalUrl,
+      });
+    }
+  }
+  return entries;
 }
 
 // ─── Mid recap (camps + afterschool) ────────────────────────────────────────
@@ -3690,6 +3848,9 @@ function buildTokens(entry: AudienceEntry, brand: OrgBrand): Record<string, stri
     // class_photos - "" for every other template.
     photos_url: entry.photos_url ?? "",
     photo_count: entry.photo_count ?? "",
+    // final_class_photo - "" for every other template.
+    last_class_date: entry.last_class_date ?? "",
+    instructor_portal_url: entry.instructor_portal_url ?? "",
     // installment_reminder - "" for every other template.
     charge_date: entry.charge_date ?? "",
     installment_label: entry.installment_label ?? "",

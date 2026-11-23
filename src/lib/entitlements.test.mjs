@@ -135,6 +135,10 @@ eq('installment_reminder is opt-out', isOptOutAutomation('installment_reminder')
 eq('no row + installment_reminder -> sending', automationIsSending(null, 'installment_reminder'), true);
 eq('stored false beats the installment_reminder default', automationIsSending({ enabled: false }, 'installment_reminder'), false);
 eq('installment_reminder is listed on every tier', ALWAYS_LISTED_AUTOMATION_KEYS.has('installment_reminder'), true);
+eq('final_class_photo is opt-out', isOptOutAutomation('final_class_photo'), true);
+eq('no row + final_class_photo -> sending', automationIsSending(null, 'final_class_photo'), true);
+eq('stored false beats the final_class_photo default', automationIsSending({ enabled: false }, 'final_class_photo'), false);
+eq('final_class_photo is listed on every tier', ALWAYS_LISTED_AUTOMATION_KEYS.has('final_class_photo'), true);
 eq('the always-listed set is not a back door for upgrade automations',
    ['check_in', 'mid_recap', 'final_recap', 'birthday', 'welcome_contact', 'review_request', 'abandoned_registration', 'partner_roster']
      .some((k) => ALWAYS_LISTED_AUTOMATION_KEYS.has(k)),
