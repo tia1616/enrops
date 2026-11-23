@@ -24,6 +24,7 @@ import PartnerRequirementsSection from "./PartnerRequirementsSection.jsx";
 import { DocumentsTable, InstructorGrid, RecordSummary, RegistrationLine, RequirementsList } from "../partner/ProviderRecord.jsx";
 import PartnerDecision from "../partner/PartnerDecision.jsx";
 import ClassesTable from "../partner/ClassesTable.jsx";
+import MarketingAsksSection from "../partner/MarketingAsksSection.jsx";
 import ProviderTodo from "./ProviderTodo.jsx";
 import { partnerTodo } from "../../lib/partnerTodo.js";
 import EmailsSent from "../partner/EmailsSent.jsx";
@@ -73,6 +74,9 @@ export default function PartnerRecord() {
   const opening = useRef(false);
   const [tab, setTab] = useRecordTab(PROVIDER_TABS);
   const [classCount, setClassCount] = useState(null);
+  // Flyers / social graphics the partner asked for that aren't on a class yet
+  // (ClassesTable reports them; 20261123r). Amber on the To do list, never red.
+  const [mediaGaps, setMediaGaps] = useState([]);
   const [emailCount, setEmailCount] = useState(null);
   const [decision, setDecision] = useState(null);
   // undefined = loading, null = couldn't load (20261119p).
@@ -142,7 +146,7 @@ export default function PartnerRecord() {
   });
   // What this partner still needs from the provider (2026-11-20), from the
   // same summary the partner sees.
-  const todo = s ? partnerTodo({ s, instructors, orgName, today }) : [];
+  const todo = s ? partnerTodo({ s, instructors, orgName, today, mediaGaps, partnerName: partner?.partner_name }) : [];
 
   async function open(d) {
     // A second click while the file is on its way would open it twice.
@@ -242,6 +246,7 @@ export default function PartnerRecord() {
               onUpload={(key) => setForm({ editing: null, kind: DOC_FOR[key] })}
               onRenew={(doc) => setForm({ editing: doc, kind: null })}
               instructorPortalUrl={`${window.location.origin}/${org?.slug}/instructor`}
+              onTab={setTab}
             />
           </RecordTabPanel>
 
@@ -262,6 +267,7 @@ export default function PartnerRecord() {
             <ClassesTable
               key={`classes:${partnerId}`} partnerId={partnerId} orgId={org?.id} orgName={orgName}
               viewer="provider" partnerName={partner.partner_name} canEdit={canManage} onCount={setClassCount}
+              onMediaGaps={setMediaGaps}
             />
           </RecordTabPanel>
 
@@ -284,6 +290,7 @@ export default function PartnerRecord() {
               key={`requirements:${partnerId}`} partner={partner} rows={requirements} canManage={canManage}
               onChange={setRequirements} control={reqControl} onSaved={loadReqControl}
             />
+            <MarketingAsksSection key={`marketing:${partnerId}`} partner={partner} viewer="provider" orgName={orgName} />
           </RecordTabPanel>
 
           <RecordTabPanel id="logins" active={tab}>

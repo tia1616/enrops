@@ -18,6 +18,13 @@ import {
   scheduleText, enrolledText, countSourceText, classBadge, rosterAvailable,
   sortClasses, rosterDisplayRows, asksDismissal, showsHomeroom, groupClassesByTerm,
 } from "../../lib/partnerClasses.js";
+import {
+  listMarketingAsks, listClassMedia, uploadClassMedia, removeClassMedia, marketingFileUrl,
+  shareMarketingFile, COPY_LINK_DAYS,
+} from "../../lib/partnerMarketing.js";
+import {
+  wantedAsks, indexMedia, mediaKey, itemOf, askLine, fileProblemForAsk, shareName, extOfPath, mediaGaps,
+} from "../../lib/partnerMarketingLogic.js";
 
 const TH = "border-b border-j2s-ink/10 bg-white px-3 py-2 text-left text-xs font-semibold text-j2s-ink/60";
 const TD = "border-b border-j2s-ink/10 px-3 py-2 align-top";
@@ -25,8 +32,27 @@ const TD = "border-b border-j2s-ink/10 px-3 py-2 align-top";
 const keyOf = (c) => `${c.kind}:${c.class_id}`;
 
 // `onCount(n)`: how many classes loaded, for the count on the page's tab (null = failed).
-export default function ClassesTable({ partnerId, orgId, orgName, viewer = "partner", partnerName = "", canEdit = false, onCount }) {
+// `onMediaGaps(gaps)`: what the partner asked for that isn't on a class yet
+// ([{ item, count }], from mediaGaps), for the provider's To do list.
+export default function ClassesTable({ partnerId, orgId, orgName, viewer = "partner", partnerName = "", canEdit = false, onCount, onMediaGaps }) {
   const [classes, setClasses] = useState(null);
+  // Marketing (20261123r): what the partner asks for, and the files on classes.
+  const [asks, setAsks] = useState([]);
+  const [media, setMedia] = useState(() => new Map());
+  const [mediaError, setMediaError] = useState("");
+
+  async function loadMedia() {
+    try {
+      const [a, m] = await Promise.all([listMarketingAsks(partnerId), listClassMedia(orgId)]);
+      setAsks(a);
+      setMedia(indexMedia(m));
+      setMediaError("");
+      return { a, m: indexMedia(m) };
+    } catch (err) {
+      setMediaError(`Couldn't load flyers and graphics: ${err?.message ?? "unknown error"}`);
+      return null;
+    }
+  }
   const [loadError, setLoadError] = useState("");
   const [open, setOpen] = useState(null);          // key of the class whose roster is open
   const [rosters, setRosters] = useState({});      // key -> { rows, asks } | { error }
@@ -49,9 +75,17 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
 
   useEffect(() => {
     setClasses(null); setOpen(null); setRosters({}); setEdit(null); setSaved("");
-    if (partnerId) load();
+    if (partnerId) { load(); if (orgId) loadMedia(); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [partnerId]);
+  }, [partnerId, orgId]);
+
+  // The provider's To do list hears what's still missing.
+  useEffect(() => {
+    if (classes && onMediaGaps) onMediaGaps(mediaGaps(classes, asks, media));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [classes, asks, media]);
+
+  const wanted = wantedAsks(asks);
 
   async function toggleRoster(c) {
     const k = keyOf(c);
@@ -99,6 +133,17 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
     <section className="mt-5 rounded-2xl bg-white shadow-card">
       <h2 className="px-4 pt-4 text-base font-bold text-j2s-ink">{heading}</h2>
       {loadError && <p className="error-text px-4 pt-2">{loadError}</p>}
+      {mediaError && <p className="error-text px-4 pt-2">{mediaError}</p>}
+      {/* "Flyers on 2 of 4 classes": the partner sees at a glance what's in. */}
+      {classes?.length > 0 && wanted.length > 0 && (
+        <p className="px-4 pt-1 text-sm text-j2s-ink/70">
+          {wanted.map((a) => {
+            const live = classes.filter((c) => c.status !== "cancelled");
+            const have = live.filter((c) => media.has(mediaKey(c.kind, c.class_id, a.item_key))).length;
+            return `${itemOf(a.item_key).label}s on ${have} of ${live.length} classes`;
+          }).join(" · ")}
+        </p>
+      )}
       {classes === null ? (
         <p className="px-4 pb-4 pt-2 text-sm text-j2s-ink/60">Loading…</p>
       ) : classes.length === 0 ? (
@@ -146,6 +191,14 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
                           {open === k ? "Hide roster" : "Roster"}
                         </button>
                       )}
+                      {/* Flyer / social graphic (20261123r), in the pinned column so it's on a phone screen. */}
+                      {c.status !== "cancelled" && wanted.map((a) => (
+                        <ClassMediaLine
+                          key={a.item_key} c={c} ask={a} file={media.get(mediaKey(c.kind, c.class_id, a.item_key)) ?? null}
+                          viewer={viewer} canEdit={canEdit} orgId={orgId} partnerName={partnerName} termLabel={g.label}
+                          onChanged={loadMedia}
+                        />
+                      ))}
                     </td>
                     <td className={`${TD} min-w-[9rem]`}>
                       {count != null && <div className="text-base font-semibold tabular-nums text-j2s-ink">{count}</div>}
@@ -220,5 +273,78 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
         </div>
       )}
     </section>
+  );
+}
+
+// One asked-for item on one class. The provider adds, replaces or removes it;
+// the partner downloads it, shares the file itself (the device's share sheet,
+// e.g. to its marketing team), or copies a link that works for 7 days.
+function ClassMediaLine({ c, ask, file, viewer, canEdit, orgId, partnerName, termLabel, onChanged }) {
+  const [busy, setBusy] = useState("");
+  const [note, setNote] = useState(null); // { ok } | { err }
+  const label = itemOf(ask.item_key).label;
+  const isProvider = viewer === "provider";
+  const name = file ? shareName(c.title, termLabel, ask.item_key, extOfPath(file.storage_path)) : "";
+  const btn = "py-0.5 text-xs font-semibold text-j2s-purple hover:underline disabled:opacity-60";
+
+  async function run(kind, fn) {
+    setBusy(kind);
+    setNote(null);
+    try { await fn(); } catch (err) { setNote({ err: err?.message ?? "Something went wrong." }); } finally { setBusy(""); }
+  }
+
+  async function onPick(e) {
+    const f = e.target.files?.[0];
+    e.target.value = "";
+    if (!f) return;
+    const problem = fileProblemForAsk(f, ask, partnerName || "The partner");
+    if (problem) { setNote({ err: problem }); return; }
+    await run("upload", async () => {
+      await uploadClassMedia(orgId, c, ask.item_key, f);
+      await onChanged();
+      setNote({ ok: `${label} added.` });
+    });
+  }
+
+  const download = () => run("download", async () => {
+    window.open(await marketingFileUrl(file.storage_path, { download: name }), "_blank", "noopener");
+  });
+  const copyLink = () => run("copy", async () => {
+    await navigator.clipboard.writeText(await marketingFileUrl(file.storage_path, { download: name, days: COPY_LINK_DAYS }));
+    setNote({ ok: `Link copied. It works for ${COPY_LINK_DAYS} days, no sign-in needed.` });
+  });
+  const share = () => run("share", async () => {
+    const r = await shareMarketingFile(file.storage_path, name);
+    if (r === "unsupported") {
+      await navigator.clipboard.writeText(await marketingFileUrl(file.storage_path, { download: name, days: COPY_LINK_DAYS }));
+      setNote({ ok: `This browser can't share files, so the link is copied instead. It works for ${COPY_LINK_DAYS} days.` });
+    }
+  });
+  const remove = () => {
+    if (!window.confirm(`Remove the ${label.toLowerCase()} from ${c.title || "this class"}?`)) return;
+    run("remove", async () => { await removeClassMedia(c, ask.item_key); await onChanged(); });
+  };
+
+  return (
+    <div className="mt-0.5 text-xs">
+      <span className="font-semibold text-j2s-ink/70">{label}:</span>{" "}
+      {file ? <span className="text-emerald-700">✓ Added</span> : <span className="text-amber-700">Not added yet</span>}
+      <div className="flex flex-wrap gap-x-3">
+        {file && <button type="button" className={btn} onClick={download} disabled={!!busy}>{busy === "download" ? "Opening…" : "Download"}</button>}
+        {file && !isProvider && <button type="button" className={btn} onClick={share} disabled={!!busy}>{busy === "share" ? "Sharing…" : "Share"}</button>}
+        {file && !isProvider && <button type="button" className={btn} onClick={copyLink} disabled={!!busy}>Copy link</button>}
+        {isProvider && canEdit && (
+          <label className={`${btn} cursor-pointer`}>
+            {busy === "upload" ? "Uploading…" : file ? "Replace" : "Upload"}
+            <input type="file" className="sr-only" disabled={!!busy} onChange={onPick}
+              accept={ask.file_types.map((t) => (t === "pdf" ? "application/pdf" : t === "png" ? "image/png" : "image/jpeg")).join(",")} />
+          </label>
+        )}
+        {isProvider && canEdit && file && <button type="button" className={btn} onClick={remove} disabled={!!busy}>Remove</button>}
+      </div>
+      {isProvider && !file && <div className="text-j2s-ink/55">{askLine(ask, partnerName)}{ask.note ? ` · ${ask.note}` : ""}</div>}
+      {note?.ok && <div role="status" className="text-emerald-700">{note.ok}</div>}
+      {note?.err && <div role="alert" className="text-red-700">{note.err}</div>}
+    </div>
   );
 }

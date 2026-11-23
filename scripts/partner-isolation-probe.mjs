@@ -438,6 +438,27 @@ for (const h of hosts) {
     ok(`${who} cannot edit a document`, edit.status >= 400 || rows(edit).length === 0, `status ${edit.status}`);
   }
 
+  // Marketing (20261123r): asks and logos read only for its own partners;
+  // never sets another partner's asks; never puts a file on a class.
+  for (const t of ['partner_marketing_asks', 'partner_logos']) {
+    const r = await call(`/rest/v1/${t}?select=partner_id`, { token: h.token });
+    const stray = rows(r).filter((x) => !h.partners.has(x.partner_id));
+    ok(`${who} reads ${t} only for its own partners`, r.status < 400 && stray.length === 0, `status ${r.status}, ${stray.length} other partner row(s)`);
+  }
+  for (const p of partnerIdsInPlay.filter((x) => !h.partners.has(x))) {
+    // Harmless if wrongly allowed: the file types are invalid, so it is refused anyway.
+    const r = await call('/rest/v1/rpc/set_partner_marketing_ask', {
+      token: h.token, method: 'POST',
+      body: { p_partner_id: p, p_item_key: 'flyer', p_wanted: true, p_file_types: ['probe'], p_needs_logo: false, p_needs_accessible: false, p_note: null },
+    });
+    ok(`${who} cannot set marketing asks for another partner (${p.slice(0, 8)}) (42501)`, r.json?.code === '42501', `status ${r.status} ${r.json?.code ?? ''}`);
+  }
+  const mediaSet = await call('/rest/v1/rpc/set_class_media', {
+    token: h.token, method: 'POST',
+    body: { p_kind: 'class', p_class_id: '00000000-0000-0000-0000-000000000000', p_item_key: 'flyer', p_storage_path: 'probe/x.pdf', p_filename: null },
+  });
+  ok(`${who} cannot put a file on a class (42501)`, mediaSet.json?.code === '42501', `status ${mediaSet.status} ${mediaSet.json?.code ?? ''}`);
+
   // Cannot write a visit into another partner's log.
   for (const p of partnerIdsInPlay.filter((x) => !h.partners.has(x))) {
     const r = await call('/rest/v1/rpc/log_partner_portal_event', {
@@ -468,6 +489,10 @@ for (const p of partnerIdsInPlay) {
   ok(`anon: no requirement controls for ${p.slice(0, 8)}`, gotNothing(c), `status ${c.status}`);
   const w = await call('/rest/v1/rpc/set_partner_requirement', { method: 'POST', body: { p_partner_id: p, p_requirement_key: 'business_license', p_required: true } });
   ok(`anon: cannot change requirements for ${p.slice(0, 8)}`, w.json !== true, `status ${w.status}`);
+}
+for (const t of ['partner_marketing_asks', 'partner_logos', 'class_media']) {
+  const r = await call(`/rest/v1/${t}?select=*&limit=5`);
+  ok(`anon: reads nothing from ${t}`, gotNothing(r), `status ${r.status}`);
 }
 const anonRoster = await call('/rest/v1/rpc/partner_portal_class_roster', { method: 'POST', body: { p_partner_id: partnerIdsInPlay[0], p_kind: 'class', p_class_id: '00000000-0000-0000-0000-000000000000' } });
 ok('anon: no roster', gotNothing(anonRoster), `status ${anonRoster.status}`);
