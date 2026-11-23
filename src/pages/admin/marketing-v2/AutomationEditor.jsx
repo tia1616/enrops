@@ -83,6 +83,10 @@ const TOKENS_BY_TEMPLATE_KEY = {
   // photos are never in the email); {{photo_count}} = how many were shared that day.
   // child_first_name joins siblings in the same class ("Ada and Ben").
   class_photos:           ["first_name", "child_first_name", "program_name", "photos_url", "photo_count", "org_name", "sender_name"],
+  // final_class_photo: recipient is the INSTRUCTOR teaching the last class.
+  // {{last_class_date}} = "today" on the morning of, else "Tuesday, December 8";
+  // {{instructor_portal_url}} = their portal, where photos are uploaded.
+  final_class_photo:      ["first_name", "program_name", "location_name", "last_class_date", "instructor_portal_url", "org_name", "sender_name"],
   // installment_reminder: {{charge_date}} = the day the card is charged ("Friday,
   // November 6"); {{installment_label}} = "first"/"second"/"third". No amount token
   // on purpose: the charge includes a fee share only the charger can work out.
