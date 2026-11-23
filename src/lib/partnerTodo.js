@@ -74,6 +74,11 @@ export function partnerTodo({ s, instructors, orgName, today }) {
       });
       continue;
     }
+    // Forms are signed only in enrops onboarding (on production 11/23 every
+    // active instructor had signed there except one invited that day), so the
+    // unsigned ones become ONE item: finish onboarding, with the invite on
+    // their record. No paper path (Jessica 11/23: overengineered).
+    const unsigned = [];
     for (const l of instructorChecklist(r, orgName, today)) {
       if (!columns.has(l.key)) continue;
       const tone = bad(l.badge) ? "bad" : soon(l.badge) ? "warn" : null;
@@ -105,8 +110,17 @@ export function partnerTodo({ s, instructors, orgName, today }) {
       } else if (l.key === "training" && tone === "bad") {
         items.push({ key: `training:${r.instructor_id}`, tone, text: `Add ${who}'s training date.`, action: { type: "instructor", instructorId: r.instructor_id } });
       } else if (SIGNED[l.key] && tone === "bad") {
-        items.push({ key: `${l.key}:${r.instructor_id}`, tone, text: `${who} hasn't signed ${SIGNED[l.key]} in enrops. They sign it during instructor onboarding.`, action: { type: "instructor", instructorId: r.instructor_id } });
+        unsigned.push(SIGNED[l.key]);
       }
+    }
+    if (unsigned.length) {
+      const list = unsigned.length === 1 ? unsigned[0]
+        : `${unsigned.slice(0, -1).join(", ")}${unsigned.length > 2 ? "," : ""} and ${unsigned[unsigned.length - 1]}`;
+      items.push({
+        key: `signed:${r.instructor_id}`, tone: "bad",
+        text: `${who} hasn't signed ${list} yet. They sign in enrops onboarding; if they haven't finished it, resend their invite from their record.`,
+        action: { type: "instructor", instructorId: r.instructor_id },
+      });
     }
   }
 
