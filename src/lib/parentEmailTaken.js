@@ -13,9 +13,17 @@
 // who fixes it, and nothing is changed.
 //
 // The Contacts edit (supabase/functions/update-contact) uses the same sentence.
+//
+// WORDING. "Belongs to another family" was not true in the case that prompted
+// this: Jen Israel's two records were the SAME family, typed twice. All the
+// database can say is that the address is on a different record, so that is all
+// the sentence claims - and it names the common cause and a real way to reach us
+// (Share feedback is in every admin sidebar; HELP_EMAIL receives mail).
+
+import { HELP_EMAIL } from "./helpEmail.js";
 
 const REASON =
-  "that email already belongs to another family's record in enrops. Contact enrops and we'll combine the two records.";
+  `that email is already on a different record in enrops (often the same family, registered twice). Send us a note with Share feedback or email ${HELP_EMAIL}, and we'll combine the two records.`;
 
 // Contacts: the edit is all-or-nothing (checked before anything is written).
 export const PARENT_EMAIL_TAKEN_MESSAGE = `Nothing was changed: ${REASON}`;

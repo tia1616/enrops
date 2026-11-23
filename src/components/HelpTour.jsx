@@ -23,8 +23,10 @@ const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 
 export const REPLAY_EVENT = "enrops:help-tour-replay";
-// The one place the support address is written for the Help page and the tour.
-export const HELP_EMAIL = "hello@enrops.com";
+// The support address lives in src/lib/helpEmail.js (also read by the
+// "email taken" refusal); re-exported here so the Help page's import still works.
+export { HELP_EMAIL } from "../lib/helpEmail.js";
+import { HELP_EMAIL } from "../lib/helpEmail.js";
 const seenKey = (userId) => `enrops.helptour.seen.${userId}`;
 
 // Paths where the tour must not interrupt: the class builders.
