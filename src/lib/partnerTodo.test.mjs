@@ -47,8 +47,17 @@ eq('expiring is amber', byKey['doc:insurance:cert']?.tone, 'warn');
 eq('a current document is not listed', Object.keys(byKey).some((k) => k.startsWith('doc:partner_agreement')), false);
 eq('expired check: upload for that instructor', byKey['bgc:ricky']?.action, { type: 'instructor', instructorId: 'ricky', upload: 'background-check' });
 eq('missing training', byKey['training:kyle']?.text, 'Add Kyle Test\'s training date.');
-eq('missing signature, required', !!byKey['code_of_conduct:kyle'], true);
-eq('not-required item is never listed', Object.keys(byKey).some((k) => k.startsWith('mandatory_reporter')), false);
+eq('missing signature: one item, points to onboarding', byKey['signed:kyle']?.text, "Kyle Test hasn't signed the code of conduct yet. They sign in enrops onboarding; if they haven't finished it, resend their invite from their record.");
+eq('not-required form is never named', /mandatory|contractor/.test(byKey['signed:kyle']?.text ?? ''), false);
+{
+  // Three unsigned required forms: still ONE item, all named.
+  const all3 = requiredKeys([{ requirement_key: 'code_of_conduct', required: true }, { requirement_key: 'mandatory_reporter', required: true }, { requirement_key: 'contractor_agreement', required: true }]);
+  const g = [shared({ id: 'gray', first: 'Grayson', code_of_conduct_on: null, mandatory_reporter_on: null, agreement_signed_on: null })];
+  const sg = providerSummary({ docs, instructors: g, partnerId: P, orgName: 'J2S', today: TODAY, required: all3 });
+  const tg = partnerTodo({ s: sg, instructors: g, orgName: 'J2S', today: TODAY }).filter((t) => t.key.endsWith(':gray'));
+  eq('three unsigned forms: one item', tg.map((t) => t.key), ['signed:gray']);
+  eq('three unsigned forms: all named', tg[0]?.text.startsWith("Grayson Test hasn't signed the code of conduct, the mandatory reporter acknowledgment, and the contractor agreement yet."), true);
+}
 eq('cleared but no date: ask for the report with its date', byKey['bgc:ana']?.text, 'Ana Test\'s background check is cleared but has no completed date. Upload the report again with its date.');
 eq('not shared: one share item, nothing else about them', todo.filter((t) => t.key.endsWith(':lukas')).map((t) => t.action.type), ['share']);
 eq('a fully current instructor has nothing', todo.some((t) => t.key.endsWith(':riley')), false);
