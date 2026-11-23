@@ -220,7 +220,10 @@ serve(async (req: Request) => {
         // A FAMILY ON FILE WITH NO LOGIN YET. Same auto-create-on-first-sign-in
         // the instructor branch has, for the same reason: the address is on a
         // record the business made, and the magic link itself is the proof of
-        // control - only the owner of the inbox can use what is sent.
+        // control - only the owner of the inbox can use what is sent. (The new
+        // account is linked to the family at creation by
+        // on_auth_user_created_link_parent, i.e. before the link is clicked;
+        // only that inbox's owner can ever use it.)
         //
         // Reachable mainly after an operator CORRECTS a family's email (roster
         // or Contacts): 20261123b unlinks the old login, and the corrected
@@ -250,11 +253,17 @@ serve(async (req: Request) => {
           email,
           email_confirm: true,
         });
-        if (createErr || !created?.user) {
-          throw new Error(`Couldn't create auth user: ${createErr?.message ?? 'unknown error'}`);
+        if (created?.user) {
+          user = created.user;
+          console.log(`Auto-created auth user for a family on file (context=${context ?? 'parent'})`);
+        } else {
+          // Lost a race (a double-click, or a second tab) - the account now
+          // exists. Use it rather than turning "check your inbox" into an error.
+          user = await findUserByEmail(supabase, email);
+          if (!user) {
+            throw new Error(`Couldn't create auth user: ${createErr?.message ?? 'unknown error'}`);
+          }
         }
-        user = created.user;
-        console.log(`Auto-created auth user for a family on file (context=${context ?? 'parent'})`);
       }
     }
 

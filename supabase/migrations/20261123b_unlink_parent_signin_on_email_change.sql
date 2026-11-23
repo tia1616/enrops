@@ -16,7 +16,11 @@
 -- WHY UNLINK, NEVER RELINK HERE. 20260727b withdrew linking by an email typed
 -- into a form, because a typo hands the real owner of the mistyped address a
 -- family's portal. An operator correcting an email is exactly such a typed
--- address. So this trigger only ever REMOVES a link.
+-- address. So this trigger only ever REMOVES a link. The link is re-made only
+-- when someone signs in at the address on file - which, like every sign-in path
+-- here, treats the owner of that inbox as the family. An operator who corrects
+-- to a WRONG address therefore still gives that inbox's owner the portal once
+-- they sign in; the safeguard is the operator typing it right, not this code.
 --
 -- ORDERING WITH link_parent_auth_on_email_change. That trigger (20260727a,
 -- re-applied to prod 2026-09-03) links by typed email when auth_id is NULL. BEFORE
