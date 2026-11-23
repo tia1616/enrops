@@ -62,7 +62,7 @@ The location probably has no district, or the district has no calendar saved. Se
 Mark it as a no-school day: open the class and tap **Mark a no-school day**. Choose **Just this school**, or every class in that district skips the date too. The schedule runs a week longer and families see the new dates.
 
 ### What does FA26 or WI27 mean? {#faq-term-codes}
-Season plus year: FA fall, WI winter, SP spring, SU summer. WI27 is winter 2027.
+Season plus year: FA fall, WI winter, SP spring, SU summer. WI27 is winter 2027. Winter is December to February, so a class starting in December or January is in winter. A class goes in the season of its first class.
 
 ### How do I copy my classes to next term? {#faq-copy-term}
 **Copy classes to another term** on Programs. Copies are drafts and need a first class date before you publish. See **Copy your classes to the next term**.
@@ -133,7 +133,7 @@ A family started registering and didn't pay. They aren't on your roster yet.
 **Programs → Class rosters**, expand the class, tap **Refund / remove**. See **Refund a family**.
 
 ### Does a class stop selling when it starts? {#faq-close}
-Not on its own yet. **Unpublish** it when you want to stop new registrations. See **Stop selling a class**.
+Not when it starts. It comes off your page once its season is over (see **When families see your classes**). To stop new registrations sooner, **Unpublish** it. See **Stop selling a class**.
 
 ### How do I send the roster to the school? {#faq-roster-partner}
 **View / print → Email roster to partner**. See **Send the roster to your school partner**.
