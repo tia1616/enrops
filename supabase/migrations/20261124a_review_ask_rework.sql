@@ -204,16 +204,31 @@ returns table (program_id uuid, program_name text, term text, families_asked big
                withdrawn_asked bigint, clicked bigint, reminded bigint, clicked_after_reminder bigint,
                last_asked_at timestamptz)
 language sql stable security definer set search_path = public as $$
-  select ra.program_id, coalesce(p.curriculum, '(deleted class)'), ra.term,
-         count(distinct ra.family_email) filter (where ra.asked_at is not null),
-         count(distinct ra.family_email) filter (where ra.asked_at is not null and ra.variant = 'withdrawn'),
-         count(distinct ra.family_email) filter (where ra.first_clicked_at is not null),
-         count(distinct ra.family_email) filter (where ra.reminded_at is not null),
-         count(distinct ra.family_email) filter (where ra.reminded_at is not null and ra.first_clicked_at > ra.reminded_at),
-         max(ra.asked_at)
-    from review_asks ra left join programs p on p.id = ra.program_id
-   where ra.organization_id = p_org and check_org_access(p_org)
-   group by ra.program_id, p.curriculum, ra.term;
+  -- One row per FAMILY first, then count families. "Withdrawn" = the family got
+  -- the withdrawn wording, i.e. EVERY covered registration was withdrawn (the
+  -- same rule groupReviewFamilies uses); a family with one active and one
+  -- refunded child got the standard email and is not counted as withdrawn.
+  with fam as (
+    select ra.program_id, ra.term, ra.family_email,
+           bool_or(ra.asked_at is not null) as asked,
+           bool_and(ra.variant = 'withdrawn') as withdrawn,
+           bool_or(ra.first_clicked_at is not null) as clicked,
+           bool_or(ra.reminded_at is not null) as reminded,
+           bool_or(ra.reminded_at is not null and ra.first_clicked_at > ra.reminded_at) as clicked_after,
+           max(ra.asked_at) as last_asked
+      from review_asks ra
+     where ra.organization_id = p_org and check_org_access(p_org)
+     group by ra.program_id, ra.term, ra.family_email
+  )
+  select fam.program_id, coalesce(p.curriculum, '(deleted class)'), fam.term,
+         count(*) filter (where asked),
+         count(*) filter (where asked and withdrawn),
+         count(*) filter (where clicked),
+         count(*) filter (where reminded),
+         count(*) filter (where clicked_after),
+         max(last_asked)
+    from fam left join programs p on p.id = fam.program_id
+   group by fam.program_id, p.curriculum, fam.term;
 $$;
 revoke all on function public.review_ask_stats(uuid) from public, anon;
 grant execute on function public.review_ask_stats(uuid) to authenticated, service_role;
