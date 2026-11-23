@@ -3477,6 +3477,22 @@ async function resolveReviewRequestAudience(
   regEntries.forEach(take);
   contactEntries.forEach(take);
 
+  // The one-button wording ({{review_link_url}}, the template default since
+  // 2026-11-24) needs a link on THIS path too. There is no review_asks row to
+  // track here, so it is the org's Google link directly. A body that uses the
+  // token with no link set would send a dead button: fail closed instead.
+  const bodyNeedsLink = /\{\{review_link_url\}\}/.test(a.body_override ?? a.template.default_body ?? "");
+  if (bodyNeedsLink && out.length > 0) {
+    const { data: orgRow, error: orgErr } = await supabase
+      .from("organizations").select("google_review_url").eq("id", a.organization_id).maybeSingle();
+    if (orgErr) throw orgErr;
+    if (!orgRow?.google_review_url) {
+      console.error(`[lifecycle-automations-cron] review ask (engagement) skipped for org ${a.organization_id}: no google_review_url set`);
+      return [];
+    }
+    for (const entry of out) entry.review_link_url = orgRow.google_review_url;
+  }
+
   // Mint the 5 scoring links AFTER dedup, only for the entries that will
   // actually be sent — not once per candidate registration, which for a
   // family with several matching regs would sign tokens for siblings whose
@@ -3614,6 +3630,7 @@ async function resolveReviewLastSessionAudience(
   const today = orgToday(a.org.timezone, now);
   const hour = orgHour(a.org.timezone, now);
   const days = Math.max(0, pickNumber(a.timing_override?.days_after_last_session, a.template.default_timing?.days_after_last_session, 0));
+  const reviewEnabledDay = orgToday(a.org.timezone, new Date(a.enabled_at));
   const kind = a.template.applies_to_program_type;
   const skip = await loadReviewSkipSet(supabase, a.organization_id);
   const nextTermAvailable = await hasFutureProgramsForOrg(supabase, a.organization_id);
@@ -3643,11 +3660,16 @@ async function resolveReviewLastSessionAudience(
     const list = ((sessions ?? []) as string[]).slice().sort();
     if (list.length === 0) continue;
     const target = plusDays(list[list.length - 1], days);
+    // Forward-only: the grace window catches a missed evening, never a class
+    // that ended before this automation was on.
+    if (target < reviewEnabledDay) continue;
     if (!eveningDue(target, today, hour)) continue;
     due.set(p.id, { name: p.curriculum ?? "", term: p.term, target });
   }
 
   if (due.size > 0) {
+    // (rows can still come back empty: a class that ends with nobody in it.
+    // The guard below keeps that from sending .in("term", []).)
     const { data: regs, error: rErr } = await supabase
       .from("registrations")
       .select("id, program_id, status, payment_status, parent_id, students ( first_name ), parents!inner ( id, first_name, email )")
@@ -3672,6 +3694,7 @@ async function resolveReviewLastSessionAudience(
     // Already asked this term (any program) = skip. The ledger key would stop
     // the send anyway; this also keeps us from creating ask rows for them.
     const terms = [...new Set(rows.map((r) => r.term))];
+    if (terms.length > 0) {
     const { data: prior, error: priorErr } = await supabase
       .from("review_asks").select("term, family_email")
       .eq("automation_id", a.id).in("term", terms).not("asked_at", "is", null);
@@ -3718,6 +3741,7 @@ async function resolveReviewLastSessionAudience(
       entry.review_ask_mark = "asked";
       out.push(entry);
     }
+    } // terms.length > 0
   }
 
   // ── 2. The one reminder, N days after the ask, to families with no click.

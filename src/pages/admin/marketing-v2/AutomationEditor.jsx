@@ -465,7 +465,8 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       const { data } = await supabase.from("organizations").select("google_review_url").eq("id", orgId).maybeSingle();
       if (!alive) return;
       const url = data?.google_review_url ?? "";
-      setReviewSettings((s) => ({ ...s, googleUrl: url }));
+      // Never overwrite a link the operator typed while this was loading.
+      setReviewSettings((s) => (s.googleUrl.trim() ? s : { ...s, googleUrl: url }));
       setSavedReviewSettings((s) => ({ ...s, googleUrl: url }));
     })();
     return () => { alive = false; };
