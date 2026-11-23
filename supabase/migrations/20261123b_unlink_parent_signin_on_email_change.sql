@@ -28,7 +28,8 @@
 -- earlier triggers left it. This one is named zz_ so it runs AFTER it: that
 -- trigger sees the old, non-null auth_id and does nothing, then this one clears
 -- it. Named a_..., the cleared auth_id would have let that trigger relink to
--- whatever account owns the typed address.
+-- whatever account owns the typed address. (20261123c then drops that trigger,
+-- so the ordering is now defensive only.)
 --
 -- Pairs with auth-send-magic-link, which now creates the login for a family on
 -- file whose corrected address has no account yet (otherwise the parent sign-in
