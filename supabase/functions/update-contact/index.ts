@@ -49,6 +49,18 @@ async function verifyCaller(
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// Same words as the roster's edit form (src/lib/parentEmailTaken.js) - one
+// situation, one sentence, wherever an operator meets it.
+const TAKEN_BY_ANOTHER_FAMILY =
+  "Nothing was changed: that email already belongs to another family's record in enrops. Contact enrops and we'll combine the two records.";
+
+// Case-insensitive EXACT match. `ilike` treats `_` and `%` as wildcards, and
+// `_` is common in email addresses: unescaped, "mrs_j@x.com" would match
+// "mrs.j@x.com" and move the wrong family.
+function exactILike(s: string): string {
+  return s.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
 function str(v: unknown): string | null {
   if (v === null || v === undefined) return null;
   const s = String(v).trim();
@@ -115,6 +127,84 @@ Deno.serve(async (req: Request) => {
   };
 
   const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+  // ── A CORRECTED EMAIL GOES TO THE FAMILY'S RECORD, NOT JUST THE LIST ──────
+  // A contact row is the mailing-list copy. The roster, the parent portal and
+  // every registration email read `parents.email`. Before this, an operator who
+  // fixed a mistyped address here fixed the list only, and the roster kept the
+  // wrong one (Jen Israel, 11/23).
+  //
+  // So when the email changes and that old address belongs to a family who is
+  // a customer of THIS org (parent_org_relationships), the parent record moves
+  // too. `parents` is one row per person across every business, so that is a
+  // correction to the person; trg_sync_parent_email_to_contact then carries it
+  // to their contact rows at every org they belong to - this one included.
+  //
+  // ORDER: both conflicts are checked BEFORE anything is written, then the
+  // parent first, then the contact. If the parent write fails, nothing has
+  // changed. A family whose old address is only on this list (an import, no
+  // registration) has no parent row to move, and the edit stays list-only.
+  const { data: current, error: curErr } = await supabase
+    .from("marketing_recipients")
+    .select("email, school_name")
+    .eq("id", id)
+    .eq("organization_id", organization_id)
+    .maybeSingle();
+  if (curErr) return jsonError(`Couldn't save: ${curErr.message}`, 500);
+  if (!current) return jsonError("Contact not found for this organization.", 404);
+
+  const oldEmail = String(current.email ?? "").trim().toLowerCase();
+  let parentToMove: string | null = null;
+  if (oldEmail && oldEmail !== email) {
+    const { data: oldParent, error: opErr } = await supabase
+      .from("parents")
+      .select("id, parent_org_relationships!inner(organization_id)")
+      .ilike("email", exactILike(oldEmail))
+      .eq("parent_org_relationships.organization_id", organization_id)
+      .maybeSingle();
+    if (opErr) return jsonError(`Couldn't save: ${opErr.message}`, 500);
+
+    if (oldParent) {
+      const { data: taken, error: tkErr } = await supabase
+        .from("parents")
+        .select("id")
+        .ilike("email", exactILike(email))
+        .neq("id", oldParent.id)
+        .limit(1);
+      if (tkErr) return jsonError(`Couldn't save: ${tkErr.message}`, 500);
+      if (taken && taken.length) return jsonError(TAKEN_BY_ANOTHER_FAMILY, 409);
+
+      // The contact's own unique key (org, email, school). Checked here, not
+      // left to the update below, because by then the parent has moved.
+      const { data: dupContact, error: dcErr } = await supabase
+        .from("marketing_recipients")
+        .select("id")
+        .eq("organization_id", organization_id)
+        .ilike("email", exactILike(email))
+        .eq("school_name", patch.school_name)
+        .neq("id", id)
+        .limit(1);
+      if (dcErr) return jsonError(`Couldn't save: ${dcErr.message}`, 500);
+      if (dupContact && dupContact.length) return jsonError("Another contact already has this email and school.", 409);
+
+      parentToMove = oldParent.id as string;
+    }
+  }
+
+  if (parentToMove) {
+    const { data: moved, error: pErr } = await supabase
+      .from("parents")
+      .update({ email })
+      .eq("id", parentToMove)
+      .select("id");
+    if (pErr) {
+      // Lost a race to another family taking the address between the check and here.
+      if ((pErr as { code?: string }).code === "23505") return jsonError(TAKEN_BY_ANOTHER_FAMILY, 409);
+      return jsonError(`Couldn't save: ${pErr.message}`, 500);
+    }
+    if (!moved || !moved.length) return jsonError("Couldn't update this family's record. Nothing was changed.", 500);
+  }
+
   const { data, error } = await supabase
     .from("marketing_recipients")
     .update(patch)
