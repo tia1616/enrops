@@ -56,5 +56,5 @@ goal: You know where your money is, and you can refund or credit a family in a m
 
 ## Stop selling a class {#stop-selling}
 
-- A published class keeps taking registrations until you stop it, even after it has started. There's no automatic close date yet.
+- A published class keeps taking registrations after it has started. It comes off your page only once its season is over (see **When families see your classes**). There's no close date you can set yet.
 - To stop it, open the class in **Programs → Scheduled programs** and tap **Unpublish**. It goes back to draft, and families already registered stay registered.
