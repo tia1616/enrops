@@ -27,6 +27,7 @@ import { loadOrgBrand, formatFromAddress, renderSignatureBlock, OrgBrand } from 
 import { isEmailAllowed, emailGuardActive } from '../_shared/emailGuard.ts';
 import { logPlatformEvent, FEATURE, ACTION, OUTCOME } from '../_shared/logPlatformEvent.ts';
 import { logTransactionalSend, formatSendError } from '../_shared/sendLog.ts';
+import { isOnRoster } from '../_shared/rosterOrder.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -99,7 +100,10 @@ serve(async (req) => {
     // ----- Roster parents: registrations -> students -> parents -----
     const { data: regs, error: regErr } = await admin
       .from('registrations')
-      .select('student_id')
+      // status / payment_status / ach_payment_state are SELECTED because isOnRoster
+      // reads all three. A column missing from the select arrives undefined and the
+      // predicate silently answers "not enrolled" for everyone.
+      .select('student_id, status, payment_status, ach_payment_state')
       .eq('organization_id', organizationId)
       .eq('program_id', programId)
       .neq('status', 'cancelled')
@@ -110,7 +114,21 @@ serve(async (req) => {
       // families "are not on the roster or the roster email" - this keeps that true.
       .neq('status', 'waitlist');
     if (regErr) return json({ error: `Load roster: ${regErr.message}` }, 500);
-    const studentIds = [...new Set((regs ?? []).map((r: any) => r.student_id).filter(Boolean))];
+    // AN ABANDONED CHECKOUT IS THE SAME DEAD END AS A WAITLIST ROW, and until
+    // 2026-09-09 only the waitlist half was excluded. A family who reached Stripe
+    // and never paid leaves a pending/unpaid row, which passed both filters above,
+    // so "Invite families to portal" emailed them a sign-in link to a Dashboard
+    // that lists status='confirmed' only - i.e. to an empty page. The comment
+    // directly above already argued exactly why that must not happen; it just did
+    // not cover this case.
+    //
+    // isOnRoster is the same shared rule the admin roster, the instructor portal
+    // and the emailed PDF use, so "who is in this class" has one answer across the
+    // product. It keeps confirmed-but-unpaid families (354 prod rows: hand-added,
+    // imported, comped, school pays off-platform) and ACH mid-settlement - both of
+    // those DO have a place and should be invited.
+    const enrolledRegs = (regs ?? []).filter((r: any) => isOnRoster(r));
+    const studentIds = [...new Set(enrolledRegs.map((r: any) => r.student_id).filter(Boolean))];
     if (studentIds.length === 0) {
       return json({ invited: 0, skipped_existing: 0, skipped_no_email: 0, failed: 0, total_candidates: 0,
         message: 'No families on this roster yet.' });
@@ -195,17 +213,16 @@ serve(async (req) => {
     for (const c of deliverable) {
       // Create the account only if missing — the auth.users trigger links
       // parents.auth_id by email. Existing-but-never-signed-in just gets a re-send.
-      let authUserId = c.existingId;
+      //
+      // NO LINKING HERE for an account that already exists. This used to set
+      // parents.auth_id to whatever login owned the roster's typed address, which
+      // hands a family's portal to the owner of a mistyped address (an
+      // instructor, another business's parent). 20261123c withdrew the same
+      // thing from the database. The invite email below IS the fix: signing in
+      // from it proves the inbox, and claim_parent_record() links them then.
       if (!c.hasAccount) {
-        const { data: created, error: createErr } = await admin.auth.admin.createUser({ email: c.email, email_confirm: true });
+        const { error: createErr } = await admin.auth.admin.createUser({ email: c.email, email_confirm: true });
         if (createErr) { console.error('createUser failed', c.email, createErr.message); failed++; failedReasons.push({ email: c.email, reason: shortErr(createErr.message) }); continue; }
-        authUserId = created?.user?.id ?? null;
-      }
-      // Self-heal: the on-create trigger links parents.auth_id, but a pre-existing
-      // account leaves it unlinked → the parent's portal can't resolve. Link it
-      // now (only when null, so we never steal a correct link or hit the unique idx).
-      if (authUserId) {
-        await admin.from('parents').update({ auth_id: authUserId }).eq('id', c.parentId).is('auth_id', null);
       }
 
       let signInUrl = redirectTo || SUPABASE_URL;
