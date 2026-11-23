@@ -108,7 +108,7 @@ export function partnerTodo({ s, instructors, orgName, today }) {
       } else if (l.key === "training" && tone === "bad") {
         items.push({ key: `training:${r.instructor_id}`, tone, text: `Add ${who}'s training date.`, action: { type: "instructor", instructorId: r.instructor_id } });
       } else if (SIGNED[l.key] && tone === "bad") {
-        items.push({ key: `${l.key}:${r.instructor_id}`, tone, text: `${who} hasn't signed ${SIGNED[l.key].name}. If they signed it on paper, record it on their record; otherwise they sign it during enrops onboarding.`, action: { type: "instructor", instructorId: r.instructor_id, paper: SIGNED[l.key].form } });
+        items.push({ key: `${l.key}:${r.instructor_id}`, tone, text: `${who} hasn't signed ${SIGNED[l.key].name}. If they signed it on paper, record it on their record.`, action: { type: "instructor", instructorId: r.instructor_id, paper: SIGNED[l.key].form } });
       }
     }
   }
