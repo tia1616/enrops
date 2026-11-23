@@ -50,9 +50,10 @@ async function verifyCaller(
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // Same words as the roster's edit form (src/lib/parentEmailTaken.js) - one
-// situation, one sentence, wherever an operator meets it.
+// situation, one sentence, wherever an operator meets it. The address is
+// src/lib/helpEmail.js's HELP_EMAIL (edge fns cannot import from src/).
 const TAKEN_BY_ANOTHER_FAMILY =
-  "Nothing was changed: that email already belongs to another family's record in enrops. Contact enrops and we'll combine the two records.";
+  "Nothing was changed: that email is already on a different record in enrops (often the same family, registered twice). Send us a note with Share feedback or email hello@enrops.com, and we'll combine the two records.";
 
 // Case-insensitive EXACT match. `ilike` treats `_` and `%` as wildcards, and
 // `_` is common in email addresses: unescaped, "mrs_j@x.com" would match

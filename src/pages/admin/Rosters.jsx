@@ -677,7 +677,15 @@ function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled
               orgId={orgId}
               canManage={canManage}
               justSaved={justSavedId === reg.id}
-              onSaved={() => {
+              onSaved={(opts) => {
+                // keepOpen: a PARTIAL save (CamperEditForm kept its form open to
+                // show what did not land). Refresh the list, but neither close the
+                // form nor flash "Saved".
+                if (opts?.keepOpen) {
+                  load(true);
+                  if (onChanged) onChanged();
+                  return;
+                }
                 setEditingId(null);
                 setJustSavedId(reg.id);       // row scrolls itself into view + flashes "Saved"
                 load(true);                    // in-place refresh, no unmount/scroll-yank
@@ -1366,9 +1374,12 @@ function CamperEditForm({ registration, orgId, canEdit = false, onCancel, onSave
       );
       if (emailTaken) {
         // The form stays open on purpose: the operator's typed parent details are
-        // still in it, and closing would read as "all saved".
+        // still in it, and closing would read as "all saved". But the student and
+        // registration changes DID save, so the roster behind it refreshes
+        // (keepOpen) - otherwise it shows the old grade and reads as nothing saved.
         setErr(PARENT_EMAIL_TAKEN_ON_ROSTER);
         setBusy(false);
+        if (onSaved) onSaved({ keepOpen: true });
         return;
       }
       if (onSaved) onSaved();
