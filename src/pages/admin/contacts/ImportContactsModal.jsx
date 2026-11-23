@@ -1032,46 +1032,29 @@ const TYPE_LABEL = {
 
 function DoneStep({ result, orgId, onClose }) {
   const navigate = useNavigate();
-  const [pending, setPending] = useState(() => Array.isArray(result.partners_without_location) ? result.partners_without_location : []);
-  const [added, setAdded] = useState([]); // [{ location_id, location_name }]
-  const [busyId, setBusyId] = useState(null);
-  const [rowErr, setRowErr] = useState(null);
+  const pending = Array.isArray(result.partners_without_location) ? result.partners_without_location : [];
 
   const locsCreated = result.locations_created ?? 0;
   const locsLinked = result.locations_linked ?? 0;
-  const locTotal = locsCreated + locsLinked + added.length;
+  const locTotal = locsCreated + locsLinked;
   // Drive the unlocks card + Create-a-program button off touched locations
   // (which includes idempotent re-imports), not just net-new counts. Otherwise
   // a re-upload with everything already linked leaves only an orphan
   // "I'll do this later" button.
   const hasUsableLocations = locTotal > 0 || (Array.isArray(result.touched_locations) && result.touched_locations.length > 0);
-  // All venue locations the import touched + any the operator just added
-  // inline. Each gets an "Edit details" link so paragraph fields (arrival
-  // instructions, food policy, notes) are one click away.
-  const touched = [
-    ...((Array.isArray(result.touched_locations) ? result.touched_locations : [])),
-    ...added,
-  ];
+  // All venue locations the import touched. Each gets an "Edit details" link so
+  // paragraph fields (arrival instructions, food policy, notes) are one click away.
+  const touched = Array.isArray(result.touched_locations) ? result.touched_locations : [];
 
-  async function addAsLocation(partner) {
-    setBusyId(partner.partner_id);
-    setRowErr(null);
-    try {
-      const base = (partner.partner_name.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)) || 'venue';
-      const slug = `${base}-${Math.random().toString(36).slice(2, 8)}`;
-      const { data, error } = await supabase
-        .from('program_locations')
-        .insert({ organization_id: orgId, name: partner.partner_name, slug, partner_id: partner.partner_id })
-        .select('id')
-        .maybeSingle();
-      if (error) throw error;
-      setAdded((a) => [...a, { location_id: data?.id, location_name: partner.partner_name, was_created: true }]);
-      setPending((p) => p.filter((x) => x.partner_id !== partner.partner_id));
-    } catch (e) {
-      setRowErr(`Couldn't add ${partner.partner_name} as a location: ${e.message}`);
-    } finally {
-      setBusyId(null);
-    }
+  // A district or Parks & Rec covers several venues, so the import makes no site
+  // for it. "Add a site" opens the ONE add-a-site form (save_site) with this
+  // partner already picked as the bigger organization, so the operator types the
+  // real venue: its name, address and district. This button used to insert a
+  // site named after the district itself, with no address and no district, so
+  // its classes skipped no holidays (Jessica 2026-11-20).
+  function addSiteFor(partner) {
+    onClose();
+    navigate(`/admin/schools?add=site&umbrella=${encodeURIComponent(partner.partner_id)}`);
   }
 
   return (
@@ -1123,13 +1106,12 @@ function DoneStep({ result, orgId, onClose }) {
       {pending.length > 0 && (
         <div style={{ marginTop: 12, border: `1px solid ${RULE}`, borderRadius: 8, padding: 14 }}>
           <p style={{ margin: '0 0 4px', fontSize: 14, fontWeight: 700, color: INK }}>
-            Add a location for these?
+            Add a site for these?
           </p>
           <p style={{ margin: '0 0 10px', fontSize: 12.5, color: MUTED, lineHeight: 1.5 }}>
             A district or Parks &amp; Rec usually covers several sites, so we didn’t guess.
-            Add the specific venue where you’ll run programs — or skip and add them later under Locations.
+            Add each school or venue where you’ll run classes, or add them later under Locations.
           </p>
-          {rowErr && <div style={{ background: `${RED}1A`, color: RED, padding: 8, borderRadius: 6, fontSize: 12.5, marginBottom: 8 }}>{rowErr}</div>}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {pending.map((p) => (
               <div key={p.partner_id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, background: CREAM, border: `1px solid ${RULE}`, borderRadius: 6, padding: '8px 10px' }}>
@@ -1139,21 +1121,15 @@ function DoneStep({ result, orgId, onClose }) {
                 </span>
                 <button
                   type="button"
-                  disabled={busyId === p.partner_id}
-                  onClick={() => addAsLocation(p)}
-                  style={{ padding: '5px 12px', background: '#fff', color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontSize: 12.5, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', whiteSpace: 'nowrap', opacity: busyId === p.partner_id ? 0.6 : 1 }}
-                >{busyId === p.partner_id ? 'Adding…' : 'Add as location'}</button>
+                  onClick={() => addSiteFor(p)}
+                  style={{ padding: '5px 12px', background: '#fff', color: BRIGHT, border: `1px solid ${BRIGHT}`, borderRadius: 6, fontSize: 12.5, fontWeight: 600, fontFamily: 'inherit', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                >Add a site</button>
               </div>
             ))}
           </div>
         </div>
       )}
 
-      {added.length > 0 && (
-        <div style={{ marginTop: 10, fontSize: 12.5, color: OK }}>
-          ✓ Added {added.length} more location{added.length === 1 ? '' : 's'}.
-        </div>
-      )}
 
       {/* What this unlocks */}
       {hasUsableLocations && (

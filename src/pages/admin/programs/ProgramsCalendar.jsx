@@ -35,6 +35,7 @@ import { buildCatalogUrl } from "../../../lib/regLinks.js";
 import { WAITLIST_STATUS } from "../../../lib/waitlistState.js";
 import { enrolledSeats, enrollmentBreakdown } from "../../../lib/enrollmentSummary.js";
 import { fetchOrgTerms, formatTermLabel } from "../../../lib/terms.js";
+import { isTermOnSale } from "../../../lib/classSeasons.js";
 import { getPermissions } from "../../../lib/permissions.js";
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 // Only the two helpers this file does not already have of its own. Its local
@@ -1187,7 +1188,10 @@ export default function ProgramsCalendar() {
         </Suspense>
       )}
       {term && termsLoaded && (
-        activeTerm === term ? (
+        // On sale = the one open season for a provider who switches seasons by
+        // hand (the old activeTerm === term), or the open season plus the next
+        // three for one whose classes follow their dates (classSeasons.js).
+        isTermOnSale({ active_registration_term: activeTerm, classes_follow_dates: org?.classes_follow_dates }, term) ? (
           // Honest state: a term can be "open for registration" while the org has
           // no Stripe account connected — the page takes sign-ups but the money
           // has nowhere of theirs to land. Saying a plain green "open" there tells
@@ -1214,6 +1218,14 @@ export default function ProgramsCalendar() {
               ✓ {formatTermLabel(term)} is open for registration — this is what parents see.
             </div>
           )
+        ) : org?.classes_follow_dates === true ? (
+          // No switch to offer: this provider's open season moves on its own.
+          // Off sale here means the season is over or more than a year out.
+          <div style={{ ...registrationBanner, background: "#fff8ec", borderColor: "#f0dfb8", color: AMBER }}>
+            <span>
+              Families don&apos;t see {formatTermLabel(term)} classes. They see classes from this season through the next year.
+            </span>
+          </div>
         ) : (
           <div style={{ ...registrationBanner, background: "#fff8ec", borderColor: "#f0dfb8", color: AMBER }}>
             <span>

@@ -24,6 +24,7 @@ import { allChoices, offeredChoices, DEFAULT_OFFERED } from "../../lib/dismissal
 import { buildRegUrl } from "../../lib/regLinks.js";
 import { formatDayLabel, isCampProgram } from "../../lib/programSchedule.js";
 import { questionAppliesToCart, ENROLLMENT_SCOPES } from "../../lib/registrationFields.js";
+import { onSaleTerms } from "../../lib/classSeasons.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -409,7 +410,10 @@ export default function RegistrationQuestions() {
       // it a Mon-Thu camp reads "(Mondays)" in both pickers.
       .select("id, curriculum, day_of_week, class_days, session_count, status, runs_own_registration")
       .eq("organization_id", org.id)
-      .eq("term", org.active_registration_term || "")
+      // The seasons families can buy (classSeasons.onSaleTerms): the open one,
+      // plus the next three for a provider whose classes follow their dates.
+      // Camps carry a term too and are listed from these seasons, as before.
+      .in("term", onSaleTerms(org).length ? onSaleTerms(org) : [""])
       .order("curriculum")
       .then(({ data: progs }) => {
         // Same staleness guard the questions query gets above. Without it, a

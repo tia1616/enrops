@@ -72,6 +72,8 @@ export default function SchoolsList() {
   const [showInactive, setShowInactive] = useState(false);
   const [expanded, setExpanded] = useState(new Set());               // umbrella partner ids expanded
   const [adding, setAdding] = useState(false);
+  // The umbrella partner a deep-linked add starts on; "" for a plain add.
+  const [addUmbrellaId, setAddUmbrellaId] = useState("");
   const [importing, setImporting] = useState(false);
   const [findingAddresses, setFindingAddresses] = useState(false);
   const [selectedPartner, setSelectedPartner] = useState(null);
@@ -283,6 +285,23 @@ export default function SchoolsList() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, partners, locations]);
 
+  // Deep link: /admin/schools?add=site&umbrella=<partner id> opens the add form
+  // with that umbrella partner picked (the contact import's "Add a site").
+  // Same wait-for-the-row rule as ?edit above: the import navigates here while
+  // its reload is still in flight, so keep the params until the partner arrives.
+  useEffect(() => {
+    if (searchParams.get("add") !== "site" || partners === null) return;
+    const umbrella = searchParams.get("umbrella") || "";
+    if (umbrella && !(partners ?? []).some((x) => x.id === umbrella)) return;
+    setAddUmbrellaId(umbrella);
+    setAdding(true);
+    const next = new URLSearchParams(searchParams);
+    next.delete("add");
+    next.delete("umbrella");
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, partners]);
+
   async function openPartnerById(partnerId) {
     const { data: fresh } = await supabase.from("partners")
       .select("id, partner_name, partner_type, location_area, locations_managed, marketing_notes, invoicing_notes, planning_notes, implementation_notes, other_notes, inactive")
@@ -483,10 +502,12 @@ export default function SchoolsList() {
         <AddSchoolModal
           org={org} districts={districts} partners={(partners ?? [])}
           districtsWarning={districtLoadError}
-          onClose={() => setAdding(false)}
+          initialUmbrellaPartnerId={addUmbrellaId}
+          onClose={() => { setAdding(false); setAddUmbrellaId(""); }}
           onDistrictsChanged={loadDistricts}
           onCreated={async ({ partnerId, locationId }) => {
             setAdding(false);
+            setAddUmbrellaId("");
             await loadDistricts();
             await load();
             // No partner = a studio (the "at a school" box was unticked): open

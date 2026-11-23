@@ -79,7 +79,10 @@ export default function PublicLayout() {
         // view returning America/Los_Angeles on each. No migration precedes this
         // one. (Checking the table instead proves nothing: the table has no
         // support_email at all, which is how the view got overlooked once already.)
-        .select('id, slug, name, logo_url, status, active_registration_term, instructor_pay_model, stripe_charges_enabled, support_email, timezone')
+        // classes_follow_dates: view column added by 20261123e, which must be on
+        // an environment BEFORE this read ships there (an unknown column fails
+        // the whole read, and this is the catalog).
+        .select('id, slug, name, logo_url, status, active_registration_term, instructor_pay_model, stripe_charges_enabled, support_email, timezone, classes_follow_dates')
         .eq('slug', slug)
         .maybeSingle();
       if (cancelled) return;

@@ -25,6 +25,7 @@ import PriceTierField from "../../../components/PriceTierField.jsx";
 // which imports nothing - terms.js pulls in the supabase client, so anything
 // defined there cannot be unit-tested by the repo's plain-node runner.
 import { campTermForDate, firstMeetingDayOnOrAfter, campDayMismatchMessage } from "../../../lib/programSchedule.js";
+import { classTermFor, isTermOnSale } from "../../../lib/classSeasons.js";
 import ShareProgram from "../../../components/ShareProgram.jsx";
 import FamiliesPayNote, { useOrgFeeConfig } from "../../../components/FamiliesPayNote.jsx";
 import ProgramSteps from "../../../components/ProgramSteps.jsx";
@@ -301,9 +302,24 @@ export default function QuickProgramBuilder() {
   const campFirstMeetingDay = firstMeetingDayOnOrAfter(startDate, campDays);
   // Falls back to the active term only when there is no first day yet - the form
   // cannot be submitted in that state, so it never reaches a saved row.
+  // A weekly or one-off class: for a provider whose classes follow their dates
+  // (every self-serve signup, classes_follow_dates), the season of the class's
+  // first day, so a class starting in January is filed under Winter and not the
+  // open Fall (Jessica 2026-11-20). For a provider who switches seasons by hand,
+  // the open season, as before. One rule: classSeasons.classTermFor.
+  // The class's real first meeting: a weekly class meets on its weekday on or
+  // after the typed start (a Saturday start for a Tuesday class first meets the
+  // Tuesday after, which can be in the next season). `day`, not effectiveDay:
+  // effectiveDay is declared further down and reading it here would crash every
+  // render (component TDZ).
+  const classFirstMeetingDay = isOneOff
+    ? (startDate || null)
+    : (firstMeetingDayOnOrAfter(startDate, day ? [day] : []) || startDate || null);
   const effectiveTerm = mode === "camp"
     ? (campTermForDate(campFirstMeetingDay) || org.active_registration_term)
-    : org.active_registration_term;
+    : classTermFor(org, classFirstMeetingDay);
+  // Whether families can buy this class the moment it is published.
+  const classOnSale = isTermOnSale(org, effectiveTerm);
   // A camp is the same thing to an operator - something families register for -
   // that happens on several days of ONE week instead of one day a week. It writes
   // a PROGRAM, like every other mode here: the date functions learned to walk
@@ -1637,7 +1653,7 @@ export default function QuickProgramBuilder() {
             // out-of-term heading is for classes only. "Live" would otherwise
             // contradict the line underneath, which tells a class's operator
             // families cannot see it until that term opens.
-            : !isCamp && effectiveTerm && effectiveTerm !== org.active_registration_term
+            : !isCamp && effectiveTerm && !classOnSale
               ? `Saved to ${formatTermLabel(effectiveTerm)}.`
               : `Your ${isCamp ? "camp" : "program"} is live.`}
         </div>
@@ -1693,7 +1709,13 @@ export default function QuickProgramBuilder() {
                 out-of-term wording below is for CLASSES only - saying it about a
                 camp would tell the operator to sit on a link that already
                 works. */}
-            {!isCamp && effectiveTerm && effectiveTerm !== org.active_registration_term ? (
+            {!isCamp && effectiveTerm && !classOnSale && org.classes_follow_dates === true ? (
+              <>
+                Saved to {formatTermLabel(effectiveTerm)}. Families see classes from
+                this season through the next year, so they&apos;ll see this one once
+                its dates are within that window.
+              </>
+            ) : !isCamp && effectiveTerm && !classOnSale ? (
               <>
                 Saved to {formatTermLabel(effectiveTerm)}. Your registration page is
                 showing {formatTermLabel(org.active_registration_term)} right now, so

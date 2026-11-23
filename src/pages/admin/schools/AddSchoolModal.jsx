@@ -57,7 +57,7 @@ function parseCity(address) {
   return m ? m[1].trim() : "";
 }
 
-export default function AddSchoolModal({ org, districts = [], partners = [], onClose, onCreated, onDistrictsChanged, districtsWarning = "" }) {
+export default function AddSchoolModal({ org, districts = [], partners = [], onClose, onCreated, onDistrictsChanged, districtsWarning = "", initialUmbrellaPartnerId = "" }) {
   const [name, setName] = useState("");
   const [type, setType] = useState("public_school");
   const [address, setAddress] = useState("");
@@ -69,11 +69,18 @@ export default function AddSchoolModal({ org, districts = [], partners = [], onC
   // assumed. Starts ticked for partner-first orgs (J2S, Jeff: every site has
   // been a partner site) and for a self-serve provider who said they go out to
   // sites; unticked for a studio.
+  // initialUmbrellaPartnerId: opened from the contact import's "Add a site" for
+  // a district or Parks & Rec it just imported. Starts on "belongs to a bigger
+  // organization" with that partner picked, so the operator only types the
+  // real venue's name, address and district (Jessica 2026-11-20: the import
+  // used to save a site named after the district itself, with nothing else).
   const [atPartner, setAtPartner] = useState(
-    org?.venue_model === "own_venue" ? org?.venue_answer === "goes_to_sites" : true,
+    initialUmbrellaPartnerId
+      ? true
+      : org?.venue_model === "own_venue" ? org?.venue_answer === "goes_to_sites" : true,
   );
-  const [umbrellaMode, setUmbrellaMode] = useState(false);
-  const [umbrellaPartnerId, setUmbrellaPartnerId] = useState("");
+  const [umbrellaMode, setUmbrellaMode] = useState(!!initialUmbrellaPartnerId);
+  const [umbrellaPartnerId, setUmbrellaPartnerId] = useState(initialUmbrellaPartnerId || "");
   const [newUmbrellaName, setNewUmbrellaName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
