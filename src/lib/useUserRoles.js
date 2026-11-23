@@ -22,8 +22,20 @@ export async function getUserRoles(userId) {
     supabase.from('instructors').select('id').eq('auth_user_id', userId).eq('is_active', true).limit(1).maybeSingle(),
     supabase.from('org_members').select('id, organization_id').eq('auth_user_id', userId).not('accepted_at', 'is', null).limit(1).maybeSingle(),
   ]);
+  // A family record on this user's address that isn't linked yet: claim it
+  // here, not only on the family dashboard. Linking happens ONLY at sign-in
+  // (20261123c withdrew linking by a typed address), and an admin or instructor
+  // who registers their own child lands on /admin or /instructor - so without
+  // this, the switcher never offers "Family" and they never reach the dashboard
+  // that would have claimed it. claim_parent_record links by the CALLER's own
+  // proven login email and returns null for everyone else.
+  let parentId = p?.id ?? null;
+  if (!parentId) {
+    const { data: claimedId } = await supabase.rpc('claim_parent_record');
+    parentId = claimedId ?? null;
+  }
   return {
-    isParent: !!p,
+    isParent: !!parentId,
     isInstructor: !!i,
     isAdmin: !!m,
     // WHICH org they administer. isAdmin alone is org-agnostic, so a provider

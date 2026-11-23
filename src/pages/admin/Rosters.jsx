@@ -40,6 +40,7 @@ import { sortRosterPrograms, filterRosterPrograms } from "./rosterSearch.js";
 import { sortRosterRows, isOnRoster } from "../../lib/rosterOrder.js";
 import { usePermissions } from "../../lib/permissions.js";
 import { requireWritten, isWriteRefused } from "../../lib/writeGuard.js";
+import { PARENT_EMAIL_TAKEN_ON_ROSTER, isParentEmailTaken } from "../../lib/parentEmailTaken.js";
 import { WAITLIST_STATUS } from "../../lib/waitlistState.js";
 import WaitingList from "../../components/WaitingList.jsx";
 import EmailRosterModal from "./EmailRosterModal";
@@ -1306,8 +1307,15 @@ function CamperEditForm({ registration, orgId, canEdit = false, onCancel, onSave
         "this student's details",
       );
 
-      // Parent: update existing or create new
-      if (emptyOrNull(form.parent_email)) {
+      // Parent: update existing or create new.
+      //
+      // An email already on ANOTHER family's record is not a crash: the student
+      // fields above are written, the registration notes below still should be,
+      // and the operator needs to know exactly which part did not land. So that
+      // one refusal is caught here and reported after the rest is saved; every
+      // other error still aborts as before.
+      let emailTaken = false;
+      if (emptyOrNull(form.parent_email)) try {
         const parentFields = {
           first_name: emptyOrNull(form.parent_first) ?? "",
           last_name: emptyOrNull(form.parent_last) ?? "",
@@ -1343,6 +1351,9 @@ function CamperEditForm({ registration, orgId, canEdit = false, onCancel, onSave
             .insert({ parent_id: newParent.id, organization_id: orgId });
           if (relErr) console.error("[CamperEditForm] parent_org_rel failed", relErr);
         }
+      } catch (pe) {
+        if (!isParentEmailTaken(pe)) throw pe;
+        emailTaken = true;
       }
 
       requireWritten(
@@ -1353,6 +1364,13 @@ function CamperEditForm({ registration, orgId, canEdit = false, onCancel, onSave
           .select("id"),
         "the registration notes",
       );
+      if (emailTaken) {
+        // The form stays open on purpose: the operator's typed parent details are
+        // still in it, and closing would read as "all saved".
+        setErr(PARENT_EMAIL_TAKEN_ON_ROSTER);
+        setBusy(false);
+        return;
+      }
       if (onSaved) onSaved();
     } catch (e) {
       console.error("[CamperEditForm] save failed", e);
