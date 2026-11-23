@@ -218,6 +218,11 @@ verify_jwt = false
 [functions.review-rate]
 verify_jwt = false
 
+# Public: the tracked Google review button in a review ask. Records the click
+# (HMAC-gated) and redirects to organizations.google_review_url.
+[functions.review-go]
+verify_jwt = false
+
 [functions.checkr-webhook]
 verify_jwt = false
 

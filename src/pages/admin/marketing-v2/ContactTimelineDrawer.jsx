@@ -410,6 +410,82 @@ async function fetchPartner(contact) {
 
 // ─── Drawer ──────────────────────────────────────────────────────────────────
 
+// Staff / instructor / owner household. Google does not allow reviews from a
+// business's own people, so the review ask skips any household flagged here.
+// Instructors are also skipped automatically (by email) without a flag.
+const HOUSEHOLD_FLAGS = [
+  ["", "A family"],
+  ["staff", "Staff household"],
+  ["instructor", "Instructor household"],
+  ["owner", "Owner household"],
+];
+
+function HouseholdFlag({ email, orgId }) {
+  const key = low(email);
+  const [flag, setFlag] = useState(null); // null = loading
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState(null); // { tone, text }
+  useEffect(() => {
+    if (!key || !orgId) return;
+    let alive = true;
+    (async () => {
+      const { data, error } = await supabase
+        .from("org_household_flags").select("flag").eq("organization_id", orgId).eq("email", key).maybeSingle();
+      if (!alive) return;
+      if (error) { setMsg({ tone: "negative", text: `Couldn't load: ${error.message}` }); setFlag(""); return; }
+      setFlag(data?.flag ?? "");
+    })();
+    return () => { alive = false; };
+  }, [key, orgId]);
+
+  async function change(next) {
+    const prev = flag;
+    setFlag(next);
+    setSaving(true);
+    setMsg(null);
+    try {
+      if (next) {
+        const { data, error } = await supabase
+          .from("org_household_flags")
+          .upsert({ organization_id: orgId, email: key, flag: next }, { onConflict: "organization_id,email" })
+          .select("flag").maybeSingle();
+        if (error) throw error;
+        if (!data) throw new Error("Not saved. You may not have permission to change this.");
+      } else {
+        const { error } = await supabase
+          .from("org_household_flags").delete().eq("organization_id", orgId).eq("email", key);
+        if (error) throw error;
+      }
+      setMsg({ tone: "positive", text: next ? "Saved. Review asks will skip this household." : "Saved. This household gets review asks like everyone else." });
+    } catch (e) {
+      setFlag(prev);
+      setMsg({ tone: "negative", text: e.message ?? "Couldn't save." });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!key) return null;
+  return (
+    <div style={{ padding: "12px 20px", borderBottom: `1px solid ${RULE}`, background: CREAM }}>
+      <label style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: INK }}>
+        <span style={{ fontWeight: 700 }}>This is</span>
+        <select
+          value={flag ?? ""}
+          disabled={flag === null || saving}
+          onChange={(e) => change(e.target.value)}
+          style={{ padding: "5px 8px", fontSize: 13, border: `1px solid ${RULE}`, borderRadius: 6, background: "#fff", color: INK }}
+        >
+          {HOUSEHOLD_FLAGS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </select>
+      </label>
+      <div style={{ fontSize: 11, color: msg ? (TONE[msg.tone] ?? MUTED) : MUTED, marginTop: 6, lineHeight: 1.4 }}>
+        {msg?.text ?? "Staff, instructor and owner households never get a review ask. Instructors are skipped automatically."}
+      </div>
+    </div>
+  );
+}
+
 export default function ContactTimelineDrawer({ audience, contact, contactLabel, orgId, onClose }) {
   const [events, setEvents] = useState(null); // null = loading
   const [err, setErr] = useState(null);
@@ -453,6 +529,7 @@ export default function ContactTimelineDrawer({ audience, contact, contactLabel,
           </div>
           <button type="button" onClick={onClose} style={{ background: "transparent", border: "none", color: MUTED, fontSize: 20, cursor: "pointer", lineHeight: 1 }} aria-label="Close">✕</button>
         </div>
+        {audience === "families" && contact?.email && <HouseholdFlag email={contact.email} orgId={orgId} />}
 
         <div style={{ flex: 1, overflowY: "auto", padding: "16px 20px" }}>
           {events === null ? (

@@ -24,6 +24,7 @@ import { isOptOutAutomation } from "../../../lib/entitlements.js";
 import { buildRegUrl, PUBLIC_SITE } from "../../../lib/regLinks.js";
 import { buildTestSources } from "../../../lib/automationTestSources.js";
 import { PLATFORM_FOOTER_TEXT, platformFooterUrl, surfaceForAutomation } from "../../../components/PlatformFooterLine.jsx";
+import { ReviewAskSettings, ReviewAskResults, reviewSettingsFrom } from "./ReviewAskPanel.jsx";
 
 // Decode the common HTML entities operators might type or paste into a
 // plain-text input. The big one is &mdash; in subjects — subjects don't
@@ -74,7 +75,13 @@ const TOKENS_BY_TEMPLATE_KEY = {
   // pasted "Your review link" field below rather than replacing it, since a
   // contact-only tenant (no registrations at all) can't use these and still
   // needs a plain link.
-  review_request:         ["first_name", "child_first_name", "org_name", "sender_name", "review_rate_url_1", "review_rate_url_2", "review_rate_url_3", "review_rate_url_4", "review_rate_url_5"],
+  // 2026-11-24: the star links are retired from the picker (the ask is one
+  // Google button now). The cron still renders {{review_rate_url_N}} so an old
+  // body keeps working. {{review_link_url}} = the tracked Google button;
+  // {{program_name}} resolves when the ask is sent off the last session.
+  review_request:         ["first_name", "child_first_name", "program_name", "org_name", "sender_name", "review_link_url"],
+  // check_in_camp: the evening of camp day one. Siblings named together.
+  check_in_camp:          ["first_name", "child_first_name", "program_name", "location_name", "org_name", "sender_name"],
   // no_school_day: program-centric (no child name — a parent may have several
   // kids in one class). {{no_school_dates}} = the affected class day(s);
   // {{no_school_reason}} = why (falls back to "a no-school day" if blank).
@@ -113,6 +120,7 @@ const TEST_SOURCE_BY_TEMPLATE_KEY = {
   welcome_camp: "camps",
   welcome_afterschool: "afterschool",
   check_in: "afterschool",
+  check_in_camp: "camps",
   mid_recap: "both",
   final_recap: "both",
 };
@@ -408,7 +416,61 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
   // has 5 anchors, not 1, and this field's single-anchor replace would
   // silently clobber one of them the moment an operator touched it.
   const currentReviewBody = automation?.body_override ?? template.default_body;
-  const isReviewLink = template.key === "review_request" && !usesStarLinkTokens(currentReviewBody);
+  // Also OFF for the one-button design: {{review_link_url}} is filled per family
+  // by the cron, and the Google link itself lives in Review ask settings below.
+  const isReviewLink = template.key === "review_request"
+    && !usesStarLinkTokens(currentReviewBody)
+    && !/\{\{review_link_url\}\}/.test(currentReviewBody || "");
+
+  // ── Review ask (review_request) ──────────────────────────────────────────
+  // Two wordings: families who finished, and withdrawn/refunded. subject/body
+  // always hold the variant ON SCREEN; the other one waits in otherCopy, and
+  // switching swaps them. Save reads each from wherever it is right now.
+  const isReviewAsk = template.key === "review_request";
+  const hasWithdrawnCopy = isReviewAsk && template.default_withdrawn_body != null;
+  const [variant, setVariant] = useState("standard"); // "standard" | "withdrawn"
+  const [otherCopy, setOtherCopy] = useState({
+    subject: automation?.withdrawn_subject_override ?? template.default_withdrawn_subject ?? "",
+    body: automation?.withdrawn_body_override ?? template.default_withdrawn_body ?? "",
+  });
+  function switchVariant(next) {
+    if (next === variant) return;
+    const showing = { subject, body };
+    setSubject(otherCopy.subject);
+    setBody(otherCopy.body);
+    setOtherCopy(showing);
+    setEditingBody(false);
+    setVariant(next);
+  }
+  // After a reset the families wording is back on screen, so the parked copy
+  // is the withdrawn default.
+  function resetWithdrawnCopyState() {
+    setVariant("standard");
+    setOtherCopy({ subject: template.default_withdrawn_subject ?? "", body: template.default_withdrawn_body ?? "" });
+  }
+  const stdSubject = variant === "standard" ? subject : otherCopy.subject;
+  const stdBody = variant === "standard" ? body : otherCopy.body;
+  const wdSubject = variant === "withdrawn" ? subject : otherCopy.subject;
+  const wdBody = variant === "withdrawn" ? body : otherCopy.body;
+  const variantParam = isReviewAsk && variant === "withdrawn" ? "withdrawn" : undefined;
+
+  // Settings that are not the wording. The Google link is an ORG field
+  // (organizations.google_review_url); loaded here, saved with the editor.
+  const [reviewSettings, setReviewSettings] = useState(() => reviewSettingsFrom(automation, ""));
+  const [savedReviewSettings, setSavedReviewSettings] = useState(() => reviewSettingsFrom(automation, ""));
+  useEffect(() => {
+    if (!isReviewAsk || !orgId) return;
+    let alive = true;
+    (async () => {
+      const { data } = await supabase.from("organizations").select("google_review_url").eq("id", orgId).maybeSingle();
+      if (!alive) return;
+      const url = data?.google_review_url ?? "";
+      setReviewSettings((s) => ({ ...s, googleUrl: url }));
+      setSavedReviewSettings((s) => ({ ...s, googleUrl: url }));
+    })();
+    return () => { alive = false; };
+  }, [isReviewAsk, orgId]);
+  const reviewOffLastSession = isReviewAsk && reviewSettings.trigger === "days_after_last_session";
   const [reviewLink, setReviewLink] = useState(
     isReviewLink ? extractReviewUrl(currentReviewBody) : "",
   );
@@ -442,7 +504,9 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
   const audienceParam = audience === "instructor" ? "instructor" : undefined;
   // Also render server-side (which draws the Download buttons) whenever the email
   // has attachments, so the preview shows exactly where the button lands.
-  const wantsServerPreview = realSourceSelected || isTwoAudience || (emailAttachments?.length > 0);
+  // The review ask always renders server-side too: the button's link and the
+  // withdrawn wording only exist in the real pipeline.
+  const wantsServerPreview = realSourceSelected || isTwoAudience || isReviewAsk || (emailAttachments?.length > 0);
 
   useEffect(() => {
     if (!sourceType || !orgId) return;
@@ -514,6 +578,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
               test_camp_session_id: srcType === "camp" ? srcId : null,
               test_program_id: srcType === "program" ? srcId : null,
               audience: audienceParam,
+              variant: variantParam,
             },
           },
         );
@@ -530,7 +595,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       }
     }, 500);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [wantsServerPreview, realSourceSelected, selectedSource, subject, body, emailAttachments, orgId, template.key, audienceParam]);
+  }, [wantsServerPreview, realSourceSelected, selectedSource, subject, body, emailAttachments, orgId, template.key, audienceParam, variantParam]);
 
   function toggleBodyEdit() {
     if (editingBody) {
@@ -650,9 +715,22 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
   }, [showingServerPreview, serverPreview, previewHtml]);
 
   const tokens = TOKENS_BY_TEMPLATE_KEY[template.key] ?? [];
-  const hasOverride = (automation?.subject_override != null) || (automation?.body_override != null) || (automation?.timing_override != null) || ((Array.isArray(automation?.email_attachments) ? automation.email_attachments.length : 0) > 0);
-  const subjectDirty = subject !== (automation?.subject_override ?? template.default_subject);
-  const bodyDirty = body !== (automation?.body_override ?? template.default_body);
+  const hasOverride = (automation?.subject_override != null) || (automation?.body_override != null) || (automation?.timing_override != null) ||
+    (automation?.withdrawn_subject_override != null) || (automation?.withdrawn_body_override != null) || ((Array.isArray(automation?.email_attachments) ? automation.email_attachments.length : 0) > 0);
+  // stdSubject/stdBody = the families-who-finished wording wherever it is right
+  // now (on screen, or parked while the withdrawn wording is shown). For every
+  // other template they are simply subject/body.
+  const subjectDirty = stdSubject !== (automation?.subject_override ?? template.default_subject);
+  const bodyDirty = stdBody !== (automation?.body_override ?? template.default_body);
+  const withdrawnDirty = hasWithdrawnCopy && (
+    wdSubject !== (automation?.withdrawn_subject_override ?? template.default_withdrawn_subject ?? "")
+    || wdBody !== (automation?.withdrawn_body_override ?? template.default_withdrawn_body ?? "")
+  );
+  const reviewSettingsDirty = isReviewAsk && JSON.stringify(reviewSettings) !== JSON.stringify(savedReviewSettings);
+  const googleUrlClean = reviewSettings.googleUrl.trim();
+  const googleUrlInvalid = isReviewAsk && googleUrlClean !== "" && !/^https:\/\/\S+$/i.test(googleUrlClean);
+  const replyToClean = reviewSettings.replyTo.trim();
+  const replyToInvalid = isReviewAsk && replyToClean !== "" && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(replyToClean);
   // Clamp ≥1; empty/invalid falls back to the template default. Mirrors the cron.
   const parsedTiming = hasTiming
     ? Math.max(1, parseInt(timingValue, 10) || defaultTiming || 1)
@@ -665,7 +743,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
         .sort((a, b) => String(a.id).localeCompare(String(b.id))),
     );
   const attachmentsDirty = normAtt(emailAttachments) !== normAtt(automation?.email_attachments);
-  const dirty = subjectDirty || bodyDirty || timingDirty || attachmentsDirty;
+  const dirty = subjectDirty || bodyDirty || timingDirty || attachmentsDirty || withdrawnDirty || reviewSettingsDirty;
 
   async function handleSave() {
     setSaving(true);
@@ -676,8 +754,10 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       // plain text — &mdash; would render as 7 literal chars. Bodies are
       // HTML and entities render correctly there, but decoded chars look
       // cleaner in the editor next time they open it.
-      const cleanedSubject = decodeCommonEntities(subject);
-      const cleanedBody = decodeCommonEntities(body);
+      if (googleUrlInvalid) throw new Error("The Google review link must start with https://");
+      if (replyToInvalid) throw new Error("The reply-to address doesn't look like an email address.");
+      const cleanedSubject = decodeCommonEntities(stdSubject);
+      const cleanedBody = decodeCommonEntities(stdBody);
       // Only set overrides for fields that actually differ from defaults —
       // keeps the table clean and makes "Reset" semantically simple.
       // Board sends never read subject_override (their subject is system-generated),
@@ -689,9 +769,28 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       // differs from the default (equal-to-default clears it, like subject/body).
       const patch = { subject_override: subjectOverride, body_override: bodyOverride, email_attachments: emailAttachments ?? [] };
       if (hasTiming) {
-        patch.timing_override = parsedTiming !== defaultTiming
-          ? { ...(automation?.timing_override ?? {}), [timingKey]: parsedTiming }
-          : null;
+        // Remove only THIS control's key when it equals the default; any other
+        // key in the jsonb (the review ask's days_after_last_session) survives.
+        const rest = { ...(automation?.timing_override ?? {}) };
+        delete rest[timingKey];
+        const next = parsedTiming !== defaultTiming ? { ...rest, [timingKey]: parsedTiming } : rest;
+        patch.timing_override = Object.keys(next).length ? next : null;
+      }
+      if (isReviewAsk) {
+        const lastDays = Math.max(0, Math.min(30, parseInt(reviewSettings.lastSessionDays, 10) || 0));
+        const remDays = Math.max(1, Math.min(14, parseInt(reviewSettings.reminderDays, 10) || 3));
+        const base = { ...((patch.timing_override !== undefined ? patch.timing_override : automation?.timing_override) ?? {}) };
+        base.days_after_last_session = lastDays;
+        patch.timing_override = base;
+        patch.trigger_override = reviewSettings.trigger === "days_after_last_session" ? "days_after_last_session" : null;
+        patch.reminder_days_after = reviewSettings.reminderOn ? remDays : null;
+        patch.reply_to_override = replyToClean || null;
+        if (hasWithdrawnCopy) {
+          const ws = decodeCommonEntities(wdSubject);
+          const wb = decodeCommonEntities(wdBody);
+          patch.withdrawn_subject_override = ws !== (template.default_withdrawn_subject ?? "") ? ws : null;
+          patch.withdrawn_body_override = wb !== (template.default_withdrawn_body ?? "") ? wb : null;
+        }
       }
       // Capture prior values BEFORE the upsert so we can append edit history.
       const prevSubject = automation?.subject_override ?? null;
@@ -732,6 +831,20 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
         if (insErr) throw insErr;
         result = data;
       }
+      // The Google link is the ORG's (one link, wherever a review is asked for).
+      // Written only when it changed, and checked back: a write RLS silently
+      // filters returns no row, and "Saved" must not claim a link that isn't.
+      if (isReviewAsk && googleUrlClean !== savedReviewSettings.googleUrl.trim()) {
+        const { data: orgRow, error: orgErr } = await supabase
+          .from("organizations")
+          .update({ google_review_url: googleUrlClean || null })
+          .eq("id", orgId)
+          .select("google_review_url")
+          .maybeSingle();
+        if (orgErr) throw orgErr;
+        if (!orgRow) throw new Error("The email saved, but the Google review link did not. You may not have permission to change it.");
+      }
+      if (isReviewAsk) setSavedReviewSettings({ ...reviewSettings, googleUrl: googleUrlClean, replyTo: replyToClean });
       // Append voice-signal rows for any field that actually changed. Foundation
       // for Ennie learning operator voice over time — phrases added/dropped,
       // structural changes per save. Failure here is non-fatal (the save
@@ -790,6 +903,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       // No row to reset — just revert local editor state.
       setSubject(template.default_subject);
       setBody(template.default_body);
+      resetWithdrawnCopyState();
       setEmailAttachments([]);
       if (hasTiming) setTimingValue(String(defaultTiming));
       if (isReviewLink) setReviewLink("");
@@ -802,7 +916,18 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       const prevSubject = automation?.subject_override ?? null;
       const prevBody = automation?.body_override ?? null;
       const resetPatch = { subject_override: null, body_override: null, email_attachments: [] };
-      if (hasTiming) resetPatch.timing_override = null;
+      // Reset is about the WORDING. The review ask's send settings (when, the
+      // reminder, reply-to) are left alone: resetting copy must not silently
+      // move or stop the send.
+      if (hasTiming) {
+        const keep = { ...(automation?.timing_override ?? {}) };
+        delete keep[timingKey];
+        resetPatch.timing_override = Object.keys(keep).length ? keep : null;
+      }
+      if (hasWithdrawnCopy) {
+        resetPatch.withdrawn_subject_override = null;
+        resetPatch.withdrawn_body_override = null;
+      }
       const { data, error: upErr } = await supabase
         .from("automations")
         .update(resetPatch)
@@ -812,6 +937,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       if (upErr) throw upErr;
       setSubject(template.default_subject);
       setBody(template.default_body);
+      resetWithdrawnCopyState();
       setEmailAttachments([]);
       if (hasTiming) setTimingValue(String(defaultTiming));
       if (isReviewLink) setReviewLink("");
@@ -863,6 +989,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
             test_camp_session_id: srcType === "camp" ? srcId : null,
             test_program_id: srcType === "program" ? srcId : null,
             audience: audienceParam,
+            variant: variantParam,
           },
         },
       );
@@ -870,7 +997,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       if (data?.ok === false) {
         throw new Error(data?.error ?? "Send failed");
       }
-      setSuccess(`Test sent to ${testEmail}${isTwoAudience ? ` (${audience === "instructor" ? "instructor" : "families"} version)` : ""}. Check your inbox.`);
+      setSuccess(`Test sent to ${testEmail}${isTwoAudience ? ` (${audience === "instructor" ? "instructor" : "families"} version)` : ""}${isReviewAsk ? ` (${variant === "withdrawn" ? "withdrawn or refunded" : "families who finished"} version)` : ""}. Check your inbox.`);
     } catch (e) {
       setError(e?.message ?? "Test send failed — try again");
     } finally {
@@ -917,6 +1044,36 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
                 {audience === "instructor"
                   ? "Instructors get a fixed, tailored heads-up (not editable here). The preview and test below show that version."
                   : "The subject and message below are the family version. Instructors get a matching heads-up — flip the toggle to preview it."}
+              </p>
+            </div>
+          )}
+          {isReviewAsk && <ReviewAskResults orgId={orgId} />}
+          {isReviewAsk && <ReviewAskSettings value={reviewSettings} onChange={setReviewSettings} />}
+          {hasWithdrawnCopy && (
+            <div style={{ marginBottom: 16 }}>
+              <span style={{ display: "block", fontSize: 12, fontWeight: 700, color: INK, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>
+                Wording for
+              </span>
+              <div style={{ display: "inline-flex", border: `1px solid ${RULE}`, borderRadius: 8, overflow: "hidden" }}>
+                {[["standard", "Families who finished"], ["withdrawn", "Withdrawn or refunded"]].map(([val, lbl]) => (
+                  <button
+                    key={val}
+                    type="button"
+                    onClick={() => switchVariant(val)}
+                    style={{
+                      padding: "8px 16px", fontSize: 13, fontWeight: 600, border: "none",
+                      cursor: "pointer", background: variant === val ? PURPLE : "#fff",
+                      color: variant === val ? "#fff" : MUTED,
+                    }}
+                  >
+                    {lbl}
+                  </button>
+                ))}
+              </div>
+              <p style={{ margin: "6px 0 0", fontSize: 11, color: MUTED, lineHeight: 1.4 }}>
+                {variant === "withdrawn"
+                  ? "Families who withdrew or were refunded get this version. Same button, same reply line."
+                  : "Every family who was in the class gets this. Withdrawn and refunded families get their own version: switch to see it."}
               </p>
             </div>
           )}
@@ -1205,7 +1362,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
           )}
 
           {/* Timing — for templates with an editable days_after or days_before offset */}
-          {hasTiming && (
+          {hasTiming && !reviewOffLastSession && (
             <div style={{ marginBottom: 24 }}>
               <span style={{ display: "block", fontSize: 12, fontWeight: 700, color: INK, textTransform: "uppercase", letterSpacing: 1, marginBottom: 6 }}>
                 Timing

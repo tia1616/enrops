@@ -67,6 +67,10 @@ import {
   type WelcomeWindow,
 } from "./welcomeWindow.ts";
 import { claimSend, loadPriorSends, type PriorSend } from "./sendLedger.ts";
+import {
+  EVENING_HOUR, eveningDue, plusDays, groupReviewFamilies, reviewAskContextKey,
+  reviewReminderContextKey, reminderSubject, type ReviewCandidateRow,
+} from "./reviewAsk.ts";
 import { venueLabel } from "../_shared/roomLabel.ts";
 import { runWaitlistSweep } from "./waitlistSweep.ts";
 import { offeringIdOf, buildResolvedIndex, isGenuinelyAbandoned } from "./abandonedSuppression.ts";
@@ -146,6 +150,10 @@ interface TemplateRow {
   // Who the automation is addressed to. Drives whether the platform
   // attribution line renders (parents/partners yes, instructors no).
   audience: string | null;
+  // Copy for a withdrawn / refunded registration (review_request). NULL for
+  // every template without a second wording.
+  default_withdrawn_subject?: string | null;
+  default_withdrawn_body?: string | null;
 }
 
 interface AutomationRow {
@@ -158,6 +166,14 @@ interface AutomationRow {
   timing_override: Record<string, unknown> | null;
   enabled_at: string | null;
   email_attachments: unknown; // jsonb: [{ id, attach }]
+  // NULL = template.trigger_type. Read through effectiveTrigger(), never directly.
+  trigger_override?: string | null;
+  // NULL = org default reply-to.
+  reply_to_override?: string | null;
+  withdrawn_subject_override?: string | null;
+  withdrawn_body_override?: string | null;
+  // Reminder N days after a review ask to families with no click. NULL = off.
+  reminder_days_after?: number | null;
   template: TemplateRow;
   // timezone drives what "today" means for this org's audience windows — a
   // sweep runs at every hour of the day, so UTC is not good enough.
@@ -179,6 +195,7 @@ interface TestSendParams {
   // the tailored instructor copy; anything else = the parent (default) copy.
   audience?: "parent" | "instructor";
   preview_attachments?: unknown; // DRAFT email_attachments jsonb, so the test send matches the editor
+  variant?: "withdrawn";
 }
 
 interface TestSendResult {
@@ -196,6 +213,7 @@ interface PreviewParams {
   test_program_id: string | null;
   audience?: "parent" | "instructor";
   preview_attachments?: unknown; // DRAFT email_attachments jsonb, so the preview matches the editor
+  variant?: "withdrawn";
 }
 
 interface PreviewResult {
@@ -268,6 +286,13 @@ interface AudienceEntry {
   review_rate_url_3?: string;
   review_rate_url_4?: string;
   review_rate_url_5?: string;
+  // ── review ask (days_after_last_session) only ──
+  // drives {{review_link_url}}: the tracked review-go link for this family's ask.
+  review_link_url?: string;
+  // The review_asks rows this email covers, stamped asked_at / reminded_at by
+  // sendOne after a successful send.
+  review_ask_ids?: string[];
+  review_ask_mark?: "asked" | "reminded";
   // ── class_photos only ──
   // drives {{photos_url}}: the family's Photos tab in the parent portal. The
   // photos themselves are never in the email; the portal visit is the point.
@@ -340,6 +365,7 @@ serve(async (req) => {
     try {
       const body = await req.json().catch(() => ({}));
       const parsedAudience = body?.audience === "instructor" ? "instructor" : undefined;
+      const parsedVariant = body?.variant === "withdrawn" ? "withdrawn" as const : undefined;
       if (body?.mode === "test_send") {
         testSendParams = {
           organization_id: body.organization_id,
@@ -351,6 +377,7 @@ serve(async (req) => {
           test_program_id: typeof body.test_program_id === "string" ? body.test_program_id : null,
           audience: parsedAudience,
           preview_attachments: body.preview_attachments,
+          variant: parsedVariant,
         };
       } else if (body?.mode === "preview") {
         previewParams = {
@@ -362,6 +389,7 @@ serve(async (req) => {
           test_program_id: typeof body.test_program_id === "string" ? body.test_program_id : null,
           audience: parsedAudience,
           preview_attachments: body.preview_attachments,
+          variant: parsedVariant,
         };
       } else if (typeof body?.registration_id === "string") {
         eventRegistrationId = body.registration_id;
@@ -452,10 +480,11 @@ serve(async (req) => {
     .from("automations")
     .select(`
       id, organization_id, template_id, enabled, subject_override, body_override, timing_override, enabled_at, email_attachments,
+      trigger_override, reply_to_override, withdrawn_subject_override, withdrawn_body_override, reminder_days_after,
       template:automation_templates!inner (
         id, key, display_name, trigger_type, applies_to_program_type, mailing_type,
         default_subject, default_body, default_timing, time_saved_minutes_per_send, is_v1_enabled,
-        audience
+        audience, default_withdrawn_subject, default_withdrawn_body
       ),
       org:organizations!inner ( id, slug, name, timezone )
     `)
@@ -478,7 +507,14 @@ serve(async (req) => {
       // Welcome is the only trigger that needs to react within minutes. Every
       // other one is anchored to a date, so the daily run is the right cadence
       // and re-evaluating them 96 times a day would buy nothing.
-      if (a.template.trigger_type !== "days_before_first_session") continue;
+      // THE EXCEPTION is an EVENING send (review ask, camp day-1 check-in):
+      // it is due at 6 pm org-local, which the once-a-day 7 am run can never
+      // hit. Those run on the sweep, but only in the 6-8 pm local window, so
+      // the 96-a-day cost is 8 sweeps and the rest of the day is untouched.
+      if (isEveningAutomation(a)) {
+        const h = orgHour(a.org.timezone, sweepNow);
+        if (h < EVENING_HOUR || h >= EVENING_HOUR + 2) continue;
+      } else if (a.template.trigger_type !== "days_before_first_session") continue;
       // Never a 3am email. Anything found outside the org's waking hours simply
       // waits for the 7am sweep, which is still far sooner than the daily run.
       if (!withinSendingHours(orgHour(a.org.timezone, sweepNow))) {
@@ -508,6 +544,22 @@ serve(async (req) => {
 // Per-automation runner
 // ───────────────────────────────────────────────────────────────────────────
 
+// The trigger this automation actually runs on. An org can move review_request
+// off the template's trigger (automations.trigger_override) without changing it
+// for every other org. Everything that branches on trigger reads this.
+function effectiveTrigger(a: AutomationRow): string {
+  return a.trigger_override || a.template.trigger_type;
+}
+
+// Sent at 6 pm org-local, so they run on the evening sweeps (see the sweep
+// gate). A camp-only template on days_after_first_session is the camp day-1
+// check-in; the class check-in (afterschool, 14 days) is not evening-timed.
+function isEveningAutomation(a: AutomationRow): boolean {
+  const t = effectiveTrigger(a);
+  if (t === "days_after_last_session") return true;
+  return t === "days_after_first_session" && a.template.applies_to_program_type === "camps";
+}
+
 async function runAutomation(
   supabase: SupabaseClient,
   a: AutomationRow,
@@ -516,7 +568,7 @@ async function runAutomation(
 ) {
   // 1. Resolve audience by trigger type
   let audience: AudienceEntry[] = [];
-  switch (a.template.trigger_type) {
+  switch (effectiveTrigger(a)) {
     case "days_before_first_session":
       audience = await resolveWelcomeAudience(supabase, a, eventRegistrationId);
       break;
@@ -524,7 +576,9 @@ async function runAutomation(
       audience = await resolveAbandonedAudience(supabase, a);
       break;
     case "days_after_first_session":
-      audience = await resolveCheckInAudience(supabase, a);
+      audience = a.template.applies_to_program_type === "camps"
+        ? await resolveCampDayOneAudience(supabase, a)
+        : await resolveCheckInAudience(supabase, a);
       break;
     case "session_midpoint":
       audience = await resolveMidRecapAudience(supabase, a);
@@ -543,6 +597,9 @@ async function runAutomation(
       break;
     case "days_after_engagement":
       audience = await resolveReviewRequestAudience(supabase, a);
+      break;
+    case "days_after_last_session":
+      audience = await resolveReviewLastSessionAudience(supabase, a);
       break;
     case "days_before_no_school":
       audience = await resolveNoSchoolDayAudience(supabase, a);
@@ -566,7 +623,7 @@ async function runAutomation(
       // Survey feature not built yet — template stays is_v1_enabled=false.
       return { skipped: "template_disabled_v1" };
     default:
-      return { skipped: "unknown_trigger", trigger: a.template.trigger_type };
+      return { skipped: "unknown_trigger", trigger: effectiveTrigger(a) };
   }
 
   // 2. Create automation_runs row. The sweep runs 96 times a day and almost
@@ -833,7 +890,9 @@ async function sendOne(
   const send = await sendResendEmail({
     from: formatFromAddress(brand),
     to: entry.parent_email,
-    reply_to: brand.reply_to,
+    // An automation can name its own reply-to (the review ask goes to the
+    // person who reads those replies); otherwise the org default.
+    reply_to: a.reply_to_override || brand.reply_to,
     subject,
     html: fullHtml,
     text: plainText,
@@ -904,6 +963,22 @@ async function sendOne(
     // The email may already have gone out; log but return the true send result so
     // the run tally is honest. A missing row just means the next cron re-attempts.
     console.error("[lifecycle-automations-cron] recipient upsert failed:", recErr);
+  }
+  // Review asks: stamp the review_asks rows this email covered, so the admin
+  // view counts it and the reminder pass can find it. The SEND LEDGER above is
+  // what stops a second ask (its context_key is per term + family); this stamp
+  // is the reporting/reminder record, so a failure here is logged loudly but
+  // cannot cause a duplicate email.
+  if (send.ok && entry.review_ask_ids?.length && entry.review_ask_mark) {
+    const col = entry.review_ask_mark === "reminded" ? "reminded_at" : "asked_at";
+    const { error: askErr } = await supabase
+      .from("review_asks")
+      .update({ [col]: nowIso })
+      .in("id", entry.review_ask_ids)
+      .is(col, null);
+    if (askErr) {
+      console.error(`[lifecycle-automations-cron] review_asks ${col} stamp failed for ${entry.review_ask_ids.join(",")}:`, askErr);
+    }
   }
   return status;
 }
@@ -992,6 +1067,7 @@ interface RenderInput {
   to_email?: string; // only used to seed entry.parent_email for a test send
   audience?: "parent" | "instructor"; // no_school_day: which role variant to render
   preview_attachments?: unknown; // the DRAFT email_attachments jsonb ([{id,attach}]) so the preview/test reflects unsaved changes
+  variant?: "withdrawn"; // review_request: render the withdrawn / refunded wording
 }
 interface RenderOutput {
   ok: boolean;
@@ -1020,7 +1096,7 @@ async function renderLifecycleEmail(supabase: SupabaseClient, input: RenderInput
 
   const { data: org, error: oErr } = await supabase
     .from("organizations")
-    .select("id, slug, name")
+    .select("id, slug, name, google_review_url")
     .eq("id", input.organization_id)
     .maybeSingle();
   if (oErr || !org) {
@@ -1078,6 +1154,9 @@ async function renderLifecycleEmail(supabase: SupabaseClient, input: RenderInput
     // installment_reminder sample, so a test send reads like the real thing.
     charge_date: "Friday, November 6",
     installment_label: "second",
+    // Review ask: a test/preview goes STRAIGHT to the org's Google review page
+    // (no ask row exists to track, and a test click must not count as a family's).
+    review_link_url: org.google_review_url ?? "",
   };
 
   // True preview: when the operator picked a real camp/program, overwrite the
@@ -1105,8 +1184,9 @@ async function renderLifecycleEmail(supabase: SupabaseClient, input: RenderInput
 
   // Editor passes the current draft; fall back to template defaults so the
   // unmodified template can also be previewed/tested.
-  let subjectTpl = input.preview_subject ?? template.default_subject;
-  let bodyTpl = input.preview_body ?? template.default_body;
+  const wantWithdrawn = input.variant === "withdrawn";
+  let subjectTpl = input.preview_subject ?? (wantWithdrawn ? template.default_withdrawn_subject : null) ?? template.default_subject;
+  let bodyTpl = input.preview_body ?? (wantWithdrawn ? template.default_withdrawn_body : null) ?? template.default_body;
   // no_school_day instructor variant: swap in the fixed instructor copy (not the
   // operator's parent draft) and render {{first_name}} as an instructor. Lets the
   // editor preview + test-send BOTH role variants of a two-audience automation.
@@ -1176,8 +1256,19 @@ async function runTestSend(supabase: SupabaseClient, params: TestSendParams): Pr
     to_email: params.test_to_email,
     audience: params.audience,
     preview_attachments: params.preview_attachments,
+    variant: params.variant,
   });
   if (!rendered.ok) return { ok: false, error: rendered.error };
+
+  // The test goes out with the same reply-to a real send would use.
+  const { data: autoRow, error: autoErr } = await supabase
+    .from("automations")
+    .select("reply_to_override, automation_templates!inner ( key )")
+    .eq("organization_id", params.organization_id)
+    .eq("automation_templates.key", params.template_key)
+    .maybeSingle();
+  if (autoErr) return { ok: false, error: `automation lookup failed: ${autoErr.message}` };
+  const testReplyTo = (autoRow as { reply_to_override?: string | null } | null)?.reply_to_override || rendered.brand!.reply_to;
 
   try {
     const resp = await fetch("https://api.resend.com/emails", {
@@ -1189,7 +1280,7 @@ async function runTestSend(supabase: SupabaseClient, params: TestSendParams): Pr
       body: JSON.stringify({
         from: formatFromAddress(rendered.brand!),
         to: params.test_to_email,
-        reply_to: rendered.brand!.reply_to,
+        reply_to: testReplyTo,
         subject: `[TEST] ${rendered.subject}`,
         html: rendered.html,
         tags: [
@@ -1223,6 +1314,7 @@ async function runPreview(supabase: SupabaseClient, params: PreviewParams): Prom
     test_program_id: params.test_program_id,
     audience: params.audience,
     preview_attachments: params.preview_attachments,
+    variant: params.variant,
   });
   if (!rendered.ok) return { ok: false, error: rendered.error };
   return { ok: true, subject: rendered.subject, body_html: rendered.html, used_real_data: rendered.used_real_data };
@@ -3432,6 +3524,305 @@ function makeReviewEntry(p: {
   };
 }
 
+// ─── Review ask off the LAST session (days_after_last_session) ──────────────
+// The rules are in ./reviewAsk.ts (tested). This function does the reads.
+//
+// Fails CLOSED at every gate that could widen the audience: no Google link, no
+// signing secret, the staff/instructor exclusion list unreadable, the opt-out
+// list unreadable. Each throws or returns [] with a log, never "send anyway".
+// Never filtered by score, complaint or refund: nothing below reads one.
+const REVIEW_GO_ENDPOINT = `${SUPABASE_URL}/functions/v1/review-go`;
+const PROGRAM_STATUSES_NOT_RUN = ["draft", "cancelled"];
+
+async function reviewGoUrl(askId: string): Promise<string> {
+  const t = await hmacBase64Url(REVIEW_RATE_SECRET, `go:${askId}`);
+  return `${REVIEW_GO_ENDPOINT}?${new URLSearchParams({ a: askId, t }).toString()}`;
+}
+
+function reviewCopyFor(a: AutomationRow, variant: "standard" | "withdrawn"): { subject: string | null; body: string | null } {
+  if (variant === "withdrawn") {
+    return {
+      subject: a.withdrawn_subject_override ?? a.template.default_withdrawn_subject ?? null,
+      body: a.withdrawn_body_override ?? a.template.default_withdrawn_body ?? null,
+    };
+  }
+  return { subject: a.subject_override ?? a.template.default_subject, body: a.body_override ?? a.template.default_body };
+}
+
+// Exclusions shared by the ask and the reminder: staff / instructor / owner
+// households and marketing opt-outs. Both reads THROW on error.
+async function loadReviewSkipSet(supabase: SupabaseClient, orgId: string): Promise<Set<string>> {
+  const { data: excl, error: exErr } = await supabase.rpc("review_ask_excluded_emails", { p_org: orgId });
+  if (exErr) throw new Error(`review ask: staff/instructor exclusion list unavailable, refusing to send: ${exErr.message}`);
+  const { data: supp, error: suppErr } = await supabase
+    .from("marketing_suppressions").select("email").eq("organization_id", orgId);
+  if (suppErr) throw suppErr;
+  const skip = new Set<string>();
+  for (const r of (excl ?? []) as Array<{ email: string | null }>) if (r.email) skip.add(r.email.trim().toLowerCase());
+  for (const r of (supp ?? []) as Array<{ email: string | null }>) if (r.email) skip.add(r.email.trim().toLowerCase());
+  return skip;
+}
+
+async function resolveReviewLastSessionAudience(
+  supabase: SupabaseClient,
+  a: AutomationRow,
+): Promise<AudienceEntry[]> {
+  if (!a.enabled_at) return [];
+  const { data: orgRow, error: orgErr } = await supabase
+    .from("organizations").select("google_review_url").eq("id", a.organization_id).maybeSingle();
+  if (orgErr) throw orgErr;
+  if (!orgRow?.google_review_url) {
+    console.error(`[lifecycle-automations-cron] review ask skipped for org ${a.organization_id}: no google_review_url set`);
+    return [];
+  }
+  if (!REVIEW_RATE_SECRET) {
+    console.error("[lifecycle-automations-cron] review ask skipped: REVIEW_RATE_SECRET unset, cannot sign the review link");
+    return [];
+  }
+
+  const now = new Date();
+  const today = orgToday(a.org.timezone, now);
+  const hour = orgHour(a.org.timezone, now);
+  const days = Math.max(0, pickNumber(a.timing_override?.days_after_last_session, a.template.default_timing?.days_after_last_session, 0));
+  const kind = a.template.applies_to_program_type;
+  const skip = await loadReviewSkipSet(supabase, a.organization_id);
+  const nextTermAvailable = await hasFutureProgramsForOrg(supabase, a.organization_id);
+  const out: AudienceEntry[] = [];
+
+  // ── 1. The ask: programs whose last session + N lands now (6 pm local).
+  const { data: programs, error: pErr } = await supabase
+    .from("programs")
+    .select("id, curriculum, term, status, runs_own_registration, class_days, first_session_date")
+    .eq("organization_id", a.organization_id)
+    .lte("first_session_date", today)
+    .gte("first_session_date", plusDays(today, -400));
+  if (pErr) throw pErr;
+  const due = new Map<string, { name: string; term: string; target: string }>();
+  for (const p of (programs ?? []) as any[]) {
+    if (PROGRAM_STATUSES_NOT_RUN.includes(p.status)) continue;
+    if (isPartnerRun(p)) continue;
+    if (!p.term) continue; // the per-term limit needs a term
+    const camp = isCampProgram(p);
+    if (kind === "camps" && !camp) continue;
+    if (kind === "afterschool" && camp) continue;
+    const { data: sessions, error: dErr } = await supabase.rpc("derive_program_session_dates", { p_program_id: p.id });
+    if (dErr) {
+      console.error(`[lifecycle-automations-cron] review ask: derive_program_session_dates failed for program ${p.id}:`, dErr);
+      continue;
+    }
+    const list = ((sessions ?? []) as string[]).slice().sort();
+    if (list.length === 0) continue;
+    const target = plusDays(list[list.length - 1], days);
+    if (!eveningDue(target, today, hour)) continue;
+    due.set(p.id, { name: p.curriculum ?? "", term: p.term, target });
+  }
+
+  if (due.size > 0) {
+    const { data: regs, error: rErr } = await supabase
+      .from("registrations")
+      .select("id, program_id, status, payment_status, parent_id, students ( first_name ), parents!inner ( id, first_name, email )")
+      .eq("organization_id", a.organization_id)
+      .in("program_id", [...due.keys()]);
+    if (rErr) throw rErr;
+    const rows: ReviewCandidateRow[] = [];
+    for (const r of (regs ?? []) as any[]) {
+      const meta = due.get(r.program_id);
+      if (!meta || !r.parents?.email) continue;
+      rows.push({
+        registration_id: r.id, program_id: r.program_id, program_name: meta.name, term: meta.term,
+        status: r.status, payment_status: r.payment_status, parent_id: r.parents.id,
+        parent_email: r.parents.email, parent_first_name: r.parents.first_name ?? null,
+        child_first_name: r.students?.first_name ?? null, target_date: meta.target,
+      });
+    }
+    // Earliest-ending program first, so a family's ask names the class that
+    // ended first; ties by program id for a stable pick.
+    rows.sort((x, y) => (x.target_date < y.target_date ? -1 : x.target_date > y.target_date ? 1 : x.program_id < y.program_id ? -1 : 1));
+
+    // Already asked this term (any program) = skip. The ledger key would stop
+    // the send anyway; this also keeps us from creating ask rows for them.
+    const terms = [...new Set(rows.map((r) => r.term))];
+    const { data: prior, error: priorErr } = await supabase
+      .from("review_asks").select("term, family_email")
+      .eq("automation_id", a.id).in("term", terms).not("asked_at", "is", null);
+    if (priorErr) throw priorErr;
+    const asked = new Set(((prior ?? []) as any[]).map((r) => `${r.term}|${r.family_email}`));
+
+    const families = groupReviewFamilies(rows, (k) => skip.has(k))
+      .filter((f) => !asked.has(`${f.term}|${f.key}`));
+
+    for (const fam of families) {
+      const copy = reviewCopyFor(a, fam.variant);
+      if (!copy.subject || !copy.body) {
+        console.error(`[lifecycle-automations-cron] review ask: no ${fam.variant} copy for automation ${a.id}, family skipped`);
+        continue;
+      }
+      const { error: upErr } = await supabase.from("review_asks").upsert(
+        fam.registrations.map((r) => ({
+          organization_id: a.organization_id, automation_id: a.id, registration_id: r.registration_id,
+          program_id: r.program_id, term: fam.term, family_email: fam.key, variant: r.variant,
+        })),
+        { onConflict: "automation_id,registration_id,term", ignoreDuplicates: true },
+      );
+      if (upErr) throw upErr;
+      const { data: askRows, error: askErr } = await supabase
+        .from("review_asks").select("id, registration_id")
+        .eq("automation_id", a.id).eq("term", fam.term)
+        .in("registration_id", fam.registrations.map((r) => r.registration_id));
+      if (askErr) throw askErr;
+      const ids = fam.registrations
+        .map((r) => ((askRows ?? []) as any[]).find((x) => x.registration_id === r.registration_id)?.id as string | undefined)
+        .filter((x): x is string => !!x);
+      if (ids.length === 0) continue;
+      const entry = makeReviewEntry({
+        year: now.getUTCFullYear(), parentId: fam.parent_id, email: fam.email,
+        parentFirstName: fam.parent_first_name, childFirstName: formatChildNameList(fam.child_first_names) || null,
+        programName: fam.program_name, orgSlug: a.org.slug, nextTermAvailable,
+        registrationId: fam.registrations[0].registration_id,
+      });
+      entry.context_key = reviewAskContextKey(fam.term, fam.email);
+      entry.subject_template = copy.subject;
+      entry.body_template = copy.body;
+      entry.review_link_url = await reviewGoUrl(ids[0]);
+      entry.review_ask_ids = ids;
+      entry.review_ask_mark = "asked";
+      out.push(entry);
+    }
+  }
+
+  // ── 2. The one reminder, N days after the ask, to families with no click.
+  // Clicks only: nothing about how the family felt is read here.
+  const remDays = a.reminder_days_after ?? 0;
+  if (remDays >= 1) {
+    const since = new Date(now.getTime() - (remDays + 5) * 86400000).toISOString();
+    const { data: open, error: oErr } = await supabase
+      .from("review_asks")
+      .select("id, term, family_email, variant, asked_at, reminded_at, first_clicked_at, program_id, registration_id, registrations ( parent_id, students ( first_name ), parents ( id, first_name, email ) ), programs ( curriculum )")
+      .eq("automation_id", a.id)
+      .not("asked_at", "is", null)
+      .gte("asked_at", since)
+      .order("asked_at", { ascending: true })
+      .order("id", { ascending: true });
+    if (oErr) throw oErr;
+    const byFamily = new Map<string, any[]>();
+    for (const r of (open ?? []) as any[]) {
+      const k = `${r.term}|${r.family_email}`;
+      if (!byFamily.has(k)) byFamily.set(k, []);
+      byFamily.get(k)!.push(r);
+    }
+    for (const rows of byFamily.values()) {
+      if (rows.some((r) => r.first_clicked_at || r.reminded_at)) continue;
+      const first = rows[0];
+      if (skip.has(first.family_email)) continue;
+      const target = plusDays(orgToday(a.org.timezone, new Date(first.asked_at)), remDays);
+      if (!eveningDue(target, today, hour)) continue;
+      const parent = first.registrations?.parents;
+      if (!parent?.email) continue;
+      const variant = rows.some((r) => r.variant === "standard") ? "standard" : "withdrawn";
+      const copy = reviewCopyFor(a, variant);
+      if (!copy.subject || !copy.body) continue;
+      const names = [...new Set(rows.map((r) => r.registrations?.students?.first_name).filter(Boolean))] as string[];
+      const entry = makeReviewEntry({
+        year: now.getUTCFullYear(), parentId: parent.id, email: parent.email,
+        parentFirstName: parent.first_name ?? null, childFirstName: formatChildNameList(names) || null,
+        programName: first.programs?.curriculum ?? "", orgSlug: a.org.slug, nextTermAvailable,
+        registrationId: first.registration_id,
+      });
+      entry.context_key = reviewReminderContextKey(first.term, first.family_email);
+      entry.subject_template = reminderSubject(copy.subject);
+      entry.body_template = copy.body;
+      entry.review_link_url = await reviewGoUrl(first.id);
+      entry.review_ask_ids = rows.map((r) => r.id);
+      entry.review_ask_mark = "reminded";
+      out.push(entry);
+    }
+  }
+  return out;
+}
+
+// ─── Camp day-one check-in (camps only, evening of the first camp day) ──────
+// Template check_in_camp: days_after_first_session + applies 'camps'. N = 0 is
+// 6 pm org-local on the camp's first date (derive_program_session_dates), sent
+// that evening only (no next-morning catch-up: the copy says "reply tonight").
+// One email per family per camp; siblings are named together.
+async function resolveCampDayOneAudience(
+  supabase: SupabaseClient,
+  a: AutomationRow,
+): Promise<AudienceEntry[]> {
+  if (!a.enabled_at) return [];
+  const now = new Date();
+  const today = orgToday(a.org.timezone, now);
+  const hour = orgHour(a.org.timezone, now);
+  const enabledDay = orgToday(a.org.timezone, new Date(a.enabled_at));
+  const days = Math.max(0, pickNumber(a.timing_override?.days_after, a.template.default_timing?.days_after, 0));
+  const nextTermAvailable = await hasFutureProgramsForOrg(supabase, a.organization_id);
+
+  const { data: programs, error: pErr } = await supabase
+    .from("programs")
+    .select("id, curriculum, status, runs_own_registration, class_days, first_session_date, start_time, end_time, program_locations ( name )")
+    .eq("organization_id", a.organization_id)
+    .lte("first_session_date", today)
+    .gte("first_session_date", plusDays(today, -(days + 14)));
+  if (pErr) throw pErr;
+  const due = new Map<string, any>();
+  for (const p of (programs ?? []) as any[]) {
+    if (PROGRAM_STATUSES_NOT_RUN.includes(p.status) || isPartnerRun(p) || !isCampProgram(p)) continue;
+    const { data: sessions, error: dErr } = await supabase.rpc("derive_program_session_dates", { p_program_id: p.id });
+    if (dErr) {
+      console.error(`[lifecycle-automations-cron] camp day-one: derive_program_session_dates failed for program ${p.id}:`, dErr);
+      continue;
+    }
+    const list = ((sessions ?? []) as string[]).slice().sort();
+    if (list.length === 0) continue;
+    const target = plusDays(list[0], days);
+    if (target < enabledDay) continue; // forward-only: never a back-catalog blast on enable
+    if (!eveningDue(target, today, hour, 0)) continue;
+    due.set(p.id, { ...p, first_day: list[0] });
+  }
+  if (due.size === 0) return [];
+
+  const { data: regs, error: rErr } = await supabase
+    .from("registrations")
+    .select("id, program_id, students!inner ( id, first_name ), parents!inner ( id, first_name, email )")
+    .eq("organization_id", a.organization_id)
+    .eq("status", "confirmed")
+    .in("program_id", [...due.keys()]);
+  if (rErr) throw rErr;
+
+  const fams = new Map<string, { p: any; parent: any; names: string[] }>();
+  for (const r of (regs ?? []) as any[]) {
+    if (!r.parents?.email) continue;
+    const k = `${r.program_id}|${r.parents.id}`;
+    let f = fams.get(k);
+    if (!f) { f = { p: due.get(r.program_id), parent: r.parents, names: [] }; fams.set(k, f); }
+    if (r.students?.first_name && !f.names.includes(r.students.first_name)) f.names.push(r.students.first_name);
+  }
+  return [...fams.values()].map(({ p, parent, names }) => ({
+    context_key: `program:${p.id}:parent:${parent.id}:check_in_camp`,
+    parent_id: parent.id,
+    parent_email: parent.email,
+    parent_first_name: parent.first_name,
+    child_first_name: formatChildNameList(names) || null,
+    program_name: p.curriculum ?? "camp",
+    program_start_date: formatDate(p.first_day),
+    program_end_date: "",
+    program_time: timeClause(p.start_time, p.end_time, true),
+    program_day: "",
+    is_camp: true,
+    location_name: p.program_locations?.name ?? "",
+    abandoned_resume_url: "",
+    age_turning: "",
+    final_showcase_raw: "",
+    mid_term_skills_raw: [],
+    final_recap_skills_raw: [],
+    arrival_instructions_raw: "",
+    dismissal_instructions_raw: "",
+    session_dates_raw: [],
+    register_url: `${PUBLIC_SITE_URL}/${a.org.slug}/register`,
+    next_term_available: nextTermAvailable,
+  }));
+}
+
 // ─── Abandoned registration ─────────────────────────────────────────────────
 //
 // A stale `pending` row is not proof of an abandoned signup: a parent who drops
@@ -3869,6 +4260,8 @@ function buildTokens(entry: AudienceEntry, brand: OrgBrand): Record<string, stri
     review_rate_url_3: entry.review_rate_url_3 ?? "",
     review_rate_url_4: entry.review_rate_url_4 ?? "",
     review_rate_url_5: entry.review_rate_url_5 ?? "",
+    // The review ask's one Google button (tracked). "" elsewhere.
+    review_link_url: entry.review_link_url ?? "",
     // class_photos - "" for every other template.
     photos_url: entry.photos_url ?? "",
     photo_count: entry.photo_count ?? "",
