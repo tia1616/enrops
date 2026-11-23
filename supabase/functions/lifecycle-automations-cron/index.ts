@@ -77,6 +77,7 @@ import { abandonedResumeUrl } from "./abandonedResumeUrl.ts";
 import { formatChildNameList } from "../_shared/childNameList.ts";
 import { photoDaysToNotify, classPhotoRecipients, PHOTO_LOOKBACK_DAYS, type EnrolledReg } from "./classPhotosAudience.ts";
 import { finalPhotoFire, teachersOnDay, type LeadAssignment, type SettledSub } from "./finalPhotoReminder.ts";
+import { commsLevelFor } from "../_shared/entitlements.ts";
 import { hmacBase64Url } from "../_shared/hmac.ts";
 import {
   installmentReminderRecipients, installmentLabel, REMINDER_DAYS_AHEAD, type ReminderRow,
@@ -2071,9 +2072,15 @@ async function resolveFinalClassPhotoAudience(
 ): Promise<AudienceEntry[]> {
   // Separate read for the same reason as resolveClassPhotosAudience.
   const { data: org, error: orgErr } = await supabase
-    .from("organizations").select("class_photos_enabled").eq("id", a.organization_id).maybeSingle();
+    .from("organizations").select("class_photos_enabled, instructor_pay_model, platform_plan")
+    .eq("id", a.organization_id).maybeSingle();
   if (orgErr) throw orgErr;
   if (!org?.class_photos_enabled) return [];
+  // This template is default-on and lives under the Instructors audience on the
+  // Comms screen. commsAudiencesFor (src/lib/entitlements.js) shows that audience
+  // exactly when the org's Comms level is full, so an org below it could not see
+  // or switch off the send. Never send what the sender cannot find.
+  if (commsLevelFor(org) !== "full") return [];
 
   const today = orgToday(a.org.timezone, new Date());
   const horizon = addDays(today, 7);
@@ -2111,35 +2118,53 @@ async function resolveFinalClassPhotoAudience(
   if (due.size === 0) return [];
   const dueIds = [...due.keys()];
 
+  // Every id-list read below is CHUNKED (a long .in() overflows the request line
+  // and dies before PostgREST) and PAGED (PostgREST silently caps a response at
+  // 1000 rows). The week-before window keeps a whole end-of-term week "due" at
+  // once, so both limits are reachable here.
+  const readInChunks = async (
+    ids: string[],
+    build: (chunk: string[]) => any,
+  ): Promise<any[]> => {
+    const out: any[] = [];
+    for (let i = 0; i < ids.length; i += 50) {
+      const chunk = ids.slice(i, i + 50);
+      for (let from = 0; ; from += PAGE_SIZE) {
+        const { data, error } = await build(chunk).order("id", { ascending: true }).range(from, from + PAGE_SIZE - 1);
+        if (error) throw error;
+        out.push(...(data ?? []));
+        if (!data || data.length < PAGE_SIZE) break;
+      }
+    }
+    return out;
+  };
+
   // Only classes with at least one confirmed, uncancelled family.
-  const { data: regs, error: rErr } = await supabase
+  const regs = await readInChunks(dueIds, (chunk) => supabase
     .from("registrations")
-    .select("program_id")
+    .select("id, program_id")
     .eq("organization_id", a.organization_id)
     .eq("status", "confirmed")
     .is("cancelled_at", null)
-    .in("program_id", dueIds);
-  if (rErr) throw rErr;
-  const withFamilies = new Set(((regs ?? []) as any[]).map((r) => r.program_id));
+    .in("program_id", chunk));
+  const withFamilies = new Set(regs.map((r) => r.program_id));
 
-  const { data: assigns, error: asgErr } = await supabase
+  const assigns = await readInChunks(dueIds, (chunk) => supabase
     .from("program_assignments")
     .select("id, program_id, instructor_id")
     .eq("organization_id", a.organization_id)
     .eq("status", "confirmed")
-    .in("program_id", dueIds);
-  if (asgErr) throw asgErr;
-  const assignRows = ((assigns ?? []) as any[]).filter((r) => withFamilies.has(r.program_id));
+    .in("program_id", chunk));
+  const assignRows = assigns.filter((r) => withFamilies.has(r.program_id));
   if (assignRows.length === 0) return [];
 
-  const { data: subRows, error: subErr } = await supabase
+  const subRows = await readInChunks(assignRows.map((r) => r.id), (chunk) => supabase
     .from("assignment_substitutions")
-    .select("parent_assignment_id, sub_instructor_id, date")
+    .select("id, parent_assignment_id, sub_instructor_id, date")
     .eq("organization_id", a.organization_id)
     .eq("parent_assignment_type", "program")
     .in("status", ["confirmed", "taught"])
-    .in("parent_assignment_id", assignRows.map((r) => r.id));
-  if (subErr) throw subErr;
+    .in("parent_assignment_id", chunk));
 
   const teachersByProgram = new Map<string, string[]>();
   for (const pid of new Set(assignRows.map((r) => r.program_id as string))) {
@@ -2155,14 +2180,13 @@ async function resolveFinalClassPhotoAudience(
   }
 
   const instructorIds = [...new Set([...teachersByProgram.values()].flat())];
-  const { data: instructors, error: iErr } = await supabase
+  const instructors = await readInChunks(instructorIds, (chunk) => supabase
     .from("instructors")
     .select("id, first_name, preferred_name, email")
     .eq("organization_id", a.organization_id)
     .eq("is_active", true)
-    .in("id", instructorIds);
-  if (iErr) throw iErr;
-  const instructorById = new Map(((instructors ?? []) as any[]).map((i) => [i.id, i]));
+    .in("id", chunk));
+  const instructorById = new Map(instructors.map((i) => [i.id, i]));
 
   const portalUrl = `${PUBLIC_SITE_URL}/${a.org.slug}/instructor`;
   const entries: AudienceEntry[] = [];
