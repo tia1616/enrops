@@ -15,6 +15,7 @@ import {
   standardPriceFor,
 } from '../../lib/pricing.js';
 import { formatTermLabel, termSeasonName, schoolYearTermsForFall } from '../../lib/terms.js';
+import { onSaleTerms, followsDates } from '../../lib/classSeasons.js';
 import { programScheduleSummary, formatDayLabel, isCampProgram } from '../../lib/programSchedule.js';
 import { groupCampsByArea, campWhereLabel, campAreaOf } from '../../lib/campAreas.js';
 import { audienceLabel } from '../../lib/grades.js';
@@ -279,8 +280,16 @@ export default function Home() {
   // seasonName: "Winter". Both fall back to neutral wording if the org's term
   // code is missing or malformed, so the page degrades to vague rather than
   // to a confidently wrong season.
-  const termLabel = formatTermLabel(org?.active_registration_term) || '';
+  // A provider whose classes follow their dates sells several seasons at once,
+  // so the page heading names none ("Registration is open"); each class card
+  // names its OWN season instead (cardTermLabel / cardSeasonName below).
+  const termLabel = followsDates(org) ? '' : (formatTermLabel(org?.active_registration_term) || '');
   const seasonName = termSeasonName(org?.active_registration_term); // null when not a term code
+  // A class card's season: the class's own term. Identical to the org's open
+  // term for a season-switching provider (only that term is on sale), and the
+  // right one for a date-following provider, whose January class is Winter.
+  const cardTermLabel = (p) => formatTermLabel(p?.term) || termLabel;
+  const cardSeasonName = (p) => termSeasonName(p?.term) || seasonName;
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'instant' });
@@ -453,7 +462,14 @@ export default function Home() {
         // September because it happened to carry the open term. A class is
         // selected by its term and a camp by its dates, and neither rule may
         // pick up the other's rows.
-        .or(`and(class_days.is.null,term.eq.${catalogTerm}),and(class_days.not.is.null,end_date.gte.${todayIso})`)
+        // Weekly classes: the seasons on sale (classSeasons.onSaleTerms). That is
+        // the one open season for a provider who switches seasons by hand -
+        // exactly the old `term.eq` - and the open season plus the next three
+        // for one whose classes follow their dates, so a January class is on
+        // sale in November without anyone switching anything (20261123d).
+        // The open season comes from the org's own column, interpolated exactly
+        // as the old term.eq did; the later ones are generated season codes.
+        .or(`and(class_days.is.null,term.in.(${onSaleTerms(org).join(',') || 'none'})),and(class_days.not.is.null,end_date.gte.${todayIso})`)
         .eq('status', 'open')
         // Native programs (we run checkout) OR partner-run programs the operator
         // explicitly listed with a registration link (shown as a link-out, no checkout).
@@ -1762,8 +1778,8 @@ export default function Home() {
                             <p className="font-titan text-xs uppercase tracking-widest text-j2s-ink/50">
                               {isCampProgram(p)
                                 ? 'Camp'
-                                : seasonName
-                                  ? (vipEligible ? `${seasonName} only` : seasonName)
+                                : cardSeasonName(p)
+                                  ? (vipEligible ? `${cardSeasonName(p)} only` : cardSeasonName(p))
                                   : (vipEligible ? 'This term only' : 'This term')}
                             </p>
                             <div className="mt-2">
@@ -1792,7 +1808,7 @@ export default function Home() {
                                 line above - so labelling a February camp
                                 "Fall 2026" is just wrong. */}
                             {!isCampProgram(p) && (
-                              <p className="mt-1 text-xs text-j2s-ink/60">{termLabel}</p>
+                              <p className="mt-1 text-xs text-j2s-ink/60">{cardTermLabel(p)}</p>
                             )}
                             {/* #8: Early-bird on both cards */}
                             {fallShowsEarlyBird && fallEarlyBirdLabel && (
@@ -1819,8 +1835,8 @@ export default function Home() {
                                   // Same reason as the badge above: "Register for
                                   // fall" on a December camp is simply untrue.
                                   ? 'Register'
-                                  : seasonName
-                                    ? (vipEligible ? `Register for ${seasonName.toLowerCase()} only` : `Register for ${seasonName.toLowerCase()}`)
+                                  : cardSeasonName(p)
+                                    ? (vipEligible ? `Register for ${cardSeasonName(p).toLowerCase()} only` : `Register for ${cardSeasonName(p).toLowerCase()}`)
                                     : (vipEligible ? 'Register for this term only' : 'Register')}
                               </button>
                             )}

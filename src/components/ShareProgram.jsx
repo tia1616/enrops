@@ -9,9 +9,11 @@
 //     link is their external_registration_url, not our catalog. If they haven't
 //     given us a link, there's nothing to share yet.
 
+import { useOutletContext } from "react-router-dom";
 import ShareLink from "./ShareLink.jsx";
 import { isCampProgram } from "../lib/programSchedule.js";
 import { buildProgramShareUrl } from "../lib/regLinks.js";
+import { isTermOnSale } from "../lib/classSeasons.js";
 
 const INK = "#1a1a1a";
 const AMBER = "#a16207";
@@ -26,6 +28,10 @@ function fileSlug(name) {
 }
 
 export default function ShareProgram({ slug, program, activeTerm, align = "right" }) {
+  // Every caller is an admin page under AdminLayout, whose outlet carries the
+  // org. Only classes_follow_dates is read from it; the open season still
+  // comes from the activeTerm prop, as before.
+  const { org } = useOutletContext() ?? {};
   const isPartnerRun = !!program?.runs_own_registration;
   const externalUrl = program?.external_registration_url || "";
 
@@ -59,7 +65,11 @@ export default function ShareProgram({ slug, program, activeTerm, align = "right
   // catalog shows an open camp until its last day whatever term is on sale
   // (2026-09-28), so its link works the moment it is published - which is the
   // point, since camps are advertised weeks before the season they sit in.
-  const inCatalogTerm = isCampProgram(program) || (!!activeTerm && program?.term === activeTerm);
+  // A weekly class: its season must be on sale. One season for a provider who
+  // switches seasons by hand; the open season and the next three for one whose
+  // classes follow their dates (classSeasons.js).
+  const inCatalogTerm = isCampProgram(program)
+    || isTermOnSale({ active_registration_term: activeTerm, classes_follow_dates: org?.classes_follow_dates }, program?.term);
   const shareable = isPublished && inCatalogTerm;
   const url = slug && shareable ? buildProgramShareUrl(slug, program?.id) : "";
 
@@ -68,6 +78,14 @@ export default function ShareProgram({ slug, program, activeTerm, align = "right
       <strong style={{ color: AMBER }}>Not live yet.</strong> Publish this
       program first and you'll get a shareable registration link and QR code
       here. Families can only sign up once it's open.
+    </div>
+  ) : org?.classes_follow_dates === true ? (
+    // Date-following: the only classes off sale are ones whose season is over
+    // or more than a year out, so "a later term" would be untrue for half of them.
+    <div style={{ fontSize: 13, color: INK, lineHeight: 1.55 }}>
+      <strong style={{ color: AMBER }}>Not open to families.</strong> Families
+      see classes from this season through the next year. This class&apos;s
+      dates fall outside that, so there&apos;s no public link to share.
     </div>
   ) : (
     <div style={{ fontSize: 13, color: INK, lineHeight: 1.55 }}>
