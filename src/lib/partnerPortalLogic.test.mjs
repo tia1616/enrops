@@ -50,12 +50,6 @@ eq('already-granted contacts are not offered again', contactsWithoutAccess(conta
   ok('no line names the screening company', full.every((l) => !/Yardstik/.test(`${l.detail} ${l.meta} ${l.title}`)));
   eq('training as of + source', full[1].meta, 'as of Oct 20, 2026 · Source: entered by Acme Kids');
   eq('signed item as of + source', full[2].meta, 'as of Aug 20, 2026 · Source: signed by the instructor in enrops');
-  // 20261120s: a form the provider recorded as signed on paper never claims enrops.
-  const paper = instructorChecklist({ shared: true, background_check_status: 'current', code_of_conduct_on: '2026-09-05', code_of_conduct_paper: true, agreement_signed_on: '2026-09-04', agreement_paper: false }, ORG, TODAY);
-  eq('paper: detail says on paper', paper[2].detail, 'Signed Sep 5, 2026 on paper');
-  eq('paper: source names the provider', paper[2].meta, 'as of Sep 5, 2026 · Source: signed on paper, entered by Acme Kids');
-  eq('paper: still current', paper[2].badge.label, 'Current');
-  eq('e-signed sibling unchanged', paper[4].meta, 'as of Sep 4, 2026 · Source: signed by the instructor in enrops');
   eq('five lines in order', full.map((l) => l.key), ['background_check', 'training', 'code_of_conduct', 'mandatory_reporter', 'contractor_agreement']);
   ok('every chip carries an as-of', full.every((l) => l.meta.startsWith('as of ')));
 

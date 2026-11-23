@@ -100,9 +100,6 @@ const INSTRUCTOR_FIELDS = new Set([
   'background_check_completed_on', 'background_check_expires_on', 'background_check_status',
   'background_check_vendor', 'background_check_as_of', 'training_completed_on', 'training_as_of',
   'code_of_conduct_on', 'mandatory_reporter_on', 'agreement_signed_on',
-  // 20261120s: whether each form was signed on paper (a yes/no the partner's
-  // line reads as "signed on paper, entered by <provider>"). Jessica 2026-11-20.
-  'code_of_conduct_paper', 'mandatory_reporter_paper', 'agreement_paper',
 ]);
 const DOCUMENT_FIELDS = new Set([
   'id', 'organization_id', 'partner_id', 'doc_type', 'title', 'received_on', 'effective_on',
@@ -441,21 +438,6 @@ for (const h of hosts) {
     ok(`${who} cannot edit a document`, edit.status >= 400 || rows(edit).length === 0, `status ${edit.status}`);
   }
 
-  // Cannot record or remove a paper-signed form (20261120s), even for an
-  // instructor it can see. Harmless if the rules were wrong: the date is in the
-  // future (refused anyway) and the removal names no real form. Must be the
-  // permission refusal (42501), which the function checks first.
-  const seen = await call('/rest/v1/rpc/partner_portal_instructors', { token: h.token, method: 'POST', body: { p_partner_id: [...h.partners][0] } });
-  const someInstructor = rows(seen)[0]?.instructor_id ?? '00000000-0000-0000-0000-000000000000';
-  const paperRec = await call('/rest/v1/rpc/record_paper_signature', {
-    token: h.token, method: 'POST', body: { p_instructor_id: someInstructor, p_document_id: 'code_of_conduct', p_signed_on: '2099-01-01' },
-  });
-  ok(`${who} cannot record a paper-signed form (42501)`, paperRec.json?.code === '42501', `status ${paperRec.status} ${paperRec.json?.code ?? ''}`);
-  const paperDel = await call('/rest/v1/rpc/remove_paper_signature', {
-    token: h.token, method: 'POST', body: { p_instructor_id: someInstructor, p_document_id: 'probe_not_a_form' },
-  });
-  ok(`${who} cannot remove a paper-signed form (42501)`, paperDel.json?.code === '42501', `status ${paperDel.status} ${paperDel.json?.code ?? ''}`);
-
   // Cannot write a visit into another partner's log.
   for (const p of partnerIdsInPlay.filter((x) => !h.partners.has(x))) {
     const r = await call('/rest/v1/rpc/log_partner_portal_event', {
@@ -487,8 +469,6 @@ for (const p of partnerIdsInPlay) {
   const w = await call('/rest/v1/rpc/set_partner_requirement', { method: 'POST', body: { p_partner_id: p, p_requirement_key: 'business_license', p_required: true } });
   ok(`anon: cannot change requirements for ${p.slice(0, 8)}`, w.json !== true, `status ${w.status}`);
 }
-const anonPaper = await call('/rest/v1/rpc/record_paper_signature', { method: 'POST', body: { p_instructor_id: '00000000-0000-0000-0000-000000000000', p_document_id: 'code_of_conduct', p_signed_on: '2099-01-01' } });
-ok('anon: cannot record a paper-signed form', anonPaper.status >= 400, `status ${anonPaper.status}`);
 const anonRoster = await call('/rest/v1/rpc/partner_portal_class_roster', { method: 'POST', body: { p_partner_id: partnerIdsInPlay[0], p_kind: 'class', p_class_id: '00000000-0000-0000-0000-000000000000' } });
 ok('anon: no roster', gotNothing(anonRoster), `status ${anonRoster.status}`);
 const anonDocs = await call('/rest/v1/provider_documents_with_status?select=id');

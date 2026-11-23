@@ -120,14 +120,12 @@ export function instructorChecklist(row, orgName, today) {
   const standIn = okTone(status) ? null
     : others.find((l) => l.checkType === "background_check" && okTone(l.badge)) ?? null;
 
-  // `paper`: the latest record is one the provider entered as signed on paper
-  // (20261120s), so the source never claims it was signed in enrops.
-  const signed = (key, title, date, verb, paper) => ({
+  const signed = (key, title, date, verb) => ({
     key,
     title,
     badge: date ? CURRENT : EXPIRED_OR_MISSING,
-    detail: date ? `${verb} ${formatDate(date)}${paper ? " on paper" : ""}` : "",
-    meta: date ? provenance(date, paper ? `signed on paper, ${byProvider}` : "signed by the instructor in enrops") : provenance(today, null),
+    detail: date ? `${verb} ${formatDate(date)}` : "",
+    meta: date ? provenance(date, "signed by the instructor in enrops") : provenance(today, null),
   });
 
   return [
@@ -152,9 +150,9 @@ export function instructorChecklist(row, orgName, today) {
       detail: row.training_completed_on ? `Completed ${formatDate(row.training_completed_on)}` : "",
       meta: row.training_completed_on ? provenance(row.training_as_of, byProvider) : provenance(today, null),
     },
-    signed("code_of_conduct", "Code of conduct", row.code_of_conduct_on, "Signed", row.code_of_conduct_paper),
-    signed("mandatory_reporter", "Mandatory reporter", row.mandatory_reporter_on, "Acknowledged", row.mandatory_reporter_paper),
-    signed("contractor_agreement", "Contractor agreement", row.agreement_signed_on, "Signed", row.agreement_paper),
+    signed("code_of_conduct", "Code of conduct", row.code_of_conduct_on, "Signed"),
+    signed("mandatory_reporter", "Mandatory reporter", row.mandatory_reporter_on, "Acknowledged"),
+    signed("contractor_agreement", "Contractor agreement", row.agreement_signed_on, "Signed"),
     ...others.filter((l) => l !== standIn),
   ];
 }

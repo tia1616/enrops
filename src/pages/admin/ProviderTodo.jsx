@@ -71,10 +71,10 @@ export default function ProviderTodo({ items, partnerName, onUpload, onRenew, in
                   )}
                   {it.action.type === "instructor" && (
                     <Link
-                      to={`/admin/instructors?instructor=${it.action.instructorId}${it.action.upload ? `&upload=${it.action.upload}` : ""}${it.action.paper ? `&paper=${it.action.paper}` : ""}`}
+                      to={`/admin/instructors?instructor=${it.action.instructorId}${it.action.upload ? `&upload=${it.action.upload}` : ""}`}
                       style={{ color: BRIGHT, fontSize: 13, fontWeight: 600 }}
                     >
-                      {it.action.upload ? "Upload the background check" : it.action.paper ? "Record a paper copy" : "Open their record"}
+                      {it.action.upload ? "Upload the background check" : "Open their record"}
                     </Link>
                   )}
                   {it.action.type === "share" && (

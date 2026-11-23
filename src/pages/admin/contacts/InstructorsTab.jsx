@@ -89,11 +89,6 @@ function fmtTimestamp(ts) {
   return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
-// The forms a provider can record as signed on paper (record_paper_signature,
-// 20261120s). The same keys as contractor_acknowledgments.document_id; labels
-// come from documentByKey.
-const PAPER_FORMS = ['code_of_conduct', 'mandatory_reporter_ack', 'contractor_agreement'];
-
 export default function InstructorsTab({ org }) {
   const [rows, setRows] = useState(null); // null = loading
   const [search, setSearch] = useState('');
@@ -113,9 +108,6 @@ export default function InstructorsTab({ org }) {
   // open that row, bring it into view, and open the background-check upload
   // when asked. Runs once per page load, so it never fights the operator.
   const deepLinkDone = useRef(false);
-  // ?paper=<form>: open "Record one signed on paper" on that row, set to that
-  // form. Consumed by the row once, so collapsing and reopening it doesn't.
-  const [paperLink, setPaperLink] = useState(null); // { id, doc } | null
   useEffect(() => {
     if (deepLinkDone.current || !rows) return;
     deepLinkDone.current = true;
@@ -130,8 +122,6 @@ export default function InstructorsTab({ org }) {
       setBgUploadInstructorId(id);
       setBgUploadOpen(true);
     }
-    const paper = params.get('paper');
-    if (PAPER_FORMS.includes(paper)) setPaperLink({ id, doc: paper });
     requestAnimationFrame(() => document.getElementById(`instructor-${id}`)?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
   }, [rows]);
 
@@ -461,8 +451,6 @@ export default function InstructorsTab({ org }) {
             onCancelEditName={() => setEditingNameId(null)}
             onSaveName={(vals) => saveName(r.id, vals)}
             onPatchRow={(patch) => setRows((rs) => (rs ?? []).map((x) => (x.id === r.id ? { ...x, ...patch(x) } : x)))}
-            paperLink={paperLink?.id === r.id ? paperLink.doc : null}
-            onPaperLinkUsed={() => setPaperLink(null)}
           />
           </div>
         ))}
@@ -520,7 +508,7 @@ export default function InstructorsTab({ org }) {
   );
 }
 
-function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, inviteResult, onUploadBg, onRemove, onReactivate, isEditingName, onStartEditName, onCancelEditName, onSaveName, onPatchRow, paperLink, onPaperLinkUsed }) {
+function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, inviteResult, onUploadBg, onRemove, onReactivate, isEditingName, onStartEditName, onCancelEditName, onSaveName, onPatchRow }) {
   const displayName =
     row.preferred_name?.trim() ||
     `${row.first_name ?? ''} ${row.last_name ?? ''}`.trim() ||
@@ -693,8 +681,6 @@ function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, invi
           onCancelEditName={onCancelEditName}
           onSaveName={onSaveName}
           onPatchRow={onPatchRow}
-          paperLink={paperLink}
-          onPaperLinkUsed={onPaperLinkUsed}
         />
       )}
     </div>
@@ -712,8 +698,6 @@ function InstructorRow({ row, expanded, onToggle, onSendInvite, inviteBusy, invi
 function useInstructorRecord(instructorId) {
   const [record, setRecord] = useState(null); // null = loading
   const [failed, setFailed] = useState(false);
-  // Bumped after a paper record is saved or removed, to read the list again.
-  const [reloadKey, setReloadKey] = useState(0);
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -721,7 +705,7 @@ function useInstructorRecord(instructorId) {
         const [acks, agreements] = await Promise.all([
           supabase
             .from('contractor_acknowledgments')
-            .select('document_id, document_version, acknowledged_at, source')
+            .select('document_id, document_version, acknowledged_at')
             .eq('instructor_id', instructorId)
             .order('acknowledged_at', { ascending: true }),
           supabase
@@ -743,7 +727,6 @@ function useInstructorRecord(instructorId) {
           setFailed(true);
           return;
         }
-        setFailed(false);
         setRecord({ acks: acks.data ?? [], agreements: agreements.data ?? [] });
       } catch (err) {
         if (!cancelled) setFailed(true);
@@ -751,12 +734,12 @@ function useInstructorRecord(instructorId) {
       }
     })();
     return () => { cancelled = true; };
-  }, [instructorId, reloadKey]);
-  return { record, failed, reload: () => setReloadKey((k) => k + 1) };
+  }, [instructorId]);
+  return { record, failed };
 }
 
-function InstructorDetail({ row, age, onUploadBg, onRemove, onReactivate, isEditingName, onStartEditName, onCancelEditName, onSaveName, onPatchRow, paperLink, onPaperLinkUsed }) {
-  const { record, failed: recordFailed, reload: reloadRecord } = useInstructorRecord(row.id);
+function InstructorDetail({ row, age, onUploadBg, onRemove, onReactivate, isEditingName, onStartEditName, onCancelEditName, onSaveName, onPatchRow }) {
+  const { record, failed: recordFailed } = useInstructorRecord(row.id);
   const sitePrefs = row.site_preferences?.districts ?? [];
   const dayDefaults = row.availability?.day_defaults ?? {};
   const activeDays = DAY_INITIALS.filter(([k]) => dayDefaults[k]).map(([, label]) => label);
@@ -933,20 +916,13 @@ function InstructorDetail({ row, age, onUploadBg, onRemove, onReactivate, isEdit
               </div>
             ))}
             {record.acks.map((a, i) => (
-              a.source === 'paper' ? (
-                <PaperRecordLine key={`ack-${i}`} instructorId={row.id} ack={a} onChanged={reloadRecord} />
-              ) : (
-                <div key={`ack-${i}`}>
-                  {documentByKey(a.document_id)?.label ?? a.document_id}
-                  {a.document_version ? ` · ${a.document_version}` : ''}
-                  {fmtTimestamp(a.acknowledged_at) ? ` · ${fmtTimestamp(a.acknowledged_at)}` : ''}
-                </div>
-              )
+              <div key={`ack-${i}`}>
+                {documentByKey(a.document_id)?.label ?? a.document_id}
+                {a.document_version ? ` · ${a.document_version}` : ''}
+                {fmtTimestamp(a.acknowledged_at) ? ` · ${fmtTimestamp(a.acknowledged_at)}` : ''}
+              </div>
             ))}
           </div>
-        )}
-        {record && !recordFailed && (
-          <PaperSignatureForm instructorId={row.id} initialDoc={paperLink} onOpened={onPaperLinkUsed} onSaved={reloadRecord} />
         )}
       </DetailItem>
 
@@ -1317,106 +1293,6 @@ function DetailItem({ label, children }) {
         {label}
       </div>
       <div style={{ color: INK }}>{children}</div>
-    </div>
-  );
-}
-
-const paperLinkBtn = {
-  background: 'transparent', border: 'none', padding: 0, color: PURPLE, fontSize: 12, fontWeight: 600,
-  cursor: 'pointer', fontFamily: 'inherit', textDecoration: 'underline',
-};
-
-function paperError(err) {
-  if (err?.code === '42501') return 'Only an owner or admin can record this.';
-  if (err?.code === '22023') return 'Enter the date it was signed. It can’t be in the future.';
-  return `That didn’t save: ${err?.message ?? 'unknown error'}`;
-}
-
-// A form recorded as signed on paper: shown with the date on the paper, and
-// removable in case it was entered by mistake (an e-signed form never is).
-function PaperRecordLine({ instructorId, ack, onChanged }) {
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState('');
-  async function remove() {
-    setBusy(true);
-    setErr('');
-    const { error } = await supabase.rpc('remove_paper_signature', { p_instructor_id: instructorId, p_document_id: ack.document_id });
-    setBusy(false);
-    if (error) { setErr(paperError(error)); return; }
-    onChanged();
-  }
-  return (
-    <div>
-      {documentByKey(ack.document_id)?.label ?? ack.document_id}
-      {' · signed on paper'}
-      {fmtTimestamp(ack.acknowledged_at) ? ` · ${fmtTimestamp(ack.acknowledged_at)}` : ''}
-      <button type="button" onClick={remove} disabled={busy} style={{ ...paperLinkBtn, marginLeft: 8, color: MUTED, fontWeight: 400 }}>
-        {busy ? 'Removing…' : 'Remove'}
-      </button>
-      {err && <div role="alert" style={{ fontSize: 12, color: RED }}>{err}</div>}
-    </div>
-  );
-}
-
-// "Record one signed on paper" (20261120s). The form, and the date on the
-// paper. Partners then see it as signed on paper, entered by the provider.
-function PaperSignatureForm({ instructorId, initialDoc, onOpened, onSaved }) {
-  const [open, setOpen] = useState(!!initialDoc);
-  const [doc, setDoc] = useState(initialDoc || PAPER_FORMS[0]);
-  const [date, setDate] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState('');
-  const [note, setNote] = useState('');
-  // A to-do link opened this form; mark it used so it doesn't reopen.
-  useEffect(() => { if (initialDoc) onOpened?.(); }, [initialDoc, onOpened]);
-  const today = new Date();
-  const max = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-
-  async function save() {
-    if (!date) { setErr('Enter the date it was signed.'); return; }
-    setBusy(true);
-    setErr('');
-    const { error } = await supabase.rpc('record_paper_signature', { p_instructor_id: instructorId, p_document_id: doc, p_signed_on: date });
-    setBusy(false);
-    if (error) { setErr(paperError(error)); return; }
-    setNote(`Saved. Partners now see ${documentByKey(doc)?.label ?? doc} as signed on paper.`);
-    setOpen(false);
-    setDate('');
-    onSaved();
-  }
-
-  if (!open) {
-    return (
-      <div style={{ marginTop: 6 }}>
-        <button type="button" style={paperLinkBtn} onClick={() => { setOpen(true); setNote(''); }}>Record one signed on paper</button>
-        {note && <div role="status" style={{ fontSize: 12, color: OK, marginTop: 2 }}>{note}</div>}
-      </div>
-    );
-  }
-  return (
-    <div style={{ marginTop: 8, display: 'grid', gap: 6, maxWidth: 320 }}>
-      <label style={{ fontSize: 12, color: MUTED }}>
-        Form
-        <select value={doc} onChange={(e) => setDoc(e.target.value)} disabled={busy}
-          style={{ display: 'block', width: '100%', marginTop: 2, fontSize: 13, padding: 5, fontFamily: 'inherit' }}>
-          {PAPER_FORMS.map((k) => <option key={k} value={k}>{documentByKey(k)?.label ?? k}</option>)}
-        </select>
-      </label>
-      <label style={{ fontSize: 12, color: MUTED }}>
-        Date signed
-        <input type="date" value={date} max={max} onChange={(e) => setDate(e.target.value)} disabled={busy}
-          style={{ display: 'block', marginTop: 2, fontSize: 13, padding: 5, fontFamily: 'inherit' }} />
-      </label>
-      <div style={{ fontSize: 12, color: MUTED }}>Keep the signed paper on file. Partners see the date and that it was signed on paper.</div>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-        <button type="button" onClick={save} disabled={busy}
-          style={{ padding: '5px 12px', borderRadius: 6, border: 'none', background: PURPLE, color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>
-          {busy ? 'Saving…' : 'Save'}
-        </button>
-        <button type="button" onClick={() => { setOpen(false); setErr(''); }} disabled={busy}
-          style={{ ...paperLinkBtn, color: MUTED, fontWeight: 400, textDecoration: 'none', fontSize: 13 }}>Cancel</button>
-      </div>
-      {err && <div role="alert" style={{ fontSize: 12, color: RED }}>{err}</div>}
     </div>
   );
 }
