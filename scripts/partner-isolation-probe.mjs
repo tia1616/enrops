@@ -453,6 +453,24 @@ for (const h of hosts) {
     });
     ok(`${who} cannot set marketing asks for another partner (${p.slice(0, 8)}) (42501)`, r.json?.code === '42501', `status ${r.status} ${r.json?.code ?? ''}`);
   }
+  // Files (partner-marketing bucket): every flyer/logo this host can see opens;
+  // every one it can't see is refused a link.
+  const allMedia = rows(await asService('/rest/v1/class_media?select=storage_path'));
+  const allLogos = rows(await asService('/rest/v1/partner_logos?select=storage_path,partner_id'));
+  const seenMedia = new Set(rows(await call('/rest/v1/class_media?select=storage_path', { token: h.token })).map((x) => x.storage_path));
+  const seenLogos = new Set(rows(await call('/rest/v1/partner_logos?select=storage_path', { token: h.token })).map((x) => x.storage_path));
+  for (const path of [...allMedia.map((x) => x.storage_path), ...allLogos.map((x) => x.storage_path)]) {
+    const mine = seenMedia.has(path) || seenLogos.has(path);
+    const sign = await call(`/storage/v1/object/sign/partner-marketing/${path}`, { token: h.token, method: 'POST', body: { expiresIn: 60 } });
+    const signed = sign.json?.signedURL;
+    if (mine) {
+      const got = signed ? await fetch(`${URL_BASE}/storage/v1${signed}`) : null;
+      ok(`${who} opens its marketing file ${path.slice(-12)}`, got?.status === 200, `sign ${sign.status}, get ${got?.status}`);
+    } else {
+      ok(`${who} cannot open another partner's marketing file ${path.slice(-12)}`, !signed, `sign ${sign.status}`);
+    }
+  }
+
   const mediaSet = await call('/rest/v1/rpc/set_class_media', {
     token: h.token, method: 'POST',
     body: { p_kind: 'class', p_class_id: '00000000-0000-0000-0000-000000000000', p_item_key: 'flyer', p_storage_path: 'probe/x.pdf', p_filename: null },
