@@ -43,7 +43,9 @@ create table public.partner_marketing_asks (
   constraint partner_marketing_asks_item_check check (item_key in ('flyer', 'social_graphic')),
   constraint partner_marketing_asks_types_check check (
     cardinality(file_types) >= 1 and file_types <@ array['pdf', 'jpg', 'png']),
-  constraint partner_marketing_asks_note_check check (note is null or char_length(note) <= 300)
+  constraint partner_marketing_asks_note_check check (note is null or char_length(note) <= 300),
+  -- Accessible (ADA) is asked of flyers only, never social graphics (Jessica 2026-11-23).
+  constraint partner_marketing_asks_accessible_check check (item_key = 'flyer' or not needs_accessible)
 );
 alter table public.partner_marketing_asks enable row level security;
 
@@ -94,7 +96,7 @@ begin
     (partner_id, organization_id, item_key, wanted, file_types, needs_logo, needs_accessible, note, updated_by, updated_at)
   values
     (p_partner_id, v_org, p_item_key, coalesce(p_wanted, false), v_types,
-     coalesce(p_needs_logo, false), coalesce(p_needs_accessible, false),
+     coalesce(p_needs_logo, false), p_item_key = 'flyer' and coalesce(p_needs_accessible, false),
      nullif(btrim(coalesce(p_note, '')), ''), auth.uid(), now())
   on conflict (partner_id, item_key) do update set
     wanted = excluded.wanted, file_types = excluded.file_types, needs_logo = excluded.needs_logo,

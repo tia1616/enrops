@@ -11,10 +11,11 @@
 
 import { useEffect, useState } from "react";
 import {
-  listMarketingAsks, setMarketingAsk, getPartnerLogo, uploadPartnerLogo, openMarketingFile,
+  listMarketingAsks, setMarketingAsk, getPartnerLogo, uploadPartnerLogo, openMarketingFile, marketingFileUrl,
 } from "../../lib/partnerMarketing.js";
 import { MARKETING_ITEMS, FILE_TYPES, ACCESSIBLE_HINT, askLine, extOfPath } from "../../lib/partnerMarketingLogic.js";
-import { fileProblem } from "../../lib/providerDocumentLogic.js";
+import { fileProblem, formatDate } from "../../lib/providerDocumentLogic.js";
+import { localDateOf } from "../../lib/partnerPortalLogic.js";
 
 const blankAsk = (key) => ({ item_key: key, wanted: false, file_types: ["pdf", "jpg", "png"], needs_logo: false, needs_accessible: false, note: "" });
 
@@ -40,6 +41,21 @@ export default function MarketingAsksSection({ partner, viewer = "partner", orgN
     }
   }
   useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [partner.id]);
+
+  // A small picture of the uploaded logo (Jessica 2026-11-23), so both sides
+  // can see at a glance that it's there and which one it is. A PDF logo has no
+  // picture; it shows as a PDF tile.
+  const [logoThumb, setLogoThumb] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    setLogoThumb(null);
+    if (logo?.storage_path && extOfPath(logo.storage_path) !== "pdf") {
+      marketingFileUrl(logo.storage_path, { days: 1 })
+        .then((u) => { if (!cancelled) setLogoThumb(u); })
+        .catch(() => {}); // no picture is fine; the name and Download still show
+    }
+    return () => { cancelled = true; };
+  }, [logo?.storage_path]);
 
   const edit = (key, patch) => setAsks((a) => ({ ...a, [key]: { ...a[key], ...patch } }));
 
@@ -113,7 +129,7 @@ export default function MarketingAsksSection({ partner, viewer = "partner", orgN
                   {a.wanted ? (
                     <>
                       <div className="mt-1 text-sm text-j2s-ink/80">{askLine(a, partner.partner_name)}</div>
-                      {a.needs_accessible && <div className="mt-1 text-xs text-j2s-ink/60">Accessible: {ACCESSIBLE_HINT}</div>}
+                      {a.needs_accessible && item.accessible && <div className="mt-1 text-xs text-j2s-ink/60">Accessible: {ACCESSIBLE_HINT}</div>}
                       {a.note && <div className="mt-1 text-sm text-j2s-ink">{a.note}</div>}
                     </>
                   ) : <div className="mt-1 text-sm text-j2s-ink/55">Not asked for.</div>}
@@ -145,10 +161,12 @@ export default function MarketingAsksSection({ partner, viewer = "partner", orgN
                       <input type="checkbox" className="h-4 w-4" checked={a.needs_logo} onChange={(e) => edit(item.key, { needs_logo: e.target.checked })} />
                       Must include our logo
                     </label>
-                    <label className="flex items-start gap-2">
-                      <input type="checkbox" className="mt-0.5 h-4 w-4" checked={a.needs_accessible} onChange={(e) => edit(item.key, { needs_accessible: e.target.checked })} />
-                      <span>Must be accessible (ADA)<span className="block text-xs text-j2s-ink/60">{ACCESSIBLE_HINT}</span></span>
-                    </label>
+                    {item.accessible && (
+                      <label className="flex items-start gap-2">
+                        <input type="checkbox" className="mt-0.5 h-4 w-4" checked={a.needs_accessible} onChange={(e) => edit(item.key, { needs_accessible: e.target.checked })} />
+                        <span>Must be accessible (ADA)<span className="block text-xs text-j2s-ink/60">{ACCESSIBLE_HINT}</span></span>
+                      </label>
+                    )}
                     <label className="text-xs font-semibold text-j2s-ink/60">
                       Anything else, in your words
                       <input type="text" maxLength={300} value={a.note} onChange={(e) => edit(item.key, { note: e.target.value })}
@@ -174,7 +192,16 @@ export default function MarketingAsksSection({ partner, viewer = "partner", orgN
           {logo === undefined ? <span className="text-j2s-ink/60">Loading…</span>
             : logo ? (
               <>
-                <span className="text-j2s-ink/80">{logo.original_filename || "Logo"}</span>
+                {/* Light grey behind it, so a white or see-through logo still shows. */}
+                <span className="flex h-16 w-24 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-j2s-ink/10 bg-j2s-ink/[0.04]">
+                  {logoThumb
+                    ? <img src={logoThumb} alt={`${partner.partner_name || "Partner"} logo`} className="max-h-full max-w-full object-contain p-1" />
+                    : <span className="text-xs font-semibold text-j2s-ink/55">{extOfPath(logo.storage_path) === "pdf" ? "PDF" : "Logo"}</span>}
+                </span>
+                <span className="min-w-0">
+                  <span className="block font-semibold text-emerald-700">✓ Uploaded{logo.uploaded_at ? ` ${formatDate(localDateOf(logo.uploaded_at))}` : ""}</span>
+                  <span className="block truncate text-xs text-j2s-ink/60">{logo.original_filename || "Logo"}</span>
+                </span>
                 <button type="button" onClick={openLogo} className="font-semibold text-j2s-purple hover:underline">Download</button>
               </>
             ) : <span className="text-j2s-ink/55">{isPartner ? "Not uploaded yet." : "Not uploaded yet. They add it from their portal."}</span>}

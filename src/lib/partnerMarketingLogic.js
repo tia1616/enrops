@@ -7,9 +7,12 @@
 
 import { storedExtension } from "./providerDocumentLogic.js";
 
+// `accessible`: whether a partner can ask for it to be accessible (ADA). A
+// flyer yes; a social graphic no (Jessica 2026-11-23). The database holds the
+// same rule (partner_marketing_asks_accessible_check).
 export const MARKETING_ITEMS = [
-  { key: "flyer", label: "Flyer", lower: "a flyer" },
-  { key: "social_graphic", label: "Social graphic", lower: "a social graphic" },
+  { key: "flyer", label: "Flyer", lower: "a flyer", accessible: true },
+  { key: "social_graphic", label: "Social graphic", lower: "a social graphic", accessible: false },
 ];
 export const FILE_TYPES = [
   { key: "pdf", label: "PDF" },
@@ -42,7 +45,7 @@ export function askLine(ask, partnerName = "the partner") {
   return [
     typesText(ask.file_types),
     ask.needs_logo ? `with ${partnerName}'s logo` : null,
-    ask.needs_accessible ? "accessible (ADA)" : null,
+    ask.needs_accessible && itemOf(ask.item_key).accessible ? "accessible (ADA)" : null,
   ].filter(Boolean).join(" · ");
 }
 

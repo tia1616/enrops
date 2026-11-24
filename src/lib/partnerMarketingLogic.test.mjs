@@ -18,6 +18,8 @@ const flyer = { item_key: 'flyer', wanted: true, file_types: ['pdf', 'jpg'], nee
 const social = { item_key: 'social_graphic', wanted: false, file_types: ['png'] };
 eq('only wanted asks, in order', wantedAsks([social, flyer]).map((a) => a.item_key), ['flyer']);
 eq('ask line', askLine(flyer, 'Happy Valley'), "PDF or JPG · with Happy Valley's logo · accessible (ADA)");
+// Social graphics are never asked to be accessible (Jessica 2026-11-23), even if a row says so.
+eq('social graphic never says accessible', askLine({ item_key: 'social_graphic', wanted: true, file_types: ['png'], needs_logo: true, needs_accessible: true }, 'HV'), "PNG · with HV's logo");
 
 const file = (name, type, size = 1000) => ({ name, type, size });
 eq('accepted type', fileProblemForAsk(file('f.pdf', 'application/pdf'), flyer, 'Happy Valley'), null);
