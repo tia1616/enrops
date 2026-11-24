@@ -10,7 +10,7 @@
 // photo": families are told to email the provider, and the provider deletes the
 // photo here without having to find the instructor who took it.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
 import { signPhotoUrls, deleteClassPhoto } from "../../lib/classPhotos.js";
@@ -68,8 +68,15 @@ export default function ClassPhotosSettingsCard({ org }) {
     return () => { cancelled = true; };
   }, [orgId]);
 
+  // Latest load wins. Opening the list again, a delete, or the switch going
+  // off and on each start a load; an older, slower one must not overwrite the
+  // newer result (or put a stale error over a list that loaded fine).
+  const loadSeq = useRef(0);
+
   const loadPhotos = useCallback(async () => {
     if (!orgId) return;
+    const seq = ++loadSeq.current;
+    setListErr("");
     try {
       // Newest first. 60 covers "the photo from class last Tuesday".
       const { data, error } = await supabase
@@ -86,11 +93,14 @@ export default function ClassPhotosSettingsCard({ org }) {
         const { data: progs } = await supabase.from("programs").select("id, curriculum").in("id", ids);
         for (const p of progs ?? []) names[p.id] = p.curriculum || "Class";
       }
+      const signed = await signPhotoUrls(rows);
+      if (seq !== loadSeq.current) return;
       setClassNames(names);
-      setUrls(await signPhotoUrls(rows));
+      setUrls(signed);
       setPhotos(rows);
     } catch (e) {
       console.error("[ClassPhotosSettingsCard] photo load failed", e);
+      if (seq !== loadSeq.current) return;
       setListErr("Couldn't load the photos.");
       setPhotos([]);
     }
