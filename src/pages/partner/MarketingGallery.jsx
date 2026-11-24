@@ -59,7 +59,8 @@ function TermGallery({ group, providerName }) {
         ))}
       </div>
       {note?.err && <p role="alert" className="text-xs text-red-700">{note.err}</p>}
-      <ul className="mt-1.5 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+      {/* Three across on a phone, so a term's flyers fit on one screen. */}
+      <ul className="mt-1.5 grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5">
         {group.cards.map((k) => <Card key={k.file.storage_path} card={k} />)}
       </ul>
     </div>
@@ -113,10 +114,10 @@ function Card({ card }) {
             : <span className="text-sm font-bold text-j2s-ink/45">{picture ? "…" : "PDF"}</span>}
         </span>
       </button>
-      <div className="p-2">
-        <div className="line-clamp-2 text-xs font-semibold leading-snug text-j2s-ink">{c.title || "Class"}</div>
-        <div className="text-[11px] text-j2s-ink/55">{itemOf(ask.item_key).label}</div>
-        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
+      <div className="p-1.5">
+        <div className="line-clamp-2 text-[11px] font-semibold leading-snug text-j2s-ink">{c.title || "Class"}</div>
+        <div className="text-[10px] text-j2s-ink/55">{itemOf(ask.item_key).label}</div>
+        <div className="mt-1 flex flex-wrap gap-x-2.5 gap-y-1">
           <button type="button" className={btn} onClick={share} disabled={!!busy}>{busy === "share" ? "Sharing…" : "Share"}</button>
           <button type="button" className={btn} onClick={download} disabled={!!busy}>Download</button>
         </div>

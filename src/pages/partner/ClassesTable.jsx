@@ -129,6 +129,8 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
   }
 
   const heading = viewer === "provider" ? `Classes at ${partnerName || "this partner"}'s sites` : "Classes at your sites";
+  // What's in, by term, for the flyer board.
+  const gallery = classes?.length && wanted.length ? galleryGroups(groupClassesByTerm(classes, formatTermLabel), asks, media) : [];
 
   return (
     <section className="mt-5 rounded-2xl bg-white shadow-card">
@@ -143,14 +145,16 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
             const have = live.filter((c) => media.has(mediaKey(c.kind, c.class_id, a.item_key))).length;
             return `${itemOf(a.item_key).plural} on ${have} of ${live.length} classes`;
           }).join(" · ")}
+          {gallery.length > 0 && (
+            <>
+              {" · "}
+              <button type="button" className="font-semibold text-j2s-purple hover:underline"
+                onClick={() => document.getElementById(`flyer-board-${partnerId}`)?.scrollIntoView({ behavior: "smooth", block: "start" })}>
+                See them ↓
+              </button>
+            </>
+          )}
         </p>
-      )}
-      {/* The flyer board: everything that's in, by term (both pages). */}
-      {classes?.length > 0 && wanted.length > 0 && (
-        <MarketingGallery
-          groups={galleryGroups(groupClassesByTerm(classes, formatTermLabel), asks, media)}
-          providerName={orgName}
-        />
       )}
       {/* Nothing asked yet: tell the partner it can, and take it there. */}
       {viewer === "partner" && classes?.length > 0 && wanted.length === 0 && !mediaError && onAskMarketing && (
@@ -287,6 +291,13 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
               ])}
             </tbody>
           </table>
+        </div>
+      )}
+      {/* The flyer board, below the classes so enrollment stays first on a
+          phone (portal rule 1); "See them" at the top jumps here. */}
+      {gallery.length > 0 && (
+        <div id={`flyer-board-${partnerId}`} className="scroll-mt-24 pb-4">
+          <MarketingGallery groups={gallery} providerName={orgName} />
         </div>
       )}
     </section>
