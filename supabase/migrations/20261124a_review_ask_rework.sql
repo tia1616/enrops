@@ -168,6 +168,10 @@ grant select on public.review_asks to authenticated;
 -- Default privileges hand anon SELECT on new tables; RLS already blocks it
 -- (policies are TO authenticated), but take the grant away too.
 revoke all on public.review_asks from anon;
+-- Prod's default privileges also hand authenticated INSERT/UPDATE/DELETE on
+-- new tables (staging's do not). No write policy exists, so RLS blocks them,
+-- but this table is written only by service role: take the grants away.
+revoke insert, update, delete, truncate on public.review_asks from authenticated;
 revoke all on public.org_household_flags from anon;
 grant all on public.review_asks to service_role;
 
