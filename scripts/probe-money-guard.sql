@@ -74,6 +74,8 @@ begin
       when 'statement_descriptor_suffix' then 'case when coalesce(statement_descriptor_suffix,'''') <> ''ABC'' then ''ABC'' else ''ABD'' end'
       when 'default_age_min'        then 'case when coalesce(default_age_min,0) <> 5 then 5 else 6 end'
       when 'default_age_max'        then 'case when coalesce(default_age_max,0) <> 40 then 40 else 41 end'
+      -- CHECK: null or https:// (20261124a). 'zz' broke it and reported it unprobeable.
+      when 'google_review_url'      then 'case when coalesce(google_review_url,'''') <> ''https://probe.example.test/a'' then ''https://probe.example.test/a'' else ''https://probe.example.test/b'' end'
       else case
         -- A small sentinel, not `+ 1`: incrementing overflowed platform_fee_cap_cents
         -- and reported it unprobeable, hiding whether it was locked at all.
