@@ -1717,14 +1717,26 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
   const saleStatus = (() => {
     if (p.status !== "open" || isCampProgram(p) || !hasDates) return null;
     const dates = scheduleArr.filter((x) => x?.kind === "session" && x?.date).map((x) => String(x.date).slice(0, 10)).sort();
-    const now = new Date();
-    const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
-    return classSaleStatus({
+    // The business's own day, the same one checkout and the family page count by.
+    let todayIso;
+    try {
+      todayIso = new Intl.DateTimeFormat("en-CA", { timeZone: rowOrg?.timezone || "America/Los_Angeles", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+    } catch {
+      todayIso = new Date().toISOString().slice(0, 10);
+    }
+    const status = classSaleStatus({
       last_session: dates[dates.length - 1],
       sessions_total: dates.length,
       sessions_left: dates.filter((d) => d >= todayIso).length,
       late_join_allowed: rowOrg?.late_join_allowed,
     }, todayIso);
+    // "In progress" (green) only where families can actually buy it: a
+    // season-switching business's off-season class is running but NOT on sale.
+    if (status?.state === "in_progress"
+      && !isTermOnSale({ active_registration_term: orgActiveTerm, classes_follow_dates: rowOrg?.classes_follow_dates }, p.term)) {
+      return null;
+    }
+    return status;
   })();
 
   return (
