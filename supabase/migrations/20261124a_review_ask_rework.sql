@@ -6,7 +6,7 @@
 --      Chosen PER AUTOMATION (automations.trigger_override), not by rewriting the
 --      template, so a contact-only tenant keeps 'days_after_engagement'.
 --   2. A second copy variant for withdrawn / refunded registrations
---      (template default + per-org override), and a per-automation reply-to.
+--      (template default + per-org override).
 --   3. organizations.google_review_url: where the tracked button lands.
 --      NULL = the ask does not send (fail closed, logged), never a guessed URL.
 --   4. org_household_flags: staff / instructor / owner households, never asked.
@@ -44,22 +44,16 @@ alter table public.automation_templates
 alter table public.automations
   add column if not exists trigger_override text
     check (trigger_override is null or trigger_override in ('days_after_last_session','days_after_engagement')),
-  add column if not exists reply_to_override text
-    check (reply_to_override is null or reply_to_override ~* '^[^@\s]+@[^@\s]+\.[^@\s]+$'),
   add column if not exists withdrawn_subject_override text,
   add column if not exists withdrawn_body_override text,
   -- Reminder to families with no click, N days after the ask. NULL/0 = off.
   add column if not exists reminder_days_after smallint
-    check (reminder_days_after is null or reminder_days_after between 1 and 14),
-  -- false = the message carries its own personal sign-off, so the org's email
-  -- signature block is left off (no second sign-off). Default true: every
-  -- existing automation renders exactly as before.
-  add column if not exists show_signature boolean not null default true;
+    check (reminder_days_after is null or reminder_days_after between 1 and 14);
+-- Sign-off and reply-to are deliberately NOT per automation: every email uses
+-- the org's signature and reply-to from settings (one place to set each).
 
 comment on column public.automations.trigger_override is
   'NULL = use automation_templates.trigger_type. Lets one org run review_request off the last session while another runs it off engagement.';
-comment on column public.automations.reply_to_override is
-  'NULL = org default reply-to (org_branding.email_reply_to). Set when a specific person should get the replies to this one automation.';
 
 -- 2. Withdrawn/refunded copy defaults on the template ---------------------------
 alter table public.automation_templates
@@ -245,8 +239,7 @@ insert into public.automation_templates (
   'days_after_first_session', 'camps', 'informational',
   'How was day one, {{first_name}}?',
   '<p style="margin:0 0 16px;">Hi {{first_name}},</p>
-<p style="margin:0 0 16px;">{{child_first_name}} just finished day one of {{program_name}}. If anything should be different tomorrow (drop-off, the group, the project, anything at all), reply tonight and we''ll get on it before drop-off.</p>
-<p style="margin:0;">{{sender_name}}, {{org_name}}</p>',
+<p style="margin:0 0 16px;">{{child_first_name}} just finished day one of {{program_name}}. If anything should be different tomorrow (drop-off, the group, the project, anything at all), reply tonight and we''ll get on it before drop-off.</p>',
   '{"days_after": 0}'::jsonb, 3, false, true,
   (select coalesce(sort_order, 40) + 1 from public.automation_templates where key = 'check_in')
 ) on conflict (key) do nothing;
@@ -261,15 +254,13 @@ update public.automation_templates set
 <p style="margin:0 0 16px;">{{child_first_name}} just finished {{program_name}}. Thank you for sharing them with us this term.</p>
 <p style="margin:0 0 16px;">One favor: would you leave us a Google review? Two sentences is plenty. It is how the next family decides whether to try us.</p>
 <p style="margin:0 0 16px;"><a href="{{review_link_url}}" style="display:inline-block;padding:12px 22px;border-radius:8px;background:#674EE8;color:#ffffff;font-weight:600;text-decoration:none;">Leave a Google review</a></p>
-<p style="margin:0 0 16px;">If something should have been better, hit reply and tell me. I read every one, and it changes what we do next term.</p>
-<p style="margin:0;">{{sender_name}}</p>',
+<p style="margin:0 0 16px;">If something should have been better, hit reply and tell me. I read every one, and it changes what we do next term.</p>',
   default_withdrawn_subject = 'Two minutes for {{program_name}}?',
   default_withdrawn_body = '<p style="margin:0 0 16px;">Hi {{first_name}},</p>
 <p style="margin:0 0 16px;">Thank you for trying {{program_name}} with us this term.</p>
 <p style="margin:0 0 16px;">One favor: would you leave us a Google review? Two sentences is plenty, whatever your experience was. It is how the next family decides whether to try us.</p>
 <p style="margin:0 0 16px;"><a href="{{review_link_url}}" style="display:inline-block;padding:12px 22px;border-radius:8px;background:#674EE8;color:#ffffff;font-weight:600;text-decoration:none;">Leave a Google review</a></p>
-<p style="margin:0 0 16px;">If something should have been better, hit reply and tell me. I read every one, and it changes what we do next term.</p>
-<p style="margin:0;">{{sender_name}}</p>'
+<p style="margin:0 0 16px;">If something should have been better, hit reply and tell me. I read every one, and it changes what we do next term.</p>'
 where key = 'review_request';
 
 commit;

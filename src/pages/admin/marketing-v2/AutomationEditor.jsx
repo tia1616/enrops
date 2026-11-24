@@ -472,9 +472,6 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
     return () => { alive = false; };
   }, [isReviewAsk, orgId]);
   const reviewOffLastSession = isReviewAsk && reviewSettings.trigger === "days_after_last_session";
-  // Only the review ask exposes the toggle; every other template lets the
-  // server use the saved value (true for all of them).
-  const showSignatureParam = isReviewAsk ? reviewSettings.showSignature !== false : undefined;
   const [reviewLink, setReviewLink] = useState(
     isReviewLink ? extractReviewUrl(currentReviewBody) : "",
   );
@@ -583,7 +580,6 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
               test_program_id: srcType === "program" ? srcId : null,
               audience: audienceParam,
               variant: variantParam,
-              show_signature: showSignatureParam,
             },
           },
         );
@@ -600,7 +596,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       }
     }, 500);
     return () => { cancelled = true; clearTimeout(t); };
-  }, [wantsServerPreview, realSourceSelected, selectedSource, subject, body, emailAttachments, orgId, template.key, audienceParam, variantParam, showSignatureParam]);
+  }, [wantsServerPreview, realSourceSelected, selectedSource, subject, body, emailAttachments, orgId, template.key, audienceParam, variantParam]);
 
   function toggleBodyEdit() {
     if (editingBody) {
@@ -734,8 +730,6 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
   const reviewSettingsDirty = isReviewAsk && JSON.stringify(reviewSettings) !== JSON.stringify(savedReviewSettings);
   const googleUrlClean = reviewSettings.googleUrl.trim();
   const googleUrlInvalid = isReviewAsk && googleUrlClean !== "" && !/^https:\/\/\S+$/i.test(googleUrlClean);
-  const replyToClean = reviewSettings.replyTo.trim();
-  const replyToInvalid = isReviewAsk && replyToClean !== "" && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(replyToClean);
   // Clamp ≥1; empty/invalid falls back to the template default. Mirrors the cron.
   const parsedTiming = hasTiming
     ? Math.max(1, parseInt(timingValue, 10) || defaultTiming || 1)
@@ -760,7 +754,6 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
       // HTML and entities render correctly there, but decoded chars look
       // cleaner in the editor next time they open it.
       if (googleUrlInvalid) throw new Error("The Google review link must start with https://");
-      if (replyToInvalid) throw new Error("The reply-to address doesn't look like an email address.");
       const cleanedSubject = decodeCommonEntities(stdSubject);
       const cleanedBody = decodeCommonEntities(stdBody);
       // Only set overrides for fields that actually differ from defaults —
@@ -789,8 +782,6 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
         patch.timing_override = base;
         patch.trigger_override = reviewSettings.trigger === "days_after_last_session" ? "days_after_last_session" : null;
         patch.reminder_days_after = reviewSettings.reminderOn ? remDays : null;
-        patch.reply_to_override = replyToClean || null;
-        patch.show_signature = reviewSettings.showSignature !== false;
         if (hasWithdrawnCopy) {
           const ws = decodeCommonEntities(wdSubject);
           const wb = decodeCommonEntities(wdBody);
@@ -850,7 +841,7 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
         if (orgErr) throw orgErr;
         if (!orgRow) throw new Error("The email saved, but the Google review link did not. You may not have permission to change it.");
       }
-      if (isReviewAsk) setSavedReviewSettings({ ...reviewSettings, googleUrl: googleUrlClean, replyTo: replyToClean });
+      if (isReviewAsk) setSavedReviewSettings({ ...reviewSettings, googleUrl: googleUrlClean });
       // Append voice-signal rows for any field that actually changed. Foundation
       // for Ennie learning operator voice over time — phrases added/dropped,
       // structural changes per save. Failure here is non-fatal (the save
@@ -996,7 +987,6 @@ export default function AutomationEditor({ template, automation, orgId, orgName,
             test_program_id: srcType === "program" ? srcId : null,
             audience: audienceParam,
             variant: variantParam,
-            show_signature: showSignatureParam,
           },
         },
       );

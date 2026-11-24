@@ -68,7 +68,7 @@ export function ReviewAskSettings({ value, onChange }) {
         </p>
       </div>
 
-      <div style={{ marginBottom: 16 }}>
+      <div>
         <span style={label}>Reminder</span>
         <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, color: INK, flexWrap: "wrap" }}>
           <input type="checkbox" checked={v.reminderOn} onChange={(e) => set({ reminderOn: e.target.checked })} />
@@ -84,26 +84,6 @@ export function ReviewAskSettings({ value, onChange }) {
           <span>days later, to families who have not clicked</span>
         </label>
         <p style={help}>Only whether they clicked decides it. One reminder per family, then it stops.</p>
-      </div>
-
-      <div>
-        <span style={label}>Replies go to</span>
-        <input
-          type="email"
-          value={v.replyTo}
-          onChange={(e) => set({ replyTo: e.target.value })}
-          placeholder="Your usual reply-to address"
-          style={{ ...input, width: "100%" }}
-        />
-        <p style={help}>Leave blank to use your usual reply-to. Families who reply should reach someone who reads it the same day.</p>
-      </div>
-
-      <div style={{ marginTop: 16 }}>
-        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 14, color: INK }}>
-          <input type="checkbox" checked={v.showSignature} onChange={(e) => set({ showSignature: e.target.checked })} />
-          <span>Add my email signature under this message</span>
-        </label>
-        <p style={help}>Turn this off when the message already signs off with your name, so families do not see two sign-offs.</p>
       </div>
     </div>
   );
@@ -199,8 +179,6 @@ export function reviewSettingsFrom(automation, googleUrl) {
     lastSessionDays: String(Number.isFinite(tt.days_after_last_session) ? tt.days_after_last_session : 0),
     reminderOn: (automation?.reminder_days_after ?? 0) >= 1,
     reminderDays: String((automation?.reminder_days_after ?? 0) >= 1 ? automation.reminder_days_after : 3),
-    replyTo: automation?.reply_to_override ?? "",
-    showSignature: automation?.show_signature !== false,
     googleUrl: googleUrl ?? "",
   };
 }
