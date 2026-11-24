@@ -1856,15 +1856,26 @@ export default function Home() {
                                   against a bare one would invent a discount
                                   that is partly the fee. */}
                               {/* A class that has started is priced for the
-                                  sessions left; the full price is struck
-                                  through beside it, as an early bird is. */}
-                              {fallShowsEarlyBird || fallPricing.is_prorated ? (
+                                  sessions left (pricing.js proratedBaseCents).
+                                  Said in plain words under the usual purple
+                                  price, NOT in the early-bird orange with a
+                                  strike-through, which would read as a sale. */}
+                              {fallShowsEarlyBird && !fallPricing.is_prorated ? (
                                 <>
                                   <p className="font-titan text-3xl text-j2s-orange-dark">
                                     {formatMoney(totalWithFee(fallPricing.base_cents, feeConfig))}
                                   </p>
                                   <p className="text-xs text-j2s-ink/60 line-through">
                                     {formatMoney(totalWithFee(fallPricing.standard_cents, feeConfig))}
+                                  </p>
+                                </>
+                              ) : fallPricing.is_prorated ? (
+                                <>
+                                  <p className="font-titan text-3xl text-j2s-purple">
+                                    {formatMoney(totalWithFee(fallPricing.base_cents, feeConfig))}
+                                  </p>
+                                  <p className="text-xs text-j2s-ink/60">
+                                    For the {p.sessions_left} sessions left
                                   </p>
                                 </>
                               ) : (

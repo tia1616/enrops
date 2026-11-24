@@ -1624,12 +1624,16 @@ async function recordExternalRefund(
 ) {
   const { data: regData } = await admin
     .from('registrations')
-    .select('id, organization_id, program_id, camp_session_id, parent_id, student_id, payment_status')
+    // registered_at: a late joiner's fee refund is measured against the
+    // sessions they bought - the same as refund-registration, so a refund made
+    // from Stripe and one made in enrops return the same fee.
+    .select('id, organization_id, program_id, camp_session_id, parent_id, student_id, payment_status, registered_at')
     .eq('id', input.registrationId)
     .maybeSingle();
   const reg = regData as {
     id: string; organization_id: string; program_id: string | null; camp_session_id: string | null;
     parent_id: string | null; student_id: string | null; payment_status: string | null;
+    registered_at: string | null;
   } | null;
   if (!reg) {
     console.error(`[charge.refunded] registration ${input.registrationId} vanished; skipping`);
@@ -1758,6 +1762,7 @@ async function recordExternalRefund(
       organization_id: reg.organization_id,
       program_id: reg.program_id,
       camp_session_id: reg.camp_session_id,
+      registered_at: reg.registered_at ?? null,
     });
     const facts = await readChargeFeeFacts(stripe, input.paymentIntentId, input.chargeAccountId);
     alertFactsRead = true;
