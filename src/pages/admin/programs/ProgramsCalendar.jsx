@@ -1189,8 +1189,8 @@ export default function ProgramsCalendar() {
       )}
       {term && termsLoaded && (
         // On sale = the one open season for a provider who switches seasons by
-        // hand (the old activeTerm === term), or the open season plus the next
-        // three for one whose classes follow their dates (classSeasons.js).
+        // hand (the old activeTerm === term), or, for one whose classes follow
+        // their dates, earlier seasons and up to three ahead (classSeasons.js).
         isTermOnSale({ active_registration_term: activeTerm, classes_follow_dates: org?.classes_follow_dates }, term) ? (
           // Honest state: a term can be "open for registration" while the org has
           // no Stripe account connected — the page takes sign-ups but the money
@@ -1214,16 +1214,25 @@ export default function ProgramsCalendar() {
               </Link>
             </div>
           ) : (
-            <div style={{ ...registrationBanner, background: "#f0f8f0", borderColor: "#bfd9bf", color: OK_GREEN }}>
-              ✓ {formatTermLabel(term)} is open for registration — this is what parents see.
-            </div>
+            org?.classes_follow_dates === true ? (
+              // Date-following: an earlier season can be "on sale" while some of
+              // its classes have finished, so name the real rule (isClassOnSale).
+              <div style={{ ...registrationBanner, background: "#f0f8f0", borderColor: "#bfd9bf", color: OK_GREEN }}>
+                ✓ Families can sign up for these classes until each one&apos;s last session.
+              </div>
+            ) : (
+              <div style={{ ...registrationBanner, background: "#f0f8f0", borderColor: "#bfd9bf", color: OK_GREEN }}>
+                ✓ {formatTermLabel(term)} is open for registration — this is what parents see.
+              </div>
+            )
           )
         ) : org?.classes_follow_dates === true ? (
           // No switch to offer: this provider's open season moves on its own.
-          // Off sale here means the season is over or more than a year out.
+          // Off sale here can only mean more than a year out (earlier seasons
+          // stay on sale until each class's last session).
           <div style={{ ...registrationBanner, background: "#fff8ec", borderColor: "#f0dfb8", color: AMBER }}>
             <span>
-              Families don&apos;t see {formatTermLabel(term)} classes. They see classes from this season through the next year.
+              Families don&apos;t see {formatTermLabel(term)} classes yet. They see classes up to a year ahead.
             </span>
           </div>
         ) : (

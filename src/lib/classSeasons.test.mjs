@@ -1,6 +1,6 @@
 // Pins the one "which seasons are on sale" rule (classSeasons.js), and that it
 // orders seasons the same way as SQL term_for_date / term_ordinal (20261123d).
-import { termOrdinal, nextTerm, onSaleTerms, isTermOnSale, classTermFor, isPastTerm } from "./classSeasons.js";
+import { termOrdinal, nextTerm, isTermOnSale, isClassOnSale, classTermFor, isPastTerm } from "./classSeasons.js";
 
 let pass = 0;
 let fail = 0;
@@ -21,12 +21,28 @@ eq(nextTerm("SU27"), "FA27", "Summer is followed by Fall of the same year");
 const dates = { classes_follow_dates: true, active_registration_term: "FA26" };
 const manual = { classes_follow_dates: false, active_registration_term: "WI27" };
 
-eq(onSaleTerms(dates), ["FA26", "WI27", "SP27", "SU27"], "a date-following org sells the open season and three after");
-eq(onSaleTerms(manual), ["WI27"], "a season-switching org sells only its open season (unchanged)");
-eq(onSaleTerms({ classes_follow_dates: true }), [], "no open season = nothing on sale");
 ok(isTermOnSale(dates, "WI27"), "a January class is on sale in November for a date-following org");
+ok(isTermOnSale(dates, "SU27"), "three seasons ahead is on sale");
+ok(!isTermOnSale(dates, "FA27"), "four seasons ahead is not on sale yet");
 ok(!isTermOnSale(manual, "FA26"), "a season-switching org's old season stays off sale");
+ok(isTermOnSale(manual, "WI27"), "a season-switching org's open season is on sale");
+ok(!isTermOnSale(manual, "SP27"), "a season-switching org's next season waits for the switch");
 ok(!isTermOnSale(dates, null), "a class with no season is not on sale");
+ok(!isTermOnSale({ classes_follow_dates: true }, "WI27"), "no open season = nothing on sale");
+
+// THE LAST-SESSION RULE (Jessica 2026-11-24): a running class stays on sale
+// until its last session, even after its season has ended.
+const winterOpen = { classes_follow_dates: true, active_registration_term: "WI27" };
+const fallClass = { term: "FA26" };
+ok(isTermOnSale(winterOpen, "FA26"), "an earlier season stays on sale for a date-following org");
+ok(isClassOnSale(winterOpen, fallClass, "2026-12-10", "2026-12-03"), "a Fall class still running in December is on sale");
+ok(isClassOnSale(winterOpen, fallClass, "2026-12-10", "2026-12-10"), "on sale ON its last session day");
+ok(!isClassOnSale(winterOpen, fallClass, "2026-12-10", "2026-12-11"), "off sale the day after its last session");
+ok(isClassOnSale(winterOpen, fallClass, null, "2026-12-11"), "no known last session: the season alone decides (old behaviour)");
+const j2s = { classes_follow_dates: false, active_registration_term: "WI27" };
+ok(!isClassOnSale(j2s, fallClass, "2026-12-10", "2026-12-03"), "a season-switching org's running Fall class stays off sale (unchanged)");
+ok(!isClassOnSale(j2s, { term: "WI27" }, "2027-03-01", "2027-03-02"), "a season-switching org's FINISHED open-season class drops off");
+ok(isClassOnSale(j2s, { term: "WI27" }, "2027-03-01", "2027-01-20"), "a season-switching org's running open-season class is on sale");
 
 // THE BUG: Branching Minds' January classes were filed under Fall.
 eq(classTermFor(dates, "2027-01-05"), "WI27", "a class starting Jan 5 is filed under Winter 2027");

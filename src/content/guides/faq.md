@@ -133,7 +133,7 @@ A family started registering and didn't pay. They aren't on your roster yet.
 **Programs → Class rosters**, expand the class, tap **Refund / remove**. See **Refund a family**.
 
 ### Does a class stop selling when it starts? {#faq-close}
-Not when it starts. It comes off your page once its season is over (see **When families see your classes**). To stop new registrations sooner, **Unpublish** it. See **Stop selling a class**.
+Not when it starts. It comes off your page after its last session (see **When families see your classes**). To stop new registrations sooner, **Unpublish** it. See **Stop selling a class**.
 
 ### How do I send the roster to the school? {#faq-roster-partner}
 **View / print → Email roster to partner**. See **Send the roster to your school partner**.

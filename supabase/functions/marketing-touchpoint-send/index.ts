@@ -266,23 +266,29 @@ type VipOffering = {
 // The raw columns were still being selected after that switch, which left a
 // second, stale source of the From line sitting in scope where a later edit
 // could reach for it.
-// The seasons whose weekly classes the public catalog shows. Mirror of
-// src/lib/classSeasons.js onSaleTerms; classSeasons.test.mjs pins the same
-// ordering (FA26 -> WI27 -> SP27 -> SU27).
+// Is this weekly class's season one the public catalog shows? Mirror of
+// src/lib/classSeasons.js isTermOnSale (Deno cannot import src);
+// classSeasons.test.mjs pins the same season ordering (FA26 -> WI27 -> SP27).
+// Season-switching org: the open season only. Date-following org: earlier
+// seasons and up to three ahead (a running class stays on sale until its last
+// session; the catalog applies that half, so a finished class's link simply
+// lands on the full page).
 const SEASON_CODES = ["WI", "SP", "SU", "FA"];
-function onSaleTermsForOrg(org: { active_registration_term: string | null; classes_follow_dates?: boolean | null }): string[] {
+function seasonOrdinal(term: string): number | null {
+  const m = /^(WI|SP|SU|FA)(\d{2})$/.exec(term.trim());
+  return m ? Number(m[2]) * 4 + SEASON_CODES.indexOf(m[1]) : null;
+}
+function isTermOnSaleForOrg(
+  org: { active_registration_term: string | null; classes_follow_dates?: boolean | null },
+  term: string | null | undefined,
+): boolean {
   const open = org.active_registration_term;
-  if (!open) return [];
-  if (org.classes_follow_dates !== true) return [open];
-  const m = /^(WI|SP|SU|FA)(\d{2})$/.exec(open.trim());
-  if (!m) return [open];
-  const out = [open];
-  let n = Number(m[2]) * 4 + SEASON_CODES.indexOf(m[1]);
-  for (let i = 0; i < 3; i += 1) {
-    n += 1;
-    out.push(`${SEASON_CODES[n % 4]}${String(Math.floor(n / 4) % 100).padStart(2, "0")}`);
-  }
-  return out;
+  if (!term || !open) return false;
+  if (org.classes_follow_dates !== true) return term === open;
+  const o = seasonOrdinal(open);
+  const t = seasonOrdinal(term);
+  if (o === null || t === null) return term === open;
+  return t <= o + 3;
 }
 
 type Org = {
@@ -1590,10 +1596,8 @@ async function buildTokensForRecipient(input: TokensInput & { locationNameMap?: 
   // via public_org_directory). Single source of truth; no hardcoded term. A deep
   // link for any other term would land on a catalog that can't show that class,
   // so fall back to the full catalog.
-  // Same rule as src/lib/classSeasons.js onSaleTerms (Deno cannot import src):
-  // the open season, plus the next three for a provider whose classes follow
-  // their dates (organizations.classes_follow_dates, 20261123d).
-  const inCatalogTerm = onSaleTermsForOrg(org).includes(program?.term ?? "");
+  // Same rule as src/lib/classSeasons.js isTermOnSale (see isTermOnSaleForOrg).
+  const inCatalogTerm = isTermOnSaleForOrg(org, program?.term);
   const programDeepLink = program?.id && inCatalogTerm ? `${PUBLIC_SITE_URL}/${org.slug}?program=${program.id}` : "";
   const defaultRegisterUrl = `${PUBLIC_SITE_URL}/${org.slug}`;
   const untaggedRegisterUrl = safeRegistrationUrl || programDeepLink || defaultRegisterUrl;

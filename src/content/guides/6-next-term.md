@@ -22,8 +22,8 @@ goal: Next term's classes are copied, dated and open, and this term's families h
 
 ## When families see your classes {#open-term}
 
-- Most providers have nothing to switch. Your page shows weekly classes from this season and the next three, so a class for January or next summer is on sale as soon as you publish it.
-- Each weekly class belongs to the season of its first class. When that season is over, the class comes off your page on its own, even if it still has sessions left. Families already enrolled aren't affected.
+- Most providers have nothing to switch. Your page shows weekly classes up to a year ahead, so a class for January or next summer is on sale as soon as you publish it, even while this term's classes are still running.
+- Each weekly class stays on your page until its last session, then comes off on its own. Families already enrolled aren't affected. To stop sign-ups sooner, **Unpublish** it.
 - Camps stay on your page until their last day, whatever the season.
 - If Programs shows **Open (term) for registration →**, your account opens one term at a time instead. Tapping it switches your page to that term's weekly classes, and the old term's stop showing.
 
