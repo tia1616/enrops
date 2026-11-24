@@ -154,8 +154,15 @@ const NAV = [
   // header comment, permissions.canManageSettings, and the RLS policy
   // members_update_own_org (can_admin_org) — but the guard's match list missed
   // it, so staff/viewer could open it by URL and every save then failed as a
-  // 0-row update. Other Settings sub-pages (background-checks, training,
-  // branding, registration-questions) have the same gap and are NOT fixed here.
+  // 0-row update. The other Settings sub-pages had the same gap; branding was
+  // closed next (below), and registration-questions, background-checks and
+  // training on 2026-11-24 (Jessica's go): each is reached only from a Settings
+  // row, and the guides promise staff "no money or settings". This IS a
+  // narrowing for two of them: custom_reg_fields and instructor_training_videos
+  // are can_edit_org (owner/admin/STAFF) at RLS, so staff could save there by
+  // URL. Background checks write organizations (can_admin_org) and never could.
+  // Prod had zero staff members when this landed (2 J2S viewers, who can
+  // write none of the three).
   // /admin/branding belongs in this match list for the same reason /admin/email-sender
   // does: it is reached from a Manage button on the Settings page and has no nav item of
   // its own, so without it the sidebar goes blank while you are editing branding and it
@@ -167,7 +174,7 @@ const NAV = [
   // /admin/branding by URL — previously they could view it read-only via
   // members_read_branding while their save would fail at RLS, i.e. a page they could
   // reach but not use. One viewer exists on prod. Same posture as /admin/email-sender.
-  { to: "/admin/settings", label: "Settings", gate: "settings", match: ["/admin/settings", "/admin/waivers", "/admin/survey-settings", "/admin/pay-rates", "/admin/email-sender", "/admin/branding", "/admin/instructor-documents"] }, // owner/admin only
+  { to: "/admin/settings", label: "Settings", gate: "settings", match: ["/admin/settings", "/admin/waivers", "/admin/survey-settings", "/admin/pay-rates", "/admin/email-sender", "/admin/branding", "/admin/instructor-documents", "/admin/registration-questions", "/admin/background-checks", "/admin/training"] }, // owner/admin only
   { to: "/admin/team", label: "Team", gate: "team" },             // owner/admin only
   // The provider guides (src/content/guides). Ungated: every role on every plan
   // can read how enrops works, and it is static text with no data behind it.
