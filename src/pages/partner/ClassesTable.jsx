@@ -23,6 +23,7 @@ import {
 } from "../../lib/partnerMarketing.js";
 import {
   wantedAsks, indexMedia, mediaKey, itemOf, askLine, fileProblemForAsk, shareName, extOfPath, mediaGaps, galleryGroups,
+  MARKETING_ITEMS, FILE_TYPES,
 } from "../../lib/partnerMarketingLogic.js";
 import MarketingGallery from "./MarketingGallery.jsx";
 
@@ -87,6 +88,10 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
   }, [classes, asks, media]);
 
   const wanted = wantedAsks(asks);
+  // Every item a class can carry (20261124m): what the partner asked for, with
+  // its rules, and the rest open to the provider anyway (any PDF, JPG or PNG).
+  const rowItems = MARKETING_ITEMS.map((i) => wanted.find((a) => a.item_key === i.key)
+    ?? { item_key: i.key, wanted: false, file_types: FILE_TYPES.map((t) => t.key) });
 
   async function toggleRoster(c) {
     const k = keyOf(c);
@@ -129,8 +134,8 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
   }
 
   const heading = viewer === "provider" ? `Classes at ${partnerName || "this partner"}'s sites` : "Classes at your sites";
-  // What's in, by term, for the flyer board.
-  const gallery = classes?.length && wanted.length ? galleryGroups(groupClassesByTerm(classes, formatTermLabel), asks, media) : [];
+  // Everything that's in, by term, for the flyer board, asked for or not.
+  const gallery = classes?.length ? galleryGroups(groupClassesByTerm(classes, formatTermLabel), media) : [];
 
   return (
     <section className="mt-5 rounded-2xl bg-white shadow-card">
@@ -138,9 +143,10 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
       {loadError && <p className="error-text px-4 pt-2">{loadError}</p>}
       {mediaError && <p className="error-text px-4 pt-2">{mediaError}</p>}
       {/* "Flyers on 2 of 4 classes": the partner sees at a glance what's in. */}
-      {classes?.length > 0 && wanted.length > 0 && (
+      {classes?.length > 0 && (wanted.length > 0 || gallery.length > 0) && (
         <p className="px-4 pt-1 text-sm text-j2s-ink/70">
-          {wanted.map((a) => {
+          {/* A count for what was asked for, or anything already in. */}
+          {rowItems.filter((a) => a.wanted || classes.some((c) => media.has(mediaKey(c.kind, c.class_id, a.item_key)))).map((a) => {
             const live = classes.filter((c) => c.status !== "cancelled");
             const have = live.filter((c) => media.has(mediaKey(c.kind, c.class_id, a.item_key))).length;
             return `${itemOf(a.item_key).plural} on ${have} of ${live.length} classes`;
@@ -213,7 +219,7 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
                         </button>
                       )}
                       {/* Flyer / social graphic (20261123r), in the pinned column so it's on a phone screen. */}
-                      {c.status !== "cancelled" && wanted.map((a) => (
+                      {c.status !== "cancelled" && !mediaError && rowItems.map((a) => (
                         <ClassMediaLine
                           key={a.item_key} c={c} ask={a} file={media.get(mediaKey(c.kind, c.class_id, a.item_key)) ?? null}
                           viewer={viewer} canEdit={canEdit} orgId={orgId} partnerName={partnerName} termLabel={g.label}
@@ -362,17 +368,33 @@ function ClassMediaLine({ c, ask, file, viewer, canEdit, orgId, partnerName, ter
     return file ? <div className="mt-0.5 text-xs text-emerald-700">✓ {label}</div> : null;
   }
 
+  const accept = ask.file_types.map((t) => (t === "pdf" ? "application/pdf" : t === "png" ? "image/png" : "image/jpeg")).join(",");
+
+  // Not asked for and not added: one quiet link, never amber (20261124m).
+  if (!ask.wanted && !file && !pending) {
+    if (!canEdit) return null;
+    return (
+      <div className="mt-0.5 text-xs">
+        <label className={`${btn} cursor-pointer`}>
+          {busy === "upload" ? "Uploading…" : `+ Add a ${label.toLowerCase()}`}
+          <input type="file" className="sr-only" disabled={!!busy} onChange={onPick} accept={accept} />
+        </label>
+        {note?.ok && <div role="status" className="text-emerald-700">{note.ok}</div>}
+        {note?.err && <div role="alert" className="text-red-700">{note.err}</div>}
+      </div>
+    );
+  }
+
   return (
     <div className="mt-0.5 text-xs">
       <span className="font-semibold text-j2s-ink/70">{label}:</span>{" "}
-      {file ? <span className="text-emerald-700">✓ Added</span> : <span className="text-amber-700">Not added yet</span>}
+      {file ? <span className="text-emerald-700">✓ Added</span> : ask.wanted ? <span className="text-amber-700">Not added yet</span> : null}
       <div className="flex flex-wrap gap-x-3">
         {file && <button type="button" className={btn} onClick={view} disabled={!!busy}>{busy === "view" ? "Opening…" : "View"}</button>}
         {canEdit && !pending && (
           <label className={`${btn} cursor-pointer`}>
             {busy === "upload" ? "Uploading…" : file ? "Replace" : "Upload"}
-            <input type="file" className="sr-only" disabled={!!busy} onChange={onPick}
-              accept={ask.file_types.map((t) => (t === "pdf" ? "application/pdf" : t === "png" ? "image/png" : "image/jpeg")).join(",")} />
+            <input type="file" className="sr-only" disabled={!!busy} onChange={onPick} accept={accept} />
           </label>
         )}
         {canEdit && file && !pending && <button type="button" className={btn} onClick={remove} disabled={!!busy}>Remove</button>}
@@ -403,7 +425,7 @@ function ClassMediaLine({ c, ask, file, viewer, canEdit, orgId, partnerName, ter
           </div>
         </div>
       )}
-      {!file && <div className="text-j2s-ink/55">{askLine(ask, partnerName)}{ask.note ? ` · ${ask.note}` : ""}</div>}
+      {!file && ask.wanted && <div className="text-j2s-ink/55">{askLine(ask, partnerName)}{ask.note ? ` · ${ask.note}` : ""}</div>}
       {note?.ok && <div role="status" className="text-emerald-700">{note.ok}</div>}
       {note?.err && <div role="alert" className="text-red-700">{note.err}</div>}
     </div>

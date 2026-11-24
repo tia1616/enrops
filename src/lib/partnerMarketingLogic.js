@@ -92,20 +92,20 @@ export function extOfPath(path) {
 export const isPicture = (path) => ["jpg", "jpeg", "png"].includes(extOfPath(path));
 
 /**
- * The gallery (Peachjar's flyer board): every file that's in, grouped by term
+ * The gallery (Peachjar's flyer board): every file that's in, asked for or not
+ * (a provider may add one before the partner asks, 20261124m), grouped by term
  * in the classes' own order. `groups` = groupClassesByTerm output
- * ([{ key, label, classes }]). Returns [{ key, label, cards: [{ c, ask, file, name }] }],
- * dropping terms with nothing in. Cancelled classes are left out.
+ * ([{ key, label, classes }]). Returns [{ key, label, cards: [{ c, ask, file, name }] }]
+ * (`ask` = { item_key }), dropping terms with nothing in. Cancelled classes are left out.
  */
-export function galleryGroups(groups, asks, media) {
+export function galleryGroups(groups, media) {
   const idx = media instanceof Map ? media : indexMedia(media);
-  const wanted = wantedAsks(asks);
   return (groups || []).map((g) => ({
     key: g.key,
     label: g.label,
-    cards: g.classes.filter((c) => c.status !== "cancelled").flatMap((c) => wanted.map((a) => {
-      const file = idx.get(mediaKey(c.kind, c.class_id, a.item_key));
-      return file ? { c, ask: a, file, name: shareName(c.title, g.label, a.item_key, extOfPath(file.storage_path)) } : null;
+    cards: g.classes.filter((c) => c.status !== "cancelled").flatMap((c) => MARKETING_ITEMS.map((i) => {
+      const file = idx.get(mediaKey(c.kind, c.class_id, i.key));
+      return file ? { c, ask: { item_key: i.key }, file, name: shareName(c.title, g.label, i.key, extOfPath(file.storage_path)) } : null;
     }).filter(Boolean)),
   })).filter((g) => g.cards.length > 0);
 }
