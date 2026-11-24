@@ -180,8 +180,11 @@ export default function StepReview({
                     {/* Same start date and length the family saw on the catalog
                         card, restated at the last screen before they pay, so the
                         dates they decided on are the dates they're confirming. */}
+                    {/* Bold when the class has already started (sessions_left is
+                        only set then): the family is buying part of a class, and
+                        must not miss it (Jessica 2026-11-24). */}
                     {scheduleStr && (
-                      <p className="mt-1 text-sm text-j2s-ink/70">{scheduleStr}</p>
+                      <p className={`mt-1 text-sm ${l.sessions_left != null ? 'font-bold text-j2s-ink' : 'text-j2s-ink/70'}`}>{scheduleStr}</p>
                     )}
                     <PrereqLine text={prereqTexts[i]} variant="compact" className="mt-1" />
                     <p className="mt-1 text-xs text-j2s-ink/50">
