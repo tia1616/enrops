@@ -139,6 +139,15 @@ interface ProrationRegistration {
   organization_id: string;
   program_id: string | null;
   camp_session_id: string | null;
+  // When the family registered. A family that joined a weekly class after it
+  // started paid only for the sessions left (proratedBaseCents, Jessica
+  // 2026-11-24), so "% remaining" is measured against THE SESSIONS THEY BOUGHT:
+  // the class's sessions on or after their registration day. Without it, a
+  // late joiner cancelling would be measured against the whole class and get
+  // back too little of the fee. Optional: a caller that omits it keeps the old
+  // whole-class measure, which is exactly right for anyone who joined before
+  // the first session.
+  registered_at?: string | null;
 }
 
 type DbLike = SupabaseClient;
@@ -173,7 +182,12 @@ export async function loadProration(
     try {
       const { data, error } = await db.rpc('derive_program_session_dates', { p_program_id: reg.program_id });
       if (!error && Array.isArray(data) && data.length > 0) {
-        const dates = (data as unknown[]).map((d) => String(d).slice(0, 10));
+        const all = (data as unknown[]).map((d) => String(d).slice(0, 10));
+        // Only the sessions this family bought (see registered_at above). If
+        // that would leave none - bad data - fall back to the whole class.
+        const joinedOn = reg.registered_at ? todayInTimezone(timezone, new Date(reg.registered_at)) : null;
+        const bought = joinedOn ? all.filter((d) => d >= joinedOn) : all;
+        const dates = bought.length ? bought : all;
         return { fraction: sessionsRemainingFraction(dates, asOf), sessionDates: dates, asOf, source: 'program' };
       }
     } catch {

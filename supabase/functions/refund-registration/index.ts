@@ -456,7 +456,9 @@ serve(async (req: Request) => {
     // ── load registration ─────────────────────────────────────────────────
     const { data: regData, error: regErr } = await supabase
       .from('registrations')
-      .select('id, organization_id, status, payment_status, stripe_payment_intent_id, amount_cents, student_id, parent_id, program_id, camp_session_id, stripe_charge_account_id')
+      // registered_at: a late joiner's fee refund is measured against the
+      // sessions they bought (loadProration, _shared/refundFeeProration.ts).
+      .select('id, organization_id, status, payment_status, stripe_payment_intent_id, amount_cents, student_id, parent_id, program_id, camp_session_id, stripe_charge_account_id, registered_at')
       .eq('id', registrationId)
       .maybeSingle();
     if (regErr) {
@@ -985,6 +987,7 @@ serve(async (req: Request) => {
       organization_id: reg.organization_id,
       program_id: reg.program_id,
       camp_session_id: reg.camp_session_id,
+      registered_at: reg.registered_at ?? null,
     });
     if (proration.source === 'unknown') {
       console.warn(

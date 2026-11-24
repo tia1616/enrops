@@ -18,6 +18,11 @@ export interface ProgramPricing {
   price_cents: number;
   early_bird_price_cents: number | null;
   early_bird_deadline: string | null; // 'YYYY-MM-DD'
+  // A weekly class that has already started: its derived session count and how
+  // many are on or after today (business timezone). Absent for camps, year
+  // bundle legs and anything not yet started - those are never prorated.
+  sessions_total?: number | null;
+  sessions_left?: number | null;
 }
 
 // One priced line = one registration-to-be. child_index drives the sibling rule.
@@ -106,6 +111,27 @@ export function isEarlyBirdActive(
   return now.getTime() < end;
 }
 
+// A FAMILY JOINING A CLASS THAT HAS STARTED PAYS FOR THE SESSIONS LEFT
+// (Jessica 2026-11-24): price x sessions left / total sessions, rounded to the
+// cent. Prorated only when 0 < left < total; a class not started (left = total)
+// or with unknown counts keeps its full price. A session dated today counts as
+// left (same as refundFeeProration). This is the BASE price, so sibling and
+// promo discounts, and the enrops service fee, all follow it.
+//
+// LINE FOR LINE THE SAME as src/lib/pricing.js proratedBaseCents: that one sets
+// the price on screen, this one sets the charge.
+export function proratedBaseCents(
+  baseCents: number,
+  sessionsLeft: number | null | undefined,
+  sessionsTotal: number | null | undefined,
+): number {
+  const left = Number(sessionsLeft);
+  const total = Number(sessionsTotal);
+  if (!Number.isInteger(left) || !Number.isInteger(total)) return baseCents;
+  if (total <= 0 || left <= 0 || left >= total) return baseCents;
+  return Math.round((baseCents * left) / total);
+}
+
 export function basePriceForProgram(
   p: ProgramPricing,
   now: Date = new Date(),
@@ -113,10 +139,10 @@ export function basePriceForProgram(
 ): number {
   const standard = p.price_cents;
   const eb = p.early_bird_price_cents;
-  if (eb != null && eb < standard && isEarlyBirdActive(p.early_bird_deadline, now, timeZone)) {
-    return eb;
-  }
-  return standard;
+  const base = (eb != null && eb < standard && isEarlyBirdActive(p.early_bird_deadline, now, timeZone))
+    ? eb
+    : standard;
+  return proratedBaseCents(base, p.sessions_left, p.sessions_total);
 }
 
 export interface PromoValidation {

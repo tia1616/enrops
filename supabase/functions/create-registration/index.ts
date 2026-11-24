@@ -237,6 +237,11 @@ serve(async (req) => {
     // fail-open the family page uses - because the other checks still hold.
     const todayLocal = todayInTimezone((org as { timezone?: string | null }).timezone);
     const finished = new Set<string>();
+    // The same dates also price a class that has already started: the family
+    // pays for the sessions left (proratedBaseCents in _shared/promoPricing.ts,
+    // applied in the pricing block below). Counted here, once, so "finished" and
+    // "how many are left" can never be read from two different derivations.
+    const sessionsById = new Map<string, { sessions_total: number; sessions_left: number }>();
     for (const p of cartPrograms || []) {
       if (p.organization_id !== orgId) continue;
       if (isCampProgram(p)) {
@@ -248,8 +253,15 @@ serve(async (req) => {
         console.warn('[create-registration] could not read session dates; not refusing on dates', p.id, datesErr.message);
         continue;
       }
-      const last = Array.isArray(dates) && dates.length ? String([...dates].sort().at(-1)).slice(0, 10) : null;
+      const isoDates = Array.isArray(dates) ? dates.map((d) => String(d).slice(0, 10)) : [];
+      const last = isoDates.length ? [...isoDates].sort().at(-1)! : null;
       if (last && last < todayLocal) finished.add(p.id);
+      if (isoDates.length) {
+        sessionsById.set(p.id, {
+          sessions_total: isoDates.length,
+          sessions_left: isoDates.filter((d) => d >= todayLocal).length,
+        });
+      }
     }
     const rejected = allProgramIds.filter((id) => {
       const p = byId.get(id);
@@ -649,7 +661,7 @@ serve(async (req) => {
     // Real prices for non-VIP programs, scoped to this org (reject a program that
     // isn't in this org so a client can't inject a foreign/fake price).
     const nonVipIds = [...new Set(flat.filter((f) => !f.is_vip).map((f) => f.program_id))];
-    const priceById = new Map<string, { id: string; price_cents: number; early_bird_price_cents: number | null; early_bird_deadline: string | null }>();
+    const priceById = new Map<string, { id: string; price_cents: number; early_bird_price_cents: number | null; early_bird_deadline: string | null; sessions_total?: number; sessions_left?: number }>();
     if (nonVipIds.length) {
       const { data: progRows, error: progErr } = await admin
         .from('programs')
@@ -658,7 +670,10 @@ serve(async (req) => {
       if (progErr) throw new Error(`price lookup: ${progErr.message}`);
       for (const pr of progRows || []) {
         if (pr.organization_id !== orgId) return json({ error: 'A program in your cart is not available.' }, 400);
-        priceById.set(pr.id, pr);
+        // Session counts only exist for weekly classes (camps were skipped when
+        // they were counted), and year-bundle legs never come through here, so
+        // only a single weekly class that has started is ever prorated.
+        priceById.set(pr.id, { ...pr, ...(sessionsById.get(pr.id) ?? {}) });
       }
       for (const id of nonVipIds) {
         if (!priceById.has(id)) return json({ error: 'A program in your cart could not be found.' }, 400);

@@ -59,6 +59,18 @@ export function formatStartDate(iso, now = new Date()) {
 export function programScheduleSummary(program, now = new Date()) {
   const start = formatStartDate(program?.first_session_date, now);
 
+  // A class that has ALREADY STARTED and is still on sale: say so, and how much
+  // of it is left, because that is what the family is buying - and what the
+  // price was prorated by (pricing.js proratedBaseCents). Counts come from
+  // class_last_sessions (20261124c), on a program row or a pricing line.
+  const left = Number(program?.sessions_left);
+  const total = Number(program?.sessions_total);
+  if (Number.isInteger(left) && Number.isInteger(total) && total > 0 && left > 0 && left < total) {
+    return start
+      ? `Started ${start} ${SEP} ${left} of ${total} sessions left`
+      : `${left} of ${total} sessions left`;
+  }
+
   // session_count is NOT NULL in count mode and materialized in range mode, but
   // a 0 or a stray string must never reach the card as "0 sessions".
   const raw = Number(program?.session_count);
