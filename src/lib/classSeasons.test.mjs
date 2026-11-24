@@ -38,7 +38,9 @@ ok(isTermOnSale(winterOpen, "FA26"), "an earlier season stays on sale for a date
 ok(isClassOnSale(winterOpen, fallClass, "2026-12-10", "2026-12-03"), "a Fall class still running in December is on sale");
 ok(isClassOnSale(winterOpen, fallClass, "2026-12-10", "2026-12-10"), "on sale ON its last session day");
 ok(!isClassOnSale(winterOpen, fallClass, "2026-12-10", "2026-12-11"), "off sale the day after its last session");
-ok(isClassOnSale(winterOpen, fallClass, null, "2026-12-11"), "no known last session: the season alone decides (old behaviour)");
+ok(!isClassOnSale(winterOpen, fallClass, null, "2026-12-11"), "no known last session: an EARLIER season stays off sale (a failed read must not re-list finished classes)");
+ok(isClassOnSale(winterOpen, { term: "WI27" }, null, "2026-12-11"), "no known last session: the open season is on sale (old behaviour)");
+ok(isClassOnSale(winterOpen, { term: "SP27" }, null, "2026-12-11"), "no known last session: a later season is on sale (old behaviour)");
 const j2s = { classes_follow_dates: false, active_registration_term: "WI27" };
 ok(!isClassOnSale(j2s, fallClass, "2026-12-10", "2026-12-03"), "a season-switching org's running Fall class stays off sale (unchanged)");
 ok(!isClassOnSale(j2s, { term: "WI27" }, "2027-03-01", "2027-03-02"), "a season-switching org's FINISHED open-season class drops off");

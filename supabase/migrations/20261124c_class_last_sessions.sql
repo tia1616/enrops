@@ -31,6 +31,9 @@ as $$
    where p.organization_id = p_organization_id
      and p.status = 'open'
      and (p.class_days is null or p.class_days = '{}')
+     -- A season-switching business only shows its open season, so only those
+     -- classes need deriving (J2S prod 11/24: 111 classes all terms = 138 ms).
+     and (o.classes_follow_dates or p.term = o.active_registration_term)
 $$;
 
 comment on function public.class_last_sessions(uuid) is

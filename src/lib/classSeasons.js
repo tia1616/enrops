@@ -75,12 +75,17 @@ export function isTermOnSale(org, term) {
 }
 
 // Can families buy this weekly class today? Its season is on sale AND it has
-// not finished. lastSessionIso comes from class_last_sessions (20261124c); when
-// it is unknown (no dates yet, or that read failed) only the season decides,
-// which is exactly the behaviour before the last-session rule existed.
+// not finished. lastSessionIso comes from class_last_sessions (20261124c).
+//
+// When it is unknown (no dates yet, the read failed, or the migration has not
+// reached this environment) an EARLIER season is NOT on sale: only a real last
+// date can prove an earlier class is still running. Otherwise a failed read
+// would re-list every finished class the provider ever published. So the
+// unknown case is exactly the rule before last sessions existed: the open
+// season and up to three ahead (or just the open one, for a season switcher).
 export function isClassOnSale(org, program, lastSessionIso, todayIso) {
   if (!isTermOnSale(org, program?.term)) return false;
-  if (!lastSessionIso || !todayIso) return true;
+  if (!lastSessionIso || !todayIso) return !isPastTerm(org, program?.term);
   return String(lastSessionIso).slice(0, 10) >= String(todayIso).slice(0, 10);
 }
 
