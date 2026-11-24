@@ -1204,7 +1204,9 @@ export default function ProgramsCalendar() {
                action. The old #a16207 read as rust and belongs to no palette. */
             <div style={{ ...registrationBanner, background: "#FFF6E9", borderColor: ENROPS_GOLD, color: PURPLE }}>
               <span>
-                {formatTermLabel(term)} is open for registration, but you can't get paid yet — connect Stripe to start receiving payments.
+                {org?.classes_follow_dates === true
+                  ? "Families can sign up, but you can't get paid yet — connect Stripe to start receiving payments."
+                  : `${formatTermLabel(term)} is open for registration, but you can't get paid yet — connect Stripe to start receiving payments.`}
               </span>
               <Link
                 to="/admin/finances"
