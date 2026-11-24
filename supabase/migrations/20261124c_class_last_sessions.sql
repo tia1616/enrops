@@ -20,9 +20,19 @@
 --
 -- A season-switching business only shows its open season, so only those classes
 -- are derived (J2S prod 11/24: all 111 classes, every term = 138 ms).
+--
+-- late_join_allowed (Jessica 11/24, "yes, add the setting"): a business can turn
+-- late joining OFF, so a class stops selling once its first session has
+-- happened (Sawyer's default). ON by default. Returned on every row so the
+-- public page gets it from this one read; checkout reads the column itself.
+alter table public.organizations
+  add column if not exists late_join_allowed boolean not null default true;
+comment on column public.organizations.late_join_allowed is
+  'TRUE (default): families can join a weekly class after it starts, priced for the sessions left. FALSE: a class stops selling once its first session has happened. Read by classSeasons.isClassOnSale and create-registration.';
+
 drop function if exists public.class_last_sessions(uuid);
 create function public.class_last_sessions(p_organization_id uuid)
-returns table(program_id uuid, last_session date, sessions_total integer, sessions_left integer)
+returns table(program_id uuid, last_session date, sessions_total integer, sessions_left integer, late_join_allowed boolean)
 language sql
 stable
 security definer
@@ -32,7 +42,8 @@ as $$
          (select max(d) from unnest(x.dates) d),
          coalesce(array_length(x.dates, 1), 0),
          (select count(*)::int from unnest(x.dates) d
-           where d >= (now() at time zone coalesce(o.timezone, 'America/Los_Angeles'))::date)
+           where d >= (now() at time zone coalesce(o.timezone, 'America/Los_Angeles'))::date),
+         o.late_join_allowed
     from public.programs p
     join public.organizations o
       on o.id = p.organization_id
@@ -45,7 +56,7 @@ as $$
 $$;
 
 comment on function public.class_last_sessions(uuid) is
-  'Per published weekly class of an active org: last session date, total sessions, sessions on or after today (org timezone). Public (family page): on sale until the last session; a running class is priced for the sessions left (pricing.js / promoPricing.ts proratedBaseCents).';
+  'Per published weekly class of an active org: last session date, total sessions, sessions on or after today (org timezone), and whether the business lets families join after a class starts. Public (family page).';
 
 revoke all on function public.class_last_sessions(uuid) from public, anon, authenticated;
 grant execute on function public.class_last_sessions(uuid) to anon, authenticated, service_role;

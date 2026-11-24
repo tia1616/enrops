@@ -130,7 +130,9 @@ serve(async (req) => {
       // excluded schools). The bundle check and the bundle price read it.
       // timezone: "has this class finished" is a local-date question (the
       // last-session check in the cart validation below).
-      .select('id, name, vip_offering, timezone')
+      // late_join_allowed: the business's switch for selling a class after it
+      // has started (20261124c). Off = refused once the first session is past.
+      .select('id, name, vip_offering, timezone, late_join_allowed')
       .eq('slug', organization_slug)
       .single();
     if (orgErr || !org) {
@@ -257,10 +259,14 @@ serve(async (req) => {
       const last = isoDates.length ? [...isoDates].sort().at(-1)! : null;
       if (last && last < todayLocal) finished.add(p.id);
       if (isoDates.length) {
-        sessionsById.set(p.id, {
-          sessions_total: isoDates.length,
-          sessions_left: isoDates.filter((d) => d >= todayLocal).length,
-        });
+        const sessionsLeft = isoDates.filter((d) => d >= todayLocal).length;
+        sessionsById.set(p.id, { sessions_total: isoDates.length, sessions_left: sessionsLeft });
+        // LATE JOINING OFF: once the first session has happened the class is not
+        // sold at all - the same rule the family page applies
+        // (classSeasons.isClassOnSale / hasStarted).
+        if ((org as { late_join_allowed?: boolean | null }).late_join_allowed === false && sessionsLeft < isoDates.length) {
+          finished.add(p.id);
+        }
       }
     }
     const rejected = allProgramIds.filter((id) => {
