@@ -1711,9 +1711,9 @@ export default function QuickProgramBuilder() {
                 works. */}
             {!isCamp && effectiveTerm && !classOnSale && org.classes_follow_dates === true ? (
               <>
-                Saved to {formatTermLabel(effectiveTerm)}. Families see classes from
-                this season through the next year, so they&apos;ll see this one once
-                its dates are within that window.
+                Saved to {formatTermLabel(effectiveTerm)}. Families see classes up
+                to a year ahead, so they&apos;ll see this one once it&apos;s within
+                a year of starting.
               </>
             ) : !isCamp && effectiveTerm && !classOnSale ? (
               <>

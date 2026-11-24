@@ -24,7 +24,7 @@ import { allChoices, offeredChoices, DEFAULT_OFFERED } from "../../lib/dismissal
 import { buildRegUrl } from "../../lib/regLinks.js";
 import { formatDayLabel, isCampProgram } from "../../lib/programSchedule.js";
 import { questionAppliesToCart, ENROLLMENT_SCOPES } from "../../lib/registrationFields.js";
-import { onSaleTerms } from "../../lib/classSeasons.js";
+import { isTermOnSale } from "../../lib/classSeasons.js";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -408,14 +408,16 @@ export default function RegistrationQuestions() {
       // class a family could actually reach.
       // class_days so programLabel can tell a camp from a weekly class; without
       // it a Mon-Thu camp reads "(Mondays)" in both pickers.
-      .select("id, curriculum, day_of_week, class_days, session_count, status, runs_own_registration")
+      .select("id, curriculum, day_of_week, class_days, session_count, status, runs_own_registration, term")
       .eq("organization_id", org.id)
-      // The seasons families can buy (classSeasons.onSaleTerms): the open one,
-      // plus the next three for a provider whose classes follow their dates.
-      // Camps carry a term too and are listed from these seasons, as before.
-      .in("term", onSaleTerms(org).length ? onSaleTerms(org) : [""])
       .order("curriculum")
-      .then(({ data: progs }) => {
+      .then(({ data: unfiltered }) => {
+        // The seasons families can buy (classSeasons.isTermOnSale): the open
+        // one for a provider who switches seasons by hand; for one whose classes
+        // follow their dates, earlier seasons and up to three ahead (season
+        // codes do not sort as text, so this filters here, not in the query).
+        // Camps carry a term too and are listed from these seasons, as before.
+        const progs = (unfiltered ?? []).filter((p) => isTermOnSale(org, p.term));
         // Same staleness guard the questions query gets above. Without it, a
         // fast org switch (A -> B) where A's slower response lands last leaves
         // org A's classes on screen under org B: the preview would then build

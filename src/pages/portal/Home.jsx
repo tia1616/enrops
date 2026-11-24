@@ -15,7 +15,7 @@ import {
   standardPriceFor,
 } from '../../lib/pricing.js';
 import { formatTermLabel, termSeasonName, schoolYearTermsForFall } from '../../lib/terms.js';
-import { onSaleTerms, followsDates } from '../../lib/classSeasons.js';
+import { isClassOnSale, followsDates } from '../../lib/classSeasons.js';
 import { programScheduleSummary, formatDayLabel, isCampProgram } from '../../lib/programSchedule.js';
 import { groupCampsByArea, campWhereLabel, campAreaOf } from '../../lib/campAreas.js';
 import { audienceLabel } from '../../lib/grades.js';
@@ -380,7 +380,7 @@ export default function Home() {
     // out {} either way, exactly as it did before.
     //
     // Fee config stays OUT of this batch deliberately - see below.
-    const [brRes, scRes, pgRes, futureRes, wcRes, dtRes, vipPublic, prereqMap] = await Promise.all([
+    const [brRes, scRes, pgRes, futureRes, wcRes, dtRes, vipPublic, prereqMap, lastRes] = await Promise.all([
       // Branding (hero copy, colors, etc) - multi-tenant ready. Any provider
       // can customize these via org_branding row; defaults apply if blank.
       supabase
@@ -462,14 +462,17 @@ export default function Home() {
         // September because it happened to carry the open term. A class is
         // selected by its term and a camp by its dates, and neither rule may
         // pick up the other's rows.
-        // Weekly classes: the seasons on sale (classSeasons.onSaleTerms). That is
-        // the one open season for a provider who switches seasons by hand -
-        // exactly the old `term.eq` - and the open season plus the next three
-        // for one whose classes follow their dates, so a January class is on
-        // sale in November without anyone switching anything (20261123d).
-        // The open season comes from the org's own column, interpolated exactly
-        // as the old term.eq did; the later ones are generated season codes.
-        .or(`and(class_days.is.null,term.in.(${onSaleTerms(org).join(',') || 'none'})),and(class_days.not.is.null,end_date.gte.${todayIso})`)
+        // Weekly classes: a provider who switches seasons by hand gets its open
+        // season here, exactly the old `term.eq`. One whose classes follow their
+        // dates (20261123d) gets every published weekly class, because its
+        // seasons on sale include EARLIER ones (a Fall class still running in
+        // December) - season codes do not sort as text, so PostgREST cannot
+        // range-filter them. Either way the rows are then narrowed by the one
+        // rule, classSeasons.isClassOnSale (season on sale AND not past its last
+        // session), right after this batch.
+        .or(followsDates(org)
+          ? `class_days.is.null,and(class_days.not.is.null,end_date.gte.${todayIso})`
+          : `and(class_days.is.null,term.eq.${catalogTerm || 'none'}),and(class_days.not.is.null,end_date.gte.${todayIso})`)
         .eq('status', 'open')
         // Native programs (we run checkout) OR partner-run programs the operator
         // explicitly listed with a registration link (shown as a link-out, no checkout).
@@ -533,11 +536,22 @@ export default function Home() {
       // The curriculum's parent-facing prerequisite line (soft-fails to an empty
       // map). See curriculumPrereqs.js for why this exists.
       fetchPrereqMap(supabase, org.id),
+      // Each published weekly class's real last session (20261124c, a definer
+      // wrapper: anon cannot run derive_program_session_dates itself). A class
+      // stays on sale until that date. DEPLOY ORDER: the migration reaches an
+      // environment before this frontend; if the read fails anyway, only the
+      // season decides (isClassOnSale), which is the behaviour before this rule.
+      supabase.rpc('class_last_sessions', { p_organization_id: org.id }),
     ]);
 
     const br = brRes.data;
     const sc = scRes.data;
-    const pg = pgRes.data ? withPrerequisites(pgRes.data, prereqMap) : pgRes.data;
+    const lastById = new Map((lastRes?.error ? [] : (lastRes?.data || [])).map((r) => [r.program_id, r.last_session]));
+    // THE ONE RULE for weekly classes (classSeasons.isClassOnSale): season on
+    // sale AND not past its last session. Camps were already bounded by their
+    // own end_date in the query.
+    const onSale = (pgRes.data || []).filter((p) => isCampProgram(p) || isClassOnSale(org, p, lastById.get(p.id), todayIso));
+    const pg = pgRes.data ? withPrerequisites(onSale, prereqMap) : pgRes.data;
     const wc = wcRes.data;
     // id -> name. A district whose name we cannot read falls out of the map and
     // its schools land in the OTHER_DISTRICT bucket, which is what happened to

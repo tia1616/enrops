@@ -132,7 +132,7 @@ Three things and you're live: build a class, connect Stripe, share the link.
 - Check it on your phone too, not just a computer.
 - At checkout families see your price plus the enrops service fee on its own line, so nobody is surprised.
 - Where to send it: the principal or front office, your school newsletter contact, and the families you already know.
-- If families can't see a class, the share panel says **Not open to families** and gives no link. That happens when the class's season is over or more than a year away. Camps are the exception: their link works as soon as you publish. See **When families see your classes**.
+- If families can't see a class, the share panel says **Not open to families** and gives no link. That happens when the class starts more than a year from now, or, if you open one term at a time, when its term isn't open yet. Camps are the exception: their link works as soon as you publish. See **When families see your classes**.
 
 **If it goes wrong**
 - The share button says **Connect Stripe to share your link →**: families can't pay until Stripe is connected.

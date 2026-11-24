@@ -26,6 +26,7 @@ import { priceCart, validatePromo } from '../_shared/promoPricing.ts';
 import { renderWaiverText } from '../_shared/waiverText.ts';
 import { isCampProgram } from '../_shared/campProgram.ts';
 import { sanitizeAttribution } from '../_shared/emailAttribution.ts';
+import { todayInTimezone } from '../_shared/refundFeeProration.ts';
 
 // The winter and spring terms that complete a fall term's school year:
 // FA26 -> WI27 + SP27. TWIN of schoolYearTermsForFall() in src/lib/terms.js,
@@ -127,7 +128,9 @@ serve(async (req) => {
       // against each signature.
       // vip_offering: the business's own year-bundle settings (on or off, price,
       // excluded schools). The bundle check and the bundle price read it.
-      .select('id, name, vip_offering')
+      // timezone: "has this class finished" is a local-date question (the
+      // last-session check in the cart validation below).
+      .select('id, name, vip_offering, timezone')
       .eq('slug', organization_slug)
       .single();
     if (orgErr || !org) {
@@ -220,10 +223,34 @@ serve(async (req) => {
     const allProgramIds = [...new Set(flat.map((f) => f.program_id))];
     const { data: cartPrograms, error: pubErr } = await admin
       .from('programs')
-      .select('id, status, organization_id, runs_own_registration, grade_min, grade_max, age_format, term, program_location_id, day_of_week, class_days')
+      .select('id, status, organization_id, runs_own_registration, grade_min, grade_max, age_format, term, program_location_id, day_of_week, class_days, end_date')
       .in('id', allProgramIds);
     if (pubErr) throw new Error(`cart validation: ${pubErr.message}`);
     const byId = new Map((cartPrograms || []).map((p) => [p.id, p]));
+    // FINISHED - past its last session (a class) or its last day (a camp), in
+    // the business's own timezone. The same rule the family page applies
+    // (src/lib/classSeasons.js isClassOnSale, Jessica 2026-11-24): a class is on
+    // sale until it ends. Checked here too because a saved or shared
+    // /register?program= link skips the family page entirely, and used to sell a
+    // finished class at full price. A session dated today still counts as on
+    // sale. If the dates cannot be read, the class is NOT refused - the same
+    // fail-open the family page uses - because the other checks still hold.
+    const todayLocal = todayInTimezone((org as { timezone?: string | null }).timezone);
+    const finished = new Set<string>();
+    for (const p of cartPrograms || []) {
+      if (p.organization_id !== orgId) continue;
+      if (isCampProgram(p)) {
+        if (p.end_date && String(p.end_date).slice(0, 10) < todayLocal) finished.add(p.id);
+        continue;
+      }
+      const { data: dates, error: datesErr } = await admin.rpc('derive_program_session_dates', { p_program_id: p.id });
+      if (datesErr) {
+        console.warn('[create-registration] could not read session dates; not refusing on dates', p.id, datesErr.message);
+        continue;
+      }
+      const last = Array.isArray(dates) && dates.length ? String([...dates].sort().at(-1)).slice(0, 10) : null;
+      if (last && last < todayLocal) finished.add(p.id);
+    }
     const rejected = allProgramIds.filter((id) => {
       const p = byId.get(id);
       // Missing row counts as rejected: an id we cannot read is an id we must
@@ -231,7 +258,8 @@ serve(async (req) => {
       return !p
         || p.organization_id !== orgId
         || p.status !== 'open'
-        || p.runs_own_registration === true;
+        || p.runs_own_registration === true
+        || finished.has(id);
     });
     if (rejected.length) {
       console.warn('[create-registration] BLOCKED: cart holds programs that are not this org\'s, open and ours to sell', rejected);

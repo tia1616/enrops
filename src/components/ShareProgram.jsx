@@ -66,8 +66,12 @@ export default function ShareProgram({ slug, program, activeTerm, align = "right
   // (2026-09-28), so its link works the moment it is published - which is the
   // point, since camps are advertised weeks before the season they sit in.
   // A weekly class: its season must be on sale. One season for a provider who
-  // switches seasons by hand; the open season and the next three for one whose
-  // classes follow their dates (classSeasons.js).
+  // switches seasons by hand; for one whose classes follow their dates, earlier
+  // seasons and up to three ahead (classSeasons.isTermOnSale). The other half of
+  // the rule - not past its last session - is NOT checked here: it needs a
+  // per-class read, and this renders once per row on Programs. A finished class
+  // is the one case where this link lands on the page without that class; the
+  // family page and checkout both refuse it (isClassOnSale, create-registration).
   const inCatalogTerm = isCampProgram(program)
     || isTermOnSale({ active_registration_term: activeTerm, classes_follow_dates: org?.classes_follow_dates }, program?.term);
   const shareable = isPublished && inCatalogTerm;
@@ -80,12 +84,13 @@ export default function ShareProgram({ slug, program, activeTerm, align = "right
       here. Families can only sign up once it's open.
     </div>
   ) : org?.classes_follow_dates === true ? (
-    // Date-following: the only classes off sale are ones whose season is over
-    // or more than a year out, so "a later term" would be untrue for half of them.
+    // Date-following: the only published class whose season is off sale is one
+    // starting more than a year out (earlier seasons stay on sale until each
+    // class's last session).
     <div style={{ fontSize: 13, color: INK, lineHeight: 1.55 }}>
-      <strong style={{ color: AMBER }}>Not open to families.</strong> Families
-      see classes from this season through the next year. This class&apos;s
-      dates fall outside that, so there&apos;s no public link to share.
+      <strong style={{ color: AMBER }}>Not open to families yet.</strong> Families
+      see classes up to a year ahead, and this one starts later than that, so
+      there&apos;s no public link to share yet.
     </div>
   ) : (
     <div style={{ fontSize: 13, color: INK, lineHeight: 1.55 }}>
