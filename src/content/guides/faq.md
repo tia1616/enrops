@@ -133,7 +133,13 @@ A family started registering and didn't pay. They aren't on your roster yet.
 **Programs → Class rosters**, expand the class, tap **Refund / remove**. See **Refund a family**.
 
 ### Does a class stop selling when it starts? {#faq-close}
-Not when it starts. It comes off your page after its last session (see **When families see your classes**). To stop new registrations sooner, **Unpublish** it. See **Stop selling a class**.
+Not when it starts. It comes off your page after its last session (see **When families see your classes**). To stop sign-ups once every class has started, turn off **Settings → Late sign-ups**. To stop one class sooner, **Unpublish** it. See **Stop selling a class**.
+
+### What does a family pay if they join late? {#faq-late-join}
+Only for the sessions left: the price × sessions left ÷ total sessions. A family joining an 8-session $275 class with 4 sessions left pays $137.50. Their card and checkout say "Started Nov 2 · 4 of 8 sessions left". Sibling discounts and promo codes still apply.
+
+### Why does my page say "No open programs yet"? {#faq-no-programs}
+Every published class has either finished, or started while **Settings → Late sign-ups** is off. Publish your next classes, or turn Late sign-ups back on.
 
 ### How do I send the roster to the school? {#faq-roster-partner}
 **View / print → Email roster to partner**. See **Send the roster to your school partner**.

@@ -141,6 +141,7 @@ Three things and you're live: build a class, connect Stripe, share the link.
 ## Where registrations show up {#see-registrations}
 
 - **Programs → Scheduled programs** shows enrolled / spots for each class.
+- Once a class has started, it also shows whether families can still sign up: **In progress · 4 of 8 sessions left** (still taking sign-ups, at a price for the sessions left), **Sign-ups closed · class started** (you've turned off **Settings → Late sign-ups**), or **Sign-ups closed · class finished**.
 - **Programs → Class rosters** lists every child. Anyone who registers through enrops shows up automatically.
 - "(+N unfinished registrations, not counted)" means a family started but didn't pay. They aren't on your roster yet.
 - Payments: **Money → Payments** shows what came in. Your actual bank deposits are in your Stripe dashboard (**Stripe Dashboard ↗**).

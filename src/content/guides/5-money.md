@@ -57,4 +57,5 @@ goal: You know where your money is, and you can refund or credit a family in a m
 ## Stop selling a class {#stop-selling}
 
 - A published class keeps taking registrations after it has started. It comes off your page after its last session (see **When families see your classes**). There's no close date you can set yet.
+- To stop sign-ups for every class once it has started, turn off **Settings → Late sign-ups**.
 - To stop it, open the class in **Programs → Scheduled programs** and tap **Unpublish**. It goes back to draft, and families already registered stay registered.
