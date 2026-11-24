@@ -310,6 +310,7 @@ function ClassMediaLine({ c, ask, file, viewer, canEdit, orgId, partnerName, ter
   // Each browser call happens inside the tap (see partnerMarketing.js), so a
   // phone's browser never blocks it.
   const download = () => run("download", () => openMarketingFile(file.storage_path, name));
+  const view = () => run("view", () => openMarketingFile(file.storage_path, name, { view: true }));
   const copyLink = () => run("copy", async () => {
     await copyMarketingLink(file.storage_path, name);
     setNote({ ok: `Link copied. It works for ${COPY_LINK_DAYS} days, no sign-in needed.` });
@@ -340,6 +341,7 @@ function ClassMediaLine({ c, ask, file, viewer, canEdit, orgId, partnerName, ter
       <span className="font-semibold text-j2s-ink/70">{label}:</span>{" "}
       {file ? <span className="text-emerald-700">✓ Added</span> : <span className="text-amber-700">Not added yet</span>}
       <div className="flex flex-wrap gap-x-3">
+        {file && <button type="button" className={btn} onClick={view} disabled={!!busy}>{busy === "view" ? "Opening…" : "View"}</button>}
         {file && <button type="button" className={btn} onClick={download} disabled={!!busy}>{busy === "download" ? "Opening…" : "Download"}</button>}
         {file && !isProvider && <button type="button" className={btn} onClick={share} disabled={!!busy}>{busy === "share" ? "Sharing…" : "Share"}</button>}
         {file && !isProvider && <button type="button" className={btn} onClick={copyLink} disabled={!!busy}>Copy link</button>}

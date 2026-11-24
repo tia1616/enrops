@@ -94,11 +94,11 @@ export default function MarketingAsksSection({ partner, viewer = "partner", orgN
     }
   }
 
-  async function openLogo() {
+  async function openLogo(view = false) {
     try {
       const name = `${partner.partner_name || "Partner"} logo.${extOfPath(logo.storage_path)}`;
       // Opens the tab inside the tap, so a phone's pop-up blocker allows it.
-      await openMarketingFile(logo.storage_path, name);
+      await openMarketingFile(logo.storage_path, name, { view });
     } catch (err) {
       setMsg((m) => ({ ...m, logo: { err: `Couldn't open the logo: ${err?.message ?? "unknown error"}` } }));
     }
@@ -202,7 +202,8 @@ export default function MarketingAsksSection({ partner, viewer = "partner", orgN
                   <span className="block font-semibold text-emerald-700">✓ Uploaded{logo.uploaded_at ? ` ${formatDate(localDateOf(logo.uploaded_at))}` : ""}</span>
                   <span className="block truncate text-xs text-j2s-ink/60">{logo.original_filename || "Logo"}</span>
                 </span>
-                <button type="button" onClick={openLogo} className="font-semibold text-j2s-purple hover:underline">Download</button>
+                <button type="button" onClick={() => openLogo(true)} className="font-semibold text-j2s-purple hover:underline">View</button>
+                <button type="button" onClick={() => openLogo(false)} className="font-semibold text-j2s-purple hover:underline">Download</button>
               </>
             ) : <span className="text-j2s-ink/55">{isPartner ? "Not uploaded yet." : "Not uploaded yet. They add it from their portal."}</span>}
           {isPartner && canEdit && (

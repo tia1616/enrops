@@ -123,12 +123,15 @@ export const COPY_LINK_DAYS = LINK_DAYS;
 // tap. Each helper below does its browser call before any network wait, or
 // hands the browser a promise, so Safari on a phone doesn't refuse it.
 
-/** Open the file in a new tab. Call straight from the tap. */
-export async function openMarketingFile(path, name) {
+/**
+ * Open the file in a new tab. Call straight from the tap. `view`: show it in
+ * the browser; otherwise it downloads under `name`.
+ */
+export async function openMarketingFile(path, name, { view = false } = {}) {
   const tab = window.open("", "_blank");
   if (tab) tab.opener = null;
   try {
-    const url = await marketingFileUrl(path, { download: name });
+    const url = await marketingFileUrl(path, view ? {} : { download: name });
     if (tab) tab.location.href = url;
     else window.location.assign(url);
   } catch (err) {
