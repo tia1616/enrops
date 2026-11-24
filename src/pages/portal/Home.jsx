@@ -13,6 +13,7 @@ import {
   VIP_TOTAL_CENTS,
   basePriceForItem,
   standardPriceFor,
+  proratedBaseCents,
 } from '../../lib/pricing.js';
 import { formatTermLabel, termSeasonName, schoolYearTermsForFall } from '../../lib/terms.js';
 import { isClassOnSale, followsDates } from '../../lib/classSeasons.js';
@@ -546,11 +547,18 @@ export default function Home() {
 
     const br = brRes.data;
     const sc = scRes.data;
-    const lastById = new Map((lastRes?.error ? [] : (lastRes?.data || [])).map((r) => [r.program_id, r.last_session]));
+    const sessionsById = new Map((lastRes?.error ? [] : (lastRes?.data || [])).map((r) => [r.program_id, r]));
     // THE ONE RULE for weekly classes (classSeasons.isClassOnSale): season on
     // sale AND not past its last session. Camps were already bounded by their
-    // own end_date in the query.
-    const onSale = (pgRes.data || []).filter((p) => isCampProgram(p) || isClassOnSale(org, p, lastById.get(p.id), todayIso));
+    // own end_date in the query. Each class also carries its session counts, so
+    // a class that has started shows "4 of 8 sessions left" and is priced for
+    // them (pricing.js proratedBaseCents) - the same counts checkout charges by.
+    const onSale = (pgRes.data || [])
+      .filter((p) => isCampProgram(p) || isClassOnSale(org, p, sessionsById.get(p.id)?.last_session, todayIso))
+      .map((p) => {
+        const s = !isCampProgram(p) ? sessionsById.get(p.id) : null;
+        return s ? { ...p, sessions_left: s.sessions_left, sessions_total: s.sessions_total } : p;
+      });
     const pg = pgRes.data ? withPrerequisites(onSale, prereqMap) : pgRes.data;
     const wc = wcRes.data;
     // id -> name. A district whose name we cannot read falls out of the map and
@@ -1240,10 +1248,20 @@ export default function Home() {
                                 is never a reveal — a family sees the real
                                 number before they type anything. */}
                             <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>
-                              <span style={{ fontWeight: 600, color: '#1a1a1a' }}>{formatMoney(totalWithFee(p.price_cents, feeConfig))}</span>
-                              {feeOnCents(p.price_cents, feeConfig) > 0 && (
-                                <span> · {formatMoney(p.price_cents)} class + {formatMoney(feeOnCents(p.price_cents, feeConfig))} enrops service fee</span>
-                              )}
+                              {(() => {
+                                // A class that has started is priced for the
+                                // sessions left (pricing.js proratedBaseCents,
+                                // the same rule checkout charges by).
+                                const classCents = proratedBaseCents(p.price_cents, p.sessions_left, p.sessions_total);
+                                return (
+                                  <>
+                                    <span style={{ fontWeight: 600, color: '#1a1a1a' }}>{formatMoney(totalWithFee(classCents, feeConfig))}</span>
+                                    {feeOnCents(classCents, feeConfig) > 0 && (
+                                      <span> · {formatMoney(classCents)} class + {formatMoney(feeOnCents(classCents, feeConfig))} enrops service fee</span>
+                                    )}
+                                  </>
+                                );
+                              })()}
                             </div>
                           </div>
                         </div>
@@ -1801,7 +1819,10 @@ export default function Home() {
                                   one. Showing an all-in price crossed out
                                   against a bare one would invent a discount
                                   that is partly the fee. */}
-                              {fallShowsEarlyBird ? (
+                              {/* A class that has started is priced for the
+                                  sessions left; the full price is struck
+                                  through beside it, as an early bird is. */}
+                              {fallShowsEarlyBird || fallPricing.is_prorated ? (
                                 <>
                                   <p className="font-titan text-3xl text-j2s-orange-dark">
                                     {formatMoney(totalWithFee(fallPricing.base_cents, feeConfig))}

@@ -97,5 +97,17 @@ eq('coverage: TZ safe (Feb 15 2027 is a Monday)',
 eq('coverage: null in -> empty, not a refusal', campDayCoverage(null, null), { meets: [], never: [] });
 eq('coverage: non-array dates -> no false "never"', campDayCoverage(['monday'], 'nope').never, []);
 eq('coverage: junk day names are not reported missing', campDayCoverage(['funday'], ['2027-02-15']).never, []);
+// --- a class that has already started (Jessica 2026-11-24) ---
+// The card and the review line say so, and how much is left: that is what the
+// family is buying, and what the price was prorated by.
+eq('started: says so and what is left',
+  programScheduleSummary({ first_session_date: '2026-08-03', session_count: 8, sessions_left: 4, sessions_total: 8 }, NOW),
+  'Started Aug 3 · 4 of 8 sessions left');
+eq('not started yet (all left): unchanged wording',
+  programScheduleSummary({ first_session_date: '2026-09-15', session_count: 8, sessions_left: 8, sessions_total: 8 }, NOW),
+  'Starts Sep 15 · 8 sessions');
+eq('no counts: unchanged wording',
+  programScheduleSummary({ first_session_date: '2026-09-15', session_count: 8 }, NOW),
+  'Starts Sep 15 · 8 sessions');
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

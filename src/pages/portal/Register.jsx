@@ -437,7 +437,7 @@ export default function Register() {
   }, [programs, schools]);
 
   async function load() {
-    const [schoolsRes, programsRes, waiversRes, regFieldsRes, feeRes, cancelPolicyRes, prereqs] = await Promise.all([
+    const [schoolsRes, programsRes, waiversRes, regFieldsRes, feeRes, cancelPolicyRes, prereqs, sessionsRes] = await Promise.all([
       // program_locations_public, NOT the base table. The old comment below said
       // "Anon-safe: public_read_program_locations allows anon reads" - true, but
       // that policy is `TO public`, so it served signed-in families too and let
@@ -500,11 +500,21 @@ export default function Register() {
       // The curriculum's parent-facing prerequisite line, restated on the cart
       // line before payment. Soft-fails to an empty map.
       fetchPrereqMap(supabase, ORG_ID),
+      // Session counts per weekly class (20261124c), so a class that has
+      // already started is shown and priced for the sessions left
+      // (pricing.js proratedBaseCents) - the same counts create-registration
+      // charges by. On failure nothing is attached and the full price shows;
+      // the charge is still decided server-side.
+      supabase.rpc('class_last_sessions', { p_organization_id: ORG_ID }),
     ]);
 
+    const sessionsById = new Map((sessionsRes?.error ? [] : (sessionsRes?.data || [])).map((r) => [r.program_id, r]));
     setSchools(schoolsRes.data || []);
     setPrereqMap(prereqs);
-    setPrograms(programsRes.data || []);
+    setPrograms((programsRes.data || []).map((p) => {
+      const s = !isCampProgram(p) ? sessionsById.get(p.id) : null;
+      return s ? { ...p, sessions_left: s.sessions_left, sessions_total: s.sessions_total } : p;
+    }));
     // Substitute the business name into the waiver text here, at the one place
     // it is loaded, rather than in each component that displays it — a reader
     // that forgot would show a family "{{org}}" in a contract.

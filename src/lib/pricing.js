@@ -162,6 +162,29 @@ export function calculateProgramPrice(program) {
   return Math.round(sessionCount * rate);
 }
 
+// A FAMILY JOINING A CLASS THAT HAS STARTED PAYS FOR THE SESSIONS LEFT
+// (Jessica 2026-11-24): price x sessions left / total sessions, rounded to the
+// cent. Prorated only when 0 < left < total; a class not started or with
+// unknown counts keeps its full price. The counts come from class_last_sessions
+// (20261124c), attached to the program row as sessions_left / sessions_total.
+//
+// LINE FOR LINE THE SAME as supabase/functions/_shared/promoPricing.ts
+// proratedBaseCents: this one sets the price on screen, that one the charge.
+export function proratedBaseCents(baseCents, sessionsLeft, sessionsTotal) {
+  const left = Number(sessionsLeft);
+  const total = Number(sessionsTotal);
+  if (!Number.isInteger(left) || !Number.isInteger(total)) return baseCents;
+  if (total <= 0 || left <= 0 || left >= total) return baseCents;
+  return Math.round((baseCents * left) / total);
+}
+
+// Is this program priced for its sessions left? (Same test as above.)
+export function isProrated(program) {
+  const left = Number(program?.sessions_left);
+  const total = Number(program?.sessions_total);
+  return Number.isInteger(left) && Number.isInteger(total) && total > 0 && left > 0 && left < total;
+}
+
 // timeZone is the ORGANISATION's (organizations.timezone), and decides only one
 // thing: whether the early-bird deadline has passed. Omitted, it falls back to
 // UTC — the behaviour this had before — so a caller that has not been wired up
@@ -184,6 +207,17 @@ export function basePriceForItem({ program, isVip, today = new Date(), timeZone 
     };
   }
 
+  const result = unproratedBaseForItem(program, today, timeZone);
+  if (!isProrated(program)) return result;
+  return {
+    ...result,
+    base_cents: proratedBaseCents(result.base_cents, program.sessions_left, program.sessions_total),
+    label: `${program.sessions_left} of ${program.sessions_total} sessions left`,
+    is_prorated: true,
+  };
+}
+
+function unproratedBaseForItem(program, today, timeZone) {
   const standardPrice = standardPriceFor(program);
 
   // Per-row early bird from DB.
@@ -315,6 +349,12 @@ export function calculateCart(cart) {
           // the review line SHOWS this number to a family, where guessing "8
           // sessions" at a program that never said so is a claim we can't back.
           session_count: prog.session_count ?? null,
+          // A class that has already started: what the review line says ("4 of
+          // 8 sessions left") and what the price was prorated by. Null otherwise.
+          // A year bundle is never prorated (fixed bundle price), so its legs
+          // never say so either.
+          sessions_left: !item.isVip && isProrated(prog) ? prog.sessions_left : null,
+          sessions_total: !item.isVip && isProrated(prog) ? prog.sessions_total : null,
           // VIP-only: surface Winter and Spring start dates for installment scheduling
           vip_winter_first_session_date:
             item.isVip && item.vipBundle?.winter?.first_session_date
