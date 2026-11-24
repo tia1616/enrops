@@ -20,7 +20,7 @@ const actionBtn = { background: "none", border: "none", padding: 0, color: BRIGH
  * instructor signs in at, for the share items. `canManage` hides the document
  * buttons for roles that can't upload (the links still show where to go).
  */
-export default function ProviderTodo({ items, partnerName, onUpload, onRenew, instructorPortalUrl, canManage, requirementsUnknown = false }) {
+export default function ProviderTodo({ items, partnerName, onUpload, onRenew, instructorPortalUrl, canManage, requirementsUnknown = false, onTab }) {
   const [copied, setCopied] = useState("");
 
   async function copyPortalLink(key) {
@@ -76,6 +76,9 @@ export default function ProviderTodo({ items, partnerName, onUpload, onRenew, in
                     >
                       {it.action.upload ? "Upload the background check" : "Open their record"}
                     </Link>
+                  )}
+                  {it.action.type === "tab" && onTab && (
+                    <button type="button" style={actionBtn} onClick={() => { onTab(it.action.tab); window.scrollTo({ top: 0, behavior: "smooth" }); }}>{it.action.label}</button>
                   )}
                   {it.action.type === "share" && (
                     <>

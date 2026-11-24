@@ -39,9 +39,19 @@ const SIGNED = {
  * @param today        YYYY-MM-DD
  * @returns [{ key, tone: 'bad'|'warn', text, action }]  bad first, then warn
  */
-export function partnerTodo({ s, instructors, orgName, today }) {
+export function partnerTodo({ s, instructors, orgName, today, mediaGaps = [], partnerName = "This partner" }) {
   if (!s) return [];
   const items = [];
+
+  // Marketing the partner asked for (20261123r): amber, never red, since it
+  // never counts toward requirements. One item per kind, to the Classes tab.
+  for (const g of mediaGaps) {
+    items.push({
+      key: `media:${g.item.key}`, tone: "warn",
+      text: `${partnerName} asks for ${g.item.lower} on each class. ${g.count} ${g.count === 1 ? "class still needs one" : "classes still need one"}.`,
+      action: { type: "tab", tab: "classes", label: "Go to Classes" },
+    });
+  }
 
   for (const b of s.business || []) {
     const label = b.label.toLowerCase();

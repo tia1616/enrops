@@ -28,6 +28,7 @@ import { PartnerShell, PartnerSignIn, NoAccess, useMemberships, todayIso } from 
 import { DocumentsTable, InstructorGrid, RecordSummary, RegistrationLine, RequirementsList } from "./ProviderRecord.jsx";
 import PartnerDecision from "./PartnerDecision.jsx";
 import ClassesTable from "./ClassesTable.jsx";
+import MarketingAsksSection from "./MarketingAsksSection.jsx";
 import EmailsSent from "./EmailsSent.jsx";
 import { RecordTabRow, RecordTabPanel, useRecordTab, alertFor } from "./RecordTabs.jsx";
 import { decisionTag } from "../../lib/recordTabs.js";
@@ -48,6 +49,8 @@ export default function PartnerProviderDetail() {
   const [openError, setOpenError] = useState("");
   const opening = useRef(false);
   const [tab, setTab] = useRecordTab(PARTNER_TABS);
+  // Bumped when the partner saves a marketing ask, so Classes re-reads it.
+  const [marketingVersion, setMarketingVersion] = useState(0);
   const [classCount, setClassCount] = useState(null);
   const [emailCount, setEmailCount] = useState(null);
   const [decision, setDecision] = useState(null);
@@ -156,7 +159,12 @@ export default function PartnerProviderDetail() {
           </RecordTabPanel>
 
           <RecordTabPanel id="classes" active={tab}>
-            <ClassesTable key={`classes:${m.partner_id}`} partnerId={m.partner_id} orgId={m.organization_id} orgName={orgName} onCount={setClassCount} />
+            <ClassesTable key={`classes:${m.partner_id}:${marketingVersion}`} partnerId={m.partner_id}
+              // Only logins that can change the asks are invited to.
+              onAskMarketing={reqControl?.can_edit ? () => {
+                setTab("requirements");
+                requestAnimationFrame(() => document.getElementById("marketing-asks")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+              } : undefined} orgId={m.organization_id} orgName={orgName} onCount={setClassCount} />
           </RecordTabPanel>
 
           <RecordTabPanel id="instructors" active={tab}>
@@ -178,6 +186,13 @@ export default function PartnerProviderDetail() {
               rows={requirements} canManage onChange={setRequirements}
               viewer="partner" orgName={orgName} control={reqControl}
               onSaved={() => loadReqControl(m.partner_id)}
+            />
+            {/* Marketing asks + logo (20261123r): the same every-site admin edits. */}
+            <MarketingAsksSection
+              key={`marketing:${m.partner_id}`}
+              partner={{ id: m.partner_id, partner_name: m.partner_name }}
+              viewer="partner" orgName={orgName} canEdit={!!reqControl?.can_edit}
+              onSaved={() => setMarketingVersion((v) => v + 1)}
             />
           </RecordTabPanel>
 
