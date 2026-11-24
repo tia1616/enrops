@@ -82,17 +82,64 @@ export async function listClassMedia(orgId) {
   return data ?? [];
 }
 
-/** Put a flyer / social graphic on a class, replacing any. */
-export async function uploadClassMedia(orgId, c, itemKey, file) {
-  const path = await uploadInto(orgId, file);
+/** Point a class at a file already in the bucket; tidy up on refusal or replace. */
+async function attach(c, itemKey, path, filename) {
   const { data: old, error } = await supabase.rpc("set_class_media", {
-    p_kind: c.kind, p_class_id: c.class_id, p_item_key: itemKey, p_storage_path: path, p_filename: file.name || null,
+    p_kind: c.kind, p_class_id: c.class_id, p_item_key: itemKey, p_storage_path: path, p_filename: filename || null,
   });
   if (error) {
     await removeFile(path);
     throw error;
   }
   await removeFile(old);
+}
+
+/**
+ * Put a flyer / social graphic on a class, replacing any, and on each of
+ * `alsoFor` (other classes the same file covers: "upload once, use for
+ * several"). Each class gets its own copy, so removing it from one class never
+ * takes it off another. Resolves the classes it could NOT go on ([{ c, error }]).
+ */
+export async function uploadClassMedia(orgId, c, itemKey, file, alsoFor = []) {
+  const path = await uploadInto(orgId, file);
+  await attach(c, itemKey, path, file.name);
+  const failed = [];
+  for (const other of alsoFor) {
+    try {
+      const copyPath = `${orgId}/${crypto.randomUUID()}.${storedExtension(file) || "pdf"}`;
+      const { error } = await supabase.storage.from(MARKETING_BUCKET).copy(path, copyPath);
+      if (error) throw error;
+      await attach(other, itemKey, copyPath, file.name);
+    } catch (error) {
+      failed.push({ c: other, error });
+    }
+  }
+  return failed;
+}
+
+/**
+ * Zip several files into one download ("Download all for Winter 2027").
+ * `files` = [{ path, name }] with distinct names. The zip library loads only
+ * when this runs.
+ */
+export async function downloadAllZip(files, zipFileName) {
+  const { zipSync } = await import("fflate");
+  const entries = {};
+  for (const f of files) {
+    const res = await fetch(await marketingFileUrl(f.path));
+    if (!res.ok) throw new Error(`couldn't fetch ${f.name}`);
+    // Pictures and PDFs are already compressed: store them as they are.
+    entries[f.name] = [new Uint8Array(await res.arrayBuffer()), { level: 0 }];
+  }
+  const blob = new Blob([zipSync(entries)], { type: "application/zip" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = zipFileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 export async function removeClassMedia(c, itemKey) {

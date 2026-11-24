@@ -19,12 +19,12 @@ import {
   sortClasses, rosterDisplayRows, asksDismissal, showsHomeroom, groupClassesByTerm,
 } from "../../lib/partnerClasses.js";
 import {
-  listMarketingAsks, listClassMedia, uploadClassMedia, removeClassMedia,
-  openMarketingFile, copyMarketingLink, canShareFiles, prepareShareFile, shareFile, COPY_LINK_DAYS,
+  listMarketingAsks, listClassMedia, uploadClassMedia, removeClassMedia, openMarketingFile,
 } from "../../lib/partnerMarketing.js";
 import {
-  wantedAsks, indexMedia, mediaKey, itemOf, askLine, fileProblemForAsk, shareName, extOfPath, mediaGaps,
+  wantedAsks, indexMedia, mediaKey, itemOf, askLine, fileProblemForAsk, shareName, extOfPath, mediaGaps, galleryGroups,
 } from "../../lib/partnerMarketingLogic.js";
+import MarketingGallery from "./MarketingGallery.jsx";
 
 const TH = "border-b border-j2s-ink/10 bg-white px-3 py-2 text-left text-xs font-semibold text-j2s-ink/60";
 const TD = "border-b border-j2s-ink/10 px-3 py-2 align-top";
@@ -34,7 +34,8 @@ const keyOf = (c) => `${c.kind}:${c.class_id}`;
 // `onCount(n)`: how many classes loaded, for the count on the page's tab (null = failed).
 // `onMediaGaps(gaps)`: what the partner asked for that isn't on a class yet
 // ([{ item, count }], from mediaGaps), for the provider's To do list.
-export default function ClassesTable({ partnerId, orgId, orgName, viewer = "partner", partnerName = "", canEdit = false, onCount, onMediaGaps }) {
+// `onAskMarketing()`: the partner's page takes it to the Marketing asks.
+export default function ClassesTable({ partnerId, orgId, orgName, viewer = "partner", partnerName = "", canEdit = false, onCount, onMediaGaps, onAskMarketing }) {
   const [classes, setClasses] = useState(null);
   // Marketing (20261123r): what the partner asks for, and the files on classes.
   const [asks, setAsks] = useState([]);
@@ -140,8 +141,24 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
           {wanted.map((a) => {
             const live = classes.filter((c) => c.status !== "cancelled");
             const have = live.filter((c) => media.has(mediaKey(c.kind, c.class_id, a.item_key))).length;
-            return `${itemOf(a.item_key).label}s on ${have} of ${live.length} classes`;
+            return `${itemOf(a.item_key).plural} on ${have} of ${live.length} classes`;
           }).join(" · ")}
+        </p>
+      )}
+      {/* The flyer board: everything that's in, by term (both pages). */}
+      {classes?.length > 0 && wanted.length > 0 && (
+        <MarketingGallery
+          groups={galleryGroups(groupClassesByTerm(classes, formatTermLabel), asks, media)}
+          providerName={orgName} viewer={viewer}
+        />
+      )}
+      {/* Nothing asked yet: tell the partner it can, and take it there. */}
+      {viewer === "partner" && classes?.length > 0 && wanted.length === 0 && !mediaError && onAskMarketing && (
+        <p className="px-4 pt-1 text-sm text-j2s-ink/70">
+          Want a flyer or social graphic for each class?{" "}
+          <button type="button" onClick={onAskMarketing} className="font-semibold text-j2s-purple hover:underline">
+            Ask {orgName || "the provider"} for them →
+          </button>
         </p>
       )}
       {classes === null ? (
@@ -196,7 +213,7 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
                         <ClassMediaLine
                           key={a.item_key} c={c} ask={a} file={media.get(mediaKey(c.kind, c.class_id, a.item_key)) ?? null}
                           viewer={viewer} canEdit={canEdit} orgId={orgId} partnerName={partnerName} termLabel={g.label}
-                          onChanged={loadMedia}
+                          onChanged={loadMedia} siblings={classes}
                         />
                       ))}
                     </td>
@@ -276,13 +293,12 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
   );
 }
 
-// One asked-for item on one class. The provider adds, replaces or removes it;
-// the partner downloads it, shares the file itself (the device's share sheet,
-// e.g. to its marketing team), or copies a link that works for 7 days.
-function ClassMediaLine({ c, ask, file, viewer, canEdit, orgId, partnerName, termLabel, onChanged }) {
+// One asked-for item on one class. The provider views, adds (to this class and
+// any others it covers), replaces or removes it. The partner's row only shows
+// a small marker; viewing, sharing and downloading are in the gallery above.
+function ClassMediaLine({ c, ask, file, viewer, canEdit, orgId, partnerName, termLabel, onChanged, siblings }) {
   const [busy, setBusy] = useState("");
   const [note, setNote] = useState(null); // { ok } | { err }
-  const [prepared, setPrepared] = useState(null); // a downloaded File waiting for a second Share tap
   const label = itemOf(ask.item_key).label;
   const isProvider = viewer === "provider";
   const name = file ? shareName(c.title, termLabel, ask.item_key, extOfPath(file.storage_path)) : "";
@@ -294,47 +310,46 @@ function ClassMediaLine({ c, ask, file, viewer, canEdit, orgId, partnerName, ter
     try { await fn(); } catch (err) { setNote({ err: err?.message ?? "Something went wrong." }); } finally { setBusy(""); }
   }
 
+  // A picked file waits here while the provider says which other classes it
+  // also covers ("upload once, use for several").
+  const [pending, setPending] = useState(null); // { file, also: Set<key> } | null
+  const others = (siblings || []).filter((o) => o.status !== "cancelled" && !(o.kind === c.kind && o.class_id === c.class_id));
+
   async function onPick(e) {
     const f = e.target.files?.[0];
     e.target.value = "";
     if (!f) return;
     const problem = fileProblemForAsk(f, ask, partnerName || "The partner");
     if (problem) { setNote({ err: problem }); return; }
+    if (others.length) { setNote(null); setPending({ file: f, also: new Set() }); return; }
+    await doUpload(f, []);
+  }
+
+  async function doUpload(f, alsoFor) {
+    setPending(null);
     await run("upload", async () => {
-      await uploadClassMedia(orgId, c, ask.item_key, f);
+      const failed = await uploadClassMedia(orgId, c, ask.item_key, f, alsoFor);
       await onChanged();
-      setNote({ ok: `${label} added.` });
+      const done = 1 + alsoFor.length - failed.length;
+      setNote(failed.length
+        ? { err: `Added to ${done} ${done === 1 ? "class" : "classes"}; couldn't add it to ${failed.map((x) => x.c.title).join(", ")}.` }
+        : { ok: done === 1 ? `${label} added.` : `${label} added to ${done} classes.` });
     });
   }
 
-  // Each browser call happens inside the tap (see partnerMarketing.js), so a
-  // phone's browser never blocks it.
-  const download = () => run("download", () => openMarketingFile(file.storage_path, name));
+  // Each browser call happens inside the tap (see partnerMarketing.js).
   const view = () => run("view", () => openMarketingFile(file.storage_path, name, { view: true }));
-  const copyLink = () => run("copy", async () => {
-    await copyMarketingLink(file.storage_path, name);
-    setNote({ ok: `Link copied. It works for ${COPY_LINK_DAYS} days, no sign-in needed.` });
-  });
-  const share = () => {
-    if (!canShareFiles()) {
-      // No share sheet here (most desktop browsers): copy the link instead.
-      run("share", async () => {
-        await copyMarketingLink(file.storage_path, name);
-        setNote({ ok: `This browser can't share files, so the link is copied instead. It works for ${COPY_LINK_DAYS} days.` });
-      });
-      return;
-    }
-    run("share", async () => {
-      const f = prepared ?? await prepareShareFile(file.storage_path, name);
-      const r = await shareFile(f);
-      if (r === "again") { setPrepared(f); setNote({ ok: "Ready. Tap Share again." }); }
-      else setPrepared(null);
-    });
-  };
   const remove = () => {
     if (!window.confirm(`Remove the ${label.toLowerCase()} from ${c.title || "this class"}?`)) return;
     run("remove", async () => { await removeClassMedia(c, ask.item_key); await onChanged(); });
   };
+  const keyOfClass = (o) => `${o.kind}:${o.class_id}`;
+
+  // The partner's rows stay clean: a small marker when it's in, nothing when
+  // it isn't (the gallery and the "1 of 4" count say the rest).
+  if (!isProvider) {
+    return file ? <div className="mt-0.5 text-xs text-emerald-700">✓ {label}</div> : null;
+  }
 
   return (
     <div className="mt-0.5 text-xs">
@@ -342,19 +357,42 @@ function ClassMediaLine({ c, ask, file, viewer, canEdit, orgId, partnerName, ter
       {file ? <span className="text-emerald-700">✓ Added</span> : <span className="text-amber-700">Not added yet</span>}
       <div className="flex flex-wrap gap-x-3">
         {file && <button type="button" className={btn} onClick={view} disabled={!!busy}>{busy === "view" ? "Opening…" : "View"}</button>}
-        {file && <button type="button" className={btn} onClick={download} disabled={!!busy}>{busy === "download" ? "Opening…" : "Download"}</button>}
-        {file && !isProvider && <button type="button" className={btn} onClick={share} disabled={!!busy}>{busy === "share" ? "Sharing…" : "Share"}</button>}
-        {file && !isProvider && <button type="button" className={btn} onClick={copyLink} disabled={!!busy}>Copy link</button>}
-        {isProvider && canEdit && (
+        {canEdit && !pending && (
           <label className={`${btn} cursor-pointer`}>
             {busy === "upload" ? "Uploading…" : file ? "Replace" : "Upload"}
             <input type="file" className="sr-only" disabled={!!busy} onChange={onPick}
               accept={ask.file_types.map((t) => (t === "pdf" ? "application/pdf" : t === "png" ? "image/png" : "image/jpeg")).join(",")} />
           </label>
         )}
-        {isProvider && canEdit && file && <button type="button" className={btn} onClick={remove} disabled={!!busy}>Remove</button>}
+        {canEdit && file && !pending && <button type="button" className={btn} onClick={remove} disabled={!!busy}>Remove</button>}
       </div>
-      {isProvider && !file && <div className="text-j2s-ink/55">{askLine(ask, partnerName)}{ask.note ? ` · ${ask.note}` : ""}</div>}
+      {pending && (
+        <div className="mt-1 rounded-lg border border-j2s-ink/15 bg-j2s-ink/[0.02] p-2">
+          <div className="font-semibold text-j2s-ink">Use this {label.toLowerCase()} for other classes too?</div>
+          <div className="mt-1 grid gap-1">
+            {others.map((o) => (
+              <label key={keyOfClass(o)} className="flex items-start gap-1.5">
+                <input type="checkbox" className="mt-0.5 h-3.5 w-3.5"
+                  checked={pending.also.has(keyOfClass(o))}
+                  onChange={(e) => setPending((p) => {
+                    const also = new Set(p.also);
+                    if (e.target.checked) also.add(keyOfClass(o)); else also.delete(keyOfClass(o));
+                    return { ...p, also };
+                  })} />
+                <span>{o.title || "Class"}</span>
+              </label>
+            ))}
+          </div>
+          <div className="mt-1.5 flex gap-3">
+            <button type="button" className="rounded bg-j2s-purple px-2.5 py-1 text-xs font-semibold text-white"
+              onClick={() => doUpload(pending.file, others.filter((o) => pending.also.has(keyOfClass(o))))}>
+              {pending.also.size ? `Add to ${pending.also.size + 1} classes` : "Add to this class"}
+            </button>
+            <button type="button" className="text-xs text-j2s-ink/60 hover:underline" onClick={() => setPending(null)}>Cancel</button>
+          </div>
+        </div>
+      )}
+      {!file && <div className="text-j2s-ink/55">{askLine(ask, partnerName)}{ask.note ? ` · ${ask.note}` : ""}</div>}
       {note?.ok && <div role="status" className="text-emerald-700">{note.ok}</div>}
       {note?.err && <div role="alert" className="text-red-700">{note.err}</div>}
     </div>

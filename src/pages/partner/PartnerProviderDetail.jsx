@@ -159,7 +159,11 @@ export default function PartnerProviderDetail() {
           </RecordTabPanel>
 
           <RecordTabPanel id="classes" active={tab}>
-            <ClassesTable key={`classes:${m.partner_id}:${marketingVersion}`} partnerId={m.partner_id} orgId={m.organization_id} orgName={orgName} onCount={setClassCount} />
+            <ClassesTable key={`classes:${m.partner_id}:${marketingVersion}`} partnerId={m.partner_id}
+              onAskMarketing={() => {
+                setTab("requirements");
+                requestAnimationFrame(() => document.getElementById("marketing-asks")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+              }} orgId={m.organization_id} orgName={orgName} onCount={setClassCount} />
           </RecordTabPanel>
 
           <RecordTabPanel id="instructors" active={tab}>

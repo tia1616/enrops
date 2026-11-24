@@ -9,7 +9,7 @@
 // admin edits (`canEdit`, from partner_requirements_control); everyone else
 // reads. Never part of compliance: nothing here counts toward requirements.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   listMarketingAsks, setMarketingAsk, getPartnerLogo, uploadPartnerLogo, openMarketingFile, marketingFileUrl,
 } from "../../lib/partnerMarketing.js";
@@ -32,6 +32,7 @@ export default function MarketingAsksSection({ partner, viewer = "partner", orgN
       const [rows, lg] = await Promise.all([listMarketingAsks(partner.id), getPartnerLogo(partner.id)]);
       const byKey = Object.fromEntries(MARKETING_ITEMS.map((i) => [i.key, blankAsk(i.key)]));
       for (const r of rows) byKey[r.item_key] = { ...r, note: r.note ?? "" };
+      savedNote.current = Object.fromEntries(Object.entries(byKey).map(([k, v]) => [k, v.note]));
       setAsks(byKey);
       setLogo(lg);
       setLoadError("");
@@ -57,22 +58,35 @@ export default function MarketingAsksSection({ partner, viewer = "partner", orgN
     return () => { cancelled = true; };
   }, [logo?.storage_path]);
 
-  const edit = (key, patch) => setAsks((a) => ({ ...a, [key]: { ...a[key], ...patch } }));
-
-  async function save(key) {
-    const a = asks[key];
-    if (a.wanted && !a.file_types.length) { setMsg((m) => ({ ...m, [key]: { err: "Tick at least one file type." } })); return; }
-    setSaving(key);
-    setMsg((m) => ({ ...m, [key]: null }));
-    try {
-      await setMarketingAsk(partner.id, a);
-      setMsg((m) => ({ ...m, [key]: { ok: "Saved." } }));
-      onSaved?.();
-    } catch (err) {
-      setMsg((m) => ({ ...m, [key]: { err: `That didn't save: ${err?.message ?? "unknown error"}` } }));
-    } finally {
-      setSaving("");
+  // Saves the moment a box is ticked, like the requirements list above it
+  // (Jessica 2026-11-24); the note saves when you leave the box. Saves for one
+  // item queue in order, so quick ticks never land out of order.
+  const chain = useRef({});
+  const savedNote = useRef({});
+  function save(key, next) {
+    setMsg((m) => ({ ...m, [key]: { saving: true } }));
+    chain.current[key] = (chain.current[key] ?? Promise.resolve())
+      .then(() => setMarketingAsk(partner.id, next))
+      .then(() => {
+        savedNote.current[key] = next.note ?? "";
+        setMsg((m) => ({ ...m, [key]: { ok: "Saved." } }));
+        onSaved?.();
+      })
+      .catch((err) => setMsg((m) => ({ ...m, [key]: { err: `That didn't save: ${err?.message ?? "unknown error"}` } })));
+  }
+  function change(key, patch) {
+    const next = { ...asks[key], ...patch };
+    if (next.wanted && !next.file_types.length) {
+      setMsg((m) => ({ ...m, [key]: { err: "Keep at least one file type ticked." } }));
+      return;
     }
+    setAsks((a) => ({ ...a, [key]: next }));
+    save(key, next);
+  }
+  const typeNote = (key, note) => setAsks((a) => ({ ...a, [key]: { ...a[key], note } }));
+  function saveNote(key) {
+    const a = asks[key];
+    if ((a.note ?? "") !== (savedNote.current[key] ?? "")) save(key, a);
   }
 
   async function onLogo(e) {
@@ -108,7 +122,8 @@ export default function MarketingAsksSection({ partner, viewer = "partner", orgN
     : msg[k]?.err ? <p role="alert" className="mt-1 text-xs text-red-700">{msg[k].err}</p> : null;
 
   return (
-    <section className="mt-5 rounded-2xl bg-white p-4 shadow-card">
+    // id: Classes' "Ask ... for them" scrolls here.
+    <section id="marketing-asks" className="mt-5 scroll-mt-24 rounded-2xl bg-white p-4 shadow-card">
       <h2 className="text-base font-bold text-j2s-ink">
         {isPartner ? `Marketing you'd like from ${orgName || "this provider"}` : `Marketing ${partner.partner_name} asks for`}
       </h2>
@@ -140,7 +155,7 @@ export default function MarketingAsksSection({ partner, viewer = "partner", orgN
               <fieldset key={item.key} className="rounded-xl border border-j2s-ink/10 p-3">
                 <legend className="sr-only">{item.label}</legend>
                 <label className="flex items-center gap-2 text-sm font-semibold text-j2s-ink">
-                  <input type="checkbox" checked={a.wanted} onChange={(e) => edit(item.key, { wanted: e.target.checked })} className="h-4 w-4" />
+                  <input type="checkbox" checked={a.wanted} onChange={(e) => change(item.key, { wanted: e.target.checked })} className="h-4 w-4" />
                   Ask for {item.lower} for each class
                 </label>
                 {a.wanted && (
@@ -151,35 +166,32 @@ export default function MarketingAsksSection({ partner, viewer = "partner", orgN
                         {FILE_TYPES.map((t) => (
                           <label key={t.key} className="flex items-center gap-1.5">
                             <input type="checkbox" className="h-4 w-4" checked={a.file_types.includes(t.key)}
-                              onChange={(e) => edit(item.key, { file_types: e.target.checked ? [...a.file_types, t.key] : a.file_types.filter((x) => x !== t.key) })} />
+                              onChange={(e) => change(item.key, { file_types: e.target.checked ? [...a.file_types, t.key] : a.file_types.filter((x) => x !== t.key) })} />
                             {t.label}
                           </label>
                         ))}
                       </div>
                     </div>
                     <label className="flex items-center gap-2">
-                      <input type="checkbox" className="h-4 w-4" checked={a.needs_logo} onChange={(e) => edit(item.key, { needs_logo: e.target.checked })} />
+                      <input type="checkbox" className="h-4 w-4" checked={a.needs_logo} onChange={(e) => change(item.key, { needs_logo: e.target.checked })} />
                       Must include our logo
                     </label>
                     {item.accessible && (
                       <label className="flex items-start gap-2">
-                        <input type="checkbox" className="mt-0.5 h-4 w-4" checked={a.needs_accessible} onChange={(e) => edit(item.key, { needs_accessible: e.target.checked })} />
+                        <input type="checkbox" className="mt-0.5 h-4 w-4" checked={a.needs_accessible} onChange={(e) => change(item.key, { needs_accessible: e.target.checked })} />
                         <span>Must be accessible (ADA)<span className="block text-xs text-j2s-ink/60">{ACCESSIBLE_HINT}</span></span>
                       </label>
                     )}
                     <label className="text-xs font-semibold text-j2s-ink/60">
                       Anything else, in your words
-                      <input type="text" maxLength={300} value={a.note} onChange={(e) => edit(item.key, { note: e.target.value })}
-                        placeholder="e.g. 8.5 x 11 portrait, 4 weeks before the class starts"
+                      <input type="text" maxLength={300} value={a.note} onChange={(e) => typeNote(item.key, e.target.value)}
+                        onBlur={() => saveNote(item.key)}
+                        placeholder={item.example}
                         className="mt-1 block w-full rounded border border-j2s-ink/20 px-2 py-1 text-sm font-normal text-j2s-ink" />
                     </label>
                   </div>
                 )}
-                <button type="button" onClick={() => save(item.key)} disabled={!!saving}
-                  className="mt-3 rounded bg-j2s-purple px-3 py-1 text-xs font-semibold text-white disabled:opacity-60">
-                  {saving === item.key ? "Saving…" : "Save"}
-                </button>
-                <Msg k={item.key} />
+                {msg[item.key]?.saving ? <p role="status" className="mt-1 text-xs text-j2s-ink/55">Saving…</p> : <Msg k={item.key} />}
               </fieldset>
             );
           })}

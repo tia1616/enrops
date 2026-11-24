@@ -1,6 +1,7 @@
 // Marketing on the partner portal (20261123r).
 import {
   typesText, wantedAsks, askLine, fileProblemForAsk, indexMedia, mediaKey, shareName, extOfPath, mediaGaps,
+  galleryGroups, zipName, uniqueNames, isPicture,
 } from './partnerMarketingLogic.js';
 import { partnerTodo } from './partnerTodo.js';
 
@@ -54,6 +55,22 @@ const todo = partnerTodo({ s, instructors: [], orgName: 'J2S', today: '2026-11-2
 eq('to do: one amber item', todo.map((t) => [t.key, t.tone]), [['media:flyer', 'warn']]);
 eq('to do: text', todo[0]?.text, 'Happy Valley asks for a flyer on each class. 1 class still needs one.');
 eq('to do: goes to Classes', todo[0]?.action, { type: 'tab', tab: 'classes', label: 'Go to Classes' });
+
+// The gallery: only files that are in, grouped by term, cancelled classes out.
+{
+  const groups = [
+    { key: 'WI27', label: 'Winter 2027', classes: [classes[0], classes[1], classes[2]] },
+    { key: 'SP27', label: 'Spring 2027', classes: [classes[3]] },
+  ];
+  const media2 = [...rows, { program_id: 'p3', camp_session_id: null, item_key: 'flyer', storage_path: 'o/c.pdf' }];
+  const g = galleryGroups(groups, [flyer], media2);
+  eq('gallery: by term, only what is in', g.map((x) => [x.label, x.cards.map((k) => k.c.class_id)]), [['Winter 2027', ['p1']], ['Spring 2027', ['c1']]]);
+  eq('gallery: card name says what it is', g[0].cards[0].name, ' - Winter 2027 - Flyer.pdf'.replace(/^/, 'Class'));
+  eq('gallery: nothing asked, nothing shown', galleryGroups(groups, [social], media2), []);
+}
+eq('zip name', zipName('Journey to STEAM', 'Winter 2027'), 'Journey to STEAM - Winter 2027 - flyers and graphics.zip');
+eq('unique names in one zip', uniqueNames(['a.pdf', 'b.jpg', 'A.pdf', 'a.pdf']), ['a.pdf', 'b.jpg', 'A (2).pdf', 'a (3).pdf']);
+eq('picture or tile', [isPicture('o/x.JPG'), isPicture('o/x.png'), isPicture('o/x.pdf')], [true, true, false]);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
