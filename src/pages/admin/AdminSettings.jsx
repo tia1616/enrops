@@ -196,7 +196,8 @@ export default function AdminSettings() {
         </div>
       </section>
 
-      <LateJoinSettingsCard org={org} />
+      {/* Only where families register on enrops - elsewhere it would do nothing. */}
+      {org?.uses_enrops_registration !== false && <LateJoinSettingsCard org={org} />}
 
       {/* The lean-ops "Locations" section lived here only because lean ops had
           no top-level venue nav. It is now a tab under Programs -- next to the
