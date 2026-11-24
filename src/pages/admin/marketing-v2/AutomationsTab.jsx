@@ -347,6 +347,17 @@ export default function AutomationsTab() {
       setError('Add your review link first — click Edit, replace the "Add your review link here" link with your Google, Yelp, or Facebook review URL, then Save.');
       return;
     }
+    // The one-button review ask sends nothing without the org's Google link
+    // (the cron fails closed). Read it fresh: the editor may have just saved it.
+    if (goingOn && effectiveBody.includes("{{review_link_url}}")) {
+      const { data: o, error: oErr } = await supabase
+        .from("organizations").select("google_review_url").eq("id", org.id).maybeSingle();
+      if (oErr) { setError(`Couldn't check your Google review link: ${oErr.message}`); return; }
+      if (!o?.google_review_url) {
+        setError("Add your Google review link first: click Edit message, paste it under Google review link, then Save.");
+        return;
+      }
+    }
     setSavingTplId(tpl.id);
     setError(null);
     try {
