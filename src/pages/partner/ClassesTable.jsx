@@ -149,7 +149,7 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
       {classes?.length > 0 && wanted.length > 0 && (
         <MarketingGallery
           groups={galleryGroups(groupClassesByTerm(classes, formatTermLabel), asks, media)}
-          providerName={orgName} viewer={viewer}
+          providerName={orgName}
         />
       )}
       {/* Nothing asked yet: tell the partner it can, and take it there. */}

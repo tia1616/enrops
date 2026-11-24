@@ -118,11 +118,13 @@ export async function uploadClassMedia(orgId, c, itemKey, file, alsoFor = []) {
 }
 
 /**
- * Zip several files into one download ("Download all for Winter 2027").
- * `files` = [{ path, name }] with distinct names. The zip library loads only
- * when this runs.
+ * Zip several files into one ("Download all for Winter 2027"). `files` =
+ * [{ path, name }] with distinct names. Resolves a link to the zip: the caller
+ * shows it as a "Save" link the person taps, because a phone's browser
+ * ignores a download started after the network waits. The zip library loads
+ * only when this runs. Call URL.revokeObjectURL when done.
  */
-export async function downloadAllZip(files, zipFileName) {
+export async function makeZip(files) {
   const { zipSync } = await import("fflate");
   const entries = {};
   for (const f of files) {
@@ -131,15 +133,7 @@ export async function downloadAllZip(files, zipFileName) {
     // Pictures and PDFs are already compressed: store them as they are.
     entries[f.name] = [new Uint8Array(await res.arrayBuffer()), { level: 0 }];
   }
-  const blob = new Blob([zipSync(entries)], { type: "application/zip" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = zipFileName;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  return URL.createObjectURL(new Blob([zipSync(entries)], { type: "application/zip" }));
 }
 
 export async function removeClassMedia(c, itemKey) {

@@ -7,31 +7,36 @@
 import { useEffect, useState } from "react";
 import {
   marketingFileUrl, openMarketingFile, copyMarketingLink, canShareFiles, prepareShareFile, shareFile,
-  downloadAllZip, COPY_LINK_DAYS,
+  makeZip, COPY_LINK_DAYS,
 } from "../../lib/partnerMarketing.js";
 import { isPicture, zipName, uniqueNames, itemOf } from "../../lib/partnerMarketingLogic.js";
 
-export default function MarketingGallery({ groups, providerName, viewer = "partner" }) {
+export default function MarketingGallery({ groups, providerName }) {
   const total = groups.reduce((n, g) => n + g.cards.length, 0);
   if (!total) return null;
   return (
     <div className="px-4 pt-3">
       <h3 className="text-sm font-bold text-j2s-ink">Flyers &amp; graphics</h3>
-      {groups.map((g) => <TermGallery key={g.key} group={g} providerName={providerName} viewer={viewer} />)}
+      {groups.map((g) => <TermGallery key={g.key} group={g} providerName={providerName} />)}
     </div>
   );
 }
 
 function TermGallery({ group, providerName }) {
   const [zipping, setZipping] = useState(false);
+  const [zipUrl, setZipUrl] = useState(null); // ready to save: a real link the person taps
   const [note, setNote] = useState(null);
+  const fileName = zipName(providerName, group.label);
+
+  // Free the zip when it's replaced or the page goes.
+  useEffect(() => () => { if (zipUrl) URL.revokeObjectURL(zipUrl); }, [zipUrl]);
 
   async function downloadAll() {
     setZipping(true);
     setNote(null);
     try {
       const names = uniqueNames(group.cards.map((k) => k.name));
-      await downloadAllZip(group.cards.map((k, i) => ({ path: k.file.storage_path, name: names[i] })), zipName(providerName, group.label));
+      setZipUrl(await makeZip(group.cards.map((k, i) => ({ path: k.file.storage_path, name: names[i] }))));
     } catch (err) {
       setNote({ err: `Couldn't make the download: ${err?.message ?? "unknown error"}` });
     } finally {
@@ -43,11 +48,15 @@ function TermGallery({ group, providerName }) {
     <div className="mt-2">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <div className="text-xs font-semibold uppercase tracking-wide text-j2s-ink/55">{group.label}</div>
-        {group.cards.length > 1 && (
+        {group.cards.length > 1 && (zipUrl ? (
+          <a href={zipUrl} download={fileName} className="rounded bg-j2s-purple px-2.5 py-1 text-xs font-semibold text-white">
+            Save all {group.cards.length} (zip)
+          </a>
+        ) : (
           <button type="button" onClick={downloadAll} disabled={zipping} className="text-xs font-semibold text-j2s-purple hover:underline disabled:opacity-60">
             {zipping ? "Getting them ready…" : `Download all ${group.cards.length}`}
           </button>
-        )}
+        ))}
       </div>
       {note?.err && <p role="alert" className="text-xs text-red-700">{note.err}</p>}
       <ul className="mt-1.5 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">

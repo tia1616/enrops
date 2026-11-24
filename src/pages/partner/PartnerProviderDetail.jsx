@@ -160,10 +160,11 @@ export default function PartnerProviderDetail() {
 
           <RecordTabPanel id="classes" active={tab}>
             <ClassesTable key={`classes:${m.partner_id}:${marketingVersion}`} partnerId={m.partner_id}
-              onAskMarketing={() => {
+              // Only logins that can change the asks are invited to.
+              onAskMarketing={reqControl?.can_edit ? () => {
                 setTab("requirements");
                 requestAnimationFrame(() => document.getElementById("marketing-asks")?.scrollIntoView({ behavior: "smooth", block: "start" }));
-              }} orgId={m.organization_id} orgName={orgName} onCount={setClassCount} />
+              } : undefined} orgId={m.organization_id} orgName={orgName} onCount={setClassCount} />
           </RecordTabPanel>
 
           <RecordTabPanel id="instructors" active={tab}>
