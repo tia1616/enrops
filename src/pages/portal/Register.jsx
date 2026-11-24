@@ -6,6 +6,7 @@ import { VIP_PRICE_PER_TERM_CENTS, INSTALLMENT_MIN_CENTS } from '../../lib/prici
 import { schoolYearTermsForFall } from '../../lib/terms.js';
 import { spreadCreditAcrossLines } from '../../lib/creditSpread.js';
 import { isCampProgram } from '../../lib/programSchedule.js';
+import { classSaleStatus } from '../../lib/classSeasons.js';
 import { questionAppliesToCart } from '../../lib/registrationFields.js';
 import { useCart } from '../../context/CartContext.jsx';
 import StepIndicator from '../../components/StepIndicator.jsx';
@@ -91,6 +92,10 @@ export default function Register() {
   // The error banner, so a failure can be scrolled to the family. See the effect below.
   const errorRef = useRef(null);
   const [submitting, setSubmitting] = useState(false);
+  // A saved or shared ?program= link to a class that has CLOSED to sign-ups
+  // (finished, or started while the business has Late sign-ups off). Shown as a
+  // plain message up front, instead of a form checkout would refuse at the end.
+  const [closedProgram, setClosedProgram] = useState(null); // { program, status } | null
 
   // READ AGAIN, not once. A `function` rather than a const so the loader above
   // can call it without depending on declaration order.
@@ -353,6 +358,20 @@ export default function Register() {
     const program = programs.find((x) => x.id === programFromUrl);
     if (!program) return;
 
+    // CLOSED TO SIGN-UPS? The same facts checkout refuses on
+    // (classSeasons.classSaleStatus): a class past its last session, or one that
+    // has started while the business has Late sign-ups off. Say so now rather
+    // than after the family has filled in every screen.
+    if (!isCampProgram(program)) {
+      const now = new Date();
+      const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const status = classSaleStatus(program, todayIso);
+      if (status && status.state !== 'in_progress') {
+        setClosedProgram({ program, status });
+        return;
+      }
+    }
+
     const school = schools.find((s) => s.id === program.program_location_id);
     if (school) setActiveChildSchool(school);
 
@@ -513,7 +532,9 @@ export default function Register() {
     setPrereqMap(prereqs);
     setPrograms((programsRes.data || []).map((p) => {
       const s = !isCampProgram(p) ? sessionsById.get(p.id) : null;
-      return s ? { ...p, sessions_left: s.sessions_left, sessions_total: s.sessions_total } : p;
+      // last_session + late_join_allowed travel with the counts so a saved link
+      // to a closed class can say so up front (classSaleStatus).
+      return s ? { ...p, sessions_left: s.sessions_left, sessions_total: s.sessions_total, last_session: s.last_session, late_join_allowed: s.late_join_allowed } : p;
     }));
     // Substitute the business name into the waiver text here, at the one place
     // it is loaded, rather than in each component that displays it — a reader
@@ -963,6 +984,28 @@ export default function Register() {
     return (
       <div className="flex min-h-[50vh] items-center justify-center">
         <div className="animate-pulse text-j2s-ink/50">Loading registration&hellip;</div>
+      </div>
+    );
+  }
+
+  // A link to a class that has closed to sign-ups, with nothing else in the
+  // cart: say so plainly and point to the classes that ARE open.
+  if (closedProgram && !cart.children.some((c) => c.items.length > 0)) {
+    const name = closedProgram.program.curriculum || 'This class';
+    return (
+      <div className="mx-auto max-w-xl px-4 py-12 sm:px-6">
+        <div className="rounded-2xl border border-j2s-purple/15 bg-white p-6 shadow-card">
+          <p className="font-titan text-xl text-j2s-ink">{name} is no longer taking sign-ups</p>
+          <p className="mt-2 text-sm leading-relaxed text-j2s-ink/70">
+            {closedProgram.status.state === 'finished'
+              ? 'This class has finished.'
+              : `This class has already started, and ${org?.name || 'this provider'} isn't adding new families to it.`}
+            {' '}Have a look at what's open now.
+          </p>
+          <a href={`/${ORG_SLUG}`} className="btn-j2s-primary mt-5 inline-block">
+            See open classes →
+          </a>
+        </div>
       </div>
     );
   }

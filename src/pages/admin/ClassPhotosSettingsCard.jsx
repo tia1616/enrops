@@ -15,6 +15,7 @@ import { Link } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
 import { signPhotoUrls, deleteClassPhoto } from "../../lib/classPhotos.js";
 import { PhotoGrid, PhotoLightbox } from "../../components/ClassPhotoGrid.jsx";
+import SettingSwitch from "../../components/SettingSwitch.jsx";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -147,16 +148,13 @@ export default function ClassPhotosSettingsCard({ org }) {
               Before shooting, an instructor is shown which children have no photo permission on file.
             </div>
           </div>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={enabled === true}
-            disabled={enabled === null || saving}
-            onClick={toggle}
-            style={{ flexShrink: 0, padding: "9px 16px", background: enabled ? "#2f7d32" : BRIGHT, color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", opacity: enabled === null || saving ? 0.6 : 1 }}
-          >
-            {enabled === null ? "..." : saving ? "Saving..." : enabled ? "On" : "Turn on"}
-          </button>
+          <SettingSwitch
+            on={enabled === true}
+            loading={enabled === null}
+            busy={saving}
+            label="Instructors share photos with families"
+            onChange={toggle}
+          />
         </div>
         {enabled && (
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, marginTop: 16, borderTop: `1px solid ${RULE}`, paddingTop: 14 }}>
@@ -168,16 +166,14 @@ export default function ClassPhotosSettingsCard({ org }) {
                   : <>Add your logo on the <Link to="/admin/branding" style={{ color: BRIGHT, fontWeight: 600 }}>Branding page</Link> first.</>}
               </div>
             </div>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={showLogo === true}
-              disabled={showLogo === null || savingLogo || (!hasLogo && !showLogo)}
-              onClick={toggleLogo}
-              style={{ flexShrink: 0, padding: "9px 16px", background: showLogo ? "#2f7d32" : BRIGHT, color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", opacity: showLogo === null || savingLogo || (!hasLogo && !showLogo) ? 0.6 : 1 }}
-            >
-              {showLogo === null ? "..." : savingLogo ? "Saving..." : showLogo ? "On" : "Turn on"}
-            </button>
+            <SettingSwitch
+              on={showLogo === true}
+              loading={showLogo === null}
+              busy={savingLogo}
+              disabled={!hasLogo && !showLogo}
+              label="Add your logo to photos"
+              onChange={toggleLogo}
+            />
           </div>
         )}
 
