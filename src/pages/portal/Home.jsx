@@ -555,7 +555,7 @@ export default function Home() {
     // a class that has started shows "4 of 8 sessions left" and is priced for
     // them (pricing.js proratedBaseCents) - the same counts checkout charges by.
     const onSale = (pgRes.data || [])
-      .filter((p) => isCampProgram(p) || isClassOnSale(org, p, sessionsById.get(p.id)?.last_session, todayIso))
+      .filter((p) => isCampProgram(p) || isClassOnSale(org, p, sessionsById.get(p.id) ?? null, todayIso))
       .map((p) => {
         const s = !isCampProgram(p) ? sessionsById.get(p.id) : null;
         return s ? { ...p, sessions_left: s.sessions_left, sessions_total: s.sessions_total } : p;

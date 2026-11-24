@@ -35,16 +35,26 @@ ok(!isTermOnSale({ classes_follow_dates: true }, "WI27"), "no open season = noth
 const winterOpen = { classes_follow_dates: true, active_registration_term: "WI27" };
 const fallClass = { term: "FA26" };
 ok(isTermOnSale(winterOpen, "FA26"), "an earlier season stays on sale for a date-following org");
-ok(isClassOnSale(winterOpen, fallClass, "2026-12-10", "2026-12-03"), "a Fall class still running in December is on sale");
-ok(isClassOnSale(winterOpen, fallClass, "2026-12-10", "2026-12-10"), "on sale ON its last session day");
-ok(!isClassOnSale(winterOpen, fallClass, "2026-12-10", "2026-12-11"), "off sale the day after its last session");
+// A class_last_sessions row: last session, 8 sessions, 3 left, late joining on.
+const row = (last, extra = {}) => ({ last_session: last, sessions_total: 8, sessions_left: 3, late_join_allowed: true, ...extra });
+ok(isClassOnSale(winterOpen, fallClass, row("2026-12-10"), "2026-12-03"), "a Fall class still running in December is on sale");
+ok(isClassOnSale(winterOpen, fallClass, row("2026-12-10"), "2026-12-10"), "on sale ON its last session day");
+ok(!isClassOnSale(winterOpen, fallClass, row("2026-12-10"), "2026-12-11"), "off sale the day after its last session");
 ok(!isClassOnSale(winterOpen, fallClass, null, "2026-12-11"), "no known last session: an EARLIER season stays off sale (a failed read must not re-list finished classes)");
 ok(isClassOnSale(winterOpen, { term: "WI27" }, null, "2026-12-11"), "no known last session: the open season is on sale (old behaviour)");
 ok(isClassOnSale(winterOpen, { term: "SP27" }, null, "2026-12-11"), "no known last session: a later season is on sale (old behaviour)");
 const j2s = { classes_follow_dates: false, active_registration_term: "WI27" };
-ok(!isClassOnSale(j2s, fallClass, "2026-12-10", "2026-12-03"), "a season-switching org's running Fall class stays off sale (unchanged)");
-ok(!isClassOnSale(j2s, { term: "WI27" }, "2027-03-01", "2027-03-02"), "a season-switching org's FINISHED open-season class drops off");
-ok(isClassOnSale(j2s, { term: "WI27" }, "2027-03-01", "2027-01-20"), "a season-switching org's running open-season class is on sale");
+ok(!isClassOnSale(j2s, fallClass, row("2026-12-10"), "2026-12-03"), "a season-switching org's running Fall class stays off sale (unchanged)");
+ok(!isClassOnSale(j2s, { term: "WI27" }, row("2027-03-01"), "2027-03-02"), "a season-switching org's FINISHED open-season class drops off");
+ok(isClassOnSale(j2s, { term: "WI27" }, row("2027-03-01"), "2027-01-20"), "a season-switching org's running open-season class is on sale");
+
+// LATE JOINING OFF (Jessica 2026-11-24): a class stops selling at its first session.
+ok(!isClassOnSale(winterOpen, fallClass, row("2026-12-10", { late_join_allowed: false }), "2026-12-03"),
+  "late joining off: a class that has started is off sale");
+ok(isClassOnSale(winterOpen, { term: "WI27" }, row("2027-03-01", { late_join_allowed: false, sessions_left: 8 }), "2026-12-03"),
+  "late joining off: a class that has NOT started is still on sale");
+ok(!isClassOnSale(j2s, { term: "WI27" }, row("2027-03-01", { late_join_allowed: false }), "2027-01-20"),
+  "late joining off applies to a season-switching org too");
 
 // THE BUG: Branching Minds' January classes were filed under Fall.
 eq(classTermFor(dates, "2027-01-05"), "WI27", "a class starting Jan 5 is filed under Winter 2027");

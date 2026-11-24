@@ -83,10 +83,26 @@ export function isTermOnSale(org, term) {
 // would re-list every finished class the provider ever published. So the
 // unknown case is exactly the rule before last sessions existed: the open
 // season and up to three ahead (or just the open one, for a season switcher).
-export function isClassOnSale(org, program, lastSessionIso, todayIso) {
+//
+// sessions is the class's class_last_sessions row ({ last_session,
+// sessions_total, sessions_left, late_join_allowed }), or null when unknown.
+// When the business has turned late joining OFF (late_join_allowed false), a
+// class that has started - fewer sessions left than it has - is off sale too:
+// the per-class window then closes at the first session, Sawyer's default.
+export function isClassOnSale(org, program, sessions, todayIso) {
   if (!isTermOnSale(org, program?.term)) return false;
+  const lastSessionIso = sessions?.last_session;
   if (!lastSessionIso || !todayIso) return !isPastTerm(org, program?.term);
-  return String(lastSessionIso).slice(0, 10) >= String(todayIso).slice(0, 10);
+  if (String(lastSessionIso).slice(0, 10) < String(todayIso).slice(0, 10)) return false;
+  return !(sessions.late_join_allowed === false && hasStarted(sessions));
+}
+
+// Has this class already had at least one session? (Counts from
+// class_last_sessions; unknown counts = not started.)
+export function hasStarted(sessions) {
+  const left = Number(sessions?.sessions_left);
+  const total = Number(sessions?.sessions_total);
+  return Number.isInteger(left) && Number.isInteger(total) && total > 0 && left < total;
 }
 
 // The season a weekly class is filed under. For a date-following org, the season

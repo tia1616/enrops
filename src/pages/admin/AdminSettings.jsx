@@ -196,6 +196,8 @@ export default function AdminSettings() {
         </div>
       </section>
 
+      <LateJoinSettingsCard org={org} />
+
       {/* The lean-ops "Locations" section lived here only because lean ops had
           no top-level venue nav. It is now a tab under Programs -- next to the
           classes it serves, rather than in a drawer you configure once -- so
@@ -385,6 +387,70 @@ export default function AdminSettings() {
       </section>
       )}
     </div>
+  );
+}
+
+// Late sign-ups: organizations.late_join_allowed (20261124c), ON by default.
+// On: a family can join a weekly class after it starts and pays for the
+// sessions left (pricing.js proratedBaseCents). Off: a class stops selling once
+// its first session has happened (classSeasons.isClassOnSale, and
+// create-registration refuses it). Same switch pattern as ClassPhotosSettingsCard,
+// including reading the row back so a refused write is visible.
+function LateJoinSettingsCard({ org }) {
+  const orgId = org?.id;
+  const [allowed, setAllowed] = useState(null); // null = loading
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (!orgId) return undefined;
+    let cancelled = false;
+    (async () => {
+      const { data, error } = await supabase
+        .from("organizations").select("late_join_allowed").eq("id", orgId).maybeSingle();
+      if (cancelled) return;
+      if (error) { console.error("[LateJoinSettingsCard] load failed", error); setErr("Couldn't load this setting."); return; }
+      setAllowed(data?.late_join_allowed !== false);
+    })();
+    return () => { cancelled = true; };
+  }, [orgId]);
+
+  async function toggle() {
+    setSaving(true);
+    setErr("");
+    const { data, error } = await supabase
+      .from("organizations").update({ late_join_allowed: !allowed }).eq("id", orgId).select("late_join_allowed");
+    setSaving(false);
+    if (error) { console.error("[LateJoinSettingsCard] save failed", error); setErr("That didn't save. Try again."); return; }
+    if (!data || data.length === 0) { setErr("Only an owner or admin can change this setting."); return; }
+    setAllowed(data[0].late_join_allowed !== false);
+  }
+
+  return (
+    <section style={{ marginTop: 24 }}>
+      <h2 style={sectionTitle}>Late sign-ups</h2>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
+        <div>
+          <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>Let families join a class after it starts</div>
+          <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
+            {allowed === false
+              ? "Off: a class stops taking sign-ups once its first session has happened."
+              : "On: families can sign up until a class's last session, and pay only for the sessions left. Turn it off to stop sign-ups once a class has started."}
+          </div>
+          {err && <div style={{ color: RED, fontSize: 13, marginTop: 8 }}>{err}</div>}
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={allowed === true}
+          disabled={allowed === null || saving}
+          onClick={toggle}
+          style={{ flexShrink: 0, padding: "9px 16px", background: allowed ? GREEN : BRIGHT, color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", opacity: allowed === null || saving ? 0.6 : 1 }}
+        >
+          {allowed === null ? "..." : saving ? "Saving..." : allowed ? "On" : "Turn on"}
+        </button>
+      </div>
+    </section>
   );
 }
 
