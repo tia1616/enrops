@@ -10,20 +10,22 @@
 // photo": families are told to email the provider, and the provider deletes the
 // photo here without having to find the instructor who took it.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
 import { signPhotoUrls, deleteClassPhoto } from "../../lib/classPhotos.js";
 import { PhotoGrid, PhotoLightbox } from "../../components/ClassPhotoGrid.jsx";
 import SettingSwitch from "../../components/SettingSwitch.jsx";
 
-const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
 const INK = "#1a1a1a";
 const MUTED = "#6b6b6b";
 const RULE = "#e2dfd5";
-const PANEL = "#fff";
-const sectionTitle = { fontSize: 13, fontWeight: 700, color: PURPLE, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 12 };
+// One row in Settings' "Emails & photos" group (AdminSettings draws the group's
+// panel and heading). Same three values as AdminSettings' rows so they line up.
+const ROW_PAD = "14px 18px";
+const rowTitle = { fontSize: 15, fontWeight: 600, color: INK };
+const rowDesc = { fontSize: 13, color: MUTED, marginTop: 2, lineHeight: 1.5, maxWidth: 520 };
 
 const prettyDay = (d) =>
   d ? new Date(`${d}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
@@ -40,9 +42,13 @@ export default function ClassPhotosSettingsCard({ org }) {
   const [savingLogo, setSavingLogo] = useState(false);
   const [err, setErr] = useState("");
   const [photos, setPhotos] = useState(null);
+  // The photo list's own error, kept apart from the switches' save errors so
+  // opening or closing the list never hides or wipes one of those.
+  const [listErr, setListErr] = useState("");
   const [urls, setUrls] = useState({});
   const [classNames, setClassNames] = useState({});
   const [open, setOpen] = useState(null);
+  const [reviewOpen, setReviewOpen] = useState(false);
 
   useEffect(() => {
     if (!orgId) return undefined;
@@ -62,8 +68,15 @@ export default function ClassPhotosSettingsCard({ org }) {
     return () => { cancelled = true; };
   }, [orgId]);
 
+  // Latest load wins. Opening the list again, a delete, or the switch going
+  // off and on each start a load; an older, slower one must not overwrite the
+  // newer result (or put a stale error over a list that loaded fine).
+  const loadSeq = useRef(0);
+
   const loadPhotos = useCallback(async () => {
     if (!orgId) return;
+    const seq = ++loadSeq.current;
+    setListErr("");
     try {
       // Newest first. 60 covers "the photo from class last Tuesday".
       const { data, error } = await supabase
@@ -80,12 +93,15 @@ export default function ClassPhotosSettingsCard({ org }) {
         const { data: progs } = await supabase.from("programs").select("id, curriculum").in("id", ids);
         for (const p of progs ?? []) names[p.id] = p.curriculum || "Class";
       }
+      const signed = await signPhotoUrls(rows);
+      if (seq !== loadSeq.current) return;
       setClassNames(names);
-      setUrls(await signPhotoUrls(rows));
+      setUrls(signed);
       setPhotos(rows);
     } catch (e) {
       console.error("[ClassPhotosSettingsCard] photo load failed", e);
-      setErr("Couldn't load the photos.");
+      if (seq !== loadSeq.current) return;
+      setListErr("Couldn't load the photos.");
       setPhotos([]);
     }
   }, [orgId]);
@@ -93,7 +109,9 @@ export default function ClassPhotosSettingsCard({ org }) {
   // Only once the provider has the feature on: a provider that never enabled it
   // should not pay for signing URLs, and on an environment without the table
   // (frontend ahead of the migration) should not be shown a load error.
-  useEffect(() => { if (enabled === true) loadPhotos(); }, [enabled, loadPhotos]);
+  // And only once they open "Review photos": the list sits folded on Settings,
+  // so signing 60 URLs on every visit to the page would buy nothing.
+  useEffect(() => { if (enabled === true && reviewOpen) loadPhotos(); }, [enabled, reviewOpen, loadPhotos]);
 
   async function toggle() {
     setSaving(true);
@@ -137,30 +155,27 @@ export default function ClassPhotosSettingsCard({ org }) {
   }
 
   return (
-    <section style={{ marginTop: 24 }}>
-      <h2 style={sectionTitle}>Class photos</h2>
-      <div style={{ background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
+    <div style={{ padding: ROW_PAD }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14 }}>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>Instructors share photos with families</div>
-            <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
-              Instructors take photos from their portal; each carries a small enrops mark. Every family enrolled in that class sees them in their portal.
-              Before shooting, an instructor is shown which children have no photo permission on file.
+          <div style={{ minWidth: 0 }}>
+            <div style={rowTitle}>Class photos</div>
+            <div style={rowDesc}>
+              Instructors share photos from class with families. Each carries a small enrops mark, and instructors see which children have no photo permission.
             </div>
           </div>
           <SettingSwitch
             on={enabled === true}
             loading={enabled === null}
             busy={saving}
-            label="Instructors share photos with families"
+            label="Class photos"
             onChange={toggle}
           />
         </div>
         {enabled && (
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, marginTop: 16, borderTop: `1px solid ${RULE}`, paddingTop: 14 }}>
-            <div>
-              <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>Add your logo to photos</div>
-              <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, marginTop: 14, borderTop: `1px solid ${RULE}`, paddingTop: 12 }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 14, fontWeight: 600, color: INK }}>Add your logo to photos</div>
+              <div style={rowDesc}>
                 {hasLogo
                   ? "Your logo goes in the bottom-left corner, alongside the enrops mark. It applies to photos taken from now on."
                   : <>Add your logo on the <Link to="/admin/branding" style={{ color: BRIGHT, fontWeight: 600 }}>Branding page</Link> first.</>}
@@ -179,10 +194,39 @@ export default function ClassPhotosSettingsCard({ org }) {
 
         {err && <div style={{ color: "#b0413e", fontSize: 13, marginTop: 10 }}>{err}</div>}
 
-        {enabled && photos !== null && (
-          <div style={{ marginTop: 16, borderTop: `1px solid ${RULE}`, paddingTop: 14 }}>
+        {/* Folded by default so the list does not take over Settings. This is
+            where a provider deletes a photo when a family asks, so the link
+            says so. */}
+        {enabled && (
+          <div style={{ marginTop: 12, borderTop: `1px solid ${RULE}`, paddingTop: 10 }}>
+            <button
+              type="button"
+              aria-expanded={reviewOpen}
+              // Opening starts a fresh load: back to "Loading photos…", not the
+              // last attempt's error or empty list.
+              onClick={() => {
+                if (!reviewOpen) { setListErr(""); setPhotos(null); }
+                setReviewOpen((v) => !v);
+              }}
+              style={{ background: "none", border: "none", padding: 0, color: BRIGHT, fontSize: 14, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}
+            >
+              {reviewOpen ? "Hide photos" : "Review or delete photos →"}
+            </button>
+          </div>
+        )}
+
+        {enabled && reviewOpen && listErr && (
+          <div style={{ color: "#b0413e", fontSize: 13, marginTop: 10 }}>{listErr}</div>
+        )}
+
+        {enabled && reviewOpen && photos === null && (
+          <div style={{ fontSize: 13, color: MUTED, marginTop: 10 }}>Loading photos…</div>
+        )}
+
+        {enabled && reviewOpen && photos !== null && (
+          <div style={{ marginTop: 12 }}>
             {photos.length === 0 ? (
-              !err && <div style={{ fontSize: 13, color: MUTED }}>No photos yet.</div>
+              !listErr && <div style={{ fontSize: 13, color: MUTED }}>No photos yet.</div>
             ) : (
               <>
                 <div style={{ fontSize: 12, color: MUTED, marginBottom: 10 }}>
@@ -200,7 +244,6 @@ export default function ClassPhotosSettingsCard({ org }) {
             )}
           </div>
         )}
-      </div>
 
       {openPhoto && (
         <PhotoLightbox
@@ -217,6 +260,6 @@ export default function ClassPhotosSettingsCard({ org }) {
           ]}
         />
       )}
-    </section>
+    </div>
   );
 }

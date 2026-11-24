@@ -1,10 +1,11 @@
-// /admin/settings — tenant-level settings. Currently just the Connections
-// section (Google Drive). Future: branding edits, notification prefs, etc.
+// /admin/settings — tenant-level settings, grouped by job: Your page & sign-ups,
+// Emails & photos, Instructors (canManageInstructors), Connections (non-lean).
+// Each setting is one row; most open their own page under /admin/*.
 //
 // Multi-tenant: connection rows are org-scoped via RLS. Each org admin sees
 // their own org's connections. Copy is brand-neutral (no J2S strings).
 
-import { useEffect, useState } from "react";
+import { Children, useEffect, useState } from "react";
 import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
 import { canManageInstructors } from "../../lib/entitlements.js";
@@ -133,11 +134,13 @@ export default function AdminSettings() {
     }
   }
 
+  const isLean = org?.instructor_pay_model === "enrops_platform";
+
   return (
     <div>
       <h1 style={{ margin: 0, color: PURPLE, fontSize: 26, fontWeight: 700 }}>Settings</h1>
       <p style={{ color: MUTED, fontSize: 14, margin: "6px 0 22px", lineHeight: 1.5 }}>
-        Connect your organization to outside services and manage your account.
+        How your page looks, what families get, and how your team runs.
       </p>
 
       {toast && (
@@ -154,207 +157,86 @@ export default function AdminSettings() {
         </div>
       )}
 
-      {/* Signup promises this twice ("you can change this address anytime in
-          Settings") and until now there was nowhere to do it. Registration
-          operators only — changing an established tenant's address would break
-          every link they have ever handed out. */}
-      {org?.instructor_pay_model === "enrops_platform" && (
-        <PageAddressSection
-          org={org}
-          onSaved={(slug) => {
-            // Correct the shell's copy straight away: every other surface reads
-            // org.slug for share links and the embed snippet, and the address
-            // field itself compares against it to know what "changed" means.
-            setOrg?.((o) => (o ? { ...o, slug } : o));
-            setToast({ kind: "success", message: `Your page address is now ${slug}.` });
-          }}
-        />
-      )}
+      {/* Grouped by job (Jessica approved 2026-11-24): one group per job, one
+          row per setting. Every row keeps the name it had as a card, because
+          guides, the tenant-sender test email ("Settings → Email sender") and
+          the Drive error ("Settings → Connections") send people here by name. */}
 
-      <section style={{ marginTop: 12 }}>
-        <h2 style={sectionTitle}>Waivers &amp; policies</h2>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>Waivers &amp; policies</div>
-            <div style={{ fontSize: 13, color: MUTED, marginTop: 2, lineHeight: 1.5, maxWidth: 460 }}>
-              The forms families sign to enroll, plus the policies you publish on your registration site.
-            </div>
-          </div>
-          <Link to="/admin/waivers" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
-        </div>
-      </section>
+      <SettingsGroup title="Your page & sign-ups" intro="What families see when they find you and sign up.">
+        {/* Signup promises this twice ("you can change this address anytime in
+            Settings"). Registration operators only: changing an established
+            tenant's address would break every link they have ever handed out. */}
+        {isLean && (
+          <PageAddressSection
+            org={org}
+            onSaved={(slug) => {
+              // Correct the shell's copy straight away: every other surface reads
+              // org.slug for share links and the embed snippet, and the address
+              // field itself compares against it to know what "changed" means.
+              setOrg?.((o) => (o ? { ...o, slug } : o));
+              setToast({ kind: "success", message: `Your page address is now ${slug}.` });
+            }}
+          />
+        )}
+        {/* Not gated by operator type: the logo shows in the public header and
+            the catalog reads org_branding for every tenant (verified 2026-07-31).
+            The /admin/branding route itself was never gated. */}
+        <SettingsRow title="Branding" to="/admin/branding">
+          Your logo, colors and the words at the top of your class list.
+        </SettingsRow>
+        <SettingsRow title="Registration questions" to="/admin/registration-questions">
+          What your sign-up form asks families.
+        </SettingsRow>
+        <SettingsRow title="Waivers & policies" to="/admin/waivers">
+          What families sign, and the policies on your page.
+        </SettingsRow>
+        {/* Only where families register on enrops - elsewhere it would do nothing. */}
+        {org?.uses_enrops_registration !== false && <LateJoinSettingsCard org={org} setOrg={setOrg} />}
+      </SettingsGroup>
 
-      <section style={{ marginTop: 24 }}>
-        <h2 style={sectionTitle}>Registration questions</h2>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>What your form asks families</div>
-            <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
-              Choose the pickup, release, and guardian details your registration form collects, and add your own questions. Turn off anything you don't need.
-            </div>
-          </div>
-          <Link to="/admin/registration-questions" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
-        </div>
-      </section>
+      <SettingsGroup title="Emails & photos" intro="What families get from you after they sign up.">
+        {/* Title matches the destination page's own h1 ("Email sender"):
+            NO_TENANT_INBOX_MESSAGE tells an operator to find it from Settings.
+            Registration operators' copy leaves out the sender-name and signature
+            controls that branding covers for them. */}
+        <SettingsRow title="Email sender" to="/admin/email-sender">
+          {isLean
+            ? "Where family replies go, and where your alerts land."
+            : "Your sender name and signature, where family replies go, and where your alerts land."}
+        </SettingsRow>
+        <ClassPhotosSettingsCard org={org} />
+      </SettingsGroup>
 
-      {/* Only where families register on enrops - elsewhere it would do nothing. */}
-      {org?.uses_enrops_registration !== false && <LateJoinSettingsCard org={org} setOrg={setOrg} />}
-
-      {/* The lean-ops "Locations" section lived here only because lean ops had
-          no top-level venue nav. It is now a tab under Programs -- next to the
-          classes it serves, rather than in a drawer you configure once -- so
-          keeping a duplicate entry point here would be two doors to one room.
-          J2S is unaffected: it keeps its own top-level Locations item. */}
-
+      {/* Gated on the ENTITLEMENT, not the nav shape: a founding registration
+          operator manages instructors too, and their instructors cannot onboard
+          without documents and the background-check switch (which defaults ON
+          in WizardHost). See canManageInstructors. The lean-ops "Locations"
+          card that once lived on this page is a tab under Programs now. */}
       {canManageInstructors(org) && (
-      <section style={{ marginTop: 24 }}>
-        <h2 style={sectionTitle}>Availability survey</h2>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>Survey questions &amp; intro</div>
-            <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
-              Choose which questions the instructor availability survey asks and set a default intro. Turn off anything you don't need.
-            </div>
-          </div>
-          <Link to="/admin/survey-settings" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
-        </div>
-      </section>
+        <SettingsGroup title="Instructors" intro="Onboarding, pay and scheduling for your team.">
+          <SettingsRow title="Instructor documents" to="/admin/instructor-documents">
+            What your instructors sign when they join.
+          </SettingsRow>
+          <SettingsRow title="Background checks" to="/admin/background-checks">
+            Whether onboarding asks for one, and where to get it.
+          </SettingsRow>
+          <SettingsRow title="Training videos" to="/admin/training">
+            Videos new instructors watch during onboarding.
+          </SettingsRow>
+          <SettingsRow title="Pay rates" to="/admin/pay-rates">
+            What you pay per session.
+          </SettingsRow>
+          <SettingsRow title="Availability survey" to="/admin/survey-settings">
+            What the survey asks your instructors.
+          </SettingsRow>
+        </SettingsGroup>
       )}
 
-      {/* Branding used to be hidden from registration operators, on the reasoning
-          that a logo-and-colours screen "barely shows up anywhere" for them. That
-          stopped being true. Verified 2026-07-31 before unhiding:
-            - the logo renders in the public header on every tenant page,
-              including the registration flow (PublicLayout reads
-              organizations.logo_url);
-            - the catalog page reads org_branding and renders the operator's
-              colours and banner image (portal/Home.jsx).
-          So the card's own promise - "they appear on your registration page and
-          every email you send" - is accurate, while the gate meant the one
-          operator type that most needs their own branding was the only one who
-          could not reach it. Settings was making a promise the product kept and
-          the gate hid. The /admin/branding ROUTE was never gated (the route guard
-          blocks on role permissions only), so this only ever hid the entrance. */}
-      <section style={{ marginTop: 24 }}>
-        <h2 style={sectionTitle}>Branding</h2>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>Logo, colors &amp; page wording</div>
-            <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
-              Your logo appears on your registration pages and your emails. Your colors style your emails, and your banner and headline sit at the top of your class list.
-            </div>
-          </div>
-          <Link to="/admin/branding" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
-        </div>
-      </section>
-
-      {/* Reply-to is the one exception to "no provider branding in v1", because
-          without it a family's reply goes to us instead of to them. The copy is
-          narrowed for registration operators so it doesn't advertise the
-          signature and sender-name controls that branding covers. */}
-      {/* Heading matches the destination page's own h1 ("Email sender") on
-          purpose: NO_TENANT_INBOX_MESSAGE tells an operator to find this page
-          from Settings, and it can only do that if the words match what is on
-          screen. "Email replies" also no longer covered what the page owns. */}
-      <section style={{ marginTop: 24 }}>
-        <h2 style={sectionTitle}>Email sender</h2>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>
-              {org?.instructor_pay_model === "enrops_platform" ? "Where family replies go" : "How your emails show up"}
-            </div>
-            <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
-              {org?.instructor_pay_model === "enrops_platform"
-                ? <>When a family replies to a confirmation or reminder, it goes to <strong>{org?.email || "your email"}</strong>. Change it here if replies should go somewhere else, and set where your own alerts land.</>
-                : "Set the sender name, reply-to address, email signature, and mailing address that show on your invites, waivers, and reminders — and where the alerts meant for you land. We handle the sending domain — no DNS setup."}
-            </div>
-          </div>
-          <Link to="/admin/email-sender" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
-        </div>
-      </section>
-
-      {canManageInstructors(org) && (
-      <section style={{ marginTop: 24 }}>
-        <h2 style={sectionTitle}>Pay rates</h2>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>What you pay instructors</div>
-            <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
-              Set your per-session pay for lead and developing instructors. Enrops fills these amounts in automatically when a session is confirmed, so payroll adds up on its own.
-            </div>
-          </div>
-          <Link to="/admin/pay-rates" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
-        </div>
-      </section>
-      )}
-
-      {/* Gated on the ENTITLEMENT, not the nav shape. Every other instructor
-          section here tests `instructor_pay_model !== 'enrops_platform'`, which
-          hides it from a founding operator who is entitled to the whole product
-          — and this is the one surface their instructors cannot onboard without.
-          See canManageInstructors. */}
-      {canManageInstructors(org) && (
-      <section style={{ marginTop: 24 }}>
-        <h2 style={sectionTitle}>Instructor documents</h2>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>What your instructors sign</div>
-            <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
-              Your contractor agreement, pay schedule, code of conduct and the rest — written in your words. Instructors read and sign these when they join.
-            </div>
-          </div>
-          <Link to="/admin/instructor-documents" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
-        </div>
-      </section>
-      )}
-
-      {/* Entitlement, not nav shape. Jessica confirmed on staging as a
-          lean+founding org: the documents card appeared but this did not, so she
-          could author an agreement and then had no way to configure — or switch
-          OFF — the background-check step, which defaults ON
-          (WizardHost: `backgroundCheck?.enabled !== false`). Her instructor would
-          hit a step with no provider, no link and no way out. */}
-      {canManageInstructors(org) && (
-      <section style={{ marginTop: 24 }}>
-        <h2 style={sectionTitle}>Background checks</h2>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>Instructor background checks</div>
-            <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
-              Choose whether a background check is required in onboarding, and tell instructors where to complete one. Turn it off if you don't need it.
-            </div>
-          </div>
-          <Link to="/admin/background-checks" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
-        </div>
-      </section>
-      )}
-
-      {canManageInstructors(org) && (
-      <section style={{ marginTop: 24 }}>
-        <h2 style={sectionTitle}>Training videos</h2>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
-          <div>
-            <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>Instructor training videos</div>
-            <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
-              Upload training videos new instructors must watch during onboarding — no skipping or speeding up — with optional comprehension questions. Turn it off if you don't need it.
-            </div>
-          </div>
-          <Link to="/admin/training" style={{ flexShrink: 0, padding: "9px 16px", background: BRIGHT, color: "#fff", borderRadius: 8, fontSize: 13, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" }}>Manage →</Link>
-        </div>
-      </section>
-      )}
-
-      <ClassPhotosSettingsCard org={org} />
-
-      {/* Google Drive is for importing curriculum documents — a J2S workflow
-          that has no counterpart for a registration operator. Hidden rather
-          than left as a card that leads somewhere they'd never use. */}
-      {org?.instructor_pay_model !== "enrops_platform" && (
-      <section style={{ marginTop: 24 }}>
-        <h2 style={sectionTitle}>Connections</h2>
-
-        <div style={connectionCard}>
-          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+      {/* Google Drive is for importing curriculum documents, a J2S workflow
+          with no counterpart for a registration operator. */}
+      {!isLean && (
+        <SettingsGroup title="Connections" intro="Outside services linked to enrops.">
+          <div style={{ display: "flex", alignItems: "center", gap: 14, padding: ROW_PAD }}>
             <div style={iconBox}>
               <svg width="24" height="24" viewBox="0 0 24 24" aria-hidden="true">
                 {/* Simple Drive triangle mark — no need to load Google's logo SVG */}
@@ -362,15 +244,13 @@ export default function AdminSettings() {
               </svg>
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 600, fontSize: 15, color: INK }}>Google Drive</div>
-              <div style={{ color: MUTED, fontSize: 13, marginTop: 2 }}>
+              <div style={rowTitle}>Google Drive</div>
+              <div style={rowDesc}>
                 {loading
                   ? "Checking connection…"
                   : connection
                   ? <>Connected as <strong style={{ color: INK }}>{connection.google_email}</strong></>
-                  : org?.instructor_pay_model === "enrops_platform"
-                  ? "Connect your Google Drive to import documents directly into Enrops."
-                  : "Connect your Google Drive to import curriculum documents directly into Enrops."}
+                  : "Import curriculum documents straight from Drive."}
               </div>
             </div>
             <div>
@@ -385,9 +265,40 @@ export default function AdminSettings() {
               )}
             </div>
           </div>
-        </div>
-      </section>
+        </SettingsGroup>
       )}
+    </div>
+  );
+}
+// One group of settings: a small heading, one line on what the group is for,
+// then a single panel holding its rows with a hairline between them. A row
+// gated off with `cond && <Row/>` is dropped here, so it leaves no empty
+// divider, and a group whose rows are all gated off disappears.
+function SettingsGroup({ title, intro, children }) {
+  const rows = Children.toArray(children).filter(Boolean);
+  if (rows.length === 0) return null;
+  return (
+    <section style={{ marginTop: 26 }}>
+      <h2 style={{ ...sectionTitle, marginBottom: 2 }}>{title}</h2>
+      <p style={{ fontSize: 13, color: MUTED, margin: "0 0 10px", lineHeight: 1.5 }}>{intro}</p>
+      <div style={{ background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10 }}>
+        {rows.map((row, i) => (
+          <div key={row.key ?? i} style={i > 0 ? { borderTop: `1px solid ${RULE}` } : undefined}>{row}</div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+// One setting that lives on its own page: name, one line, "Manage →".
+function SettingsRow({ title, to, children }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, padding: ROW_PAD }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={rowTitle}>{title}</div>
+        <div style={rowDesc}>{children}</div>
+      </div>
+      <Link to={to} aria-label={`Manage ${title}`} style={manageLink}>Manage →</Link>
     </div>
   );
 }
@@ -433,27 +344,24 @@ function LateJoinSettingsCard({ org, setOrg }) {
   }
 
   return (
-    <section style={{ marginTop: 24 }}>
-      <h2 style={sectionTitle}>Late sign-ups</h2>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
-        <div>
-          <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>Let families join a class after it starts</div>
-          <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
-            {allowed === false
-              ? "A class stops taking sign-ups once its first session has happened."
-              : "Families can sign up until a class's last session, and pay only for the sessions left. Turn this off to stop sign-ups once a class has started."}
-          </div>
-          {err && <div style={{ color: RED, fontSize: 13, marginTop: 8 }}>{err}</div>}
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 14, padding: ROW_PAD }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={rowTitle}>Late sign-ups</div>
+        <div style={rowDesc}>
+          {allowed === false
+            ? "A class stops taking sign-ups once its first session has happened."
+            : "Families can join after a class starts and pay for the sessions left."}
         </div>
-        <SettingSwitch
-          on={allowed === true}
-          loading={allowed === null}
-          busy={saving}
-          label="Let families join a class after it starts"
-          onChange={toggle}
-        />
+        {err && <div style={{ color: RED, fontSize: 13, marginTop: 8 }}>{err}</div>}
       </div>
-    </section>
+      <SettingSwitch
+        on={allowed === true}
+        loading={allowed === null}
+        busy={saving}
+        label="Late sign-ups"
+        onChange={toggle}
+      />
+    </div>
   );
 }
 
@@ -507,12 +415,10 @@ function PageAddressSection({ org, onSaved }) {
   }
 
   return (
-    <section style={{ marginTop: 12 }}>
-      <h2 style={sectionTitle}>Your page address</h2>
-      <div style={{ background: PANEL, border: `1px solid ${RULE}`, borderRadius: 10, padding: "16px 18px" }}>
-        <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>Where families find you</div>
-        <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
-          This is the web address of your registration page. Change it whenever you like.
+    <div style={{ padding: ROW_PAD }}>
+        <div style={rowTitle}>Your page address</div>
+        <div style={rowDesc}>
+          The web address of your registration page.
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 12 }}>
@@ -556,21 +462,21 @@ function PageAddressSection({ org, onSaved }) {
             Saved. Your page is now at enrops.com/{savedSlug}.
           </div>
         )}
-      </div>
-    </section>
+    </div>
   );
 }
 
 // --- styles ---
 
-const sectionTitle = { fontSize: 13, fontWeight: 700, color: PURPLE, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 12 };
+const sectionTitle = { fontSize: 13, fontWeight: 700, color: PURPLE, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 12, marginTop: 0 };
 
-const connectionCard = {
-  background: PANEL,
-  border: `1px solid ${RULE}`,
-  borderRadius: 12,
-  padding: 18,
-};
+// Every row on this page uses these so rows line up inside a group.
+// ClassPhotosSettingsCard keeps a copy of the same three values (it is imported
+// by this file, so importing them back would be a cycle).
+const ROW_PAD = "14px 18px";
+const rowTitle = { fontSize: 15, fontWeight: 600, color: INK };
+const rowDesc = { fontSize: 13, color: MUTED, marginTop: 2, lineHeight: 1.5, maxWidth: 520 };
+const manageLink = { flexShrink: 0, color: BRIGHT, fontSize: 14, fontWeight: 600, textDecoration: "none", whiteSpace: "nowrap" };
 
 const iconBox = {
   width: 40,
