@@ -42,6 +42,9 @@ export default function ClassPhotosSettingsCard({ org }) {
   const [savingLogo, setSavingLogo] = useState(false);
   const [err, setErr] = useState("");
   const [photos, setPhotos] = useState(null);
+  // The photo list's own error, kept apart from the switches' save errors so
+  // opening or closing the list never hides or wipes one of those.
+  const [listErr, setListErr] = useState("");
   const [urls, setUrls] = useState({});
   const [classNames, setClassNames] = useState({});
   const [open, setOpen] = useState(null);
@@ -88,7 +91,7 @@ export default function ClassPhotosSettingsCard({ org }) {
       setPhotos(rows);
     } catch (e) {
       console.error("[ClassPhotosSettingsCard] photo load failed", e);
-      setErr("Couldn't load the photos.");
+      setListErr("Couldn't load the photos.");
       setPhotos([]);
     }
   }, [orgId]);
@@ -189,9 +192,12 @@ export default function ClassPhotosSettingsCard({ org }) {
             <button
               type="button"
               aria-expanded={reviewOpen}
-              // Clear a leftover switch-save error, which would otherwise hide
-              // "Loading photos…" (both share err).
-              onClick={() => { setErr(""); setReviewOpen((v) => !v); }}
+              // Opening starts a fresh load: back to "Loading photos…", not the
+              // last attempt's error or empty list.
+              onClick={() => {
+                if (!reviewOpen) { setListErr(""); setPhotos(null); }
+                setReviewOpen((v) => !v);
+              }}
               style={{ background: "none", border: "none", padding: 0, color: BRIGHT, fontSize: 14, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}
             >
               {reviewOpen ? "Hide photos" : "Review or delete photos →"}
@@ -199,14 +205,18 @@ export default function ClassPhotosSettingsCard({ org }) {
           </div>
         )}
 
-        {enabled && reviewOpen && photos === null && !err && (
+        {enabled && reviewOpen && listErr && (
+          <div style={{ color: "#b0413e", fontSize: 13, marginTop: 10 }}>{listErr}</div>
+        )}
+
+        {enabled && reviewOpen && photos === null && (
           <div style={{ fontSize: 13, color: MUTED, marginTop: 10 }}>Loading photos…</div>
         )}
 
         {enabled && reviewOpen && photos !== null && (
           <div style={{ marginTop: 12 }}>
             {photos.length === 0 ? (
-              !err && <div style={{ fontSize: 13, color: MUTED }}>No photos yet.</div>
+              !listErr && <div style={{ fontSize: 13, color: MUTED }}>No photos yet.</div>
             ) : (
               <>
                 <div style={{ fontSize: 12, color: MUTED, marginBottom: 10 }}>
