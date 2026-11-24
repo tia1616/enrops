@@ -14,6 +14,7 @@ import {
   basePriceForItem,
   standardPriceFor,
   proratedBaseCents,
+  isProrated,
 } from '../../lib/pricing.js';
 import { formatTermLabel, termSeasonName, schoolYearTermsForFall } from '../../lib/terms.js';
 import { isClassOnSale, followsDates } from '../../lib/classSeasons.js';
@@ -1276,8 +1277,11 @@ export default function Home() {
                             <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>
                               {meta}
                             </div>
+                            {/* Bold when the class has already started ("Started
+                                Nov 2 · 4 of 8 sessions left"), so a family sees
+                                they are joining part-way (Jessica 2026-11-24). */}
                             {scheduleStr && (
-                              <div style={{ fontSize: 13, color: '#6b6b6b', marginTop: 2 }}>{scheduleStr}</div>
+                              <div style={{ fontSize: 13, color: isProrated(p) ? '#1a1a1a' : '#6b6b6b', fontWeight: isProrated(p) ? 700 : 400, marginTop: 2 }}>{scheduleStr}</div>
                             )}
                             {/* All-in price, stated here rather than at the Pay
                                 step. The breakdown sits underneath so the fee
@@ -1740,7 +1744,7 @@ export default function Home() {
                               (The old guard also rendered a bare "0" for a program
                               whose session_count was 0, since `0 && ...` is 0.) */}
                           {scheduleStr && (
-                            <p className="mt-1 text-sm font-semibold text-j2s-ink/70">
+                            <p className={`mt-1 text-sm ${isProrated(p) ? 'font-bold text-j2s-ink' : 'font-semibold text-j2s-ink/70'}`}>
                               {scheduleStr}
                             </p>
                           )}
