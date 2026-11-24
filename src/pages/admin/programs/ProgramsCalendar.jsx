@@ -35,7 +35,7 @@ import { buildCatalogUrl } from "../../../lib/regLinks.js";
 import { WAITLIST_STATUS } from "../../../lib/waitlistState.js";
 import { enrolledSeats, enrollmentBreakdown } from "../../../lib/enrollmentSummary.js";
 import { fetchOrgTerms, formatTermLabel } from "../../../lib/terms.js";
-import { isTermOnSale } from "../../../lib/classSeasons.js";
+import { isTermOnSale, classSaleStatus } from "../../../lib/classSeasons.js";
 import { getPermissions } from "../../../lib/permissions.js";
 import { pixelWorkflowCreated } from "../../../lib/metaPixel.js";
 // Only the two helpers this file does not already have of its own. Its local
@@ -1708,6 +1708,25 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
     ? `${sessionRowCount} session${sessionRowCount === 1 ? "" : "s"}`
     : "No dates";
 
+  // WHERE THIS CLASS STANDS FOR SIGN-UPS (Jessica 2026-11-24): "In progress · 4
+  // of 8 sessions left", "Sign-ups closed · class finished", or (Late sign-ups
+  // off) "Sign-ups closed · class started". Same rule the family page and
+  // checkout apply (classSeasons.classSaleStatus / isClassOnSale), worked out
+  // from this row's own session dates, so a provider can see which published
+  // classes families can still buy. Weekly classes that are published only.
+  const saleStatus = (() => {
+    if (p.status !== "open" || isCampProgram(p) || !hasDates) return null;
+    const dates = scheduleArr.filter((x) => x?.kind === "session" && x?.date).map((x) => String(x.date).slice(0, 10)).sort();
+    const now = new Date();
+    const todayIso = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+    return classSaleStatus({
+      last_session: dates[dates.length - 1],
+      sessions_total: dates.length,
+      sessions_left: dates.filter((d) => d >= todayIso).length,
+      late_join_allowed: rowOrg?.late_join_allowed,
+    }, todayIso);
+  })();
+
   return (
     <>
     <div data-program-row style={{
@@ -1764,6 +1783,20 @@ function ProgramRow({ program: p, e, sessionDates, drift, districtHasCalendar, i
               }}
             >
               Not linked
+            </span>
+          )}
+          {saleStatus && (
+            <span style={{
+              fontSize: 10,
+              color: saleStatus.state === "in_progress" ? OK_GREEN : MUTED,
+              background: saleStatus.state === "in_progress" ? "#f0f8f0" : "#f0eee5",
+              padding: "2px 8px",
+              borderRadius: 999,
+              fontWeight: 700,
+              letterSpacing: 0.3,
+              flexShrink: 0,
+            }}>
+              {saleStatus.label}
             </span>
           )}
           {isCancelled && (

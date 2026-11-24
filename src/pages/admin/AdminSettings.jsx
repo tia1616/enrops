@@ -9,6 +9,7 @@ import { Link, useOutletContext } from "react-router-dom";
 import { supabase } from "../../lib/supabase.js";
 import { canManageInstructors } from "../../lib/entitlements.js";
 import ClassPhotosSettingsCard from "./ClassPhotosSettingsCard.jsx";
+import SettingSwitch from "../../components/SettingSwitch.jsx";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -197,7 +198,7 @@ export default function AdminSettings() {
       </section>
 
       {/* Only where families register on enrops - elsewhere it would do nothing. */}
-      {org?.uses_enrops_registration !== false && <LateJoinSettingsCard org={org} />}
+      {org?.uses_enrops_registration !== false && <LateJoinSettingsCard org={org} setOrg={setOrg} />}
 
       {/* The lean-ops "Locations" section lived here only because lean ops had
           no top-level venue nav. It is now a tab under Programs -- next to the
@@ -397,7 +398,7 @@ export default function AdminSettings() {
 // its first session has happened (classSeasons.isClassOnSale, and
 // create-registration refuses it). Same switch pattern as ClassPhotosSettingsCard,
 // including reading the row back so a refused write is visible.
-function LateJoinSettingsCard({ org }) {
+function LateJoinSettingsCard({ org, setOrg }) {
   const orgId = org?.id;
   const [allowed, setAllowed] = useState(null); // null = loading
   const [saving, setSaving] = useState(false);
@@ -424,7 +425,11 @@ function LateJoinSettingsCard({ org }) {
     setSaving(false);
     if (error) { console.error("[LateJoinSettingsCard] save failed", error); setErr("That didn't save. Try again."); return; }
     if (!data || data.length === 0) { setErr("Only an owner or admin can change this setting."); return; }
-    setAllowed(data[0].late_join_allowed !== false);
+    const saved = data[0].late_join_allowed !== false;
+    setAllowed(saved);
+    // Keep the shell's copy current: Programs reads org.late_join_allowed for
+    // each class's "Sign-ups closed · class started" chip.
+    setOrg?.((o) => (o ? { ...o, late_join_allowed: saved } : o));
   }
 
   return (
@@ -435,21 +440,18 @@ function LateJoinSettingsCard({ org }) {
           <div style={{ fontSize: 15, fontWeight: 600, color: INK }}>Let families join a class after it starts</div>
           <div style={{ fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 1.5, maxWidth: 520 }}>
             {allowed === false
-              ? "Off: a class stops taking sign-ups once its first session has happened."
-              : "On: families can sign up until a class's last session, and pay only for the sessions left. Turn it off to stop sign-ups once a class has started."}
+              ? "A class stops taking sign-ups once its first session has happened."
+              : "Families can sign up until a class's last session, and pay only for the sessions left. Turn this off to stop sign-ups once a class has started."}
           </div>
           {err && <div style={{ color: RED, fontSize: 13, marginTop: 8 }}>{err}</div>}
         </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={allowed === true}
-          disabled={allowed === null || saving}
-          onClick={toggle}
-          style={{ flexShrink: 0, padding: "9px 16px", background: allowed ? GREEN : BRIGHT, color: "#fff", border: "none", borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap", opacity: allowed === null || saving ? 0.6 : 1 }}
-        >
-          {allowed === null ? "..." : saving ? "Saving..." : allowed ? "On" : "Turn on"}
-        </button>
+        <SettingSwitch
+          on={allowed === true}
+          loading={allowed === null}
+          busy={saving}
+          label="Let families join a class after it starts"
+          onChange={toggle}
+        />
       </div>
     </section>
   );

@@ -97,6 +97,27 @@ export function isClassOnSale(org, program, sessions, todayIso) {
   return !(sessions.late_join_allowed === false && hasStarted(sessions));
 }
 
+// Where a published weekly class stands for sign-ups, in words a provider or a
+// family reads: the same facts isClassOnSale decides on, so a label can never
+// say "open" about a class checkout refuses. null = nothing to say (not started
+// yet, or dates unknown). Read by Programs (a chip on each class) and Register
+// (a saved link to a class that has closed).
+export function classSaleStatus(sessions, todayIso) {
+  const last = sessions?.last_session ? String(sessions.last_session).slice(0, 10) : null;
+  if (!last || !todayIso) return null;
+  if (last < String(todayIso).slice(0, 10)) {
+    return { state: "finished", label: "Sign-ups closed · class finished" };
+  }
+  if (!hasStarted(sessions)) return null;
+  if (sessions.late_join_allowed === false) {
+    return { state: "closed_started", label: "Sign-ups closed · class started" };
+  }
+  return {
+    state: "in_progress",
+    label: `In progress · ${sessions.sessions_left} of ${sessions.sessions_total} sessions left`,
+  };
+}
+
 // Has this class already had at least one session? (Counts from
 // class_last_sessions; unknown counts = not started.)
 export function hasStarted(sessions) {

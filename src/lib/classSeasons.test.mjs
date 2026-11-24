@@ -1,6 +1,6 @@
 // Pins the one "which seasons are on sale" rule (classSeasons.js), and that it
 // orders seasons the same way as SQL term_for_date / term_ordinal (20261123d).
-import { termOrdinal, nextTerm, isTermOnSale, isClassOnSale, classTermFor, isPastTerm } from "./classSeasons.js";
+import { termOrdinal, nextTerm, isTermOnSale, isClassOnSale, classTermFor, isPastTerm, classSaleStatus } from "./classSeasons.js";
 
 let pass = 0;
 let fail = 0;
@@ -55,6 +55,19 @@ ok(isClassOnSale(winterOpen, { term: "WI27" }, row("2027-03-01", { late_join_all
   "late joining off: a class that has NOT started is still on sale");
 ok(!isClassOnSale(j2s, { term: "WI27" }, row("2027-03-01", { late_join_allowed: false }), "2027-01-20"),
   "late joining off applies to a season-switching org too");
+
+// The words Programs and Register show - same facts as isClassOnSale.
+eq(classSaleStatus(row("2026-12-10"), "2026-12-03")?.label, "In progress · 3 of 8 sessions left", "status: running class");
+eq(classSaleStatus(row("2026-12-10"), "2026-12-11")?.state, "finished", "status: finished class");
+eq(classSaleStatus(row("2026-12-10", { late_join_allowed: false }), "2026-12-03")?.state, "closed_started", "status: started with late joins off");
+eq(classSaleStatus(row("2027-03-01", { sessions_left: 8 }), "2026-12-03"), null, "status: not started = nothing to say");
+eq(classSaleStatus(null, "2026-12-03"), null, "status: unknown dates = nothing to say");
+// The status and the rule must never disagree.
+for (const [r, t] of [[row("2026-12-10"), "2026-12-03"], [row("2026-12-10"), "2026-12-11"], [row("2026-12-10", { late_join_allowed: false }), "2026-12-03"]]) {
+  const st = classSaleStatus(r, t);
+  const sellable = isClassOnSale(winterOpen, fallClass, r, t);
+  ok(sellable === (st?.state !== "finished" && st?.state !== "closed_started"), `status and rule agree (${st?.state})`);
+}
 
 // THE BUG: Branching Minds' January classes were filed under Fall.
 eq(classTermFor(dates, "2027-01-05"), "WI27", "a class starting Jan 5 is filed under Winter 2027");
