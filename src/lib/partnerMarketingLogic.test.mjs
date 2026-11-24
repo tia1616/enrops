@@ -63,10 +63,13 @@ eq('to do: goes to Classes', todo[0]?.action, { type: 'tab', tab: 'classes', lab
     { key: 'SP27', label: 'Spring 2027', classes: [classes[3]] },
   ];
   const media2 = [...rows, { program_id: 'p3', camp_session_id: null, item_key: 'flyer', storage_path: 'o/c.pdf' }];
-  const g = galleryGroups(groups, [flyer], media2);
+  const g = galleryGroups(groups, media2);
   eq('gallery: by term, only what is in', g.map((x) => [x.label, x.cards.map((k) => k.c.class_id)]), [['Winter 2027', ['p1']], ['Spring 2027', ['c1']]]);
   eq('gallery: card name says what it is', g[0].cards[0].name, ' - Winter 2027 - Flyer.pdf'.replace(/^/, 'Class'));
-  eq('gallery: nothing asked, nothing shown', galleryGroups(groups, [social], media2), []);
+  // 20261124m: a file added before the partner asked still shows.
+  const unasked = galleryGroups(groups, [{ program_id: 'p2', camp_session_id: null, item_key: 'social_graphic', storage_path: 'o/s.png' }]);
+  eq('gallery: a file nobody asked for still shows', unasked.map((x) => x.cards.map((k) => [k.c.class_id, k.ask.item_key])), [[['p2', 'social_graphic']]]);
+  eq('gallery: nothing in, nothing shown', galleryGroups(groups, []), []);
 }
 eq('zip name', zipName('Journey to STEAM', 'Winter 2027'), 'Journey to STEAM - Winter 2027 - flyers and graphics.zip');
 eq('unique names in one zip', uniqueNames(['a.pdf', 'b.jpg', 'A.pdf', 'a.pdf']), ['a.pdf', 'b.jpg', 'A (2).pdf', 'a (3).pdf']);
