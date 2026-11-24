@@ -189,7 +189,9 @@ export default function ClassPhotosSettingsCard({ org }) {
             <button
               type="button"
               aria-expanded={reviewOpen}
-              onClick={() => setReviewOpen((v) => !v)}
+              // Clear a leftover switch-save error, which would otherwise hide
+              // "Loading photos…" (both share err).
+              onClick={() => { setErr(""); setReviewOpen((v) => !v); }}
               style={{ background: "none", border: "none", padding: 0, color: BRIGHT, fontSize: 14, fontWeight: 600, fontFamily: "inherit", cursor: "pointer" }}
             >
               {reviewOpen ? "Hide photos" : "Review or delete photos →"}
