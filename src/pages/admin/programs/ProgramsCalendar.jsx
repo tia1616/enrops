@@ -1220,7 +1220,10 @@ export default function ProgramsCalendar() {
               // Date-following: an earlier season can be "on sale" while some of
               // its classes have finished, so name the real rule (isClassOnSale).
               <div style={{ ...registrationBanner, background: "#f0f8f0", borderColor: "#bfd9bf", color: OK_GREEN }}>
-                ✓ Families can sign up for these classes until each one&apos;s last session.
+                {/* Follows Settings > Late sign-ups (org.late_join_allowed). */}
+                {org?.late_join_allowed === false
+                  ? "✓ Families can sign up for these classes until each one starts. Late sign-ups are off in Settings."
+                  : "✓ Families can sign up for these classes until each one's last session."}
               </div>
             ) : (
               <div style={{ ...registrationBanner, background: "#f0f8f0", borderColor: "#bfd9bf", color: OK_GREEN }}>
