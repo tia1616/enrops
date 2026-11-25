@@ -230,6 +230,8 @@ eq('never asked', asksDismissal([], 'class'), false);
   eq('money columns when shared', rows.some((r) => r.startsWith('Class,') && r.endsWith('Children paid for,Families paid')), true);
   eq('class row', rows.includes('Super Mario,HV Library,2026-09-15 to 2026-11-03,Finished,8,8,0,0,6,6,"$1,686.00"'), true);
   eq('cancelled not scheduled', rows.some((r) => r.startsWith('LEGO,Annex,') && r.includes(',Running,2,3,0,1,5,5,')), true);
+  const future = termStatementCsv('Winter 2027', [{ ...b, first_date: '2027-01-12' }], sums, { today: '2026-11-25' }).split('\r\n');
+  eq('a class not started yet says so', future.some((r) => r.startsWith('LEGO,Annex,') && r.includes(',Not started,')), true);
   eq('totals', rows.includes('Total,,,2 classes,10,11,0,1,11,11,"$2,914.00"'), true);
   eq('drafts left out', rows.some((r) => r.startsWith('Draft,')), false);
   const partnerCopy = termStatementCsv('Fall 2026', [a], new Map([['class:a', { sessions: held(8), money: null }]]), { providerName: 'Journey to STEAM' }).split('\r\n');
@@ -251,6 +253,11 @@ eq('never asked', asksDismissal([], 'class'), false);
   eq('partner-run', canShareClass({ ...open, count_source: 'partner' }, org), false);
   eq('camp session', canShareClass({ ...open, kind: 'camp' }, org), false);
   eq('no settings', canShareClass(open, null), false);
+  // Review 2026-11-25: the catalog's rule, not just the season.
+  const started = { last_session: '2027-03-01', sessions_total: 8, sessions_left: 5, late_join_allowed: false };
+  eq('started class with late sign-ups off: no link (catalog hides it)', canShareClass(open, org, started, '2027-01-25'), false);
+  eq('started class with late sign-ups on: link', canShareClass(open, org, { ...started, late_join_allowed: true }, '2027-01-25'), true);
+  eq('past its last session: no link', canShareClass(open, org, { ...started, late_join_allowed: true }, '2027-03-02'), false);
   eq('tagged link', partnerShareUrl('j2s', 'abc', 'Happy Valley Parks and Rec', 'https://enrops.com'),
     'https://enrops.com/j2s?program=abc&utm_source=partner&utm_medium=partner_portal&utm_campaign=happy-valley-parks-and-rec');
 }

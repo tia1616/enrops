@@ -10,7 +10,7 @@
 
 import { formatDate } from "./providerDocumentLogic.js";
 import { buildProgramShareUrl } from "./regLinks.js";
-import { isTermOnSale } from "./classSeasons.js";
+import { isClassOnSale } from "./classSeasons.js";
 import { sortRosterRows } from "./rosterOrder.js";
 import { gradeLabel } from "./grades.js";
 import { dismissalSummary } from "./dismissal.js";
@@ -230,7 +230,7 @@ export function classSummaryCsv(c, summary, rows, { providerName = "", termLabel
  * partner sees it only when the provider shares it). `invoicingNote` is the
  * provider's own note and is passed only on the provider's page.
  */
-export function termStatementCsv(termLabel, classes, summaries, { partnerName = "", providerName = "", invoicingNote = "" } = {}) {
+export function termStatementCsv(termLabel, classes, summaries, { partnerName = "", providerName = "", invoicingNote = "", today = "" } = {}) {
   const live = (classes ?? []).filter((c) => c.status === "open" || c.status === "finished");
   const sum = (c) => summaries?.get?.(`${c.kind}:${c.class_id}`) ?? null;
   const withMoney = live.some((c) => sum(c)?.money);
@@ -255,7 +255,9 @@ export function termStatementCsv(termLabel, classes, summaries, { partnerName = 
     if (kids !== "") t.kids += kids;
     if (m) { t.paidKids += Number(m.children || 0); t.cents += Number(m.paid_cents || 0); }
     const dates = c.first_date && c.last_date && c.first_date !== c.last_date ? `${c.first_date} to ${c.last_date}` : (c.first_date || c.last_date || "");
-    line(c.title || "Untitled class", c.site || "", dates, c.status === "finished" ? "Finished" : "Running",
+    const status = c.status === "finished" ? "Finished"
+      : today && c.first_date && c.first_date > String(today) ? "Not started" : "Running";
+    line(c.title || "Untitled class", c.site || "", dates, status,
       s ? held : "", s ? sched : "", s ? nc : "", s ? canc : "", kids,
       ...(withMoney ? [m ? Number(m.children || 0) : "", m ? dollars(m.paid_cents) : ""] : []));
   }
@@ -305,15 +307,17 @@ export function glanceText(g, thisYear) {
 
 /**
  * Can a partner share this class's sign-up link (Jessica 2026-11-25: "share
- * this class")? The rule the provider's own Programs share uses
- * (ShareProgram): a weekly class families register for through enrops,
- * open, not finished, in a season on sale. Camps (camp sessions) and
- * partner-run classes have no catalog link here. `org` is the provider's
- * public_org_directory row ({ active_registration_term, classes_follow_dates }).
+ * this class")? Exactly when the family catalog would show it: THE ONE RULE
+ * the catalog uses (classSeasons.isClassOnSale, src/pages/portal/Home.jsx):
+ * season on sale, not past its last session, and not started when the
+ * provider turned late sign-ups off. Only weekly classes families register
+ * for through enrops; camps (camp sessions) and partner-run classes have no
+ * catalog link here. `org` = public_org_directory row; `sessions` = the
+ * class's class_last_sessions row (null when unknown: the season decides).
  */
-export function canShareClass(c, org) {
+export function canShareClass(c, org, sessions = null, todayIso = null) {
   if (!c || c.kind !== "class" || c.status !== "open" || c.count_source !== "enrops") return false;
-  return isTermOnSale(org, c.term);
+  return isClassOnSale(org, { term: c.term }, sessions, todayIso);
 }
 
 /**

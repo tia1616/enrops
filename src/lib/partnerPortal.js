@@ -407,6 +407,17 @@ export async function getProviderSaleSettings(orgId) {
   return data ?? null;
 }
 
+/**
+ * Each published weekly class's last session and session counts (the catalog's
+ * own read, 20261124c: an anon-callable definer). Map program_id -> row; an
+ * empty map when unreadable (the season alone then decides).
+ */
+export async function getClassLastSessions(orgId) {
+  const { data, error } = await supabase.rpc("class_last_sessions", { p_organization_id: orgId });
+  if (error) return new Map();
+  return new Map((data ?? []).map((r) => [r.program_id, r]));
+}
+
 /** The provider's own invoicing note for a partner (provider side only; for the term statement). */
 export async function getPartnerInvoicingNote(orgId, partnerId) {
   const { data, error } = await supabase.from("partners")

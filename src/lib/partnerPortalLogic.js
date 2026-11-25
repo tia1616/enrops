@@ -530,7 +530,7 @@ export function emailsTheyGet({ contacts = [], siteEmails = [], logins = [], ros
     {
       key: "roster",
       title: "Class rosters",
-      when: "7 days before a class starts, on its first day, and when its roster changes. Only classes families sign up for through enrops.",
+      when: "7 days before a class starts, on its first day, and when its roster changes. Only classes families sign up for through enrops. A site's day-of contact gets only that site's rosters.",
       to: uniq([...withEmail.map(name), ...siteEmails]),
       note: rosterOn === false ? "Off for your business (Automations)." : rosterOn === null ? "Couldn't read whether this is on." : "",
     },
@@ -551,7 +551,7 @@ export function emailsTheyGet({ contacts = [], siteEmails = [], logins = [], ros
     {
       key: "digest",
       title: "Monday safety-record digest",
-      when: "Mondays, only when a document or instructor check is expiring or has expired.",
+      when: "Mondays, only when something they require is expiring or has expired, or an instructor stopped sharing their status.",
       to: admins,
       note: admins.length ? "Signed-in Admin logins (not Viewers)." : "No one yet (signed-in Admin logins get this)",
     },

@@ -19,8 +19,9 @@ import DocumentStatusBadge from "../../components/DocumentStatusBadge.jsx";
 import { formatTermLabel } from "../../lib/terms.js";
 import {
   listPartnerClasses, getClassRoster, getClassSummary, getRegistrationFields, setReportedEnrollment,
-  getShowFamilyPayments, setShowFamilyPayments, getPartnerInvoicingNote, getProviderSaleSettings,
+  getShowFamilyPayments, setShowFamilyPayments, getPartnerInvoicingNote, getProviderSaleSettings, getClassLastSessions,
 } from "../../lib/partnerPortal.js";
+import { todayIso } from "./partnerShared.jsx";
 import SettingSwitch from "../../components/SettingSwitch.jsx";
 import {
   scheduleText, enrolledText, countSourceText, classBadge, rosterAvailable,
@@ -104,19 +105,26 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
   // "Share sign-up link" on the partner's view (Jessica 2026-11-25): only
   // where the link works (canShareClass, the provider's own share rule).
   const [saleSettings, setSaleSettings] = useState(null);
-  const [shared, setShared] = useState(""); // key of the class just shared/copied
+  const [lastSessions, setLastSessions] = useState(() => new Map());
+  const [shared, setShared] = useState(null); // { key, word } just after a share/copy
   useEffect(() => {
-    setSaleSettings(null);
+    setSaleSettings(null); setLastSessions(new Map());
     if (viewer !== "partner" || !orgId || !orgSlug) return;
     getProviderSaleSettings(orgId).then(setSaleSettings).catch(() => setSaleSettings(null));
+    getClassLastSessions(orgId).then(setLastSessions).catch(() => setLastSessions(new Map()));
   }, [viewer, orgId, orgSlug]);
+  useEffect(() => {
+    if (!shared) return;
+    const t = setTimeout(() => setShared(null), 4000);
+    return () => clearTimeout(t);
+  }, [shared]);
   async function shareClass(c) {
     const url = partnerShareUrl(orgSlug, c.class_id, sharerName);
     const k = keyOf(c);
     try {
       if (navigator.share) {
         await navigator.share({ title: c.title || "Class", text: `Sign up for ${c.title || "this class"} at ${c.site || "our site"}`, url });
-        setShared(k);
+        setShared({ key: k, word: "Shared" });
         return;
       }
     } catch (err) {
@@ -124,7 +132,7 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
     }
     try {
       await navigator.clipboard.writeText(url);
-      setShared(k);
+      setShared({ key: k, word: "Link copied" });
     } catch {
       window.prompt("Copy this sign-up link:", url);
     }
@@ -146,7 +154,7 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
       const note = viewer === "provider" && orgId ? await getPartnerInvoicingNote(orgId, partnerId).catch(() => "") : "";
       const who = viewer === "provider" ? partnerName : orgName;
       const csv = termStatementCsv(g.label, live, summaries, {
-        partnerName: viewer === "provider" ? partnerName : "", providerName: orgName, invoicingNote: note,
+        partnerName: viewer === "provider" ? partnerName : "", providerName: orgName, invoicingNote: note, today: todayIso(),
       });
       const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
       const url = URL.createObjectURL(blob);
@@ -350,13 +358,13 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
                           {detailsButtonText(c, open === k)}
                         </button>
                       )}
-                      {viewer === "partner" && orgSlug && saleSettings && canShareClass(c, saleSettings) && (
+                      {viewer === "partner" && orgSlug && saleSettings && canShareClass(c, saleSettings, lastSessions.get(c.class_id) ?? null, todayIso()) && (
                         <div>
                           <button type="button" onClick={() => shareClass(c)}
                             className="py-1 text-xs font-semibold text-j2s-purple hover:underline">
                             Share sign-up link
                           </button>
-                          {shared === k && <span role="status" className="ml-2 text-xs text-emerald-700">Link ready to paste</span>}
+                          {shared?.key === k && <span role="status" className="ml-2 text-xs text-emerald-700">{shared.word}</span>}
                         </div>
                       )}
                       {/* Flyer / social graphic (20261123r), in the pinned column so it's on a phone screen. */}

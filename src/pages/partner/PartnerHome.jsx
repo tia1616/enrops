@@ -119,7 +119,10 @@ export default function PartnerHome() {
         <section className="mt-6 rounded-2xl bg-white p-4 shadow-card sm:max-w-3xl">
           <h2 className="text-base font-bold text-j2s-ink">Your classes</h2>
           <ul className="mt-2 space-y-1.5">
-            {shown.filter((r) => glanceText(r.glance)).map(({ m, glance }) => (
+            {/* Every provider, whatever the site filter below (its counts are whole-provider). */}
+            {(rows ?? []).filter((r) => glanceText(r.glance))
+              .sort((a, b) => a.m.organization_name.localeCompare(b.m.organization_name))
+              .map(({ m, glance }) => (
               <li key={m.partner_id} className="text-sm text-j2s-ink/80">
                 <Link to={`/partner/${m.partner_id}#classes`} className="font-semibold text-j2s-purple hover:underline">{m.organization_name}</Link>
                 {memberships.filter((x) => x.organization_id === m.organization_id).length > 1 ? ` (${m.partner_name})` : ""}
@@ -176,7 +179,8 @@ export default function PartnerHome() {
                 {shown.map(({ m, summary: s }) => (
                   <tr key={m.partner_id} className="hover:bg-j2s-purple-soft/40">
                     <td className="px-4 py-3">
-                      <Link to={`/partner/${m.partner_id}`} className="font-semibold text-j2s-purple hover:underline">{m.organization_name}</Link>
+                      {/* #documents: this row is the safety record (a provider's page opens on Classes otherwise). */}
+                      <Link to={`/partner/${m.partner_id}#documents`} className="font-semibold text-j2s-purple hover:underline">{m.organization_name}</Link>
                       {s.sites.length > 0 && <div className="text-xs text-j2s-ink/50">{s.sites.join(", ")}</div>}
                     </td>
                     <td className="px-4 py-3"><RequirementsCell s={s} /></td>
@@ -191,7 +195,7 @@ export default function PartnerHome() {
           {/* Phone: the same rows as cards. */}
           <div className="mt-6 space-y-3 md:hidden">
             {shown.map(({ m, summary: s }) => (
-              <Link key={m.partner_id} to={`/partner/${m.partner_id}`} className="block rounded-2xl bg-white p-4 shadow-card">
+              <Link key={m.partner_id} to={`/partner/${m.partner_id}#documents`} className="block rounded-2xl bg-white p-4 shadow-card">
                 <div className="font-semibold text-j2s-purple">{m.organization_name}</div>
                 {s.sites.length > 0 && <div className="text-xs text-j2s-ink/50">{s.sites.join(", ")}</div>}
                 <dl className="mt-3 grid grid-cols-[auto,1fr] gap-x-4 gap-y-2 text-sm">

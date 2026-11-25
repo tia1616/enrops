@@ -76,7 +76,7 @@ async function findUserByEmail(supabase: any, email: string) {
 async function findPartnerGrant(supabase: any, email: string, orgId: string | null) {
   let query = supabase
     .from('partner_portal_access')
-    .select('contact_id, organization_id, contact:partner_contacts(contact_name, contact_email), partner:partners(partner_name, inactive)');
+    .select('contact_id, organization_id, last_signed_in_at, contact:partner_contacts(contact_name, contact_email), partner:partners(partner_name, inactive)');
   if (orgId) query = query.eq('organization_id', orgId);
   const { data: grants, error } = await query;
   if (error) throw new Error(`partner access lookup failed: ${error.message}`);
@@ -91,6 +91,9 @@ async function findPartnerGrant(supabase: any, email: string, orgId: string | nu
     provider_count: new Set(mine.map((g: any) => g.organization_id)).size,
     first_name: String(grant.contact?.contact_name ?? '').trim().split(/\s+/)[0] || null,
     partner_name: (grant.partner?.partner_name as string) ?? null,
+    // Has this person ever signed in at this provider? An "invited you" subject
+    // is only true for someone who hasn't.
+    ever_signed_in: mine.some((g: any) => !!g.last_signed_in_at),
   };
 }
 
@@ -386,7 +389,7 @@ serve(async (req: Request) => {
       // end-of-class summaries, flyers), so the subject names the portal.
       : template === 'partner' ? (partnerSeveralProviders
           ? 'Your partner portal'
-          : partnerInvite
+          : partnerInvite && !partnerGrant?.ever_signed_in
             ? `${tenantBrand?.org_name ?? 'Your provider'} invited you to your partner portal`
             : `Sign in to ${tenantBrand?.org_name ?? 'your provider'}'s partner portal`)
       : `Sign in to ${tenantBrand?.org_name ?? 'enrops'}`;
