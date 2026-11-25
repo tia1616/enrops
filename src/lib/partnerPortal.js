@@ -92,9 +92,12 @@ export function partnerPortalUrl() {
 //
 // `org` null = the neutral partner home's sign-in: any provider's grant counts,
 // and the email speaks as that provider (or as enrops when several share).
-export async function sendPartnerSignInLink(org, email) {
+export async function sendPartnerSignInLink(org, email, note = "") {
   const body = { email, redirect_to: partnerPortalUrl(), context: "partner" };
   if (org?.id) body.org_id = org.id;
+  // A personal note goes in the email only when the provider's own owner/admin
+  // sends it (the function ignores it for anyone else).
+  if (note && note.trim()) body.note = note.trim().slice(0, 1000);
   const { data, error } = await supabase.functions.invoke("auth-send-magic-link", { body });
   if (error) throw error;
   if (data?.error) throw new Error(data.error);
@@ -390,6 +393,37 @@ export async function getShowFamilyPayments(orgId, partnerId) {
     .select("show_family_payments").eq("organization_id", orgId).eq("id", partnerId).maybeSingle();
   if (error) throw error;
   return !!data?.show_family_payments;
+}
+
+/**
+ * What decides whether a class's public sign-up link works: the provider's
+ * on-sale season settings, from the public directory (readable by anyone,
+ * which is what families see). null when unreadable (no share buttons).
+ */
+export async function getProviderSaleSettings(orgId) {
+  const { data, error } = await supabase.from("public_org_directory")
+    .select("active_registration_term, classes_follow_dates").eq("id", orgId).maybeSingle();
+  if (error) throw error;
+  return data ?? null;
+}
+
+/**
+ * Each published weekly class's last session and session counts (the catalog's
+ * own read, 20261124c: an anon-callable definer). Map program_id -> row; an
+ * empty map when unreadable (the season alone then decides).
+ */
+export async function getClassLastSessions(orgId) {
+  const { data, error } = await supabase.rpc("class_last_sessions", { p_organization_id: orgId });
+  if (error) return new Map();
+  return new Map((data ?? []).map((r) => [r.program_id, r]));
+}
+
+/** The provider's own invoicing note for a partner (provider side only; for the term statement). */
+export async function getPartnerInvoicingNote(orgId, partnerId) {
+  const { data, error } = await supabase.from("partners")
+    .select("invoicing_notes").eq("organization_id", orgId).eq("id", partnerId).maybeSingle();
+  if (error) throw error;
+  return data?.invoicing_notes ?? "";
 }
 
 /** Turn it on or off. Throws when no row changed (not this provider's partner, or refused). */

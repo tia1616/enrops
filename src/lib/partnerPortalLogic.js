@@ -473,3 +473,94 @@ export function decisionProblem({ decision, note, title }) {
   if ((note || "").length > 500) return "Keep the note under 500 characters.";
   return null;
 }
+
+/**
+ * Who at a partner is actually using the portal (Jessica 2026-11-25: the
+ * adoption view). `list` = that partner's partner_portal_access rows.
+ *   signedIn   - has signed in at least once
+ *   waiting    - a link was sent, never signed in
+ *   notInvited - has a login, no link sent yet (nothing reaches them until you send one)
+ *   lastVisit  - most recent sign-in (ISO), or null
+ */
+export function loginAdoption(list) {
+  const rows = list ?? [];
+  const signedIn = rows.filter((g) => g.last_signed_in_at);
+  const lastVisit = signedIn.map((g) => g.last_signed_in_at).sort().pop() ?? null;
+  return {
+    total: rows.length,
+    signedIn: signedIn.length,
+    waiting: rows.filter((g) => !g.last_signed_in_at && g.last_link_sent_at).length,
+    notInvited: rows.filter((g) => !g.last_signed_in_at && !g.last_link_sent_at).length,
+    lastVisit,
+  };
+}
+
+/** "2 of 3 signed in · last visit Nov 20, 2026 · 1 invite not sent". */
+export function adoptionText(a) {
+  if (!a || !a.total) return "No logins yet";
+  const parts = [`${a.signedIn} of ${a.total} signed in`];
+  if (a.lastVisit) parts.push(`last visit ${formatDate(String(a.lastVisit).slice(0, 10))}`);
+  if (a.waiting) parts.push(`${a.waiting} sent a link, not in yet`);
+  if (a.notInvited) parts.push(`${a.notInvited} ${a.notInvited === 1 ? "invite" : "invites"} not sent`);
+  return parts.join(" · ");
+}
+
+/**
+ * Every automatic email a partner's people get, and who exactly gets it
+ * (Jessica 2026-11-25: "emails they get"). Pure; the page passes what it read.
+ *   contacts      [{ contact_name, contact_email }] - every contact of the partner
+ *   siteEmails    [string]                          - the partner's sites' day-of contact emails
+ *   logins        partner_portal_access rows with contact { contact_name, contact_email }
+ *   rosterOn      boolean | null (null = couldn't read the Automations setting)
+ *   sharesPaid    boolean - partners.show_family_payments
+ * Returns [{ key, title, when, to: [names], note }]. Each sentence is true for
+ * what the senders do today (lifecycle-automations-cron partner_roster,
+ * partner-marketing-notify-cron, partner-digest-cron).
+ */
+export function emailsTheyGet({ contacts = [], siteEmails = [], logins = [], rosterOn = null, sharesPaid = false } = {}) {
+  const name = (c) => (c?.contact_name || c?.contact_email || "").trim();
+  const uniq = (xs) => [...new Set(xs.filter(Boolean))];
+  const withEmail = contacts.filter((c) => (c.contact_email || "").trim());
+  const signedIn = logins.filter((g) => g.last_signed_in_at);
+  const signedInNames = uniq(signedIn.map((g) => name(g.contact)));
+  // partner_digest_due: every signed-in host_admin, whatever sites they see (checked on prod 2026-11-25).
+  const admins = uniq(signedIn.filter((g) => g.role === "host_admin").map((g) => name(g.contact)));
+  const nobodyYet = "No one yet (only people who have signed in get this)";
+  return [
+    {
+      key: "roster",
+      title: "Class rosters",
+      when: "7 days before a class starts, on its first day, and when its roster changes. Only classes families sign up for through enrops. A site's day-of contact gets only that site's rosters.",
+      to: uniq([...withEmail.map(name), ...siteEmails]),
+      note: rosterOn === false ? "Off for your business (Automations)." : rosterOn === null ? "Couldn't read whether this is on." : "",
+    },
+    {
+      key: "wrapup",
+      title: "End-of-class summary",
+      when: "A couple of days after each class ends: sessions held and the roster count" + (sharesPaid ? ", plus what families paid." : "."),
+      to: signedInNames,
+      note: signedInNames.length ? "You get a copy." : nobodyYet,
+    },
+    {
+      key: "flyers",
+      title: "New flyers and graphics",
+      when: "When you add or replace a flyer or social graphic on one of their classes. A login limited to some sites hears only about those.",
+      to: signedInNames,
+      note: signedInNames.length ? "" : nobodyYet,
+    },
+    {
+      key: "digest",
+      title: "Monday safety-record digest",
+      when: "Mondays, only when something they require is expiring or has expired, or an instructor stopped sharing their status.",
+      to: admins,
+      note: admins.length ? "Signed-in Admin logins (not Viewers)." : "No one yet (signed-in Admin logins get this)",
+    },
+    {
+      key: "signin",
+      title: "Sign-in links",
+      when: "Only when you send one (People & emails, Logins), or they ask for one on the sign-in page.",
+      to: uniq(logins.map((g) => name(g.contact))),
+      note: "",
+    },
+  ];
+}

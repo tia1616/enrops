@@ -49,7 +49,8 @@ export function partnerTodo({ s, instructors, orgName, today, mediaGaps = [], pa
     items.push({
       key: `media:${g.item.key}`, tone: "warn",
       text: `${partnerName} asks for ${g.item.lower} on each class. ${g.count} ${g.count === 1 ? "class still needs one" : "classes still need one"}.`,
-      action: { type: "tab", tab: "classes", label: "Go to Classes" },
+      // "marketing" opens Classes at the flyer asks (an alias, 2026-11-25).
+      action: { type: "tab", tab: "marketing", label: "Go to the flyer asks" },
     });
   }
 

@@ -24,18 +24,34 @@ import PartnerRequirementsSection from "./PartnerRequirementsSection.jsx";
 import { DocumentsTable, InstructorGrid, RecordSummary, RegistrationLine, RequirementsList } from "../partner/ProviderRecord.jsx";
 import PartnerDecision from "../partner/PartnerDecision.jsx";
 import ClassesTable from "../partner/ClassesTable.jsx";
+import EmailsTheyGet from "../partner/EmailsTheyGet.jsx";
 import MarketingAsksSection from "../partner/MarketingAsksSection.jsx";
 import ProviderTodo from "./ProviderTodo.jsx";
 import { partnerTodo } from "../../lib/partnerTodo.js";
 import EmailsSent from "../partner/EmailsSent.jsx";
-import { RecordTabRow, RecordTabPanel, useRecordTab, alertFor } from "../partner/RecordTabs.jsx";
-import { decisionTag } from "../../lib/recordTabs.js";
+import { RecordTabRow, RecordTabPanel, RecordSection, SectionJumps, useRecordTab, alertFor } from "../partner/RecordTabs.jsx";
+import { decisionTag, worstAlert } from "../../lib/recordTabs.js";
 
 // After To do, the partner's five tabs in the partner's order, then the two that only
 // the provider has (what this partner requires, and its logins + activity).
 // "todo" first: on the provider's own page, what's left to do comes before
 // the record itself (2026-11-20).
-const PROVIDER_TABS = ["todo", "documents", "classes", "instructors", "emails", "decision", "requirements", "logins"];
+// Grouped tabs (Jessica 2026-11-25: "too many tabs... can be grouped better").
+// The old tabs are sections now; their #names (and To do's jump buttons) still
+// open the right tab and scroll to the section.
+// To do is a box above the tabs (Jessica 2026-11-25), so three tabs; an old
+// #todo link opens Classes (the box is on every tab).
+const PROVIDER_TABS = ["classes", "safety", "people"];
+const PROVIDER_TAB_ALIASES = {
+  todo: "classes", marketing: "classes",
+  documents: "safety", instructors: "safety", decision: "safety", requirements: "safety",
+  logins: "people", emails: "people",
+};
+const CLASSES_SECTIONS = [{ id: "marketing", label: "Flyers they ask for" }];
+const SAFETY_SECTIONS = [
+  { id: "documents", label: "Documents" }, { id: "instructors", label: "Instructors" },
+  { id: "requirements", label: "What they require" }, { id: "decision", label: "Decision" },
+];
 import { todayIso } from "../partner/partnerShared.jsx";
 import { usePermissions } from "../../lib/permissions.js";
 import { listPartnerInstructors, listPartnerRequirements, getRequirementsControl } from "../../lib/partnerPortal.js";
@@ -72,7 +88,8 @@ export default function PartnerRecord() {
   const [toast, setToast] = useState("");
   const [form, setForm] = useState(null); // null | { editing: row|null, kind: string|null }
   const opening = useRef(false);
-  const [tab, setTab] = useRecordTab(PROVIDER_TABS);
+  const [tab, setTab] = useRecordTab(PROVIDER_TABS, PROVIDER_TAB_ALIASES,
+    !!partner && docs !== null && instructors !== null && requirements !== undefined);
   const [classCount, setClassCount] = useState(null);
   // Flyers / social graphics the partner asked for that aren't on a class yet
   // (ClassesTable reports them; 20261123r). Amber on the To do list, never red.
@@ -223,82 +240,99 @@ export default function PartnerRecord() {
           <RegistrationLine orgId={org?.id} />
           <RecordSummary s={s} />
 
+          {/* To do: a box above the tabs, not a tab (Jessica 2026-11-25). The
+              three most urgent (red first), then "Show all". */}
+          <ProviderTodo
+            items={todo} partnerName={partner.partner_name} canManage={canManage}
+            requirementsUnknown={requirements === null || requirements?.length === 0}
+            onUpload={(key) => setForm({ editing: null, kind: DOC_FOR[key] })}
+            onRenew={(doc) => setForm({ editing: doc, kind: null })}
+            instructorPortalUrl={`${window.location.origin}/${org?.slug}/instructor`}
+            onTab={setTab} limit={3}
+          />
+
           {/* Same tabs as the partner's page, plus the provider-only two
               (RecordTabs.jsx). */}
           <RecordTabRow
             active={tab} onChange={setTab}
             tabs={[
-              { id: "todo", label: "To do", count: todo.length || null, alert: todo.some((t) => t.tone === "bad") ? "bad" : todo.length ? "attention" : null },
-              { id: "documents", label: "Documents", alert: alertFor(s.business.map((b) => b.badge)) },
               { id: "classes", label: "Classes", count: classCount },
-              { id: "instructors", label: "Instructors", count: s.instructors.total || null, alert: s.instructors.total ? alertFor([s.instructors.badge]) : null },
-              { id: "emails", label: "Emails sent", count: emailCount },
-              { id: "decision", label: "Decision", tag: decisionTag(decision)?.text, alert: decisionTag(decision)?.alert },
-              { id: "requirements", label: "What they require", tag: reqControl?.set_by_partner ? "Set by them" : null },
-              { id: "logins", label: "Logins" },
+              {
+                // Documents, instructors, what they require, their decision: one dot for the worst.
+                id: "safety", label: "Safety record", tag: decisionTag(decision)?.text,
+                alert: worstAlert(
+                  alertFor(s.business.map((b) => b.badge)),
+                  s.instructors.total ? alertFor([s.instructors.badge]) : null,
+                  decisionTag(decision)?.alert ?? null,
+                ),
+              },
+              { id: "people", label: "People & emails", count: emailCount },
             ]}
           />
 
-          <RecordTabPanel id="todo" active={tab}>
-            <ProviderTodo
-              items={todo} partnerName={partner.partner_name} canManage={canManage}
-              requirementsUnknown={requirements === null || requirements?.length === 0}
-              onUpload={(key) => setForm({ editing: null, kind: DOC_FOR[key] })}
-              onRenew={(doc) => setForm({ editing: doc, kind: null })}
-              instructorPortalUrl={`${window.location.origin}/${org?.slug}/instructor`}
-              onTab={setTab}
-            />
-          </RecordTabPanel>
-
-          <RecordTabPanel id="documents" active={tab}>
-            <RequirementsList requirements={requirements} viewer="provider" partnerName={partner.partner_name} />
-            <DocumentsTable
-              s={s} orgName={orgName} today={today} onOpen={open}
-              viewer="provider" partnerName={partner.partner_name} renderActions={actions}
-            />
-            {canManage && (
-              <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
-                <button type="button" style={primaryBtn} onClick={() => setForm({ editing: null, kind: null })}>Add another document</button>
-              </div>
-            )}
-          </RecordTabPanel>
 
           <RecordTabPanel id="classes" active={tab}>
+            {/* The asks sit below a long class list; this makes them findable. */}
+            <SectionJumps sections={CLASSES_SECTIONS} onJump={setTab} />
             <ClassesTable
               key={`classes:${partnerId}`} partnerId={partnerId} orgId={org?.id} orgName={orgName}
               viewer="provider" partnerName={partner.partner_name} canEdit={canManage} onCount={setClassCount}
               onMediaGaps={setMediaGaps}
             />
+            {/* Flyers and graphics they ask for, and their logo, next to the
+                classes the flyers go on (Jessica 2026-11-25: "how do they know
+                where flyers are?"); was under What they require. */}
+            <RecordSection id="marketing">
+              <MarketingAsksSection key={`marketing:${partnerId}`} partner={partner} viewer="provider" orgName={orgName} />
+            </RecordSection>
           </RecordTabPanel>
 
-          <RecordTabPanel id="instructors" active={tab}>
-            {/* Keyed on the partner: a picked cell must never carry over. */}
-            <InstructorGrid
-              key={partnerId} s={s} instructors={instructors} orgName={orgName} today={today}
-              viewer="provider" partnerName={partner.partner_name}
-            />
+          {/* Safety record (2026-11-25 regroup): what were the Documents,
+              Instructors, What they require and Decision tabs, top to bottom. */}
+          <RecordTabPanel id="safety" active={tab}>
+            <SectionJumps sections={SAFETY_SECTIONS} onJump={setTab} />
+            <RecordSection id="documents">
+              <RequirementsList requirements={requirements} viewer="provider" partnerName={partner.partner_name} />
+              <DocumentsTable
+                s={s} orgName={orgName} today={today} onOpen={open}
+                viewer="provider" partnerName={partner.partner_name} renderActions={actions}
+              />
+              {canManage && (
+                <div style={{ marginTop: 10, display: "flex", justifyContent: "flex-end" }}>
+                  <button type="button" style={primaryBtn} onClick={() => setForm({ editing: null, kind: null })}>Add another document</button>
+                </div>
+              )}
+            </RecordSection>
+            <RecordSection id="instructors">
+              {/* Keyed on the partner: a picked cell must never carry over. */}
+              <InstructorGrid
+                key={partnerId} s={s} instructors={instructors} orgName={orgName} today={today}
+                viewer="provider" partnerName={partner.partner_name}
+              />
+            </RecordSection>
+            <RecordSection id="requirements">
+              {/* Keys are unique among siblings: two equal keys here once made
+                  React render this section twice. */}
+              <PartnerRequirementsSection
+                key={`requirements:${partnerId}`} partner={partner} rows={requirements} canManage={canManage}
+                onChange={setRequirements} control={reqControl} onSaved={loadReqControl}
+              />
+            </RecordSection>
+            <RecordSection id="decision">
+              <PartnerDecision key={`decision:${partnerId}`} partnerId={partnerId} partnerName={partner.partner_name} onLatest={setDecision} />
+            </RecordSection>
           </RecordTabPanel>
 
-          <RecordTabPanel id="emails" active={tab}>
-            <EmailsSent key={`emails:${partnerId}`} partnerId={partnerId} orgName={orgName} viewer="provider" partnerName={partner.partner_name} onCount={setEmailCount} />
-          </RecordTabPanel>
-
-          <RecordTabPanel id="requirements" active={tab}>
-            {/* Keys are unique among siblings: two equal keys here once made
-                React render this section twice. */}
-            <PartnerRequirementsSection
-              key={`requirements:${partnerId}`} partner={partner} rows={requirements} canManage={canManage}
-              onChange={setRequirements} control={reqControl} onSaved={loadReqControl}
-            />
-            <MarketingAsksSection key={`marketing:${partnerId}`} partner={partner} viewer="provider" orgName={orgName} />
-          </RecordTabPanel>
-
-          <RecordTabPanel id="logins" active={tab}>
-            <PartnerLoginsSection key={`logins:${partnerId}`} org={org} partner={partner} canManage={canManage} onMessage={flash} />
-          </RecordTabPanel>
-
-          <RecordTabPanel id="decision" active={tab}>
-            <PartnerDecision key={`decision:${partnerId}`} partnerId={partnerId} partnerName={partner.partner_name} onLatest={setDecision} />
+          {/* People & emails (2026-11-25 regroup): Logins, then what goes out
+              automatically and to whom, then what has gone out. */}
+          <RecordTabPanel id="people" active={tab}>
+            <RecordSection id="logins">
+              <PartnerLoginsSection key={`logins:${partnerId}`} org={org} partner={partner} canManage={canManage} onMessage={flash} />
+            </RecordSection>
+            <RecordSection id="emails">
+              <EmailsTheyGet key={`get:${partnerId}`} orgId={org?.id} partnerId={partnerId} />
+              <EmailsSent key={`emails:${partnerId}`} partnerId={partnerId} orgName={orgName} viewer="provider" partnerName={partner.partner_name} onCount={setEmailCount} />
+            </RecordSection>
           </RecordTabPanel>
         </>
       )}

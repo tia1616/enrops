@@ -8,7 +8,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { listPartnerInstructors, listPartnerRequirements, logPartnerPortalEvent } from "../../lib/partnerPortal.js";
+import { listPartnerInstructors, listPartnerRequirements, logPartnerPortalEvent, listPartnerClasses } from "../../lib/partnerPortal.js";
+import { classesAtAGlance, glanceText } from "../../lib/partnerClasses.js";
 import { listProviderDocuments } from "../../lib/providerDocuments.js";
 import { providerSummary, requiredKeys } from "../../lib/partnerPortalLogic.js";
 import { formatDate } from "../../lib/providerDocumentLogic.js";
@@ -54,15 +55,18 @@ export default function PartnerHome() {
     // allSettled, not all: one provider's failed read must not hide the others.
     // The providers that failed are named in the error line above the table.
     Promise.allSettled(memberships.map(async (m) => {
-      const [docs, instructors, requirements] = await Promise.all([
+      const [docs, instructors, requirements, classes] = await Promise.all([
         docsByOrg.get(m.organization_id),
         listPartnerInstructors(m.partner_id),
         // A list that fails to load counts everything (requiredKeys(null)):
         // the row shows too much rather than hiding a gap.
         listPartnerRequirements(m.partner_id).catch(() => null),
+        // Enrollment first (Jessica 2026-11-25). A failed read hides only this line.
+        listPartnerClasses(m.partner_id).catch(() => null),
       ]);
       return {
         m,
+        glance: classes ? classesAtAGlance(classes, today) : null,
         listUnknown: !Array.isArray(requirements) || requirements.length === 0,
         summary: providerSummary({
           docs, instructors, partnerId: m.partner_id, orgName: m.organization_name, today, required: requiredKeys(requirements),
@@ -110,6 +114,25 @@ export default function PartnerHome() {
         schools and programs that host them.
       </p>
 
+      {/* Your classes, first (Jessica 2026-11-25: "enrollment first"; portal rule 1). */}
+      {(rows ?? []).some((r) => glanceText(r.glance)) && (
+        <section className="mt-6 rounded-2xl bg-white p-4 shadow-card sm:max-w-3xl">
+          <h2 className="text-base font-bold text-j2s-ink">Your classes</h2>
+          <ul className="mt-2 space-y-1.5">
+            {/* Every provider, whatever the site filter below (its counts are whole-provider). */}
+            {(rows ?? []).filter((r) => glanceText(r.glance))
+              .sort((a, b) => a.m.organization_name.localeCompare(b.m.organization_name))
+              .map(({ m, glance }) => (
+              <li key={m.partner_id} className="text-sm text-j2s-ink/80">
+                <Link to={`/partner/${m.partner_id}#classes`} className="font-semibold text-j2s-purple hover:underline">{m.organization_name}</Link>
+                {memberships.filter((x) => x.organization_id === m.organization_id).length > 1 ? ` (${m.partner_name})` : ""}
+                {": "}{glanceText(glance)}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <div className="mt-6 grid grid-cols-5 gap-2 sm:max-w-2xl">
         {STATES.map((s) => (
           <div key={s} className="rounded-xl bg-white px-3 py-2 text-center shadow-card">
@@ -156,6 +179,7 @@ export default function PartnerHome() {
                 {shown.map(({ m, summary: s }) => (
                   <tr key={m.partner_id} className="hover:bg-j2s-purple-soft/40">
                     <td className="px-4 py-3">
+                      {/* Opens on Classes, like every way into a provider (Jessica 2026-11-25). */}
                       <Link to={`/partner/${m.partner_id}`} className="font-semibold text-j2s-purple hover:underline">{m.organization_name}</Link>
                       {s.sites.length > 0 && <div className="text-xs text-j2s-ink/50">{s.sites.join(", ")}</div>}
                     </td>

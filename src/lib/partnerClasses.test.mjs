@@ -5,6 +5,7 @@ import {
   sortClasses, rosterDisplayRows, asksDismissal, shortDate, showsHomeroom,
   summaryAvailable, detailsButtonText, sessionsHeadline, sessionStatusText, paidText, dollars,
   csvCell, classSummaryCsv, summaryFileName, childPaidText, paidByChild,
+  termStatementCsv, statementFileName, classesAtAGlance, glanceText, canShareClass, partnerShareUrl,
 } from './partnerClasses.js';
 
 let pass = 0, fail = 0;
@@ -211,6 +212,69 @@ eq('never asked', asksDismissal([], 'class'), false);
   eq('csv paid per child', csv.includes('Ava Lee,2nd,$269.10') && csv.includes('Bo Kim,K,Free'), true);
   const hidden = classSummaryCsv({ ...base, title: 'X' }, { sessions: [], money: null }, [{ key: 'a', name: 'Ava Lee', grade: '2nd', homeroom: null }]).split('\r\n');
   eq('no money, no Paid column in csv', hidden.includes('Student,Grade'), true);
+}
+
+// Term statement per partner (Jessica 2026-11-25).
+{
+  const a = { ...base, class_id: 'a', status: 'finished', title: 'Super Mario', site: 'HV Library', enrolled: 6, first_date: '2026-09-15', last_date: '2026-11-03' };
+  const b = { ...base, class_id: 'b', status: 'open', title: 'LEGO', site: 'Annex', enrolled: 5 };
+  const draft = { ...base, class_id: 'd', status: 'draft', title: 'Draft' };
+  const held = (n) => Array.from({ length: n }, () => ({ status: 'held' }));
+  const sums = new Map([
+    ['class:a', { sessions: held(8), money: { children: 6, paid_cents: 168600 } }],
+    ['class:b', { sessions: [...held(2), { status: 'upcoming' }, { status: 'cancelled' }], money: { children: 5, paid_cents: 122800 } }],
+  ]);
+  const rows = termStatementCsv('Fall 2026', [a, b, draft], sums, { partnerName: 'Happy Valley Parks and Rec', providerName: 'Journey to STEAM', invoicingNote: 'Their 10% of what families paid' }).split('\r\n');
+  eq('statement title', rows[0], 'Statement,"Happy Valley Parks and Rec, Fall 2026"');
+  eq('provider note only when passed', rows.includes('Your invoicing notes (only on your copy),Their 10% of what families paid'), true);
+  eq('money columns when shared', rows.some((r) => r.startsWith('Class,') && r.endsWith('Children paid for,Families paid')), true);
+  eq('class row', rows.includes('Super Mario,HV Library,2026-09-15 to 2026-11-03,Finished,8,8,0,0,6,6,"$1,686.00"'), true);
+  eq('cancelled not scheduled', rows.some((r) => r.startsWith('LEGO,Annex,') && r.includes(',Running,2,3,0,1,5,5,')), true);
+  const future = termStatementCsv('Winter 2027', [{ ...b, first_date: '2027-01-12' }], sums, { today: '2026-11-25' }).split('\r\n');
+  eq('a class not started yet says so', future.some((r) => r.startsWith('LEGO,Annex,') && r.includes(',Not started,')), true);
+  eq('totals', rows.includes('Total,,,2 classes,10,11,0,1,11,11,"$2,914.00"'), true);
+  eq('drafts left out', rows.some((r) => r.startsWith('Draft,')), false);
+  const partnerCopy = termStatementCsv('Fall 2026', [a], new Map([['class:a', { sessions: held(8), money: null }]]), { providerName: 'Journey to STEAM' }).split('\r\n');
+  eq('no money columns when not shared', partnerCopy.some((r) => r.includes('Families paid')), false);
+  eq('no note on a partner copy', partnerCopy.some((r) => r.startsWith('Your invoicing notes')), false);
+  const unread = termStatementCsv('Fall 2026', [a], new Map(), {}).split('\r\n');
+  eq('unread summary says so', unread.some((r) => r.startsWith('Note,')), true);
+  eq('statement file name', statementFileName('Happy Valley Parks and Rec', 'Fall 2026'), 'Happy Valley Parks and Rec - Fall 2026 statement.csv');
+}
+
+// Share sign-up link (partner view).
+{
+  const org = { active_registration_term: 'WI27', classes_follow_dates: false };
+  const open = { ...base, kind: 'class', status: 'open', count_source: 'enrops', term: 'WI27' };
+  eq('open enrops class on sale can share', canShareClass(open, org), true);
+  eq('season not on sale', canShareClass({ ...open, term: 'SP27' }, org), false);
+  eq('date-following provider: a season ahead is on sale', canShareClass({ ...open, term: 'SP27' }, { ...org, classes_follow_dates: true }), true);
+  eq('finished', canShareClass({ ...open, status: 'finished' }, org), false);
+  eq('partner-run', canShareClass({ ...open, count_source: 'partner' }, org), false);
+  eq('camp session', canShareClass({ ...open, kind: 'camp' }, org), false);
+  eq('no settings', canShareClass(open, null), false);
+  // Review 2026-11-25: the catalog's rule, not just the season.
+  const started = { last_session: '2027-03-01', sessions_total: 8, sessions_left: 5, late_join_allowed: false };
+  eq('started class with late sign-ups off: no link (catalog hides it)', canShareClass(open, org, started, '2027-01-25'), false);
+  eq('started class with late sign-ups on: link', canShareClass(open, org, { ...started, late_join_allowed: true }, '2027-01-25'), true);
+  eq('past its last session: no link', canShareClass(open, org, { ...started, late_join_allowed: true }, '2027-03-02'), false);
+  eq('tagged link', partnerShareUrl('j2s', 'abc', 'Happy Valley Parks and Rec', 'https://enrops.com'),
+    'https://enrops.com/j2s?program=abc&utm_source=partner&utm_medium=partner_portal&utm_campaign=happy-valley-parks-and-rec');
+}
+
+// Partner home: classes at a glance (enrollment first).
+{
+  const g = classesAtAGlance([
+    { ...base, class_id: '1', status: 'open', first_date: '2026-11-01', enrolled: 10 },
+    { ...base, class_id: '2', status: 'open', first_date: '2027-01-12', enrolled: 4 },
+    { ...base, class_id: '3', status: 'finished', first_date: '2026-09-01', enrolled: 6 },
+    { ...base, class_id: '4', status: 'cancelled', enrolled: 9 },
+    { ...base, class_id: '5', status: 'open', first_date: '2026-11-01', count_source: 'partner', enrolled: null },
+  ], '2026-11-25');
+  eq('glance counts', g, { running: 2, upcoming: 1, finished: 1, children: 14, nextStart: '2027-01-12' });
+  eq('glance words', glanceText(g, 2026), '2 classes running · 1 starting from Jan 12, 2027 · 14 children enrolled · 1 finished, summary ready');
+  eq('only finished', glanceText({ running: 0, upcoming: 0, finished: 2, children: 0, nextStart: null }), '2 finished, summaries ready');
+  eq('nothing', glanceText(classesAtAGlance([], '2026-11-25')), '');
 }
 
 // The database keeps a finished class listed 60 days, as 'finished'.

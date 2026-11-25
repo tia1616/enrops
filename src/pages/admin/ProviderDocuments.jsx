@@ -22,7 +22,7 @@ import { Link, useNavigate, useOutletContext } from "react-router-dom";
 import { RequirementsCell, InstructorsCell } from "../partner/ProviderRecord.jsx";
 import { todayIso } from "../partner/partnerShared.jsx";
 import { listPartnerInstructors, listPartnerRequirements, listPortalAccess } from "../../lib/partnerPortal.js";
-import { partnersInUse, providerSummary, requiredKeys } from "../../lib/partnerPortalLogic.js";
+import { partnersInUse, providerSummary, requiredKeys, loginAdoption, adoptionText } from "../../lib/partnerPortalLogic.js";
 import { listProviderDocuments, listPartners } from "../../lib/providerDocuments.js";
 import { usePermissions } from "../../lib/permissions.js";
 import RegistrationSystemField from "./RegistrationSystemField.jsx";
@@ -38,11 +38,6 @@ const input = { width: "100%", padding: "10px 12px", border: `1.5px solid ${RULE
 const th = { padding: "10px 14px", borderBottom: `1px solid ${RULE}`, fontWeight: 700, whiteSpace: "nowrap" };
 const td = { padding: "12px 14px", borderBottom: `1px solid ${RULE}`, verticalAlign: "middle" };
 
-function loginsText(list) {
-  if (!list.length) return "No one yet";
-  const signedIn = list.filter((g) => g.last_signed_in_at).length;
-  return `${list.length} ${list.length === 1 ? "person" : "people"}, ${signedIn} signed in`;
-}
 
 export default function ProviderDocuments() {
   const { org } = useOutletContext();
@@ -98,6 +93,17 @@ export default function ProviderDocuments() {
     return (partners ?? []).filter((p) => !p.inactive && !ids.has(p.id));
   }, [partners, used]);
   const sharedWithAll = docs.filter((d) => !d.partner_id);
+  // The adoption line above the table (Jessica 2026-11-25): who is actually using it.
+  const adoption = useMemo(() => {
+    const live = used.filter((p) => !p.inactive);
+    const by = live.map((p) => loginAdoption(grants.filter((g) => g.partner_id === p.id)));
+    return {
+      partners: live.length,
+      withLogins: by.filter((a) => a.total).length,
+      using: by.filter((a) => a.signedIn).length,
+      notInvited: by.reduce((n, a) => n + a.notInvited, 0),
+    };
+  }, [used, grants]);
 
   if (partners === null) {
     return <div style={{ padding: 40, color: MUTED, textAlign: "center" }}>Loading…</div>;
@@ -129,7 +135,13 @@ export default function ProviderDocuments() {
           </div>
         </div>
       ) : (
-        <section style={{ marginTop: 20, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 12, overflowX: "auto" }}>
+        <>
+        <p style={{ margin: "20px 0 0", fontSize: 14, color: INK }}>
+          <strong>{adoption.using} of {adoption.partners}</strong> partners have someone signed in.
+          {adoption.withLogins < adoption.partners && <> {adoption.partners - adoption.withLogins} have no login yet.</>}
+          {adoption.notInvited > 0 && <> {adoption.notInvited} {adoption.notInvited === 1 ? "person has" : "people have"} a login but no invite yet (open the partner, then People &amp; emails).</>}
+        </p>
+        <section style={{ marginTop: 10, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 12, overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5, minWidth: 640 }}>
             <thead>
               <tr style={{ textAlign: "left", color: MUTED, fontSize: 11.5, textTransform: "uppercase", letterSpacing: 0.4 }}>
@@ -159,13 +171,17 @@ export default function ProviderDocuments() {
                         <td style={td}><InstructorsCell s={s} /></td>
                       </>
                     )}
-                    <td style={{ ...td, color: MUTED }}>{loginsText(theirLogins)}</td>
+                    <td style={{ ...td, color: MUTED }}>
+                      {adoptionText(loginAdoption(theirLogins))}
+                      {p.show_family_payments && <div style={{ fontSize: 12, color: "#166534", marginTop: 2 }}>Sees what families paid</div>}
+                    </td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
         </section>
+        </>
       )}
 
       {sharedWithAll.length > 0 && (

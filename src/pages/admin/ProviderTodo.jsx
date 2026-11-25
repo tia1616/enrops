@@ -20,8 +20,12 @@ const actionBtn = { background: "none", border: "none", padding: 0, color: BRIGH
  * instructor signs in at, for the share items. `canManage` hides the document
  * buttons for roles that can't upload (the links still show where to go).
  */
-export default function ProviderTodo({ items, partnerName, onUpload, onRenew, instructorPortalUrl, canManage, requirementsUnknown = false, onTab }) {
+export default function ProviderTodo({ items, partnerName, onUpload, onRenew, instructorPortalUrl, canManage, requirementsUnknown = false, onTab, limit = Infinity }) {
   const [copied, setCopied] = useState("");
+  // A box above the tabs (Jessica 2026-11-25: "put 'to do' as a box on the
+  // top instead of a tab"): the first few, worst first, then "Show all".
+  const [showAll, setShowAll] = useState(false);
+  const shownItems = showAll ? items : items.slice(0, limit);
 
   async function copyPortalLink(key) {
     try {
@@ -51,7 +55,7 @@ export default function ProviderTodo({ items, partnerName, onUpload, onRenew, in
       )}
       {items.length > 0 && (
         <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
-          {items.map((it, i) => (
+          {shownItems.map((it, i) => (
             <li key={it.key} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "10px 0", borderTop: i === 0 ? "none" : `1px solid ${RULE}` }}>
               <span aria-hidden="true" style={{ flexShrink: 0, width: 8, height: 8, borderRadius: 99, marginTop: 6, background: DOT[it.tone] }} />
               <div style={{ minWidth: 0, flex: 1 }}>
@@ -78,7 +82,7 @@ export default function ProviderTodo({ items, partnerName, onUpload, onRenew, in
                     </Link>
                   )}
                   {it.action.type === "tab" && onTab && (
-                    <button type="button" style={actionBtn} onClick={() => { onTab(it.action.tab); window.scrollTo({ top: 0, behavior: "smooth" }); }}>{it.action.label}</button>
+                    <button type="button" style={actionBtn} onClick={() => onTab(it.action.tab)}>{it.action.label}</button>
                   )}
                   {it.action.type === "share" && (
                     <>
@@ -93,6 +97,16 @@ export default function ProviderTodo({ items, partnerName, onUpload, onRenew, in
             </li>
           ))}
         </ul>
+      )}
+      {items.length > shownItems.length && (
+        <button type="button" style={{ ...actionBtn, marginTop: 6 }} onClick={() => setShowAll(true)}>
+          Show all {items.length}
+        </button>
+      )}
+      {showAll && items.length > limit && (
+        <button type="button" style={{ ...actionBtn, marginTop: 6 }} onClick={() => setShowAll(false)}>
+          Show fewer
+        </button>
       )}
     </section>
   );

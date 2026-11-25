@@ -9,6 +9,8 @@
 // for that partner (both render ClassesTable) can never say different things.
 
 import { formatDate } from "./providerDocumentLogic.js";
+import { buildProgramShareUrl } from "./regLinks.js";
+import { isClassOnSale } from "./classSeasons.js";
 import { sortRosterRows } from "./rosterOrder.js";
 import { gradeLabel } from "./grades.js";
 import { dismissalSummary } from "./dismissal.js";
@@ -218,6 +220,114 @@ export function classSummaryCsv(c, summary, rows, { providerName = "", termLabel
     }
   }
   return out.join("\r\n");
+}
+
+/**
+ * One partner's statement for one term (Jessica 2026-11-25: invoicing is per
+ * partner, not per class): a row per running or finished class, then totals.
+ * `summaries` maps keyOf(c) -> partner_portal_class_summary result (null when
+ * it could not be read). Money columns only when some class carries money (a
+ * partner sees it only when the provider shares it). `invoicingNote` is the
+ * provider's own note and is passed only on the provider's page.
+ */
+export function termStatementCsv(termLabel, classes, summaries, { partnerName = "", providerName = "", invoicingNote = "", today = "" } = {}) {
+  const live = (classes ?? []).filter((c) => c.status === "open" || c.status === "finished");
+  const sum = (c) => summaries?.get?.(`${c.kind}:${c.class_id}`) ?? null;
+  const withMoney = live.some((c) => sum(c)?.money);
+  const out = [];
+  const line = (...cells) => out.push(cells.map(csvCell).join(","));
+  line("Statement", [partnerName, termLabel].filter(Boolean).join(", "));
+  if (providerName) line("Provider", providerName);
+  if (invoicingNote && invoicingNote.trim()) line("Your invoicing notes (only on your copy)", invoicingNote.trim());
+  out.push("");
+  line("Class", "Site", "Dates", "Status", "Sessions held", "Sessions scheduled", "Not confirmed yet", "Cancelled", "Children on the roster",
+    ...(withMoney ? ["Children paid for", "Families paid"] : []));
+  const t = { held: 0, sched: 0, nc: 0, canc: 0, kids: 0, paidKids: 0, cents: 0 };
+  for (const c of live) {
+    const s = sum(c);
+    const list = s?.sessions ?? [];
+    const n = (st) => list.filter((x) => x.status === st).length;
+    const held = n("held"); const canc = n("cancelled"); const nc = n("not_confirmed");
+    const sched = list.length - canc;
+    const kids = c.count_source === "partner" || c.enrolled == null ? "" : Number(c.enrolled);
+    const m = s?.money;
+    t.held += held; t.sched += sched; t.nc += nc; t.canc += canc;
+    if (kids !== "") t.kids += kids;
+    if (m) { t.paidKids += Number(m.children || 0); t.cents += Number(m.paid_cents || 0); }
+    const dates = c.first_date && c.last_date && c.first_date !== c.last_date ? `${c.first_date} to ${c.last_date}` : (c.first_date || c.last_date || "");
+    const status = c.status === "finished" ? "Finished"
+      : today && c.first_date && c.first_date > String(today) ? "Not started" : "Running";
+    line(c.title || "Untitled class", c.site || "", dates, status,
+      s ? held : "", s ? sched : "", s ? nc : "", s ? canc : "", kids,
+      ...(withMoney ? [m ? Number(m.children || 0) : "", m ? dollars(m.paid_cents) : ""] : []));
+  }
+  line("Total", "", "", `${live.length} ${live.length === 1 ? "class" : "classes"}`, t.held, t.sched, t.nc, t.canc, t.kids,
+    ...(withMoney ? [t.paidKids, dollars(t.cents)] : []));
+  if (live.some((c) => !sum(c))) {
+    out.push("");
+    line("Note", "Sessions could not be read for some classes; those cells are blank.");
+  }
+  return out.join("\r\n");
+}
+
+/** "Happy Valley Parks and Rec - Fall 2026 statement.csv" */
+export function statementFileName(partnerName, termLabel) {
+  const base = [partnerName || "Partner", termLabel].filter(Boolean).join(" - ");
+  return `${base.replace(/[\\/:*?"<>|]+/g, "").trim() || "Partner"} statement.csv`;
+}
+
+/**
+ * A partner's classes at a glance, for the partner home (Jessica 2026-11-25:
+ * enrollment first). Cancelled and not-yet-open classes are left out.
+ * `children` counts only classes with a number (not partner-run, not an
+ * un-entered typed count).
+ */
+export function classesAtAGlance(rows, today) {
+  const t = String(today ?? "");
+  const live = (rows ?? []).filter((c) => c.status === "open" || c.status === "finished");
+  const finished = live.filter((c) => c.status === "finished");
+  const open = live.filter((c) => c.status === "open");
+  const running = open.filter((c) => !c.first_date || c.first_date <= t);
+  const upcoming = open.filter((c) => c.first_date && c.first_date > t);
+  const children = open.reduce((n, c) => n + (c.count_source !== "partner" && Number.isFinite(Number(c.enrolled)) && c.enrolled != null ? Number(c.enrolled) : 0), 0);
+  const nextStart = upcoming.map((c) => c.first_date).sort()[0] ?? null;
+  return { running: running.length, upcoming: upcoming.length, finished: finished.length, children, nextStart };
+}
+
+/** "3 running · 2 starting Jan 12 · 41 children enrolled · 1 finished, summary ready". Empty string when nothing. */
+export function glanceText(g, thisYear) {
+  if (!g) return "";
+  const parts = [];
+  if (g.running) parts.push(`${g.running} ${g.running === 1 ? "class" : "classes"} running`);
+  if (g.upcoming) parts.push(`${g.upcoming} starting${g.nextStart ? ` from ${shortDate(g.nextStart, thisYear)}` : " soon"}`);
+  if (g.running || g.upcoming) parts.push(`${g.children} ${g.children === 1 ? "child" : "children"} enrolled`);
+  if (g.finished) parts.push(`${g.finished} finished, ${g.finished === 1 ? "summary" : "summaries"} ready`);
+  return parts.join(" · ");
+}
+
+/**
+ * Can a partner share this class's sign-up link (Jessica 2026-11-25: "share
+ * this class")? Exactly when the family catalog would show it: THE ONE RULE
+ * the catalog uses (classSeasons.isClassOnSale, src/pages/portal/Home.jsx):
+ * season on sale, not past its last session, and not started when the
+ * provider turned late sign-ups off. Only weekly classes families register
+ * for through enrops; camps (camp sessions) and partner-run classes have no
+ * catalog link here. `org` = public_org_directory row; `sessions` = the
+ * class's class_last_sessions row (null when unknown: the season decides).
+ */
+export function canShareClass(c, org, sessions = null, todayIso = null) {
+  if (!c || c.kind !== "class" || c.status !== "open" || c.count_source !== "enrops") return false;
+  return isClassOnSale(org, { term: c.term }, sessions, todayIso);
+}
+
+/**
+ * The class's sign-up link, tagged so a registration it brings in is credited
+ * to this partner (registrations.attribution, src/lib/attribution.js).
+ */
+export function partnerShareUrl(slug, classId, partnerName, origin) {
+  const base = buildProgramShareUrl(slug, classId, origin);
+  const campaign = String(partnerName || "partner").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "partner";
+  return `${base}&utm_source=partner&utm_medium=partner_portal&utm_campaign=${encodeURIComponent(campaign)}`;
 }
 
 /** "Super Mario Game Makers - Fall 2026.csv", safe for a file name. */

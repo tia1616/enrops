@@ -10,31 +10,51 @@
 // once, its count can show on its tab, and switching tabs never refetches or
 // loses an open roster.
 //
-// Each tab has its own link (#documents, #classes ...), so a partner can send
+// Each tab has its own link (#classes, #safety ...), so a partner can send
 // someone straight to one. Plain #name only: that is all an artifact-style
-// share or a pasted link keeps.
+// share or a pasted link keeps. Since 2026-11-25 several old tabs are sections
+// of one grouped tab ("too many tabs"); their old #names still work (aliases).
 
 import { useCallback, useEffect, useState } from "react";
 import TabStrip from "../../components/TabStrip.jsx";
-import { tabFromHash as pickTab } from "../../lib/recordTabs.js";
+import { tabFromHash as pickTab, sectionFromHash } from "../../lib/recordTabs.js";
 
 export { alertFor } from "../../lib/recordTabs.js";
 
 const DOT = { bad: "bg-red-500", attention: "bg-amber-400" };
 
 const currentHash = () => (typeof window !== "undefined" ? window.location.hash : "");
-const tabFromHash = (ids) => pickTab(currentHash(), ids);
+
+/** Bring a section inside a grouped tab into view, once the tab is shown. */
+function scrollToSection(section) {
+  if (!section || typeof window === "undefined") return;
+  // Two frames: the tab panel un-hides on the first render.
+  requestAnimationFrame(() => requestAnimationFrame(() =>
+    document.getElementById(`section-${section}`)?.scrollIntoView({ behavior: "smooth", block: "start" })));
+}
 
 /**
  * The active tab, kept in the address. `ids` are the tabs this page has; an
- * unknown or missing #name opens the first one.
+ * unknown or missing #name opens the first one. `aliases` maps an old tab
+ * (now a section of a grouped tab, Jessica 2026-11-25) to its tab, and opening
+ * one scrolls to that section: #documents opens Safety record at Documents.
  */
-export function useRecordTab(ids) {
-  const key = ids.join(",");
-  const [active, setActive] = useState(() => tabFromHash(ids));
+export function useRecordTab(ids, aliases = {}, ready = true) {
+  const key = ids.join(",") + "|" + Object.entries(aliases).map((e) => e.join(">")).join(",");
+  const [active, setActive] = useState(() => pickTab(currentHash(), ids, aliases));
+
+  // A page still loading has no sections yet, so an old link (#decision)
+  // scrolls again once `ready` turns true (review 2026-11-25).
+  useEffect(() => {
+    if (ready) scrollToSection(sectionFromHash(currentHash(), ids, aliases));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, key]);
 
   useEffect(() => {
-    const onHash = () => setActive(tabFromHash(ids));
+    const onHash = () => {
+      setActive(pickTab(currentHash(), ids, aliases));
+      scrollToSection(sectionFromHash(currentHash(), ids, aliases));
+    };
     onHash();
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
@@ -42,12 +62,39 @@ export function useRecordTab(ids) {
   }, [key]);
 
   const choose = useCallback((id) => {
-    setActive(id);
+    const hash = `#${id}`;
+    setActive(pickTab(hash, ids, aliases));
     // replaceState: a tab is a view, not a page; Back leaves the record.
-    try { window.history.replaceState(window.history.state, "", `#${id}`); } catch { /* address bar is a convenience */ }
-  }, []);
+    try { window.history.replaceState(window.history.state, "", hash); } catch { /* address bar is a convenience */ }
+    scrollToSection(sectionFromHash(hash, ids, aliases));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
 
   return [active, choose];
+}
+
+/** One part of a grouped tab, with the anchor old links scroll to. */
+export function RecordSection({ id, children }) {
+  return <div id={`section-${id}`} className="scroll-mt-28">{children}</div>;
+}
+
+/**
+ * "Jump to: Documents · Instructors · Requirements · Decision" at the top of
+ * a grouped tab (Jessica 2026-11-25), so its later sections are findable.
+ * `onJump(id)` is the page's tab chooser (an alias id scrolls to its section).
+ */
+export function SectionJumps({ sections, onJump }) {
+  return (
+    <nav aria-label="Jump to a section" className="mt-4 flex flex-wrap items-center gap-x-1 gap-y-1 text-sm">
+      <span className="text-j2s-ink/55">Jump to:</span>
+      {sections.map((s, i) => (
+        <span key={s.id}>
+          <button type="button" onClick={() => onJump(s.id)} className="font-semibold text-j2s-purple hover:underline">{s.label}</button>
+          {i < sections.length - 1 && <span aria-hidden="true" className="px-1 text-j2s-ink/30">·</span>}
+        </span>
+      ))}
+    </nav>
+  );
 }
 
 /**

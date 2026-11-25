@@ -19,14 +19,15 @@ import DocumentStatusBadge from "../../components/DocumentStatusBadge.jsx";
 import { formatTermLabel } from "../../lib/terms.js";
 import {
   listPartnerClasses, getClassRoster, getClassSummary, getRegistrationFields, setReportedEnrollment,
-  getShowFamilyPayments, setShowFamilyPayments,
+  getShowFamilyPayments, setShowFamilyPayments, getPartnerInvoicingNote, getProviderSaleSettings, getClassLastSessions,
 } from "../../lib/partnerPortal.js";
+import { todayIso } from "./partnerShared.jsx";
 import SettingSwitch from "../../components/SettingSwitch.jsx";
 import {
   scheduleText, enrolledText, countSourceText, classBadge, rosterAvailable,
   sortClasses, rosterDisplayRows, asksDismissal, showsHomeroom, groupClassesByTerm,
   detailsButtonText, sessionsHeadline, sessionStatusText, paidText, classSummaryCsv, summaryFileName, shortDate,
-  paidByChild, childPaidText,
+  paidByChild, childPaidText, termStatementCsv, statementFileName, canShareClass, partnerShareUrl,
 } from "../../lib/partnerClasses.js";
 import {
   listMarketingAsks, listClassMedia, uploadClassMedia, removeClassMedia, openMarketingFile,
@@ -46,7 +47,7 @@ const keyOf = (c) => `${c.kind}:${c.class_id}`;
 // `onMediaGaps(gaps)`: what the partner asked for that isn't on a class yet
 // ([{ item, count }], from mediaGaps), for the provider's To do list.
 // `onAskMarketing()`: the partner's page takes it to the Marketing asks.
-export default function ClassesTable({ partnerId, orgId, orgName, viewer = "partner", partnerName = "", canEdit = false, onCount, onMediaGaps, onAskMarketing }) {
+export default function ClassesTable({ partnerId, orgId, orgName, viewer = "partner", partnerName = "", canEdit = false, onCount, onMediaGaps, onAskMarketing, orgSlug = "", sharerName = "" }) {
   const [classes, setClasses] = useState(null);
   // Marketing (20261123r): what the partner asks for, and the files on classes.
   const [asks, setAsks] = useState([]);
@@ -100,6 +101,74 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [partnerId, orgId]);
+
+  // "Share sign-up link" on the partner's view (Jessica 2026-11-25): only
+  // where the link works (canShareClass, the provider's own share rule).
+  const [saleSettings, setSaleSettings] = useState(null);
+  const [lastSessions, setLastSessions] = useState(() => new Map());
+  const [shared, setShared] = useState(null); // { key, word } just after a share/copy
+  useEffect(() => {
+    setSaleSettings(null); setLastSessions(new Map());
+    if (viewer !== "partner" || !orgId || !orgSlug) return;
+    getProviderSaleSettings(orgId).then(setSaleSettings).catch(() => setSaleSettings(null));
+    getClassLastSessions(orgId).then(setLastSessions).catch(() => setLastSessions(new Map()));
+  }, [viewer, orgId, orgSlug]);
+  useEffect(() => {
+    if (!shared) return;
+    const t = setTimeout(() => setShared(null), 4000);
+    return () => clearTimeout(t);
+  }, [shared]);
+  async function shareClass(c) {
+    const url = partnerShareUrl(orgSlug, c.class_id, sharerName);
+    const k = keyOf(c);
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: c.title || "Class", text: `Sign up for ${c.title || "this class"} at ${c.site || "our site"}`, url });
+        setShared({ key: k, word: "Shared" });
+        return;
+      }
+    } catch (err) {
+      if (err?.name === "AbortError") return; // they closed the share sheet
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      setShared({ key: k, word: "Link copied" });
+    } catch {
+      window.prompt("Copy this sign-up link:", url);
+    }
+  }
+
+  // Term statement (Jessica 2026-11-25): one file per partner per term.
+  const [statementBusy, setStatementBusy] = useState(""); // term key being built
+  const [statementError, setStatementError] = useState("");
+  async function downloadStatement(g) {
+    if (statementBusy) return;
+    setStatementBusy(g.key); setStatementError("");
+    try {
+      const live = g.classes.filter((c) => c.status === "open" || c.status === "finished");
+      const summaries = new Map();
+      await Promise.all(live.map(async (c) => {
+        try { summaries.set(keyOf(c), await getClassSummary(partnerId, c.kind, c.class_id)); }
+        catch { summaries.set(keyOf(c), null); }
+      }));
+      const note = viewer === "provider" && orgId ? await getPartnerInvoicingNote(orgId, partnerId).catch(() => "") : "";
+      const who = viewer === "provider" ? partnerName : orgName;
+      const csv = termStatementCsv(g.label, live, summaries, {
+        partnerName: viewer === "provider" ? partnerName : "", providerName: orgName, invoicingNote: note, today: todayIso(),
+      });
+      const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = statementFileName(who, g.label);
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      setStatementError(`Couldn't build the ${g.label} statement: ${err?.message ?? "unknown error"}`);
+    } finally {
+      setStatementBusy("");
+    }
+  }
 
   async function toggleSharePaid(on) {
     setSharePaidBusy(true); setSharePaidError("");
@@ -203,6 +272,7 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
         </div>
       )}
       {loadError && <p className="error-text px-4 pt-2">{loadError}</p>}
+      {statementError && <p role="alert" className="error-text px-4 pt-2">{statementError}</p>}
       {mediaError && <p className="error-text px-4 pt-2">{mediaError}</p>}
       {/* "Flyers on 2 of 4 classes": the partner sees at a glance what's in. */}
       {classes?.length > 0 && (wanted.length > 0 || gallery.length > 0) && (
@@ -258,7 +328,15 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
                 <tr key={`term:${g.key}`}>
                   <th colSpan={4} scope="rowgroup" className="border-b border-j2s-ink/10 bg-j2s-ink/[0.03] px-3 pb-1.5 pt-3 text-left text-sm font-bold text-j2s-ink">
                     {/* Pinned like the class column, so it stays on screen when a phone scrolls the table sideways. */}
-                    <span className="sticky left-3">{g.label}</span>
+                    <span className="sticky left-3 inline-flex flex-wrap items-baseline gap-x-3">
+                      {g.label}
+                      {g.classes.some((c) => c.status === "open" || c.status === "finished") && (
+                        <button type="button" onClick={() => downloadStatement(g)} disabled={!!statementBusy}
+                          className="text-xs font-semibold text-j2s-purple hover:underline disabled:opacity-60">
+                          {statementBusy === g.key ? "Building…" : `Download ${g.label} statement`}
+                        </button>
+                      )}
+                    </span>
                   </th>
                 </tr>,
                 ...g.classes.flatMap((c) => {
@@ -279,6 +357,15 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
                           className="mt-0.5 py-1 text-xs font-semibold text-j2s-purple hover:underline">
                           {detailsButtonText(c, open === k)}
                         </button>
+                      )}
+                      {viewer === "partner" && orgSlug && saleSettings && canShareClass(c, saleSettings, lastSessions.get(c.class_id) ?? null, todayIso()) && (
+                        <div>
+                          <button type="button" onClick={() => shareClass(c)}
+                            className="py-1 text-xs font-semibold text-j2s-purple hover:underline">
+                            Share sign-up link
+                          </button>
+                          {shared?.key === k && <span role="status" className="ml-2 text-xs text-emerald-700">{shared.word}</span>}
+                        </div>
                       )}
                       {/* Flyer / social graphic (20261123r), in the pinned column so it's on a phone screen. */}
                       {takesMarketing(c) && !mediaError && rowItems.map((a) => (
@@ -374,7 +461,7 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
           phone (portal rule 1); "See them" at the top jumps here. */}
       {gallery.length > 0 && (
         <div id={`flyer-board-${partnerId}`} className="scroll-mt-24 pb-4">
-          <MarketingGallery groups={gallery} providerName={orgName} />
+          <MarketingGallery groups={gallery} providerName={orgName} onAsk={viewer === "partner" ? onAskMarketing : undefined} />
         </div>
       )}
     </section>

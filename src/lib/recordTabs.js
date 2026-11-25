@@ -20,8 +20,28 @@ export function decisionTag(decision) {
   return { text: "Withdrawn", alert: null };
 }
 
-/** The tab a #name asks for, or the first tab when it names none of these. */
-export function tabFromHash(hash, ids) {
+/**
+ * The tab a #name asks for, or the first tab when it names none of these.
+ * `aliases` maps a section that now lives inside a grouped tab to that tab
+ * (Jessica 2026-11-25: "too many tabs"; #documents -> "safety"), so every
+ * link ever sent still opens the right place.
+ */
+export function tabFromHash(hash, ids, aliases = {}) {
   const h = String(hash ?? "").replace(/^#/, "");
-  return ids.includes(h) ? h : ids[0];
+  if (ids.includes(h)) return h;
+  if (Object.prototype.hasOwnProperty.call(aliases, h) && ids.includes(aliases[h])) return aliases[h];
+  return ids[0];
+}
+
+/** The section a #name points at inside a grouped tab, or null (it names a whole tab or nothing). */
+export function sectionFromHash(hash, ids, aliases = {}) {
+  const h = String(hash ?? "").replace(/^#/, "");
+  return !ids.includes(h) && Object.prototype.hasOwnProperty.call(aliases, h) && ids.includes(aliases[h]) ? h : null;
+}
+
+/** Worst dot of several: "bad" beats "attention" beats none. */
+export function worstAlert(...alerts) {
+  if (alerts.includes("bad")) return "bad";
+  if (alerts.includes("attention")) return "attention";
+  return null;
 }

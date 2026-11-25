@@ -26,6 +26,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { logPlatformEvent, FEATURE, ACTION } from '../_shared/logPlatformEvent.ts';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 import { isEmailAllowed } from '../_shared/emailGuard.ts';
+import { partnerPortalWhat, partnerNoteBlock, cleanPartnerNote } from './partnerEmail.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -75,7 +76,7 @@ async function findUserByEmail(supabase: any, email: string) {
 async function findPartnerGrant(supabase: any, email: string, orgId: string | null) {
   let query = supabase
     .from('partner_portal_access')
-    .select('contact_id, organization_id, contact:partner_contacts(contact_name, contact_email), partner:partners(partner_name, inactive)');
+    .select('contact_id, organization_id, last_signed_in_at, contact:partner_contacts(contact_name, contact_email), partner:partners(partner_name, inactive)');
   if (orgId) query = query.eq('organization_id', orgId);
   const { data: grants, error } = await query;
   if (error) throw new Error(`partner access lookup failed: ${error.message}`);
@@ -90,6 +91,9 @@ async function findPartnerGrant(supabase: any, email: string, orgId: string | nu
     provider_count: new Set(mine.map((g: any) => g.organization_id)).size,
     first_name: String(grant.contact?.contact_name ?? '').trim().split(/\s+/)[0] || null,
     partner_name: (grant.partner?.partner_name as string) ?? null,
+    // Has this person ever signed in at this provider? An "invited you" subject
+    // is only true for someone who hasn't.
+    ever_signed_in: mine.some((g: any) => !!g.last_signed_in_at),
   };
 }
 
@@ -123,7 +127,7 @@ serve(async (req: Request) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
 
   try {
-    const { email: rawEmail, redirect_to, context, org_id } = await req.json();
+    const { email: rawEmail, redirect_to, context, org_id, note: rawNote } = await req.json();
     // Normalized once, for every context. Sign-in accounts are case-insensitive,
     // and an un-trimmed address made the user lookup miss and createUser fail
     // loudly - a 400 that told an anonymous caller "this address holds access"
@@ -367,6 +371,13 @@ serve(async (req: Request) => {
       ? await loadOrgBrand(supabase, org_id ?? partnerBrandOrg ?? instructorRow?.organization_id ?? null)
       : null;
     const partnerSeveralProviders = template === 'partner' && !org_id && (partnerGrant?.provider_count ?? 0) > 1;
+    // An invite the provider's own owner/admin sends from the Logins tab
+    // (Jessica 2026-11-25: "invites with a personal note"). The note is taken
+    // ONLY from that caller; anyone requesting their own link from the public
+    // sign-in form gets the plain email, so a stranger can never put words in
+    // a provider's mouth. Capped, trimmed, escaped when rendered.
+    const partnerInvite = template === 'partner' && adminCaller;
+    const partnerNote = cleanPartnerNote(rawNote, partnerInvite);
 
     const subject =
       template === 'signup' ? 'Finish setting up your enrops page'
@@ -374,9 +385,13 @@ serve(async (req: Request) => {
       : template === 'onboarding' ? `Continue your ${tenantBrand?.org_name ?? 'enrops'} onboarding`
       : template === 'instructor' ? 'Sign in to view your schedule'
       // Spec v3 wording: "safety record", never "vendor compliance".
+      // The portal is more than the safety record now (classes, rosters,
+      // end-of-class summaries, flyers), so the subject names the portal.
       : template === 'partner' ? (partnerSeveralProviders
-          ? "Your providers' safety record"
-          : `${tenantBrand?.org_name ?? 'Your provider'}'s safety record`)
+          ? 'Your partner portal'
+          : partnerInvite && !partnerGrant?.ever_signed_in
+            ? `${tenantBrand?.org_name ?? 'Your provider'} invited you to your partner portal`
+            : `Sign in to ${tenantBrand?.org_name ?? 'your provider'}'s partner portal`)
       : `Sign in to ${tenantBrand?.org_name ?? 'enrops'}`;
 
     const html =
@@ -384,7 +399,7 @@ serve(async (req: Request) => {
       : template === 'admin' ? buildAdminEmail(firstName, signInUrl)
       : template === 'onboarding' ? buildOnboardingEmail(firstName, signInUrl, tenantBrand)
       : template === 'instructor' ? buildInstructorEmail(firstName, signInUrl, tenantBrand)
-      : template === 'partner' ? buildPartnerEmail(firstName, signInUrl, tenantBrand, partnerGrant?.partner_name ?? null, partnerSeveralProviders)
+      : template === 'partner' ? buildPartnerEmail(firstName, signInUrl, tenantBrand, partnerGrant?.partner_name ?? null, partnerSeveralProviders, partnerNote)
       : buildParentEmail(firstName, signInUrl, tenantBrand);
 
     // Operator-facing auth emails (signup + admin) send AS enrops from the
@@ -661,7 +676,7 @@ function readableOn(bg: string): { fg: string; muted: string } {
 // A partner (a parks department, a school) being let in to see a provider's
 // vendor records. Speaks as the provider. No support address is invented when
 // the provider has none on file.
-function buildPartnerEmail(firstName: string, signInUrl: string, brand: any, partnerName: string | null, severalProviders = false): string {
+function buildPartnerEmail(firstName: string, signInUrl: string, brand: any, partnerName: string | null, severalProviders = false, note = ''): string {
   const orgName = brand?.org_name || 'enrops';
   const support = brand?.reply_to || null;
   const accent = brand?.primary_color || '#5847C9';
@@ -680,14 +695,13 @@ function buildPartnerEmail(firstName: string, signInUrl: string, brand: any, par
   </div>
   <div style="padding:28px;">
     <p style="margin:0 0 16px;font-size:15px;color:#1A1530;">Hi ${escapeHtml(firstName)},</p>
+    ${partnerNoteBlock(note, orgName, accent)}
     <p style="margin:0 0 24px;font-size:15px;color:#1A1530;line-height:1.6;">
-      ${severalProviders
-        ? `The providers you work with share their safety record with you${forWhom}: insurance, agreements and the status of their instructors. Tap below to see them, with the date each item is good through.`
-        : `${escapeHtml(orgName)} shares its safety record with you${forWhom}: insurance, agreements and the status of its instructors. Tap below to see it, with the date each item is good through.`}
+      ${partnerPortalWhat(escapeHtml(orgName), forWhom, severalProviders)} Tap below to sign in. There is no password; this link signs you in.
     </p>
     <div style="text-align:center;margin:28px 0;">
       <a href="${escapeAttr(signInUrl)}" style="display:inline-block;background:${escapeAttr(accent)};color:#fff;text-decoration:none;padding:14px 36px;border-radius:8px;font-size:15px;font-weight:700;">
-        See the safety record
+        Open your partner portal
       </a>
     </div>
     <p style="margin:0;font-size:13px;color:#6b6880;">This link expires in 24 hours. You can ask for a new one any time from the same page.${helpLine}</p>
