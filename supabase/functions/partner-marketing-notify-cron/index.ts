@@ -33,6 +33,7 @@ import { deliver } from "../_shared/claimThenSend.ts";
 import { isEmailAllowed } from "../_shared/emailGuard.ts";
 import { fetchWithRateLimitRetry, SINGLE_EMAIL_RETRY } from "../_shared/resendRateLimit.ts";
 import { renderAsk, renderMedia, groupKey, type NoticeRow } from "./noticeEmail.ts";
+import { renderWrapup, renderWrapupCopy, type WrapupRow } from "./wrapupEmail.ts";
 
 const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
@@ -62,6 +63,15 @@ serve(async (req) => {
   const testTo = typeof body?.test_to === "string" && body.test_to.includes("@") ? body.test_to.trim() : null;
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+  // End-of-class summary test (20261125w): { wrapup_test_to, wrapup_today }
+  // sends the first login's email AND the provider copy to wrapup_test_to
+  // only, as if today were wrapup_today. Nothing is marked sent.
+  const wrapupTestTo = typeof body?.wrapup_test_to === "string" && body.wrapup_test_to.includes("@") ? body.wrapup_test_to.trim() : null;
+  if (wrapupTestTo) {
+    const today = typeof body?.wrapup_today === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.wrapup_today) ? body.wrapup_today : null;
+    return json({ ok: true, mode: "wrapup_test", ...(await wrapupTest(supabase, wrapupTestTo, today)) }, 200);
+  }
   const { data, error } = await supabase.rpc("partner_marketing_notices_due");
   if (error) return json({ ok: false, error: error.message }, 500);
 
@@ -94,8 +104,144 @@ serve(async (req) => {
       summary.push({ group: key, error: (e as Error).message });
     }
   }
-  return json({ ok: true, mode: "cron", groups: summary }, 200);
+
+  // End-of-class summaries (20261125w). A failure here never undoes the flyer emails above.
+  let wrapups: unknown = null;
+  try {
+    wrapups = await sendWrapups(supabase, brand);
+  } catch (e) {
+    console.error(`[partner-marketing-notify-cron] wrapups failed:`, e);
+    wrapups = { error: (e as Error).message };
+  }
+  return json({ ok: true, mode: "cron", groups: summary, wrapups }, 200);
 });
+
+// ---------------------------------------------------------------- wrap-ups
+
+const wrapupLedger = (supabase: SupabaseClient) => supabase.from("partner_class_wrapup_sends");
+
+/** The provider's owners and admins (the record-expiry-cron recipient rule). */
+async function providerAdmins(supabase: SupabaseClient, orgId: string): Promise<string[]> {
+  const { data } = await supabase.from("org_members").select("email")
+    .eq("organization_id", orgId).in("role", ["owner", "admin"]).not("accepted_at", "is", null);
+  return [...new Set((data ?? []).map((m: { email: string | null }) => (m.email ?? "").trim().toLowerCase()).filter((e) => e.includes("@")))];
+}
+
+/**
+ * One email per partner login (its finished classes), then one copy per
+ * provider + partner to the provider's owners and admins naming who was told.
+ * Claim by inserting ledger rows (only rows THIS run inserted are sent),
+ * release by deleting them when the send failed.
+ */
+async function sendWrapups(supabase: SupabaseClient, brand: Brand) {
+  const { data, error } = await supabase.rpc("partner_class_wrapups_due", { p_today: null });
+  if (error) throw new Error(`due failed: ${error.message}`);
+  const byLogin = new Map<string, WrapupRow[]>();
+  for (const r of (data ?? []) as WrapupRow[]) {
+    if (!r.summary) continue; // the login can no longer see it
+    if (!byLogin.has(r.access_id)) byLogin.set(r.access_id, []);
+    byLogin.get(r.access_id)!.push(r);
+  }
+
+  const results: unknown[] = [];
+  // partner -> { rows by class, names told }
+  const told = new Map<string, { rows: Map<string, WrapupRow>; names: string[] }>();
+  const replyCache = new Map<string, string | null>();
+  const replyFor = async (orgId: string) => {
+    if (!replyCache.has(orgId)) replyCache.set(orgId, (await loadOrgBrand(supabase, orgId)).tenant_reply_to);
+    return replyCache.get(orgId)!;
+  };
+
+  for (const [accessId, rows] of byLogin) {
+    const key = `access:${accessId}`;
+    const { data: claimed, error: cErr } = await wrapupLedger(supabase)
+      .upsert(rows.map((r) => ({ organization_id: r.organization_id, partner_id: r.partner_id, class_kind: r.class_kind, class_id: r.class_id, recipient_key: key })),
+        { onConflict: "class_kind,class_id,recipient_key", ignoreDuplicates: true })
+      .select("id, class_kind, class_id");
+    if (cErr) { results.push({ login: accessId, error: `claim failed: ${cErr.message}` }); continue; }
+    const mineKeys = new Set((claimed ?? []).map((c: { class_kind: string; class_id: string }) => `${c.class_kind}:${c.class_id}`));
+    const mine = rows.filter((r) => mineKeys.has(`${r.class_kind}:${r.class_id}`));
+    if (!mine.length) { results.push({ login: accessId, status: "already_claimed" }); continue; }
+
+    const { subject, html, text } = renderWrapup(brand, mine, PUBLIC_SITE_URL);
+    const id = await sendRaw(brand, mine[0].to_email, subject, html, text, await replyFor(mine[0].organization_id), "partner_class_wrapup");
+    if (!id) {
+      const ids = (claimed ?? []).map((c: { id: string }) => c.id);
+      const { error: rErr } = await wrapupLedger(supabase).delete().in("id", ids);
+      if (rErr) console.error(`[partner-marketing-notify-cron] wrapup RELEASE FAILED for ${accessId}: ${rErr.message}`);
+      results.push({ login: accessId, classes: mine.length, status: "released" });
+      continue;
+    }
+    results.push({ login: accessId, classes: mine.length, status: "sent" });
+    const pk = `${mine[0].organization_id}:${mine[0].partner_id}`;
+    if (!told.has(pk)) told.set(pk, { rows: new Map(), names: [] });
+    const t = told.get(pk)!;
+    t.names.push(mine[0].to_name || mine[0].to_email);
+    // Prefer the view of a login that sees more (an every-site login's row is the same class).
+    for (const r of mine) if (!t.rows.has(`${r.class_kind}:${r.class_id}`)) t.rows.set(`${r.class_kind}:${r.class_id}`, r);
+  }
+
+  // The provider's copy: once per class.
+  for (const [pk, t] of told) {
+    const rows = [...t.rows.values()];
+    const { data: claimed, error: cErr } = await wrapupLedger(supabase)
+      .upsert(rows.map((r) => ({ organization_id: r.organization_id, partner_id: r.partner_id, class_kind: r.class_kind, class_id: r.class_id, recipient_key: "provider" })),
+        { onConflict: "class_kind,class_id,recipient_key", ignoreDuplicates: true })
+      .select("id, class_kind, class_id");
+    if (cErr) { results.push({ copy: pk, error: `claim failed: ${cErr.message}` }); continue; }
+    const mineKeys = new Set((claimed ?? []).map((c: { class_kind: string; class_id: string }) => `${c.class_kind}:${c.class_id}`));
+    const mine = rows.filter((r) => mineKeys.has(`${r.class_kind}:${r.class_id}`));
+    if (!mine.length) continue;
+    const admins = await providerAdmins(supabase, mine[0].organization_id);
+    const { subject, html, text } = renderWrapupCopy(brand, mine, t.names, PUBLIC_SITE_URL);
+    let sent = 0;
+    for (const to of admins) if (await sendRaw(brand, to, subject, html, text, null, "partner_class_wrapup_copy")) sent++;
+    if (sent === 0) {
+      const ids = (claimed ?? []).map((c: { id: string }) => c.id);
+      await wrapupLedger(supabase).delete().in("id", ids);
+    }
+    results.push({ copy: pk, classes: mine.length, sent });
+  }
+  return results;
+}
+
+/** Test: the first login's email and its provider copy, both to `to`, nothing marked. */
+async function wrapupTest(supabase: SupabaseClient, to: string, today: string | null) {
+  const { data, error } = await supabase.rpc("partner_class_wrapups_due", { p_today: today });
+  if (error) return { error: error.message };
+  const rows = ((data ?? []) as WrapupRow[]).filter((r) => r.summary);
+  if (!rows.length) return { sent: 0, note: "nothing due for that day" };
+  const first = rows.filter((r) => r.access_id === rows[0].access_id);
+  const brand = await loadOrgBrand(supabase, null);
+  const a = renderWrapup(brand, first, PUBLIC_SITE_URL);
+  const b = renderWrapupCopy(brand, first, [first[0].to_name || first[0].to_email], PUBLIC_SITE_URL);
+  const id1 = await sendRaw(brand, to, a.subject, a.html, a.text, null, "partner_class_wrapup_test");
+  const id2 = await sendRaw(brand, to, b.subject, b.html, b.text, null, "partner_class_wrapup_test");
+  return { partner: first[0].partner_name, classes: first.length, would_go_to: first[0].to_email, sent: [id1, id2].filter(Boolean).length, subjects: [a.subject, b.subject] };
+}
+
+/** One email; the Resend id, or null when it failed or was held back. */
+async function sendRaw(brand: Brand, to: string, subject: string, html: string, text: string, replyTo: string | null, tag: string): Promise<string | null> {
+  if (!isEmailAllowed(to)) {
+    console.log("[partner-marketing-notify-cron] held back by the staging allowlist");
+    return null;
+  }
+  try {
+    const { res: resp } = await fetchWithRateLimitRetry(() => fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${RESEND_API_KEY}` },
+      body: JSON.stringify({
+        from: formatFromAddress(brand), to, reply_to: replyTo ?? brand.reply_to, subject, html, text,
+        tags: [{ name: "type", value: tag }],
+      }),
+    }), SINGLE_EMAIL_RETRY);
+    if (resp.ok) return ((await resp.json().catch(() => ({}))) as { id?: string }).id ?? "unknown";
+    console.error(`[partner-marketing-notify-cron] send failed: ${resp.status} ${(await resp.text()).slice(0, 200)}`);
+  } catch (e) {
+    console.error(`[partner-marketing-notify-cron] send threw:`, e);
+  }
+  return null;
+}
 
 /** Claim one group's rows, email each recipient the lines that are theirs, confirm or release. */
 async function sendGroup(supabase: SupabaseClient, brand: Brand, rows: NoticeRow[]) {

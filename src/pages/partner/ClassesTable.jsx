@@ -192,6 +192,10 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
           <div className="text-sm">
             <div className="font-semibold text-j2s-ink">Show {partnerName || "this partner"} what families paid</div>
             <div className="text-xs text-j2s-ink/60">For partners you split revenue with. Off: they see sessions and rosters, not money.</div>
+            {/* 20261125w: the end-of-class email the partner gets. */}
+            <div className="text-xs text-j2s-ink/60">
+              Two days after each class ends, {partnerName || "the partner"}'s logins get an email with the sessions held{sharePaid ? " and what families paid" : ""}. You get a copy.
+            </div>
             {sharePaidError && <div role="alert" className="text-xs text-red-700">{sharePaidError}</div>}
           </div>
           <SettingSwitch on={!!sharePaid} loading={sharePaid === undefined} busy={sharePaidBusy} disabled={!canEdit}
