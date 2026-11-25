@@ -26,6 +26,7 @@ import {
   scheduleText, enrolledText, countSourceText, classBadge, rosterAvailable,
   sortClasses, rosterDisplayRows, asksDismissal, showsHomeroom, groupClassesByTerm,
   detailsButtonText, sessionsHeadline, sessionStatusText, paidText, classSummaryCsv, summaryFileName, shortDate,
+  paidByChild, childPaidText,
 } from "../../lib/partnerClasses.js";
 import {
   listMarketingAsks, listClassMedia, uploadClassMedia, removeClassMedia, openMarketingFile,
@@ -333,6 +334,8 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
                                   <th className="px-2 py-1 text-left text-xs font-semibold text-j2s-ink/60">Grade</th>
                                   {roster.homeroom && <th className="px-2 py-1 text-left text-xs font-semibold text-j2s-ink/60">Homeroom</th>}
                                   {roster.asks && <th className="px-2 py-1 text-left text-xs font-semibold text-j2s-ink/60">Dismissal</th>}
+                                  {/* Per child (Jessica 2026-11-25), only when the paid total is shown. */}
+                                  {paidByChild(roster.summary?.money) && <th className="px-2 py-1 text-left text-xs font-semibold text-j2s-ink/60">Paid</th>}
                                 </tr>
                               </thead>
                               <tbody>
@@ -342,6 +345,9 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
                                     <td className="px-2 py-1 text-j2s-ink/80">{r.grade}</td>
                                     {roster.homeroom && <td className="px-2 py-1 text-j2s-ink/80">{r.homeroom ?? "Not stated"}</td>}
                                     {roster.asks && <td className="px-2 py-1 text-j2s-ink/80">{r.dismissal}</td>}
+                                    {paidByChild(roster.summary?.money) && (
+                                      <td className="px-2 py-1 tabular-nums text-j2s-ink/80">{childPaidText(paidByChild(roster.summary.money).get(r.key))}</td>
+                                    )}
                                   </tr>
                                 ))}
                               </tbody>

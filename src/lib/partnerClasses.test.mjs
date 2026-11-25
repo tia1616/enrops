@@ -4,7 +4,7 @@ import {
   scheduleText, enrolledText, countSourceText, classBadge, rosterAvailable,
   sortClasses, rosterDisplayRows, asksDismissal, shortDate, showsHomeroom,
   summaryAvailable, detailsButtonText, sessionsHeadline, sessionStatusText, paidText, dollars,
-  csvCell, classSummaryCsv, summaryFileName,
+  csvCell, classSummaryCsv, summaryFileName, childPaidText, paidByChild,
 } from './partnerClasses.js';
 
 let pass = 0, fail = 0;
@@ -192,6 +192,25 @@ eq('never asked', asksDismissal([], 'class'), false);
   const noMoney = classSummaryCsv(done, { sessions: [], money: null }, null).split('\r\n');
   eq('csv without money or roster', noMoney.some((l) => l.startsWith('Families paid') || l.startsWith('Student')), false);
   eq('file name', summaryFileName({ title: 'Robots: Go/Build' }, 'Fall 2026'), 'Robots GoBuild - Fall 2026 summary.csv');
+}
+
+// Paid per child (Jessica 2026-11-25: "put per person what they paid").
+{
+  eq('paid', childPaidText({ status: 'paid', paid_cents: 26910 }), '$269.10');
+  eq('paying', childPaidText({ status: 'paying', paid_cents: 10000 }), '$100.00 so far (paying in instalments)');
+  eq('free', childPaidText({ status: 'free', paid_cents: 0 }), 'Free');
+  eq('refunded', childPaidText({ status: 'refunded', paid_cents: 0 }), 'Refunded');
+  eq('processing', childPaidText({ status: 'processing', paid_cents: 0 }), 'Bank payment pending');
+  eq('unpaid', childPaidText({ status: 'unpaid', paid_cents: 0 }), 'Not paid');
+  eq('no entry', childPaidText(undefined), '');
+  eq('no money, no column', paidByChild(null), null);
+  const money = { children: 1, paid_cents: 26910, by_child: [{ row_key: 'a', status: 'paid', paid_cents: 26910 }, { row_key: 'b', status: 'free', paid_cents: 0 }] };
+  const csv = classSummaryCsv({ ...base, status: 'finished', title: 'X', site: 'S', enrolled: 2 },
+    { sessions: [], money }, [{ key: 'a', name: 'Ava Lee', grade: '2nd', homeroom: null }, { key: 'b', name: 'Bo Kim', grade: 'K', homeroom: null }]).split('\r\n');
+  eq('csv has a Paid column', csv.includes('Student,Grade,Paid'), true);
+  eq('csv paid per child', csv.includes('Ava Lee,2nd,$269.10') && csv.includes('Bo Kim,K,Free'), true);
+  const hidden = classSummaryCsv({ ...base, title: 'X' }, { sessions: [], money: null }, [{ key: 'a', name: 'Ava Lee', grade: '2nd', homeroom: null }]).split('\r\n');
+  eq('no money, no Paid column in csv', hidden.includes('Student,Grade'), true);
 }
 
 // The database keeps a finished class listed 60 days, as 'finished'.

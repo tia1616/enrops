@@ -115,12 +115,33 @@ begin
 
   -- What families actually paid: only where families registered through
   -- enrops, and to a partner only when the provider shares it (20261125u).
+  -- Per child too (Jessica 2026-11-25: "put per person what they paid"),
+  -- keyed by registration id = the roster's row_key: paid_cents and a status
+  -- the page words: paid / paying (instalments still due) / free / refunded /
+  -- processing (bank transfer in flight) / unpaid (on the roster, never charged).
   if v_enrops and not v_own and (coalesce(v_admin, false) or v_shared) then
-    select jsonb_build_object('children', count(*) filter (where t.collected > 0),
-                              'paid_cents', coalesce(sum(t.collected), 0))
+    select jsonb_build_object(
+             'children', count(*) filter (where t.collected > 0),
+             'paid_cents', coalesce(sum(t.collected), 0),
+             'by_child', coalesce(jsonb_agg(jsonb_build_object(
+                'row_key', t.id,
+                'paid_cents', t.collected,
+                'status', case when t.collected > 0 and t.inst_due then 'paying'
+                               when t.collected > 0 then 'paid'
+                               when t.refunded > 0 then 'refunded'
+                               when t.ach then 'processing'
+                               when t.payment_status = 'paid' then 'free'
+                               else 'unpaid' end)), '[]'::jsonb))
       into v_money
     from (
-      select greatest(
+      select r.id, r.payment_status,
+             coalesce(r.ach_payment_state = 'processing', false) as ach,
+             -- Still due: pending, or paused on a failed card. Not 'paused_program_cancelled'.
+             exists (select 1 from public.installments i where i.registration_id = r.id
+                      and i.status in ('pending', 'paused_card_failed')) as inst_due,
+             (select coalesce(sum(f.amount_cents), 0) from public.refunds f
+               where f.registration_id = r.id and f.status = 'succeeded') as refunded,
+             greatest(
                case when exists (select 1 from public.installments i where i.registration_id = r.id)
                     then (select coalesce(sum(i.amount_cents), 0) from public.installments i
                           where i.registration_id = r.id and i.status = 'paid')

@@ -149,6 +149,28 @@ export function paidText(money, enrolled = null) {
   return `Families paid ${dollars(money.paid_cents)}, after discounts and refunds${ofRoster}.`;
 }
 
+/**
+ * One child's "Paid" cell (Jessica 2026-11-25: "put per person what they
+ * paid"). `entry` = one of summary.money.by_child; null = no money shown.
+ */
+export function childPaidText(entry) {
+  if (!entry) return "";
+  switch (entry.status) {
+    case "paid": return dollars(entry.paid_cents);
+    case "paying": return `${dollars(entry.paid_cents)} so far (paying in instalments)`;
+    case "free": return "Free";
+    case "refunded": return "Refunded";
+    case "processing": return "Bank payment pending";
+    default: return "Not paid";
+  }
+}
+
+/** row_key -> by_child entry, for the roster's Paid column. null when there is no money to show. */
+export function paidByChild(money) {
+  if (!money || !Array.isArray(money.by_child)) return null;
+  return new Map(money.by_child.map((e) => [e.row_key, e]));
+}
+
 /** One CSV cell, quoted when needed, and never read as a formula by Excel or Sheets. */
 export function csvCell(v) {
   let s = v == null ? "" : String(v);
@@ -185,8 +207,13 @@ export function classSummaryCsv(c, summary, rows, { providerName = "", termLabel
   if (rows) {
     out.push("");
     const homeroom = showsHomeroom(rows);
-    line("Student", "Grade", ...(homeroom ? ["Homeroom"] : []));
-    for (const r of rows) line(r.name, r.grade, ...(homeroom ? [r.homeroom ?? ""] : []));
+    // Paid per child only when the money line is shown at all.
+    const byChild = paid ? paidByChild(summary.money) : null;
+    line("Student", "Grade", ...(homeroom ? ["Homeroom"] : []), ...(byChild ? ["Paid"] : []));
+    for (const r of rows) {
+      line(r.name, r.grade, ...(homeroom ? [r.homeroom ?? ""] : []),
+        ...(byChild ? [childPaidText(byChild.get(r.key))] : []));
+    }
   }
   return out.join("\r\n");
 }
