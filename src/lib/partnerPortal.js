@@ -92,9 +92,12 @@ export function partnerPortalUrl() {
 //
 // `org` null = the neutral partner home's sign-in: any provider's grant counts,
 // and the email speaks as that provider (or as enrops when several share).
-export async function sendPartnerSignInLink(org, email) {
+export async function sendPartnerSignInLink(org, email, note = "") {
   const body = { email, redirect_to: partnerPortalUrl(), context: "partner" };
   if (org?.id) body.org_id = org.id;
+  // A personal note goes in the email only when the provider's own owner/admin
+  // sends it (the function ignores it for anyone else).
+  if (note && note.trim()) body.note = note.trim().slice(0, 1000);
   const { data, error } = await supabase.functions.invoke("auth-send-magic-link", { body });
   if (error) throw error;
   if (data?.error) throw new Error(data.error);

@@ -95,6 +95,10 @@ export default function PartnerLoginsSection({ org, partner, canManage, onMessag
   const [editing, setEditing] = useState(null); // { id, everySite, picked } | null
   const [busy, setBusy] = useState(null); // grant id, or "grant"
   const [error, setError] = useState("");
+  // A personal note that goes in the sign-in email (Jessica 2026-11-25:
+  // "invites with a personal note"). Kept for every send on this page until
+  // changed, so several people at one partner get the same words.
+  const [note, setNote] = useState("");
 
   async function load() {
     try {
@@ -159,11 +163,14 @@ export default function PartnerLoginsSection({ org, partner, canManage, onMessag
       setError(`${row.contact?.contact_name || "This contact"} has no email address. Add one in Locations, then give them access again.`);
       return;
     }
-    if (!window.confirm(`Email a sign-in link to ${row.contact?.contact_name || email} (${email})? They'll see what's shown to ${partner.partner_name}.`)) return;
+    const withNote = note.trim()
+      ? `\n\nYour note goes with it:\n"${note.trim().slice(0, 300)}${note.trim().length > 300 ? "..." : ""}"`
+      : "\n\nNo personal note (you can add one above the list).";
+    if (!window.confirm(`Email a sign-in link to ${row.contact?.contact_name || email} (${email})? They'll see what's shown to ${partner.partner_name}.${withNote}`)) return;
     setBusy(row.id); setError("");
     try {
       // The function tells an owner/admin what really happened; say exactly that.
-      const outcome = await sendPartnerSignInLink(org, email);
+      const outcome = await sendPartnerSignInLink(org, email, note);
       if (outcome === "sent") onMessage(`Sign-in link sent to ${email}.`);
       else if (outcome === "suppressed_on_staging") setError(`Not sent: this is the staging site, which only emails test inboxes.`);
       else if (outcome === "no_access") setError(`Not sent: ${email} no longer has access. Refresh the page and check their partner and email.`);
@@ -198,6 +205,23 @@ export default function PartnerLoginsSection({ org, partner, canManage, onMessag
       </p>
 
       {error && <div style={{ marginBottom: 12, padding: "10px 12px", background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, color: "#991b1b", fontSize: 13 }}>{error}</div>}
+
+      {canManage && grants?.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <label htmlFor={`invite-note-${partner.id}`} style={{ display: "block", fontSize: 13, fontWeight: 600, color: INK, marginBottom: 4 }}>
+            Personal note for the sign-in email <span style={{ fontWeight: 400, color: MUTED }}>(optional)</span>
+          </label>
+          <textarea
+            id={`invite-note-${partner.id}`} value={note} maxLength={1000} rows={3}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder={`Hi! We're using enrops to share our classes, rosters and safety record with ${partner.partner_name}. Here's your sign-in.`}
+            style={{ width: "100%", maxWidth: 600, boxSizing: "border-box", padding: "8px 10px", border: `1px solid ${RULE}`, borderRadius: 8, fontSize: 14, fontFamily: "inherit", lineHeight: 1.5 }}
+          />
+          <div style={{ fontSize: 12, color: MUTED, marginTop: 2 }}>
+            Goes at the top of the email, above the sign-in button, for each link you send from this page. Replies go to your reply-to email.
+          </div>
+        </div>
+      )}
 
       <div style={{ background: PANEL, border: `1px solid ${RULE}`, borderRadius: 12, padding: "6px 20px" }}>
         {grants === null ? (
