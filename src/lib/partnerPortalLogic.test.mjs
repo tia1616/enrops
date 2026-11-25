@@ -285,5 +285,30 @@ import { decisionRecordedLine, decisionProblem, localDateOf, DECISIONS } from '.
   eq('no logins', adoptionText(loginAdoption([])), 'No logins yet');
 }
 
+// --- emails they get (Jessica 2026-11-25) -----------------------------------
+{
+  const { emailsTheyGet } = await import('./partnerPortalLogic.js');
+  const rows = emailsTheyGet({
+    contacts: [{ contact_name: 'Kacy Cullen', contact_email: 'k@x' }, { contact_name: 'No Email' }, { contact_name: 'Stephani Hern', contact_email: 's@x' }],
+    siteEmails: ['library@x'],
+    logins: [
+      { role: 'host_admin', site_ids: null, last_signed_in_at: '2026-11-20', contact: { contact_name: 'Kacy Cullen' } },
+      { role: 'host_admin', site_ids: ['a'], last_signed_in_at: '2026-11-20', contact: { contact_name: 'Site Person' } },
+      { role: 'host_admin', site_ids: null, contact: { contact_name: 'Not Yet' } },
+    ],
+    rosterOn: true, sharesPaid: true,
+  });
+  const by = Object.fromEntries(rows.map((r) => [r.key, r]));
+  eq('rosters go to every contact with an email and the site email', by.roster.to, ['Kacy Cullen', 'Stephani Hern', 'library@x']);
+  eq('summary only to signed-in people', by.wrapup.to, ['Kacy Cullen', 'Site Person']);
+  eq('summary mentions money when shared', by.wrapup.when.includes('what families paid'), true);
+  eq('digest to every signed-in Admin, whatever their sites', by.digest.to, ['Kacy Cullen', 'Site Person']);
+  eq('sign-in links: everyone with a login', by.signin.to, ['Kacy Cullen', 'Site Person', 'Not Yet']);
+  const off = emailsTheyGet({ rosterOn: false });
+  eq('roster off says so', off[0].note, 'Off for your business (Automations).');
+  eq('nobody signed in says so', off[1].note.startsWith('No one yet'), true);
+  eq('no money words when not shared', off[1].when.includes('paid'), false);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

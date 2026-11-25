@@ -24,6 +24,7 @@ import PartnerRequirementsSection from "./PartnerRequirementsSection.jsx";
 import { DocumentsTable, InstructorGrid, RecordSummary, RegistrationLine, RequirementsList } from "../partner/ProviderRecord.jsx";
 import PartnerDecision from "../partner/PartnerDecision.jsx";
 import ClassesTable from "../partner/ClassesTable.jsx";
+import EmailsTheyGet from "../partner/EmailsTheyGet.jsx";
 import MarketingAsksSection from "../partner/MarketingAsksSection.jsx";
 import ProviderTodo from "./ProviderTodo.jsx";
 import { partnerTodo } from "../../lib/partnerTodo.js";
@@ -280,6 +281,8 @@ export default function PartnerRecord() {
           </RecordTabPanel>
 
           <RecordTabPanel id="emails" active={tab}>
+            {/* What goes out automatically, and to whom (Jessica 2026-11-25), above what has gone out. */}
+            <EmailsTheyGet key={`get:${partnerId}`} orgId={org?.id} partnerId={partnerId} />
             <EmailsSent key={`emails:${partnerId}`} partnerId={partnerId} orgName={orgName} viewer="provider" partnerName={partner.partner_name} onCount={setEmailCount} />
           </RecordTabPanel>
 
