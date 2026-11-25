@@ -27,6 +27,7 @@ const SOFT = "#f7f6f1";
 const RED = "#b42318";
 
 const PHONE_MAX = 560;
+const LAUNCHER_H = 48;
 const LIFT_VAR = "--ennie-lift";
 
 // Starters: each one is answered by a real guide section (connect-stripe,
@@ -253,7 +254,8 @@ export default function EnnieChat({ org, user }) {
     : {
       position: "fixed",
       right: 20,
-      bottom: `calc(92px + var(${LIFT_VAR}, 0px) + env(safe-area-inset-bottom, 0px))`,
+      // Just above the launcher: its 20px gap + its height + 12px.
+      bottom: `calc(${20 + LAUNCHER_H + 12}px + var(${LIFT_VAR}, 0px) + env(safe-area-inset-bottom, 0px))`,
       width: 380,
       height: `min(600px, calc(100vh - 140px - var(${LIFT_VAR}, 0px)))`,
       borderRadius: 14,
@@ -268,30 +270,34 @@ export default function EnnieChat({ org, user }) {
           ref={launcherRef}
           type="button"
           onClick={() => (open ? close() : setOpen(true))}
-          aria-label={open ? "Close Ask Ennie" : "Ask Ennie"}
           aria-expanded={open}
-          title="Ask Ennie"
           data-tour="ennie"
+          // A labelled pill, not a bare face: Jessica 11/25, a face alone did not
+          // read as a place to click. The words are the label.
           style={{
             position: "fixed",
             right: `calc(20px + env(safe-area-inset-right, 0px))`,
             bottom: `calc(20px + var(${LIFT_VAR}, 0px) + env(safe-area-inset-bottom, 0px))`,
-            width: phone ? 52 : 58,
-            height: phone ? 52 : 58,
-            borderRadius: "50%",
+            height: LAUNCHER_H,
+            borderRadius: LAUNCHER_H / 2,
             border: `2px solid ${open ? PURPLE : "#fff"}`,
             background: GOLD,
-            padding: 0,
+            color: PURPLE,
+            padding: "0 16px 0 4px",
             cursor: "pointer",
             boxShadow: "0 4px 14px rgba(28,0,79,0.25)",
             zIndex: 90,
             display: "flex",
             alignItems: "center",
-            justifyContent: "center",
-            overflow: "hidden",
+            gap: 8,
+            fontFamily: "inherit",
+            fontSize: 15,
+            fontWeight: 700,
+            whiteSpace: "nowrap",
           }}
         >
-          <Ennie state="idle" size={phone ? 48 : 54} framed={false} />
+          <Ennie state="idle" size={LAUNCHER_H - 10} />
+          <span>{open ? "Close" : "Ask Ennie"}</span>
         </button>
       )}
 
