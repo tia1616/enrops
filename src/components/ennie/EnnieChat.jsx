@@ -14,7 +14,6 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import ReactMarkdown from "react-markdown";
 import { supabase } from "../../lib/supabase";
 import Ennie from "../Ennie.jsx";
-import ElapsedTimer from "../ElapsedTimer.jsx";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";
@@ -121,20 +120,12 @@ export default function EnnieChat({ org, user }) {
   const [view, setView] = useState("chat"); // chat | handoff | sent
   const [note, setNote] = useState("");
   const [handoff, setHandoff] = useState({ status: "idle", error: "" });
-  const [elapsed, setElapsed] = useState(0);
   const listRef = useRef(null);
   const inputRef = useRef(null);
   const launcherRef = useRef(null);
 
   const asking = turns.some((t) => t.status === "asking");
   const askedAny = turns.some((t) => t.status === "done");
-
-  useEffect(() => {
-    if (!asking) return undefined;
-    setElapsed(0);
-    const id = setInterval(() => setElapsed((s) => s + 1), 1000);
-    return () => clearInterval(id);
-  }, [asking]);
 
   // Newest message in view: while Ennie is working, the bottom; once an answer
   // arrives, the top of that turn (the question), so a long answer is read from
@@ -324,7 +315,7 @@ export default function EnnieChat({ org, user }) {
             <Ennie state={asking ? "thinking" : "idle"} size={36} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, color: PURPLE, fontSize: 15 }}>Ask Ennie</div>
-              <div style={{ color: MUTED, fontSize: 12.5 }}>Answers from the Help guides</div>
+              <div style={{ color: MUTED, fontSize: 12.5 }}>AI assistant</div>
             </div>
             {turns.length > 0 && view === "chat" && (
               <button type="button" onClick={newChat} disabled={asking} style={{ ...linkBtn, fontWeight: 500, fontSize: 12.5, opacity: asking ? 0.5 : 1 }}>
@@ -347,7 +338,7 @@ export default function EnnieChat({ org, user }) {
                 {turns.length === 0 && (
                   <div>
                     <p style={{ margin: "2px 0 10px", lineHeight: 1.5 }}>
-                      Hi, I'm Ennie. Ask me how to do something in enrops and I'll answer from the Help guides.
+                      Hi, I'm Ennie. What can I help you with?
                     </p>
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 8 }}>
                       {STARTERS.map((s) => (
@@ -371,10 +362,14 @@ export default function EnnieChat({ org, user }) {
                     </div>
 
                     {t.status === "asking" && (
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, color: MUTED, fontSize: 13 }}>
-                        <span>Looking through the guides</span>
-                        <ElapsedTimer seconds={elapsed} />
-                        <span style={{ color: MUTED }}>(usually under 10 seconds)</span>
+                      // The chat norm: three moving dots in Ennie's bubble (Jessica
+                      // 11/25). The ElapsedTimer rule is for long AI jobs, not a
+                      // few-second chat reply.
+                      <div role="status" aria-label="Ennie is typing" style={{ alignSelf: "flex-start", background: "#fff", border: `1px solid ${RULE}`, borderRadius: 12, padding: "11px 14px", display: "flex", gap: 5 }}>
+                        <style>{"@keyframes ennieDot{0%,60%,100%{transform:translateY(0);opacity:.35}30%{transform:translateY(-4px);opacity:1}}"}</style>
+                        {[0, 1, 2].map((i) => (
+                          <span key={i} aria-hidden="true" style={{ width: 7, height: 7, borderRadius: "50%", background: PURPLE, animation: `ennieDot 1.2s ${i * 0.15}s infinite ease-in-out` }} />
+                        ))}
                       </div>
                     )}
 
