@@ -2,12 +2,12 @@
 // that are genuinely UNCOVERED: a sub declined and no one else is filling in for
 // that class+date. Silent when everything's covered.
 //
-// Data comes from ONE source of truth — the get_sub_coverage(p_org) RPC — shared
-// with the homescreen (AdminOverview). The RPC only returns slots whose parent
-// class is still alive (camp not cancelled/withdrawn, program not cancelled,
-// parent not deleted), so a cancelled/orphaned class can't leave a stale
-// "needs cover" alarm here. It splits coverage the same way the homescreen does,
-// in three states (migration 20260923b):
+// Data comes from ONE source of truth — the get_sub_coverage(p_org) RPC. (The
+// homescreen that also read it was removed 2026-11-25; this banner is now the only
+// place it shows.) The RPC only returns slots whose parent class is still alive
+// (camp not cancelled/withdrawn, program not cancelled, parent not deleted), so a
+// cancelled/orphaned class can't leave a stale "needs cover" alarm here. It splits
+// coverage in three states (migration 20260923b):
 //   'uncovered' - somebody said no and no offer is out   -> shown here
 //   'at_risk'   - somebody said no and an offer IS out   -> shown here
 //   'lead_out'  - the instructor marked the date off in their availability
