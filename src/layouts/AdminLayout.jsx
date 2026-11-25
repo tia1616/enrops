@@ -10,6 +10,7 @@ import PwaInstallButton from "../components/pwa/PwaInstallButton.jsx";
 import EnropsWordmark from "../components/EnropsWordmark.jsx";
 import FeedbackWidget from "../components/feedback/FeedbackWidget.jsx";
 import HelpTour from "../components/HelpTour.jsx";
+import EnnieChat from "../components/ennie/EnnieChat.jsx";
 import AnnouncementBanner from "../components/feedback/AnnouncementBanner.jsx";
 import { getPermissions } from "../lib/permissions";
 import { canManageInstructors } from "../lib/entitlements.js";
@@ -1154,6 +1155,9 @@ export default function AdminLayout() {
           </Suspense>
           {/* Once per person: where the "?", Help and Share feedback are. */}
           <HelpTour userId={user?.id} pathname={location.pathname} />
+          {/* "Ask Ennie", bottom-right on every admin page: answers from the
+              Help guides, and hands off to a person (provider onboarding chunk 3). */}
+          <EnnieChat org={org} user={user} />
           </>
           )}
 

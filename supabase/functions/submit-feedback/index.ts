@@ -65,9 +65,46 @@ serve(async (req) => {
     const page_path = body.page_path ? String(body.page_path).slice(0, 1000) : null;
     const user_agent = body.user_agent ? String(body.user_agent).slice(0, 1000) : null;
 
+    // Ennie's "Send to the enrops team" (ennie-help, onboarding chunk 3) reuses
+    // this path, so a help request lands in the same table and inbox as feedback.
+    // It sends only the conversation id; the chat itself is read back from
+    // ennie_questions under the CALLER's JWT (own rows only, RLS), never taken
+    // from the body, so what reaches the inbox is what Ennie actually said.
+    const ennieConversationId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+        .test(String(body.ennie_conversation_id ?? ''))
+      ? String(body.ennie_conversation_id)
+      : null;
+
     if (!organization_id) return json({ error: 'Missing organization' }, 400);
-    if (!message) return json({ error: 'Please enter some feedback' }, 400);
+    if (!message && !ennieConversationId) return json({ error: 'Please enter some feedback' }, 400);
     if (message.length > 5000) return json({ error: 'Feedback is too long (5000 char max)' }, 400);
+
+    let transcript = '';
+    if (ennieConversationId) {
+      const { data: turns, error: turnsErr } = await supabase
+        .from('ennie_questions')
+        .select('question, answer, answered, sources')
+        .eq('conversation_id', ennieConversationId)
+        .eq('organization_id', organization_id)
+        .eq('auth_user_id', user.id)
+        .order('created_at', { ascending: true })
+        .limit(20);
+      if (turnsErr) {
+        // The person still reaches Jessica; she sees the chat was lost.
+        console.error('submit-feedback: Ennie chat load failed:', turnsErr.message);
+        transcript = '(The Ennie chat could not be attached.)';
+      } else {
+        transcript = (turns ?? [])
+          .map((t: { question: string; answer: string | null; answered: boolean; sources: string[] | null }) =>
+            `Q: ${t.question}\nEnnie${t.answered ? '' : ' (no answer in the guides)'}: ${t.answer ?? ''}` +
+            (t.answered && t.sources?.length ? `\n   [from ${t.sources.join(', ')}]` : ''))
+          .join('\n\n');
+      }
+    }
+    const isHelpRequest = ennieConversationId !== null;
+    const storedMessage = isHelpRequest
+      ? `${message || '(no note)'}\n\n--- Ennie chat ---\n${transcript || '(no questions asked yet)'}`
+      : message;
 
     // Insert under the caller's JWT — RLS enforces org membership + uid match.
     // No RETURNING/.select() here: the feedback SELECT policy is platform-admin
@@ -79,7 +116,7 @@ serve(async (req) => {
         organization_id,
         auth_user_id: user.id,
         user_email: user.email ?? null,
-        message,
+        message: storedMessage,
         page_url,
         page_path,
         user_agent,
@@ -130,14 +167,14 @@ serve(async (req) => {
       const where = page_path ?? page_url ?? 'unknown';
       const html = `
         <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#1a1a1a;line-height:1.5">
-          <h2 style="color:#1C004F;margin:0 0 12px">New Enrops feedback</h2>
+          <h2 style="color:#1C004F;margin:0 0 12px">${isHelpRequest ? 'Help request from Ennie chat' : 'New Enrops feedback'}</h2>
           <p style="margin:0 0 4px"><strong>From:</strong> ${esc(user.email ?? 'unknown')}</p>
           <p style="margin:0 0 4px"><strong>Provider:</strong> ${esc(orgName)}</p>
           <p style="margin:0 0 12px"><strong>Page:</strong> ${esc(where)}</p>
-          <div style="background:#F2F0FF;border:1px solid #e2dfd5;border-radius:10px;padding:14px 16px;white-space:pre-wrap">${esc(message)}</div>
+          <div style="background:#F2F0FF;border:1px solid #e2dfd5;border-radius:10px;padding:14px 16px;white-space:pre-wrap">${esc(storedMessage)}</div>
           <p style="color:#6b6b6b;font-size:12px;margin-top:16px">Reply to this email to respond directly to ${esc(user.email ?? 'the sender')}.</p>
         </div>`;
-      const text = `New Enrops feedback\nFrom: ${user.email ?? 'unknown'}\nProvider: ${orgName}\nPage: ${where}\n\n${message}`;
+      const text = `${isHelpRequest ? 'Help request from Ennie chat' : 'New Enrops feedback'}\nFrom: ${user.email ?? 'unknown'}\nProvider: ${orgName}\nPage: ${where}\n\n${storedMessage}`;
       const r = await fetch('https://api.resend.com/emails', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${RESEND_API_KEY}` },
@@ -147,7 +184,7 @@ serve(async (req) => {
           // as the body promises.
           to: NOTIFY_EMAIL,
           reply_to: user.email ?? undefined,
-          subject: `[Enrops feedback] ${orgName} — ${user.email ?? 'user'}`,
+          subject: `${isHelpRequest ? '[Enrops help request]' : '[Enrops feedback]'} ${orgName} — ${user.email ?? 'user'}`,
           html,
           text,
         }),
