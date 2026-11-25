@@ -29,21 +29,28 @@ import MarketingAsksSection from "../partner/MarketingAsksSection.jsx";
 import ProviderTodo from "./ProviderTodo.jsx";
 import { partnerTodo } from "../../lib/partnerTodo.js";
 import EmailsSent from "../partner/EmailsSent.jsx";
-import { RecordTabRow, RecordTabPanel, RecordSection, useRecordTab, alertFor } from "../partner/RecordTabs.jsx";
+import { RecordTabRow, RecordTabPanel, RecordSection, SectionJumps, useRecordTab, alertFor } from "../partner/RecordTabs.jsx";
 import { decisionTag, worstAlert } from "../../lib/recordTabs.js";
 
 // After To do, the partner's five tabs in the partner's order, then the two that only
 // the provider has (what this partner requires, and its logins + activity).
 // "todo" first: on the provider's own page, what's left to do comes before
 // the record itself (2026-11-20).
-// Four tabs (Jessica 2026-11-25: "too many tabs... can be grouped better").
+// Grouped tabs (Jessica 2026-11-25: "too many tabs... can be grouped better").
 // The old tabs are sections now; their #names (and To do's jump buttons) still
 // open the right tab and scroll to the section.
-const PROVIDER_TABS = ["todo", "classes", "safety", "people"];
+// To do is a box above the tabs (Jessica 2026-11-25), so three tabs; an old
+// #todo link opens Classes (the box is on every tab).
+const PROVIDER_TABS = ["classes", "safety", "people"];
 const PROVIDER_TAB_ALIASES = {
+  todo: "classes", marketing: "classes",
   documents: "safety", instructors: "safety", decision: "safety", requirements: "safety",
   logins: "people", emails: "people",
 };
+const SAFETY_SECTIONS = [
+  { id: "documents", label: "Documents" }, { id: "instructors", label: "Instructors" },
+  { id: "requirements", label: "What they require" }, { id: "decision", label: "Decision" },
+];
 import { todayIso } from "../partner/partnerShared.jsx";
 import { usePermissions } from "../../lib/permissions.js";
 import { listPartnerInstructors, listPartnerRequirements, getRequirementsControl } from "../../lib/partnerPortal.js";
@@ -231,12 +238,22 @@ export default function PartnerRecord() {
           <RegistrationLine orgId={org?.id} />
           <RecordSummary s={s} />
 
+          {/* To do: a box above the tabs, not a tab (Jessica 2026-11-25). The
+              three most urgent (red first), then "Show all". */}
+          <ProviderTodo
+            items={todo} partnerName={partner.partner_name} canManage={canManage}
+            requirementsUnknown={requirements === null || requirements?.length === 0}
+            onUpload={(key) => setForm({ editing: null, kind: DOC_FOR[key] })}
+            onRenew={(doc) => setForm({ editing: doc, kind: null })}
+            instructorPortalUrl={`${window.location.origin}/${org?.slug}/instructor`}
+            onTab={setTab} limit={3}
+          />
+
           {/* Same tabs as the partner's page, plus the provider-only two
               (RecordTabs.jsx). */}
           <RecordTabRow
             active={tab} onChange={setTab}
             tabs={[
-              { id: "todo", label: "To do", count: todo.length || null, alert: todo.some((t) => t.tone === "bad") ? "bad" : todo.length ? "attention" : null },
               { id: "classes", label: "Classes", count: classCount },
               {
                 // Documents, instructors, what they require, their decision: one dot for the worst.
@@ -251,16 +268,6 @@ export default function PartnerRecord() {
             ]}
           />
 
-          <RecordTabPanel id="todo" active={tab}>
-            <ProviderTodo
-              items={todo} partnerName={partner.partner_name} canManage={canManage}
-              requirementsUnknown={requirements === null || requirements?.length === 0}
-              onUpload={(key) => setForm({ editing: null, kind: DOC_FOR[key] })}
-              onRenew={(doc) => setForm({ editing: doc, kind: null })}
-              instructorPortalUrl={`${window.location.origin}/${org?.slug}/instructor`}
-              onTab={setTab}
-            />
-          </RecordTabPanel>
 
           <RecordTabPanel id="classes" active={tab}>
             <ClassesTable
@@ -268,11 +275,18 @@ export default function PartnerRecord() {
               viewer="provider" partnerName={partner.partner_name} canEdit={canManage} onCount={setClassCount}
               onMediaGaps={setMediaGaps}
             />
+            {/* Flyers and graphics they ask for, and their logo, next to the
+                classes the flyers go on (Jessica 2026-11-25: "how do they know
+                where flyers are?"); was under What they require. */}
+            <RecordSection id="marketing">
+              <MarketingAsksSection key={`marketing:${partnerId}`} partner={partner} viewer="provider" orgName={orgName} />
+            </RecordSection>
           </RecordTabPanel>
 
           {/* Safety record (2026-11-25 regroup): what were the Documents,
               Instructors, What they require and Decision tabs, top to bottom. */}
           <RecordTabPanel id="safety" active={tab}>
+            <SectionJumps sections={SAFETY_SECTIONS} onJump={setTab} />
             <RecordSection id="documents">
               <RequirementsList requirements={requirements} viewer="provider" partnerName={partner.partner_name} />
               <DocumentsTable
@@ -299,7 +313,6 @@ export default function PartnerRecord() {
                 key={`requirements:${partnerId}`} partner={partner} rows={requirements} canManage={canManage}
                 onChange={setRequirements} control={reqControl} onSaved={loadReqControl}
               />
-              <MarketingAsksSection key={`marketing:${partnerId}`} partner={partner} viewer="provider" orgName={orgName} />
             </RecordSection>
             <RecordSection id="decision">
               <PartnerDecision key={`decision:${partnerId}`} partnerId={partnerId} partnerName={partner.partner_name} onLatest={setDecision} />

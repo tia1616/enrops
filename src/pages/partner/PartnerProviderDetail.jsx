@@ -30,14 +30,19 @@ import PartnerDecision from "./PartnerDecision.jsx";
 import ClassesTable from "./ClassesTable.jsx";
 import MarketingAsksSection from "./MarketingAsksSection.jsx";
 import EmailsSent from "./EmailsSent.jsx";
-import { RecordTabRow, RecordTabPanel, RecordSection, useRecordTab, alertFor } from "./RecordTabs.jsx";
+import { RecordTabRow, RecordTabPanel, RecordSection, SectionJumps, useRecordTab, alertFor } from "./RecordTabs.jsx";
 import { decisionTag, worstAlert } from "../../lib/recordTabs.js";
 
 // Three tabs (Jessica 2026-11-25: enrollment first, then "too many tabs").
 // Classes opens by default; the old tabs are sections of Safety record, and
 // their #names (in emails already sent) still open it at that section.
 const PARTNER_TABS = ["classes", "safety", "emails"];
-const PARTNER_TAB_ALIASES = { documents: "safety", instructors: "safety", requirements: "safety", decision: "safety" };
+const PARTNER_TAB_ALIASES = { documents: "safety", instructors: "safety", requirements: "safety", decision: "safety", marketing: "classes" };
+// The jump row at the top of Safety record (Jessica 2026-11-25: "and requirements?").
+const SAFETY_SECTIONS = [
+  { id: "documents", label: "Documents" }, { id: "instructors", label: "Instructors" },
+  { id: "requirements", label: "Requirements" }, { id: "decision", label: "Decision" },
+];
 
 export default function PartnerProviderDetail() {
   const { partnerId } = useParams();
@@ -166,18 +171,28 @@ export default function PartnerProviderDetail() {
             <ClassesTable key={`classes:${m.partner_id}:${marketingVersion}`} partnerId={m.partner_id}
               // Only logins that can change the asks are invited to.
               onAskMarketing={reqControl?.can_edit ? () => {
-                setTab("safety");
-                // Two frames: the tab un-hides first (as RecordTabs.scrollToSection).
-                requestAnimationFrame(() => requestAnimationFrame(() =>
-                  document.getElementById("marketing-asks")?.scrollIntoView({ behavior: "smooth", block: "start" })));
+                // The asks are on this tab now, below the classes.
+                document.getElementById("marketing-asks")?.scrollIntoView({ behavior: "smooth", block: "start" });
               } : undefined} orgId={m.organization_id} orgName={orgName} onCount={setClassCount}
               // For "Share sign-up link" (Jessica 2026-11-25): the provider's public page, tagged with this partner.
               orgSlug={m.organization_slug} sharerName={m.partner_name} />
+            {/* Flyers and graphics they want, and their logo, with the classes
+                and flyer board (Jessica 2026-11-25: "how do they know where
+                flyers are?"); was under Requirements. Same every-site admin edits. */}
+            <RecordSection id="marketing">
+              <MarketingAsksSection
+                key={`marketing:${m.partner_id}`}
+                partner={{ id: m.partner_id, partner_name: m.partner_name }}
+                viewer="partner" orgName={orgName} canEdit={!!reqControl?.can_edit}
+                onSaved={() => setMarketingVersion((v) => v + 1)}
+              />
+            </RecordSection>
           </RecordTabPanel>
 
           {/* Safety record (2026-11-25 regroup): what were the Documents,
               Instructors, Requirements and Decision tabs, top to bottom. */}
           <RecordTabPanel id="safety" active={tab}>
+            <SectionJumps sections={SAFETY_SECTIONS} onJump={setTab} />
             <RecordSection id="documents">
               <RequirementsList requirements={requirements} />
               <DocumentsTable s={s} orgName={orgName} today={today} onOpen={open} />
@@ -196,13 +211,6 @@ export default function PartnerProviderDetail() {
                 rows={requirements} canManage onChange={setRequirements}
                 viewer="partner" orgName={orgName} control={reqControl}
                 onSaved={() => loadReqControl(m.partner_id)}
-              />
-              {/* Marketing asks + logo (20261123r): the same every-site admin edits. */}
-              <MarketingAsksSection
-                key={`marketing:${m.partner_id}`}
-                partner={{ id: m.partner_id, partner_name: m.partner_name }}
-                viewer="partner" orgName={orgName} canEdit={!!reqControl?.can_edit}
-                onSaved={() => setMarketingVersion((v) => v + 1)}
               />
             </RecordSection>
             <RecordSection id="decision">

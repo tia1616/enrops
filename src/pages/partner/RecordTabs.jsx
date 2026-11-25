@@ -72,6 +72,25 @@ export function RecordSection({ id, children }) {
 }
 
 /**
+ * "Jump to: Documents · Instructors · Requirements · Decision" at the top of
+ * a grouped tab (Jessica 2026-11-25), so its later sections are findable.
+ * `onJump(id)` is the page's tab chooser (an alias id scrolls to its section).
+ */
+export function SectionJumps({ sections, onJump }) {
+  return (
+    <nav aria-label="Jump to a section" className="mt-4 flex flex-wrap items-center gap-x-1 gap-y-1 text-sm">
+      <span className="text-j2s-ink/55">Jump to:</span>
+      {sections.map((s, i) => (
+        <span key={s.id}>
+          <button type="button" onClick={() => onJump(s.id)} className="font-semibold text-j2s-purple hover:underline">{s.label}</button>
+          {i < sections.length - 1 && <span aria-hidden="true" className="px-1 text-j2s-ink/30">·</span>}
+        </span>
+      ))}
+    </nav>
+  );
+}
+
+/**
  * The tab row. `tabs`: [{ id, label, count?, tag?, alert? }] (tag = a short
  * word such as "Accepted") where alert is
  * 'bad' (red dot: something missing or expired) or 'attention' (amber dot:

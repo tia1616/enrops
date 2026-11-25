@@ -345,6 +345,9 @@ export default function PartnerLoginsSection({ org, partner, canManage, onMessag
 function PartnerActivity({ org, partner, grants }) {
   const [rows, setRows] = useState(null);
   const [failed, setFailed] = useState(false);
+  // Collapsed to its latest line (Jessica 2026-11-25: "why do I need to know
+  // what Happy Valley has opened? that list is just gonna grow super long").
+  const [open, setOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -387,9 +390,28 @@ function PartnerActivity({ org, partner, grants }) {
     return g ? (g.contact?.contact_name || g.contact?.contact_email) : "Someone who no longer has access";
   };
 
+  if (!failed && rows && rows.length > 0 && !open) {
+    const ev = rows[0];
+    return (
+      <div style={{ marginTop: 18, fontSize: 13, color: MUTED }}>
+        Last activity: <span style={{ color: INK, fontWeight: 600 }}>{who(ev)}</span>{" "}
+        {ev.action === "document_opened" ? "opened a document"
+          : ev.action === "roster_opened" ? "opened a roster"
+            : ev.action.startsWith("partner_requirement") ? "changed what they require"
+              : "viewed your records"}
+        {" · "}{new Date(ev.occurred_at).toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+        {" · "}
+        <button type="button" style={linkBtn} onClick={() => setOpen(true)}>See recent activity</button>
+      </div>
+    );
+  }
+
   return (
     <div style={{ marginTop: 18 }}>
-      <div style={{ fontSize: 14, fontWeight: 600, color: INK, marginBottom: 6 }}>What they've opened and changed</div>
+      <div style={{ fontSize: 14, fontWeight: 600, color: INK, marginBottom: 6 }}>
+        What they've opened and changed
+        {open && <button type="button" style={{ ...linkBtn, marginLeft: 10, fontWeight: 600 }} onClick={() => setOpen(false)}>Hide</button>}
+      </div>
       <div style={{ background: PANEL, border: `1px solid ${RULE}`, borderRadius: 12, padding: "6px 20px" }}>
         {failed ? (
           <div style={{ padding: "12px 0", color: "#991b1b", fontSize: 13 }}>Couldn't load partner activity.</div>
