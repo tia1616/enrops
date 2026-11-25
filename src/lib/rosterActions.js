@@ -58,8 +58,13 @@ export function refundConfirmSentence({ studentName, classLabel, mode, amountCen
 
 /**
  * The move panel's confirm sentence. No money ever moves on a move (Jessica,
- * 2026-11-25), so the money clause says what they PAID against what the new class
- * COSTS, only when the two differ - a difference is the operator's to settle.
+ * 2026-11-25), so the money clause compares the REGISTRATION's price with the new
+ * class's, only when the two differ - a difference is the operator's to settle.
+ *
+ * "Their registration is", never "they paid": amount_cents is the price of the
+ * registration, and a confirmed one can be unpaid (an imported roster), part-way
+ * through a payment plan, or one leg of a year-long bundle. "Paid" would be false
+ * for all three.
  */
 export function moveConfirmSentence({ studentName, fromLabel, toLabel, paidCents, toPriceCents }) {
   const who = String(studentName ?? "").trim() || "this child";
@@ -67,7 +72,7 @@ export function moveConfirmSentence({ studentName, fromLabel, toLabel, paidCents
   const paid = Number.isFinite(Number(paidCents)) && paidCents != null ? Number(paidCents) : null;
   const price = Number.isFinite(Number(toPriceCents)) && toPriceCents != null ? Number(toPriceCents) : null;
   if (paid != null && price != null && paid !== price) {
-    return `${base} No money moves: they paid ${fmt(paid)} and the new class is ${fmt(price)}.`;
+    return `${base} No money moves: their registration is ${fmt(paid)} and the new class is ${fmt(price)}.`;
   }
   return `${base} No money moves.`;
 }

@@ -28,7 +28,8 @@ import { serve } from 'https://deno.land/std@0.177.0/http/server.ts';
 import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0';
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 import { describeProgram } from '../_shared/classSummary.ts';
-import { isCampProgram } from '../_shared/campProgram.ts';
+import { venueLabel } from '../_shared/roomLabel.ts';
+import { isCampProgram, programScheduleLabel } from '../_shared/campProgram.ts';
 import { esc } from '../_shared/escapeHtml.ts';
 import {
   groupRecipientsByAddress,
@@ -65,7 +66,7 @@ function adminClient() {
 // Every column a summary, a label or the guards below read. One list, so options
 // and move describe a class from the same fields.
 const PROGRAM_COLUMNS =
-  'id, organization_id, curriculum, status, term, day_of_week, class_days, start_time, end_time, ' +
+  'id, organization_id, curriculum, status, term, day_of_week, class_days, start_time, end_time, end_date, ' +
   'first_session_date, max_capacity, price_cents, room, program_locations ( name, room_number )';
 
 // The machine keys move_registration raises, and what an operator is told for each.
@@ -110,6 +111,19 @@ function classLabel(p: Program): string {
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
+}
+
+function fmtShortDate(iso: string): string {
+  const d = new Date(`${iso}T12:00:00Z`);
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+}
+
+// describeProgram reads day_of_week, which on a CAMP holds only its first day, so
+// a Mon-Thu camp would be described as "Monday". Camps get their real day span.
+function summaryFor(p: Program): string {
+  if (!isCampProgram(p)) return describeProgram(p);
+  const where = venueLabel(p?.program_locations?.name, p?.room, p?.program_locations?.room_number);
+  return [where, programScheduleLabel(p)].filter(Boolean).join(' · ');
 }
 
 function fmtDate(iso: string | null | undefined): string {
@@ -254,7 +268,7 @@ serve(async (req: Request) => {
             id: p.id,
             name: className(p),
             label: classLabel(p),
-            summary: describeProgram(p),
+            summary: summaryFor(p),
             site: siteName(p),
             term: p.term ?? null,
             day_of_week: p.day_of_week ?? null,
@@ -293,7 +307,7 @@ serve(async (req: Request) => {
           id: source.id,
           name: className(source),
           label: classLabel(source),
-          summary: describeProgram(source),
+          summary: summaryFor(source),
           term: source.term ?? null,
           price_cents: source.price_cents ?? null,
         },
@@ -339,8 +353,11 @@ serve(async (req: Request) => {
       }, 409);
     }
 
-    const callerName = (member.name ?? '').trim() || member.email || auth.user.email || 'an admin';
-    const note = `Moved ${todayIso()} by ${callerName}: ${classLabel(source)} -> ${classLabel(target)}. No money moved.`;
+    // THE INSTRUCTOR READS THIS. registrations.notes is shown on the instructor
+    // portal's roster ("Note: ..."), so it says only what helps whoever teaches the
+    // new class - where the child came from and when. Who moved them and the money
+    // are recorded in the enrollment event and the send log, not here.
+    const note = `Moved here from ${classLabel(source)} on ${fmtShortDate(todayIso())}.`;
 
     const { error: moveErr } = await supabase.rpc('move_registration', {
       p_registration_id: reg.id,
@@ -428,7 +445,7 @@ async function emailFamily(
   if (upcoming.length) nextDate = fmtDate(upcoming[0]);
 
   const brand = await loadOrgBrand(supabase, reg.organization_id);
-  const newWhere = describeProgram(target);
+  const newWhere = summaryFor(target);
   const oldName = className(source);
   const newName = className(target);
   const subject = `{{student_first_name}}'s class has changed`;
