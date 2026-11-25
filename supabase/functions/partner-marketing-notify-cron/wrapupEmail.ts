@@ -3,13 +3,14 @@
 // (partner_class_wrapups_due reads AS that login), so this file only says it.
 // NO EM DASHES.
 //
-//   to a partner login: "Super Mario Game Makers has finished: the summary is ready"
-//   the provider's copy: "Copy: Happy Valley Parks and Rec got the end-of-class summary"
+//   to one person at a partner: "Class summary ready: Super Mario Game Makers"
+//   the provider's copy: "Copy: class summary sent to Happy Valley Parks and Rec",
+//   with "Sent to ..." under each class
 
 import { esc } from "../_shared/escapeHtml.ts";
 
 export interface WrapupRow {
-  access_id: string;
+  recipient_key: string; // one person at one partner: user:<auth id>:<partner id>
   organization_id: string;
   provider_name: string;
   partner_id: string;
@@ -75,14 +76,22 @@ export function classLines(r: WrapupRow): string[] {
   return lines;
 }
 
-function page(brand: Brand, heading: string, intro: string, rows: WrapupRow[], foot: string, button: string, link: string): string {
+/** A copy row: what was sent, plus who it went to (provider copy only). */
+export type CopyClass = WrapupRow & { told?: string[] };
+
+/** The lines for one class, with "Sent to ..." on a provider copy. */
+function linesFor(r: CopyClass): string[] {
+  return r.told?.length ? [...classLines(r), `Sent to ${namesList(r.told)}`] : classLines(r);
+}
+
+function page(brand: Brand, heading: string, intro: string, rows: CopyClass[], foot: string, button: string, link: string): string {
   const logo = brand.logo_url
     ? `<img src="${esc(brand.logo_url)}" alt="${esc(brand.org_name)}" style="max-height:48px;display:block;margin:0 auto 20px;" />`
     : "";
   const blocks = rows.map((r) =>
     `<div style="padding:10px 0;border-bottom:1px solid #eee;">` +
     `<div style="font-size:15px;font-weight:600;color:#1a1a1a;">${esc(r.title || "A class")}${r.site ? ` <span style="font-weight:400;color:#6b6b6b;">at ${esc(r.site)}</span>` : ""}</div>` +
-    classLines(r).map((l) => `<div style="font-size:14px;color:#1a1a1a;line-height:1.5;">${esc(l)}</div>`).join("") +
+    linesFor(r).map((l) => `<div style="font-size:14px;color:#1a1a1a;line-height:1.5;">${esc(l)}</div>`).join("") +
     `</div>`).join("");
   return `<!doctype html><html><body style="margin:0;background:${esc(brand.page_bg_color)};padding:24px;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
   <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:12px;padding:28px;">
@@ -95,9 +104,9 @@ function page(brand: Brand, heading: string, intro: string, rows: WrapupRow[], f
   </div></body></html>`;
 }
 
-function text(heading: string, intro: string, rows: WrapupRow[], foot: string, button: string, link: string): string {
+function text(heading: string, intro: string, rows: CopyClass[], foot: string, button: string, link: string): string {
   return [heading, "", intro, "",
-    ...rows.flatMap((r) => [`${r.title || "A class"}${r.site ? ` at ${r.site}` : ""}`, ...classLines(r).map((l) => `  ${l}`), ""]),
+    ...rows.flatMap((r) => [`${r.title || "A class"}${r.site ? ` at ${r.site}` : ""}`, ...linesFor(r).map((l) => `  ${l}`), ""]),
     `${button}: ${link}`, "", foot, ""].join("\n");
 }
 
@@ -106,9 +115,10 @@ const PARTNER_FOOT = "Each class stays in your portal for 60 days after it ends,
 /** To one partner login: the classes at its sites that just finished. */
 export function renderWrapup(brand: Brand, rows: WrapupRow[], siteUrl: string) {
   const provider = rows[0].provider_name || "Your provider";
+  // Titles often contain a colon already, so the subject leads with the news.
   const subject = rows.length === 1
-    ? `${rows[0].title || "A class"} has finished: the summary is ready`
-    : `${rows.length} classes have finished: the summaries are ready`;
+    ? `Class summary ready: ${rows[0].title || "your class"}`
+    : `Class summaries ready: ${rows.length} classes finished`;
   const intro = rows.length === 1
     ? `${provider} finished a class at your site. Here is how it went:`
     : `${provider} finished ${rows.length} classes at your sites. Here is how they went:`;
@@ -128,12 +138,12 @@ export function namesList(names: string[]): string {
 }
 
 /** The provider's copy: who at the partner was told, and what they saw. */
-export function renderWrapupCopy(brand: Brand, rows: WrapupRow[], toldNames: string[], siteUrl: string) {
+export function renderWrapupCopy(brand: Brand, rows: CopyClass[], siteUrl: string) {
   const partner = rows[0].partner_name || "Your partner";
   const subject = rows.length === 1
-    ? `Copy: ${partner} got the summary for ${rows[0].title || "a class"}`
-    : `Copy: ${partner} got the summaries for ${rows.length} classes`;
-  const intro = `enrops emailed ${namesList(toldNames)} at ${partner} this end-of-class summary, two days after the last session. Here is what they saw:`;
+    ? `Copy: class summary sent to ${partner}`
+    : `Copy: ${rows.length} class summaries sent to ${partner}`;
+  const intro = `enrops emailed ${partner} this end-of-class summary after the last session. Here is what they saw, and who got each one:`;
   const foot = "Partners get this for every class that finishes at their sites. They see what families paid only if you turned that on for them, on the partner's Classes tab.";
   const link = `${siteUrl}/admin/partner-documents/${rows[0].partner_id}#classes`;
   return {

@@ -6,7 +6,7 @@ import { sessionsLine, classLines, renderWrapup, renderWrapupCopy, namesList, ty
 const brand = { org_name: "enrops", logo_url: null, primary_color: "#5847C9", page_bg_color: "#f5f3ee" };
 const held = (n: number) => Array.from({ length: n }, (_, i) => ({ date: `2026-09-${String(10 + i).padStart(2, "0")}`, status: "held" }));
 const row: WrapupRow = {
-  access_id: "a1", organization_id: "o", provider_name: "Journey to STEAM", partner_id: "p", partner_name: "Happy Valley Parks and Rec",
+  recipient_key: "user:u1:p", organization_id: "o", provider_name: "Journey to STEAM", partner_id: "p", partner_name: "Happy Valley Parks and Rec",
   to_email: "k@x.org", to_name: "Kacy Cullen", class_kind: "class", class_id: "c1", title: "Super Mario Game Makers", site: "Happy Valley Library",
   first_date: "2026-09-15", last_date: "2026-11-03", count_source: "enrops", enrolled: 6,
   summary: { sessions: held(8), money: { children: 6, paid_cents: 168600 } },
@@ -29,17 +29,27 @@ Deno.test("class lines: money only when the summary carries it", () => {
 
 Deno.test("partner email", () => {
   const one = renderWrapup(brand, [row], "https://enrops.com");
-  assertEquals(one.subject, "Super Mario Game Makers has finished: the summary is ready");
+  assertEquals(one.subject, "Class summary ready: Super Mario Game Makers");
+  // A title with its own colon never makes a double-colon subject.
+  assertEquals(renderWrapup(brand, [{ ...row, title: "Super Mario Game Makers: Coding & Design" }], "x").subject,
+    "Class summary ready: Super Mario Game Makers: Coding & Design");
   assert(one.text.includes("https://enrops.com/partner/p#classes"));
   const two = renderWrapup(brand, [row, { ...row, class_id: "c2", title: "LEGO" }], "https://enrops.com");
-  assertEquals(two.subject, "2 classes have finished: the summaries are ready");
+  assertEquals(two.subject, "Class summaries ready: 2 classes finished");
+  assert(!one.text.includes("Sent to"), "a partner never sees who else was told");
   assert(!/[—–]/.test(one.subject + one.text + one.html + two.text), "no em or en dashes");
 });
 
 Deno.test("provider copy names who was told", () => {
-  const c = renderWrapupCopy(brand, [row], ["Kacy Cullen", "Stephani Hern"], "https://enrops.com");
-  assertEquals(c.subject, "Copy: Happy Valley Parks and Rec got the summary for Super Mario Game Makers");
-  assert(c.text.includes("enrops emailed Kacy Cullen and Stephani Hern at Happy Valley Parks and Rec"));
+  const c = renderWrapupCopy(brand, [
+    { ...row, told: ["Kacy Cullen", "Stephani Hern"] },
+    { ...row, class_id: "c2", title: "LEGO", site: "Annex", told: ["Stephani Hern"] },
+  ], "https://enrops.com");
+  assertEquals(c.subject, "Copy: 2 class summaries sent to Happy Valley Parks and Rec");
+  // Who got WHICH class, not one list for all (a site-limited login gets fewer).
+  assert(c.text.includes("Super Mario Game Makers at Happy Valley Library") && c.text.includes("Sent to Kacy Cullen and Stephani Hern"));
+  assert(c.text.includes("LEGO at Annex") && c.text.includes("  Sent to Stephani Hern"));
+  assertEquals(renderWrapupCopy(brand, [{ ...row, told: ["Kacy Cullen"] }], "x").subject, "Copy: class summary sent to Happy Valley Parks and Rec");
   assert(c.text.includes("/admin/partner-documents/p#classes"));
   assertEquals(namesList(["A", "B", "C"]), "A, B and C");
   assert(!/[—–]/.test(c.subject + c.text + c.html));
@@ -53,6 +63,14 @@ Deno.test("names are escaped in html", () => {
 Deno.test("migration: read as the login, signed-in logins only, 2 to 9 days, working hours", async () => {
   const sql = await Deno.readTextFile(new URL("../../migrations/20261125w_partner_class_wrapup.sql", import.meta.url));
   assert(sql.includes("where pa.auth_user_id is not null"));
+  // One email per PERSON per partner, however many contact rows share their email.
+  assert(sql.includes("select distinct on (pa.partner_id, pa.auth_user_id)"));
+  assert(sql.includes("v_key := 'user:' || a.auth_user_id::text || ':' || a.partner_id::text;"));
+  // A bad timezone is inside the per-person exception block.
+  assert(sql.indexOf("begin\n      -- Working hours") > 0 && sql.indexOf("begin\n      -- Working hours") < sql.indexOf("exception when others"));
+  // Provider copies come from the ledger.
+  assert(sql.includes("create or replace function public.partner_class_wrapup_copies_due()"));
+  assert(sql.includes("revoke all on function public.partner_class_wrapup_copies_due() from public, anon, authenticated;"));
   assert(sql.includes("pc.last_date between v_today - 9 and v_today - 2"));
   assert(sql.includes("not between 9 and 17"));
   assert(sql.includes("public.partner_portal_class_summary(a.partner_id, pc.kind, pc.class_id)"));

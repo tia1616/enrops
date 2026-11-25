@@ -128,81 +128,95 @@ async function providerAdmins(supabase: SupabaseClient, orgId: string): Promise<
 }
 
 /**
- * One email per partner login (its finished classes), then one copy per
- * provider + partner to the provider's owners and admins naming who was told.
- * Claim by inserting ledger rows (only rows THIS run inserted are sent),
- * release by deleting them when the send failed.
+ * 1) One email per PERSON at a partner (its finished classes). Claim by
+ *    inserting ledger rows carrying what is sent (only rows THIS run inserted
+ *    are sent); release by deleting them when the send failed.
+ * 2) The provider's copies, driven by the LEDGER (partner_class_wrapup_copies_due),
+ *    not by this run's memory: a copy that failed is retried next run, and a
+ *    person told on a later day is named then. One copy per provider + partner
+ *    per run, naming who got each class.
  */
 async function sendWrapups(supabase: SupabaseClient, brand: Brand) {
   const { data, error } = await supabase.rpc("partner_class_wrapups_due", { p_today: null });
   if (error) throw new Error(`due failed: ${error.message}`);
-  const byLogin = new Map<string, WrapupRow[]>();
+  const byPerson = new Map<string, WrapupRow[]>();
   for (const r of (data ?? []) as WrapupRow[]) {
-    if (!r.summary) continue; // the login can no longer see it
-    if (!byLogin.has(r.access_id)) byLogin.set(r.access_id, []);
-    byLogin.get(r.access_id)!.push(r);
+    if (!r.summary) continue; // this person can no longer see it
+    if (!byPerson.has(r.recipient_key)) byPerson.set(r.recipient_key, []);
+    byPerson.get(r.recipient_key)!.push(r);
   }
 
   const results: unknown[] = [];
-  // partner -> { rows by class, names told }
-  const told = new Map<string, { rows: Map<string, WrapupRow>; names: string[] }>();
   const replyCache = new Map<string, string | null>();
   const replyFor = async (orgId: string) => {
     if (!replyCache.has(orgId)) replyCache.set(orgId, (await loadOrgBrand(supabase, orgId)).tenant_reply_to);
     return replyCache.get(orgId)!;
   };
 
-  for (const [accessId, rows] of byLogin) {
-    const key = `access:${accessId}`;
+  for (const [key, rows] of byPerson) {
     const { data: claimed, error: cErr } = await wrapupLedger(supabase)
-      .upsert(rows.map((r) => ({ organization_id: r.organization_id, partner_id: r.partner_id, class_kind: r.class_kind, class_id: r.class_id, recipient_key: key })),
-        { onConflict: "class_kind,class_id,recipient_key", ignoreDuplicates: true })
+      .upsert(rows.map((r) => ({
+        organization_id: r.organization_id, partner_id: r.partner_id, class_kind: r.class_kind, class_id: r.class_id,
+        recipient_key: key, to_name: r.to_name || r.to_email, payload: r,
+      })), { onConflict: "class_kind,class_id,recipient_key", ignoreDuplicates: true })
       .select("id, class_kind, class_id");
-    if (cErr) { results.push({ login: accessId, error: `claim failed: ${cErr.message}` }); continue; }
+    if (cErr) { results.push({ person: key, error: `claim failed: ${cErr.message}` }); continue; }
     const mineKeys = new Set((claimed ?? []).map((c: { class_kind: string; class_id: string }) => `${c.class_kind}:${c.class_id}`));
     const mine = rows.filter((r) => mineKeys.has(`${r.class_kind}:${r.class_id}`));
-    if (!mine.length) { results.push({ login: accessId, status: "already_claimed" }); continue; }
+    if (!mine.length) { results.push({ person: key, status: "already_claimed" }); continue; }
 
     const { subject, html, text } = renderWrapup(brand, mine, PUBLIC_SITE_URL);
     const id = await sendRaw(brand, mine[0].to_email, subject, html, text, await replyFor(mine[0].organization_id), "partner_class_wrapup");
     if (!id) {
       const ids = (claimed ?? []).map((c: { id: string }) => c.id);
       const { error: rErr } = await wrapupLedger(supabase).delete().in("id", ids);
-      if (rErr) console.error(`[partner-marketing-notify-cron] wrapup RELEASE FAILED for ${accessId}: ${rErr.message}`);
-      results.push({ login: accessId, classes: mine.length, status: "released" });
+      if (rErr) console.error(`[partner-marketing-notify-cron] wrapup RELEASE FAILED for ${key}: ${rErr.message}`);
+      results.push({ person: key, classes: mine.length, status: "released" });
       continue;
     }
-    results.push({ login: accessId, classes: mine.length, status: "sent" });
-    const pk = `${mine[0].organization_id}:${mine[0].partner_id}`;
-    if (!told.has(pk)) told.set(pk, { rows: new Map(), names: [] });
-    const t = told.get(pk)!;
-    t.names.push(mine[0].to_name || mine[0].to_email);
-    // Prefer the view of a login that sees more (an every-site login's row is the same class).
-    for (const r of mine) if (!t.rows.has(`${r.class_kind}:${r.class_id}`)) t.rows.set(`${r.class_kind}:${r.class_id}`, r);
+    results.push({ person: key, classes: mine.length, status: "sent" });
   }
 
-  // The provider's copy: once per class.
-  for (const [pk, t] of told) {
-    const rows = [...t.rows.values()];
+  // The provider's copies, from the ledger.
+  const { data: due, error: dErr } = await supabase.rpc("partner_class_wrapup_copies_due");
+  if (dErr) { results.push({ copies: `due failed: ${dErr.message}` }); return results; }
+  const byPartner = new Map<string, CopyRow[]>();
+  for (const c of (due ?? []) as CopyRow[]) {
+    const pk = `${c.organization_id}:${c.partner_id}`;
+    if (!byPartner.has(pk)) byPartner.set(pk, []);
+    byPartner.get(pk)!.push(c);
+  }
+  for (const [pk, copies] of byPartner) {
+    const admins = await providerAdmins(supabase, copies[0].organization_id);
+    if (!admins.length) { results.push({ copy: pk, status: "no owner or admin email; will retry" }); continue; }
     const { data: claimed, error: cErr } = await wrapupLedger(supabase)
-      .upsert(rows.map((r) => ({ organization_id: r.organization_id, partner_id: r.partner_id, class_kind: r.class_kind, class_id: r.class_id, recipient_key: "provider" })),
+      .upsert(copies.map((c) => ({ organization_id: c.organization_id, partner_id: c.partner_id, class_kind: c.class_kind, class_id: c.class_id, recipient_key: "provider" })),
         { onConflict: "class_kind,class_id,recipient_key", ignoreDuplicates: true })
       .select("id, class_kind, class_id");
     if (cErr) { results.push({ copy: pk, error: `claim failed: ${cErr.message}` }); continue; }
     const mineKeys = new Set((claimed ?? []).map((c: { class_kind: string; class_id: string }) => `${c.class_kind}:${c.class_id}`));
-    const mine = rows.filter((r) => mineKeys.has(`${r.class_kind}:${r.class_id}`));
+    const mine = copies.filter((c) => mineKeys.has(`${c.class_kind}:${c.class_id}`));
     if (!mine.length) continue;
-    const admins = await providerAdmins(supabase, mine[0].organization_id);
-    const { subject, html, text } = renderWrapupCopy(brand, mine, t.names, PUBLIC_SITE_URL);
+    const { subject, html, text } = renderWrapupCopy(brand, mine.map((c) => ({ ...c.payload, told: c.told_names })), PUBLIC_SITE_URL);
     let sent = 0;
     for (const to of admins) if (await sendRaw(brand, to, subject, html, text, null, "partner_class_wrapup_copy")) sent++;
     if (sent === 0) {
       const ids = (claimed ?? []).map((c: { id: string }) => c.id);
-      await wrapupLedger(supabase).delete().in("id", ids);
+      const { error: rErr } = await wrapupLedger(supabase).delete().in("id", ids);
+      if (rErr) console.error(`[partner-marketing-notify-cron] copy RELEASE FAILED for ${pk}: ${rErr.message}`);
     }
     results.push({ copy: pk, classes: mine.length, sent });
   }
   return results;
+}
+
+interface CopyRow {
+  organization_id: string;
+  partner_id: string;
+  class_kind: string;
+  class_id: string;
+  payload: WrapupRow;
+  told_names: string[];
 }
 
 /** Test: the first login's email and its provider copy, both to `to`, nothing marked. */
@@ -211,10 +225,10 @@ async function wrapupTest(supabase: SupabaseClient, to: string, today: string | 
   if (error) return { error: error.message };
   const rows = ((data ?? []) as WrapupRow[]).filter((r) => r.summary);
   if (!rows.length) return { sent: 0, note: "nothing due for that day" };
-  const first = rows.filter((r) => r.access_id === rows[0].access_id);
+  const first = rows.filter((r) => r.recipient_key === rows[0].recipient_key);
   const brand = await loadOrgBrand(supabase, null);
   const a = renderWrapup(brand, first, PUBLIC_SITE_URL);
-  const b = renderWrapupCopy(brand, first, [first[0].to_name || first[0].to_email], PUBLIC_SITE_URL);
+  const b = renderWrapupCopy(brand, first.map((r) => ({ ...r, told: [r.to_name || r.to_email] })), PUBLIC_SITE_URL);
   const id1 = await sendRaw(brand, to, a.subject, a.html, a.text, null, "partner_class_wrapup_test");
   const id2 = await sendRaw(brand, to, b.subject, b.html, b.text, null, "partner_class_wrapup_test");
   return { partner: first[0].partner_name, classes: first.length, would_go_to: first[0].to_email, sent: [id1, id2].filter(Boolean).length, subjects: [a.subject, b.subject] };
