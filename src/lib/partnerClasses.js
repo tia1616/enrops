@@ -272,6 +272,35 @@ export function statementFileName(partnerName, termLabel) {
   return `${base.replace(/[\\/:*?"<>|]+/g, "").trim() || "Partner"} statement.csv`;
 }
 
+/**
+ * A partner's classes at a glance, for the partner home (Jessica 2026-11-25:
+ * enrollment first). Cancelled and not-yet-open classes are left out.
+ * `children` counts only classes with a number (not partner-run, not an
+ * un-entered typed count).
+ */
+export function classesAtAGlance(rows, today) {
+  const t = String(today ?? "");
+  const live = (rows ?? []).filter((c) => c.status === "open" || c.status === "finished");
+  const finished = live.filter((c) => c.status === "finished");
+  const open = live.filter((c) => c.status === "open");
+  const running = open.filter((c) => !c.first_date || c.first_date <= t);
+  const upcoming = open.filter((c) => c.first_date && c.first_date > t);
+  const children = open.reduce((n, c) => n + (c.count_source !== "partner" && Number.isFinite(Number(c.enrolled)) && c.enrolled != null ? Number(c.enrolled) : 0), 0);
+  const nextStart = upcoming.map((c) => c.first_date).sort()[0] ?? null;
+  return { running: running.length, upcoming: upcoming.length, finished: finished.length, children, nextStart };
+}
+
+/** "3 running · 2 starting Jan 12 · 41 children enrolled · 1 finished, summary ready". Empty string when nothing. */
+export function glanceText(g, thisYear) {
+  if (!g) return "";
+  const parts = [];
+  if (g.running) parts.push(`${g.running} ${g.running === 1 ? "class" : "classes"} running`);
+  if (g.upcoming) parts.push(`${g.upcoming} starting${g.nextStart ? ` from ${shortDate(g.nextStart, thisYear)}` : " soon"}`);
+  if (g.running || g.upcoming) parts.push(`${g.children} ${g.children === 1 ? "child" : "children"} enrolled`);
+  if (g.finished) parts.push(`${g.finished} finished, ${g.finished === 1 ? "summary" : "summaries"} ready`);
+  return parts.join(" · ");
+}
+
 /** "Super Mario Game Makers - Fall 2026.csv", safe for a file name. */
 export function summaryFileName(c, termLabel) {
   const base = [c.title || "Class", termLabel].filter(Boolean).join(" - ");

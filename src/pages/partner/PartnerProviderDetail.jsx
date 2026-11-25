@@ -33,7 +33,9 @@ import EmailsSent from "./EmailsSent.jsx";
 import { RecordTabRow, RecordTabPanel, useRecordTab, alertFor } from "./RecordTabs.jsx";
 import { decisionTag } from "../../lib/recordTabs.js";
 
-const PARTNER_TABS = ["documents", "classes", "instructors", "emails", "requirements", "decision"];
+// Classes first (Jessica 2026-11-25: enrollment first): a partner landing on a
+// provider with no #tab opens its classes, not its documents.
+const PARTNER_TABS = ["classes", "documents", "instructors", "emails", "requirements", "decision"];
 
 export default function PartnerProviderDetail() {
   const { partnerId } = useParams();
@@ -144,8 +146,8 @@ export default function PartnerProviderDetail() {
             sticky
             active={tab} onChange={setTab}
             tabs={[
-              { id: "documents", label: "Documents", alert: alertFor(s.business.map((b) => b.badge)) },
               { id: "classes", label: "Classes", count: classCount },
+              { id: "documents", label: "Documents", alert: alertFor(s.business.map((b) => b.badge)) },
               { id: "instructors", label: "Instructors", count: s.instructors.total || null, alert: s.instructors.total ? alertFor([s.instructors.badge]) : null },
               { id: "emails", label: "Emails sent", count: emailCount },
               { id: "requirements", label: "Requirements" },

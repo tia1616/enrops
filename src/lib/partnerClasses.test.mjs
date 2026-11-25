@@ -5,7 +5,7 @@ import {
   sortClasses, rosterDisplayRows, asksDismissal, shortDate, showsHomeroom,
   summaryAvailable, detailsButtonText, sessionsHeadline, sessionStatusText, paidText, dollars,
   csvCell, classSummaryCsv, summaryFileName, childPaidText, paidByChild,
-  termStatementCsv, statementFileName,
+  termStatementCsv, statementFileName, classesAtAGlance, glanceText,
 } from './partnerClasses.js';
 
 let pass = 0, fail = 0;
@@ -238,6 +238,21 @@ eq('never asked', asksDismissal([], 'class'), false);
   const unread = termStatementCsv('Fall 2026', [a], new Map(), {}).split('\r\n');
   eq('unread summary says so', unread.some((r) => r.startsWith('Note,')), true);
   eq('statement file name', statementFileName('Happy Valley Parks and Rec', 'Fall 2026'), 'Happy Valley Parks and Rec - Fall 2026 statement.csv');
+}
+
+// Partner home: classes at a glance (enrollment first).
+{
+  const g = classesAtAGlance([
+    { ...base, class_id: '1', status: 'open', first_date: '2026-11-01', enrolled: 10 },
+    { ...base, class_id: '2', status: 'open', first_date: '2027-01-12', enrolled: 4 },
+    { ...base, class_id: '3', status: 'finished', first_date: '2026-09-01', enrolled: 6 },
+    { ...base, class_id: '4', status: 'cancelled', enrolled: 9 },
+    { ...base, class_id: '5', status: 'open', first_date: '2026-11-01', count_source: 'partner', enrolled: null },
+  ], '2026-11-25');
+  eq('glance counts', g, { running: 2, upcoming: 1, finished: 1, children: 14, nextStart: '2027-01-12' });
+  eq('glance words', glanceText(g, 2026), '2 classes running · 1 starting from Jan 12, 2027 · 14 children enrolled · 1 finished, summary ready');
+  eq('only finished', glanceText({ running: 0, upcoming: 0, finished: 2, children: 0, nextStart: null }), '2 finished, summaries ready');
+  eq('nothing', glanceText(classesAtAGlance([], '2026-11-25')), '');
 }
 
 // The database keeps a finished class listed 60 days, as 'finished'.
