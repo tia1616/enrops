@@ -41,6 +41,28 @@ Two weeks out, make sure families know what's coming and your school knows who's
 **Ennie's advice**
 - When you add a child by hand, the photo release box starts ticked. Untick it if the family hasn't agreed, and the child shows as pending until they do.
 - **Remove** only appears for families who haven't paid, and it can't be undone. For a family who paid, use **Refund / remove** (see **Money moments**).
+- If a family wants a different day or class, don't remove them. Use **Move** (next section).
+
+## Move a child to another class {#move}
+
+**Goal:** a child switches class or camp week in one step, and their payment stays as it is.
+
+**Steps**
+1. **Programs → Class rosters.** Expand the class the child is in now.
+2. Tap **Move** on their row.
+3. Under **Move to**, pick the new class. Use **Search by class, school or term** to find it. Each class shows its spots left and its price.
+4. Leave **Email the family about the move** ticked, or untick it to tell them yourself.
+5. Read the sentence above the button. It names the child, both classes, and what happens to the money.
+6. Tap **Move** and the child's name. When it says **Moved.**, tap **Done**.
+
+**Ennie's advice**
+- No money moves. If the new class costs a different amount, the sentence shows both prices so you can sort out the difference yourself (a partial refund or a note to the family).
+- The email names the new class, where and when it meets, and the next date. Both parents on file get it. The new class's usual welcome email still goes out if that class hasn't started.
+- If the new class is full, you're warned first. The button changes to **Move ... anyway**, and the class goes over its seat count.
+- A class moves to a class and a camp to a camp. A class that has already finished isn't in the list.
+- If the child was on the new class's waiting list, that place clears on its own. Their old seat is offered to the old class's waiting list.
+- For one term of a year-long sign-up, only that term moves. Their other terms stay where they are.
+- The child's instructor sees a short note on their roster: "Moved here from ... on ...".
 
 ## Send the roster to your school partner {#roster-to-partner}
 
