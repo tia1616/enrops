@@ -262,6 +262,7 @@ export default function EnnieChat({ org, user }) {
           type="button"
           onClick={() => (open ? close() : setOpen(true))}
           aria-expanded={open}
+          aria-label={open ? "Close Ask Ennie" : "Ask Ennie"}
           data-tour="ennie"
           // A labelled pill, not a bare face: Jessica 11/25, a face alone did not
           // read as a place to click. The words are the label.

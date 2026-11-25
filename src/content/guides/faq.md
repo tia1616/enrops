@@ -158,4 +158,4 @@ Not yet.
 ## Getting help
 
 ### Who do I ask? {#faq-help}
-Tap Ennie in the bottom-right corner to ask a question. Ennie answers from these guides and links the part it used. If the guides don't cover it, tap **Send to the enrops team** and the chat comes to us. You can also tap **Talk to a person** in the chat, tap **Share feedback** in the menu, or email hello@enrops.com. A real person on the enrops team answers.
+Tap **Ask Ennie** in the bottom-right corner to ask a question. Ennie answers from these guides and links the part it used. If the guides don't cover it, tap **Send to the enrops team** and the chat comes to us. You can also tap **Talk to a person** in the chat, tap **Share feedback** in the menu, or email hello@enrops.com. A real person on the enrops team answers.
