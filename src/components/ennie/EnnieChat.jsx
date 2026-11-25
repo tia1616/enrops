@@ -135,11 +135,22 @@ export default function EnnieChat({ org, user }) {
     return () => clearInterval(id);
   }, [asking]);
 
-  // Newest message in view.
+  // Newest message in view: while Ennie is working, the bottom; once an answer
+  // arrives, the top of that turn (the question), so a long answer is read from
+  // its first line instead of its last.
+  const lastTurnRef = useRef(null);
+  const lastStatus = turns.length ? turns[turns.length - 1].status : null;
   useEffect(() => {
-    const el = listRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [turns, view]);
+    const list = listRef.current;
+    if (!list) return;
+    const last = lastTurnRef.current;
+    if (last && (lastStatus === "done" || lastStatus === "error")) {
+      // The list is position:relative, so offsetTop is measured from its top.
+      list.scrollTop = Math.max(0, last.offsetTop - 8);
+    } else {
+      list.scrollTop = list.scrollHeight;
+    }
+  }, [turns.length, lastStatus, view]);
 
   useEffect(() => {
     if (open && view === "chat") inputRef.current?.focus();
@@ -326,7 +337,7 @@ export default function EnnieChat({ org, user }) {
 
           {view === "chat" && (
             <>
-              <div ref={listRef} aria-live="polite" style={{ flex: 1, overflowY: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 10, background: SOFT }}>
+              <div ref={listRef} aria-live="polite" style={{ position: "relative", flex: 1, overflowY: "auto", padding: 14, display: "flex", flexDirection: "column", gap: 10, background: SOFT }}>
                 {turns.length === 0 && (
                   <div>
                     <p style={{ margin: "2px 0 10px", lineHeight: 1.5 }}>
@@ -347,8 +358,8 @@ export default function EnnieChat({ org, user }) {
                   </div>
                 )}
 
-                {turns.map((t) => (
-                  <div key={t.key} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {turns.map((t, i) => (
+                  <div key={t.key} ref={i === turns.length - 1 ? lastTurnRef : undefined} style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                     <div style={{ alignSelf: "flex-end", maxWidth: "85%", background: LAVENDER, color: PURPLE, borderRadius: 12, padding: "8px 11px", lineHeight: 1.45, whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
                       {t.question}
                     </div>
