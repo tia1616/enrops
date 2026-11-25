@@ -154,7 +154,9 @@ export default function MoveRegistrationDrawer({ registration, onClose, onDone }
               Now in <strong style={{ color: INK }}>{data.from.label}</strong>
               {data.from.term ? ` · ${data.from.term}` : ""}
               {data.registration.amount_cents != null && (
-                <> · paid <strong style={{ color: INK }}>{fmtCents(data.registration.amount_cents)}</strong></>
+                // The registration's price, not "paid": it can be unpaid, part-way
+                // through a plan, or one leg of a bundle. See rosterActions.js.
+                <> · <strong style={{ color: INK }}>{fmtCents(data.registration.amount_cents)}</strong></>
               )}
             </div>
 

@@ -41,9 +41,9 @@ eq('move, same price', moveConfirmSentence({ studentName: 'Evan Stone', fromLabe
   'Move Evan Stone from Monday Super Mario at Jackson to Tuesday Minecraft at Jackson. No money moves.');
 // The 10/19 Venter move: paid $285, new class $299.
 eq('move, price differs (Venter)', moveConfirmSentence({ studentName: 'Brianna Venter', fromLabel: 'Monday LEGO at Forest Hills', toLabel: 'Wednesday Super Mario at Forest Hills', paidCents: 28500, toPriceCents: 29900 }),
-  'Move Brianna Venter from Monday LEGO at Forest Hills to Wednesday Super Mario at Forest Hills. No money moves: they paid $285.00 and the new class is $299.00.');
+  'Move Brianna Venter from Monday LEGO at Forest Hills to Wednesday Super Mario at Forest Hills. No money moves: their registration is $285.00 and the new class is $299.00.');
 eq('move, unknown price says no comparison', moveConfirmSentence({ studentName: 'A', fromLabel: 'X', toLabel: 'Y', paidCents: 100, toPriceCents: null }), 'Move A from X to Y. No money moves.');
-eq('move, paid $0 vs price is compared', moveConfirmSentence({ studentName: 'A', fromLabel: 'X', toLabel: 'Y', paidCents: 0, toPriceCents: 29900 }), 'Move A from X to Y. No money moves: they paid $0.00 and the new class is $299.00.');
+eq('move, paid $0 vs price is compared', moveConfirmSentence({ studentName: 'A', fromLabel: 'X', toLabel: 'Y', paidCents: 0, toPriceCents: 29900 }), 'Move A from X to Y. No money moves: their registration is $0.00 and the new class is $299.00.');
 
 // Seats
 eq('seats: left', seatLabel({ max_capacity: 14, seats_taken: 11, is_full: false }), '3 spots left');
