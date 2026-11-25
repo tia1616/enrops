@@ -11,12 +11,21 @@ import {
 } from "../../lib/partnerMarketing.js";
 import { isPicture, zipName, uniqueNames, itemOf } from "../../lib/partnerMarketingLogic.js";
 
-export default function MarketingGallery({ groups, providerName }) {
+// `onAsk()` (partner logins that can edit the asks): "Change what you ask ... for"
+// beside the heading, where a partner looks (Jessica 2026-11-25).
+export default function MarketingGallery({ groups, providerName, onAsk }) {
   const total = groups.reduce((n, g) => n + g.cards.length, 0);
   if (!total) return null;
   return (
     <div className="px-4 pt-3">
-      <h3 className="text-sm font-bold text-j2s-ink">Flyers &amp; graphics</h3>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <h3 className="text-sm font-bold text-j2s-ink">Flyers &amp; graphics</h3>
+        {onAsk && (
+          <button type="button" onClick={onAsk} className="text-sm font-semibold text-j2s-purple hover:underline">
+            Change what you ask {providerName || "the provider"} for →
+          </button>
+        )}
+      </div>
       {groups.map((g) => <TermGallery key={g.key} group={g} providerName={providerName} />)}
     </div>
   );

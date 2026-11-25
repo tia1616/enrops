@@ -47,6 +47,7 @@ const PROVIDER_TAB_ALIASES = {
   documents: "safety", instructors: "safety", decision: "safety", requirements: "safety",
   logins: "people", emails: "people",
 };
+const CLASSES_SECTIONS = [{ id: "marketing", label: "Flyers they ask for" }];
 const SAFETY_SECTIONS = [
   { id: "documents", label: "Documents" }, { id: "instructors", label: "Instructors" },
   { id: "requirements", label: "What they require" }, { id: "decision", label: "Decision" },
@@ -271,6 +272,8 @@ export default function PartnerRecord() {
 
 
           <RecordTabPanel id="classes" active={tab}>
+            {/* The asks sit below a long class list; this makes them findable. */}
+            <SectionJumps sections={CLASSES_SECTIONS} onJump={setTab} />
             <ClassesTable
               key={`classes:${partnerId}`} partnerId={partnerId} orgId={org?.id} orgName={orgName}
               viewer="provider" partnerName={partner.partner_name} canEdit={canManage} onCount={setClassCount}

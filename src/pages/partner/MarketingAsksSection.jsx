@@ -125,7 +125,8 @@ export default function MarketingAsksSection({ partner, viewer = "partner", orgN
     // id: Classes' "Ask ... for them" scrolls here.
     <section id="marketing-asks" className="mt-5 scroll-mt-24 rounded-2xl bg-white p-4 shadow-card">
       <h2 className="text-base font-bold text-j2s-ink">
-        {isPartner ? `Marketing you'd like from ${orgName || "this provider"}` : `Marketing ${partner.partner_name} asks for`}
+        {/* Says "flyers" (Jessica 2026-11-25: "i don't see flyer asks?"). */}
+        {isPartner ? `Flyers and social graphics you ask ${orgName || "this provider"} for` : `Flyers and social graphics ${partner.partner_name} asks for`}
       </h2>
       <p className="mt-1 text-sm text-j2s-ink/70">
         {isPartner

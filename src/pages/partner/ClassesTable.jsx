@@ -461,7 +461,7 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
           phone (portal rule 1); "See them" at the top jumps here. */}
       {gallery.length > 0 && (
         <div id={`flyer-board-${partnerId}`} className="scroll-mt-24 pb-4">
-          <MarketingGallery groups={gallery} providerName={orgName} />
+          <MarketingGallery groups={gallery} providerName={orgName} onAsk={viewer === "partner" ? onAskMarketing : undefined} />
         </div>
       )}
     </section>

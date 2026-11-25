@@ -39,6 +39,7 @@ import { decisionTag, worstAlert } from "../../lib/recordTabs.js";
 const PARTNER_TABS = ["classes", "safety", "emails"];
 const PARTNER_TAB_ALIASES = { documents: "safety", instructors: "safety", requirements: "safety", decision: "safety", marketing: "classes" };
 // The jump row at the top of Safety record (Jessica 2026-11-25: "and requirements?").
+const CLASSES_SECTIONS = [{ id: "marketing", label: "Flyers you ask for" }];
 const SAFETY_SECTIONS = [
   { id: "documents", label: "Documents" }, { id: "instructors", label: "Instructors" },
   { id: "requirements", label: "Requirements" }, { id: "decision", label: "Decision" },
@@ -169,6 +170,8 @@ export default function PartnerProviderDetail() {
           />
 
           <RecordTabPanel id="classes" active={tab}>
+            {/* The asks sit below a long class list; this makes them findable. */}
+            <SectionJumps sections={CLASSES_SECTIONS} onJump={setTab} />
             <ClassesTable key={`classes:${m.partner_id}:${marketingVersion}`} partnerId={m.partner_id}
               // Only logins that can change the asks are invited to.
               onAskMarketing={reqControl?.can_edit ? () => {
