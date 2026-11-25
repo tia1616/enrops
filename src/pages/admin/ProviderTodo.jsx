@@ -82,7 +82,7 @@ export default function ProviderTodo({ items, partnerName, onUpload, onRenew, in
                     </Link>
                   )}
                   {it.action.type === "tab" && onTab && (
-                    <button type="button" style={actionBtn} onClick={() => { onTab(it.action.tab); window.scrollTo({ top: 0, behavior: "smooth" }); }}>{it.action.label}</button>
+                    <button type="button" style={actionBtn} onClick={() => onTab(it.action.tab)}>{it.action.label}</button>
                   )}
                   {it.action.type === "share" && (
                     <>

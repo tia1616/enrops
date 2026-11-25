@@ -54,7 +54,7 @@ const s = { business: [], instructors: { columns: [] } };
 const todo = partnerTodo({ s, instructors: [], orgName: 'J2S', today: '2026-11-23', mediaGaps: mediaGaps(classes, [flyer], rows), partnerName: 'Happy Valley' });
 eq('to do: one amber item', todo.map((t) => [t.key, t.tone]), [['media:flyer', 'warn']]);
 eq('to do: text', todo[0]?.text, 'Happy Valley asks for a flyer on each class. 1 class still needs one.');
-eq('to do: goes to Classes', todo[0]?.action, { type: 'tab', tab: 'classes', label: 'Go to Classes' });
+eq('to do: goes to the flyer asks', todo[0]?.action, { type: 'tab', tab: 'marketing', label: 'Go to the flyer asks' });
 
 // The gallery: only files that are in, grouped by term, cancelled classes out.
 {

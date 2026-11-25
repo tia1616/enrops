@@ -28,15 +28,18 @@ eq('unknown hash: first tab', tabFromHash('#logins', IDS), 'documents');
 eq('a magic-link hash is not a tab', tabFromHash('#access_token=abc&type=magiclink', IDS), 'documents');
 
 // Grouped tabs (Jessica 2026-11-25: "too many tabs"): old links still land.
-const PROVIDER = ['todo', 'classes', 'safety', 'people'];
-const PA = { documents: 'safety', instructors: 'safety', decision: 'safety', requirements: 'safety', logins: 'people', emails: 'people' };
-eq('provider: no hash opens To do', tabFromHash('', PROVIDER, PA), 'todo');
+// The real setup (PartnerRecord.jsx PROVIDER_TABS / PROVIDER_TAB_ALIASES).
+const PROVIDER = ['classes', 'safety', 'people'];
+const PA = { todo: 'classes', marketing: 'classes', documents: 'safety', instructors: 'safety', decision: 'safety', requirements: 'safety', logins: 'people', emails: 'people' };
+eq('provider: no hash opens Classes', tabFromHash('', PROVIDER, PA), 'classes');
+eq('old #todo opens Classes', tabFromHash('#todo', PROVIDER, PA), 'classes');
+eq('#marketing opens Classes at the flyer asks', [tabFromHash('#marketing', PROVIDER, PA), sectionFromHash('#marketing', PROVIDER, PA)], ['classes', 'marketing']);
 eq('old #documents opens Safety record', tabFromHash('#documents', PROVIDER, PA), 'safety');
 eq('old #logins opens People & emails', tabFromHash('#logins', PROVIDER, PA), 'people');
 eq('...at the logins section', sectionFromHash('#logins', PROVIDER, PA), 'logins');
 eq('a whole tab is not a section', sectionFromHash('#safety', PROVIDER, PA), null);
-eq('unknown hash: first tab, no section', [tabFromHash('#nope', PROVIDER, PA), sectionFromHash('#nope', PROVIDER, PA)], ['todo', null]);
-eq('an alias never borrows a prototype key', tabFromHash('#constructor', PROVIDER, PA), 'todo');
+eq('unknown hash: first tab, no section', [tabFromHash('#nope', PROVIDER, PA), sectionFromHash('#nope', PROVIDER, PA)], ['classes', null]);
+eq('an alias never borrows a prototype key', tabFromHash('#constructor', PROVIDER, PA), 'classes');
 const PARTNER = ['classes', 'safety', 'emails'];
 const PAA = { documents: 'safety', instructors: 'safety', requirements: 'safety', decision: 'safety' };
 eq('partner: no hash opens Classes', tabFromHash('', PARTNER, PAA), 'classes');

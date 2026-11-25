@@ -39,9 +39,16 @@ function scrollToSection(section) {
  * (now a section of a grouped tab, Jessica 2026-11-25) to its tab, and opening
  * one scrolls to that section: #documents opens Safety record at Documents.
  */
-export function useRecordTab(ids, aliases = {}) {
+export function useRecordTab(ids, aliases = {}, ready = true) {
   const key = ids.join(",") + "|" + Object.entries(aliases).map((e) => e.join(">")).join(",");
   const [active, setActive] = useState(() => pickTab(currentHash(), ids, aliases));
+
+  // A page still loading has no sections yet, so an old link (#decision)
+  // scrolls again once `ready` turns true (review 2026-11-25).
+  useEffect(() => {
+    if (ready) scrollToSection(sectionFromHash(currentHash(), ids, aliases));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, key]);
 
   useEffect(() => {
     const onHash = () => {

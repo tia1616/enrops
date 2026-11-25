@@ -57,7 +57,8 @@ export default function PartnerProviderDetail() {
   const [loadError, setLoadError] = useState("");
   const [openError, setOpenError] = useState("");
   const opening = useRef(false);
-  const [tab, setTab] = useRecordTab(PARTNER_TABS, PARTNER_TAB_ALIASES);
+  const [tab, setTab] = useRecordTab(PARTNER_TABS, PARTNER_TAB_ALIASES,
+    !!m && docs !== null && instructors !== null && requirements !== undefined);
   // Bumped when the partner saves a marketing ask, so Classes re-reads it.
   const [marketingVersion, setMarketingVersion] = useState(0);
   const [classCount, setClassCount] = useState(null);

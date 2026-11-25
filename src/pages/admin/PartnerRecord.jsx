@@ -87,7 +87,8 @@ export default function PartnerRecord() {
   const [toast, setToast] = useState("");
   const [form, setForm] = useState(null); // null | { editing: row|null, kind: string|null }
   const opening = useRef(false);
-  const [tab, setTab] = useRecordTab(PROVIDER_TABS, PROVIDER_TAB_ALIASES);
+  const [tab, setTab] = useRecordTab(PROVIDER_TABS, PROVIDER_TAB_ALIASES,
+    !!partner && docs !== null && instructors !== null && requirements !== undefined);
   const [classCount, setClassCount] = useState(null);
   // Flyers / social graphics the partner asked for that aren't on a class yet
   // (ClassesTable reports them; 20261123r). Amber on the To do list, never red.
