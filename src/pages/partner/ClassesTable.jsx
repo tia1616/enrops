@@ -381,7 +381,7 @@ const SESSION_TONE = {
 function ClassSummary({ c, summary, rows, termLabel, orgName, viewer, partnerName }) {
   if (!summary) return null;
   const sessions = summary.sessions ?? [];
-  const paid = paidText(summary.money);
+  const paid = paidText(summary.money, c.enrolled);
   // The provider sees the money either way; say when the partner doesn't.
   const hiddenFromPartner = viewer === "provider" && summary.shared === false;
   function download() {

@@ -161,9 +161,13 @@ eq('never asked', asksDismissal([], 'class'), false);
     ['Held', 'Cancelled', 'Upcoming', 'Not confirmed yet', 'Not confirmed yet']);
 
   // HV Fall Super Mario on prod, 2026-11-25: 6 children, $1,686.
-  eq('paid line', paidText({ children: 6, paid_cents: 168600 }), 'Families paid $1,686.00 for 6 children, after discounts and refunds.');
-  eq('one child', paidText({ children: 1, paid_cents: 29900 }), 'Families paid $299.00 for 1 child, after discounts and refunds.');
-  eq('nothing paid', paidText({ children: 0, paid_cents: 0 }), 'No payments yet.');
+  eq('paid line, all paid', paidText({ children: 6, paid_cents: 168600 }, 6), 'Families paid $1,686.00, after discounts and refunds (6 of the 6 children on the roster paid).');
+  // Staging HV Fall Super Mario, 2026-11-25: 5 on the roster, 1 paid (free, refunded, never charged).
+  eq('fewer paid than enrolled says so', paidText({ children: 1, paid_cents: 26910 }, 5), 'Families paid $269.10, after discounts and refunds (1 of the 5 children on the roster paid).');
+  eq('one on the roster', paidText({ children: 1, paid_cents: 29900 }, 1), 'Families paid $299.00, after discounts and refunds (1 of the 1 child on the roster paid).');
+  eq('no roster count', paidText({ children: 2, paid_cents: 500 }), 'Families paid $5.00, after discounts and refunds (2 children).');
+  eq('nothing paid', paidText({ children: 0, paid_cents: 0 }, 3), 'No payments yet (0 of the 3 children on the roster paid).');
+  eq('nothing paid, no count', paidText({ children: 0, paid_cents: 0 }), 'No payments yet.');
   eq('no money line off enrops', paidText(null), null);
   eq('dollars', dollars(123456), '$1,234.56');
 

@@ -131,14 +131,22 @@ export function dollars(cents) {
 }
 
 /**
- * "Families paid $1,686.00 for 6 children, after discounts and refunds."
+ * "Families paid $1,686.00, after discounts and refunds (6 of the 6 children
+ * on the roster paid)." The roster count is said beside it because some
+ * children on a roster paid nothing (free, refunded, added without a charge),
+ * and "for 1 child" next to "5/14" read as a mistake (Jessica 2026-11-25).
+ * `enrolled` = the class's roster count; omitted, no comparison is made.
  * null when there is no money line (families did not register through enrops).
  */
-export function paidText(money) {
+export function paidText(money, enrolled = null) {
   if (!money) return null;
   const n = Number(money.children || 0);
-  if (n === 0) return "No payments yet.";
-  return `Families paid ${dollars(money.paid_cents)} for ${n} ${n === 1 ? "child" : "children"}, after discounts and refunds.`;
+  const total = Number(enrolled);
+  const ofRoster = Number.isInteger(total) && total > 0
+    ? ` (${n} of the ${total} ${total === 1 ? "child" : "children"} on the roster paid)`
+    : n > 0 ? ` (${n} ${n === 1 ? "child" : "children"})` : "";
+  if (n === 0) return `No payments yet${ofRoster}.`;
+  return `Families paid ${dollars(money.paid_cents)}, after discounts and refunds${ofRoster}.`;
 }
 
 /** One CSV cell, quoted when needed, and never read as a formula by Excel or Sheets. */
@@ -172,6 +180,7 @@ export function classSummaryCsv(c, summary, rows, { providerName = "", termLabel
     out.push("");
     line("Families paid", dollars(summary.money.paid_cents));
     line("Children paid for", Number(summary.money.children || 0));
+    if (Number.isInteger(Number(c.enrolled)) && c.enrolled != null) line("Children on the roster", Number(c.enrolled));
   }
   if (rows) {
     out.push("");
