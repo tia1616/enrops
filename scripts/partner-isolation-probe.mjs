@@ -257,7 +257,20 @@ for (const h of hosts) {
   }
   scanFields(`${who} classes`, ownClasses.map(({ _partner, ...c }) => c), CLASS_FIELDS);
   const rosterRows = [];
-  for (const c of ownClasses.filter((x) => x.count_source === 'enrops' && x.status === 'open')) {
+  // End-of-term summary (20261125t): own class answers; through any other
+  // partner it is null. A jsonb answer is an object, so gotNothing (which only
+  // counts list rows) cannot judge it: null or refused is the bar.
+  const noObject = (r) => r.status >= 400 || r.json == null;
+  for (const c of ownClasses.filter((x) => x.status === 'open' || x.status === 'finished')) {
+    const s = await call('/rest/v1/rpc/partner_portal_class_summary', { token: h.token, method: 'POST', body: { p_partner_id: c._partner, p_kind: c.kind, p_class_id: c.class_id } });
+    ok(`${who} summary of "${c.title}" answers`, !noObject(s) && Array.isArray(s.json.sessions), `status ${s.status}`);
+    ok(`${who} summary of "${c.title}" has only sessions and money`, !noObject(s) && Object.keys(s.json).sort().join() === 'money,sessions', Object.keys(s.json ?? {}).join());
+    for (const p of partnerIdsInPlay.filter((x) => x !== c._partner)) {
+      const w = await call('/rest/v1/rpc/partner_portal_class_summary', { token: h.token, method: 'POST', body: { p_partner_id: p, p_kind: c.kind, p_class_id: c.class_id } });
+      ok(`${who} cannot read "${c.title}" summary through another partner (${p.slice(0, 8)})`, noObject(w), `status ${w.status}`);
+    }
+  }
+  for (const c of ownClasses.filter((x) => x.count_source === 'enrops' && (x.status === 'open' || x.status === 'finished'))) {
     const r = await call('/rest/v1/rpc/partner_portal_class_roster', { token: h.token, method: 'POST', body: { p_partner_id: c._partner, p_kind: c.kind, p_class_id: c.class_id } });
     const list = rows(r);
     rosterRows.push(...list);
@@ -514,6 +527,10 @@ for (const t of ['partner_marketing_asks', 'partner_logos', 'class_media']) {
 }
 const anonRoster = await call('/rest/v1/rpc/partner_portal_class_roster', { method: 'POST', body: { p_partner_id: partnerIdsInPlay[0], p_kind: 'class', p_class_id: '00000000-0000-0000-0000-000000000000' } });
 ok('anon: no roster', gotNothing(anonRoster), `status ${anonRoster.status}`);
+for (const p of partnerIdsInPlay) {
+  const r = await call('/rest/v1/rpc/partner_portal_class_summary', { method: 'POST', body: { p_partner_id: p, p_kind: 'class', p_class_id: '00000000-0000-0000-0000-000000000000' } });
+  ok(`anon: no summary for ${p.slice(0, 8)}`, r.status >= 400 || r.json == null, `status ${r.status}`);
+}
 const anonDocs = await call('/rest/v1/provider_documents_with_status?select=id');
 ok('anon: no documents', gotNothing(anonDocs), `status ${anonDocs.status}`);
 

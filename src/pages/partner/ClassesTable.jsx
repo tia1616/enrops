@@ -1,6 +1,10 @@
 // "Classes at your sites": every class and camp this provider runs at the
-// partner's sites that has not ended, with enrolled / max (Jessica 2026-11-19:
-// "like 5/18"), the instructor, and a roster the partner opens in the row.
+// partner's sites that has not ended or ended in the last 60 days ("Finished",
+// 20261125t), with enrolled / max (Jessica 2026-11-19: "like 5/18"), the
+// instructor, and a roster the partner opens in the row. The same panel shows
+// which sessions were held and, where families registered through enrops,
+// what they paid, with a download to attach to an invoice (Jessica
+// 2026-11-25: "what info do they need?").
 // Rendered by the partner's page AND the provider's own page for that partner
 // (admin/PartnerRecord), like the rest of ProviderRecord, so both see the same
 // numbers. The provider's page adds "Enter count" on a class it registers
@@ -13,17 +17,18 @@
 import { useEffect, useRef, useState } from "react";
 import DocumentStatusBadge from "../../components/DocumentStatusBadge.jsx";
 import { formatTermLabel } from "../../lib/terms.js";
-import { listPartnerClasses, getClassRoster, getRegistrationFields, setReportedEnrollment } from "../../lib/partnerPortal.js";
+import { listPartnerClasses, getClassRoster, getClassSummary, getRegistrationFields, setReportedEnrollment } from "../../lib/partnerPortal.js";
 import {
   scheduleText, enrolledText, countSourceText, classBadge, rosterAvailable,
   sortClasses, rosterDisplayRows, asksDismissal, showsHomeroom, groupClassesByTerm,
+  detailsButtonText, sessionsHeadline, sessionStatusText, paidText, classSummaryCsv, summaryFileName, shortDate,
 } from "../../lib/partnerClasses.js";
 import {
   listMarketingAsks, listClassMedia, uploadClassMedia, removeClassMedia, openMarketingFile,
 } from "../../lib/partnerMarketing.js";
 import {
   wantedAsks, indexMedia, mediaKey, itemOf, askLine, fileProblemForAsk, shareName, extOfPath, mediaGaps, galleryGroups,
-  MARKETING_ITEMS, FILE_TYPES,
+  takesMarketing, MARKETING_ITEMS, FILE_TYPES,
 } from "../../lib/partnerMarketingLogic.js";
 import MarketingGallery from "./MarketingGallery.jsx";
 
@@ -97,15 +102,22 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
     const k = keyOf(c);
     if (open === k) { setOpen(null); return; }
     setOpen(k);
-    if (rosters[k]?.rows || loadingRoster.current.has(k)) return;
+    // Loaded already (rows is null for a class with no roster), or loading.
+    if ((rosters[k] && !rosters[k].error) || loadingRoster.current.has(k)) return;
     loadingRoster.current.add(k);
     try {
-      const [rows, fields] = await Promise.all([
-        getClassRoster(partnerId, c.kind, c.class_id),
-        getRegistrationFields(orgId, c.kind === "class" ? c.class_id : null),
+      // The roster only for a class families registered for in enrops; the
+      // sessions (and what was paid) for every running or finished class.
+      const withRoster = rosterAvailable(c);
+      const [rows, fields, summary] = await Promise.all([
+        withRoster ? getClassRoster(partnerId, c.kind, c.class_id) : null,
+        withRoster ? getRegistrationFields(orgId, c.kind === "class" ? c.class_id : null) : null,
+        getClassSummary(partnerId, c.kind, c.class_id),
       ]);
-      const shown = rosterDisplayRows(rows);
-      setRosters((m) => ({ ...m, [k]: { rows: shown, asks: asksDismissal(fields, c.kind), homeroom: showsHomeroom(shown) } }));
+      const shown = withRoster ? rosterDisplayRows(rows) : null;
+      setRosters((m) => ({ ...m, [k]: {
+        rows: shown, asks: withRoster && asksDismissal(fields, c.kind), homeroom: withRoster && showsHomeroom(shown), summary,
+      } }));
     } catch (err) {
       setRosters((m) => ({ ...m, [k]: { error: `Couldn't load the roster: ${err?.message ?? "unknown error"}` } }));
     } finally {
@@ -147,7 +159,7 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
         <p className="px-4 pt-1 text-sm text-j2s-ink/70">
           {/* A count for what was asked for, or anything already in. */}
           {rowItems.filter((a) => a.wanted || classes.some((c) => media.has(mediaKey(c.kind, c.class_id, a.item_key)))).map((a) => {
-            const live = classes.filter((c) => c.status !== "cancelled");
+            const live = classes.filter(takesMarketing);
             const have = live.filter((c) => media.has(mediaKey(c.kind, c.class_id, a.item_key))).length;
             return `${itemOf(a.item_key).plural} on ${have} of ${live.length} classes`;
           }).join(" · ")}
@@ -176,8 +188,8 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
       ) : classes.length === 0 ? (
         <p className="px-4 pb-4 pt-2 text-sm text-j2s-ink/70">
           {viewer === "provider"
-            ? `You have no current or upcoming classes at ${partnerName || "this partner"}'s sites.`
-            : `${orgName || "This provider"} has no current or upcoming classes at your sites.`}
+            ? `You have no current, upcoming or recent classes at ${partnerName || "this partner"}'s sites.`
+            : `${orgName || "This provider"} has no current, upcoming or recent classes at your sites.`}
         </p>
       ) : (
         <div className="mt-2 overflow-x-auto">
@@ -212,14 +224,14 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
                       <div className="text-xs text-j2s-ink/55">{c.site}{c.kind === "camp" ? " · Camp" : ""}</div>
                       <div className="text-xs text-j2s-ink/55">{scheduleText(c)}</div>
                       {/* In the pinned first column so it is on screen on a phone. */}
-                      {rosterAvailable(c) && (
+                      {detailsButtonText(c, open === k) && (
                         <button type="button" onClick={() => toggleRoster(c)} aria-expanded={open === k}
                           className="mt-0.5 py-1 text-xs font-semibold text-j2s-purple hover:underline">
-                          {open === k ? "Hide roster" : "Roster"}
+                          {detailsButtonText(c, open === k)}
                         </button>
                       )}
                       {/* Flyer / social graphic (20261123r), in the pinned column so it's on a phone screen. */}
-                      {c.status !== "cancelled" && !mediaError && rowItems.map((a) => (
+                      {takesMarketing(c) && !mediaError && rowItems.map((a) => (
                         <ClassMediaLine
                           key={a.item_key} c={c} ask={a} file={media.get(mediaKey(c.kind, c.class_id, a.item_key)) ?? null}
                           viewer={viewer} canEdit={canEdit} orgId={orgId} partnerName={partnerName} termLabel={g.label}
@@ -259,11 +271,14 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
                   open === k && (
                     <tr key={`${k}:roster`}>
                       <td colSpan={4} className="border-b border-j2s-ink/10 bg-j2s-ink/[0.02] px-3 py-3">
+                        {roster && !roster.error && (
+                          <ClassSummary c={c} summary={roster.summary} rows={roster.rows} termLabel={g.label} orgName={orgName} />
+                        )}
                         {!roster ? (
-                          <p className="text-sm text-j2s-ink/60">Loading roster…</p>
+                          <p className="text-sm text-j2s-ink/60">Loading…</p>
                         ) : roster.error ? (
                           <p className="error-text">{roster.error}</p>
-                        ) : roster.rows.length === 0 ? (
+                        ) : roster.rows == null ? null : roster.rows.length === 0 ? (
                           <p className="text-sm text-j2s-ink/70">No one is enrolled yet.</p>
                         ) : (
                           <div className="overflow-x-auto">
@@ -310,6 +325,54 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
   );
 }
 
+// Sessions held and what families paid, above the roster, with the download a
+// partner attaches to an invoice. `summary` null = this login may not see it.
+const SESSION_TONE = {
+  held: "border-emerald-200 bg-emerald-50 text-emerald-800",
+  cancelled: "border-j2s-ink/15 bg-j2s-ink/[0.04] text-j2s-ink/55 line-through",
+  upcoming: "border-j2s-ink/15 bg-white text-j2s-ink/70",
+  not_confirmed: "border-amber-200 bg-amber-50 text-amber-800",
+};
+
+function ClassSummary({ c, summary, rows, termLabel, orgName }) {
+  if (!summary) return null;
+  const sessions = summary.sessions ?? [];
+  const paid = paidText(summary.money);
+  function download() {
+    const csv = classSummaryCsv(c, summary, rows, { providerName: orgName, termLabel });
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = summaryFileName(c, termLabel);
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+  return (
+    <div className="mb-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <div className="text-sm font-semibold text-j2s-ink">{sessionsHeadline(sessions)}</div>
+        <button type="button" onClick={download} className="text-xs font-semibold text-j2s-purple hover:underline">
+          Download summary (CSV)
+        </button>
+      </div>
+      {sessions.length > 0 && (
+        <ul className="mt-1.5 flex flex-wrap gap-1.5" aria-label="Sessions">
+          {sessions.map((s) => (
+            <li key={`${s.date}:${s.status}`} title={sessionStatusText(s.status)}
+              className={`rounded border px-1.5 py-0.5 text-xs tabular-nums ${SESSION_TONE[s.status] ?? SESSION_TONE.not_confirmed}`}>
+              {shortDate(s.date)}{s.status === "held" ? "" : ` · ${sessionStatusText(s.status)}`}
+            </li>
+          ))}
+        </ul>
+      )}
+      {paid && <p className="mt-1.5 text-sm text-j2s-ink/80">{paid}</p>}
+    </div>
+  );
+}
+
 // One asked-for item on one class. The provider views, adds (to this class and
 // any others it covers), replaces or removes it. The partner's row only shows
 // a small marker; viewing, sharing and downloading are in the gallery above.
@@ -330,7 +393,7 @@ function ClassMediaLine({ c, ask, file, viewer, canEdit, orgId, partnerName, ter
   // A picked file waits here while the provider says which other classes it
   // also covers ("upload once, use for several").
   const [pending, setPending] = useState(null); // { file, also: Set<key> } | null
-  const others = (siblings || []).filter((o) => o.status !== "cancelled" && !(o.kind === c.kind && o.class_id === c.class_id));
+  const others = (siblings || []).filter((o) => takesMarketing(o) && !(o.kind === c.kind && o.class_id === c.class_id));
 
   async function onPick(e) {
     const f = e.target.files?.[0];

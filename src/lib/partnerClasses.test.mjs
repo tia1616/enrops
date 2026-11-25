@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 import {
   scheduleText, enrolledText, countSourceText, classBadge, rosterAvailable,
   sortClasses, rosterDisplayRows, asksDismissal, shortDate, showsHomeroom,
+  summaryAvailable, detailsButtonText, sessionsHeadline, sessionStatusText, paidText, dollars,
+  csvCell, classSummaryCsv, summaryFileName,
 } from './partnerClasses.js';
 
 let pass = 0, fail = 0;
@@ -133,6 +135,69 @@ eq('never asked', asksDismissal([], 'class'), false);
   eq('JS rule has exactly three conditions (a fourth must be copied to SQL)', (jsFn.match(/===/g) || []).length, 3);
   // The count and the roster both read the same rule.
   eq('count reads the rule', (sql.match(/private\.registration_on_roster\(r\)/g) || []).length >= 3, true);
+}
+
+// --- finished classes and the end-of-term summary (20261125t) ---------------
+{
+  const done = { ...base, status: 'finished' };
+  eq('finished badge', classBadge(done).label, 'Finished');
+  eq('finished full class still says Finished', classBadge({ ...done, enrolled: 18 }).label, 'Finished');
+  eq('finished enrops class keeps its roster', rosterAvailable(done), true);
+  eq('finished class: one button', detailsButtonText(done, false), 'Roster & sessions');
+  eq('open, hide', detailsButtonText(base, true), 'Hide roster & sessions');
+  eq('partner-run: sessions only', detailsButtonText({ ...base, count_source: 'partner' }, false), 'Sessions');
+  eq('typed count: sessions only', detailsButtonText({ ...base, count_source: 'provider' }, false), 'Sessions');
+  eq('draft: no button', detailsButtonText({ ...base, status: 'draft' }, false), null);
+  eq('cancelled: no button', detailsButtonText({ ...base, status: 'cancelled' }, false), null);
+  eq('summary on finished', summaryAvailable(done), true);
+
+  const s = (status, date = '2026-09-01') => ({ date, status });
+  eq('all held', sessionsHeadline([s('held'), s('held')]), '2 of 2 sessions held');
+  eq('cancelled is not on the schedule count', sessionsHeadline([s('held'), s('cancelled'), s('not_confirmed')]),
+    '1 of 2 sessions held · 1 not confirmed yet · 1 cancelled');
+  eq('one session', sessionsHeadline([s('upcoming')]), '0 of 1 session held · 1 upcoming');
+  eq('no dates', sessionsHeadline([]), 'No session dates set');
+  eq('status words', ['held', 'cancelled', 'upcoming', 'not_confirmed', 'odd'].map(sessionStatusText),
+    ['Held', 'Cancelled', 'Upcoming', 'Not confirmed yet', 'Not confirmed yet']);
+
+  // HV Fall Super Mario on prod, 2026-11-25: 6 children, $1,686.
+  eq('paid line', paidText({ children: 6, paid_cents: 168600 }), 'Families paid $1,686.00 for 6 children, after discounts and refunds.');
+  eq('one child', paidText({ children: 1, paid_cents: 29900 }), 'Families paid $299.00 for 1 child, after discounts and refunds.');
+  eq('nothing paid', paidText({ children: 0, paid_cents: 0 }), 'No payments yet.');
+  eq('no money line off enrops', paidText(null), null);
+  eq('dollars', dollars(123456), '$1,234.56');
+
+  eq('csv quotes commas', csvCell('Smith, Jo'), '"Smith, Jo"');
+  eq('csv quotes quotes', csvCell('Jo "JJ"'), '"Jo ""JJ"""');
+  eq('csv defuses a formula', csvCell('=HYPERLINK("x")'), `"'=HYPERLINK(""x"")"`);
+  eq('csv defuses a minus', csvCell('-1'), "'-1");
+  eq('csv null', csvCell(null), '');
+
+  const csv = classSummaryCsv(
+    { ...done, title: 'Super Mario', site: 'Happy Valley Library', first_date: '2026-09-15', last_date: '2026-11-03' },
+    { sessions: [s('held', '2026-09-15'), s('cancelled', '2026-10-13')], money: { children: 2, paid_cents: 59800 } },
+    [{ name: 'Ava Lee', grade: '2nd', homeroom: null }, { name: '=cmd', grade: 'K', homeroom: null }],
+    { providerName: 'Journey to STEAM', termLabel: 'Fall 2026' },
+  ).split('\r\n');
+  eq('csv first line', csv[0], 'Class,Super Mario');
+  eq('csv has term and provider', csv.includes('Term,Fall 2026') && csv.includes('Provider,Journey to STEAM'), true);
+  eq('csv lists each date with status', csv.includes('2026-09-15,Held') && csv.includes('2026-10-13,Cancelled'), true);
+  eq('csv total', csv.includes('Families paid,"$598.00"') || csv.includes('Families paid,$598.00'), true);
+  eq('csv roster, no homeroom column when none', csv.includes('Student,Grade') && csv.includes('Ava Lee,2nd'), true);
+  eq('csv roster defuses a formula name', csv.includes("'=cmd,K"), true);
+  const noMoney = classSummaryCsv(done, { sessions: [], money: null }, null).split('\r\n');
+  eq('csv without money or roster', noMoney.some((l) => l.startsWith('Families paid') || l.startsWith('Student')), false);
+  eq('file name', summaryFileName({ title: 'Robots: Go/Build' }, 'Fall 2026'), 'Robots GoBuild - Fall 2026 summary.csv');
+}
+
+// The database keeps a finished class listed 60 days, as 'finished'.
+{
+  const sql = readFileSync(new URL('../../supabase/migrations/20261125t_partner_term_summary.sql', import.meta.url), 'utf8');
+  eq('classes stay 60 days', (sql.match(/>= v_today - 60/g) || []).length, 2);
+  eq('finished status for classes and camps', (sql.match(/then 'finished'/g) || []).length, 2);
+  eq('summary has no anon grant', /grant execute on function public\.partner_portal_class_summary\(uuid, text, uuid\) to authenticated;/.test(sql)
+    && /revoke all on function public\.partner_portal_class_summary\(uuid, text, uuid\) from public, anon;/.test(sql), true);
+  eq('summary money counts only the roster', sql.includes('private.registration_on_roster(r)'), true);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

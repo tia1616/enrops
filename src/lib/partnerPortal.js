@@ -356,6 +356,18 @@ export async function getClassRoster(partnerId, kind, classId) {
 }
 
 /**
+ * One class's end-of-term summary (20261125t): { sessions: [{ date, status }],
+ * money: { children, paid_cents } | null }. status is held / cancelled /
+ * upcoming / not_confirmed. money is null when families did not register
+ * through enrops. null overall when this login may not see the class.
+ */
+export async function getClassSummary(partnerId, kind, classId) {
+  const { data, error } = await supabase.rpc("partner_portal_class_summary", { p_partner_id: partnerId, p_kind: kind, p_class_id: classId });
+  if (error) throw error;
+  return data ?? null;
+}
+
+/**
  * The provider's registration questions, for "is there a Dismissal column"
  * (asksDismissal). null when the read fails, which shows the column.
  */
