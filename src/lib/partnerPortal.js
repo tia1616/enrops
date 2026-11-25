@@ -395,6 +395,18 @@ export async function getShowFamilyPayments(orgId, partnerId) {
   return !!data?.show_family_payments;
 }
 
+/**
+ * What decides whether a class's public sign-up link works: the provider's
+ * on-sale season settings, from the public directory (readable by anyone,
+ * which is what families see). null when unreadable (no share buttons).
+ */
+export async function getProviderSaleSettings(orgId) {
+  const { data, error } = await supabase.from("public_org_directory")
+    .select("active_registration_term, classes_follow_dates").eq("id", orgId).maybeSingle();
+  if (error) throw error;
+  return data ?? null;
+}
+
 /** The provider's own invoicing note for a partner (provider side only; for the term statement). */
 export async function getPartnerInvoicingNote(orgId, partnerId) {
   const { data, error } = await supabase.from("partners")

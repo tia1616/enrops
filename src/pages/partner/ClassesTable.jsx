@@ -19,14 +19,14 @@ import DocumentStatusBadge from "../../components/DocumentStatusBadge.jsx";
 import { formatTermLabel } from "../../lib/terms.js";
 import {
   listPartnerClasses, getClassRoster, getClassSummary, getRegistrationFields, setReportedEnrollment,
-  getShowFamilyPayments, setShowFamilyPayments, getPartnerInvoicingNote,
+  getShowFamilyPayments, setShowFamilyPayments, getPartnerInvoicingNote, getProviderSaleSettings,
 } from "../../lib/partnerPortal.js";
 import SettingSwitch from "../../components/SettingSwitch.jsx";
 import {
   scheduleText, enrolledText, countSourceText, classBadge, rosterAvailable,
   sortClasses, rosterDisplayRows, asksDismissal, showsHomeroom, groupClassesByTerm,
   detailsButtonText, sessionsHeadline, sessionStatusText, paidText, classSummaryCsv, summaryFileName, shortDate,
-  paidByChild, childPaidText, termStatementCsv, statementFileName,
+  paidByChild, childPaidText, termStatementCsv, statementFileName, canShareClass, partnerShareUrl,
 } from "../../lib/partnerClasses.js";
 import {
   listMarketingAsks, listClassMedia, uploadClassMedia, removeClassMedia, openMarketingFile,
@@ -46,7 +46,7 @@ const keyOf = (c) => `${c.kind}:${c.class_id}`;
 // `onMediaGaps(gaps)`: what the partner asked for that isn't on a class yet
 // ([{ item, count }], from mediaGaps), for the provider's To do list.
 // `onAskMarketing()`: the partner's page takes it to the Marketing asks.
-export default function ClassesTable({ partnerId, orgId, orgName, viewer = "partner", partnerName = "", canEdit = false, onCount, onMediaGaps, onAskMarketing }) {
+export default function ClassesTable({ partnerId, orgId, orgName, viewer = "partner", partnerName = "", canEdit = false, onCount, onMediaGaps, onAskMarketing, orgSlug = "", sharerName = "" }) {
   const [classes, setClasses] = useState(null);
   // Marketing (20261123r): what the partner asks for, and the files on classes.
   const [asks, setAsks] = useState([]);
@@ -100,6 +100,35 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [partnerId, orgId]);
+
+  // "Share sign-up link" on the partner's view (Jessica 2026-11-25): only
+  // where the link works (canShareClass, the provider's own share rule).
+  const [saleSettings, setSaleSettings] = useState(null);
+  const [shared, setShared] = useState(""); // key of the class just shared/copied
+  useEffect(() => {
+    setSaleSettings(null);
+    if (viewer !== "partner" || !orgId || !orgSlug) return;
+    getProviderSaleSettings(orgId).then(setSaleSettings).catch(() => setSaleSettings(null));
+  }, [viewer, orgId, orgSlug]);
+  async function shareClass(c) {
+    const url = partnerShareUrl(orgSlug, c.class_id, sharerName);
+    const k = keyOf(c);
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: c.title || "Class", text: `Sign up for ${c.title || "this class"} at ${c.site || "our site"}`, url });
+        setShared(k);
+        return;
+      }
+    } catch (err) {
+      if (err?.name === "AbortError") return; // they closed the share sheet
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      setShared(k);
+    } catch {
+      window.prompt("Copy this sign-up link:", url);
+    }
+  }
 
   // Term statement (Jessica 2026-11-25): one file per partner per term.
   const [statementBusy, setStatementBusy] = useState(""); // term key being built
@@ -320,6 +349,15 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
                           className="mt-0.5 py-1 text-xs font-semibold text-j2s-purple hover:underline">
                           {detailsButtonText(c, open === k)}
                         </button>
+                      )}
+                      {viewer === "partner" && orgSlug && saleSettings && canShareClass(c, saleSettings) && (
+                        <div>
+                          <button type="button" onClick={() => shareClass(c)}
+                            className="py-1 text-xs font-semibold text-j2s-purple hover:underline">
+                            Share sign-up link
+                          </button>
+                          {shared === k && <span role="status" className="ml-2 text-xs text-emerald-700">Link ready to paste</span>}
+                        </div>
                       )}
                       {/* Flyer / social graphic (20261123r), in the pinned column so it's on a phone screen. */}
                       {takesMarketing(c) && !mediaError && rowItems.map((a) => (

@@ -166,7 +166,9 @@ export default function PartnerProviderDetail() {
               onAskMarketing={reqControl?.can_edit ? () => {
                 setTab("requirements");
                 requestAnimationFrame(() => document.getElementById("marketing-asks")?.scrollIntoView({ behavior: "smooth", block: "start" }));
-              } : undefined} orgId={m.organization_id} orgName={orgName} onCount={setClassCount} />
+              } : undefined} orgId={m.organization_id} orgName={orgName} onCount={setClassCount}
+              // For "Share sign-up link" (Jessica 2026-11-25): the provider's public page, tagged with this partner.
+              orgSlug={m.organization_slug} sharerName={m.partner_name} />
           </RecordTabPanel>
 
           <RecordTabPanel id="instructors" active={tab}>

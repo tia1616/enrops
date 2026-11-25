@@ -9,6 +9,8 @@
 // for that partner (both render ClassesTable) can never say different things.
 
 import { formatDate } from "./providerDocumentLogic.js";
+import { buildProgramShareUrl } from "./regLinks.js";
+import { isTermOnSale } from "./classSeasons.js";
 import { sortRosterRows } from "./rosterOrder.js";
 import { gradeLabel } from "./grades.js";
 import { dismissalSummary } from "./dismissal.js";
@@ -299,6 +301,29 @@ export function glanceText(g, thisYear) {
   if (g.running || g.upcoming) parts.push(`${g.children} ${g.children === 1 ? "child" : "children"} enrolled`);
   if (g.finished) parts.push(`${g.finished} finished, ${g.finished === 1 ? "summary" : "summaries"} ready`);
   return parts.join(" · ");
+}
+
+/**
+ * Can a partner share this class's sign-up link (Jessica 2026-11-25: "share
+ * this class")? The rule the provider's own Programs share uses
+ * (ShareProgram): a weekly class families register for through enrops,
+ * open, not finished, in a season on sale. Camps (camp sessions) and
+ * partner-run classes have no catalog link here. `org` is the provider's
+ * public_org_directory row ({ active_registration_term, classes_follow_dates }).
+ */
+export function canShareClass(c, org) {
+  if (!c || c.kind !== "class" || c.status !== "open" || c.count_source !== "enrops") return false;
+  return isTermOnSale(org, c.term);
+}
+
+/**
+ * The class's sign-up link, tagged so a registration it brings in is credited
+ * to this partner (registrations.attribution, src/lib/attribution.js).
+ */
+export function partnerShareUrl(slug, classId, partnerName, origin) {
+  const base = buildProgramShareUrl(slug, classId, origin);
+  const campaign = String(partnerName || "partner").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "partner";
+  return `${base}&utm_source=partner&utm_medium=partner_portal&utm_campaign=${encodeURIComponent(campaign)}`;
 }
 
 /** "Super Mario Game Makers - Fall 2026.csv", safe for a file name. */

@@ -5,7 +5,7 @@ import {
   sortClasses, rosterDisplayRows, asksDismissal, shortDate, showsHomeroom,
   summaryAvailable, detailsButtonText, sessionsHeadline, sessionStatusText, paidText, dollars,
   csvCell, classSummaryCsv, summaryFileName, childPaidText, paidByChild,
-  termStatementCsv, statementFileName, classesAtAGlance, glanceText,
+  termStatementCsv, statementFileName, classesAtAGlance, glanceText, canShareClass, partnerShareUrl,
 } from './partnerClasses.js';
 
 let pass = 0, fail = 0;
@@ -238,6 +238,21 @@ eq('never asked', asksDismissal([], 'class'), false);
   const unread = termStatementCsv('Fall 2026', [a], new Map(), {}).split('\r\n');
   eq('unread summary says so', unread.some((r) => r.startsWith('Note,')), true);
   eq('statement file name', statementFileName('Happy Valley Parks and Rec', 'Fall 2026'), 'Happy Valley Parks and Rec - Fall 2026 statement.csv');
+}
+
+// Share sign-up link (partner view).
+{
+  const org = { active_registration_term: 'WI27', classes_follow_dates: false };
+  const open = { ...base, kind: 'class', status: 'open', count_source: 'enrops', term: 'WI27' };
+  eq('open enrops class on sale can share', canShareClass(open, org), true);
+  eq('season not on sale', canShareClass({ ...open, term: 'SP27' }, org), false);
+  eq('date-following provider: a season ahead is on sale', canShareClass({ ...open, term: 'SP27' }, { ...org, classes_follow_dates: true }), true);
+  eq('finished', canShareClass({ ...open, status: 'finished' }, org), false);
+  eq('partner-run', canShareClass({ ...open, count_source: 'partner' }, org), false);
+  eq('camp session', canShareClass({ ...open, kind: 'camp' }, org), false);
+  eq('no settings', canShareClass(open, null), false);
+  eq('tagged link', partnerShareUrl('j2s', 'abc', 'Happy Valley Parks and Rec', 'https://enrops.com'),
+    'https://enrops.com/j2s?program=abc&utm_source=partner&utm_medium=partner_portal&utm_campaign=happy-valley-parks-and-rec');
 }
 
 // Partner home: classes at a glance (enrollment first).
