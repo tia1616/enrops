@@ -558,7 +558,7 @@ export function emailsTheyGet({ contacts = [], siteEmails = [], logins = [], ros
     {
       key: "signin",
       title: "Sign-in links",
-      when: "Only when you send one from Logins, or they ask for one on the sign-in page.",
+      when: "Only when you send one (People & emails, Logins), or they ask for one on the sign-in page.",
       to: uniq(logins.map((g) => name(g.contact))),
       note: "",
     },

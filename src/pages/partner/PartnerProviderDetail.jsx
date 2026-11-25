@@ -30,12 +30,14 @@ import PartnerDecision from "./PartnerDecision.jsx";
 import ClassesTable from "./ClassesTable.jsx";
 import MarketingAsksSection from "./MarketingAsksSection.jsx";
 import EmailsSent from "./EmailsSent.jsx";
-import { RecordTabRow, RecordTabPanel, useRecordTab, alertFor } from "./RecordTabs.jsx";
-import { decisionTag } from "../../lib/recordTabs.js";
+import { RecordTabRow, RecordTabPanel, RecordSection, useRecordTab, alertFor } from "./RecordTabs.jsx";
+import { decisionTag, worstAlert } from "../../lib/recordTabs.js";
 
-// Classes first (Jessica 2026-11-25: enrollment first): a partner landing on a
-// provider with no #tab opens its classes, not its documents.
-const PARTNER_TABS = ["classes", "documents", "instructors", "emails", "requirements", "decision"];
+// Three tabs (Jessica 2026-11-25: enrollment first, then "too many tabs").
+// Classes opens by default; the old tabs are sections of Safety record, and
+// their #names (in emails already sent) still open it at that section.
+const PARTNER_TABS = ["classes", "safety", "emails"];
+const PARTNER_TAB_ALIASES = { documents: "safety", instructors: "safety", requirements: "safety", decision: "safety" };
 
 export default function PartnerProviderDetail() {
   const { partnerId } = useParams();
@@ -50,7 +52,7 @@ export default function PartnerProviderDetail() {
   const [loadError, setLoadError] = useState("");
   const [openError, setOpenError] = useState("");
   const opening = useRef(false);
-  const [tab, setTab] = useRecordTab(PARTNER_TABS);
+  const [tab, setTab] = useRecordTab(PARTNER_TABS, PARTNER_TAB_ALIASES);
   // Bumped when the partner saves a marketing ask, so Classes re-reads it.
   const [marketingVersion, setMarketingVersion] = useState(0);
   const [classCount, setClassCount] = useState(null);
@@ -147,61 +149,69 @@ export default function PartnerProviderDetail() {
             active={tab} onChange={setTab}
             tabs={[
               { id: "classes", label: "Classes", count: classCount },
-              { id: "documents", label: "Documents", alert: alertFor(s.business.map((b) => b.badge)) },
-              { id: "instructors", label: "Instructors", count: s.instructors.total || null, alert: s.instructors.total ? alertFor([s.instructors.badge]) : null },
+              {
+                // Documents, instructors, requirements, decision: one dot for the worst.
+                id: "safety", label: "Safety record", tag: decisionTag(decision)?.text,
+                alert: worstAlert(
+                  alertFor(s.business.map((b) => b.badge)),
+                  s.instructors.total ? alertFor([s.instructors.badge]) : null,
+                  decisionTag(decision)?.alert ?? null,
+                ),
+              },
               { id: "emails", label: "Emails sent", count: emailCount },
-              { id: "requirements", label: "Requirements" },
-              { id: "decision", label: "Decision", tag: decisionTag(decision)?.text, alert: decisionTag(decision)?.alert },
             ]}
           />
-
-          <RecordTabPanel id="documents" active={tab}>
-            <RequirementsList requirements={requirements} />
-            <DocumentsTable s={s} orgName={orgName} today={today} onOpen={open} />
-          </RecordTabPanel>
 
           <RecordTabPanel id="classes" active={tab}>
             <ClassesTable key={`classes:${m.partner_id}:${marketingVersion}`} partnerId={m.partner_id}
               // Only logins that can change the asks are invited to.
               onAskMarketing={reqControl?.can_edit ? () => {
-                setTab("requirements");
-                requestAnimationFrame(() => document.getElementById("marketing-asks")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+                setTab("safety");
+                // Two frames: the tab un-hides first (as RecordTabs.scrollToSection).
+                requestAnimationFrame(() => requestAnimationFrame(() =>
+                  document.getElementById("marketing-asks")?.scrollIntoView({ behavior: "smooth", block: "start" })));
               } : undefined} orgId={m.organization_id} orgName={orgName} onCount={setClassCount}
               // For "Share sign-up link" (Jessica 2026-11-25): the provider's public page, tagged with this partner.
               orgSlug={m.organization_slug} sharerName={m.partner_name} />
           </RecordTabPanel>
 
-          <RecordTabPanel id="instructors" active={tab}>
-            {/* Keyed on the partner: a picked cell must never carry over to
-                another provider's record. */}
-            <InstructorGrid key={m.partner_id} s={s} instructors={instructors} orgName={orgName} today={today} />
+          {/* Safety record (2026-11-25 regroup): what were the Documents,
+              Instructors, Requirements and Decision tabs, top to bottom. */}
+          <RecordTabPanel id="safety" active={tab}>
+            <RecordSection id="documents">
+              <RequirementsList requirements={requirements} />
+              <DocumentsTable s={s} orgName={orgName} today={today} onOpen={open} />
+            </RecordSection>
+            <RecordSection id="instructors">
+              {/* Keyed on the partner: a picked cell must never carry over to
+                  another provider's record. */}
+              <InstructorGrid key={m.partner_id} s={s} instructors={instructors} orgName={orgName} today={today} />
+            </RecordSection>
+            <RecordSection id="requirements">
+              {/* The same checklist the provider sees, worded for the partner;
+                  its admin logins can change it (20261119p). */}
+              <PartnerRequirementsSection
+                key={`requirements:${m.partner_id}`}
+                partner={{ id: m.partner_id, partner_name: m.partner_name }}
+                rows={requirements} canManage onChange={setRequirements}
+                viewer="partner" orgName={orgName} control={reqControl}
+                onSaved={() => loadReqControl(m.partner_id)}
+              />
+              {/* Marketing asks + logo (20261123r): the same every-site admin edits. */}
+              <MarketingAsksSection
+                key={`marketing:${m.partner_id}`}
+                partner={{ id: m.partner_id, partner_name: m.partner_name }}
+                viewer="partner" orgName={orgName} canEdit={!!reqControl?.can_edit}
+                onSaved={() => setMarketingVersion((v) => v + 1)}
+              />
+            </RecordSection>
+            <RecordSection id="decision">
+              <PartnerDecision key={`decision:${m.partner_id}`} partnerId={m.partner_id} onLatest={setDecision} />
+            </RecordSection>
           </RecordTabPanel>
 
           <RecordTabPanel id="emails" active={tab}>
             <EmailsSent key={`emails:${m.partner_id}`} partnerId={m.partner_id} orgName={orgName} onCount={setEmailCount} />
-          </RecordTabPanel>
-
-          <RecordTabPanel id="requirements" active={tab}>
-            {/* The same checklist the provider sees, worded for the partner;
-                its admin logins can change it (20261119p). */}
-            <PartnerRequirementsSection
-              key={`requirements:${m.partner_id}`}
-              partner={{ id: m.partner_id, partner_name: m.partner_name }}
-              rows={requirements} canManage onChange={setRequirements}
-              viewer="partner" orgName={orgName} control={reqControl}
-              onSaved={() => loadReqControl(m.partner_id)}
-            />
-            {/* Marketing asks + logo (20261123r): the same every-site admin edits. */}
-            <MarketingAsksSection
-              key={`marketing:${m.partner_id}`}
-              partner={{ id: m.partner_id, partner_name: m.partner_name }}
-              viewer="partner" orgName={orgName} canEdit={!!reqControl?.can_edit}
-              onSaved={() => setMarketingVersion((v) => v + 1)}
-            />
-          </RecordTabPanel>
-
-          <RecordTabPanel id="decision" active={tab}>
-            <PartnerDecision key={`decision:${m.partner_id}`} partnerId={m.partner_id} onLatest={setDecision} />
           </RecordTabPanel>
         </>
       )}

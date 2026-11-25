@@ -1,5 +1,5 @@
 // Provider-record tabs: the dot on a tab and the tab a link opens.
-import { alertFor, tabFromHash, decisionTag } from './recordTabs.js';
+import { alertFor, tabFromHash, sectionFromHash, worstAlert, decisionTag } from './recordTabs.js';
 
 let pass = 0, fail = 0;
 function eq(name, actual, expected) {
@@ -26,6 +26,23 @@ eq('link opens its tab', tabFromHash('#classes', IDS), 'classes');
 eq('no hash: first tab', tabFromHash('', IDS), 'documents');
 eq('unknown hash: first tab', tabFromHash('#logins', IDS), 'documents');
 eq('a magic-link hash is not a tab', tabFromHash('#access_token=abc&type=magiclink', IDS), 'documents');
+
+// Grouped tabs (Jessica 2026-11-25: "too many tabs"): old links still land.
+const PROVIDER = ['todo', 'classes', 'safety', 'people'];
+const PA = { documents: 'safety', instructors: 'safety', decision: 'safety', requirements: 'safety', logins: 'people', emails: 'people' };
+eq('provider: no hash opens To do', tabFromHash('', PROVIDER, PA), 'todo');
+eq('old #documents opens Safety record', tabFromHash('#documents', PROVIDER, PA), 'safety');
+eq('old #logins opens People & emails', tabFromHash('#logins', PROVIDER, PA), 'people');
+eq('...at the logins section', sectionFromHash('#logins', PROVIDER, PA), 'logins');
+eq('a whole tab is not a section', sectionFromHash('#safety', PROVIDER, PA), null);
+eq('unknown hash: first tab, no section', [tabFromHash('#nope', PROVIDER, PA), sectionFromHash('#nope', PROVIDER, PA)], ['todo', null]);
+eq('an alias never borrows a prototype key', tabFromHash('#constructor', PROVIDER, PA), 'todo');
+const PARTNER = ['classes', 'safety', 'emails'];
+const PAA = { documents: 'safety', instructors: 'safety', requirements: 'safety', decision: 'safety' };
+eq('partner: no hash opens Classes', tabFromHash('', PARTNER, PAA), 'classes');
+eq('partner: #emails is a real tab', [tabFromHash('#emails', PARTNER, PAA), sectionFromHash('#emails', PARTNER, PAA)], ['emails', null]);
+eq('partner: old #decision opens Safety record at Decision', [tabFromHash('#decision', PARTNER, PAA), sectionFromHash('#decision', PARTNER, PAA)], ['safety', 'decision']);
+eq('worst dot', [worstAlert(null, 'attention', null), worstAlert('attention', 'bad'), worstAlert(null, null)], ['attention', 'bad', null]);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

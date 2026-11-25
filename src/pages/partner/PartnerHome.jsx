@@ -179,8 +179,8 @@ export default function PartnerHome() {
                 {shown.map(({ m, summary: s }) => (
                   <tr key={m.partner_id} className="hover:bg-j2s-purple-soft/40">
                     <td className="px-4 py-3">
-                      {/* #documents: this row is the safety record (a provider's page opens on Classes otherwise). */}
-                      <Link to={`/partner/${m.partner_id}#documents`} className="font-semibold text-j2s-purple hover:underline">{m.organization_name}</Link>
+                      {/* Opens on Classes, like every way into a provider (Jessica 2026-11-25). */}
+                      <Link to={`/partner/${m.partner_id}`} className="font-semibold text-j2s-purple hover:underline">{m.organization_name}</Link>
                       {s.sites.length > 0 && <div className="text-xs text-j2s-ink/50">{s.sites.join(", ")}</div>}
                     </td>
                     <td className="px-4 py-3"><RequirementsCell s={s} /></td>
@@ -195,7 +195,7 @@ export default function PartnerHome() {
           {/* Phone: the same rows as cards. */}
           <div className="mt-6 space-y-3 md:hidden">
             {shown.map(({ m, summary: s }) => (
-              <Link key={m.partner_id} to={`/partner/${m.partner_id}#documents`} className="block rounded-2xl bg-white p-4 shadow-card">
+              <Link key={m.partner_id} to={`/partner/${m.partner_id}`} className="block rounded-2xl bg-white p-4 shadow-card">
                 <div className="font-semibold text-j2s-purple">{m.organization_name}</div>
                 {s.sites.length > 0 && <div className="text-xs text-j2s-ink/50">{s.sites.join(", ")}</div>}
                 <dl className="mt-3 grid grid-cols-[auto,1fr] gap-x-4 gap-y-2 text-sm">

@@ -139,7 +139,7 @@ export default function ProviderDocuments() {
         <p style={{ margin: "20px 0 0", fontSize: 14, color: INK }}>
           <strong>{adoption.using} of {adoption.partners}</strong> partners have someone signed in.
           {adoption.withLogins < adoption.partners && <> {adoption.partners - adoption.withLogins} have no login yet.</>}
-          {adoption.notInvited > 0 && <> {adoption.notInvited} {adoption.notInvited === 1 ? "person has" : "people have"} a login but no invite yet (open the partner, then Logins).</>}
+          {adoption.notInvited > 0 && <> {adoption.notInvited} {adoption.notInvited === 1 ? "person has" : "people have"} a login but no invite yet (open the partner, then People &amp; emails).</>}
         </p>
         <section style={{ marginTop: 10, background: PANEL, border: `1px solid ${RULE}`, borderRadius: 12, overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13.5, minWidth: 640 }}>
