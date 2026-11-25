@@ -220,6 +220,58 @@ export function classSummaryCsv(c, summary, rows, { providerName = "", termLabel
   return out.join("\r\n");
 }
 
+/**
+ * One partner's statement for one term (Jessica 2026-11-25: invoicing is per
+ * partner, not per class): a row per running or finished class, then totals.
+ * `summaries` maps keyOf(c) -> partner_portal_class_summary result (null when
+ * it could not be read). Money columns only when some class carries money (a
+ * partner sees it only when the provider shares it). `invoicingNote` is the
+ * provider's own note and is passed only on the provider's page.
+ */
+export function termStatementCsv(termLabel, classes, summaries, { partnerName = "", providerName = "", invoicingNote = "" } = {}) {
+  const live = (classes ?? []).filter((c) => c.status === "open" || c.status === "finished");
+  const sum = (c) => summaries?.get?.(`${c.kind}:${c.class_id}`) ?? null;
+  const withMoney = live.some((c) => sum(c)?.money);
+  const out = [];
+  const line = (...cells) => out.push(cells.map(csvCell).join(","));
+  line("Statement", [partnerName, termLabel].filter(Boolean).join(", "));
+  if (providerName) line("Provider", providerName);
+  if (invoicingNote && invoicingNote.trim()) line("Your invoicing notes (only on your copy)", invoicingNote.trim());
+  out.push("");
+  line("Class", "Site", "Dates", "Status", "Sessions held", "Sessions scheduled", "Not confirmed yet", "Cancelled", "Children on the roster",
+    ...(withMoney ? ["Children paid for", "Families paid"] : []));
+  const t = { held: 0, sched: 0, nc: 0, canc: 0, kids: 0, paidKids: 0, cents: 0 };
+  for (const c of live) {
+    const s = sum(c);
+    const list = s?.sessions ?? [];
+    const n = (st) => list.filter((x) => x.status === st).length;
+    const held = n("held"); const canc = n("cancelled"); const nc = n("not_confirmed");
+    const sched = list.length - canc;
+    const kids = c.count_source === "partner" || c.enrolled == null ? "" : Number(c.enrolled);
+    const m = s?.money;
+    t.held += held; t.sched += sched; t.nc += nc; t.canc += canc;
+    if (kids !== "") t.kids += kids;
+    if (m) { t.paidKids += Number(m.children || 0); t.cents += Number(m.paid_cents || 0); }
+    const dates = c.first_date && c.last_date && c.first_date !== c.last_date ? `${c.first_date} to ${c.last_date}` : (c.first_date || c.last_date || "");
+    line(c.title || "Untitled class", c.site || "", dates, c.status === "finished" ? "Finished" : "Running",
+      s ? held : "", s ? sched : "", s ? nc : "", s ? canc : "", kids,
+      ...(withMoney ? [m ? Number(m.children || 0) : "", m ? dollars(m.paid_cents) : ""] : []));
+  }
+  line("Total", "", "", `${live.length} ${live.length === 1 ? "class" : "classes"}`, t.held, t.sched, t.nc, t.canc, t.kids,
+    ...(withMoney ? [t.paidKids, dollars(t.cents)] : []));
+  if (live.some((c) => !sum(c))) {
+    out.push("");
+    line("Note", "Sessions could not be read for some classes; those cells are blank.");
+  }
+  return out.join("\r\n");
+}
+
+/** "Happy Valley Parks and Rec - Fall 2026 statement.csv" */
+export function statementFileName(partnerName, termLabel) {
+  const base = [partnerName || "Partner", termLabel].filter(Boolean).join(" - ");
+  return `${base.replace(/[\\/:*?"<>|]+/g, "").trim() || "Partner"} statement.csv`;
+}
+
 /** "Super Mario Game Makers - Fall 2026.csv", safe for a file name. */
 export function summaryFileName(c, termLabel) {
   const base = [c.title || "Class", termLabel].filter(Boolean).join(" - ");

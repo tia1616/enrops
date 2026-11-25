@@ -392,6 +392,14 @@ export async function getShowFamilyPayments(orgId, partnerId) {
   return !!data?.show_family_payments;
 }
 
+/** The provider's own invoicing note for a partner (provider side only; for the term statement). */
+export async function getPartnerInvoicingNote(orgId, partnerId) {
+  const { data, error } = await supabase.from("partners")
+    .select("invoicing_notes").eq("organization_id", orgId).eq("id", partnerId).maybeSingle();
+  if (error) throw error;
+  return data?.invoicing_notes ?? "";
+}
+
 /** Turn it on or off. Throws when no row changed (not this provider's partner, or refused). */
 export async function setShowFamilyPayments(orgId, partnerId, on) {
   const { data, error } = await supabase.from("partners")

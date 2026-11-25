@@ -5,6 +5,7 @@ import {
   sortClasses, rosterDisplayRows, asksDismissal, shortDate, showsHomeroom,
   summaryAvailable, detailsButtonText, sessionsHeadline, sessionStatusText, paidText, dollars,
   csvCell, classSummaryCsv, summaryFileName, childPaidText, paidByChild,
+  termStatementCsv, statementFileName,
 } from './partnerClasses.js';
 
 let pass = 0, fail = 0;
@@ -211,6 +212,32 @@ eq('never asked', asksDismissal([], 'class'), false);
   eq('csv paid per child', csv.includes('Ava Lee,2nd,$269.10') && csv.includes('Bo Kim,K,Free'), true);
   const hidden = classSummaryCsv({ ...base, title: 'X' }, { sessions: [], money: null }, [{ key: 'a', name: 'Ava Lee', grade: '2nd', homeroom: null }]).split('\r\n');
   eq('no money, no Paid column in csv', hidden.includes('Student,Grade'), true);
+}
+
+// Term statement per partner (Jessica 2026-11-25).
+{
+  const a = { ...base, class_id: 'a', status: 'finished', title: 'Super Mario', site: 'HV Library', enrolled: 6, first_date: '2026-09-15', last_date: '2026-11-03' };
+  const b = { ...base, class_id: 'b', status: 'open', title: 'LEGO', site: 'Annex', enrolled: 5 };
+  const draft = { ...base, class_id: 'd', status: 'draft', title: 'Draft' };
+  const held = (n) => Array.from({ length: n }, () => ({ status: 'held' }));
+  const sums = new Map([
+    ['class:a', { sessions: held(8), money: { children: 6, paid_cents: 168600 } }],
+    ['class:b', { sessions: [...held(2), { status: 'upcoming' }, { status: 'cancelled' }], money: { children: 5, paid_cents: 122800 } }],
+  ]);
+  const rows = termStatementCsv('Fall 2026', [a, b, draft], sums, { partnerName: 'Happy Valley Parks and Rec', providerName: 'Journey to STEAM', invoicingNote: 'Their 10% of what families paid' }).split('\r\n');
+  eq('statement title', rows[0], 'Statement,"Happy Valley Parks and Rec, Fall 2026"');
+  eq('provider note only when passed', rows.includes('Your invoicing notes (only on your copy),Their 10% of what families paid'), true);
+  eq('money columns when shared', rows.some((r) => r.startsWith('Class,') && r.endsWith('Children paid for,Families paid')), true);
+  eq('class row', rows.includes('Super Mario,HV Library,2026-09-15 to 2026-11-03,Finished,8,8,0,0,6,6,"$1,686.00"'), true);
+  eq('cancelled not scheduled', rows.some((r) => r.startsWith('LEGO,Annex,') && r.includes(',Running,2,3,0,1,5,5,')), true);
+  eq('totals', rows.includes('Total,,,2 classes,10,11,0,1,11,11,"$2,914.00"'), true);
+  eq('drafts left out', rows.some((r) => r.startsWith('Draft,')), false);
+  const partnerCopy = termStatementCsv('Fall 2026', [a], new Map([['class:a', { sessions: held(8), money: null }]]), { providerName: 'Journey to STEAM' }).split('\r\n');
+  eq('no money columns when not shared', partnerCopy.some((r) => r.includes('Families paid')), false);
+  eq('no note on a partner copy', partnerCopy.some((r) => r.startsWith('Your invoicing notes')), false);
+  const unread = termStatementCsv('Fall 2026', [a], new Map(), {}).split('\r\n');
+  eq('unread summary says so', unread.some((r) => r.startsWith('Note,')), true);
+  eq('statement file name', statementFileName('Happy Valley Parks and Rec', 'Fall 2026'), 'Happy Valley Parks and Rec - Fall 2026 statement.csv');
 }
 
 // The database keeps a finished class listed 60 days, as 'finished'.

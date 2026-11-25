@@ -19,14 +19,14 @@ import DocumentStatusBadge from "../../components/DocumentStatusBadge.jsx";
 import { formatTermLabel } from "../../lib/terms.js";
 import {
   listPartnerClasses, getClassRoster, getClassSummary, getRegistrationFields, setReportedEnrollment,
-  getShowFamilyPayments, setShowFamilyPayments,
+  getShowFamilyPayments, setShowFamilyPayments, getPartnerInvoicingNote,
 } from "../../lib/partnerPortal.js";
 import SettingSwitch from "../../components/SettingSwitch.jsx";
 import {
   scheduleText, enrolledText, countSourceText, classBadge, rosterAvailable,
   sortClasses, rosterDisplayRows, asksDismissal, showsHomeroom, groupClassesByTerm,
   detailsButtonText, sessionsHeadline, sessionStatusText, paidText, classSummaryCsv, summaryFileName, shortDate,
-  paidByChild, childPaidText,
+  paidByChild, childPaidText, termStatementCsv, statementFileName,
 } from "../../lib/partnerClasses.js";
 import {
   listMarketingAsks, listClassMedia, uploadClassMedia, removeClassMedia, openMarketingFile,
@@ -100,6 +100,38 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [partnerId, orgId]);
+
+  // Term statement (Jessica 2026-11-25): one file per partner per term.
+  const [statementBusy, setStatementBusy] = useState(""); // term key being built
+  const [statementError, setStatementError] = useState("");
+  async function downloadStatement(g) {
+    if (statementBusy) return;
+    setStatementBusy(g.key); setStatementError("");
+    try {
+      const live = g.classes.filter((c) => c.status === "open" || c.status === "finished");
+      const summaries = new Map();
+      await Promise.all(live.map(async (c) => {
+        try { summaries.set(keyOf(c), await getClassSummary(partnerId, c.kind, c.class_id)); }
+        catch { summaries.set(keyOf(c), null); }
+      }));
+      const note = viewer === "provider" && orgId ? await getPartnerInvoicingNote(orgId, partnerId).catch(() => "") : "";
+      const who = viewer === "provider" ? partnerName : orgName;
+      const csv = termStatementCsv(g.label, live, summaries, {
+        partnerName: viewer === "provider" ? partnerName : "", providerName: orgName, invoicingNote: note,
+      });
+      const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = statementFileName(who, g.label);
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (err) {
+      setStatementError(`Couldn't build the ${g.label} statement: ${err?.message ?? "unknown error"}`);
+    } finally {
+      setStatementBusy("");
+    }
+  }
 
   async function toggleSharePaid(on) {
     setSharePaidBusy(true); setSharePaidError("");
@@ -203,6 +235,7 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
         </div>
       )}
       {loadError && <p className="error-text px-4 pt-2">{loadError}</p>}
+      {statementError && <p role="alert" className="error-text px-4 pt-2">{statementError}</p>}
       {mediaError && <p className="error-text px-4 pt-2">{mediaError}</p>}
       {/* "Flyers on 2 of 4 classes": the partner sees at a glance what's in. */}
       {classes?.length > 0 && (wanted.length > 0 || gallery.length > 0) && (
@@ -258,7 +291,15 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
                 <tr key={`term:${g.key}`}>
                   <th colSpan={4} scope="rowgroup" className="border-b border-j2s-ink/10 bg-j2s-ink/[0.03] px-3 pb-1.5 pt-3 text-left text-sm font-bold text-j2s-ink">
                     {/* Pinned like the class column, so it stays on screen when a phone scrolls the table sideways. */}
-                    <span className="sticky left-3">{g.label}</span>
+                    <span className="sticky left-3 inline-flex flex-wrap items-baseline gap-x-3">
+                      {g.label}
+                      {g.classes.some((c) => c.status === "open" || c.status === "finished") && (
+                        <button type="button" onClick={() => downloadStatement(g)} disabled={!!statementBusy}
+                          className="text-xs font-semibold text-j2s-purple hover:underline disabled:opacity-60">
+                          {statementBusy === g.key ? "Building…" : `Download ${g.label} statement`}
+                        </button>
+                      )}
+                    </span>
                   </th>
                 </tr>,
                 ...g.classes.flatMap((c) => {
