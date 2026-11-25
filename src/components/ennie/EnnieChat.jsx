@@ -288,7 +288,10 @@ export default function EnnieChat({ org, user }) {
             whiteSpace: "nowrap",
           }}
         >
-          <Ennie state="idle" size={LAUNCHER_H - 10} />
+          {/* loop={false}: the idle clip is an ENTRANCE (scale 0 -> full, flying
+              in), so looping it blanks her every 4s. Played once, she pops in
+              on load and holds the settled pose: a still shot. */}
+          <Ennie state="idle" size={LAUNCHER_H - 10} loop={false} />
           <span>{open ? "Close" : "Ask Ennie"}</span>
         </button>
       )}
@@ -313,7 +316,9 @@ export default function EnnieChat({ org, user }) {
             paddingTop: phone ? "calc(12px + env(safe-area-inset-top, 0px))" : 12,
             borderBottom: `1px solid ${RULE}`,
           }}>
-            <Ennie state={asking ? "thinking" : "idle"} size={36} />
+            {/* Still when resting (see the launcher); the thinking clip loops
+                cleanly, so it plays while Ennie is answering. */}
+            <Ennie state={asking ? "thinking" : "idle"} size={36} loop={asking} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, color: PURPLE, fontSize: 15 }}>Ask Ennie</div>
               <div style={{ color: MUTED, fontSize: 12.5 }}>AI assistant</div>
