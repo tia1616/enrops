@@ -17,10 +17,13 @@ const fmt = (cents) => `$${((Number(cents) || 0) / 100).toFixed(2)}`;
 // into the registration's note - keep the two in step.
 export function rosterClassLabel({ curriculum, day_of_week, class_days, site } = {}) {
   const isCamp = Array.isArray(class_days) && class_days.length > 0;
-  const day = !isCamp && day_of_week
-    ? String(day_of_week).charAt(0).toUpperCase() + String(day_of_week).slice(1).toLowerCase() + " "
-    : "";
   const name = String(curriculum ?? "").trim() || "this class";
+  const dayWord = !isCamp && day_of_week
+    ? String(day_of_week).charAt(0).toUpperCase() + String(day_of_week).slice(1).toLowerCase()
+    : "";
+  // Not when the name already says it: "Saturday Ballet Intensive" must not read
+  // "Saturday Saturday Ballet Intensive" (seen on staging 2026-11-25).
+  const day = dayWord && !new RegExp(`\\b${dayWord}`, "i").test(name) ? `${dayWord} ` : "";
   const where = String(site ?? "").trim();
   return `${day}${name}${where ? ` at ${where}` : ""}`;
 }

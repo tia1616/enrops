@@ -18,6 +18,7 @@ eq('class: no site', rosterClassLabel({ curriculum: 'Robotics', day_of_week: 'Mo
 eq('camp: day is NOT its first day', rosterClassLabel({ curriculum: 'Winter Camp', day_of_week: 'monday', class_days: ['monday', 'tuesday'], site: 'Parks' }), 'Winter Camp at Parks');
 eq('empty class_days is a CLASS, keeps its day', rosterClassLabel({ curriculum: 'Art', day_of_week: 'friday', class_days: [] }), 'Friday Art');
 eq('no name', rosterClassLabel({}), 'this class');
+eq('day already in the name is not doubled', rosterClassLabel({ curriculum: 'Saturday Ballet Intensive', day_of_week: 'Saturday', site: 'Downtown Studio' }), 'Saturday Ballet Intensive at Downtown Studio');
 
 const cls = 'Tuesday Robotics at Hallinan';
 // Refund drawer
