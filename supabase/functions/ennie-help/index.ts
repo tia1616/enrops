@@ -143,7 +143,7 @@ serve(async (req) => {
     // here only costs context, so it degrades to no history (logged).
     const { data: prior, error: priorErr } = await admin
       .from("ennie_questions")
-      .select("question, answer, answered")
+      .select("question, answer, answered, sources")
       .eq("auth_user_id", userId)
       .eq("organization_id", organizationId)
       .eq("conversation_id", conversationId)
@@ -153,7 +153,13 @@ serve(async (req) => {
     const messages: Anthropic.MessageParam[] = [];
     for (const t of (prior ?? []).slice().reverse()) {
       messages.push({ role: "user", content: t.question });
-      messages.push({ role: "assistant", content: JSON.stringify({ answered: t.answered, answer: t.answered ? t.answer : "", sources: [] }) });
+      // Replay the turn in the exact shape the model must produce, sources
+      // included: an answered turn shown with no sources teaches the model that
+      // answers cite nothing, and shapeReply then discards its next answer.
+      messages.push({
+        role: "assistant",
+        content: JSON.stringify({ answered: t.answered, answer: t.answered ? t.answer : "", sources: t.answered ? (t.sources ?? []) : [] }),
+      });
     }
     messages.push({ role: "user", content: question });
 

@@ -87,7 +87,8 @@ serve(async (req) => {
         .eq('conversation_id', ennieConversationId)
         .eq('organization_id', organization_id)
         .eq('auth_user_id', user.id)
-        .order('created_at', { ascending: true })
+        // The LATEST 20 turns (the ones that led to the request), oldest first.
+        .order('created_at', { ascending: false })
         .limit(20);
       if (turnsErr) {
         // The person still reaches Jessica; she sees the chat was lost.
@@ -95,6 +96,8 @@ serve(async (req) => {
         transcript = '(The Ennie chat could not be attached.)';
       } else {
         transcript = (turns ?? [])
+          .slice()
+          .reverse()
           .map((t: { question: string; answer: string | null; answered: boolean; sources: string[] | null }) =>
             `Q: ${t.question}\nEnnie${t.answered ? '' : ' (no answer in the guides)'}: ${t.answer ?? ''}` +
             (t.answered && t.sources?.length ? `\n   [from ${t.sources.join(', ')}]` : ''))

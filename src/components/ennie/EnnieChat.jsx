@@ -201,8 +201,9 @@ export default function EnnieChat({ org, user }) {
     if (!id) return;
     const prevRating = turn.rating ?? null;
     setTurns((ts) => ts.map((t) => (t.key === turn.key ? { ...t, rating, rateError: false } : t)));
-    const { error } = await supabase.from("ennie_questions").update({ rating }).eq("id", id);
-    if (error) {
+    // .select: an update RLS hides returns no error and no rows; that is a failure too.
+    const { data, error } = await supabase.from("ennie_questions").update({ rating }).eq("id", id).select("id");
+    if (error || !data?.length) {
       setTurns((ts) => ts.map((t) => (t.key === turn.key ? { ...t, rating: prevRating, rateError: true } : t)));
     }
   }
@@ -298,7 +299,6 @@ export default function EnnieChat({ org, user }) {
         <section
           role="dialog"
           aria-label="Ask Ennie"
-          aria-modal={phone ? "true" : undefined}
           style={{
             ...panelStyle,
             zIndex: 95,
