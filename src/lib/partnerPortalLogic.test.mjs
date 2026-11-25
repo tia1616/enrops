@@ -270,5 +270,20 @@ import { decisionRecordedLine, decisionProblem, localDateOf, DECISIONS } from '.
   eq('registration unset', registrationLabel(null), null);
 }
 
+// --- adoption view (Jessica 2026-11-25) -------------------------------------
+{
+  const { loginAdoption, adoptionText } = await import('./partnerPortalLogic.js');
+  const a = loginAdoption([
+    { last_signed_in_at: '2026-11-20T17:00:00Z', last_link_sent_at: '2026-11-01T00:00:00Z' },
+    { last_signed_in_at: '2026-11-12T17:00:00Z' },
+    { last_link_sent_at: '2026-11-24T00:00:00Z' },
+    {},
+  ]);
+  eq('adoption counts', a, { total: 4, signedIn: 2, waiting: 1, notInvited: 1, lastVisit: '2026-11-20T17:00:00Z' });
+  const t = adoptionText(a);
+  eq('adoption words', t.startsWith('2 of 4 signed in · last visit ') && t.endsWith('· 1 sent a link, not in yet · 1 invite not sent'), true);
+  eq('no logins', adoptionText(loginAdoption([])), 'No logins yet');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

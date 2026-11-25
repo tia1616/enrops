@@ -473,3 +473,34 @@ export function decisionProblem({ decision, note, title }) {
   if ((note || "").length > 500) return "Keep the note under 500 characters.";
   return null;
 }
+
+/**
+ * Who at a partner is actually using the portal (Jessica 2026-11-25: the
+ * adoption view). `list` = that partner's partner_portal_access rows.
+ *   signedIn   - has signed in at least once
+ *   waiting    - a link was sent, never signed in
+ *   notInvited - has a login, no link sent yet (nothing reaches them until you send one)
+ *   lastVisit  - most recent sign-in (ISO), or null
+ */
+export function loginAdoption(list) {
+  const rows = list ?? [];
+  const signedIn = rows.filter((g) => g.last_signed_in_at);
+  const lastVisit = signedIn.map((g) => g.last_signed_in_at).sort().pop() ?? null;
+  return {
+    total: rows.length,
+    signedIn: signedIn.length,
+    waiting: rows.filter((g) => !g.last_signed_in_at && g.last_link_sent_at).length,
+    notInvited: rows.filter((g) => !g.last_signed_in_at && !g.last_link_sent_at).length,
+    lastVisit,
+  };
+}
+
+/** "2 of 3 signed in · last visit Nov 20, 2026 · 1 invite not sent". */
+export function adoptionText(a) {
+  if (!a || !a.total) return "No logins yet";
+  const parts = [`${a.signedIn} of ${a.total} signed in`];
+  if (a.lastVisit) parts.push(`last visit ${formatDate(String(a.lastVisit).slice(0, 10))}`);
+  if (a.waiting) parts.push(`${a.waiting} sent a link, not in yet`);
+  if (a.notInvited) parts.push(`${a.notInvited} ${a.notInvited === 1 ? "invite" : "invites"} not sent`);
+  return parts.join(" · ");
+}

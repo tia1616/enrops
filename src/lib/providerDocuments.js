@@ -45,7 +45,8 @@ export async function listProviderDocuments(orgId) {
 export async function listPartners(orgId) {
   const { data, error } = await supabase
     .from("partners")
-    .select("id, partner_name, inactive")
+    // show_family_payments (20261125u, on both databases): the adoption view's "paid totals shared" tag.
+    .select("id, partner_name, inactive, show_family_payments")
     .eq("organization_id", orgId)
     .order("partner_name", { ascending: true });
   if (error) throw error;
