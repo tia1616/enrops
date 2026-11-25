@@ -17,7 +17,11 @@
 import { useEffect, useRef, useState } from "react";
 import DocumentStatusBadge from "../../components/DocumentStatusBadge.jsx";
 import { formatTermLabel } from "../../lib/terms.js";
-import { listPartnerClasses, getClassRoster, getClassSummary, getRegistrationFields, setReportedEnrollment } from "../../lib/partnerPortal.js";
+import {
+  listPartnerClasses, getClassRoster, getClassSummary, getRegistrationFields, setReportedEnrollment,
+  getShowFamilyPayments, setShowFamilyPayments,
+} from "../../lib/partnerPortal.js";
+import SettingSwitch from "../../components/SettingSwitch.jsx";
 import {
   scheduleText, enrolledText, countSourceText, classBadge, rosterAvailable,
   sortClasses, rosterDisplayRows, asksDismissal, showsHomeroom, groupClassesByTerm,
@@ -80,11 +84,36 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
     }
   }
 
+  // Provider side (20261125u): does this partner see what families paid?
+  // undefined = loading, null = couldn't read (switch hidden).
+  const [sharePaid, setSharePaid] = useState(undefined);
+  const [sharePaidBusy, setSharePaidBusy] = useState(false);
+  const [sharePaidError, setSharePaidError] = useState("");
+
   useEffect(() => {
     setClasses(null); setOpen(null); setRosters({}); setEdit(null); setSaved("");
+    setSharePaid(undefined); setSharePaidError("");
     if (partnerId) { load(); if (orgId) loadMedia(); }
+    if (viewer === "provider" && partnerId && orgId) {
+      getShowFamilyPayments(orgId, partnerId).then(setSharePaid).catch(() => setSharePaid(null));
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [partnerId, orgId]);
+
+  async function toggleSharePaid(on) {
+    setSharePaidBusy(true); setSharePaidError("");
+    try {
+      const now = await setShowFamilyPayments(orgId, partnerId, on);
+      setSharePaid(now);
+      // Open panels say "Not shown to ..." from the summary; keep them true.
+      setRosters((m) => Object.fromEntries(Object.entries(m).map(([key, v]) =>
+        [key, v?.summary ? { ...v, summary: { ...v.summary, shared: now } } : v])));
+    } catch (err) {
+      setSharePaidError(err?.message ?? "Couldn't save.");
+    } finally {
+      setSharePaidBusy(false);
+    }
+  }
 
   // The provider's To do list hears what's still missing.
   useEffect(() => {
@@ -154,6 +183,18 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
   return (
     <section className="mt-5 rounded-2xl bg-white shadow-card">
       <h2 className="px-4 pt-4 text-base font-bold text-j2s-ink">{heading}</h2>
+      {/* Revenue-split partners only (Jessica 2026-11-25). Off by default. */}
+      {viewer === "provider" && sharePaid !== null && (
+        <div className="mx-4 mt-2 flex items-center justify-between gap-3 rounded-lg border border-j2s-ink/10 px-3 py-2">
+          <div className="text-sm">
+            <div className="font-semibold text-j2s-ink">Show {partnerName || "this partner"} what families paid</div>
+            <div className="text-xs text-j2s-ink/60">For partners you split revenue with. Off: they see sessions and rosters, not money.</div>
+            {sharePaidError && <div role="alert" className="text-xs text-red-700">{sharePaidError}</div>}
+          </div>
+          <SettingSwitch on={!!sharePaid} loading={sharePaid === undefined} busy={sharePaidBusy} disabled={!canEdit}
+            label={`Show ${partnerName || "this partner"} what families paid`} onChange={toggleSharePaid} />
+        </div>
+      )}
       {loadError && <p className="error-text px-4 pt-2">{loadError}</p>}
       {mediaError && <p className="error-text px-4 pt-2">{mediaError}</p>}
       {/* "Flyers on 2 of 4 classes": the partner sees at a glance what's in. */}
@@ -274,7 +315,8 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
                     <tr key={`${k}:roster`}>
                       <td colSpan={4} className="border-b border-j2s-ink/10 bg-j2s-ink/[0.02] px-3 py-3">
                         {roster && !roster.error && (
-                          <ClassSummary c={c} summary={roster.summary} rows={roster.rows} termLabel={g.label} orgName={orgName} />
+                          <ClassSummary c={c} summary={roster.summary} rows={roster.rows} termLabel={g.label} orgName={orgName}
+                            viewer={viewer} partnerName={partnerName} />
                         )}
                         {!roster ? (
                           <p className="text-sm text-j2s-ink/60">Loading…</p>
@@ -336,12 +378,17 @@ const SESSION_TONE = {
   not_confirmed: "border-amber-200 bg-amber-50 text-amber-800",
 };
 
-function ClassSummary({ c, summary, rows, termLabel, orgName }) {
+function ClassSummary({ c, summary, rows, termLabel, orgName, viewer, partnerName }) {
   if (!summary) return null;
   const sessions = summary.sessions ?? [];
   const paid = paidText(summary.money);
+  // The provider sees the money either way; say when the partner doesn't.
+  const hiddenFromPartner = viewer === "provider" && summary.shared === false;
   function download() {
-    const csv = classSummaryCsv(c, summary, rows, { providerName: orgName, termLabel });
+    // The provider's download carries money only when the partner sees it too,
+    // so a file forwarded to the partner never says more than their portal.
+    const forFile = hiddenFromPartner ? { ...summary, money: null } : summary;
+    const csv = classSummaryCsv(c, forFile, rows, { providerName: orgName, termLabel });
     const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -370,7 +417,12 @@ function ClassSummary({ c, summary, rows, termLabel, orgName }) {
           ))}
         </ul>
       )}
-      {paid && <p className="mt-1.5 text-sm text-j2s-ink/80">{paid}</p>}
+      {paid && (
+        <p className="mt-1.5 text-sm text-j2s-ink/80">
+          {paid}
+          {hiddenFromPartner && <span className="text-j2s-ink/55"> Only you see this; {partnerName || "the partner"} doesn't.</span>}
+        </p>
+      )}
     </div>
   );
 }

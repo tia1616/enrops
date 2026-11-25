@@ -380,6 +380,28 @@ export async function getRegistrationFields(orgId, programId) {
   return data ?? [];
 }
 
+/**
+ * Does this partner see what families paid (20261125u)? Revenue-split
+ * partners only; off by default. Provider side only (partners has no
+ * partner-login read).
+ */
+export async function getShowFamilyPayments(orgId, partnerId) {
+  const { data, error } = await supabase.from("partners")
+    .select("show_family_payments").eq("organization_id", orgId).eq("id", partnerId).maybeSingle();
+  if (error) throw error;
+  return !!data?.show_family_payments;
+}
+
+/** Turn it on or off. Throws when no row changed (not this provider's partner, or refused). */
+export async function setShowFamilyPayments(orgId, partnerId, on) {
+  const { data, error } = await supabase.from("partners")
+    .update({ show_family_payments: !!on }).eq("organization_id", orgId).eq("id", partnerId)
+    .select("show_family_payments");
+  if (error) throw error;
+  if (!data?.length) throw new Error("Couldn't save. Only an owner or admin can change this.");
+  return !!data[0].show_family_payments;
+}
+
 /** The provider types a count for a class it registers outside enrops. Owner/admin only; false = refused. */
 export async function setReportedEnrollment(kind, classId, enrolled) {
   const { data, error } = await supabase.rpc("set_reported_enrollment", { p_kind: kind, p_class_id: classId, p_enrolled: enrolled });

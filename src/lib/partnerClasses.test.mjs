@@ -200,5 +200,14 @@ eq('never asked', asksDismissal([], 'class'), false);
   eq('summary money counts only the roster', sql.includes('private.registration_on_roster(r)'), true);
 }
 
+// Money goes to a partner only when the provider shares it (20261125u).
+{
+  const sql = readFileSync(new URL('../../supabase/migrations/20261125u_partner_show_family_payments.sql', import.meta.url), 'utf8');
+  eq('switch is off by default', /show_family_payments boolean not null default false/.test(sql), true);
+  eq('money needs admin or the switch', sql.includes("(coalesce(v_admin, false) or v_shared)"), true);
+  eq('a partner gets only sessions and money', sql.includes("return jsonb_build_object('sessions', v_sessions, 'money', v_money);"), true);
+  eq('no anon grant', /revoke all on function public\.partner_portal_class_summary\(uuid, text, uuid\) from public, anon;/.test(sql), true);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
