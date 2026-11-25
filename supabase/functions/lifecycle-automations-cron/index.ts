@@ -1276,6 +1276,9 @@ async function runTestSend(supabase: SupabaseClient, params: TestSendParams): Pr
   if (params.review_ask_id) {
     if (params.template_key !== "review_request") return { ok: false, error: "review_ask_id_only_for_review_request" };
     if (!REVIEW_RATE_SECRET) return { ok: false, error: "review_link_secret_unset" };
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(params.review_ask_id)) {
+      return { ok: false, error: "review_ask_not_found" };
+    }
     const { data: ask, error: askErr } = await supabase
       .from("review_asks").select("id, organization_id, family_email, asked_at")
       .eq("id", params.review_ask_id).maybeSingle();

@@ -185,7 +185,9 @@ function escapeHtmlSafe(s) {
     .replace(/"/g, "&quot;");
 }
 
-function renderTokens(template, tokens) {
+// opts.plainText mirrors the cron's renderSubject: a subject is a plain-text
+// header, so token values are NOT HTML-escaped there (display escapes it once).
+function renderTokens(template, tokens, opts = {}) {
   // Mirror the cron's renderTokens: collapse a token wrapped in parens for
   // optional display — "starts {{program_start_date}} ({{program_time}})" —
   // only when that token is known-but-empty. Keyed to the {{token}} placeholder
@@ -196,7 +198,8 @@ function renderTokens(template, tokens) {
   return collapsed.replace(/\{\{(\w+)\}\}/g, (match, key) => {
     const v = tokens[key];
     if (v == null) return match;
-    return PRE_RENDERED_HTML_TOKENS.has(key) ? v : escapeHtmlSafe(v);
+    if (PRE_RENDERED_HTML_TOKENS.has(key) || opts.plainText) return v;
+    return escapeHtmlSafe(v);
   });
 }
 
@@ -206,7 +209,7 @@ function renderTokens(template, tokens) {
 // the real email.
 function buildPreviewHtml(subject, body, orgName, senderName, logoUrl, primaryColor, orgSlug, isMarketing = false, platformSurface = null) {
   const tokens = sampleTokens(orgName, senderName, primaryColor, orgSlug);
-  const renderedSubject = renderTokens(subject, tokens);
+  const renderedSubject = renderTokens(subject, tokens, { plainText: true });
   const renderedBody = renderTokens(body, tokens);
   // Shell matches the cron's wrapInShell — tenant logo on white, no generic
   // platform gradient. Wordmark fallback when no logo is set.
