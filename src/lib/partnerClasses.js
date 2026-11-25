@@ -143,7 +143,9 @@ export function paidText(money, enrolled = null) {
   const n = Number(money.children || 0);
   const total = Number(enrolled);
   const ofRoster = Number.isInteger(total) && total > 0
-    ? ` (${n} of the ${total} ${total === 1 ? "child" : "children"} on the roster paid)`
+    ? (n === total
+      ? (total === 1 ? " (the 1 child on the roster paid)" : ` (all ${total} children on the roster paid)`)
+      : ` (${n} of the ${total} ${total === 1 ? "child" : "children"} on the roster paid)`)
     : n > 0 ? ` (${n} ${n === 1 ? "child" : "children"})` : "";
   if (n === 0) return `No payments yet${ofRoster}.`;
   return `Families paid ${dollars(money.paid_cents)}, after discounts and refunds${ofRoster}.`;

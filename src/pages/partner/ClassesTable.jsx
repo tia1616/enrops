@@ -149,6 +149,8 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
       const shown = withRoster ? rosterDisplayRows(rows) : null;
       setRosters((m) => ({ ...m, [k]: {
         rows: shown, asks: withRoster && asksDismissal(fields, c.kind), homeroom: withRoster && showsHomeroom(shown), summary,
+        // Paid per child, built once per load (null = no money shown, no column).
+        byChild: paidByChild(summary?.money),
       } }));
     } catch (err) {
       setRosters((m) => ({ ...m, [k]: { error: `Couldn't load this class's ${rosterAvailable(c) ? "roster and sessions" : "sessions"}: ${err?.message ?? "unknown error"}` } }));
@@ -335,7 +337,7 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
                                   {roster.homeroom && <th className="px-2 py-1 text-left text-xs font-semibold text-j2s-ink/60">Homeroom</th>}
                                   {roster.asks && <th className="px-2 py-1 text-left text-xs font-semibold text-j2s-ink/60">Dismissal</th>}
                                   {/* Per child (Jessica 2026-11-25), only when the paid total is shown. */}
-                                  {paidByChild(roster.summary?.money) && <th className="px-2 py-1 text-left text-xs font-semibold text-j2s-ink/60">Paid</th>}
+                                  {roster.byChild && <th className="px-2 py-1 text-left text-xs font-semibold text-j2s-ink/60">Paid</th>}
                                 </tr>
                               </thead>
                               <tbody>
@@ -345,8 +347,8 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
                                     <td className="px-2 py-1 text-j2s-ink/80">{r.grade}</td>
                                     {roster.homeroom && <td className="px-2 py-1 text-j2s-ink/80">{r.homeroom ?? "Not stated"}</td>}
                                     {roster.asks && <td className="px-2 py-1 text-j2s-ink/80">{r.dismissal}</td>}
-                                    {paidByChild(roster.summary?.money) && (
-                                      <td className="px-2 py-1 tabular-nums text-j2s-ink/80">{childPaidText(paidByChild(roster.summary.money).get(r.key))}</td>
+                                    {roster.byChild && (
+                                      <td className="px-2 py-1 tabular-nums text-j2s-ink/80">{childPaidText(roster.byChild.get(r.key))}</td>
                                     )}
                                   </tr>
                                 ))}

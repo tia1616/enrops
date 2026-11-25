@@ -130,12 +130,15 @@ begin
                                when t.collected > 0 then 'paid'
                                when t.refunded > 0 then 'refunded'
                                when t.ach then 'processing'
-                               when t.payment_status = 'paid' then 'free'
+                               -- On a plan with nothing paid (e.g. instalments paused when the
+                               -- program was cancelled) is never "free", whatever payment_status says.
+                               when t.payment_status = 'paid' and not t.has_inst then 'free'
                                else 'unpaid' end)), '[]'::jsonb))
       into v_money
     from (
       select r.id, r.payment_status,
              coalesce(r.ach_payment_state = 'processing', false) as ach,
+             exists (select 1 from public.installments i where i.registration_id = r.id) as has_inst,
              -- Still due: pending, or paused on a failed card. Not 'paused_program_cancelled'.
              exists (select 1 from public.installments i where i.registration_id = r.id
                       and i.status in ('pending', 'paused_card_failed')) as inst_due,
