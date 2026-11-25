@@ -322,17 +322,15 @@ export default function EnnieChat({ org, user }) {
             borderBottom: `1px solid ${RULE}`,
           }}>
             {/* Still when resting (see the launcher); the thinking clip loops
-                cleanly, so it plays while Ennie is answering. */}
-            <Ennie state={asking ? "thinking" : "idle"} size={36} loop={asking} />
+                cleanly, so it plays while Ennie is answering. framed={false}:
+                every Ennie in this chat is just her face, never a disc or ring
+                behind it (Jessica 11/25, twice). No "New chat" link either
+                (Jessica 11/25): not a chat-widget norm. */}
+            <Ennie state={asking ? "thinking" : "idle"} size={40} loop={asking} framed={false} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, color: PURPLE, fontSize: 15 }}>Ask Ennie</div>
               <div style={{ color: MUTED, fontSize: 12.5 }}>AI assistant</div>
             </div>
-            {turns.length > 0 && view === "chat" && (
-              <button type="button" onClick={newChat} disabled={asking} style={{ ...linkBtn, fontWeight: 500, fontSize: 12.5, opacity: asking ? 0.5 : 1 }}>
-                New chat
-              </button>
-            )}
             <button
               type="button"
               onClick={close}
