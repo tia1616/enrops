@@ -4,7 +4,7 @@
 // Effects (source archived in docs/Ennie animations/, shipped JSON lives in
 // public/ennie/):
 //
-//   idle      — calm greeting loop; the resting avatar
+//   idle      — greeting entrance, played once, then holds; the resting avatar
 //   thinking  — working loop; pair with <ElapsedTimer> on every AI op
 //                (per memory feedback_ai_wait_ui)
 //   celebrate — one-shot reaction for a completed/“win” moment
@@ -29,8 +29,12 @@ const SOURCES = {
   celebrate: '/ennie/ennie-celebrate.json',
 };
 
-// celebrate is a one-shot; the loops run continuously.
-const LOOPS = { idle: true, thinking: true, celebrate: false };
+// idle and celebrate play ONCE; thinking loops.
+// idle is not really a loop: ennie-idle.json is an ENTRANCE (she scales up from
+// nothing and flies in, then settles). Looped, she vanished and popped back
+// every 4 seconds on every page. Played once, she pops in and then holds her
+// settled pose (Jessica 11/25: "fix the other ennies too").
+const LOOPS = { idle: false, thinking: true, celebrate: false };
 
 // Source clips are 1920x1080 with the character in a small region, so we crop the
 // SVG viewBox to her. idle/thinking share a transform; celebrate she leaps upward
