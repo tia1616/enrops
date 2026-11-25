@@ -202,8 +202,11 @@ begin
     select true, coalesce(cs.runs_own_registration, false),
            (select array_agg(g::date order by g)
               from generate_series(cs.starts_on, coalesce(cs.ends_on, cs.starts_on), interval '1 day') g
-             where coalesce(array_length(cs.class_days, 1), 0) = 0
+             where (coalesce(array_length(cs.class_days, 1), 0) = 0
                 or lower(to_char(g, 'FMDay')) = any (select lower(btrim(x)) from unnest(cs.class_days::text[]) x))
+               -- The site's own closures apply to camps too (as in
+               -- derive_program_session_dates); the district calendar does not.
+               and not (g::date = any (coalesce(pl.closure_dates, '{}'::date[]))))
       into v_found, v_own, v_dates
     from public.camp_sessions cs
     join public.program_locations pl on pl.id = cs.location_id

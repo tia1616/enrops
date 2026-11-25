@@ -102,8 +102,10 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
     const k = keyOf(c);
     if (open === k) { setOpen(null); return; }
     setOpen(k);
-    // Loaded already (rows is null for a class with no roster), or loading.
-    if ((rosters[k] && !rosters[k].error) || loadingRoster.current.has(k)) return;
+    // Fetched fresh on every open, so a session an instructor confirms
+    // meanwhile shows (and downloads) as held. The last answer stays on screen
+    // until the new one lands.
+    if (loadingRoster.current.has(k)) return;
     loadingRoster.current.add(k);
     try {
       // The roster only for a class families registered for in enrops; the
@@ -119,7 +121,7 @@ export default function ClassesTable({ partnerId, orgId, orgName, viewer = "part
         rows: shown, asks: withRoster && asksDismissal(fields, c.kind), homeroom: withRoster && showsHomeroom(shown), summary,
       } }));
     } catch (err) {
-      setRosters((m) => ({ ...m, [k]: { error: `Couldn't load the roster: ${err?.message ?? "unknown error"}` } }));
+      setRosters((m) => ({ ...m, [k]: { error: `Couldn't load this class's ${rosterAvailable(c) ? "roster and sessions" : "sessions"}: ${err?.message ?? "unknown error"}` } }));
     } finally {
       loadingRoster.current.delete(k);
     }
