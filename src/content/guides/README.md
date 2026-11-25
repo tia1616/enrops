@@ -13,7 +13,7 @@ One set of guides feeds three places, so there is one thing to keep true:
 - Lowercase "enrops". No database words. No em dashes.
 - Numbers name their source. A fee or a time on screen is quoted from the screen, never invented.
 - If something can't be done yet, say so plainly ("Not yet. Tell us if you need it.").
-- Verified against prod: commit `e144a4a1` (origin/main, 2026-11-19), lean nav, free plan. The Locations, district and roster steps were re-checked 2026-11-19 against the one-Locations-list release (`8651fef2`).
+- Verified against prod: commit `e144a4a1` (origin/main, 2026-11-19), lean nav, free plan. The Locations, district and roster steps were re-checked 2026-11-19 against the one-Locations-list release (`8651fef2`). The partner portal sections (Run the term, `#partner-portal` to `#partner-emails`) were written 2026-11-25 against prod `637fd899`.
 - `guides.test.mjs` fails on a heading without an `{#id}`, a duplicate id, a leftover `VERIFY` note, or a "?" bubble whose `guide="..."` points at nothing.
 
 ## Stages (a stage opens when its trigger happens)

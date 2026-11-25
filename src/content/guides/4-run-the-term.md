@@ -76,6 +76,71 @@ Two weeks out, make sure families know what's coming and your school knows who's
 **Ennie's advice**
 - Send it before class one, and again if anyone joins late.
 
+## Give your school partner a login {#partner-portal}
+
+**Goal:** your school or park looks things up themselves (enrollment, rosters, your insurance, flyers) instead of emailing you for each one.
+
+**What they see when they sign in**
+- **Classes:** each class at their sites with enrollment as it happens, the roster with how each child goes home, and the session dates.
+- **Flyers and social graphics:** everything you've added, ready to view, share or download.
+- **A share button on each open class**, so they can send families straight to sign-up. Those sign-ups show as coming from that partner.
+- **Safety record:** your documents with the date each is good through, and your instructors' checks at their sites.
+- **Emails sent:** every email enrops has sent them.
+
+**Steps**
+1. **Partner portal** in the menu, then open the partner. If they aren't in the list, pick them under **Set up another partner**. Not there either? Add them in **Locations** first.
+2. Go to **People & emails**. Under **Give someone access**, pick the person, choose **Admin** or **Viewer**, and choose which sites they see. Tap **Give access**. The person needs an email on file; if they aren't listed, add them as a contact in **Locations** first.
+3. Optional: type a **Personal note for the sign-in email**. It goes at the top of the email.
+4. Tap **Send sign-in link** next to their name. Nothing is emailed until you tap it.
+
+**Ennie's advice**
+- Partners sign in at enrops.com/partner with their email. There's no password.
+- Admins who see every site can change their own requirements and what flyers they ask for. Viewers only look.
+- Give a site's day-to-day contact only that site, so they see only that site's classes and instructors.
+- The **Partner portal** page shows how many partners have someone signed in, and who has a login but no invite yet. On a partner's page, **People & emails** shows their last activity.
+
+## Keep your safety record current {#partner-safety-record}
+
+**Steps**
+1. **Partner portal**, open the partner. The box at the top, **What ... still needs from you**, lists anything missing, expired or due soon, each with the button that fixes it.
+2. **Safety record** holds **Documents**, **Instructors**, **What they require** and **Decision**. Use **Jump to** at the top to go straight to one.
+3. Under **Documents**, tap **Upload** on each one they require, or **Add another document**.
+
+**Ennie's advice**
+- A document shared with every partner shows on each partner's page. Upload it once.
+- **What they require** is the list the partner set. **Decision** is whether they've accepted your record.
+
+## Flyers and social graphics for a partner {#partner-flyers}
+
+**Goal:** your partner gets the flyers they want without an email chain.
+
+**How it works**
+1. The partner ticks what they want for each class (a flyer, a social graphic, their logo on it, file types). You get an email, and it shows in the box at the top of their page.
+2. On their page, **Classes** shows what they ask for under **Flyers they ask for**. On each class, tap **Upload** next to the flyer or social graphic. To use one file on several classes, tick them and tap **Add to N classes**.
+3. The partner gets an email that it's ready, and it shows on their **Flyers & graphics** board.
+
+**Ennie's advice**
+- You can add a flyer before they ask. It shows on their board the same way.
+- Files can be PDF, JPG or PNG.
+
+## When a class finishes: the partner summary {#partner-class-summary}
+
+**What happens on its own**
+- When a class ends, everyone at the partner who has signed in gets an email that its summary is ready: the roster and the sessions held. You get a copy.
+- The class stays on their **Classes** tab for 60 days after it ends, with **Roster & sessions** and **Download summary (CSV)**.
+
+**Showing what families paid (for partners you split revenue with or invoice)**
+1. **Partner portal**, open the partner, **Classes**.
+2. Turn on **Show ... what families paid**. It's off for every partner until you turn it on, and it's set per partner.
+3. They then see a **Paid** column for each child and the total for each class.
+
+**Term statement**
+- Each term heading on **Classes** has **Download ... statement**: one spreadsheet with every class that term. The partner can download it too.
+
+## What emails your partners get {#partner-emails}
+
+**Partner portal**, open the partner, **People & emails**, then **Emails they get**. It lists every automatic email enrops sends their people and exactly who gets it: rosters, the class summary, flyer emails and sign-in links.
+
 ## Invite families to the parent portal {#invite-families}
 
 **Goal:** families can sign in, see class details, and update their own pickup information.
