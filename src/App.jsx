@@ -190,8 +190,8 @@ function InstructorDocsRoute({ children }) {
 // a second dead end, which is the thing the first draft of this comment claimed
 // it was avoiding. Two of seven prod orgs match that shape today
 // (mrs-richelle, shoreview-chess: enrops_platform, uses_enrops_registration
-// false). /admin is not a fallback either — HIDE_TOP drops it for lean orgs and
-// AdminOverview redirects it back to Programs.
+// false). /admin is not a fallback either — since 2026-11-25 it has no screen of
+// its own and AdminOverview redirects it to Programs for every org.
 //
 // Picks the same way the nav does, off the same column, so the two cannot
 // disagree. Same three-line shape as CommsTabRoute and InstructorDocsRoute.
