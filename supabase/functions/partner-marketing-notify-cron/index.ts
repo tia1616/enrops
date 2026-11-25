@@ -101,30 +101,47 @@ serve(async (req) => {
 async function sendGroup(supabase: SupabaseClient, brand: Brand, rows: NoticeRow[]) {
   const kind = rows[0].kind;
   const replyTo = kind === "media" ? (await loadOrgBrand(supabase, rows[0].organization_id)).tenant_reply_to : null;
+  // Media ids go in chunks: PostgREST's .in() fails past ~100 long keys
+  // (reference_postgrest_in_url_ceiling), which would fail a big group forever.
   const claim = async (all: NoticeRow[]): Promise<NoticeRow[]> => {
+    const now = new Date().toISOString();
     if (kind === "media") {
-      const { data, error } = await supabase.from("class_media")
-        .update({ partner_notified_at: new Date().toISOString() })
-        .in("id", all.map((r) => r.media_id!)).is("partner_notified_at", null).select("id");
-      if (error) throw new Error(`claim failed: ${error.message}`);
-      const got = new Set((data ?? []).map((d: { id: string }) => d.id));
+      const got = new Set<string>();
+      for (const part of chunks(all.map((r) => r.media_id!), 50)) {
+        const { data, error } = await supabase.from("class_media")
+          .update({ partner_notified_at: now })
+          .in("id", part).is("partner_notified_at", null).select("id");
+        if (error) throw new Error(`claim failed: ${error.message}`);
+        for (const d of (data ?? []) as { id: string }[]) got.add(d.id);
+      }
       return all.filter((r) => got.has(r.media_id!));
     }
-    const { data, error } = await supabase.from("partner_marketing_asks")
-      .update({ provider_notified_at: new Date().toISOString() })
-      .eq("partner_id", rows[0].partner_id!).in("item_key", all.map((r) => r.item_key))
-      .is("provider_notified_at", null).select("item_key");
-    if (error) throw new Error(`claim failed: ${error.message}`);
-    const got = new Set((data ?? []).map((d: { item_key: string }) => d.item_key));
-    return all.filter((r) => got.has(r.item_key));
+    // An ask is claimed only as the version that was read: an edit made since
+    // (newer updated_at) stays NULL and is announced next run.
+    const mine: NoticeRow[] = [];
+    for (const r of all) {
+      const { data, error } = await supabase.from("partner_marketing_asks")
+        .update({ provider_notified_at: now })
+        .eq("partner_id", r.partner_id!).eq("item_key", r.item_key)
+        .lte("updated_at", r.updated_at!).is("provider_notified_at", null).select("item_key");
+      if (error) throw new Error(`claim failed: ${error.message}`);
+      if ((data ?? []).length) mine.push(r);
+    }
+    return mine;
   };
   const release = async (mine: NoticeRow[]) => {
-    const q = kind === "media"
-      ? supabase.from("class_media").update({ partner_notified_at: null }).in("id", mine.map((r) => r.media_id!))
-      : supabase.from("partner_marketing_asks").update({ provider_notified_at: null })
-          .eq("partner_id", rows[0].partner_id!).in("item_key", mine.map((r) => r.item_key));
-    const { error } = await q;
-    if (error) console.error(`[partner-marketing-notify-cron] RELEASE FAILED, these will not retry: ${error.message}`);
+    const errors: string[] = [];
+    if (kind === "media") {
+      for (const part of chunks(mine.map((r) => r.media_id!), 50)) {
+        const { error } = await supabase.from("class_media").update({ partner_notified_at: null }).in("id", part);
+        if (error) errors.push(error.message);
+      }
+    } else {
+      const { error } = await supabase.from("partner_marketing_asks").update({ provider_notified_at: null })
+        .eq("partner_id", rows[0].partner_id!).in("item_key", mine.map((r) => r.item_key));
+      if (error) errors.push(error.message);
+    }
+    if (errors.length) console.error(`[partner-marketing-notify-cron] RELEASE FAILED, these will not retry: ${errors.join("; ")}`);
   };
 
   // Nobody to tell (no login covers the site, class cancelled, ask turned off,
@@ -140,15 +157,29 @@ async function sendGroup(supabase: SupabaseClient, brand: Brand, rows: NoticeRow
       // Each person gets only the lines that are theirs.
       const people = [...new Set(mine.flatMap((r) => r.to_emails))];
       let sent = 0;
+      const missed: string[] = [];
       for (const to of people) {
         if (await send(brand, mine.filter((r) => r.to_emails.includes(to)), to, replyTo)) sent++;
+        else missed.push(to);
+      }
+      // Once anyone got it the group is done (no repeat to those who did);
+      // say plainly who did not, so it can be followed up by hand.
+      if (sent > 0 && missed.length) {
+        console.error(`[partner-marketing-notify-cron] ${groupKey(mine[0])}: NOT sent to ${missed.join(", ")}`);
       }
       return sent;
     },
     confirm: async () => {},
     release,
   });
-  return { items: rows.length, ...result };
+  // `items` from deliver = the rows emailed; `silent` = marked done with nobody to tell.
+  return { ...result, silent: silent.length };
+}
+
+function chunks<T>(xs: T[], n: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < xs.length; i += n) out.push(xs.slice(i, i + n));
+  return out;
 }
 
 /** The Resend message id, or null when the send failed or was held back. */
@@ -165,8 +196,9 @@ async function send(brand: Brand, rows: NoticeRow[], to: string, replyTo: string
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${RESEND_API_KEY}` },
       body: JSON.stringify({
-        // A partner replying about a flyer reaches the provider (its own
-        // address only, never a platform fallback); everything else, enrops.
+        // A partner replying about a flyer reaches the provider's own reply
+        // address when it has one; otherwise, and for every ask email, the
+        // enrops inbox (a real mailbox; mail.enrops.com has no MX).
         from: formatFromAddress(brand), to, reply_to: replyTo ?? brand.reply_to, subject, html, text,
         tags: [{ name: "type", value: rows[0].kind === "ask" ? "partner_marketing_ask" : "partner_marketing_media" }],
       }),

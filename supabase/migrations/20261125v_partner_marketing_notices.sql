@@ -64,7 +64,14 @@ create trigger partner_marketing_asks_rearm_notice
   before insert or update on public.partner_marketing_asks
   for each row execute function private.rearm_marketing_ask_notice();
 
-create or replace function public.partner_marketing_notices_due()
+-- Reviewed 2026-11-25 (independent reviewer): only the last 2 days are ever
+-- announced (anything older that is still NULL, e.g. made between this
+-- migration and the cron being scheduled, is marked done silently); a group
+-- also goes once its oldest item has waited an hour, however busy it stays;
+-- and an ask row carries its updated_at so the claim takes only the version
+-- that was read (an edit mid-run is announced next run, not lost).
+drop function if exists public.partner_marketing_notices_due();
+create function public.partner_marketing_notices_due()
 returns table(
   kind text,                -- 'ask' (to the provider) | 'media' (to the partner)
   organization_id uuid,
@@ -79,6 +86,7 @@ returns table(
   needs_logo boolean,       -- ask only
   needs_accessible boolean, -- ask only
   note text,                -- ask only
+  updated_at timestamptz,   -- ask only: the version read, for the claim
   to_emails text[]          -- empty = nobody to tell; mark done without sending
 )
 language sql
@@ -92,6 +100,7 @@ as $$
     where a.provider_notified_at is null
     group by 1, 2
     having max(a.updated_at) < now() - interval '10 minutes'
+        or min(a.updated_at) < now() - interval '60 minutes'
   ),
   media_rows as (
     select m.id, m.organization_id, m.item_key, m.created_at,
@@ -111,13 +120,15 @@ as $$
     from media_rows r
     group by 1, 2
     having max(r.created_at) < now() - interval '10 minutes'
+        or min(r.created_at) < now() - interval '60 minutes'
   )
   -- To the provider: the partner asked (only asks that are ON are worded;
   -- an ask turned off is marked done silently by coming back with no one).
   select 'ask', a.organization_id, o.name, a.partner_id, p.partner_name, a.item_key,
          null::uuid, null::text, null::text,
-         a.file_types, a.needs_logo, a.needs_accessible, a.note,
-         case when a.wanted and not coalesce(p.inactive, false) then
+         a.file_types, a.needs_logo, a.needs_accessible, a.note, a.updated_at,
+         case when a.wanted and not coalesce(p.inactive, false)
+                   and a.updated_at > now() - interval '2 days' then
            coalesce((select array_agg(distinct lower(btrim(m.email)) order by lower(btrim(m.email)))
                      from public.org_members m
                      where m.organization_id = a.organization_id and m.role in ('owner', 'admin')
@@ -134,8 +145,9 @@ as $$
   -- To the partner: every login of that partner whose sites cover the class.
   select 'media', r.organization_id, o.name, r.partner_id, p.partner_name, r.item_key,
          r.id, r.title, r.site,
-         null::text[], null::boolean, null::boolean, null::text,
-         case when r.live and r.partner_id is not null and not coalesce(p.inactive, false) then
+         null::text[], null::boolean, null::boolean, null::text, null::timestamptz,
+         case when r.live and r.partner_id is not null and not coalesce(p.inactive, false)
+                   and r.created_at > now() - interval '2 days' then
            coalesce((select array_agg(distinct lower(btrim(c.contact_email::text)) order by lower(btrim(c.contact_email::text)))
                      from public.partner_portal_access pa
                      join public.partner_contacts c on c.id = pa.contact_id

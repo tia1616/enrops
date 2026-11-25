@@ -21,6 +21,7 @@ export interface NoticeRow {
   needs_logo: boolean | null;
   needs_accessible: boolean | null;
   note: string | null;
+  updated_at: string | null; // ask only: the version read, for the claim
   to_emails: string[];
 }
 

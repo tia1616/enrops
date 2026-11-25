@@ -9,7 +9,7 @@ const base: NoticeRow = {
   kind: "media", organization_id: "o", provider_name: "Journey to STEAM", partner_id: "p",
   partner_name: "Happy Valley Parks and Rec", item_key: "flyer", media_id: "m1",
   class_title: "Super Mario Game Makers", site: "Happy Valley Library",
-  file_types: null, needs_logo: null, needs_accessible: null, note: null, to_emails: ["k@x.org"],
+  file_types: null, needs_logo: null, needs_accessible: null, note: null, updated_at: null, to_emails: ["k@x.org"],
 };
 const ask: NoticeRow = { ...base, kind: "ask", media_id: null, class_title: null, site: null, file_types: ["pdf", "png"], needs_logo: true, needs_accessible: true, note: "Letter size please" };
 
@@ -64,4 +64,12 @@ Deno.test("migration: nothing old is announced, nobody else can read the queue",
   assert(sql.includes("having max(r.created_at) < now() - interval '10 minutes'"), "uploads wait for a quiet 10 minutes");
   assert(sql.includes("pr.status in ('open', 'draft')"), "flyers on not-open-yet classes are announced");
   assert(sql.includes("(pa.site_ids is null or r.location_id = any(pa.site_ids))"), "site-limited logins hear only their sites");
+  assertEquals((sql.match(/> now\(\) - interval '2 days'/g) || []).length, 2, "nothing older than 2 days is announced");
+  assertEquals((sql.match(/or min\(\w\.(updated_at|created_at)\) < now\(\) - interval '60 minutes'/g) || []).length, 2, "a busy group still goes within the hour");
+});
+
+Deno.test("claims go in chunks and asks claim only the version read", async () => {
+  const src = await Deno.readTextFile(new URL("./index.ts", import.meta.url));
+  assert(src.includes('chunks(all.map((r) => r.media_id!), 50)'));
+  assert(src.includes('.lte("updated_at", r.updated_at!)'));
 });
