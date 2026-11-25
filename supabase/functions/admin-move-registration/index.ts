@@ -95,12 +95,17 @@ function siteName(p: Program): string {
 // "Tuesday Minecraft Makers at Jackson Elementary" - the sentence an operator reads
 // on the confirm button and in the note. Day first because that is what usually
 // differs between two classes at one school.
+// Twin of rosterClassLabel in src/lib/rosterActions.js - keep the two in step.
 function classLabel(p: Program): string {
-  const day = !isCampProgram(p) && p?.day_of_week
-    ? String(p.day_of_week).charAt(0).toUpperCase() + String(p.day_of_week).slice(1).toLowerCase() + ' '
+  const name = className(p);
+  const dayWord = !isCampProgram(p) && p?.day_of_week
+    ? String(p.day_of_week).charAt(0).toUpperCase() + String(p.day_of_week).slice(1).toLowerCase()
     : '';
+  // Not when the name already says it: "Saturday Ballet Intensive" must not read
+  // "Saturday Saturday Ballet Intensive" (seen on staging 2026-11-25).
+  const day = dayWord && !new RegExp(`\\b${dayWord}`, 'i').test(name) ? `${dayWord} ` : '';
   const site = siteName(p);
-  return `${day}${className(p)}${site ? ` at ${site}` : ''}`;
+  return `${day}${name}${site ? ` at ${site}` : ''}`;
 }
 
 function todayIso(): string {
