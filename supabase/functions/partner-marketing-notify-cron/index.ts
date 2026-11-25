@@ -132,9 +132,10 @@ async function providerAdmins(supabase: SupabaseClient, orgId: string): Promise<
  *    inserting ledger rows carrying what is sent (only rows THIS run inserted
  *    are sent); release by deleting them when the send failed.
  * 2) The provider's copies, driven by the LEDGER (partner_class_wrapup_copies_due),
- *    not by this run's memory: a copy that failed is retried next run, and a
- *    person told on a later day is named then. One copy per provider + partner
- *    per run, naming who got each class.
+ *    not by this run's memory: a copy that failed is retried on a later run
+ *    (in working hours). One copy per class, sent in the run that told the
+ *    first person(s), naming who got each class; someone at the partner who is
+ *    told on a later day is not added to a copy already sent.
  */
 async function sendWrapups(supabase: SupabaseClient, brand: Brand) {
   const { data, error } = await supabase.rpc("partner_class_wrapups_due", { p_today: null });
@@ -154,6 +155,16 @@ async function sendWrapups(supabase: SupabaseClient, brand: Brand) {
   };
 
   for (const [key, rows] of byPerson) {
+    // Everything that can throw (reply-to lookup) happens BEFORE the claim,
+    // and anything after it releases the claim, so a ledger row (which the
+    // provider copy reads as "Sent to") only stays when the email went out.
+    let replyTo: string | null;
+    try {
+      replyTo = await replyFor(rows[0].organization_id);
+    } catch (e) {
+      results.push({ person: key, error: `reply-to lookup failed: ${(e as Error).message}` });
+      continue;
+    }
     const { data: claimed, error: cErr } = await wrapupLedger(supabase)
       .upsert(rows.map((r) => ({
         organization_id: r.organization_id, partner_id: r.partner_id, class_kind: r.class_kind, class_id: r.class_id,
@@ -161,20 +172,30 @@ async function sendWrapups(supabase: SupabaseClient, brand: Brand) {
       })), { onConflict: "class_kind,class_id,recipient_key", ignoreDuplicates: true })
       .select("id, class_kind, class_id");
     if (cErr) { results.push({ person: key, error: `claim failed: ${cErr.message}` }); continue; }
+    const ids = (claimed ?? []).map((c: { id: string }) => c.id);
+    const release = async () => {
+      if (!ids.length) return;
+      const { error: rErr } = await wrapupLedger(supabase).delete().in("id", ids);
+      if (rErr) console.error(`[partner-marketing-notify-cron] wrapup RELEASE FAILED for ${key}: ${rErr.message}`);
+    };
     const mineKeys = new Set((claimed ?? []).map((c: { class_kind: string; class_id: string }) => `${c.class_kind}:${c.class_id}`));
     const mine = rows.filter((r) => mineKeys.has(`${r.class_kind}:${r.class_id}`));
     if (!mine.length) { results.push({ person: key, status: "already_claimed" }); continue; }
 
-    const { subject, html, text } = renderWrapup(brand, mine, PUBLIC_SITE_URL);
-    const id = await sendRaw(brand, mine[0].to_email, subject, html, text, await replyFor(mine[0].organization_id), "partner_class_wrapup");
-    if (!id) {
-      const ids = (claimed ?? []).map((c: { id: string }) => c.id);
-      const { error: rErr } = await wrapupLedger(supabase).delete().in("id", ids);
-      if (rErr) console.error(`[partner-marketing-notify-cron] wrapup RELEASE FAILED for ${key}: ${rErr.message}`);
-      results.push({ person: key, classes: mine.length, status: "released" });
-      continue;
+    try {
+      const { subject, html, text } = renderWrapup(brand, mine, PUBLIC_SITE_URL);
+      const id = await sendRaw(brand, mine[0].to_email, subject, html, text, replyTo, "partner_class_wrapup");
+      if (!id) {
+        await release();
+        results.push({ person: key, classes: mine.length, status: "released" });
+        continue;
+      }
+      results.push({ person: key, classes: mine.length, status: "sent" });
+    } catch (e) {
+      // One person's failure releases their claim and never stops the others.
+      await release();
+      results.push({ person: key, error: (e as Error).message, status: "released" });
     }
-    results.push({ person: key, classes: mine.length, status: "sent" });
   }
 
   // The provider's copies, from the ledger.

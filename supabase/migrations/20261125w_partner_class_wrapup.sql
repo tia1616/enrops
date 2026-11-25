@@ -25,12 +25,15 @@
 -- ('user:<auth id>:<partner id>' for a partner person, 'provider' for the
 -- provider's copy). The partner rows carry what was sent (payload, to_name),
 -- so the provider's copy is built from the ledger, not from one run's memory:
--- a copy that failed is retried, and someone told on a later day is still
--- named. Delivery is at most once: a claim made by a run that dies before
--- sending is never retried (the claim says it went).
+-- a copy that failed is retried on a later run. One copy per class, sent in
+-- the run that told the first person(s); someone told on a later day is not
+-- added to a copy already sent. The job claims a person's row only after
+-- everything that can fail before the send, and releases it on any failure,
+-- so a row means the email went. Delivery is at most once.
 --
 -- partner_class_wrapup_copies_due() lists classes told to someone in the last
--- 14 days that the provider has no copy row for yet.
+-- 14 days that the provider has no copy row for yet, during the provider's
+-- working hours (so a retry never lands at 3 am).
 
 begin;
 
@@ -159,8 +162,12 @@ as $$
          (array_agg(s.payload order by s.sent_at))[1],
          array_agg(distinct coalesce(nullif(btrim(s.to_name), ''), 'a partner login'))
   from public.partner_class_wrapup_sends s
+  join public.organizations o on o.id = s.organization_id
   where s.recipient_key like 'user:%'
     and s.sent_at > now() - interval '14 days'
+    and extract(hour from (now() at time zone
+          case when exists (select 1 from pg_catalog.pg_timezone_names z where z.name = o.timezone)
+               then o.timezone else 'America/Los_Angeles' end)) between 9 and 17
     and s.payload is not null
     and not exists (
       select 1 from public.partner_class_wrapup_sends p
