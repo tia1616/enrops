@@ -33,7 +33,8 @@ goal: You know where your money is, and you can refund or credit a family in a m
 4. For a card refund, choose **Their spot**: **Refund only — keep their spot**, or **Refund and withdraw — free their spot**. For a credit there's no spot choice, because a credit always frees their spot. Instead choose who ended it: **We cancelled the class** or **The family cancelled**.
 5. Leave **Full refund**, or type a smaller amount for a partial refund.
 6. Add a **Reason**. It's an internal note and isn't sent to the family.
-7. Tap **Refund $X** (or **Give $X credit**).
+7. Read the sentence above the button. It names the child, the class and site, and what happens to the money. If any of it is wrong, tap **Cancel**.
+8. Tap **Refund $X** (or **Give $X credit**).
 
 **Ennie's advice**
 - The family gets an email receipt for a card refund. A credit or a withdrawal without a refund sends no email, so tell them yourself.
