@@ -75,5 +75,18 @@ for (const file of walk(join(here, ".."))) {
 }
 ok(links > 0, "at least one \"?\" bubble links to a guide");
 
+// --- Ennie's chat reads a generated copy; it must match the guides ----------
+// The server function can't read src/, so it gets guides.generated.ts. A guide
+// edit without regenerating would leave Ennie answering from the old text.
+{
+  const { generate, OUT_FILE } = await import("../../scripts/build-ennie-guides.mjs");
+  const onDisk = readFileSync(OUT_FILE, "utf8").replace(/\r\n/g, "\n");
+  ok(onDisk === generate(), "ennie-help/guides.generated.ts matches the guides", "run: node scripts/build-ennie-guides.mjs");
+  const { buildEnnieGuides } = await import("./ennieGuides.js");
+  const built = buildEnnieGuides(files.map((name) => ({ name, text: readFileSync(join(dir, name), "utf8") })));
+  ok(Object.keys(built.sections).length === ids.size, "every guide section is citable by Ennie", `${Object.keys(built.sections).length} vs ${ids.size}`);
+  ok(!built.text.includes("<!--"), "authoring notes never reach Ennie");
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -1,7 +1,9 @@
 // QuestionStep — shared chrome for every question screen. Renders the question
 // heading + helper text and the sticky bottom action bar with Back / Next.
 
+import { useRef } from "react";
 import { INK, MUTED, PURPLE, RULE } from "../marketing/tokens.jsx";
+import { useEnnieLift } from "../../../components/ennie/EnnieChat.jsx";
 
 export default function QuestionStep({
   title,
@@ -18,6 +20,9 @@ export default function QuestionStep({
   manualBusy = false,
   rightExtras,
 }) {
+  // The "Ask Ennie" corner button sits above this bar, never on its Next button.
+  const barRef = useRef(null);
+  useEnnieLift(barRef);
   return (
     <div>
       {/* Top-of-step back link — visible without scrolling. Sticky bottom bar
@@ -46,6 +51,7 @@ export default function QuestionStep({
 
       {/* Sticky bottom action bar */}
       <div
+        ref={barRef}
         style={{
           position: "fixed", bottom: 0, left: 0, right: 0,
           padding: "12px 16px", background: "rgba(255,255,255,0.96)",

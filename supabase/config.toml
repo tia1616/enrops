@@ -330,3 +330,9 @@ verify_jwt = true
 # satisfies it, and an unauthenticated stranger cannot poke a mail sender.
 [functions.sub-offer-nudges-cron]
 verify_jwt = true
+
+# Ennie's help chat (provider onboarding chunk 3). TRUE: only a signed-in user
+# reaches it. verify_jwt is NOT the authorization - the function also checks the
+# caller is a member of the organization (the anon key satisfies verify_jwt).
+[functions.ennie-help]
+verify_jwt = true

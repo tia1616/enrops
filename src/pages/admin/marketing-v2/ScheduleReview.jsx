@@ -6,7 +6,8 @@
 // All edits are LOCAL until "Save as draft" or "Approve & Schedule". Chunk 07
 // wires the real PATCH + marketing-send calls.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useEnnieLift } from "../../../components/ennie/EnnieChat.jsx";
 import TouchpointCard from "./TouchpointCard.jsx";
 import { supabase } from "../../../lib/supabase.js";
 import { INK, MUTED, PURPLE, RULE, OK, INFO } from "../marketing/tokens.jsx";
@@ -56,6 +57,9 @@ export default function ScheduleReview({
   // Values: null | 'save' | 'test' | 'approve'
   busyAction,
 }) {
+  // The "Ask Ennie" corner button sits above the sticky bar, never on Approve.
+  const barRef = useRef(null);
+  useEnnieLift(barRef);
   const [recipientsOpen, setRecipientsOpen] = useState(false);
   const touchpoints = draft?.schedule?.touchpoints ?? [];
   const recipients = draft?.recipients ?? { count: 0, ids: [], segment_summary: "" };
@@ -480,7 +484,7 @@ export default function ScheduleReview({
       ))}
 
       {/* Sticky action bar */}
-      <div style={{
+      <div ref={barRef} style={{
         position: "fixed", bottom: 0, left: 0, right: 0,
         padding: "12px 16px", background: "rgba(255,255,255,0.96)",
         backdropFilter: "blur(6px)", borderTop: `1px solid ${RULE}`,
