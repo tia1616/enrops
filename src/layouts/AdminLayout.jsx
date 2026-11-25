@@ -48,8 +48,9 @@ const CORAL = "#D9694F";    // same warning coral the instructor portal uses
 //
 // URL guardrail: /admin/finances stays put — the Stripe return_url in
 // stripe-connect-onboard is hardcoded to /admin/finances?stripe=return.
+// No "Overview" item since 2026-11-25 (Jessica: "delete the overview screen, i
+// never look at it"). /admin now goes to Programs - see AdminOverview.jsx.
 const NAV = [
-  { to: "/admin", label: "Overview", end: true },
   {
     // Current-term-first: clicking "Programs" lands on Scheduled programs (which
     // defaults to the term in progress), then Class rosters, then Offerings (the
@@ -215,11 +216,8 @@ const NAV = [
 function shapeNavForOrg(nav, org) {
   if (org?.instructor_pay_model !== "enrops_platform") return nav; // full nav (J2S etc.)
   const HIDE_TOP = new Set([
-    "/admin",                        // Overview/dashboard — the free tier is
-                                     // REGISTRATION ONLY ("nothing else lives
-                                     // here"), so there is no dashboard to give
-                                     // them. Programs is their home; /admin
-                                     // redirects there (see AdminOverview).
+    // "/admin" (Overview) used to be listed first here. The item no longer exists
+    // for anybody (2026-11-25), so there is nothing to hide.
     // Team is NO LONGER hidden here. It used to be, on the premise that "a solo
     // operator has nobody to invite, so this is clutter until they upgrade" —
     // and that premise is simply false. Sarah Ahl signed up on 2026-09-17 to
@@ -1089,7 +1087,7 @@ export default function AdminLayout() {
                 Your access is <strong style={{ textTransform: "capitalize" }}>{orgMember?.role ?? "member"}</strong>.
                 Ask an owner or admin if you need access to {blockedItem.label.toLowerCase()}.
               </p>
-              <Link to="/admin" style={{ ...btn(BRIGHT, "#fff"), marginTop: 18 }}>Back to Overview</Link>
+              <Link to="/admin/programs" style={{ ...btn(BRIGHT, "#fff"), marginTop: 18 }}>Back to Programs</Link>
             </div>
           ) : (
           <>
