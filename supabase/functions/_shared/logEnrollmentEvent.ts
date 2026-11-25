@@ -23,6 +23,7 @@ export const ENROLLMENT_ACTIONS = {
   WAITLIST_CONVERTED: 'waitlist_converted',
   CANCELLED: 'cancelled',
   REFUNDED: 'refunded',
+  MOVED: 'moved',                             // an operator moved the child to another class (metadata: from/to program ids)
   MARKETING_SENT: 'marketing_sent',           // a campaign touchpoint email blast completed (aggregate, one per touchpoint)
 } as const;
 
