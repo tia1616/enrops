@@ -1,4 +1,5 @@
-// Partner portal "Classes" section (20261119a): the words and ordering, pure.
+// Partner portal "Classes" section (20261119a; finished classes and the
+// end-of-term summary 20261125t): the words and ordering, pure.
 // The numbers come from public.partner_portal_classes(); this file only says
 // them. Where a count comes from is decided in the database (count_source):
 //   'enrops'   live, equals the roster (private.registration_on_roster)
@@ -67,18 +68,162 @@ export function countSourceText(c, { viewer = "partner", partnerName = "", orgNa
   return "Live from registrations";
 }
 
-/** The chip: Cancelled / Not open yet / Full / Open. Full needs a maximum and a live or typed count. */
+/** The chip: Cancelled / Not open yet / Finished / Full / Open. Full needs a maximum and a live or typed count. */
 export function classBadge(c) {
   if (c.status === "cancelled") return { label: "Cancelled", tone: "bad" };
   if (c.status === "draft") return { label: "Not open yet", tone: "neutral" };
+  // Past its last date (20261125t): listed 60 more days so it can be invoiced.
+  if (c.status === "finished") return { label: "Finished", tone: "neutral" };
   const max = Number(c.max_capacity);
   if (c.count_source !== "partner" && c.enrolled != null && max > 0 && c.enrolled >= max) return { label: "Full", tone: "good" };
   return { label: "Open", tone: "good" };
 }
 
-/** Can this row's roster be opened? Only a live enrops class that is open. */
+/** Is this class running or just finished (not cancelled, not a draft)? */
+function isLive(c) {
+  return c.status === "open" || c.status === "finished";
+}
+
+/** Can this row's roster be opened? A live enrops class, running or finished. */
 export function rosterAvailable(c) {
-  return c.count_source === "enrops" && c.status === "open";
+  return c.count_source === "enrops" && isLive(c);
+}
+
+/** Can this row's sessions (and, for enrops classes, what families paid) be opened? */
+export function summaryAvailable(c) {
+  return isLive(c);
+}
+
+/** The row's one button: "Roster & sessions", "Sessions", or null. */
+export function detailsButtonText(c, isOpen) {
+  if (!summaryAvailable(c)) return null;
+  if (isOpen) return rosterAvailable(c) ? "Hide roster & sessions" : "Hide sessions";
+  return rosterAvailable(c) ? "Roster & sessions" : "Sessions";
+}
+
+const SESSION_WORD = { held: "Held", cancelled: "Cancelled", upcoming: "Upcoming", not_confirmed: "Not confirmed yet" };
+
+/** "Held" / "Cancelled" / "Upcoming" / "Not confirmed yet". */
+export function sessionStatusText(status) {
+  return SESSION_WORD[status] ?? "Not confirmed yet";
+}
+
+/**
+ * "7 of 8 sessions held · 1 not confirmed yet · 1 cancelled". The count is of
+ * sessions that were on the schedule (cancelled ones are named separately).
+ * Every part is a true statement of the list it summarizes.
+ */
+export function sessionsHeadline(sessions) {
+  const list = sessions ?? [];
+  if (!list.length) return "No session dates set";
+  const n = (s) => list.filter((x) => x.status === s).length;
+  const scheduled = list.length - n("cancelled");
+  const parts = [`${n("held")} of ${scheduled} ${scheduled === 1 ? "session" : "sessions"} held`];
+  if (n("not_confirmed")) parts.push(`${n("not_confirmed")} not confirmed yet`);
+  if (n("upcoming")) parts.push(`${n("upcoming")} upcoming`);
+  if (n("cancelled")) parts.push(`${n("cancelled")} cancelled`);
+  return parts.join(" · ");
+}
+
+/** "$1,686.00" from cents. */
+export function dollars(cents) {
+  return (Number(cents || 0) / 100).toLocaleString("en-US", { style: "currency", currency: "USD" });
+}
+
+/**
+ * "Families paid $1,686.00, after discounts and refunds (6 of the 6 children
+ * on the roster paid)." The roster count is said beside it because some
+ * children on a roster paid nothing (free, refunded, added without a charge),
+ * and "for 1 child" next to "5/14" read as a mistake (Jessica 2026-11-25).
+ * `enrolled` = the class's roster count; omitted, no comparison is made.
+ * null when there is no money line (families did not register through enrops).
+ */
+export function paidText(money, enrolled = null) {
+  if (!money) return null;
+  const n = Number(money.children || 0);
+  const total = Number(enrolled);
+  const ofRoster = Number.isInteger(total) && total > 0
+    ? (n === total
+      ? (total === 1 ? " (the 1 child on the roster paid)" : ` (all ${total} children on the roster paid)`)
+      : ` (${n} of the ${total} ${total === 1 ? "child" : "children"} on the roster paid)`)
+    : n > 0 ? ` (${n} ${n === 1 ? "child" : "children"})` : "";
+  if (n === 0) return `No payments yet${ofRoster}.`;
+  return `Families paid ${dollars(money.paid_cents)}, after discounts and refunds${ofRoster}.`;
+}
+
+/**
+ * One child's "Paid" cell (Jessica 2026-11-25: "put per person what they
+ * paid"). `entry` = one of summary.money.by_child; null = no money shown.
+ */
+export function childPaidText(entry) {
+  if (!entry) return "";
+  switch (entry.status) {
+    case "paid": return dollars(entry.paid_cents);
+    case "paying": return `${dollars(entry.paid_cents)} so far (paying in instalments)`;
+    case "free": return "Free";
+    case "refunded": return "Refunded";
+    case "processing": return "Bank payment pending";
+    default: return "Not paid";
+  }
+}
+
+/** row_key -> by_child entry, for the roster's Paid column. null when there is no money to show. */
+export function paidByChild(money) {
+  if (!money || !Array.isArray(money.by_child)) return null;
+  return new Map(money.by_child.map((e) => [e.row_key, e]));
+}
+
+/** One CSV cell, quoted when needed, and never read as a formula by Excel or Sheets. */
+export function csvCell(v) {
+  let s = v == null ? "" : String(v);
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+/**
+ * The downloadable summary for one class: what a partner attaches to an
+ * invoice. Class, sessions with their status, what families paid (when
+ * known), then the roster. `rows` are rosterDisplayRows (or null when the
+ * roster is not shown for this class).
+ */
+export function classSummaryCsv(c, summary, rows, { providerName = "", termLabel = "" } = {}) {
+  const out = [];
+  const line = (...cells) => out.push(cells.map(csvCell).join(","));
+  line("Class", c.title || "Untitled class");
+  line("Site", c.site || "");
+  if (termLabel) line("Term", termLabel);
+  if (providerName) line("Provider", providerName);
+  line("Schedule", scheduleText(c));
+  out.push("");
+  const sessions = summary?.sessions ?? [];
+  line("Sessions", sessionsHeadline(sessions));
+  line("Date", "Status");
+  for (const s of sessions) line(s.date, sessionStatusText(s.status));
+  const paid = paidText(summary?.money);
+  if (paid) {
+    out.push("");
+    line("Families paid", dollars(summary.money.paid_cents));
+    line("Children paid for", Number(summary.money.children || 0));
+    if (Number.isInteger(Number(c.enrolled)) && c.enrolled != null) line("Children on the roster", Number(c.enrolled));
+  }
+  if (rows) {
+    out.push("");
+    const homeroom = showsHomeroom(rows);
+    // Paid per child only when the money line is shown at all.
+    const byChild = paid ? paidByChild(summary.money) : null;
+    line("Student", "Grade", ...(homeroom ? ["Homeroom"] : []), ...(byChild ? ["Paid"] : []));
+    for (const r of rows) {
+      line(r.name, r.grade, ...(homeroom ? [r.homeroom ?? ""] : []),
+        ...(byChild ? [childPaidText(byChild.get(r.key))] : []));
+    }
+  }
+  return out.join("\r\n");
+}
+
+/** "Super Mario Game Makers - Fall 2026.csv", safe for a file name. */
+export function summaryFileName(c, termLabel) {
+  const base = [c.title || "Class", termLabel].filter(Boolean).join(" - ");
+  return `${base.replace(/[\\/:*?"<>|]+/g, "").trim() || "Class"} summary.csv`;
 }
 
 /**

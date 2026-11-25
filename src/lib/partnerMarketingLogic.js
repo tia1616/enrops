@@ -65,6 +65,12 @@ export function fileProblemForAsk(file, ask, partnerName = "The partner") {
 
 export const mediaKey = (kind, classId, itemKey) => `${kind}:${classId}:${itemKey}`;
 
+/**
+ * Does this class still need promoting? Not when it was cancelled, and not
+ * when it has finished (listed only so it can be invoiced, 20261125t).
+ */
+export const takesMarketing = (c) => c?.status !== "cancelled" && c?.status !== "finished";
+
 /** class_media rows -> Map of mediaKey -> row. */
 export function indexMedia(rows) {
   const m = new Map();
@@ -96,14 +102,14 @@ export const isPicture = (path) => ["jpg", "jpeg", "png"].includes(extOfPath(pat
  * (a provider may add one before the partner asks, 20261124m), grouped by term
  * in the classes' own order. `groups` = groupClassesByTerm output
  * ([{ key, label, classes }]). Returns [{ key, label, cards: [{ c, ask, file, name }] }]
- * (`ask` = { item_key }), dropping terms with nothing in. Cancelled classes are left out.
+ * (`ask` = { item_key }), dropping terms with nothing in. Cancelled and finished classes are left out.
  */
 export function galleryGroups(groups, media) {
   const idx = media instanceof Map ? media : indexMedia(media);
   return (groups || []).map((g) => ({
     key: g.key,
     label: g.label,
-    cards: g.classes.filter((c) => c.status !== "cancelled").flatMap((c) => MARKETING_ITEMS.map((i) => {
+    cards: g.classes.filter(takesMarketing).flatMap((c) => MARKETING_ITEMS.map((i) => {
       const file = idx.get(mediaKey(c.kind, c.class_id, i.key));
       return file ? { c, ask: { item_key: i.key }, file, name: shareName(c.title, g.label, i.key, extOfPath(file.storage_path)) } : null;
     }).filter(Boolean)),
@@ -129,12 +135,12 @@ export function uniqueNames(names) {
 
 /**
  * What the partner asked for that isn't on a class yet, per item: [{ item, count }].
- * Cancelled classes don't count.
+ * Cancelled and finished classes don't count.
  */
 export function mediaGaps(classes, asks, media) {
   const idx = media instanceof Map ? media : indexMedia(media);
   return wantedAsks(asks).map((a) => ({
     item: itemOf(a.item_key),
-    count: (classes || []).filter((c) => c.status !== "cancelled" && !idx.has(mediaKey(c.kind, c.class_id, a.item_key))).length,
+    count: (classes || []).filter((c) => takesMarketing(c) && !idx.has(mediaKey(c.kind, c.class_id, a.item_key))).length,
   })).filter((g) => g.count > 0);
 }
