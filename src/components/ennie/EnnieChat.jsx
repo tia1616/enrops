@@ -272,9 +272,13 @@ export default function EnnieChat({ org, user }) {
             bottom: `calc(20px + var(${LIFT_VAR}, 0px) + env(safe-area-inset-bottom, 0px))`,
             height: LAUNCHER_H,
             borderRadius: LAUNCHER_H / 2,
-            border: `2px solid ${open ? PURPLE : "#fff"}`,
-            background: GOLD,
-            color: PURPLE,
+            // Deep plum, white words: Jessica 11/25 compared gold, plum, bright
+            // purple and white on the real page. Ennie's lavender face stands out
+            // most on plum; on gold it is muddy, on bright purple it disappears,
+            // and white blends into the pages. Gold ring while open.
+            border: `2px solid ${open ? GOLD : "#fff"}`,
+            background: PURPLE,
+            color: "#fff",
             padding: "0 16px 0 4px",
             cursor: "pointer",
             boxShadow: "0 4px 14px rgba(28,0,79,0.25)",
@@ -291,7 +295,8 @@ export default function EnnieChat({ org, user }) {
           {/* loop={false}: the idle clip is an ENTRANCE (scale 0 -> full, flying
               in), so looping it blanks her every 4s. Played once, she pops in
               on load and holds the settled pose: a still shot. */}
-          <Ennie state="idle" size={LAUNCHER_H - 10} loop={false} />
+          {/* framed={false}: just her face, no white disc behind it (Jessica 11/25). */}
+          <Ennie state="idle" size={LAUNCHER_H - 8} loop={false} framed={false} />
           <span>{open ? "Close" : "Ask Ennie"}</span>
         </button>
       )}
