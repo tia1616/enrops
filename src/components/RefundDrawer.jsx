@@ -32,6 +32,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { formatCalendarDate } from "../lib/programSchedule";
+import { refundConfirmSentence } from "../lib/rosterActions";
 
 const PURPLE = "#1C004F";
 const BRIGHT = "#5847C9";   // indigo - primary actions (Figma)
@@ -436,6 +437,23 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
       : (withdrawNoRefund ||
         (amountCents > 0 && !overMax &&
           (seatChoice === "keep" || seatChoice === "withdraw"))));
+
+  // Which outcome the button will produce, in the sentence beside it. The same four
+  // branches as the button label below, in the same order, so the two cannot say
+  // different things about one press.
+  const seatWithdraw = seatChoice === "withdraw" ? true : seatChoice === "keep" ? false : null;
+  const confirmSentence = refundConfirmSentence({
+    studentName: reg.studentName,
+    classLabel: reg.classLabel,
+    amountCents,
+    ...(isCreditReturn
+      ? { mode: "credit_return", withdraw: seatWithdraw }
+      : isCredit
+        ? { mode: "credit", withdraw: true }
+        : withdrawNoRefund
+          ? { mode: "withdraw_no_refund", withdraw: true }
+          : { mode: "refund", withdraw: seatWithdraw }),
+  });
 
   function setFull() { setAmountStr((givebackCents / 100).toFixed(2)); }
   function setKeepFee() { setAmountStr((Math.max(0, refundableCents - adminFeeCents) / 100).toFixed(2)); }
@@ -1110,6 +1128,19 @@ export default function RefundDrawer({ registration, onClose, onDone }) {
               </div>
             )}
           </>
+        )}
+
+        {/* THE SENTENCE BESIDE THE BUTTON (2026-11-25). On 10/21 Micah Cho was
+            cancelled instead of Sahir Wanchoo, same class, two minutes apart, and a
+            refund went out of money that was meant to be kept: the child's name
+            was at the top of a long drawer and the class was nowhere. So the last
+            thing read before pressing names the child, the class and site, and
+            what happens to the money - and only once a choice is made, so it is
+            never half-true. Wording lives in src/lib/rosterActions.js. */}
+        {!loading && !loadErr && canSubmit && confirmSentence && (
+          <div style={{ marginTop: 16, background: "rgba(28,0,79,0.05)", border: `1px solid ${PURPLE}33`, borderRadius: 8, padding: "10px 12px", fontSize: 13, color: INK, lineHeight: 1.5 }}>
+            {confirmSentence}
+          </div>
         )}
 
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 }}>

@@ -26,6 +26,7 @@ import { createClient, type SupabaseClient } from 'https://esm.sh/@supabase/supa
 import { loadOrgBrand, formatFromAddress } from '../_shared/orgBrand.ts';
 import { venueLabel } from '../_shared/roomLabel.ts';
 import { htmlToPlainText } from '../_shared/familyEmailHtml.ts';
+import { DAY_LABELS, describeProgram } from '../_shared/classSummary.ts';
 import {
   excludeHouseholds,
   isCoveredByEarlierClass,
@@ -54,33 +55,8 @@ function json(body: unknown, status = 200) {
 
 const FORBIDDEN = json({ error: 'forbidden' }, 403);
 
-const DAY_LABELS: Record<string, string> = {
-  monday: 'Monday', tuesday: 'Tuesday', wednesday: 'Wednesday',
-  thursday: 'Thursday', friday: 'Friday', saturday: 'Saturday', sunday: 'Sunday',
-};
-
-// Same wording as the curriculum notice, so a family who gets both reads the
-// class described the same way twice.
-function fmtTime(t: string | null | undefined): string {
-  if (!t) return '';
-  if (/[ap]\s?m/i.test(t)) return t.toLowerCase().replace(/\s+/g, '');
-  const [hh, mm] = t.split(':').map(Number);
-  if (Number.isNaN(hh)) return t;
-  const h12 = ((hh + 11) % 12) + 1;
-  const ampm = hh >= 12 ? 'pm' : 'am';
-  return mm === 0 ? `${h12}${ampm}` : `${h12}:${String(mm).padStart(2, '0')}${ampm}`;
-}
-
-function describeProgram(p: Record<string, any>): string {
-  const parts: string[] = [];
-  // Site and room together, so a family reading "where and when" here gets the
-  // same answer as the portal and the payment confirmation.
-  const where = venueLabel(p?.program_locations?.name, p?.room, p?.program_locations?.room_number);
-  if (where) parts.push(where);
-  if (p?.day_of_week) parts.push(DAY_LABELS[String(p.day_of_week).toLowerCase()] ?? p.day_of_week);
-  if (p?.start_time) parts.push(fmtTime(p.start_time));
-  return parts.join(' · ');
-}
+// DAY_LABELS and describeProgram live in _shared/classSummary.ts since 2026-11-25,
+// so the move-a-child email describes a class in exactly these words.
 
 interface RequestBody {
   program_id?: string;

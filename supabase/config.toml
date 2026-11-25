@@ -60,6 +60,10 @@ verify_jwt = true
 [functions.admin-upload-background-check]
 verify_jwt = true
 
+# Move a child to another class (2026-11-25). Owner/admin only, re-checked inside.
+[functions.admin-move-registration]
+verify_jwt = true
+
 [functions.refresh-stripe-status]
 verify_jwt = true
 

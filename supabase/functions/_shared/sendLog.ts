@@ -35,6 +35,7 @@ export const SEND_SOURCES = {
   waitlist_invite: "A place opened up",
   waitlist_lapsed: "Waiting-list offer expired",
   parent_invite: "Portal invitation",
+  registration_moved: "Moved to another class",
 } as const;
 
 export type SendSource = keyof typeof SEND_SOURCES;

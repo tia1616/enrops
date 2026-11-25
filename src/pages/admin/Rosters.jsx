@@ -47,6 +47,8 @@ import EmailRosterModal from "./EmailRosterModal";
 import InviteFamiliesModal from "./InviteFamiliesModal";
 import MessageFamiliesModal from "./programs/MessageFamiliesModal.jsx";
 import RefundDrawer from "../../components/RefundDrawer";
+import MoveRegistrationDrawer from "../../components/MoveRegistrationDrawer";
+import { rosterClassLabel } from "../../lib/rosterActions";
 import Chevron from "../../components/Chevron.jsx";
 import { formatDayLabel } from "../../lib/programSchedule.js";
 import {
@@ -433,6 +435,7 @@ function CampRow({ camp, onUpload, onEmail, orgId, onRosterChanged, canManage })
           onChanged={onRosterChanged}
           refreshToken={camp.refresh_token || 0}
           canManage={canManage}
+          classLabel={rosterClassLabel({ curriculum: camp.curriculum_name, class_days: ["camp"], site: camp.location_name })}
         />
       )}
     </div>
@@ -482,7 +485,9 @@ const canMessageProgram = (p) => (p?.enrolled ?? 0) > 0 || (p?.departed ?? 0) > 
 // camp roster and the afterschool program roster so both edit through one
 // implementation. excludeCancelled hides cancelled registrations (programs do;
 // camps show everything).
-function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled, canManage }) {
+// classLabel: "Tuesday Robotics at Hallinan" - named in the confirm sentence on the
+// refund and move panels, so the last thing read before pressing says which class.
+function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled, canManage, classLabel = "" }) {
   const [campers, setCampers] = useState(null); // null = loading
   const [contactsByStudent, setContactsByStudent] = useState({}); // { [student_id]: [student_contacts] }
   // Did the contacts read SUCCEED? Distinct from "is it empty" - see the load.
@@ -676,6 +681,8 @@ function RosterEditor({ target, orgId, onChanged, refreshToken, excludeCancelled
               onToggleEdit={() => setEditingId((cur) => (cur === reg.id ? null : reg.id))}
               orgId={orgId}
               canManage={canManage}
+              classLabel={classLabel}
+              canMove={target.column === "program_id"}
               justSaved={justSavedId === reg.id}
               onSaved={(opts) => {
                 // keepOpen: a PARTIAL save (CamperEditForm kept its form open to
@@ -714,7 +721,7 @@ function TelLink({ phone }) {
   return <a href={`tel:${phone.replace(/[^0-9+]/g, "")}`} style={{ color: PURPLE, textDecoration: "underline" }}>{phone}</a>;
 }
 
-function CamperEditableRow({ registration, contacts = [], contactsLoaded = false, regStd = null, customLabels = {}, isEditing, onToggleEdit, orgId, onSaved, canManage, onRemoved, justSaved }) {
+function CamperEditableRow({ registration, contacts = [], contactsLoaded = false, regStd = null, customLabels = {}, isEditing, onToggleEdit, orgId, onSaved, canManage, onRemoved, justSaved, classLabel = "", canMove = false }) {
   const s = registration.student;
   // WHICH ROLE MAY EDIT A CHILD'S DETAILS - and it is NOT canManage. canManage is
   // owner/admin, deliberately stricter than the DB, and it correctly gates Refund
@@ -728,6 +735,7 @@ function CamperEditableRow({ registration, contacts = [], contactsLoaded = false
   const canEditStudent = perm.canEdit;
   const [confirming, setConfirming] = useState(false);
   const [refunding, setRefunding] = useState(false);
+  const [moving, setMoving] = useState(false);
   const [editingCare, setEditingCare] = useState(false);
   const rowRef = useRef(null);
   // After a save, bring the just-saved row back into view — a collapsing edit
@@ -938,6 +946,33 @@ function CamperEditableRow({ registration, contacts = [], contactsLoaded = false
                 sibling's verb, so one word now covers the job in both states.
                 Deliberately NOT "cancel": the drawer this opens already has a
                 Cancel button meaning "close without doing anything". */}
+            {/* MOVE, before the money buttons because it is the gentler answer to
+                "this family wants a different day". Class rosters only (a camp
+                sign-up is a different row shape), and only for a child who has a
+                place - the same test the server applies. Owner/admin, matching
+                the two buttons beside it. Added 2026-11-25; until then every move
+                was a hand-written database edit. */}
+            {canManage && canMove && !isCancelled && registration.status === "confirmed" && (
+              <button
+                type="button"
+                onClick={() => setMoving(true)}
+                style={{
+                  padding: "5px 10px",
+                  background: "transparent",
+                  color: INK,
+                  border: `1px solid ${RULE}`,
+                  borderRadius: 5,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  fontFamily: "inherit",
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                }}
+                title="Move this child to a different class. No money moves."
+              >
+                Move
+              </button>
+            )}
             {canManage && hasPayment && payStatus !== "refunded" && (
               <button
                 type="button"
@@ -1002,9 +1037,20 @@ function CamperEditableRow({ registration, contacts = [], contactsLoaded = false
             payment_status: registration.payment_status,
             stripe_payment_intent_id: registration.stripe_payment_intent_id,
             studentName: displayName,
+            classLabel,
           }}
           onClose={() => setRefunding(false)}
           onDone={() => { setRefunding(false); if (onRemoved) onRemoved(); }}
+        />
+      )}
+
+      {moving && (
+        <MoveRegistrationDrawer
+          registration={{ id: registration.id, studentName: displayName }}
+          onClose={() => setMoving(false)}
+          // The child has left THIS class, so the list reloads exactly as after a
+          // removal; the class they joined refreshes when it is next opened.
+          onDone={() => { setMoving(false); if (onRemoved) onRemoved(); }}
         />
       )}
 
@@ -3305,6 +3351,12 @@ function ProgramRosterRow({ program: p, orgId, orgSlug, canEdit, expanded, onTog
             refreshToken={p.refresh_token || 0}
             excludeCancelled
             canManage={canEdit}
+            classLabel={rosterClassLabel({
+              curriculum: p.curriculum,
+              day_of_week: p.day_of_week,
+              class_days: p.class_days,
+              site: p.program_locations?.name,
+            })}
           />
           {/* The waiting list belongs HERE, under the class an operator just expanded.
               It also renders on the per-class roster page, but that page is behind a
