@@ -194,6 +194,12 @@ interface TestSendParams {
   audience?: "parent" | "instructor";
   preview_attachments?: unknown; // DRAFT email_attachments jsonb, so the test send matches the editor
   variant?: "withdrawn";
+  // review_request only: an existing, already-asked review_asks row whose
+  // family_email IS the test recipient. The button then goes through the real
+  // tracked review-go link for that row, so the whole click path can be proven
+  // on an environment. Without it a test links straight to Google and records
+  // nothing (a test click must never count as a family's).
+  review_ask_id?: string | null;
 }
 
 interface TestSendResult {
@@ -376,6 +382,7 @@ serve(async (req) => {
           audience: parsedAudience,
           preview_attachments: body.preview_attachments,
           variant: parsedVariant,
+          review_ask_id: typeof body.review_ask_id === "string" ? body.review_ask_id : null,
         };
       } else if (body?.mode === "preview") {
         previewParams = {
@@ -820,7 +827,7 @@ async function sendOne(
   // instructor-specific copy. When unset (every other automation, and the parent
   // half of no_school_day) we fall back to the operator's editable override, then
   // the template default. Generic: sendOne stays template-agnostic.
-  const subject = renderTokens(entry.subject_template ?? a.subject_override ?? a.template.default_subject, tokens);
+  const subject = renderSubject(entry.subject_template ?? a.subject_override ?? a.template.default_subject, tokens);
   const bodySrc = entry.body_template ?? a.body_override ?? a.template.default_body;
   const renderedHtml = renderTokens(bodySrc, tokens);
   // Download buttons are appended to the BOTTOM of the body (they land above the
@@ -1064,6 +1071,7 @@ interface RenderInput {
   audience?: "parent" | "instructor"; // no_school_day: which role variant to render
   preview_attachments?: unknown; // the DRAFT email_attachments jsonb ([{id,attach}]) so the preview/test reflects unsaved changes
   variant?: "withdrawn"; // review_request: render the withdrawn / refunded wording
+  review_link_url?: string; // review_request test send: a tracked review-go link (see TestSendParams.review_ask_id)
 }
 interface RenderOutput {
   ok: boolean;
@@ -1171,6 +1179,7 @@ async function renderLifecycleEmail(supabase: SupabaseClient, input: RenderInput
     );
     if (real) { Object.assign(entry, real); usedRealData = true; }
   }
+  if (input.review_link_url) entry.review_link_url = input.review_link_url;
 
   const tokens = buildTokens(entry, brand);
   // stripe-webhook fills the real registration table on a live send; show a
@@ -1211,7 +1220,7 @@ async function renderLifecycleEmail(supabase: SupabaseClient, input: RenderInput
     tokens["first_name"] = "Alex"; // sample instructor first name (parent sample is "Sarah")
   }
 
-  const subject = renderTokens(subjectTpl, tokens);
+  const subject = renderSubject(subjectTpl, tokens);
   // Render the Download-buttons block from the DRAFT's attachment list so the
   // preview + test send show exactly what a real send will — the buttons land at
   // the bottom of the email, never as a token in the body.
@@ -1261,6 +1270,24 @@ async function runTestSend(supabase: SupabaseClient, params: TestSendParams): Pr
     return { ok: false, error: "test_email_not_an_org_admin" };
   }
 
+  // Tracked review link: only for a row in THIS org, already asked (the click
+  // recorder ignores unasked rows), whose family IS the admin receiving the test.
+  let trackedReviewLink: string | undefined;
+  if (params.review_ask_id) {
+    if (params.template_key !== "review_request") return { ok: false, error: "review_ask_id_only_for_review_request" };
+    if (!REVIEW_RATE_SECRET) return { ok: false, error: "review_link_secret_unset" };
+    const { data: ask, error: askErr } = await supabase
+      .from("review_asks").select("id, organization_id, family_email, asked_at")
+      .eq("id", params.review_ask_id).maybeSingle();
+    if (askErr) return { ok: false, error: `review ask lookup failed: ${askErr.message}` };
+    if (!ask || ask.organization_id !== params.organization_id) return { ok: false, error: "review_ask_not_found" };
+    if (!ask.asked_at) return { ok: false, error: "review_ask_not_asked" };
+    if (String(ask.family_email).trim().toLowerCase() !== params.test_to_email.trim().toLowerCase()) {
+      return { ok: false, error: "review_ask_not_for_test_email" };
+    }
+    trackedReviewLink = await reviewGoUrl(ask.id);
+  }
+
   const rendered = await renderLifecycleEmail(supabase, {
     organization_id: params.organization_id,
     template_key: params.template_key,
@@ -1272,6 +1299,7 @@ async function runTestSend(supabase: SupabaseClient, params: TestSendParams): Pr
     audience: params.audience,
     preview_attachments: params.preview_attachments,
     variant: params.variant,
+    review_link_url: trackedReviewLink,
   });
   if (!rendered.ok) return { ok: false, error: rendered.error };
 
@@ -4458,7 +4486,14 @@ async function hasFutureProgramsForOrg(supabase: SupabaseClient, orgId: string):
 // Render {{tokens}} in a template string. Plain-text tokens get HTML-escaped
 // so <, >, " stay safe in body text + href attribute context. HTML-pre-rendered
 // tokens (e.g. {{final_showcase_block}}) are passed through verbatim.
-function renderTokens(template: string, tokens: Record<string, string>): string {
+// A SUBJECT is a plain-text mail header, not HTML: nothing decodes entities in
+// it, so escaping put a literal "&amp;" in the inbox for any class named "A & B".
+// Same token rules as the body, minus the escaping.
+function renderSubject(template: string, tokens: Record<string, string>): string {
+  return renderTokens(template, tokens, { plainText: true });
+}
+
+function renderTokens(template: string, tokens: Record<string, string>, opts: { plainText?: boolean } = {}): string {
   // First, collapse a token wrapped in parens for optional display — e.g. the
   // welcome "starts {{program_start_date}} ({{program_time}})" — when that token
   // is known-but-empty (a camp/program with no start/end time): drop the whole
@@ -4473,7 +4508,7 @@ function renderTokens(template: string, tokens: Record<string, string>): string 
     const v = tokens[key];
     if (v == null) return match; // leave unknown tokens in place for visibility
     if (PRE_RENDERED_HTML_TOKENS.has(key)) return v;
-    return htmlEscapeSafe(v);
+    return opts.plainText ? v : htmlEscapeSafe(v);
   });
 }
 
