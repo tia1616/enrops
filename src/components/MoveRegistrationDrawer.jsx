@@ -57,7 +57,10 @@ export default function MoveRegistrationDrawer({ registration, onClose, onDone }
       if (cancelled) return;
       if (error || res?.error) {
         console.error("[MoveRegistrationDrawer] options failed", error || res?.error);
-        setLoadErr(res?.message || "We couldn't load the classes. Close this and try again.");
+        // A refusal is not a hiccup: "try again" would never work, so say why.
+        setLoadErr(res?.message || (res?.error === "forbidden"
+          ? "Only an owner or admin can move a child to another class."
+          : "We couldn't load the classes. Close this and try again."));
       } else {
         setData(res);
       }

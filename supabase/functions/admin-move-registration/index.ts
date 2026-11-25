@@ -38,6 +38,7 @@ import {
   type MessageRecipientRow,
 } from '../_shared/familyNotify.ts';
 import { logTransactionalSend } from '../_shared/sendLog.ts';
+import { todayInTimezone } from '../_shared/refundFeeProration.ts';
 import { logEnrollmentEvent, ENROLLMENT_ACTIONS } from '../_shared/logEnrollmentEvent.ts';
 
 const RESEND_API_KEY = Deno.env.get('RESEND_API_KEY') ?? '';
@@ -79,7 +80,9 @@ const MOVE_ERRORS: Record<string, { status: number; message: string }> = {
   target_not_found: { status: 404, message: "We couldn't find that class." },
   target_not_open: { status: 409, message: 'That class is not open, so nobody can be moved into it.' },
   different_kind: { status: 400, message: 'A class can only move to another class, and a camp to another camp.' },
-  already_in_target: { status: 409, message: 'This child already has a place in that class.' },
+  already_in_target: { status: 409, message: 'This child already has a place in that class, or a sign-up for it in progress.' },
+  target_finished: { status: 409, message: 'That class has had its last session, so nobody can be moved into it.' },
+  // target_full is answered separately (with the live count) below.
 };
 
 // deno-lint-ignore no-explicit-any
@@ -109,8 +112,12 @@ function classLabel(p: Program): string {
   return `${day}${name}${site ? ` at ${site}` : ''}`;
 }
 
-function todayIso(): string {
-  return new Date().toISOString().slice(0, 10);
+// The provider's own calendar day, not UTC's: a Pacific provider moving a child at
+// 6pm must not be told it is tomorrow. Same helper and fallback the refund path uses.
+async function orgTimezone(supabase: SupabaseClient, orgId: string): Promise<string | null> {
+  const { data, error } = await supabase.from('organizations').select('timezone').eq('id', orgId).maybeSingle();
+  if (error) console.error('[admin-move-registration] timezone lookup failed:', error);
+  return (data as { timezone?: string | null } | null)?.timezone ?? null;
 }
 
 function fmtShortDate(iso: string): string {
@@ -258,7 +265,7 @@ serve(async (req: Request) => {
       const seats = new Map((seatsRes.data ?? []).map((s: Program) => [s.program_id, s]));
       const lastByProgram = new Map((lastRes.data ?? []).map((l: Program) => [l.program_id, l]));
       const mine = new Set((mineRes.data ?? []).map((m: Program) => m.program_id));
-      const today = todayIso();
+      const today = todayInTimezone(await orgTimezone(supabase, reg.organization_id));
 
       const classes = sameKind
         .map((p: Program) => {
@@ -334,36 +341,37 @@ serve(async (req: Request) => {
     }
     if (!target) return json({ error: 'target_not_found', message: MOVE_ERRORS.target_not_found.message }, 404);
 
-    // CAPACITY: allowed past full, never silently. The screen showed the count; this
-    // re-reads it now, because a seat can have gone since the list was loaded.
-    const { data: seatRows, error: seatErr } = await supabase.rpc('program_seat_counts', {
-      p_program_ids: [targetId],
-    });
-    if (seatErr) {
-      console.error('[admin-move-registration] seat count failed:', seatErr);
-      return json({ error: 'lookup_failed' }, 500);
-    }
-    const seat = (seatRows ?? [])[0] as Program | undefined;
-    if (seat?.is_full && !confirmOverCapacity) {
-      return json({
-        error: 'target_full',
-        message: `${className(target)} is full (${seat.seats_taken} of ${seat.max_capacity}). Moving ${studentFirst} puts it over.`,
-        seats_taken: Number(seat.seats_taken ?? 0),
-        max_capacity: seat.max_capacity ?? null,
-      }, 409);
-    }
+    // CAPACITY is decided INSIDE move_registration, under a lock on the target class,
+    // so two moves into the last seat cannot both pass. Allowed past full only with
+    // the operator's confirmation, which the panel asks for beside the button.
+    const tz = await orgTimezone(supabase, reg.organization_id);
 
     // THE INSTRUCTOR READS THIS. registrations.notes is shown on the instructor
     // portal's roster ("Note: ..."), so it says only what helps whoever teaches the
     // new class - where the child came from and when. Who moved them and the money
     // are recorded in the enrollment event and the send log, not here.
-    const note = `Moved here from ${classLabel(source)} on ${fmtShortDate(todayIso())}.`;
+    const note = `Moved here from ${classLabel(source)} on ${fmtShortDate(todayInTimezone(tz))}.`;
 
     const { error: moveErr } = await supabase.rpc('move_registration', {
       p_registration_id: reg.id,
       p_target_program_id: targetId,
       p_note: note,
+      p_allow_over_capacity: confirmOverCapacity,
     });
+    if (moveErr && (moveErr.message ?? '').includes('target_full')) {
+      // Nothing moved. Re-read the count for the sentence; a failed read still
+      // refuses, it just says less.
+      const { data: seatRows } = await supabase.rpc('program_seat_counts', { p_program_ids: [targetId] });
+      const seat = (seatRows ?? [])[0] as Program | undefined;
+      return json({
+        error: 'target_full',
+        message: seat
+          ? `${className(target)} is full (${seat.seats_taken} of ${seat.max_capacity}). Moving ${studentFirst} puts it over.`
+          : `${className(target)} is full. Moving ${studentFirst} puts it over.`,
+        seats_taken: seat ? Number(seat.seats_taken ?? 0) : null,
+        max_capacity: seat?.max_capacity ?? null,
+      }, 409);
+    }
     if (moveErr) {
       const key = Object.keys(MOVE_ERRORS).find((k) => (moveErr.message ?? '').includes(k));
       if (key) return json({ error: key, message: MOVE_ERRORS[key].message }, MOVE_ERRORS[key].status);
@@ -379,7 +387,7 @@ serve(async (req: Request) => {
       studentId: reg.student_id,
       programId: targetId,
       registrationId: reg.id,
-      metadata: { from_program_id: source.id, to_program_id: targetId, over_capacity: !!seat?.is_full },
+      metadata: { from_program_id: source.id, to_program_id: targetId, over_capacity_confirmed: confirmOverCapacity },
     });
 
     let email: { requested: boolean; sent: number; failed: number; unreachable: number; error?: string } = {
@@ -387,17 +395,25 @@ serve(async (req: Request) => {
     };
     if (notifyFamily) {
       try {
-        email = { requested: true, ...(await emailFamily(supabase, { reg, source, target, studentFirst })) };
+        email = { requested: true, ...(await emailFamily(supabase, { reg, source, target, studentFirst, today: todayInTimezone(tz) })) };
       } catch (e) {
         console.error('[admin-move-registration] family email threw:', e);
         email = { requested: true, sent: 0, failed: 0, unreachable: 0, error: 'email_failed' };
       }
     }
 
+    // Over capacity is read AFTER the move, from the real count. The confirmation
+    // only says the operator allowed it; a seat may have freed since the list loaded,
+    // and "this class is now over capacity" must not be said of a class that is not.
+    const { data: afterRows } = await supabase.rpc('program_seat_counts', { p_program_ids: [targetId] });
+    const after = (afterRows ?? [])[0] as Program | undefined;
+    const overCapacity = !!after && Number(after.max_capacity) > 0 &&
+      Number(after.seats_taken) > Number(after.max_capacity);
+
     return json({
       ok: true,
       moved: { registration_id: reg.id, from_program_id: source.id, to_program_id: targetId },
-      over_capacity: !!seat?.is_full,
+      over_capacity: overCapacity,
       email,
     });
   } catch (err) {
@@ -411,9 +427,9 @@ serve(async (req: Request) => {
 // unreachable), narrowed to THIS child so a sibling in the same class is not named.
 async function emailFamily(
   supabase: SupabaseClient,
-  args: { reg: Program; source: Program; target: Program; studentFirst: string },
+  args: { reg: Program; source: Program; target: Program; studentFirst: string; today: string },
 ): Promise<{ sent: number; failed: number; unreachable: number; error?: string }> {
-  const { reg, source, target } = args;
+  const { reg, source, target, today } = args;
   const { data: rows, error: rErr } = await supabase.rpc('program_message_recipients', {
     p_program_id: target.id,
     p_org_id: reg.organization_id,
@@ -439,7 +455,6 @@ async function emailFamily(
     p_program_id: target.id,
   });
   if (dErr) console.error('[admin-move-registration] session dates failed:', dErr);
-  const today = todayIso();
   const upcoming = ((dates ?? []) as string[]).filter((d) => d >= today).sort();
   const started = !!(target.first_session_date && target.first_session_date <= today);
   if (upcoming.length) nextDate = fmtDate(upcoming[0]);

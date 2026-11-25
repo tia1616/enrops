@@ -151,13 +151,18 @@ create trigger trg_waitlist_close_on_confirm
 
 -- 2. THE MOVE ------------------------------------------------------------------------
 -- Errors are raised with a stable machine key as the MESSAGE; the edge function maps
--- each key to a sentence. Capacity is NOT checked here: Jessica's call (2026-11-25)
--- is that an operator may fill a class past capacity after a warning, and the edge
--- function shows and confirms that warning before calling this.
+-- each key to a sentence. CAPACITY IS CHECKED HERE, under a lock on the target class,
+-- so two moves into the last seat cannot both pass a check made outside the
+-- transaction (/code-review 2026-11-25). Jessica's call is that an operator may fill
+-- a class past capacity after a warning: p_allow_over_capacity is that confirmation.
+-- The 3-argument draft reached staging only, before this review; dropped so the two
+-- overloads can never both exist.
+drop function if exists public.move_registration(uuid, uuid, text);
 create or replace function public.move_registration(
-  p_registration_id   uuid,
-  p_target_program_id uuid,
-  p_note              text
+  p_registration_id      uuid,
+  p_target_program_id    uuid,
+  p_note                 text,
+  p_allow_over_capacity  boolean default false
 )
 returns jsonb
 language plpgsql
@@ -165,9 +170,11 @@ security definer
 set search_path to 'public', 'pg_temp'
 as $function$
 declare
-  r   registrations;
-  src programs;
-  tgt programs;
+  r      registrations;
+  src    programs;
+  tgt    programs;
+  v_last date;
+  v_seat record;
 begin
   -- Row-locked so two moves (or a move and a refund) of one registration serialise.
   select * into r from registrations where id = p_registration_id for update;
@@ -208,9 +215,18 @@ begin
      is distinct from (coalesce(cardinality(tgt.class_days), 0) > 0) then
     raise exception 'different_kind';
   end if;
+  -- A class that has had its last session is not somewhere a child can go. The
+  -- panel already hides these; this holds for a stale panel or a direct call. The
+  -- same session walk rosters and reminders use, so closures are counted.
+  select max(d) into v_last from unnest(public.derive_program_session_dates(tgt.id)) d;
+  if v_last is not null and v_last < current_date then
+    raise exception 'target_finished';
+  end if;
   -- Never two places for one child in one class. There is no unique index that
   -- would stop it (only waiting-list rows have one), so it is checked here, under
-  -- the row lock, with the same seat test the seat count uses.
+  -- the row lock, with the same seat test the seat count uses. A pending checkout
+  -- holding a seat counts too; the panel marks only confirmed places, so its error
+  -- sentence names "a sign-up in progress" for this case.
   if exists (
     select 1 from registrations x
     where x.program_id = tgt.id
@@ -220,6 +236,16 @@ begin
       and registration_holds_seat(x)
   ) then
     raise exception 'already_in_target';
+  end if;
+
+  -- Capacity, serialised per target class: two moves into one class queue here
+  -- rather than both reading the same free seat. (A family checking out at the same
+  -- moment does not take this lock; that race is create-registration's own and is
+  -- unchanged by this function.)
+  perform pg_advisory_xact_lock(hashtext('move_into:' || tgt.id::text));
+  select * into v_seat from public.program_seat_counts(array[tgt.id]);
+  if coalesce(v_seat.is_full, false) and not coalesce(p_allow_over_capacity, false) then
+    raise exception 'target_full';
   end if;
 
   update registrations
@@ -239,12 +265,12 @@ begin
 end;
 $function$;
 
-comment on function public.move_registration(uuid, uuid, text) is
+comment on function public.move_registration(uuid, uuid, text, boolean) is
   'Move one confirmed class registration to another open class of the same kind in the '
   'same organization. Changes program_id and appends a note; never touches money. '
   'service_role only: admin-move-registration authorises the caller first.';
 
-revoke all on function public.move_registration(uuid, uuid, text) from public;
-revoke all on function public.move_registration(uuid, uuid, text) from anon;
-revoke all on function public.move_registration(uuid, uuid, text) from authenticated;
-grant execute on function public.move_registration(uuid, uuid, text) to service_role;
+revoke all on function public.move_registration(uuid, uuid, text, boolean) from public;
+revoke all on function public.move_registration(uuid, uuid, text, boolean) from anon;
+revoke all on function public.move_registration(uuid, uuid, text, boolean) from authenticated;
+grant execute on function public.move_registration(uuid, uuid, text, boolean) to service_role;
