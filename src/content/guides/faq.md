@@ -144,6 +144,12 @@ Every published class has either finished, or started while **Settings → Late 
 ### How do I send the roster to the school? {#faq-roster-partner}
 **View / print → Email roster to partner**. See **Send the roster to your school partner**.
 
+### Can my school or park see our classes and insurance themselves? {#faq-partner-login}
+Yes. Give them a login from **Partner portal → open the partner → People & emails**. See **Give your school partner a login**.
+
+### Can my partner see what families paid? {#faq-partner-paid}
+Only if you turn it on for that partner: **Partner portal → open the partner → Classes → Show ... what families paid**. It's off until you do. See **When a class finishes: the partner summary**.
+
 ## Instructors (founding and enterprise plans)
 
 ### How do I add a teacher? {#faq-add-instructor}
